@@ -1,0 +1,6 @@
+{"ImportPath":"github.com/snissn/gomap/TreeDB/internal/valuelog","Action":"build-output","Output":"# github.com/snissn/gomap/TreeDB/internal/valuelog\n"}
+{"ImportPath":"github.com/snissn/gomap/TreeDB/internal/valuelog","Action":"build-output","Output":"TreeDB/internal/valuelog/cow_inspection_heap.go:11:45: cannot use compactLeafPagePayloadHeaderSize (constant 12 of type int) as uint64 value in array or slice literal\n"}
+{"ImportPath":"github.com/snissn/gomap/TreeDB/internal/valuelog","Action":"build-fail"}
+{"Time":"2026-10-05T21:21:53.97426-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/caching"}
+{"Time":"2026-10-05T21:21:53.974411-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"FAIL\tgithub.com/snissn/gomap/TreeDB/caching [build failed]\n"}
+{"Time":"2026-10-05T21:21:53.974425-10:00","Action":"fail","Package":"github.com/snissn/gomap/TreeDB/caching","Elapsed":0,"FailedBuild":"github.com/snissn/gomap/TreeDB/internal/valuelog"}

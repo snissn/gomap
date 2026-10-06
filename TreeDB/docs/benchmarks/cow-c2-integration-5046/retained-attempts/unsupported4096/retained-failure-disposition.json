@@ -1,0 +1,13 @@
+{
+  "recorded_utc": "2026-10-06T04:46:47.674325+00:00",
+  "kind": "diagnostic probe unsupported fixture count; not candidate runtime failure",
+  "failed_stdout_sha256": "b94d3fb7bd749900c29565cd005438cff19661efaf5b5e05406ffea39ee095e9",
+  "failed_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "actual_command_derivation": "policy final MVCC btree job; fixture rejects4096; raw command stdout retained; original subprocess exit not emitted because parser exception preceded receipt write",
+  "collector_exit_code": 1,
+  "raw_profile_jobs_completed": 6,
+  "source": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+  "old_script_sha256": "962494d97662453c361c1aa3bf2a7161d9181102de0db8ed3268274414f5612b",
+  "next": "new MVCC-only packet256x/count16, no fixture edit; preservefailedattempt",
+  "warmup_qualification": "Failed4096 iteration guard precedes Options/Open in that iteration; Go may run a preceding1x warmup that opens the fixture. No whole-process zero-fixture-work claim."
+}

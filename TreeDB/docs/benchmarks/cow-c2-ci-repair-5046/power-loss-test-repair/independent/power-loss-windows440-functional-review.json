@@ -1,0 +1,2715 @@
+{
+  "verdict": "ACCEPT scoped test source and actual local functional evidence; current-head hosted/Windows gates pending",
+  "base_head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "base_tree": "513bc7aece83bd5ac3640ffa93a4f80adf719b9d",
+  "repaired_test_sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+  "packet_manifest_sha256": "f9d15d4cdfc0a76a2d7abf88515867d23da19e24fa194d9ec36f93fda4a4617f",
+  "literal_manifest_bindings_verified": 30,
+  "packet_extra_files": [],
+  "source_snapshot_sha256": "f321934eda545fb152231b69b2ca4412440790418ddc4801668640c478ec924f",
+  "source_count": 8057,
+  "tracked_pre_post_bytes_identical": true,
+  "source_delta_only": [
+    "TreeDB/cow_power_loss_test.go"
+  ],
+  "environment": {
+    "CGO_ENABLED": "1",
+    "GOARCH": "arm64",
+    "GOCACHE": "/Users/michaelseiler/Library/Caches/go-build",
+    "GOMODCACHE": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod",
+    "GOOS": "darwin",
+    "GOROOT": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.0.darwin-arm64",
+    "GOVERSION": "go1.26.0",
+    "GOWORK": "off"
+  },
+  "stages": {
+    "normal-coordinator": {
+      "test_passes": 6,
+      "package_passes": 1,
+      "failures": 0,
+      "skips": 0,
+      "exit": 0,
+      "stdout_sha256": "ab2ee11072b12e83b2504cb73b24d7d8794d26d796e2348ab77c1e36f7d3b232",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "normal-cow-modeled": {
+      "test_passes": 123,
+      "package_passes": 1,
+      "failures": 0,
+      "skips": 0,
+      "exit": 0,
+      "stdout_sha256": "13acf932ce226dd5f5c5b5a06ceae5a6dc9906eaab31a565db247e9aa2e34c73",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cut_leaf_passes": 108,
+      "distinct_cut_cases": 36,
+      "stable_image_profile_passes": 9,
+      "matching_attempt_distribution": {
+        "1": 108
+      },
+      "receipts": [
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        }
+      ]
+    },
+    "race-coordinator": {
+      "test_passes": 6,
+      "package_passes": 1,
+      "failures": 0,
+      "skips": 0,
+      "exit": 0,
+      "stdout_sha256": "2d3e29115ab8f228fa19ebf0e7c4debf0adcf2c63ab10136093fb5656b59b342",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "race-cow-modeled": {
+      "test_passes": 123,
+      "package_passes": 1,
+      "failures": 0,
+      "skips": 0,
+      "exit": 0,
+      "stdout_sha256": "9156671d0cbf4a101c7a11c036c3b143c52503141d33014e5e472797225be637",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cut_leaf_passes": 108,
+      "distinct_cut_cases": 36,
+      "stable_image_profile_passes": 9,
+      "matching_attempt_distribution": {
+        "1": 108
+      },
+      "receipts": [
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        }
+      ]
+    },
+    "safe-coordinator": {
+      "test_passes": 6,
+      "package_passes": 1,
+      "failures": 0,
+      "skips": 0,
+      "exit": 0,
+      "stdout_sha256": "61d08793cd3b3de77276065b3a4720f70b67041941dba2b1f72b20cbb6dd638d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "safe-cow-modeled": {
+      "test_passes": 123,
+      "package_passes": 1,
+      "failures": 0,
+      "skips": 0,
+      "exit": 0,
+      "stdout_sha256": "c51f9bdea6f764662a6ba658d854cf06cbd6c9a4bb810e4cc96e64f17120931a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "cut_leaf_passes": 108,
+      "distinct_cut_cases": 36,
+      "stable_image_profile_passes": 9,
+      "matching_attempt_distribution": {
+        "1": 108
+      },
+      "receipts": [
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "command-wal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+          "point": "before-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+          "point": "after-dependency-file-sync",
+          "resource": "auxiliary",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+          "point": "before-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+          "point": "after-new-file-directory-sync",
+          "resource": "value-log",
+          "matching_attempts": 1,
+          "group_acknowledged": false,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+          "point": "before-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+          "point": "after-index-data-sync",
+          "resource": "index",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+          "point": "before-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+          "point": "after-publication-seal-write",
+          "resource": "publication-seal",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "point": "before-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "point": "after-meta-write",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "point": "before-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": false
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "point": "after-meta-sync",
+          "resource": "meta",
+          "matching_attempts": 1,
+          "group_acknowledged": true,
+          "recovered_group": true
+        }
+      ]
+    }
+  },
+  "original_failure_retained": {
+    "json_sha256": "e455a73b05178ec5a048984587b7d07b90ece22873ef6741c0fd49bf604475c0",
+    "cut_leaf_passes": 35,
+    "cut_leaf_failures": 1,
+    "classification": "captured cut, err nil; original stable-image assertions not reached"
+  },
+  "limits": [
+    "No current-head actual Windows acceptance; local Darwin arm64 Go1.26.0 only.",
+    "All local matching_attempts are1; modeled packet does not reproduce multi-attempt Windows schedule. Deterministic coordinator witness proves late-waiter retry behavior separately.",
+    "Tracked path/content snapshot and clean-untracked Git status verified; runner identity does not itself attest universal file type/mode immutability.",
+    "Production runtime and cost fixtures unchanged; compiled test binary is changed and requires current strict hosted gates. No 45-run cost repetition inferred necessary for test-only delta.",
+    "No Go/build/benchmark/remote/GitHub jobs performed by reviewer."
+  ],
+  "checkout_extras": {
+    "receipt_sha256": "578a24bfaee8ac909a4c086d3af443a242c7ca148c7cc3d4d28f549e9b9474f9",
+    "preserved_ignored_path": "scripts/__pycache__/treedb_vacuum_m0_summarize.cpython-314.pyc",
+    "limitation": "Reported mtime predates runner; no before-byte proof. Not Go source or included compiled input, and not a universal filesystem no-extra attestation."
+  }
+}

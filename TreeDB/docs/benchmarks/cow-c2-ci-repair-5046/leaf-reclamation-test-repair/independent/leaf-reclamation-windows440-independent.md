@@ -1,0 +1,25 @@
+# Independent Windows leaf reclamation diagnosis
+
+**REVISE the immediate absence assumption; a finite eventual-observation repair is justified. No runtime leak is established by the retained failure.** Exact inspected commit `4403776d10b6ac82eb9e1839f437f59a78058816`, tree `513bc7aece83bd5ac3640ffa93a4f80adf719b9d`.
+
+The actual Windows core3 JSON has 1929 test/subcase passes, 9 package passes, 60 test skips and 3 package skips. The only failed leaf is `TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed`, plus its parent and TreeDB package. Durable and NoWAL siblings passed; both repaired Close notification profiles passed. The leaf calls CompactStorage successfully once, then immediately sees the exact rotated generation 2 path still present at test319. Its report marks generation 2 deleted with no live pages/bytes, GC eligible 1 and FilesDeleted/GenerationsDeleted0. Final-plan generation 2 PinnedCount 1 is observed inside backend compaction, before the outer cache maintenance refresh completes. It does not measure a postreturn leak.
+
+## Source-supported lifecycle
+
+GC first chooses logical deleted state (`leaf_generation_gc.go:510–551`), marks the file zombie and attempts unpinned removal (354–367), then publishes a refreshed value-log set/view (829). Deleted manifest records are pruned only when their physical files are already absent (732–805), so zero deletion counts coexist with a pending logically deleted file. Manifest state is not an unlink receipt.
+
+The COW cache retains one coherent native snapshot basis and exact persistent-file identity pins (`cow_flush.go:24–61`, `bounded_read_owner.go:60`). Native published-view replacement marks the prior leaf pin set stale (`db.go:4748`), so still-retained snapshots can gain the explicit generation protection required by their old view. That explains why a generation may have no explicit pins at GC selection yet appear pinned in the subsequent final audit.
+
+The public maintenance wrapper refreshes the backend set and installs/drains its new basis after backend CompactStorage returns (`cow_maintenance.go:12–35`). Crucially, `cowBackendBasis.release` closes the native snapshot before releasing its separate identity pins (`cow_cut.go:31–38`). Snapshot finalization releases its value-log set (`db.go:2096`); the manager's final set release may attempt zombie deletion while those identity pins still exist. `deleteZombieFile` explicitly schedules `retryZombieDelete` and returns nil for such a conflict (`stable_resource.go:891–896`). The worker starts a 200ms backoff and rechecks exact file/refcount/zombie and identity authority before unlink (`manager.go:2385–2449`). A Windows sharing violation has its own retry path (stable_resource914 and manager2988); no such exact branch is proven by the hosted log.
+
+The existing native manager test at `identity_pin_manager_test.go:337–351` keeps a stable-pinned zombie present, releases its token, then polls for actual absence with a finite 5s deadline. Consequently an immediate os.Stat in public test317–319 asks for a stronger timing guarantee than the existing lifecycle. The original packet contains no manager retry/pin-release trace or later stat; it cannot distinguish safely pending deletion from a permanent leak. No production lifetime-order change, pin bypass, manual unlink or GC authority change is justified by this evidence.
+
+The prior COW registration repair remains present: successful concrete RegisterValueLogSegmentReplacing suppresses redundant cached pending inventory (`caching/db.go:28939–28951`); fallback/legacy registration retains it. This failure reports successful GC logical deletion rather than a failed attempt to re-register an already unlinked source, and does not re-establish that older defect.
+
+## Bounded repair contract
+
+Keep the single successful CompactStorage call and all three profiles. Poll only the actual unused rotated leaf path for absence with a finite 5s native-convention deadline. Fail immediately on stat errors other than present/NotExist, and retain elapsed/count diagnostics. Keep the original user cut alive and verify its value before, during and after waiting; do not close it to force success, rerun compaction, remove the file manually, or skip Windows. Preserve the later write, checkpoint, actual Close and reopen value assertions. Timing out must remain a real failure with the path/report available.
+
+Actual normal/race/safe results and new-head Windows CI must follow. This source diagnosis justifies the observation boundary without proving the precise original Windows schedule or certifying the repair's Windows execution. The prior power-loss test change and this potential test-only change do not alter production runtime or cost fixture bytes; no automatic new 45-run cost qualification follows, and strict hosted gates remain separate.
+
+Exact source Git blobs, packet/log SHA bindings, complete actual failure text and event counts are in `leaf-reclamation-windows440-independent.json`. No Go, remote, timing, GitHub or source mutation occurred.

@@ -1,0 +1,578 @@
+[
+  {
+    "label": "r1-append_only-N128",
+    "started_utc": "2026-10-06T04:37:45.354455+00:00",
+    "completed_utc": "2026-10-06T04:37:48.836017+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.48155873734504,
+    "load_before": [
+      1.412109375,
+      2.44189453125,
+      2.56103515625
+    ],
+    "user_seconds": 0.228153,
+    "system_seconds": 0.1359,
+    "child_max_rss_kib": 94380,
+    "log_sha256": "ba9e92bbd851a2d7414601dafe5e93753fc9f1014d714e0511632fbf27d099f6",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-append_only-N256",
+    "started_utc": "2026-10-06T04:37:49.447256+00:00",
+    "completed_utc": "2026-10-06T04:37:54.747415+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 5.30015239585191,
+    "load_before": [
+      1.61962890625,
+      2.4677734375,
+      2.56884765625
+    ],
+    "user_seconds": 0.275877,
+    "system_seconds": 0.14943299999999998,
+    "child_max_rss_kib": 111840,
+    "log_sha256": "b800979a60c9bfdc3d5b2bd496a3869a4ade09ff647a82adde11ad52f0e8f4ca",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-N128",
+    "started_utc": "2026-10-06T04:37:55.322049+00:00",
+    "completed_utc": "2026-10-06T04:37:58.865474+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.543427139054984,
+    "load_before": [
+      1.73046875,
+      2.47705078125,
+      2.5712890625
+    ],
+    "user_seconds": 0.150562,
+    "system_seconds": 0.101851,
+    "child_max_rss_kib": 111992,
+    "log_sha256": "3c9331828de6519d0b1378a70c87a52ca9f0d496f21e138079b945c70f20cecd",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-btree-N256",
+    "started_utc": "2026-10-06T04:37:59.463594+00:00",
+    "completed_utc": "2026-10-06T04:38:04.749870+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 5.286274841986597,
+    "load_before": [
+      1.83251953125,
+      2.48583984375,
+      2.57373046875
+    ],
+    "user_seconds": 0.21656699999999998,
+    "system_seconds": 0.13200199999999998,
+    "child_max_rss_kib": 112260,
+    "log_sha256": "c68d179f73621892acd8d76970036ee5b362a7b4987922687f4e89dd590cf83b",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-N128",
+    "started_utc": "2026-10-06T04:38:05.327334+00:00",
+    "completed_utc": "2026-10-06T04:38:08.630268+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.3029355038888752,
+    "load_before": [
+      1.92626953125,
+      2.49462890625,
+      2.576171875
+    ],
+    "user_seconds": 0.11386199999999999,
+    "system_seconds": 0.085896,
+    "child_max_rss_kib": 112864,
+    "log_sha256": "83bef424165e0612151163de1cb7ef29cf65a1e8c9aff731235156a19e377cd7",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r1-cow_btree-N256",
+    "started_utc": "2026-10-06T04:38:09.222907+00:00",
+    "completed_utc": "2026-10-06T04:38:14.155577+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 4.932669527363032,
+    "load_before": [
+      2.0927734375,
+      2.52001953125,
+      2.583984375
+    ],
+    "user_seconds": 0.15972999999999998,
+    "system_seconds": 0.099103,
+    "child_max_rss_kib": 112904,
+    "log_sha256": "c9f3f5116dba62b79d4ef5344dd66442fecb31a0cf4ff11888c0fca7a755cc8d",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-cow_btree-N128",
+    "started_utc": "2026-10-06T04:38:14.742782+00:00",
+    "completed_utc": "2026-10-06T04:38:18.076083+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.3333033891394734,
+    "load_before": [
+      2.16552734375,
+      2.5283203125,
+      2.58642578125
+    ],
+    "user_seconds": 0.110263,
+    "system_seconds": 0.096036,
+    "child_max_rss_kib": 112904,
+    "log_sha256": "7360f8f583d7d52177a012185db2394bdfdbdd083c7c833ed3b6ccab3a885897",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-cow_btree-N256",
+    "started_utc": "2026-10-06T04:38:18.656469+00:00",
+    "completed_utc": "2026-10-06T04:38:23.608832+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 4.952371554914862,
+    "load_before": [
+      2.15185546875,
+      2.51953125,
+      2.5830078125
+    ],
+    "user_seconds": 0.160598,
+    "system_seconds": 0.099161,
+    "child_max_rss_kib": 112904,
+    "log_sha256": "d3eee702aa6f1aec8e577970191dc07e94af574cee973a4b811de8a194059911",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-btree-N128",
+    "started_utc": "2026-10-06T04:38:24.195728+00:00",
+    "completed_utc": "2026-10-06T04:38:27.801159+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.6054323916323483,
+    "load_before": [
+      2.30029296875,
+      2.54443359375,
+      2.5908203125
+    ],
+    "user_seconds": 0.138617,
+    "system_seconds": 0.119805,
+    "child_max_rss_kib": 112960,
+    "log_sha256": "9ec7c007b1b8493859ca0c9b55f2bd3016e62cf3c967ee9a01fcc993d339ad15",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-btree-N256",
+    "started_utc": "2026-10-06T04:38:28.382121+00:00",
+    "completed_utc": "2026-10-06T04:38:33.645336+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 5.2632165853865445,
+    "load_before": [
+      2.27587890625,
+      2.53515625,
+      2.58740234375
+    ],
+    "user_seconds": 0.195151,
+    "system_seconds": 0.15717499999999998,
+    "child_max_rss_kib": 117604,
+    "log_sha256": "5cd8f9f0cbdec708393638875948c39cce5702f0ae09737d43e6c745ce02e9fa",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-append_only-N128",
+    "started_utc": "2026-10-06T04:38:34.226600+00:00",
+    "completed_utc": "2026-10-06T04:38:37.739654+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.5130556551739573,
+    "load_before": [
+      2.25341796875,
+      2.52587890625,
+      2.583984375
+    ],
+    "user_seconds": 0.22222299999999998,
+    "system_seconds": 0.104762,
+    "child_max_rss_kib": 112960,
+    "log_sha256": "26836a4f255c212eb8c637e070bfd9d4c122e7e8419e658da0d161880893f9df",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r2-append_only-N256",
+    "started_utc": "2026-10-06T04:38:38.320019+00:00",
+    "completed_utc": "2026-10-06T04:38:43.521756+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 5.201737164054066,
+    "load_before": [
+      2.23291015625,
+      2.51708984375,
+      2.58056640625
+    ],
+    "user_seconds": 0.280198,
+    "system_seconds": 0.141085,
+    "child_max_rss_kib": 112960,
+    "log_sha256": "c76d602a8f1f5ae53a9a947c4fe94d69261560c4031f20d3077f31627c341857",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-btree-N128",
+    "started_utc": "2026-10-06T04:38:44.099860+00:00",
+    "completed_utc": "2026-10-06T04:38:47.591027+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.49116676999256,
+    "load_before": [
+      2.29443359375,
+      2.525390625,
+      2.5830078125
+    ],
+    "user_seconds": 0.147605,
+    "system_seconds": 0.10419199999999999,
+    "child_max_rss_kib": 113012,
+    "log_sha256": "828bb8c7547b9dac147cbc13c375f0fae200910c6d377a4131a6cd8e12b002e6",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-btree-N256",
+    "started_utc": "2026-10-06T04:38:48.165430+00:00",
+    "completed_utc": "2026-10-06T04:38:53.400498+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^btree$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 5.235068409238011,
+    "load_before": [
+      2.2705078125,
+      2.5166015625,
+      2.57958984375
+    ],
+    "user_seconds": 0.20288399999999998,
+    "system_seconds": 0.140612,
+    "child_max_rss_kib": 113072,
+    "log_sha256": "4db7f528948b205001a41aeed522417459893440fb28394a4848230345c0bc4c",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-append_only-N128",
+    "started_utc": "2026-10-06T04:38:53.976753+00:00",
+    "completed_utc": "2026-10-06T04:38:57.409074+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.4323213971219957,
+    "load_before": [
+      2.4091796875,
+      2.54150390625,
+      2.58740234375
+    ],
+    "user_seconds": 0.19852499999999998,
+    "system_seconds": 0.12065,
+    "child_max_rss_kib": 113072,
+    "log_sha256": "0990efb6103c31c3b42cf6490231879996f78f4b1815b6a05ae4c07ca02a36a2",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-append_only-N256",
+    "started_utc": "2026-10-06T04:38:58.004728+00:00",
+    "completed_utc": "2026-10-06T04:39:03.245627+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^append_only$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 5.240901485085487,
+    "load_before": [
+      2.3759765625,
+      2.5322265625,
+      2.583984375
+    ],
+    "user_seconds": 0.259673,
+    "system_seconds": 0.142666,
+    "child_max_rss_kib": 113084,
+    "log_sha256": "92df08697e0cabb64324d77eb0fe0178c561e0ed11d881e4b3e60b6b5531605d",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-cow_btree-N128",
+    "started_utc": "2026-10-06T04:39:03.830251+00:00",
+    "completed_utc": "2026-10-06T04:39:07.138439+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(point|all_versions)$",
+      "-test.benchtime=128x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 3.3081885669380426,
+    "load_before": [
+      2.42626953125,
+      2.5400390625,
+      2.58642578125
+    ],
+    "user_seconds": 0.11219399999999999,
+    "system_seconds": 0.086379,
+    "child_max_rss_kib": 113084,
+    "log_sha256": "0d5b17f5f908e27556b6ed4fce27a06a2461a47524c84816a8c7dda94a597dcc",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 128
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  },
+  {
+    "label": "r3-cow_btree-N256",
+    "started_utc": "2026-10-06T04:39:07.709137+00:00",
+    "completed_utc": "2026-10-06T04:39:12.657182+00:00",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-b9e5587-v2/mvcc-cost.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkCOWIntegratedPublicMVCC$/^(command_wal_durable|command_wal_relaxed|no_wal_fast)$/^cow_btree$/^(point|all_versions)$",
+      "-test.benchtime=256x",
+      "-test.count=1",
+      "-test.timeout=300s"
+    ],
+    "exit_code": 0,
+    "elapsed_seconds": 4.948047884739935,
+    "load_before": [
+      2.42626953125,
+      2.5400390625,
+      2.58642578125
+    ],
+    "user_seconds": 0.167073,
+    "system_seconds": 0.101793,
+    "child_max_rss_kib": 113084,
+    "log_sha256": "d5107404ab3e05ad5cc332eae18e9c5beb133e50909a39c1ed2c18b2d3539ecb",
+    "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "case_validation": {
+      "rows": 6,
+      "exact_case_set": true,
+      "iterations": 256
+    },
+    "validation_error": null,
+    "source_drift_after": []
+  }
+]

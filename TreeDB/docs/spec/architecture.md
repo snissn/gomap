@@ -44,8 +44,9 @@ TreeDB's value log is the only value storage path for values.
 
 ### 2.4 Cached Layer
 
-- Buffers writes in mutable memtables.
-- Rotates immutable memtables and flushes them into backend batches.
+- Buffers writes in mutable memtables, or explicitly selected immutable COW roots.
+- Mutable modes rotate immutable memtables; COW freezes bounded sources on the
+  write/maintenance side. Both flush through canonical backend batches.
 - Writes commit-log/value-log data as part of ingest path.
 - Applies adaptive backpressure and optional background checkpointing.
 
@@ -55,12 +56,18 @@ TreeDB's value log is the only value storage path for values.
 - Applies batches via zipper merge into new page generations.
 - Maintains active value-log segment set for reads.
 
-### 2.6 Immutable memtable foundation
+### 2.6 Immutable COW cache
 
 `internal/memtable` also supplies a separately owned COW writer/read-header
 capability around installed tidwall/btree. It owns immutable string payloads,
-private preparation and finite source-generation reservations. It is not wired
-into public DB dispatch at this foundation stage. See
+private preparation and finite source-generation reservations. Explicit
+`MemtableMode="cow_btree"` integrates it with one coherent cached cut: fixed
+shard roots, bounded frozen sources and a retained backend snapshot basis.
+Capture pins that cut without rotating shards or scanning historical records.
+Preparation admits all changed roots and resource owners before command append;
+publication installs the complete cut once. See
+[COW cached publication](cow-cache-publication.md) for public capabilities,
+limits, checkpoint handoff and refusal, and
 [immutable memtable ownership](cow-memtable-ownership.md) for the precise
 pre-frame preparation, lease and retirement contract; mutable `BTree.Freeze`
 does not provide this capability.
@@ -110,6 +117,13 @@ If `DisableSideStores=true`, the main DB is opened directly at `<root>`.
 - In cached mode, snapshots and iterators also include buffered memtable writes by reading from immutable queued memtables (newest-first) plus a backend snapshot.
 - Iterators are point-in-time views and must be closed.
 - Writers are serialized; readers run concurrently.
+
+In explicit COW mode, root/source/basis ownership belongs to the same cut.
+Pointer/dictionary materialization and copying run outside its publication
+latch. An accepted flush retains its exact covered-prefix receipt through
+handoff refusal or a reported post-acceptance error; newer sources remain
+visible. Maintenance refresh uses the existing flush fence and physical
+retention authorities. COW does not introduce a second value-log GC registry.
 
 ## 6. Write Path Modes
 

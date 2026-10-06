@@ -1,0 +1,56 @@
+{
+  "candidate": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "source_sha256": {
+    "TreeDB/internal/valuelog/leaf_page_payload.go": "9c7efc06c2a9d38b95519f0face46d9af19dcfa09c73e4f784128838694355ae",
+    "TreeDB/internal/valuelog/manager.go": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+    "TreeDB/internal/valuelog/cow_reader.go": "eddc6d47c0719d91cd27ad605d6cfb5f125799a09f16b718d0e1dd884b61ee86",
+    "TreeDB/caching/cow_read_workspace.go": "84b2ecd1e596648cb5e683a248f152d7774b2dd767e7c1bf7a08487bf98a396d"
+  },
+  "stdlib_version": "go1.25.4",
+  "stdlib_sha256": {
+    "/opt/homebrew/opt/go/libexec/src/internal/filepathlite/path.go": "dd1a0138328d6353d089d6ba8e04905d9e951bedfef1b85913c64de2ca2fd223",
+    "/opt/homebrew/opt/go/libexec/src/internal/filepathlite/path_windows.go": "ad313fae9fd1e150df082ad7f43c34b0830ce79433d0eef89c7724fdb07d06bb"
+  },
+  "method": "Read-only source tracing; no Go execution or Windows differential test. Actual repair acceptance requires Go1.26.8 source binding and Windows differential witnesses.",
+  "verdict": "REVISE naive volume stripping; conditional READY for canonical fast path plus semantic fallback and admission proof",
+  "counterexamples": [
+    {
+      "path": "C:\\\\leaf_vlog\\f",
+      "original": true,
+      "naive_stripped": false,
+      "reason": "Stripped duplicate root separators create a UNC volume."
+    },
+    {
+      "path": "\\\\host\\share\\\\leaf_vlog\\f",
+      "original": true,
+      "naive_stripped": false,
+      "reason": "Duplicate separators after the original UNC share become a second UNC volume."
+    },
+    {
+      "path": "C:C:leaf_vlog\\f",
+      "original": false,
+      "naive_stripped": true,
+      "reason": "Malformed nested drive volume is stripped twice."
+    }
+  ],
+  "recommended_fallback": "If filepath.VolumeName(strippedTail) is nonempty, retain original filepath.Base(filepath.Dir(path)) classification. Preserve empty/non-leaf rejection before parsing.",
+  "allocation_limits": [
+    "Canonical drive and UNC file paths remove volume+dir concatenation; actual Go1.26.8 allocation witness still needed.",
+    "VolumeName FromSlash and Clean can allocate for noncanonical lexical paths; fallback is not globally allocation-free.",
+    "Production SegmentPath uses filepath.Join; registerSegmentLocked/openFile accepts supplied paths verbatim. Establish canonical retained native path invariant or charge temporary noncanonical path backing before allowing this COW read seam.",
+    "Known metadata arrays separately charge 4,144 bytes before Inspect; this fixed envelope does not cover variable-size filepath temporary strings."
+  ],
+  "case_matrix": [
+    "canonical drive absolute eligible leaf parent",
+    "drive-relative eligible leaf parent",
+    "UNC share root named leaf_vlog remains ineligible",
+    "UNC child leaf_vlog remains eligible",
+    "duplicate separators after drive/UNC volume",
+    "mixed slash volume prefix and separators",
+    "dot/dotdot parent normalization",
+    "trailing separators",
+    "empty and dot paths",
+    "device-prefix and nested-volume tails",
+    "non-leaf fileID remains ineligible"
+  ]
+}

@@ -1,0 +1,13 @@
+# Frozen Windows v4 source review
+
+**SOURCE ACCEPT** for the frozen variant based on `8a159dc1a2aeea02611421ecc3216b8ee84a1516`: 7286 files, aggregate `0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750` (compact sorted JSON serialization). Independently checked every bound file and extra-file inventory: zero drift and zero extras. Adjacent JSON records changed file hashes, actual Go1.26.8 filepath source, and nine v3 stdout/stderr receipts. This is not acceptance of a committed integrated candidate or Windows runtime.
+
+The 4,144-byte Windows/race metadata envelope is acquired before workspace construction and inspection, reused under existing serialization, and released after snapshot reads/iterators drain. The v4 test now drives actual pointer `Get` through real whole-envelope refusal before workspace installation, unchanged ownership, exact-value retry, admitted-buffer reuse and final baseline drain. Linux normal charge/allocation expectations remain unchanged.
+
+The namespace tail-volume fallback preserves original lexical classification, including duplicate drive/UNC separators and nested volumes. Canonical native producer closure is visible in cache rotation, manager scanning/SegmentPath, leaf fallback and pack destination paths using `filepath.Join`. The explicit low-level caller contract requires canonical retained paths; arbitrary direct registrations are not a globally allocation-free parser guarantee.
+
+The real `central-index-compaction` pressure route executes on Unix and Windows. Both capture/install stages require native CompactIndex root-ID and commit-sequence change before actual finite-budget pressure, then check accepted error, capacity refusal, old-basis retention, persistent gate, old/current pointer/tombstone/empty-value precedence, denied writers and successful retry. Unsupported vacuum/leaf-pack cases remain narrow assertions with lifetime/reopen checks continuing.
+
+The modeled poison exception accepts the recovery sentinel only after the captured `AfterMetaWrite` meta-resource event. The prior nil-cut guard proves capture. Other direct-cause checks and every actual stable-image, no-partial-group and ACK durability assertion remain unchanged. Existing asynchronous publication poison followed by a readiness/flush gate explains the sentinel.
+
+All nine v3 normal/race/safe receipts return zero; direct JSON parsing finds no failures. V4 changes only the stronger admission test, whose new runtime receipts remain separate pending evidence. Hosted Windows, default raw-path performance, coherent frozen integration, affected functional evidence and hosted review remain required. No Go or remote jobs were run by this reviewer.

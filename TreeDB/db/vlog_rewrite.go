@@ -3015,11 +3015,11 @@ func collectRewriteSwapPointerMatches(tr *tree.Tree, b *batch.Batch, swaps []rew
 			if cmp > 0 {
 				break
 			}
-			_, ptr, flags := it.UnsafeEntry()
+			_, ptr, flags, revision := iterator.UnsafeEntryWithRevision(it)
 			if flags&node.FlagPointer != 0 && ptr == swap.oldPtr {
 				// Rewrite swap batches derive touched segments explicitly and avoid
 				// per-entry touched-segment tracking overhead here.
-				b.AppendPointerViewNoTouchTrustedSorted(swap.key, swap.newPtr)
+				b.AppendPointerViewNoTouchTrustedSortedWithRevision(swap.key, swap.newPtr, revision)
 				if trackValueLogRefDelta && (page.IsValueLogFileID(swap.oldPtr.FileID) || page.IsValueLogFileID(swap.newPtr.FileID)) {
 					if delta == nil {
 						delta = newValueLogRefDelta()

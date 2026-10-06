@@ -1,0 +1,218 @@
+[
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 472.6,
+      "B/op": 128.0,
+      "allocs/op": 1.0
+    },
+    "role": "main",
+    "repeat": 1,
+    "run": "r1-main"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2889.0,
+      "B/op": 256.0,
+      "allocs/op": 1.0
+    },
+    "role": "main",
+    "repeat": 1,
+    "run": "r1-main"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2798.0,
+      "B/op": 0.0,
+      "allocs/op": 0.0
+    },
+    "role": "main",
+    "repeat": 1,
+    "run": "r1-main"
+  },
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 480.4,
+      "B/op": 128.0,
+      "allocs/op": 1.0
+    },
+    "role": "candidate",
+    "repeat": 1,
+    "run": "r1-candidate"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2846.0,
+      "B/op": 256.0,
+      "allocs/op": 1.0
+    },
+    "role": "candidate",
+    "repeat": 1,
+    "run": "r1-candidate"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2798.0,
+      "B/op": 0.0,
+      "allocs/op": 0.0
+    },
+    "role": "candidate",
+    "repeat": 1,
+    "run": "r1-candidate"
+  },
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 481.1,
+      "B/op": 128.0,
+      "allocs/op": 1.0
+    },
+    "role": "candidate",
+    "repeat": 2,
+    "run": "r2-candidate"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2888.0,
+      "B/op": 256.0,
+      "allocs/op": 1.0
+    },
+    "role": "candidate",
+    "repeat": 2,
+    "run": "r2-candidate"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2763.0,
+      "B/op": 0.0,
+      "allocs/op": 0.0
+    },
+    "role": "candidate",
+    "repeat": 2,
+    "run": "r2-candidate"
+  },
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 474.2,
+      "B/op": 128.0,
+      "allocs/op": 1.0
+    },
+    "role": "main",
+    "repeat": 2,
+    "run": "r2-main"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2869.0,
+      "B/op": 256.0,
+      "allocs/op": 1.0
+    },
+    "role": "main",
+    "repeat": 2,
+    "run": "r2-main"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2844.0,
+      "B/op": 0.0,
+      "allocs/op": 0.0
+    },
+    "role": "main",
+    "repeat": 2,
+    "run": "r2-main"
+  },
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 471.7,
+      "B/op": 128.0,
+      "allocs/op": 1.0
+    },
+    "role": "main",
+    "repeat": 3,
+    "run": "r3-main"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2891.0,
+      "B/op": 256.0,
+      "allocs/op": 1.0
+    },
+    "role": "main",
+    "repeat": 3,
+    "run": "r3-main"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2838.0,
+      "B/op": 0.0,
+      "allocs/op": 0.0
+    },
+    "role": "main",
+    "repeat": 3,
+    "run": "r3-main"
+  },
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 479.3,
+      "B/op": 128.0,
+      "allocs/op": 1.0
+    },
+    "role": "candidate",
+    "repeat": 3,
+    "run": "r3-candidate"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2897.0,
+      "B/op": 256.0,
+      "allocs/op": 1.0
+    },
+    "role": "candidate",
+    "repeat": 3,
+    "run": "r3-candidate"
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "iterations": 100000,
+    "metrics": {
+      "ns/op": 2778.0,
+      "B/op": 0.0,
+      "allocs/op": 0.0
+    },
+    "role": "candidate",
+    "repeat": 3,
+    "run": "r3-candidate"
+  }
+]

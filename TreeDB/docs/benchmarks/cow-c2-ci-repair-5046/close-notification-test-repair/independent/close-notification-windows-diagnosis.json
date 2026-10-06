@@ -1,0 +1,205 @@
+{
+  "disposition": "REVISE test attribution and timing boundaries; runtime Close deadlock not established by this log",
+  "at_utc": "2026-10-06T08:54:34.508018+00:00",
+  "failed_hosted_head": "0142519b2cc4c097f50b4e7a64a5b6993ff0d9c6",
+  "inspected_current_head": "61fbd36655a9a8641f1cacee013c8f2bf2dc1553",
+  "source_bytes_identical_for_inspected_paths": true,
+  "source_sha256": {
+    "TreeDB/cow_close_notification_test.go": "35ebac9f24cf009d570bcfd9f397c57b98d3c7276f8bf306fe9df7a2516bc252",
+    "TreeDB/public.go": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+    "TreeDB/caching/db.go": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+    "TreeDB/command_wal_public_cached.go": "01f9874ef67d733112166f7b12e0e4c8bb03069d400dad1f05f97186be3ef331",
+    "TreeDB/bg_vacuum.go": "ae477993a01960095ed9d0c40722593d4ffa45f62c8441c683371609b8018528"
+  },
+  "failure_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-014-windows-core3-failure.log",
+  "failure_log_sha256": "27131c64bae66d140c8ad89237a4389f43433a756beb29d9317b099f7a8b1583",
+  "actual_relevant_events": [
+    {
+      "Time": "2026-10-06T08:42:45.6727097Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase"
+    },
+    {
+      "Time": "2026-10-06T08:42:45.6732816Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable"
+    },
+    {
+      "Time": "2026-10-06T08:42:51.5408804Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+      "Output": "    cow_close_notification_test.go:55: close error notification blocked on public lifecycle lock\n"
+    },
+    {
+      "Time": "2026-10-06T08:42:52.748015Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWCloseErrorNotificationCanReadClosedDatabasecommand_wal_d3497742719\\001\\dictdb\\index.db: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-06T08:42:52.7485844Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+      "Elapsed": 7.08
+    },
+    {
+      "Time": "2026-10-06T08:42:52.7485844Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed"
+    },
+    {
+      "Time": "2026-10-06T08:42:57.9269824Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+      "Output": "    cow_close_notification_test.go:55: close error notification blocked on public lifecycle lock\n"
+    },
+    {
+      "Time": "2026-10-06T08:42:59.827467Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+      "Output": "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWCloseErrorNotificationCanReadClosedDatabasecommand_wal_r3514665079\\001\\dictdb\\index.db: The process cannot access the file because it is being used by another process.\n"
+    },
+    {
+      "Time": "2026-10-06T08:42:59.8279963Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+      "Elapsed": 7.08
+    },
+    {
+      "Time": "2026-10-06T08:42:59.8279963Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase",
+      "Elapsed": 14.15
+    },
+    {
+      "Time": "2026-10-06T08:42:59.8279963Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen"
+    },
+    {
+      "Time": "2026-10-06T08:42:59.8279963Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen/command_wal_durable"
+    },
+    {
+      "Time": "2026-10-06T08:43:07.8226542Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen/command_wal_durable",
+      "Elapsed": 7.99
+    },
+    {
+      "Time": "2026-10-06T08:43:07.8226542Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen/command_wal_relaxed"
+    },
+    {
+      "Time": "2026-10-06T08:43:15.8263666Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen/command_wal_relaxed",
+      "Elapsed": 8
+    },
+    {
+      "Time": "2026-10-06T08:43:15.8263666Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen/no_wal_fast"
+    },
+    {
+      "Time": "2026-10-06T08:43:16.1520756Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen/no_wal_fast",
+      "Elapsed": 0.33
+    },
+    {
+      "Time": "2026-10-06T08:43:16.1520756Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicContractCheckpointCloseReopen",
+      "Elapsed": 16.32
+    }
+  ],
+  "findings": [
+    {
+      "priority": "P2",
+      "file": "TreeDB/cow_close_notification_test.go",
+      "line": 48,
+      "trigger": "Windows test times all database.Close against 5 seconds",
+      "impact": "Test reports callback lifecycle-lock deadlock without observing notification entry; Fatal returns while Close still runs, producing TempDir busy secondary.",
+      "source_cause": "Close includes background/maintenance work before reportError and cache/backend/dict teardown after synchronous notification.",
+      "evidence_limit": "No callback-entry/completion trace, goroutine stack or isolated Close timing in failed job; 7.99/8.00 second passing neighboring fixtures include checkpoint/Close/reopen operations, not isolated Close measurements."
+    }
+  ],
+  "source_order": [
+    {
+      "file": "TreeDB/public.go",
+      "line": 1827,
+      "meaning": "bgVac.Stop/runMu/endDeferredVectorBuild/closeMaintenance before exclusive lifecycle lock"
+    },
+    {
+      "file": "TreeDB/public.go",
+      "line": 1843,
+      "meaning": "lifecycleMu exclusive lock spans final checkpoint, synchronous reportError and storage teardown"
+    },
+    {
+      "file": "TreeDB/public.go",
+      "line": 1865,
+      "meaning": "backend/dictdb/templateDB Close happen after callback return"
+    },
+    {
+      "file": "TreeDB/public.go",
+      "line": 1880,
+      "meaning": "reportError calls NotifyError synchronously before bgErr storage"
+    },
+    {
+      "file": "TreeDB/public.go",
+      "line": 596,
+      "meaning": "captureReadOwners TryRLock refuses ErrClosed, no blocking RLock"
+    },
+    {
+      "file": "TreeDB/public.go",
+      "line": 2520,
+      "meaning": "Stats TryRLock refuses nil during exclusive Close"
+    },
+    {
+      "file": "TreeDB/caching/db.go",
+      "line": 26436,
+      "meaning": "cached Close waits worker group after frontier draining"
+    },
+    {
+      "file": "TreeDB/public.go",
+      "line": 2684,
+      "meaning": "real cached.Checkpoint error returns to final public Close wrapper"
+    }
+  ],
+  "bounded_test_repair_contract": [
+    "Signal actual final-checkpoint notification entry immediately before Stats/Get, and completion after both calls; use nonblocking/bounded fixture channels.",
+    "Check actual notification and returned Close error preserve wrapped final-checkpoint ErrCOWCapacity; Get is ErrClosed and Stats is nil under exclusive lifecycle ownership.",
+    "Start callback-completion deadline at notification entry; keep a separately identified explicit finite whole-Close deadline from Close launch, including pre/post-notification I/O. Do not skip Windows or remove whole-Close liveness coverage.",
+    "Verify notification completion precedes Close return under synchronous reportError ordering; do not settle for callback entry alone.",
+    "Join the started Close before normal TempDir cleanup. Failure-path cleanup must remain bounded and report any unjoined Close rather than claiming resources were closed.",
+    "Keep real COW pressure lease until tested refusal/notification; release it and verify retained cache TotalBytes/ExternalLeases zero after actual completed Close.",
+    "Preserve async Close-hook witness; no production lifecycle/M7/owner authority change on source/log evidence alone.",
+    "Retain original old014 failure honestly, run affected normal/race/safe checks on exact test-only freeze and require repaired final-head actual Windows/strict CI/hosted review. Historical974 runtime/cost identity remains original; test-only delta needs applicability, no automatic 45-run recollection."
+  ],
+  "limitations": [
+    "Source-only diagnosis; no jobs, timing, edits, remote or GitHub operations.",
+    "Do not classify observed failure as flake or proven I/O slowness: its phase is unobserved.",
+    "Current/new final head hosted Windows evidence remains missing; no merge waiver."
+  ]
+}

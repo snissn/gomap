@@ -58,7 +58,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	backendDBBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "db.go"))
 	orderedRootBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "ordered_root_publish.go"))
 
-	for _, fragment := range []string{"db.ensureOpen()", "db.cached.SeekGEVersionRange(start, end)", "return db.SeekGE(start, end)"} {
+	for _, fragment := range []string{"db.captureReadOwners()", "cached.SeekGEVersionRange(start, end)", "return seekGEBackend(backend, start, end)"} {
 		profileInventoryRequireBody(t, publicBodies, "(*DB).SeekGEVersionRange", fragment)
 	}
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")

@@ -1,0 +1,9 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB
+cpu: 11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz
+BenchmarkCOWPublicDirtyCost/no_wal_fast/cow_btree/Inline64/N=2048/Forward16-12         	    8192	      8779 ns/op	         0 fixture_checkpoint_runs	         0 fixture_command_wal_file_sync_calls	         0 fixture_command_wal_sync_count	         1.000 fixture_cow_active_cuts	      8193 fixture_cow_capture_calls_total	       256.0 fixture_cow_control_bytes	         2.000 fixture_cow_current_roots	         0 fixture_cow_deferred_bytes	    290928 fixture_cow_external_bytes	         5.000 fixture_cow_external_leases	         0 fixture_cow_frozen_roots	         2.000 fixture_cow_generations	         0 fixture_cow_handoffs_total	   5750976 fixture_cow_history_bytes	   7109104 fixture_cow_peak_bytes	         1.000 fixture_cow_prepare_calls_total	         1.000 fixture_cow_publications_total	    290928 fixture_cow_reserved_bytes	         0 fixture_cow_retired_bytes	         0 fixture_cow_rollovers_total	         0 fixture_cow_sources	   6042160 fixture_cow_total_bytes	         0 fixture_cow_views	         0 fixture_value_log_sync_calls	      7858 p50-ns	     11879 p95-ns	     15161 p99-ns	         0 snapshot_rotations/op	         0 warm_snapshot_rotations	    1640 B/op	      20 allocs/op
+--- BENCH: BenchmarkCOWPublicDirtyCost/no_wal_fast/cow_btree/Inline64/N=2048/Forward16-12
+    cow_public_cost_bench_test.go:85: COW_FINAL_CLOSE total=0 history=0 reserved=0 retired=0 controls=0 external=0 generations=0 sources=0 views=0 leases=0 peak=7109104
+    cow_public_cost_bench_test.go:85: COW_FINAL_CLOSE total=0 history=0 reserved=0 retired=0 controls=0 external=0 generations=0 sources=0 views=0 leases=0 peak=7109104
+PASS

@@ -1,0 +1,10 @@
+{
+  "at": "2026-10-06T07:25:23.900457+00:00",
+  "toolchain": "go1.26.8.darwin-arm64",
+  "files": {
+    "src/internal/filepathlite/path.go": "dd1a0138328d6353d089d6ba8e04905d9e951bedfef1b85913c64de2ca2fd223",
+    "src/internal/filepathlite/path_windows.go": "ad313fae9fd1e150df082ad7f43c34b0830ce79433d0eef89c7724fdb07d06bb",
+    "src/internal/poll/fd_windows.go": "6bfd788cee539d0b34786baf1e01f79bb610be7e5a8bbf157ccc91b64c4eee77"
+  },
+  "source_note": "Actual installed compiler toolchain source; namespace edge-case predictions await repaired hosted Windows runtime"
+}

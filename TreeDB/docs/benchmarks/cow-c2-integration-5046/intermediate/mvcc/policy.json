@@ -1,0 +1,49 @@
+{
+  "created_utc": "2026-10-06T05:20:34.135494+00:00",
+  "scope": "tiny C2 public MVCC diagnostic; Store fences retained",
+  "source_tree_sha256": "c50cf00ef056bd1cca78e80c02cf5df79deb961915290d161d139b5aa98a0d1f",
+  "fixture_sha256": "243a3049303d017a5e68a4eb8782287c707cc91aa23f23199e910ed6db5e4b18",
+  "orders": [
+    [
+      "append_only",
+      "btree",
+      "cow_btree"
+    ],
+    [
+      "cow_btree",
+      "btree",
+      "append_only"
+    ],
+    [
+      "btree",
+      "append_only",
+      "cow_btree"
+    ]
+  ],
+  "operations": [
+    128,
+    256
+  ],
+  "logical_keys": 8,
+  "value_bytes": 128,
+  "GOMAXPROCS": 12,
+  "original_memory_controls_removed": {
+    "GOGC": null,
+    "GOMEMLIMIT": null
+  },
+  "host": {
+    "system": "Linux",
+    "node": "mikers-B560-DS3H-AC-Y1",
+    "release": "6.8.0-138-generic",
+    "version": "#138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC ",
+    "machine": "x86_64",
+    "processor": "x86_64"
+  },
+  "cpu_count": 12,
+  "timed_scope": "CommitAt plus GetAt or full exact-key version scan, validation and identical clocks",
+  "profile_acknowledgement": "CommitRelaxed uses resolved profile ordinary acknowledgement; no explicit sync promise",
+  "memory_scope": "Go B/op timed; process_alloc includes diagnostics; RSS whole child; fixture charges not per-op heap",
+  "noise_policy": "retain every sample and repeat spread; no significance or sustained claim",
+  "runner_gate": "coordinator must serialize with other owned validations",
+  "stream_policy": "separate retained stdout and stderr, each bound by receipt hash"
+}

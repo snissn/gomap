@@ -1,0 +1,21 @@
+{
+  "files": {
+    "hosted-440-independent-reanalysis.py": "febd7d7168afec61687bc591648c17951c83ed303cd84b35412048da62724a81",
+    "hosted-440-independent-review.json": "050fdd2e10fa954756cfd3f2abd24939d8f97eeec1174ee79248609167b07379",
+    "hosted-440-independent-review.md": "7a517d29f4384716e0c3ea06b0dff1d7fe039c8624ebd4677415bad23f030cf5"
+  },
+  "execution": {
+    "command": [
+      "python3",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/hosted-440-independent-reanalysis.py"
+    ],
+    "environment": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "new_Go_or_benchmark_execution": false
+  },
+  "decision": "ACCEPT",
+  "private_process_rows_copied": false,
+  "actual_executables_transferred": false
+}

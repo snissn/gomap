@@ -1,0 +1,341 @@
+[
+  {
+    "case": "BenchmarkReadUnderWriteCached/W=0",
+    "metrics": {
+      "ns/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 472.6,
+            "candidate": 480.4,
+            "delta": 7.7999999999999545,
+            "ratio": 1.0165044435040202,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 2,
+            "main": 474.2,
+            "candidate": 481.1,
+            "delta": 6.900000000000034,
+            "ratio": 1.01455082243779,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 3,
+            "main": 471.7,
+            "candidate": 479.3,
+            "delta": 7.600000000000023,
+            "ratio": 1.0161119355522579,
+            "ratio_qualification": null
+          }
+        ],
+        "ratio_spread": {
+          "samples": [
+            1.0165044435040202,
+            1.01455082243779,
+            1.0161119355522579
+          ],
+          "min": 1.01455082243779,
+          "median": 1.0161119355522579,
+          "max": 1.0165044435040202
+        }
+      },
+      "B/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 128.0,
+            "candidate": 128.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 2,
+            "main": 128.0,
+            "candidate": 128.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 3,
+            "main": 128.0,
+            "candidate": 128.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          }
+        ],
+        "ratio_spread": {
+          "samples": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        }
+      },
+      "allocs/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 1.0,
+            "candidate": 1.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 2,
+            "main": 1.0,
+            "candidate": 1.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 3,
+            "main": 1.0,
+            "candidate": 1.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          }
+        ],
+        "ratio_spread": {
+          "samples": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        }
+      }
+    }
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/Get",
+    "metrics": {
+      "ns/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 2889.0,
+            "candidate": 2846.0,
+            "delta": -43.0,
+            "ratio": 0.9851159570785739,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 2,
+            "main": 2869.0,
+            "candidate": 2888.0,
+            "delta": 19.0,
+            "ratio": 1.0066225165562914,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 3,
+            "main": 2891.0,
+            "candidate": 2897.0,
+            "delta": 6.0,
+            "ratio": 1.00207540643376,
+            "ratio_qualification": null
+          }
+        ],
+        "ratio_spread": {
+          "samples": [
+            0.9851159570785739,
+            1.0066225165562914,
+            1.00207540643376
+          ],
+          "min": 0.9851159570785739,
+          "median": 1.00207540643376,
+          "max": 1.0066225165562914
+        }
+      },
+      "B/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 256.0,
+            "candidate": 256.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 2,
+            "main": 256.0,
+            "candidate": 256.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 3,
+            "main": 256.0,
+            "candidate": 256.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          }
+        ],
+        "ratio_spread": {
+          "samples": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        }
+      },
+      "allocs/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 1.0,
+            "candidate": 1.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 2,
+            "main": 1.0,
+            "candidate": 1.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 3,
+            "main": 1.0,
+            "candidate": 1.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          }
+        ],
+        "ratio_spread": {
+          "samples": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "min": 1.0,
+          "median": 1.0,
+          "max": 1.0
+        }
+      }
+    }
+  },
+  {
+    "case": "BenchmarkDBCheckpointedValueLogGet/GetAppend",
+    "metrics": {
+      "ns/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 2798.0,
+            "candidate": 2798.0,
+            "delta": 0.0,
+            "ratio": 1.0,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 2,
+            "main": 2844.0,
+            "candidate": 2763.0,
+            "delta": -81.0,
+            "ratio": 0.9715189873417721,
+            "ratio_qualification": null
+          },
+          {
+            "repeat": 3,
+            "main": 2838.0,
+            "candidate": 2778.0,
+            "delta": -60.0,
+            "ratio": 0.9788583509513742,
+            "ratio_qualification": null
+          }
+        ],
+        "ratio_spread": {
+          "samples": [
+            1.0,
+            0.9715189873417721,
+            0.9788583509513742
+          ],
+          "min": 0.9715189873417721,
+          "median": 0.9788583509513742,
+          "max": 1.0
+        }
+      },
+      "B/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 0.0,
+            "candidate": 0.0,
+            "delta": 0.0,
+            "ratio": null,
+            "ratio_qualification": "zero baseline; ratio undefined"
+          },
+          {
+            "repeat": 2,
+            "main": 0.0,
+            "candidate": 0.0,
+            "delta": 0.0,
+            "ratio": null,
+            "ratio_qualification": "zero baseline; ratio undefined"
+          },
+          {
+            "repeat": 3,
+            "main": 0.0,
+            "candidate": 0.0,
+            "delta": 0.0,
+            "ratio": null,
+            "ratio_qualification": "zero baseline; ratio undefined"
+          }
+        ],
+        "ratio_spread": null
+      },
+      "allocs/op": {
+        "paired": [
+          {
+            "repeat": 1,
+            "main": 0.0,
+            "candidate": 0.0,
+            "delta": 0.0,
+            "ratio": null,
+            "ratio_qualification": "zero baseline; ratio undefined"
+          },
+          {
+            "repeat": 2,
+            "main": 0.0,
+            "candidate": 0.0,
+            "delta": 0.0,
+            "ratio": null,
+            "ratio_qualification": "zero baseline; ratio undefined"
+          },
+          {
+            "repeat": 3,
+            "main": 0.0,
+            "candidate": 0.0,
+            "delta": 0.0,
+            "ratio": null,
+            "ratio_qualification": "zero baseline; ratio undefined"
+          }
+        ],
+        "ratio_spread": null
+      }
+    }
+  }
+]

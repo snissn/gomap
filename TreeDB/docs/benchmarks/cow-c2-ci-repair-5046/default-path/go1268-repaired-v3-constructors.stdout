@@ -1,0 +1,6 @@
+{"mode":"btree","new_batch_close_allocs":1,"profile":"no_wal_fast","scope":"empty constructors+Close; no payload or prepare"}
+{"mode":"cow_btree","new_batch_close_allocs":5,"profile":"no_wal_fast","scope":"empty constructors+Close; no payload or prepare"}
+{"mode":"btree","new_batch_close_allocs":3,"profile":"command_wal_relaxed","scope":"empty constructors+Close; no payload or prepare"}
+{"mode":"cow_btree","new_batch_close_allocs":7,"profile":"command_wal_relaxed","scope":"empty constructors+Close; no payload or prepare"}
+{"mode":"btree","new_batch_close_allocs":3,"profile":"command_wal_durable","scope":"empty constructors+Close; no payload or prepare"}
+{"mode":"cow_btree","new_batch_close_allocs":7,"profile":"command_wal_durable","scope":"empty constructors+Close; no payload or prepare"}

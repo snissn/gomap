@@ -1,0 +1,10 @@
+{
+  "raw_N2048_residuals_exact": 48,
+  "MVCC_N256_absolute_exact": 18,
+  "MVCC_N256_ratios_exact": 12,
+  "numeric_table_rows_exact": 48,
+  "literal_whitespace_paths_all_exact": 31,
+  "actual_diffcheck_sha_matches": true,
+  "file_links_checked": 100,
+  "coordinator_scope": "experimental opt-in C2 only; no default/hosted/Windows/C3/C4/parent waiver"
+}

@@ -1,0 +1,75 @@
+{
+  "decision": "TEST_ONLY_REPAIR_AUTHORIZED; functional execution pending",
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "source_sha256": {
+    "TreeDB/cow_power_loss_test.go": "b9c8b406409431618f78eedf92e101427c5d44a3346e18ffd63e165dbbe1faad",
+    "TreeDB/caching/cow_checkpoint.go": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+    "TreeDB/caching/cow_flush.go": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+    "TreeDB/db/root_publication_build_group.go": "a7861ae20338bdb97c4197740e9b4f682bc9a873b325efc366a36929602f5df2",
+    "TreeDB/db/root_publication_activation.go": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+    "TreeDB/db/db.go": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+    "TreeDB/internal/rootpublication/coordinator.go": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+    "TreeDB/internal/rootpublication/coordinator_test.go": "7d43a65c038e3c879f9d64bcd8e106857f205146d237657e42daee001f82e334",
+    "TreeDB/internal/rootpublication/STATE_TABLE.md": "220088980e3eeb1499dd1e18622c8cb4c7767e154112ddadf64a41f056abf79d",
+    "TreeDB/internal/durabilitycut/durabilitycut.go": "7afdf8e19275b15062b1ce3dc2d7de0e58899b512616584d1189ba3f02ebfdd3"
+  },
+  "original_log": {
+    "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core5-failure.log",
+    "sha256": "ae67152ee5107154aec002d7f6d1427bee2142acd31510c47e7619ad99a16543",
+    "bytes": 906987
+  },
+  "original_json": {
+    "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core5-failed-packet/treedb-test.jsonl",
+    "sha256": "e455a73b05178ec5a048984587b7d07b90ece22873ef6741c0fd49bf604475c0"
+  },
+  "original_leaf_passes": 35,
+  "original_fail_events": [
+    {
+      "Time": "2026-10-06T09:28:36.5286416Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+      "Elapsed": 2.13
+    },
+    {
+      "Time": "2026-10-06T09:31:05.9417843Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+      "Elapsed": 201.84
+    }
+  ],
+  "proven_mechanism": "Once-only error permits a later in-flight waiter or later checkpoint to retry pre-meta failure and succeed. Existing coordinator deterministic test covers this scheduling contract.",
+  "limitation": "Original Windows log contains no attempt/waiter or event root inventory. Exact failed execution schedule and absence of unrelated-root events are not established.",
+  "proposed_file": "TreeDB/cow_power_loss_test.go",
+  "proposed_change": "Scope observer to this DB, serialize model/cut access, clone first actual cut once but return requested interruption at every matching boundary while installed; assert injected cause remains nonnil, preserve ACK/recovery/group matrix.",
+  "runtime_changes": false,
+  "new_execution": false,
+  "corrected_call_path": [
+    {
+      "path": "TreeDB/caching/cow_checkpoint.go",
+      "authority": "flushCOWFrozen(true,publish) then backendCheckpointBoundary"
+    },
+    {
+      "path": "TreeDB/caching/cow_flush.go",
+      "authority": "BeginRootPublicationBuildGroupFromSnapshot and final canonical chunk"
+    },
+    {
+      "path": "TreeDB/caching/flush_run_planner.go",
+      "authority": "last syncFlush chunk uses native physical batch WriteSync"
+    },
+    {
+      "path": "TreeDB/db/root_publication_build_group.go",
+      "authority": "finalizeLocked constructs finalizeCommitOptions with no preparedLimits; optional commandWALFinalizeOptions also has no preparedLimits"
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "authority": "line930 waits for preparedLimits != nil OR syncWrite && !commandWAL; this physical group call has nil preparedLimits, while other prepared native APIs do wait regardless profile"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "authority": "checkpointTeardownPinned later WaitThrough visibleCommitSeq; may join already running attempt"
+    }
+  ],
+  "post_test_sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8"
+}

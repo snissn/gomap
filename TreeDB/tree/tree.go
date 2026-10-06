@@ -569,6 +569,20 @@ func (t *Tree) loadNodeViewWithLoadKindInto(dst *node.Node, pageID uint64, verif
 // CAUTION: Returned entry Key/Value might point directly to mmap memory.
 // Do not modify or hold reference for long.
 func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
+	return t.getEntry(key, nil, nil, nil, false)
+}
+
+// GetEntryWithFixedScratch borrows admitted fixed-page scratch and returns an
+// entry view owned by the exact captured tree. readLeaf must use separately
+// admitted finite record/decoder scratch. No backing grows on this path.
+func (t *Tree) GetEntryWithFixedScratch(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {
+	if cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
+		return node.LeafEntry{}, node.ErrCorruptedNode
+	}
+	return t.getEntry(key, keyScratch, leafScratch, readLeaf, true)
+}
+
+func (t *Tree) getEntry(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool) (node.LeafEntry, error) {
 	if t.pointDefinitelyAbsent(key) {
 		return node.LeafEntry{}, ErrKeyNotFound
 	}
@@ -580,8 +594,26 @@ func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {
 
 	for depth := 0; depth < maxTraversalDepth; depth++ {
 		var n node.Node
-		if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
+		if bounded && currRef.Kind == page.ChildRefLeafLog {
+			if readLeaf == nil {
+				return node.LeafEntry{}, ErrOwnedIteratorLeafReader
+			}
+			data, err := readLeaf(currRef.Log, leafScratch[:0])
+			if err != nil {
+				return node.LeafEntry{}, err
+			}
+			if len(data) != page.PageSize || cap(data) != page.PageSize || &data[0] != &leafScratch[:page.PageSize][0] {
+				return node.LeafEntry{}, ErrOwnedIteratorLeafReader
+			}
+			n, err = validateLeafLogNode(data, currRef.Log, t.shouldVerifyLeafRefChecksum(), false)
+			if err != nil {
+				return node.LeafEntry{}, err
+			}
+		} else if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
 			return node.LeafEntry{}, err
+		}
+		if bounded {
+			n.SetFixedKeyScratch(keyScratch)
 		}
 
 		switch n.Type() {

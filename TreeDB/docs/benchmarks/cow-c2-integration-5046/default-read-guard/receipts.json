@@ -1,0 +1,272 @@
+[
+  {
+    "label": "r1-main",
+    "role": "main",
+    "repeat": 1,
+    "commit": "7f91eb6ca0dcdd6ec65703eb9dcb23371917ff5a",
+    "source_tree_sha256": "57c8d1801255fec2dcb4c9735a91a28cf3fc142f1795faf800998f3b3208abbb",
+    "binary_sha256": "9b14fcf72487026637c5e977226ca8e26bc608f89bc47f1498db47e81a004072",
+    "goenv_sha256": "ac687bd9763475086dbdacbfe5ae4734c33abdf966043b49240cbd5c6f50bfdd",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/default-read-guard-b9e5587/main/default-read.test",
+      "-test.run=^$",
+      "-test.bench=^(BenchmarkReadUnderWriteCached|BenchmarkDBCheckpointedValueLogGet)$/^(W=0|Get|GetAppend)$",
+      "-test.benchmem",
+      "-test.benchtime=100000x",
+      "-test.count=1",
+      "-test.timeout=600s"
+    ],
+    "started_utc": "2026-10-06T04:45:28.310284+00:00",
+    "completed_utc": "2026-10-06T04:45:32.343567+00:00",
+    "exit_code": 0,
+    "elapsed_seconds": 4.033287411089987,
+    "load_before": [
+      2.83837890625,
+      2.0,
+      2.2607421875
+    ],
+    "user_seconds": 0.809898,
+    "system_seconds": 0.2713,
+    "child_max_rss_kib": 151604,
+    "log_sha256": "ffee70bcdba3fa5bb1f27aeb1aa103b6109a4f8be6054b6bd07a56546b1e9760",
+    "stderr_sha256": "686ffc04c8d35e3283d5e1e7d4b1d793c06a7d7ffddac34565527e7d6c1b14da",
+    "validation_error": null,
+    "case_validation": {
+      "rows": 3,
+      "exact_case_set": true
+    },
+    "source_drift_before": {
+      "main": [],
+      "candidate": []
+    },
+    "source_drift_after": {
+      "main": [],
+      "candidate": []
+    }
+  },
+  {
+    "label": "r1-candidate",
+    "role": "candidate",
+    "repeat": 1,
+    "commit": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+    "source_tree_sha256": "b968df3a51076a133abf5d2e330928981a5ef5622ac9346cd9b6b52c250b19b9",
+    "binary_sha256": "396f86a3627758d4599f99bd0fa4565f65efaa1351824f2762f2fdd26d78e0a0",
+    "goenv_sha256": "9ba042ebeea5f6c6243496d5760bcfb29b1dfe624d115f4367f5e9e52ba78c8a",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/default-read-guard-b9e5587/candidate/default-read.test",
+      "-test.run=^$",
+      "-test.bench=^(BenchmarkReadUnderWriteCached|BenchmarkDBCheckpointedValueLogGet)$/^(W=0|Get|GetAppend)$",
+      "-test.benchmem",
+      "-test.benchtime=100000x",
+      "-test.count=1",
+      "-test.timeout=600s"
+    ],
+    "started_utc": "2026-10-06T04:45:33.546326+00:00",
+    "completed_utc": "2026-10-06T04:45:37.546235+00:00",
+    "exit_code": 0,
+    "elapsed_seconds": 3.9999114042147994,
+    "load_before": [
+      2.8515625,
+      2.0166015625,
+      2.26513671875
+    ],
+    "user_seconds": 0.802396,
+    "system_seconds": 0.270563,
+    "child_max_rss_kib": 149556,
+    "log_sha256": "a0634675b4405a33876cbf502ed9a7e8cbb373e4987a1d7d24cf763ec8976696",
+    "stderr_sha256": "acc7e7682e3896246636153a6f8d7f7efa7d4635cef7bc7820fee0592d40ddac",
+    "validation_error": null,
+    "case_validation": {
+      "rows": 3,
+      "exact_case_set": true
+    },
+    "source_drift_before": {
+      "main": [],
+      "candidate": []
+    },
+    "source_drift_after": {
+      "main": [],
+      "candidate": []
+    }
+  },
+  {
+    "label": "r2-candidate",
+    "role": "candidate",
+    "repeat": 2,
+    "commit": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+    "source_tree_sha256": "b968df3a51076a133abf5d2e330928981a5ef5622ac9346cd9b6b52c250b19b9",
+    "binary_sha256": "396f86a3627758d4599f99bd0fa4565f65efaa1351824f2762f2fdd26d78e0a0",
+    "goenv_sha256": "9ba042ebeea5f6c6243496d5760bcfb29b1dfe624d115f4367f5e9e52ba78c8a",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/default-read-guard-b9e5587/candidate/default-read.test",
+      "-test.run=^$",
+      "-test.bench=^(BenchmarkReadUnderWriteCached|BenchmarkDBCheckpointedValueLogGet)$/^(W=0|Get|GetAppend)$",
+      "-test.benchmem",
+      "-test.benchtime=100000x",
+      "-test.count=1",
+      "-test.timeout=600s"
+    ],
+    "started_utc": "2026-10-06T04:45:38.753661+00:00",
+    "completed_utc": "2026-10-06T04:45:42.749949+00:00",
+    "exit_code": 0,
+    "elapsed_seconds": 3.996292675845325,
+    "load_before": [
+      2.783203125,
+      2.01611328125,
+      2.263671875
+    ],
+    "user_seconds": 0.8142889999999999,
+    "system_seconds": 0.25918199999999997,
+    "child_max_rss_kib": 148228,
+    "log_sha256": "c84e10594987e28293cd082e93bfb423136e25fbb7d827db74243ec016c86b11",
+    "stderr_sha256": "f1f855a9aa92f72ce3dccdf039ab65a5dd21fec7f81b85150c9d0a2d2c3499c2",
+    "validation_error": null,
+    "case_validation": {
+      "rows": 3,
+      "exact_case_set": true
+    },
+    "source_drift_before": {
+      "main": [],
+      "candidate": []
+    },
+    "source_drift_after": {
+      "main": [],
+      "candidate": []
+    }
+  },
+  {
+    "label": "r2-main",
+    "role": "main",
+    "repeat": 2,
+    "commit": "7f91eb6ca0dcdd6ec65703eb9dcb23371917ff5a",
+    "source_tree_sha256": "57c8d1801255fec2dcb4c9735a91a28cf3fc142f1795faf800998f3b3208abbb",
+    "binary_sha256": "9b14fcf72487026637c5e977226ca8e26bc608f89bc47f1498db47e81a004072",
+    "goenv_sha256": "ac687bd9763475086dbdacbfe5ae4734c33abdf966043b49240cbd5c6f50bfdd",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/default-read-guard-b9e5587/main/default-read.test",
+      "-test.run=^$",
+      "-test.bench=^(BenchmarkReadUnderWriteCached|BenchmarkDBCheckpointedValueLogGet)$/^(W=0|Get|GetAppend)$",
+      "-test.benchmem",
+      "-test.benchtime=100000x",
+      "-test.count=1",
+      "-test.timeout=600s"
+    ],
+    "started_utc": "2026-10-06T04:45:43.955321+00:00",
+    "completed_utc": "2026-10-06T04:45:47.938843+00:00",
+    "exit_code": 0,
+    "elapsed_seconds": 3.983525027986616,
+    "load_before": [
+      2.72021484375,
+      2.015625,
+      2.26220703125
+    ],
+    "user_seconds": 0.8149029999999999,
+    "system_seconds": 0.263382,
+    "child_max_rss_kib": 150600,
+    "log_sha256": "4172e71867633c0b6c4e6a8d252bb0563f82082ad29f1af93720f6c1604e8639",
+    "stderr_sha256": "277064a0580a5a5014a5e924222211077622199c36f2fb038c62abfcb821172d",
+    "validation_error": null,
+    "case_validation": {
+      "rows": 3,
+      "exact_case_set": true
+    },
+    "source_drift_before": {
+      "main": [],
+      "candidate": []
+    },
+    "source_drift_after": {
+      "main": [],
+      "candidate": []
+    }
+  },
+  {
+    "label": "r3-main",
+    "role": "main",
+    "repeat": 3,
+    "commit": "7f91eb6ca0dcdd6ec65703eb9dcb23371917ff5a",
+    "source_tree_sha256": "57c8d1801255fec2dcb4c9735a91a28cf3fc142f1795faf800998f3b3208abbb",
+    "binary_sha256": "9b14fcf72487026637c5e977226ca8e26bc608f89bc47f1498db47e81a004072",
+    "goenv_sha256": "ac687bd9763475086dbdacbfe5ae4734c33abdf966043b49240cbd5c6f50bfdd",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/default-read-guard-b9e5587/main/default-read.test",
+      "-test.run=^$",
+      "-test.bench=^(BenchmarkReadUnderWriteCached|BenchmarkDBCheckpointedValueLogGet)$/^(W=0|Get|GetAppend)$",
+      "-test.benchmem",
+      "-test.benchtime=100000x",
+      "-test.count=1",
+      "-test.timeout=600s"
+    ],
+    "started_utc": "2026-10-06T04:45:49.147308+00:00",
+    "completed_utc": "2026-10-06T04:45:53.135675+00:00",
+    "exit_code": 0,
+    "elapsed_seconds": 3.9883771552704275,
+    "load_before": [
+      2.662109375,
+      2.01513671875,
+      2.2607421875
+    ],
+    "user_seconds": 0.7824249999999999,
+    "system_seconds": 0.299016,
+    "child_max_rss_kib": 149328,
+    "log_sha256": "b05ed5a31b07d470edb4b7e19e3cbfc472570e79c8a98c058028882113359ad3",
+    "stderr_sha256": "aaa429417622a89c543b2f27e2d84049fd5f596f7e64b40839fdd4e70497eab5",
+    "validation_error": null,
+    "case_validation": {
+      "rows": 3,
+      "exact_case_set": true
+    },
+    "source_drift_before": {
+      "main": [],
+      "candidate": []
+    },
+    "source_drift_after": {
+      "main": [],
+      "candidate": []
+    }
+  },
+  {
+    "label": "r3-candidate",
+    "role": "candidate",
+    "repeat": 3,
+    "commit": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+    "source_tree_sha256": "b968df3a51076a133abf5d2e330928981a5ef5622ac9346cd9b6b52c250b19b9",
+    "binary_sha256": "396f86a3627758d4599f99bd0fa4565f65efaa1351824f2762f2fdd26d78e0a0",
+    "goenv_sha256": "9ba042ebeea5f6c6243496d5760bcfb29b1dfe624d115f4367f5e9e52ba78c8a",
+    "command": [
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/default-read-guard-b9e5587/candidate/default-read.test",
+      "-test.run=^$",
+      "-test.bench=^(BenchmarkReadUnderWriteCached|BenchmarkDBCheckpointedValueLogGet)$/^(W=0|Get|GetAppend)$",
+      "-test.benchmem",
+      "-test.benchtime=100000x",
+      "-test.count=1",
+      "-test.timeout=600s"
+    ],
+    "started_utc": "2026-10-06T04:45:54.342108+00:00",
+    "completed_utc": "2026-10-06T04:45:58.323481+00:00",
+    "exit_code": 0,
+    "elapsed_seconds": 3.981376852374524,
+    "load_before": [
+      2.689453125,
+      2.03173828125,
+      2.26513671875
+    ],
+    "user_seconds": 0.82124,
+    "system_seconds": 0.25518199999999996,
+    "child_max_rss_kib": 150700,
+    "log_sha256": "4178e54f0a43e7e2d258b03289ca6855c4461c8353ae10c6ad8ca3cce17271b7",
+    "stderr_sha256": "635998a4aaa33113354a1fff01ad8c1a3793be88d49b0a2851b6baa06c490f53",
+    "validation_error": null,
+    "case_validation": {
+      "rows": 3,
+      "exact_case_set": true
+    },
+    "source_drift_before": {
+      "main": [],
+      "candidate": []
+    },
+    "source_drift_after": {
+      "main": [],
+      "candidate": []
+    }
+  }
+]
