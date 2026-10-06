@@ -35,13 +35,48 @@ func TestMixedSchemaAndDocumentationDriftV1(t *testing.T) {
 			t.Fatalf("schema required missing report field%s", name)
 		}
 	}
+
+	reportProperties := report["properties"].(map[string]any)
+	originals := reportProperties["Originals"].(map[string]any)
+	if originals["minimum"].(float64) != 6 || originals["maximum"].(float64) != 63 {
+		t.Fatal("original count schema drift")
+	}
+	if reportProperties["Prefixes"].(map[string]any)["maxItems"].(float64) != 64 {
+		t.Fatal("prefix count schema drift")
+	}
+	prefixProperties := reportProperties["ReadPrefixes"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	// Read the integer limit exactly; decoding JSON numbers as float64 loses bit63 precision.
+	var exact map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&exact); err != nil {
+		t.Fatal(err)
+	}
+	exactReport := exact["properties"].(map[string]any)["Report"].(map[string]any)["properties"].(map[string]any)
+	exactPrefixes := exactReport["ReadPrefixes"].(map[string]any)["items"].(map[string]any)["properties"].(map[string]any)
+	if exactPrefixes["CompatibleMask"].(map[string]any)["maximum"].(json.Number).String() != "18446744073709551615" {
+		t.Fatal("uint64 schema bound drift")
+	}
+
+	for _, name := range []string{"Lower", "Upper", "Matched"} {
+		if prefixProperties[name].(map[string]any)["maximum"].(float64) != 63 {
+			t.Fatal("prefix ordinal schema drift")
+		}
+	}
+	if _, present := fields["Originals"]; present {
+		t.Fatal("legacy report added optional original count")
+	}
+
 	audit := schema["$defs"].(map[string]any)["auditPlan"].(map[string]any)
 	if int(audit["x-maxEncodedBytes"].(float64)) != nativewire.ColocatedAuditPlanMaxBytesV1 {
 		t.Fatal("audit encoded bound drift")
 	}
 	writes := audit["properties"].(map[string]any)["Writes"].(map[string]any)
-	if writes["minItems"].(float64) != 6 || writes["maxItems"].(float64) != 6 {
-		t.Fatal("six outcome schema drift")
+	if writes["minItems"].(float64) != 0 || writes["maxItems"].(float64) != 63 {
+		t.Fatal("bounded outcome schema drift")
+	}
+	if len(audit["anyOf"].([]any)) != 2 {
+		t.Fatal("outcome/population-only schema drift")
 	}
 	readme, err := os.ReadFile("README.md")
 	if err != nil {
