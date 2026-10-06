@@ -1,5 +1,5 @@
 name: "TreeDB: vet+test"
-run-name: "Windows full-process handle discrimination: base/common-A/R (advisory)"
+run-name: "Windows R full-process handle origin: stacks armed (advisory)"
 on:
   workflow_dispatch:
 permissions:
@@ -24,14 +24,14 @@ jobs:
         with:
           go-version: "1.26.8"
           cache: false
-      - name: Serial original tests then conditional advisory error stacks
+      - name: R original assertions with advisory error-only stacks armed initially
         shell: pwsh
         run: python .github/diagnostics/windows_handle_discrimination.py "$env:RUNNER_TEMP/windows-handle-packet"
       - name: Retain complete packet even on original failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-handle-full-context-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-handle-full-context-instrumented-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-handle-packet/
           if-no-files-found: error
           retention-days: 30

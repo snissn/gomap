@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Branch-local Windows diagnosis; original sources first, no retries/product gates."""
+"""Final branch-local R-only advisory diagnosis; error-only stacks armed initially."""
 import hashlib
 import json
 import os
@@ -11,8 +11,6 @@ import sys
 import time
 
 PINS = [
-    ("base", "7649857532521db69ff4cdcf236a11377c85ab3d"),
-    ("common-A", "dca8ab478bae64e47ca92aeddaf0b2fe4ddffa39"),
     ("R", "363d8593d6c8e9d23a49d59c33c97a85ba087f77"),
 ]
 CONTEXT_PATH = Path(__file__).with_name("windows_handle_full_context.json")
@@ -108,6 +106,12 @@ def run_test(label, sha, source, mode):
 def instrument(source, destination):
     manager_path = source / "TreeDB/internal/valuelog/manager.go"
     stable_path = source / "TreeDB/internal/valuelog/stable_resource.go"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    originals_dir = destination.parent / "original-source"
+    originals_dir.mkdir(parents=True, exist_ok=False)
+    (originals_dir / "manager.go").write_bytes(manager_path.read_bytes())
+    (originals_dir / "stable_resource.go").write_bytes(stable_path.read_bytes())
+    source_manifest(source, capture(["git", "rev-parse", "HEAD"], source), destination.parent / "source-manifest-original.json")
     manager = manager_path.read_text(encoding="utf-8")
     stable = stable_path.read_text(encoding="utf-8")
     old = '\t\topenInfo, openErr := existing.File.Stat()\n\t\tpathInfo, pathErr := os.Stat(path)'
@@ -138,22 +142,17 @@ def main():
     (OUT / "full-context.json").write_bytes(CONTEXT_PATH.read_bytes())
     for _, sha in PINS:
         subprocess.run(["git", "fetch", "--no-tags", "origin", sha], cwd=REPO, check=True)
-    originals = []
-    for label, sha in PINS:
-        originals.append(run_test(label, sha, checkout(label + "-original", sha), "original"))
     instrumented = []
-    for result in originals:
-        actual_test_failure = any(e.get("Action") == "fail" and e.get("Test", "").split("/")[0] in TEST_NAMES for e in result["terminal_events"])
-        if result["exit_code"] != 0 and actual_test_failure:
-            label, sha = result["label"], result["source_sha"]
-            source = checkout(label + "-instrumented", sha)
-            overlay_hash = instrument(source, OUT / label / "instrumented-advisory" / "overlay.patch")
-            observed = run_test(label, sha, source, "instrumented-advisory")
-            observed["overlay_sha256"] = overlay_hash
-            instrumented.append(observed)
-    write_json(OUT / "receipt.json", {"originals": originals, "instrumented_advisory": instrumented, "product_gate": False, "retries": 0})
-    # Any original failure remains a failed diagnostic job even if advisory rerun passes.
-    return 1 if any(r["exit_code"] != 0 or not r["top_level_order_matches_full_original_context"] or r["source_absent_names"] or r["malformed_json_lines"] for r in originals) else 0
+    for label, sha in PINS:
+        source = checkout(label + "-instrumented", sha)
+        overlay_hash = instrument(source, OUT / label / "instrumented-advisory" / "overlay.patch")
+        observed = run_test(label, sha, source, "instrumented-advisory")
+        observed["overlay_sha256"] = overlay_hash
+        instrumented.append(observed)
+    write_json(OUT / "receipt.json", {"originals": [], "instrumented_advisory": instrumented, "product_gate": False, "retries": 0, "error_stacks_armed_initially": True, "prior_original_failure_run": CONTEXT["run"], "prior_original_failure_job": CONTEXT["job"]})
+    # An advisory instrumented error remains nonzero; no result clears a product gate.
+    return 1 if any(r["exit_code"] != 0 or not r["top_level_order_matches_full_original_context"] or r["source_absent_names"] or r["malformed_json_lines"] for r in instrumented) else 0
+
 
 
 if __name__ == "__main__":
