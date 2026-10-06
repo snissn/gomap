@@ -3686,6 +3686,7 @@ type rewriteWriter struct {
 	stableResourcePins               *rootpublication.IdentityPinRegistry
 	stableRegistryErr                error
 	stableDictionaryResourceProvider func() StableDictionaryResourceProvider
+	leafDictionaryDefinition         *rewriteLeafDictionaryDefinition
 	leafStaging                      bool
 	leafStagingRoot                  string
 	lastLeafRecordLen                uint32
@@ -3863,7 +3864,10 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone.leafBlockCodec = w.leafBlockCodec
 	clone.SetKeepPolicy(w.keepIoNsPerByte, w.keepEncodeNsRaw, w.keepSafetyMargin)
 	clone.SetTemplateCompression(w.templateMode, w.templateCfg, w.templateStore)
-	clone.SetLeafDictMode(w.leafDictID, w.leafDict, w.leafDictUseRawPages)
+	clone.leafDictID = w.leafDictID
+	clone.leafDict = w.leafDict
+	clone.leafDictUseRawPages = w.leafDictUseRawPages
+	clone.leafDictionaryDefinition = w.leafDictionaryDefinition
 	return clone, nil
 }
 
@@ -4088,6 +4092,10 @@ func (w *rewriteWriter) StableLeafPageAppends() bool {
 }
 
 func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return w.appendLeafPageWithDictionaryCapture(leafPage, nil)
+}
+
+func (w *rewriteWriter) appendLeafPageWithDictionaryCapture(leafPage []byte, dictionaries *applyLeafDictionaryCapture) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4095,6 +4103,7 @@ func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page
 	if err != nil {
 		return page.LeafLogPtr{}, nil, err
 	}
+	capture.dictionaries = dictionaries
 	rid, err := w.nextRecordRID()
 	if err != nil {
 		capture.abandon()
@@ -4131,6 +4140,10 @@ func (w *rewriteWriter) AppendLeafPages(leafPages [][]byte) ([]page.LeafLogPtr, 
 }
 
 func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return w.appendLeafPagesWithDictionaryCapture(leafPages, nil)
+}
+
+func (w *rewriteWriter) appendLeafPagesWithDictionaryCapture(leafPages [][]byte, dictionaries *applyLeafDictionaryCapture) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if w == nil {
 		return nil, nil, errors.New("vlog-rewrite: nil writer")
 	}
@@ -4141,6 +4154,7 @@ func (w *rewriteWriter) AppendLeafPagesWithStableResources(leafPages [][]byte) (
 	if err != nil {
 		return nil, nil, err
 	}
+	capture.dictionaries = dictionaries
 	startRID, err := w.reserveRecordRIDs(len(leafPages))
 	if err != nil {
 		capture.abandon()
@@ -4824,11 +4838,14 @@ func (w *rewriteWriter) SetLeafDictMode(dictID uint64, dict []byte, useRawPages 
 	if dictID == 0 || len(dict) == 0 {
 		w.leafDictID = 0
 		w.leafDict = nil
+		w.leafDictionaryDefinition = nil
 		w.leafDictUseRawPages = false
 		return
 	}
 	w.leafDictID = dictID
-	w.leafDict = append(w.leafDict[:0], dict...)
+	// Each installed definition is immutable, including across cloned lanes.
+	w.leafDict = append([]byte(nil), dict...)
+	w.leafDictionaryDefinition = &rewriteLeafDictionaryDefinition{id: dictID, bytes: w.leafDict}
 	w.leafDictUseRawPages = useRawPages
 }
 

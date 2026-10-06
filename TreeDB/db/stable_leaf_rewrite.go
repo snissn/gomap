@@ -18,6 +18,7 @@ type rewriteStableOuterLeafCapture struct {
 	parentGeneration uint64
 	dictionaryIDs    map[uint64]struct{}
 	templateIDs      map[uint64]struct{}
+	dictionaries     *applyLeafDictionaryCapture
 }
 
 func (capture *rewriteStableOuterLeafCapture) captureDictionary(ctx context.Context, dictID uint64, dictionary []byte) error {
@@ -31,16 +32,20 @@ func (capture *rewriteStableOuterLeafCapture) captureDictionary(ctx context.Cont
 	if capture.writer != nil && capture.writer.stableDictionaryResourceProvider != nil {
 		provider = capture.writer.stableDictionaryResourceProvider()
 	}
-	resources, err := captureStableDictionaryResources(ctx, provider, dictID, dictionary)
+	resources, err := capture.dictionaries.capture(ctx, capture.writer, provider, dictID, dictionary)
 	if err != nil {
 		return err
 	}
-	if resources == nil {
+	if resources == nil && capture.dictionaries == nil {
 		return fmt.Errorf("%w: dictionary %d has no stable resource closure", rootpublication.ErrUnresolvedResource, dictID)
 	}
-	if err := capture.builder.Merge(resources); err != nil {
-		resources.Release()
-		return err
+	// The private Apply scope retains successful immutable captures itself.
+	// Public and generic captures still transfer their full closure here.
+	if resources != nil {
+		if err := capture.builder.Merge(resources); err != nil {
+			resources.Release()
+			return err
+		}
 	}
 	if capture.dictionaryIDs == nil {
 		capture.dictionaryIDs = make(map[uint64]struct{})

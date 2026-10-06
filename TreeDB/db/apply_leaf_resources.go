@@ -15,8 +15,9 @@ import (
 // share this builder. Aborted/conflicting applies abandon it; successful applies
 // transfer the frozen set through the existing finalize ownership boundary.
 type applyLeafResourceCapture struct {
-	mu      sync.Mutex
-	builder *rootpublication.StableResourceSetBuilder
+	mu           sync.Mutex
+	builder      *rootpublication.StableResourceSetBuilder
+	dictionaries applyLeafDictionaryCapture
 }
 
 type applyLeafResourceLog struct {
@@ -56,14 +57,14 @@ func (l *applyLeafResourceLog) accept(ptrs []page.LeafLogPtr, resources *rootpub
 }
 
 func (l *applyLeafResourceLog) AppendLeafPage(data []byte) (page.LeafLogPtr, error) {
-	ptr, resources, err := l.inner.(LeafPageStableLog).AppendLeafPageWithStableResources(data)
+	ptr, resources, err := appendLeafPageWithDictionaryCapture(l.inner, &l.capture.dictionaries, data)
 	err = l.accept([]page.LeafLogPtr{ptr}, resources, err)
 	return ptr, err
 }
 
 func (l *applyLeafResourceLog) AppendLeafPages(data [][]byte) ([]page.LeafLogPtr, error) {
-	if stable, ok := l.inner.(LeafPageStableBatchLog); ok {
-		ptrs, resources, err := stable.AppendLeafPagesWithStableResources(data)
+	if _, ok := l.inner.(LeafPageStableBatchLog); ok {
+		ptrs, resources, err := appendLeafPagesWithDictionaryCapture(l.inner, &l.capture.dictionaries, data)
 		err = l.accept(ptrs, resources, err)
 		return ptrs, err
 	}
@@ -79,14 +80,25 @@ func (l *applyLeafResourceLog) AppendLeafPages(data [][]byte) ([]page.LeafLogPtr
 }
 
 func (l *applyLeafResourceLog) PreparedLeafPageAppends() bool {
-	_, ok := l.inner.(LeafPagePreparedStableLog)
-	return ok
+	if _, ok := l.inner.(LeafPagePreparedStableLog); !ok {
+		return false
+	}
+	if capability, ok := l.inner.(LeafPagePreparedAppendLog); ok {
+		return capability.PreparedLeafPageAppends()
+	}
+	return true
 }
 
 func (l *applyLeafResourceLog) PreparedLeafPageBatchAppends() bool {
 	_, batch := l.inner.(LeafPagePreparedStableBatchLog)
 	_, refs := l.inner.(LeafPagePreparedChildRefStableBatchLog)
-	return batch || refs
+	if !batch && !refs {
+		return false
+	}
+	if capability, ok := l.inner.(LeafPagePreparedBatchAppendLog); ok {
+		return capability.PreparedLeafPageBatchAppends()
+	}
+	return true
 }
 
 func (l *applyLeafResourceLog) AppendPreparedLeafPage(data, payload []byte) (page.LeafLogPtr, error) {
@@ -152,10 +164,17 @@ func (l *applyLeafResourceLog) LeafPageLogLane(worker int) (LeafPageLog, bool) {
 	return &applyLeafResourceLog{inner: lane, capture: l.capture}, true
 }
 
+func (l *applyLeafResourceLog) LeafPageLogLaneAny(worker int) (any, bool) {
+	return l.LeafPageLogLane(worker)
+}
+
 func (l *applyLeafResourceLog) Flush() error { return l.inner.Flush() }
 func (l *applyLeafResourceLog) Sync() error  { return l.inner.Sync() }
 
 func (l *applyLeafResourceLog) abandon() {
+	if l != nil {
+		l.capture.dictionaries.release()
+	}
 	if l != nil && l.capture.builder != nil {
 		l.capture.builder.Abandon()
 		l.capture.builder = nil
@@ -166,10 +185,30 @@ func (l *applyLeafResourceLog) freeze() (*rootpublication.StableResourceSet, err
 	if l == nil {
 		return nil, nil
 	}
+	defer l.capture.dictionaries.release()
 	resources, err := l.capture.builder.Freeze()
 	if err != nil {
 		l.capture.builder.Abandon()
 	}
 	l.capture.builder = nil
-	return resources, err
+	if err != nil {
+		return nil, err
+	}
+	if l.capture.dictionaries.empty() {
+		return resources, nil
+	}
+	// Freeze raw output before composing dictionary closures. Merging a frozen
+	// child into a mutable flat builder materializes new token references; the
+	// immutable kind-view union instead transfers the original provider leases.
+	builder := rootpublication.NewStableResourceSetBuilder()
+	defer builder.Abandon()
+	if err := l.capture.dictionaries.mergeInto(builder); err != nil {
+		resources.Release()
+		return nil, err
+	}
+	if err := builder.Merge(resources); err != nil {
+		resources.Release()
+		return nil, err
+	}
+	return builder.Freeze()
 }

@@ -411,6 +411,27 @@ frozen resources release on abort/conflict, and successful publication transfers
 ownership to the existing slot/runtime resource sets. Dictionary/template proofs
 and packed-generation authority retain their existing inherited-closure rules.
 
+Within one private Apply chain, the installed rewrite producer captures each
+immutable writer-owned dictionary definition once per identifiable provider.
+Cloned lanes share that definition. The attempt owner retains each original
+closure and provider snapshot lease, then transfers it once into the final Apply
+builder at freeze or releases it at abandon. Private append captures omit duplicate
+dictionary closures; public stable append APIs keep their full closure contract.
+A later attempt captures afresh.
+Reconfiguration installs new immutable bytes, including reuse of a logical ID,
+and provider replacement selects new authority. Unidentifiable providers and
+arbitrary definitions continue to capture and validate on every append. Capture
+errors are never retained. Provider relocation does not invalidate a pinned
+immutable definition: the retained closure still names its exact prior physical
+generation, without reopening paths or substituting a newer generation. Generic
+stable producers keep their original append/capture behavior. This bounds repeated
+dictionary decoding and hashing by definitions per attempt, rather than output
+leaves; retention is limited to the closures needed by that attempt.
+The Apply wrapper also forwards the installed producer's prepared-payload
+capability and the zipper-compatible lane bridge. A hint wrapper exposing an
+optional stable method does not authorize unsupported prepared output; concurrent
+span output continues to use the actual selected lanes and shared Apply owner.
+
 Registry-owned producer creation uses the narrower stable creation capability.
 Windows can certify this operation by validating the exact retained-parent child
 and flushing the exact child handle; it does not require rename, removal, or
