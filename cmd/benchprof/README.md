@@ -542,3 +542,8 @@ GOWORK=off go test -tags treedb_safe ./TreeDB/internal/memtable -run '^$' \
 Repeat without the tag for the default comparator. Fixture setup is excluded;
 1 MiB keys prevent short-input conversion elision from hiding allocation costs.
 See [ownership and qualification scope](../../TreeDB/docs/spec/cow-memtable-ownership.md).
+
+The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
+produces a `gomap-r1-row-v1` packet and summary through
+`scripts/r1_collection_capture.sh`. These dedicated workload artifacts are not
+benchprof inputs and do not change the unified-bench profile filename contract.
