@@ -507,10 +507,15 @@ func runCompact(dir string, args []string) {
 	batchSize := fs.Int("rewrite-batch-size", 0, "Value-log rewrite pointer-swap batch size (0=default)")
 	maxSegmentBytes := fs.Int64("rewrite-max-segment-bytes", 0, "Maximum value-log segment bytes during rewrite (0=default)")
 	leafPackPasses := fs.Int("leaf-pack-max-passes", 0, "Maximum leaf-generation pack passes (0=default)")
+	commandWALSettle := fs.Bool("command-wal-settle", false, "Run compact, command-WAL checkpoint fallback refresh, checkpoint, leaf GC, and final dry-run audit; emits an endpoint receipt")
 	_ = fs.Parse(args)
 
 	if !*rw {
 		fatalf("compact requires -rw")
+	}
+	settleMode := strings.ToLower(strings.TrimSpace(*mode))
+	if *commandWALSettle && (!strings.EqualFold(strings.TrimSpace(*scope), "all") || (settleMode != "full" && settleMode != "exhaustive")) {
+		fatalf("command-wal-settle requires -scope=all and -mode=full or exhaustive")
 	}
 
 	if strings.EqualFold(strings.TrimSpace(*scope), "index") {
@@ -530,6 +535,30 @@ func runCompact(dir string, args []string) {
 	rootDir := resolveTreeDBRootDir(dir)
 	opts := treedb.Options{Dir: rootDir}
 	applyPersistedFormatConfig(rootDir, &opts)
+	compactOpts := treedb.CompactStorageOptions{
+		Mode:                           treedb.CompactStorageMode(parseCompactStorageModeFlag("compact", *mode)),
+		SyncEachPhase:                  *syncEachPhase,
+		ValueLogRewriteBatchSize:       *batchSize,
+		ValueLogRewriteMaxSegmentBytes: *maxSegmentBytes,
+		LeafPackMaxPasses:              *leafPackPasses,
+	}
+	if *commandWALSettle {
+		receipt, endpointErr := runCompactCommandWALSettle(context.Background(), opts, compactOpts)
+		if *jsonOut {
+			if err := json.NewEncoder(os.Stdout).Encode(receipt); err != nil {
+				fatalf("encode compact endpoint: %v", err)
+			}
+		} else {
+			fmt.Printf("compact endpoint %s: status=%s refresh=%s checkpoint=%s\n", receipt.Endpoint, receipt.Status, receipt.Refresh.Status, receipt.Refresh.CheckpointStatus)
+			for _, report := range receipt.Reports {
+				printCompactStorageStats(report, false)
+			}
+		}
+		if endpointErr != nil {
+			fatalf("compact endpoint: %v", endpointErr)
+		}
+		return
+	}
 	backend, cleanupBackend, err := treedb.OpenBackend(opts)
 	if err != nil {
 		fatalf("Failed to open DB backend: %v", err)
@@ -540,13 +569,7 @@ func runCompact(dir string, args []string) {
 		}
 	}()
 
-	stats, err := backend.CompactStorage(context.Background(), treedb.CompactStorageOptions{
-		Mode:                           treedb.CompactStorageMode(parseCompactStorageModeFlag("compact", *mode)),
-		SyncEachPhase:                  *syncEachPhase,
-		ValueLogRewriteBatchSize:       *batchSize,
-		ValueLogRewriteMaxSegmentBytes: *maxSegmentBytes,
-		LeafPackMaxPasses:              *leafPackPasses,
-	})
+	stats, err := backend.CompactStorage(context.Background(), compactOpts)
 	if err != nil {
 		fatalf("CompactStorage error: %v", err)
 	}
