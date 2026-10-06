@@ -9,7 +9,7 @@ are caller inputs. No subprocess/network/Go or historical campaign execution.
 import argparse, base64, copy, hashlib, importlib.util, json, struct, sys
 from pathlib import Path
 CORE=source_path('/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py')
-CORE_SHA='dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769'
+CORE_SHA='2af4fdcf0a78a1607ddaa199ef18e26d6fa69b04c4b10fa0917496cb1c2083f5'
 if hashlib.sha256(Path(CORE).read_bytes()).hexdigest()!=CORE_SHA: raise ValueError('frozen core pin')
 spec=importlib.util.spec_from_file_location('audit_frozen_core',CORE)
 c=importlib.util.module_from_spec(spec);spec.loader.exec_module(c)

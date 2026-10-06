@@ -10,7 +10,7 @@ No subprocess/network/runtime or old campaign top-level is executed.
 import argparse, copy, hashlib, importlib.util, json, math, sys
 from pathlib import Path
 CORE_PATH=source_path('/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py')
-CORE_SHA='dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769'
+CORE_SHA='2af4fdcf0a78a1607ddaa199ef18e26d6fa69b04c4b10fa0917496cb1c2083f5'
 if hashlib.sha256(Path(CORE_PATH).read_bytes()).hexdigest()!=CORE_SHA:
  raise ValueError('frozen core pin mismatch')
 spec=importlib.util.spec_from_file_location('mixed_frozen_core',CORE_PATH)

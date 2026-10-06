@@ -9,7 +9,7 @@ writes only a fresh declared source-output directory using exclusive creation.
 import argparse,ast,hashlib,json,re
 from pathlib import Path
 ROOT=Path(__file__).parent
-PACKET_SHA='96ac79ca6fb6638e0d37699d52045599e01a6a6905605c26a63844f9d65c60b6'
+PACKET_SHA='39313520f1e1229b6aabfa5cf052e314e225712587326366f0f36ecfb36bab2a'
 def need(ok,label):
  if not ok:raise ValueError(label)
 def sha(b):return hashlib.sha256(b).hexdigest()

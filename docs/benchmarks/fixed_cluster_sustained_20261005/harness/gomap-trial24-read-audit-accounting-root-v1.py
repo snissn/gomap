@@ -10,9 +10,9 @@ wire/retention accounting. All imported sources are inert and hash-pinned.
 import argparse, ast, hashlib, importlib.util, json, math, struct, sys
 from pathlib import Path
 READ=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_read.py')
-READ_SHA='171dd9a1e11116241e96e3f211c30a5a447189d2e9cf7b8ae9061afd8dc30c57'
+READ_SHA='3252a8109f64e4a9db8f56561d258f071f7cc10e9d5229281a6b6a83e0060020'
 AUDIT=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/shared_audit.py')
-AUDIT_SHA='c39b40fd528a6a08dd20ed48be43ede0679182081510a8b6748df4adca14b65c'
+AUDIT_SHA='8199998cdee169b849755ae35bfb8a204ef86804151ccae54d62925c85d07240'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
 COLLECTOR_SHA='901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
 HEAD='__ROOT_FROZEN_HEAD__'
@@ -273,7 +273,8 @@ def verify(manifest,manifest_sha,artifacts,inputs,native_path,native_sha,stdout_
  finally:core.bounded=saved_rd;au.c.bounded=saved_au
  population=population_accounting(C,a,pinned,nodes,states,r)
  return {'population':population,'disposition':'TRIAL24_READ_AUDIT_ACCOUNTING_ONLY','campaign_acceptance':False,'manifest_sha256':manifest_sha,'stdout_sha256':stdout_sha,'native_oracle_sha256':native_sha,'promoted_oracle_sha256':a['local_pins'][a['receipts']['prefix_oracles']],'source_head':HEAD,'source_tree':TREE,'source_pins':PINS,'read':read,'audit':audit,'derivation':DERIVATION,'limits':LIMITS}
-COLLECTOR_SHA_BYTES=Path(COLLECTOR).read_bytes()
+COLLECTOR_SHA_BYTES=collector_source.encode()
+need(sha(COLLECTOR_SHA_BYTES)==COLLECTOR_SHA,'authenticated retained collector source bytes')
 def self_check():
  # Synthetic counterfactual native tables only; no full structural campaign claim.
  names=['n%02d'%i for i in range(10)]

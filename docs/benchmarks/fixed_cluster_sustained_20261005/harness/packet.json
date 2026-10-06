@@ -26,7 +26,7 @@
       },
       "output": {
         "path": "shared_read.py",
-        "sha256": "171dd9a1e11116241e96e3f211c30a5a447189d2e9cf7b8ae9061afd8dc30c57"
+        "sha256": "3252a8109f64e4a9db8f56561d258f071f7cc10e9d5229281a6b6a83e0060020"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
@@ -40,7 +40,7 @@
       },
       "output": {
         "path": "shared_audit.py",
-        "sha256": "c39b40fd528a6a08dd20ed48be43ede0679182081510a8b6748df4adca14b65c"
+        "sha256": "8199998cdee169b849755ae35bfb8a204ef86804151ccae54d62925c85d07240"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
@@ -282,7 +282,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "ebba9bed8495fa1a7e42b4f146ac31e30428c1be7a24c780106e9a7399f5b26e"
+        "sha256": "4332c29e5420acd62894982bddb0ef06ef391bc51be61fdc9cfec0e82cdcac14"
       },
       "changes": [
         [
@@ -315,7 +315,7 @@
       },
       "output": {
         "path": "gomap-trial24-resource-accounting-root-v1.py",
-        "sha256": "626ae08aff1cb82491e38ca9f260e2bc6d4b21f4af519e350081a82693f0301b"
+        "sha256": "ce17d899523213e35b70b844a4576698978a83db0544f7662e25070225307535"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -331,7 +331,7 @@
     "/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py": {
       "path": "sources/gomap-4994-mixed-window-artifact-verify-root-v7.py",
       "original_sha256": "8bcc9e05c31a962aa395d5913290288e6bc320ed8c82b6d228f0f55c65295326",
-      "sha256": "dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769",
+      "sha256": "2af4fdcf0a78a1607ddaa199ef18e26d6fa69b04c4b10fa0917496cb1c2083f5",
       "use": "source template or AST-extracted helper; historical campaign main is not executed",
       "change": "only imported core source-read seam resolves immutable baseline copies; AST-extracted functions unchanged"
     },

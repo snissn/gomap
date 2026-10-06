@@ -65,6 +65,12 @@ def pieces(text,key):
  while raw[pos].isspace():pos+=1
  need(raw[pos]==']','raw array end');return out
 
+# The local top-level selectors override the extracted older selectors.
+# Report their executing source; retain the superseded import receipt explicitly.
+for _selector,_selector_digest in (('field', '4c3e61faa3ed82f6ed74c17557de0bd88367b8b989bf2fe38438388a6afa4431'), ('pieces', 'c2154e1c81dcb7edcd1ae69f6beb89d76aa69d22a0723dfc05c577c569f108c6')):
+ HELPERS[_selector]={'file':__file__,'source_sha256':_selector_digest,'executed_source_sha256':_selector_digest,'signed_zero_decoder_repair':True,'implementation':'local_top_level_selector','overridden_import':HELPERS[_selector]}
+del _selector,_selector_digest
+
 def strict(raw):
  def unique(pairs):
   out={}

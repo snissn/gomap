@@ -22,6 +22,20 @@ def load(path,name):
  if resolver.is_file():
   rspec=importlib.util.spec_from_file_location('source_paths',resolver);rm=importlib.util.module_from_spec(rspec);rspec.loader.exec_module(rm);sys.modules['source_paths']=rm
  spec=importlib.util.spec_from_file_location(name,path);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
+def validate_source_manifest(root):
+ manifest_path=root/'source-hashes.json'
+ assert manifest_path.is_file() and not manifest_path.is_symlink(),'regular source manifest'
+ manifest=json.loads(manifest_path.read_bytes())
+ pins=manifest['files'];assert isinstance(pins,dict),'source manifest files object'
+ entries=list(root.rglob('*'))
+ assert not any(p.is_symlink() for p in entries),'source packet symlink'
+ actual={p.relative_to(root).as_posix() for p in entries if p.is_file() and p!=manifest_path}
+ assert set(pins)==actual,'complete source manifest coverage'
+ for name,digest in pins.items():
+  assert isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest),'source manifest SHA256'
+  assert sha((root/name).read_bytes())==digest,'source manifest bytes '+name
+ return pins
+validate_source_manifest(R)
 m=json.loads((R/'packet.json').read_bytes())
 for role,row in m['roles'].items():
  new=(R/row['output']['path']).read_bytes()
@@ -969,5 +983,66 @@ for field,filename in (('bootstrap_plan_sha256','plan.json'),('bootstrap_result_
  assert eval(compile(ast.Expression(body=expression),'actual-lifecycle-failed-close-no-bootstrap-authority','eval'),{'code':1,'qualification_valid':False}) is None
  checks.append('freezer_actual_lifecycle_close_binds_'+field)
 (fixtures/'freezer-locator-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_FREEZER_ADMISSION_ONLY_NOT_ACCEPTANCE','cases':locator_cases,'runtime_started':False,'Go_started':False,'network_calls':0,'limits':['Actual bootstrap context uses existing controlled dataset and TLS fixtures; no dataset/certificate qualification.','Actual freezer main executes through first owned preparation mkdir; complete bootstrap chain, input freeze and remote collection remain unexecuted.','All acceptance-shaped inputs are explicitly synthetic.']},indent=2)+'\n')
+
+
+# Complete packet manifest refusal uses the actual supported checker CLI,
+# stopping before a fixture directory or any imported stage is constructed.
+import shutil,inspect
+validate_source_manifest(R);checks.append('complete_source_manifest_current_packet_positive')
+manifest_root=fixtures/'source-manifest-negative-packets';manifest_root.mkdir()
+manifest_cases=[]
+for case in ('missing_entry','extra_entry','wrong_digest','malformed_digest','extra_file','self_entry','symlink_file'):
+ packet_copy=manifest_root/case;shutil.copytree(R,packet_copy)
+ manifest_path=packet_copy/'source-hashes.json';record=json.loads(manifest_path.read_bytes())
+ if case=='missing_entry':record['files'].pop('README.md')
+ elif case=='extra_entry':record['files']['missing.py']='a'*64
+ elif case=='wrong_digest':record['files']['README.md']='a'*64
+ elif case=='malformed_digest':record['files']['README.md']=True
+ elif case=='extra_file':(packet_copy/'unlisted.py').write_text('# synthetic unexpected source\n')
+ elif case=='self_entry':record['files']['source-hashes.json']=sha(manifest_path.read_bytes())
+ elif case=='symlink_file':
+  (packet_copy/'alias.py').symlink_to(packet_copy/'README.md');record['files']['alias.py']=record['files']['README.md']
+ manifest_path.write_text(json.dumps(record,indent=2)+'\n')
+ destination=manifest_root/('refused-fixtures-'+case)
+ before={p.relative_to(packet_copy).as_posix():p.read_bytes() for p in packet_copy.rglob('*') if p.is_file() and not p.is_symlink()}
+ argv=[sys.executable,'-B',str(packet_copy/'check.py'),'--fixtures-root',str(destination)]
+ result=subprocess.run(argv,capture_output=True)
+ (manifest_root/(case+'.stdout')).write_bytes(result.stdout);(manifest_root/(case+'.stderr')).write_bytes(result.stderr);(manifest_root/(case+'.exit')).write_text(str(result.returncode)+'\n')
+ after={p.relative_to(packet_copy).as_posix():p.read_bytes() for p in packet_copy.rglob('*') if p.is_file() and not p.is_symlink()}
+ assert result.returncode!=0 and not destination.exists() and before==after,(case,'actual source checker refused before writes')
+ manifest_cases.append({'case':case,'argv':argv,'actual_exit':result.returncode,'fixture_output_created':False,'packet_regular_bytes_unchanged':True})
+ checks.append('actual_checker_source_manifest_refuses_'+case)
+# Loading the actual read/audit module must not reread the authenticated
+# collector locator. Simulate changed bytes only on a later Path.read_bytes.
+old_read_bytes=Path.read_bytes
+try:
+ Path.read_bytes=lambda path:b'CHANGED_AFTER_AUTHENTICATION' if str(path)==str(R/m['roles']['collector']['output']['path']) else old_read_bytes(path)
+ authenticated_ra=load(R/m['roles']['read_audit']['output']['path'],'actual_collector_authenticated_snapshot')
+finally:Path.read_bytes=old_read_bytes
+assert authenticated_ra.COLLECTOR_SHA_BYTES==authenticated_ra.collector_source.encode()
+assert sha(authenticated_ra.COLLECTOR_SHA_BYTES)==authenticated_ra.COLLECTOR_SHA
+checks.append('actual_read_audit_authenticated_collector_snapshot_no_second_read')
+# A stale retained collector still fails the actual consumer's first byte join.
+verify_tree=ast.parse(inspect.getsource(authenticated_ra.verify))
+retained_join=next(n for n in ast.walk(verify_tree) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and any(isinstance(a,ast.Constant) and a.value=='actual retained collector bytes' for a in n.value.args))
+def collector_retained_join(raw):
+ ns=dict(authenticated_ra.__dict__,bounded=lambda *a,**k:raw,C=Path('/synthetic-only'))
+ exec(compile(ast.Module(body=[retained_join],type_ignores=[]),'actual-read-audit-retained-collector-byte-join','exec'),ns)
+collector_retained_join(authenticated_ra.COLLECTOR_SHA_BYTES);checks.append('actual_read_audit_retained_collector_authenticated_positive')
+bad('actual_read_audit_retained_collector_substitution_refused',lambda:collector_retained_join(b'CHANGED_AFTER_AUTHENTICATION'))
+actual_core=authenticated_ra.core;selector_report=actual_core.self_check()
+for key in ('field','pieces'):
+ source=inspect.getsource(getattr(actual_core,key));digest=sha(source.rstrip('\n').encode())
+ row=selector_report['helper_functions'][key]
+ assert row['file']==actual_core.__file__ and row['implementation']=='local_top_level_selector'
+ assert row['source_sha256']==row['executed_source_sha256']==digest
+ assert row['signed_zero_decoder_repair'] is True
+ assert row['overridden_import']['file'] in actual_core.PINS
+ assert row['overridden_import']['executed_source_sha256']!=digest
+ checks.append('actual_core_self_check_reports_executing_local_'+key)
+assert actual_core.field('{"nested":{"value":9},"value":-0}','value')[1]=='-0'
+assert actual_core.pieces('{"nested":{"values":[9]},"values":[-0,1]}','values')[0][1]=='-0'
+checks.append('metadata_repair_preserves_top_level_signed_zero_selectors')
+(fixtures/'review-batch-integrity-provenance-integration.json').write_text(json.dumps({'state':'PURE_SOURCE_INTEGRITY_AND_METADATA_ONLY_NOT_ACCEPTANCE','manifest_cases':manifest_cases,'collector_authenticated_sha256':authenticated_ra.COLLECTOR_SHA,'selector_helper_report':selector_report['helper_functions'],'runtime_started':False,'network_calls':0},indent=2)+'\n')
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))
