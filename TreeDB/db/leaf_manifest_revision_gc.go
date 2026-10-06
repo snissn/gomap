@@ -53,7 +53,9 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 		return err
 	}
 	// Freeze snapshot admission while consulting existing stale-view generation
-	// pins. Ordinary snapshots retain these pins, not a manifest token.
+	// pins. Ordinary snapshots retain these pins, not a manifest token. The write
+	// and snapshot-admission locks stay held for the entire explicit GC call,
+	// including every full inventory rescan; footprint limits are not pause budgets.
 	db.rootReuseMu.Lock()
 	defer db.rootReuseMu.Unlock()
 	return db.leafGenerationManifestStore.gcRevisionsWithHeldViews(ctx, opts, stats, func(m *leafGenerationManifest) bool {
@@ -330,16 +332,30 @@ func (s *leafGenerationManifestStore) deleteRevisionLocked(f leafManifestRevisio
 	if err != nil {
 		return err
 	}
-	_ = placeholder.Close()
+	defer placeholder.Close()
+	cleanupQuarantine := func(primary error) error {
+		// Keep the placeholder incarnation alive and never unlink a foreign child
+		// rebound under its private name. A failed cleanup retains ambiguity evidence.
+		if cleanupErr := rootpublication.ValidateStableChildLink(s.parent, placeholder, quarantine); cleanupErr != nil {
+			return s.ambiguous(errors.Join(primary, fmt.Errorf("validate revision quarantine %q: %w", quarantine, cleanupErr)))
+		}
+		if cleanupErr := rootpublication.RemoveStableChildFile(s.parent, quarantine); cleanupErr != nil {
+			return s.ambiguous(errors.Join(primary, fmt.Errorf("remove revision quarantine %q: %w", quarantine, cleanupErr)))
+		}
+		return primary
+	}
 	if s.hooks.BeforeRename != nil {
 		if err := s.hooks.BeforeRename(); err != nil {
-			_ = rootpublication.RemoveStableChildFile(s.parent, quarantine)
-			return err
+			return cleanupQuarantine(err)
 		}
 	}
+	// A successful hook may still have rebound the private destination. Validate
+	// its retained incarnation before the rename can overwrite anything there.
+	if err := rootpublication.ValidateStableChildLink(s.parent, placeholder, quarantine); err != nil {
+		return cleanupQuarantine(err)
+	}
 	if err := rootpublication.RenameStableChildFile(s.parent, f.name, quarantine); err != nil {
-		_ = rootpublication.RemoveStableChildFile(s.parent, quarantine)
-		return err
+		return cleanupQuarantine(err)
 	}
 	if err := rootpublication.ValidateStableChildLink(s.parent, f.file, quarantine); err != nil {
 		// Restore without overwriting any new canonical child. An unresolved
