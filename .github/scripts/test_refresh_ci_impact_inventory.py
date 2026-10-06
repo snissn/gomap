@@ -53,6 +53,71 @@ class RefreshSnapshotContract(unittest.TestCase):
             refresh_ci_impact_inventory.refresh(self.repo)
         return json.loads(self.manifest.read_text())
 
+    def cli(self, *args):
+        return subprocess.run([sys.executable, str(self.repo / '.github/scripts/refresh_ci_impact_inventory.py'), *args],
+                              cwd=self.repo, capture_output=True, text=True)
+
+    def prepare_cli_policy(self):
+        result = self.cli()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.git('add', ci_impact.POLICY)
+        self.git('commit', '-qm', 'reviewed CLI policy')
+
+    def assert_cli_source_rejected(self, path):
+        before = self.manifest.read_bytes()
+        for args in ((), ('--check',)):
+            with self.subTest(path=path, args=args):
+                result = self.cli(*args)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('maintenance-source-mismatch: ' + path, result.stderr)
+                self.assertEqual(self.manifest.read_bytes(), before)
+
+    def test_unstaged_helper_and_generator_algorithms_reject_both_cli_commands(self):
+        self.prepare_cli_policy()
+        paths = ('.github/scripts/ci_impact.py', '.github/scripts/refresh_ci_impact_inventory.py')
+        for path in paths:
+            original = (self.repo / path).read_text()
+            fingerprint = json.loads(self.manifest.read_text())['discovery_source_sha256']
+            if path == ci_impact.PLANNER:
+                altered = original.replace('def discovery_digest(inventory):',
+                                           'def discovery_digest(inventory):\n    return ' + repr(fingerprint))
+            else:
+                altered = original.replace("policy['discovery_source_sha256'] = ci_impact.discovery_digest(inputs)",
+                                           "policy['discovery_source_sha256'] = " + repr(fingerprint))
+            self.assertNotEqual(altered, original)
+            self.write(path, altered)
+            self.assert_cli_source_rejected(path)
+            self.write(path, original)
+
+    def test_partially_staged_maintenance_algorithms_require_matching_executing_bytes(self):
+        for path in ('.github/scripts/ci_impact.py', '.github/scripts/refresh_ci_impact_inventory.py'):
+            original = (self.repo / path).read_text()
+            if path == ci_impact.PLANNER:
+                staged = original.replace('hasher = hashlib.sha256()', "hasher = hashlib.new('sha256')")
+                working = staged.replace("hasher.update(b'\\0')", 'hasher.update(bytes([0]))')
+            else:
+                staged = original.replace('sorted(ci_impact.workflow_paths(inputs).items())',
+                                          'sorted(ci_impact.workflow_paths(inputs).items(), key=lambda item: item[0])')
+                working = staged.replace("ci_impact.expected_members(policy['workflows'])",
+                                         "ci_impact.expected_members(dict(policy['workflows']))")
+            self.assertNotEqual(staged, original)
+            self.assertNotEqual(working, staged)
+            self.write(path, staged)
+            self.git('add', path)
+            self.prepare_cli_policy()
+            self.write(path, working)
+            self.assert_cli_source_rejected(path)
+            # Fully staged, identical executing bytes are allowed; these
+            # equivalent algorithms still produce the actual committed binding.
+            self.git('add', path)
+            self.prepare_cli_policy()
+            result = self.cli('--check')
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            policy = json.loads(self.manifest.read_text())
+            inventory, _ = ci_impact.tree_inventory(self.repo, self.git('rev-parse', 'HEAD'))
+            self.assertEqual(policy['discovery_source_sha256'], ci_impact.discovery_digest(inventory))
+            self.assertTrue(all(inventory[p] == value for p, value in policy['harness_inputs'].items()))
+
     def assertCommittedSnapshot(self, policy):
         # Only the generated manifest is staged here. Untracked/unstaged inputs
         # must survive untouched and must not enter the commit's source binding.

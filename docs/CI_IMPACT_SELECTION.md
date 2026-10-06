@@ -129,6 +129,10 @@ retention bound its lifetime.
 After reviewing changed consumers, workflow commands, contexts, or membership,
 stage only the intended source, workflow and reviewed harness paths with `git add -- <paths>`,
 including intended additions/deletions and edits to the maintenance scripts.
+The executing `ci_impact.py` helper and `refresh_ci_impact_inventory.py` generator
+must exactly match their staged bytes before either refresh or `--check` runs.
+Partially staged helper/generator edits reject before writing the manifest;
+fully stage those intended code edits or run from a checkout of the intended tree.
 Review `git diff --cached` before refreshing. Use an isolated worktree when the
 primary checkout contains unrelated work; the command never stages or resets it.
 
@@ -150,7 +154,13 @@ snapshot of the index. Both source blob fingerprints and workflow names/bytes
 come from that same tree. Untracked files and unstaged edits are excluded, so a
 partially staged file uses its staged bytes; staged additions/deletions are
 included. An unmerged or unsupported index is rejected before writing the
-manifest. Reviewed ownership/rules remain the explicit working-manifest input;
+manifest.
+
+Before invoking helper inventory algorithms, maintenance directly reads both
+executing source files and their blobs in the captured tree and compares bytes.
+This guard does not use the unverified helper's Git/hash/discovery functions to
+certify itself, and never loads or executes code from staged blobs.
+Reviewed ownership/rules remain the explicit working-manifest input;
 the command preserves them and flags new owners as `UNREVIEWED`. It does not
 accept new consumers or activate authority. Runtime qualification rejects unresolved
 owners and selectors that name no inventoried workflow/job. Both `.yml` and

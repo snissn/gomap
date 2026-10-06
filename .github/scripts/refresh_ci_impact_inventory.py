@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Refresh source bindings in the reviewed advisory manifest; never accept policy.
 
-Stage intended source/workflow edits first, then run:
+Stage intended source/workflow edits and the executing helper/generator first, then run:
   uv run --with pyyaml python .github/scripts/refresh_ci_impact_inventory.py
 Review the resulting manifest and ownership rules before committing it.
 PyYAML is only needed by this maintenance command, not the workflow planner.
 """
 import argparse
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 
 import yaml
@@ -57,7 +59,24 @@ def source_workflows(root, inputs):
 
 
 def snapshot_inputs(root):
-    snapshot = ci_impact.git(root, 'write-tree').decode().strip()
+    # Bootstrap this binding with Git bytes, not unverified helper algorithms.
+    # Both commands must execute the code in the same intended source snapshot.
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS='0')
+    try:
+        snapshot = subprocess.check_output(['git', '-C', str(root), 'write-tree'],
+                                           stderr=subprocess.PIPE, env=env).decode().strip()
+    except (OSError, subprocess.CalledProcessError, UnicodeError) as error:
+        raise ci_impact.ContractError('maintenance-snapshot-error') from error
+    for path, loaded in (('.github/scripts/ci_impact.py', ci_impact.__file__),
+                         ('.github/scripts/refresh_ci_impact_inventory.py', __file__)):
+        try:
+            staged = subprocess.check_output(['git', '-C', str(root), 'cat-file', 'blob', snapshot + ':' + path],
+                                             stderr=subprocess.PIPE, env=env)
+            actual = Path(loaded).read_bytes()
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise ci_impact.ContractError('maintenance-source-unavailable: ' + path) from error
+        if actual != staged:
+            raise ci_impact.ContractError('maintenance-source-mismatch: ' + path)
     return ci_impact.tree_inventory(root, snapshot)[0]
 
 
