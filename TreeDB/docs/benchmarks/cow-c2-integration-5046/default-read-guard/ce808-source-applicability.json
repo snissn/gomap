@@ -1,0 +1,23 @@
+{
+  "recorded_utc": "2026-10-06T05:07:08.414167+00:00",
+  "current_candidate": "ce808d9d523e6ec7c32fe4c773e87d7ed8dcc2a1",
+  "current_source_tree_sha256": "c50cf00ef056bd1cca78e80c02cf5df79deb961915290d161d139b5aa98a0d1f",
+  "measured_candidate": "b9e5587fb01cb49e6eddd576b068e30c3ca2ec63",
+  "guard_disposition": "reuse applicable for the three original measured default public-read cases",
+  "new_timing_claim": false,
+  "root_accepts_applicability": true,
+  "reason": "All ten changed paths are COW-only functions/new methods or the explicit COW NoWAL publication helper. Default timed fixtures, public non-COW lifecycle selectors, ordinary cached/backend read branches and their runtime callees are unchanged. New COW point/decoder/preparation costs are recollected separately.",
+  "bindings": {
+    "default-read-guard-b9e5587/root-limited-disposition.json": "23b39b7f91229f457e1ee47072da8f4c7a4f0af303466e61e401d58d64826e47",
+    "minimization-ce808/source-applicability.md": "b2a3ac389d64c4f854e6a21a57b194b4e19fada596a21c282de007c4e0fb5c91",
+    "minimization-ce808/retained-source-applicability.json": "6045ef0a8f9c328fbbb2bbc8822e8ed6592f73168a2e12b277bd0d0d70d84677",
+    "candidate-ce808-root-root-source-check.json": "4aa32391986cad08ac6d207de12a50771b158add98ccf3e3a518183fc4807588",
+    "candidate-11474-independent-review/ce808-preliminary-source-review.md": "3d554e46ab4238b3d55236b76a37ce162ea1879ffdec3836af6f415d65950ba9"
+  },
+  "limits": [
+    "source applicability reuses original b9 timings without relabeling them",
+    "three measured cases only; no default-writer/all-profile/sustained or persistence/drain claim",
+    "about7ns inline lifecycle selector cost remains disclosed",
+    "whole C2 costs remain held until new actual cost collection/disposition"
+  ]
+}

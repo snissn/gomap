@@ -1,0 +1,17 @@
+{
+  "normal": {
+    "test_pass": 147,
+    "package_pass": 1,
+    "fail": 0
+  },
+  "race": {
+    "test_pass": 147,
+    "package_pass": 1,
+    "fail": 0
+  },
+  "safe": {
+    "test_pass": 147,
+    "package_pass": 1,
+    "fail": 0
+  }
+}

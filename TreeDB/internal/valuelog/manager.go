@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -1229,9 +1230,48 @@ func (f *File) appendPayloadFromFile(dst []byte, off int64, payloadLen int) ([]b
 
 // Set is an immutable snapshot of value-log files for snapshot isolation.
 type Set struct {
+	retentionShape      SetRetentionSizes
+	retentionKnown      bool
 	Files               map[uint32]*File
 	RefCount            atomic.Int64
 	disableReadChecksum bool
+}
+
+// SetRetentionSizes is frozen by the Set constructor while it already visits
+// the selected files. The map hint may exceed FileCount when zombies are skipped.
+// It describes retained metadata, excluding OS mappings and existing backend
+// decode/cache buffers governed by their own owner budgets.
+type SetRetentionSizes struct {
+	MapHint, FileCount                              int
+	Wrapper, MapEnvelope, FileWrapper, PathEnvelope uint64
+}
+
+// RetentionSizes performs no file enumeration. Manually constructed Sets have
+// no reliable capacity provenance and cannot supply bounded-capture admission.
+func (s *Set) RetentionSizes() (SetRetentionSizes, bool) {
+	if s == nil {
+		return SetRetentionSizes{}, true
+	}
+	return s.retentionShape, s.retentionKnown
+}
+
+func setRetentionSizes(hint int) SetRetentionSizes {
+	shape := SetRetentionSizes{MapHint: hint, Wrapper: uint64(unsafe.Sizeof(Set{})), FileWrapper: uint64(unsafe.Sizeof(File{}))}
+	// Go 1.26 Swiss maps use eight-slot groups. A uint32/*File slot is at
+	// most two machine words, plus one control byte. Even doubling group and
+	// directory capacity, allocator rounding and map/table headers fit within
+	// 512 bytes per requested slot plus 512 bytes of fixed overhead. This is an
+	// intentionally conservative aggregate envelope, not a map sizeof claim.
+	shape.MapEnvelope = 512 * (uint64(hint) + 1)
+
+	return shape
+}
+
+func (shape *SetRetentionSizes) addFile(f *File) {
+	shape.FileCount++
+	// The constructor-created path/namespace string capacities use a conservative
+	// two-times-length plus 64 bytes each rounding/header envelope.
+	shape.PathEnvelope += 2*uint64(len(f.Path)+len(f.stableNamespace)) + 128
 }
 
 func (s *Set) ReadChecksumEnabled() bool {
@@ -2181,32 +2221,54 @@ func (m *Manager) CurrentSubsetNoRefresh(ids map[uint32]struct{}) *Set {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	files := make(map[uint32]*File, len(ids))
+	shape := setRetentionSizes(len(ids))
 	for id := range ids {
 		if f := m.files[id]; f != nil && !f.IsZombie.Load() {
 			files[id] = f
+			shape.addFile(f)
 			f.RefCount.Add(1)
 		}
 	}
-	set := &Set{Files: files, disableReadChecksum: m.disableReadChecksum}
+	set := &Set{Files: files, disableReadChecksum: m.disableReadChecksum, retentionKnown: true}
+	set.retentionShape = shape
 	set.RefCount.Store(1)
 	return set
+}
+
+// RegisteredFileRetentionSizes reports one exact registered file's metadata
+// before a subset allocation. Its producer-stamped strings and concrete File
+// wrapper are immutable; this call neither refreshes nor enumerates other files.
+func (m *Manager) RegisteredFileRetentionSizes(id uint32) (SetRetentionSizes, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	f := m.files[id]
+	if f == nil || f.IsZombie.Load() {
+		return SetRetentionSizes{}, false
+	}
+	s := setRetentionSizes(1)
+	s.addFile(f)
+	return s, true
 }
 
 // currentSetLocked builds a ref-counted snapshot.
 // m.mu must be held (read or write).
 func (m *Manager) currentSetLocked() *Set {
 	files := make(map[uint32]*File, len(m.files))
+	shape := setRetentionSizes(len(m.files))
 	for id, f := range m.files {
 		if f.IsZombie.Load() {
 			continue
 		}
 		files[id] = f
+		shape.addFile(f)
 		f.RefCount.Add(1)
 	}
 	s := &Set{
 		Files:               files,
 		disableReadChecksum: m.disableReadChecksum,
 	}
+	s.retentionKnown = true
+	s.retentionShape = shape
 	s.RefCount.Store(1)
 	return s
 }

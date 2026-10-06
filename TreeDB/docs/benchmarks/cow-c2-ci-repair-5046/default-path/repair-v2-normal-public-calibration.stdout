@@ -1,0 +1,20 @@
+{"Time":"2026-10-05T21:17:40.500651122-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB"}
+{"Time":"2026-10-05T21:17:40.503176456-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut"}
+{"Time":"2026-10-05T21:17:40.50322153-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut","Output":"=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut\n"}
+{"Time":"2026-10-05T21:17:40.503236831-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_durable"}
+{"Time":"2026-10-05T21:17:40.503240891-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_durable","Output":"=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_durable\n"}
+{"Time":"2026-10-05T21:17:40.861282289-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_durable","Output":"--- PASS: TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_durable (0.36s)\n"}
+{"Time":"2026-10-05T21:17:40.861302963-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_durable","Elapsed":0.36}
+{"Time":"2026-10-05T21:17:40.861311854-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_relaxed"}
+{"Time":"2026-10-05T21:17:40.861315981-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_relaxed","Output":"=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_relaxed\n"}
+{"Time":"2026-10-05T21:17:41.217695952-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_relaxed","Output":"--- PASS: TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_relaxed (0.36s)\n"}
+{"Time":"2026-10-05T21:17:41.217716254-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/command_wal_relaxed","Elapsed":0.36}
+{"Time":"2026-10-05T21:17:41.21772233-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast"}
+{"Time":"2026-10-05T21:17:41.217724202-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast","Output":"=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast\n"}
+{"Time":"2026-10-05T21:17:41.544188073-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast","Output":"--- PASS: TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast (0.33s)\n"}
+{"Time":"2026-10-05T21:17:41.544207291-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast","Elapsed":0.33}
+{"Time":"2026-10-05T21:17:41.54421203-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut","Output":"--- PASS: TestCOWPublicCompactIndexIncludesDirtyActiveCut (1.04s)\n"}
+{"Time":"2026-10-05T21:17:41.544214263-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestCOWPublicCompactIndexIncludesDirtyActiveCut","Elapsed":1.04}
+{"Time":"2026-10-05T21:17:41.54422035-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"PASS\n"}
+{"Time":"2026-10-05T21:17:41.545902769-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"ok  \tgithub.com/snissn/gomap/TreeDB\t1.045s\n"}
+{"Time":"2026-10-05T21:17:41.545919871-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Elapsed":1.045}

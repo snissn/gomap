@@ -1,0 +1,9 @@
+# Leaf reclamation assertion repair
+
+The original exact440 Windows-core3 leaf-registration test failed only for command_wal_relaxed because the unused rotated leaf file still existed immediately after compaction. The captured report marked generation2 deleted and reported one pin during its final native audit, before the outer COW maintenance basis refresh. It does not identify the original pin owner or retry schedule.
+
+Native GC can mark a generation deleted before physical deletion completes. In the existing COW basis release sequence, Snapshot.Close precedes identity-pin Release. A final Set release can therefore attempt zombie deletion while an identity pin is still held; deleteZombieFile schedules retryZombieDelete after a pin or Windows-sharing conflict and returns nil. The retry worker uses200ms initial backoff. This source-supported lifecycle permits deferred physical deletion; the hosted attempt itself has no scheduling trace.
+
+Only the assigned physical-reclamation assertion and time import changed. The test now verifies old snapshot bytes before each stat observation and after success, retains that same old cut through a finite5s/10ms polling window, and still requires actual file absence. Other stat errors fail immediately. It never reruns compaction or releases the user old cut to obtain deletion. Existing later-write/checkpoint/Close/reopen assertions are unchanged. Each success logs polls and elapsed time, including immediate removal. No runtime policy, Windows skip or durability condition changed.
+
+Local Darwinarm64Go1.26.0 normal/race/treedb_safe count3 targeted runs all passed. Each mode records12 test/subcase events (3 parent+9 profile cases), one package PASS, nine physical-removal receipts, no failures/skips. All observed local removals were immediate; delayed Windows-path execution remains pending.

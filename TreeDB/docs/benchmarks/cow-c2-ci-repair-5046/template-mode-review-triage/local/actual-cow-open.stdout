@@ -1,0 +1,6 @@
+{"actual_memtable_mode":"cow_btree","open_error":null,"profile":"command_wal_durable","requested_template_mode":1,"set_sync_get_close":"PASS","templatedb_created":false}
+{"actual_memtable_mode":"cow_btree","open_error":null,"profile":"command_wal_durable","requested_template_mode":2,"set_sync_get_close":"PASS","templatedb_created":false}
+{"actual_memtable_mode":"cow_btree","open_error":null,"profile":"command_wal_relaxed","requested_template_mode":1,"set_sync_get_close":"PASS","templatedb_created":false}
+{"actual_memtable_mode":"cow_btree","open_error":null,"profile":"command_wal_relaxed","requested_template_mode":2,"set_sync_get_close":"PASS","templatedb_created":false}
+{"actual_memtable_mode":"cow_btree","open_error":null,"profile":"no_wal_fast","requested_template_mode":1,"set_sync_get_close":"PASS","templatedb_created":false}
+{"actual_memtable_mode":"cow_btree","open_error":null,"profile":"no_wal_fast","requested_template_mode":2,"set_sync_get_close":"PASS","templatedb_created":false}

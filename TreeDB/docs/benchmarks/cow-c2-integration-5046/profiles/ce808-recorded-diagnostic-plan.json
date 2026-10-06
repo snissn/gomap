@@ -1,0 +1,19 @@
+{
+  "recorded_utc": "2026-10-06T05:22:07.774115+00:00",
+  "candidate": "ce808d9d523e6ec7c32fe4c773e87d7ed8dcc2a1",
+  "source_tree_sha256": "c50cf00ef056bd1cca78e80c02cf5df79deb961915290d161d139b5aa98a0d1f",
+  "collector_sha256": "67d03065ee921cc67f20a372253eb8052160ea7cbcfa36fad31bae77abd962e8",
+  "collector": "unchanged repaired actual supported profile collector",
+  "expected_jobs": 8,
+  "raw_jobs": "NoWAL N2048 btree/cow InlineForward16, PointerCaptureReadRelease, PointerIncrementalWrite 8192x each",
+  "mvcc_jobs": "NoWAL point btree/cow256x count16 each",
+  "prerequisites": [
+    "complete45 new ce808 cost runs strictly analyzed",
+    "no185 timing jobs remain",
+    "frozen source and retained binaries match full identities"
+  ],
+  "exclusive_owner": "/root",
+  "outputs": "profiles-ce808-material-costs",
+  "scope": "Diagnostic CPU/alloc profiles including setup/teardown, not replacement timings or exact lower bounds. Retain complete originals and changed paths; independently review cause evidence and residual impact.",
+  "whole_C2_acceptance": false
+}

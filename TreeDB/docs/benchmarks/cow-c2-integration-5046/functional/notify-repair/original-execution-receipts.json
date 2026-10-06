@@ -1,0 +1,25 @@
+{
+  "qualification": "Original RED commands reconstructed from exact retained test selection and Go configuration; exits1 from completed exec sessions and JSON package fail events, not contemporaneous receipt file.",
+  "runner": "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/OWNED/c2-notify-repair",
+  "base_commit": "730808f7048f90d76e36ca092162222cc45e4b03",
+  "environment": {
+    "GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+    "GOWORK": "off",
+    "GOCACHE": "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/cache",
+    "GOMODCACHE": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod"
+  },
+  "runs": [
+    {
+      "log": "original-red.json",
+      "command": "go test -json ./TreeDB -run ^TestCOWCloseErrorNotificationCanReadClosedDatabase$ -count=1",
+      "exit": 1,
+      "source": "original-sync-test.go.txt"
+    },
+    {
+      "log": "original-async-red.json",
+      "command": "go test -json ./TreeDB -run ^TestCOWCloseHookCanWaitForAsynchronousNotificationRead$ -count=1",
+      "exit": 1,
+      "source": "original-async-test.go.txt"
+    }
+  ]
+}

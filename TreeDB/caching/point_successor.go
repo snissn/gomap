@@ -196,6 +196,14 @@ func (db *DB) seekGE(start, end []byte, mvccOwned bool) (key, value []byte, foun
 	if end != nil && bytes.Compare(start, end) >= 0 {
 		return nil, nil, false, nil
 	}
+	if db.cow != nil {
+		s, err := db.acquireCOWSnapshotWithError()
+		if err != nil {
+			return nil, nil, false, err
+		}
+		defer s.Close()
+		return s.cowSeekGE(start, end)
+	}
 	db.pointSuccessorCallsTotal.Add(1)
 	debugTiming := pointSuccessorDebugEnabled.Load()
 	var selectionStarted time.Time

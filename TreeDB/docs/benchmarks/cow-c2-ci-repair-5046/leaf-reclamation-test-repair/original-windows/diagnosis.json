@@ -1,0 +1,89 @@
+{
+  "decision": "READ_ONLY_DIAGNOSIS_DISTINCT_FAILURE",
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "run_id": 37441320552,
+  "job_id": 112196498661,
+  "artifact_id": 11402094450,
+  "artifact_name": "treedb-test-json-windows-core-3",
+  "failed_leaf": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+  "failed_line": 319,
+  "failure": "unused rotated leaf generation2 path still exists immediately after CompactStorage; os.Stat error=nil",
+  "close_notification": "Both synchronous WAL profile leaves and parent PASS; asynchronous Close-hook witness has no event in this job artifact, so no result claimed.",
+  "observed_gc_state": {
+    "generation2_state": "deleted",
+    "generation2_pinned_count": 1,
+    "generations_eligible": 1,
+    "generations_deleted": 0,
+    "files_deleted": 0
+  },
+  "calibration": "The log does not identify the owner of the remaining pin, a Windows sharing violation, or eventual deletion. Deferred deletion is supported by manager source, but causality is not established. No flaky-test or runtime-defect classification, no source edit or rerun.",
+  "source_bindings": {
+    "TreeDB/cow_public_review_regression_test.go": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+    "TreeDB/cow_close_notification_test.go": "d15253d599b953a09baa79ef182ddf5bfd8814960040beed8243e3e6e6ccd548",
+    "TreeDB/db/leaf_generation_gc.go": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+    "TreeDB/internal/valuelog/manager.go": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a"
+  },
+  "test_action_counts": {
+    "pass": 1929,
+    "skip": 60,
+    "fail": 2
+  },
+  "package_action_counts": {
+    "skip": 3,
+    "pass": 9,
+    "fail": 1
+  },
+  "close_results": [
+    {
+      "Time": "2026-10-06T09:40:21.4766452Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+      "Elapsed": 7.86
+    },
+    {
+      "Time": "2026-10-06T09:40:29.207167Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+      "Elapsed": 7.73
+    },
+    {
+      "Time": "2026-10-06T09:40:29.207167Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWCloseErrorNotificationCanReadClosedDatabase",
+      "Elapsed": 15.59
+    }
+  ],
+  "leaf_registration_results": [
+    {
+      "Time": "2026-10-06T09:41:29.9502618Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Elapsed": 11.03
+    },
+    {
+      "Time": "2026-10-06T09:41:33.4231382Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Elapsed": 3.47
+    },
+    {
+      "Time": "2026-10-06T09:41:36.5153109Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Elapsed": 3.09
+    },
+    {
+      "Time": "2026-10-06T09:41:36.5153109Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+      "Elapsed": 17.59
+    }
+  ]
+}

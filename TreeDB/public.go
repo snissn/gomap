@@ -30,6 +30,10 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
+type COWMemtableLimits = db.COWMemtableLimits
+
+func DefaultCOWMemtableLimits() COWMemtableLimits { return db.DefaultCOWMemtableLimits() }
+
 var errVacuumUnsupported = db.ErrVacuumUnsupported
 
 // EntryRevision is TreeDB's native per-entry revision metadata. Revision zero is
@@ -579,6 +583,27 @@ func (db *DB) ensureOpen() error {
 	return nil
 }
 
+// captureReadOwners selects an existing lower-layer owner under the public
+// lifecycle lock. Lower-layer read admission excludes storage teardown; release
+// this lock before calling the owner so user callbacks can reenter Close.
+// Exclusive lifecycle ownership belongs to Close. Refuse rather than wait when
+// Close owns or awaits that lock: Close may itself be waiting for a worker whose
+// NotifyError callback is attempting a public read.
+func (db *DB) captureReadOwners() (*caching.DB, *db.DB, error) {
+	if db == nil {
+		return nil, nil, ErrClosed
+	}
+	if !db.lifecycleMu.TryRLock() {
+		return nil, nil, ErrClosed
+	}
+	cached, backend := db.cached, db.backend
+	db.lifecycleMu.RUnlock()
+	if cached == nil && backend == nil {
+		return nil, nil, ErrClosed
+	}
+	return cached, backend, nil
+}
+
 func (db *DB) beginPublicOperation() error {
 	if db == nil {
 		return ErrClosed
@@ -752,6 +777,20 @@ func Open(opts Options) (*DB, error) {
 }
 
 func openResolved(opts Options) (*DB, error) {
+	if opts.MemtableMode == "cow_btree" {
+		if opts.ReadOnly {
+			return nil, caching.ErrCOWUnsupported
+		}
+		limits, shards, err := caching.ValidateCOWOpenOptions(caching.Options{
+			COWMemtableLimits: opts.COWMemtableLimits, MemtableShards: opts.MemtableShards,
+			DomainIngressWorkers: opts.DomainIngressWorkers,
+			DisableWAL:           opts.Durability == db.DurabilityWALOffRelaxed, ExternalCommandWAL: opts.CommandWAL,
+		})
+		if err != nil {
+			return nil, err
+		}
+		opts.COWMemtableLimits, opts.MemtableShards = limits, shards
+	}
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to
@@ -1086,6 +1125,7 @@ func openResolved(opts Options) (*DB, error) {
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:                             opts.FlushThreshold,
 		MemtableMode:                               opts.MemtableMode,
+		COWMemtableLimits:                          opts.COWMemtableLimits,
 		MemtableShards:                             opts.MemtableShards,
 		DomainIngressWorkers:                       opts.DomainIngressWorkers,
 		DomainIngressQueueSize:                     opts.DomainIngressQueueSize,
@@ -1862,26 +1902,28 @@ func (db *DB) backgroundError() error {
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.Get(key)
+	if cached != nil {
+		return cached.Get(key)
 	}
-	return db.backend.Get(key)
+	return backend.Get(key)
 }
 
 // GetVersioned returns the value for a key plus TreeDB's native per-entry
 // revision. Missing keys return a nil value and nil error, matching Get.
 func (db *DB) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, LegacyEntryRevision, err
 	}
-	if db.cached != nil {
-		return db.cached.GetVersioned(key)
+	if cached != nil {
+		return cached.GetVersioned(key)
 	}
-	return db.backend.GetVersioned(key)
+	return backend.GetVersioned(key)
 }
 
 // GetMany returns values for keys.
@@ -1889,13 +1931,14 @@ func (db *DB) GetVersioned(key []byte) ([]byte, EntryRevision, error) {
 // Semantics: Returns safe copies of values. Missing keys are returned as nil
 // entries with no error.
 func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.GetMany(keys)
+	if cached != nil {
+		return cached.GetMany(keys)
 	}
-	return db.backend.GetMany(keys)
+	return backend.GetMany(keys)
 }
 
 // GetManyView calls fn once for each key with a read-only value view. The
@@ -1905,13 +1948,14 @@ func (db *DB) GetMany(keys [][]byte) ([][]byte, error) {
 // reported with found=false and value=nil. Existing safe-copy GetMany semantics
 // are unchanged.
 func (db *DB) GetManyView(keys [][]byte, fn GetManyViewFunc) error {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return err
 	}
-	if db.cached != nil {
-		return db.cached.GetManyView(keys, fn)
+	if cached != nil {
+		return cached.GetManyView(keys, fn)
 	}
-	return db.backend.GetManyView(keys, fn)
+	return backend.GetManyView(keys, fn)
 }
 
 // GetManyParallelPlan reports how TreeDB would schedule GetMany for the given
@@ -1924,13 +1968,17 @@ func (db *DB) GetManyParallelPlan(keyCount int) (workers int, parallel bool) {
 	if keyCount <= 0 {
 		return 1, false
 	}
-	if db.cached != nil {
-		if planner, ok := any(db.cached).(getManyPlanner); ok {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
+		return 1, false
+	}
+	if cached != nil {
+		if planner, ok := any(cached).(getManyPlanner); ok {
 			return planner.GetManyParallelPlan(keyCount)
 		}
 	}
-	if db.backend != nil {
-		if planner, ok := any(db.backend).(getManyPlanner); ok {
+	if backend != nil {
+		if planner, ok := any(backend).(getManyPlanner); ok {
 			return planner.GetManyParallelPlan(keyCount)
 		}
 	}
@@ -1956,49 +2004,53 @@ func (db *DB) GetUnsafe(key []byte) ([]byte, error) {
 // It avoids internal allocations by using the provided buffer.
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return dst, err
 	}
-	if db.cached != nil {
-		return db.cached.GetAppend(key, dst)
+	if cached != nil {
+		return cached.GetAppend(key, dst)
 	}
-	return db.backend.GetAppend(key, dst)
+	return backend.GetAppend(key, dst)
 }
 
 // GetVersionedAppend appends the value for key to dst and returns TreeDB's
 // native per-entry revision. Missing/tombstoned keys return dst and
 // ErrKeyNotFound; tombstones preserve their stored revision.
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, EntryRevision, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return dst, LegacyEntryRevision, err
 	}
-	if db.cached != nil {
-		return db.cached.GetVersionedAppend(key, dst)
+	if cached != nil {
+		return cached.GetVersionedAppend(key, dst)
 	}
-	return db.backend.GetVersionedAppend(key, dst)
+	return backend.GetVersionedAppend(key, dst)
 }
 
 // Has reports whether a key exists in the database.
 func (db *DB) Has(key []byte) (bool, error) {
 	key = normalizeRawKVPointKey(key)
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return false, err
 	}
-	if db.cached != nil {
-		return db.cached.Has(key)
+	if cached != nil {
+		return cached.Has(key)
 	}
-	return db.backend.Has(key)
+	return backend.Has(key)
 }
 
 // HasMany reports whether each key exists.
 func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.HasMany(keys)
+	if cached != nil {
+		return cached.HasMany(keys)
 	}
-	snap := db.AcquireSnapshot()
+	snap := backend.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
 	}
@@ -2008,13 +2060,14 @@ func (db *DB) HasMany(keys [][]byte) ([]bool, error) {
 
 // HasPrefixes reports whether each prefix has at least one visible key.
 func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.HasPrefixes(prefixes)
+	if cached != nil {
+		return cached.HasPrefixes(prefixes)
 	}
-	snap := db.AcquireSnapshot()
+	snap := backend.AcquireSnapshot()
 	if snap == nil {
 		return nil, ErrClosed
 	}
@@ -2030,6 +2083,9 @@ func (db *DB) Set(key, value []byte) error {
 	value = normalizeRawKVValue(value)
 	if err := db.beginPublicOperation(); err != nil {
 		return err
+	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, value, true, false)
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
@@ -2054,6 +2110,9 @@ func (db *DB) SetSync(key, value []byte) error {
 	value = normalizeRawKVValue(value)
 	if err := db.beginPublicOperation(); err != nil {
 		return err
+	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, value, true, true)
 	}
 	// Select the route before appending any value/WAL bytes. Never retry an
 	// ambiguous point error. Construct the fallback under the admission lock
@@ -2097,6 +2156,9 @@ func (db *DB) Update(key []byte, fn UpdateFunc) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return caching.ErrCOWUnsupported
+	}
 	if db.commandWALCached {
 		db.rawSpanNativePublicUpdateReject.Add(1)
 		return ErrCommandWALRejected
@@ -2120,6 +2182,9 @@ func (db *DB) UpdateSync(key []byte, fn UpdateFunc) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return caching.ErrCOWUnsupported
+	}
 	if db.commandWALCached {
 		db.rawSpanNativePublicUpdateSyncReject.Add(1)
 		return ErrCommandWALRejected
@@ -2153,6 +2218,9 @@ func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return ErrConditionalTxnUnsupported
+	}
 	if db.cached != nil {
 		if db.commandWALCached {
 			return ErrConditionalTxnUnsupported
@@ -2210,6 +2278,9 @@ func (db *DB) Delete(key []byte) error {
 	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, nil, false, false)
+	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
@@ -2234,6 +2305,9 @@ func (db *DB) DeleteRange(start, end []byte) error {
 		return err
 	}
 	defer db.lifecycleMu.RUnlock()
+	if db.cached != nil && db.cached.COWMode() {
+		return caching.ErrCOWUnsupported
+	}
 	if db.commandWALCached {
 		if batch.IsDeleteRangeNoop(start, end) {
 			return nil
@@ -2285,6 +2359,9 @@ func (db *DB) DeleteSync(key []byte) error {
 	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
+	if db.cached != nil && db.cached.COWMode() {
+		return db.writeCOWPointAdmitted(key, nil, false, true)
+	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
@@ -2302,25 +2379,31 @@ func (db *DB) DeleteSync(key []byte) error {
 
 // Iterator returns a forward iterator over the range [start, end).
 func (db *DB) Iterator(start, end []byte) (Iterator, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.Iterator(start, end)
+	if cached != nil {
+		return cached.Iterator(start, end)
 	}
-	return db.backend.Iterator(start, end)
+	return backend.Iterator(start, end)
 }
 
 // SeekGE returns owned copies of the first visible physical key and value in
 // [start,end). A miss returns nil, nil, false, nil.
 func (db *DB) SeekGE(start, end []byte) ([]byte, []byte, bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, nil, false, err
 	}
-	if db.cached != nil {
-		return db.cached.SeekGE(start, end)
+	if cached != nil {
+		return cached.SeekGE(start, end)
 	}
-	it, err := db.backend.Iterator(start, end)
+	return seekGEBackend(backend, start, end)
+}
+
+func seekGEBackend(backend *db.DB, start, end []byte) ([]byte, []byte, bool, error) {
+	it, err := backend.Iterator(start, end)
 	if err != nil {
 		return nil, nil, false, err
 	}
@@ -2336,24 +2419,26 @@ func (db *DB) SeekGE(start, end []byte) ([]byte, []byte, bool, error) {
 // should use SeekGE. Store also fences multi-record commits and physical pruning
 // against reads and snapshot acquisition. Results own their key/value bytes.
 func (db *DB) SeekGEVersionRange(start, end []byte) ([]byte, []byte, bool, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, nil, false, err
 	}
-	if db.cached != nil {
-		return db.cached.SeekGEVersionRange(start, end)
+	if cached != nil {
+		return cached.SeekGEVersionRange(start, end)
 	}
-	return db.SeekGE(start, end)
+	return seekGEBackend(backend, start, end)
 }
 
 // ReverseIterator returns a reverse iterator over the range [start, end).
 func (db *DB) ReverseIterator(start, end []byte) (Iterator, error) {
-	if err := db.ensureOpen(); err != nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil, err
 	}
-	if db.cached != nil {
-		return db.cached.ReverseIterator(start, end)
+	if cached != nil {
+		return cached.ReverseIterator(start, end)
 	}
-	return db.backend.ReverseIterator(start, end)
+	return backend.ReverseIterator(start, end)
 }
 
 // NewBatch creates a new batch for buffered writes.
@@ -2406,25 +2491,42 @@ func (db *DB) AcquireSnapshot() Snapshot {
 	if db == nil {
 		return nil
 	}
-	if db.cached != nil {
-		if snap := db.cached.AcquireBackendSnapshotFastPath(); snap != nil {
-			return snap
-		}
-		return db.cached.AcquireSnapshot()
-	}
-	if db.backend == nil {
+	cached, backend, err := db.captureReadOwners()
+	if err != nil {
 		return nil
 	}
-	return db.backend.AcquireSnapshot()
+	if cached != nil {
+		if snap := cached.AcquireBackendSnapshotFastPath(); snap != nil {
+			return snap
+		}
+		snap := cached.AcquireSnapshot()
+		if snap == nil {
+			return nil
+		}
+		return snap
+	}
+	if backend == nil {
+		return nil
+	}
+	return backend.AcquireSnapshot()
 }
 
 // Stats returns diagnostic stats for the active backend and cached layer.
+// It returns nil when exclusive Close prevents diagnostic admission.
 func (db *DB) Stats() map[string]string {
-	if db == nil || (db.cached == nil && db.backend == nil) {
+	if db == nil {
 		return nil
 	}
-	if db.cached != nil {
-		stats := db.cached.Stats()
+	if !db.lifecycleMu.TryRLock() {
+		return nil
+	}
+	defer db.lifecycleMu.RUnlock()
+	cached, backend := db.cached, db.backend
+	if cached == nil && backend == nil {
+		return nil
+	}
+	if cached != nil {
+		stats := cached.Stats()
 		if stats == nil {
 			stats = make(map[string]string)
 		}
@@ -2437,11 +2539,11 @@ func (db *DB) Stats() map[string]string {
 		db.publicOperationStatsInto(stats)
 		stats["treedb.durability_mode"] = db.durabilityMode
 		stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
-		bgIndexVacuumStatsInto(stats, &db.bgVac, db.backend.VacuumOnlinePhase())
+		bgIndexVacuumStatsInto(stats, &db.bgVac, backend.VacuumOnlinePhase())
 		maintenanceStatsInto(stats, &db.maintenance)
 		return stats
 	}
-	stats := db.backend.Stats()
+	stats := backend.Stats()
 	if stats == nil {
 		stats = make(map[string]string)
 	}
@@ -2451,7 +2553,7 @@ func (db *DB) Stats() map[string]string {
 	db.publicOperationStatsInto(stats)
 	stats["treedb.durability_mode"] = db.durabilityMode
 	stats["treedb.vlog.read_integrity"] = db.valueLogReadIntegrity
-	bgIndexVacuumStatsInto(stats, &db.bgVac, db.backend.VacuumOnlinePhase())
+	bgIndexVacuumStatsInto(stats, &db.bgVac, backend.VacuumOnlinePhase())
 	maintenanceStatsInto(stats, &db.maintenance)
 	return stats
 }
@@ -2623,7 +2725,7 @@ func (db *DB) compactIndex(allowClosing bool) error {
 			return err
 		}
 	}
-	err := db.reconcileCachedBackendMaintenance(db.backend.CompactIndex())
+	err := db.runCachedBackendMaintenance(db.backend.CompactIndex)
 	if err == nil {
 		db.bgVac.deferredVectorBuildDebt.Store(false)
 	}
@@ -2718,8 +2820,13 @@ func (db *DB) vacuumIndexOnlineStats(ctx context.Context) (VacuumOnlineStats, er
 		defer unlockCommandWALPublish()
 	}
 
-	onlineStats, stats := db.backend.VacuumIndexOnlineWithStats(ctx)
-	if err := db.reconcileCachedBackendMaintenance(stats); err != nil {
+	var onlineStats VacuumOnlineStats
+	err = db.runCachedBackendMaintenance(func() error {
+		var runErr error
+		onlineStats, runErr = db.backend.VacuumIndexOnlineWithStats(ctx)
+		return runErr
+	})
+	if err != nil {
 		return onlineStats, err
 	}
 	success = true
@@ -2795,4 +2902,28 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 		return nil, ErrClosed
 	}
 	return db.backend.FragmentationReport()
+}
+
+// writeCOWPointAdmitted consumes the caller's public admission. Batch writes
+// acquire their own admission, so release this lock before invoking them.
+func (db *DB) writeCOWPointAdmitted(key, value []byte, put, syncWrite bool) error {
+	var b Batch = db.cached.NewBatchWithSize(1)
+	if db.commandWALCached {
+		b = newCommandWALPublicBatch(db, b, 1)
+	}
+	db.lifecycleMu.RUnlock()
+	var err error
+	if put {
+		err = b.Set(key, value)
+	} else {
+		err = b.Delete(key)
+	}
+	if err == nil {
+		if syncWrite {
+			err = b.WriteSync()
+		} else {
+			err = b.Write()
+		}
+	}
+	return errors.Join(err, b.Close())
 }

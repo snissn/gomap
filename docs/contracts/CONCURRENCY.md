@@ -43,9 +43,32 @@ storage before allocation and close idempotently after owned cleanup.
 Both default and `treedb_safe` builds avoid key-conversion allocation during
 estimation/refusal and lookup/seek; safe rank search costs O(log N * height).
 Release callbacks
-are deferred outside publication/admission locks. It supplies no standalone
-public DB mode at this stage. See
+are deferred outside publication/admission locks. The foundation itself does
+not select a DB mode. See
 [the precise ownership contract](../../TreeDB/docs/spec/cow-memtable-ownership.md).
+
+### Explicit immutable COW cache
+
+Explicit `MemtableMode="cow_btree"` integrates one complete immutable cut of
+fixed shard roots, bounded frozen sources and a backend snapshot basis. Capture
+pins that cut under `cutMu`; tree traversal, pointer decoding and copying run
+after release. A command sequencer covers all changed-root preparation, canonical
+metadata/dependency finalization and one cut install. It releases the command-WAL
+barrier before `cutMu`; install performs no allocation, IO or callback.
+
+Checkpoint uses `flushMu` then exclusive write admission for a brief frontier
+cut, releasing writer/admission ownership before durability IO/backend publish.
+Handoff obtains backend state without cache writer locks, then takes writer
+ownership and `cutMu` only to swap the complete successor. Maintenance callback
+and basis refresh share the flush fence. Cleanup runs outside writer/admission/
+publication locks; it may perform existing physical-owner release work.
+
+Snapshot/iterator owners preserve exact old reads while the DB remains open.
+DB Close refuses new reads and drains admitted reads before teardown. Finite
+capacity can refuse writes while old cuts remain pinned; it cannot revoke them.
+`GetManyView` callbacks run outside read/writer locks and can reenter supported
+operations. COW mode itself does not authorize narrowing MVCC Store fences. See
+[COW cached publication](../../TreeDB/docs/spec/cow-cache-publication.md).
 
 ### Typed graph reads
 

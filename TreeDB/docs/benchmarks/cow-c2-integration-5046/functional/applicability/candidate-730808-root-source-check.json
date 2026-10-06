@@ -1,0 +1,20 @@
+{
+  "candidate": "730808f7048f90d76e36ca092162222cc45e4b03",
+  "git_tree": "67cef397b60546b550787a8de251247ddb07caa2",
+  "source_tree_sha256": "0070d7097277a36438008f7f073c67e8fef691f521849cf833bf8e1c53b7efde",
+  "file_count": 6459,
+  "unchanged_git_blob_proofs_reused_from_root_verified_af59": 6450,
+  "new_changed_blobs_direct_sha256_verified": [
+    "TreeDB/caching/cow_lazy_read_workspace_test.go",
+    "TreeDB/caching/cow_read_workspace.go",
+    "TreeDB/caching/db.go",
+    "TreeDB/caching/snapshot.go",
+    "TreeDB/cow_close_frontier_test.go",
+    "TreeDB/cow_public_close_race_test.go",
+    "TreeDB/docs/spec/cow-cache-publication.md",
+    "TreeDB/profile_entrypoint_inventory_test.go",
+    "TreeDB/public.go"
+  ],
+  "mismatches": [],
+  "scope": "all frozen source files; functional/cost acceptance remains separate"
+}

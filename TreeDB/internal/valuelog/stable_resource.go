@@ -199,6 +199,15 @@ func (m *Manager) StableResourcePinRegistry() *rootpublication.IdentityPinRegist
 	return m.stableResourcePins
 }
 
+// RegisteredStableIdentity returns the immutable identity stamped when this
+// registered handle was opened. Holding its Set/File lease is required.
+func (f *File) RegisteredStableIdentity() (rootpublication.StableIdentity, bool) {
+	if f == nil {
+		return rootpublication.StableIdentity{}, false
+	}
+	return f.stableIdentity, f.stableIdentity != (rootpublication.StableIdentity{})
+}
+
 // StableSegmentIdentity returns the immutable physical identity captured when
 // the manager opened fileID. Callers can carry it across an intentional evict
 // and reject a pathname replacement before fallback cleanup.

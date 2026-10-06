@@ -111,6 +111,9 @@ func (n *Node) ensureKeyScratch(size int) []byte {
 		return []byte{}
 	}
 	if cap(n.keyScratch) < size {
+		if n.fixedKeyScratch {
+			return nil
+		}
 		nextCap := cap(n.keyScratch)
 		if nextCap < 64 {
 			nextCap = 64
@@ -314,6 +317,9 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 		} else {
 			keyLen := layout.prefixLen + layout.suffixLen
 			key = n.ensureKeyScratch(keyLen)
+			if len(key) != keyLen {
+				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+			}
 			sameBacking := len(n.leafKey) > 0 && len(key) > 0 && &n.leafKey[0] == &key[0]
 			if !sameBacking && layout.prefixLen > 0 {
 				copy(key, n.leafKey[:layout.prefixLen])
@@ -359,6 +365,9 @@ func (n *Node) leafEntryKeyAt(index uint16) (key []byte, layout leafEntryLayout,
 			}
 			keyLen := layout.prefixLen + layout.suffixLen
 			key = n.ensureKeyScratch(keyLen)
+			if len(key) != keyLen {
+				return nil, leafEntryLayout{}, 0, ErrCorruptedNode
+			}
 			sameBacking := len(prevKey) > 0 && len(key) > 0 && &prevKey[0] == &key[0]
 			if !sameBacking && layout.prefixLen > 0 {
 				copy(key, prevKey[:layout.prefixLen])
@@ -1299,6 +1308,9 @@ func (n *Node) leafColumnarPrefixV2FullKeyFlagsAt(index uint16) ([]byte, byte, e
 		} else {
 			keyLen := prefixLen + len(suffix)
 			key = n.ensureKeyScratch(keyLen)
+			if len(key) != keyLen {
+				return nil, 0, ErrCorruptedNode
+			}
 			sameBacking := len(n.leafKey) > 0 && len(key) > 0 && &n.leafKey[0] == &key[0]
 			if !sameBacking && prefixLen > 0 {
 				copy(key, n.leafKey[:prefixLen])
@@ -1331,6 +1343,9 @@ func (n *Node) leafColumnarPrefixV2FullKeyFlagsAt(index uint16) ([]byte, byte, e
 			}
 			keyLen := prefixLen + len(suffix)
 			key = n.ensureKeyScratch(keyLen)
+			if len(key) != keyLen {
+				return nil, 0, ErrCorruptedNode
+			}
 			sameBacking := len(prev) > 0 && len(key) > 0 && &prev[0] == &key[0]
 			if !sameBacking && prefixLen > 0 {
 				copy(key, prev[:prefixLen])
@@ -1723,6 +1738,9 @@ func (n *Node) searchLeafPrefixBlock(blockStart, blockEnd uint16, target []byte)
 
 		keyLen := layout.prefixLen + layout.suffixLen
 		cur := n.ensureKeyScratch(keyLen)
+		if len(cur) != keyLen {
+			return 0, false, ErrCorruptedNode
+		}
 		// If prevKey and cur share backing storage, the existing prefix bytes are
 		// already in place and we only need to overwrite the suffix below.
 		sameBacking := len(prevKey) > 0 && len(cur) > 0 && &prevKey[0] == &cur[0]
@@ -1969,6 +1987,9 @@ func (n *Node) searchLeafColumnarPrefixV2BlockWithMeta(data []byte, count uint16
 			cur = stackScratch[:keyLen]
 		} else {
 			cur = n.ensureKeyScratch(keyLen)
+			if len(cur) != keyLen {
+				return 0, false, ErrCorruptedNode
+			}
 		}
 		// If prevKey and cur share backing storage, the existing prefix bytes are
 		// already in place and we only need to overwrite the suffix below.

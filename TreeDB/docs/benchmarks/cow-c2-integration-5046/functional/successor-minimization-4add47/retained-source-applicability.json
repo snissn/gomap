@@ -1,0 +1,21 @@
+{
+  "candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "baseline": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "unchanged_files": 6471,
+  "changed_files": [
+    "TreeDB/caching/cow_batch_storage.go",
+    "TreeDB/caching/cow_cost_minimization_test.go",
+    "TreeDB/caching/cow_read.go",
+    "TreeDB/caching/point_successor.go",
+    "TreeDB/mvcc/cow_successor_test.go"
+  ],
+  "fixtures": {
+    "TreeDB/cow_public_cost_bench_test.go": "7f3b0a1fa48e41ce8dca25df6406fe8480ae69429cc5b562792282f2422e65be",
+    "TreeDB/mvcc/cow_integration_bench_test.go": "243a3049303d017a5e68a4eb8782287c707cc91aa23f23199e910ed6db5e4b18"
+  },
+  "scope": "37aa prior functional evidence remains historical. This packet executes affected public/caching/MVCC read, snapshot and ownership gates, including real Close races; no benchmark or performance acceptance.",
+  "limitations": [
+    "Inherited Print and FragmentationReport diagnostics require caller synchronization with Close.",
+    "Only exact empty retained backend bases select the lowerbound fast path. Nonempty bases, unknown successor capabilities, and winning physical tombstones use same-snapshot admitted merge."
+  ]
+}

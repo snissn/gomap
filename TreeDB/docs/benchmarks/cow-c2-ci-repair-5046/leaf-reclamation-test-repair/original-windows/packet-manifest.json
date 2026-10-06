@@ -1,0 +1,49 @@
+{
+  "files": {
+    "artifact-provenance.json": {
+      "bytes": 707,
+      "sha256": "1fd1433bf8bd5e39e3057a2c998cdae711886e18e0d7adf7cde9a3b6af6d3434"
+    },
+    "artifact.zip": {
+      "bytes": 109920,
+      "sha256": "75037e6124b38dc987e64da84f02569d0b0de01893853982b037813d4a64d778"
+    },
+    "diagnosis.json": {
+      "bytes": 3484,
+      "sha256": "1a5a1d56dbd00a02ee8862b17b144e623dd52763c585bc90a58b91ed19cf7140"
+    },
+    "diagnosis.md": {
+      "bytes": 1647,
+      "sha256": "fa5908075d073b933c1f05b0a092db55205edcb495e2fcd67a7014f5d5c45a93"
+    },
+    "event-analysis.json": {
+      "bytes": 15587,
+      "sha256": "8caee822f3d3fce3ee6dbb0d649876bea5d4d597aaea636d12dc80a4f305fcec"
+    },
+    "job.json": {
+      "bytes": 2278,
+      "sha256": "c2673f03509343a4c598755668445cb9239189813b99e42133bccb349797ee49"
+    },
+    "retrieval-commands.json": {
+      "bytes": 441,
+      "sha256": "b3087f7e572029472e1eaa393acee1e6cd417242c09003d4a5df1f551b89c8e8"
+    },
+    "source-bindings.json": {
+      "bytes": 608,
+      "sha256": "d7e177736a1ef26160419e36d649625c34137d5f3b43c5d56e13246bbdb78faf"
+    },
+    "treedb-test.jsonl": {
+      "bytes": 1955172,
+      "sha256": "0570f197b365dc69759302b66a9b886719d091a9cda5dafb8ac426fe2283daa8"
+    },
+    "treedb-test.jsonl.summary.md": {
+      "bytes": 4167,
+      "sha256": "d7c6b0dcbe17fe78ac1de4432ce46fbe7f4827c2a7f00f95ca8efd38ea4d826d"
+    }
+  },
+  "external_log": {
+    "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core3-failure.log",
+    "bytes": 2249532,
+    "sha256": "a02a226e3740ea0d1d485ae9de0cfe3000174030526a7cf1309a82d5ae2950fb"
+  }
+}

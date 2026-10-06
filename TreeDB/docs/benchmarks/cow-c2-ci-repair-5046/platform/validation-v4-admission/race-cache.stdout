@@ -1,0 +1,8 @@
+{"Time":"2026-10-05T21:34:07.627189-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/caching"}
+{"Time":"2026-10-05T21:34:08.101134-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain"}
+{"Time":"2026-10-05T21:34:08.101205-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain","Output":"=== RUN   TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain\n"}
+{"Time":"2026-10-05T21:34:08.154061-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain","Output":"--- PASS: TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain (0.05s)\n"}
+{"Time":"2026-10-05T21:34:08.154096-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestCOWReadWorkspaceMetadataAdmissionRefusalAndDrain","Elapsed":0.05}
+{"Time":"2026-10-05T21:34:08.155649-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"PASS\n"}
+{"Time":"2026-10-05T21:34:09.163258-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/caching\t1.536s\n"}
+{"Time":"2026-10-05T21:34:09.163317-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Elapsed":1.536}

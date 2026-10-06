@@ -1,28 +1,28 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths
+from source_paths import source_path, isolate_paths, W, WORKLOAD_SHA
 """Inert Trial24 native-prefix transport constructor. No automatic execution/retry.
 --prepare writes a local packet and proposed ROOT-ONLY commands.
 --capture-file validates a root-retained capture; never promotes oracle authority.
 """
 import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, pathlib, re, shlex, sys, tarfile
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="a9652589b8609cdb7f6ca480d64f4508490a739fd71684e3e1f87ae397048c8c"
+HELPER_SHA="679cef8bb78868150612f1de0828b9925c182515d727b4ecfc64f0dad9495089"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA="901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9"
+COLLECTOR_SHA="7ba177dd3b64ee37ecbaf6f92f80d76efe4c931ac8cf9b5123dbbb3910d361df"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')
 RUNNER_PINS={"gomap-1242-bounded-runner-prepare.py":"1993a5de4d50dece596e884afd7b3f9566765787f65e41c8ec7cc50dd1ee5229","run.sh":"e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a","inner.sh":"0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98"}
-REMOTE="/home/mikers/gomap-4997-4998-trial24-oracle-root-v1"
+REMOTE='/home/mikers/gomap-4997-4998-'+W.stage_short+'-oracle-root-v1'
 SOURCE="__ROOT_FROZEN_SOURCE_ROOT__"
 TEMPLATE=SOURCE+"/docs/benchmarks/fixed_cluster_sustained_20261005/harness/sources/native-runner"
 RUNNER=TEMPLATE+"/gomap-1242-bounded-runner-prepare.py"
 INVENTORY="__ROOT_FROZEN_INVENTORY_PATH__"
 INVENTORY_SHA="__ROOT_FROZEN_INVENTORY_SHA__"
 INVENTORY_ROWS="__ROOT_FROZEN_INVENTORY_ROWS__"
-RESOLVER_SHA='d0eb79bd5fe3816b5f62b77d4872033ad55bafb6cee035347e1825f5dc20c4c1'
+RESOLVER_SHA='532817b7ed8768a08f000687cbb61d0b5d563c4f4ef789f652a0b1ea61fb91a3'
 HEAD="__ROOT_FROZEN_HEAD__";TREE="__ROOT_FROZEN_TREE__"
-INPUT="/tmp/gomap-4997-4998-rf4trial24mixedchangingc1-inputs-root-v1"
+INPUT=W.local_input
 ARCHIVE=INPUT+".tar.gz"
 TEST="TestTrial24FrozenCanonicalPrefixOraclePreparation"
 PACKAGE="github.com/snissn/gomap/cmd/treedb-query-under-write"
@@ -156,6 +156,7 @@ with tarfile.open(fileobj=io.BytesIO(expanded),mode="r:") as t:
 inv=json.loads(read(ROOT/"inputs/input-inventory.json"));need(set(names)==set(inv)|{"input-inventory.json"},"exact extracted inventory")
 input_before=inputs_verify()
 (ROOT/"preparation-sources").mkdir(mode=0o700)
+source_at_absolute(ROOT/"preparation-sources/workload_profile.py",base64.b64decode(x["workload"],validate=True),WORKLOAD_SHA)
 source_at_absolute(ROOT/"preparation-sources/source_paths.py",base64.b64decode(x["resolver"],validate=True),RESOLVER_SHA)
 sys.path.insert(0,str(ROOT/"preparation-sources"))
 source_at_absolute(HELPER,base64.b64decode(x["helper"],validate=True),HELPER_SHA)
@@ -166,7 +167,7 @@ write_new(ROOT/"oracle-pins.json",(json.dumps(pins)+"\n").encode())
 spec=importlib.util.spec_from_file_location("frozen_trial24_oracle_helper",HELPER);helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
 proposal=helper.prepare(ROOT/"oracle-pins.json",ROOT/"oracle-preparation")
 overlay=str(ROOT/"oracle-preparation/overlay.json")
-cfg={"unit_prefix":"gomap-trial24-prefix-oracle-","outer_timeout_seconds":300,"provenance":{"head":HEAD,"tree":TREE,"inventory_sha256":INV_SHA,"helper_sha256":HELPER_SHA,"collector_sha256":COLLECTOR_SHA,"input_inventory_sha256":INPUT_SHA,"native_test_only":True},"go_commands":[{"name":"native-prefix-oracle","args":["test","-json","-count=1","-timeout=180s","-overlay="+overlay,"-run=^TestTrial24FrozenCanonicalPrefixOraclePreparation$","./cmd/treedb-query-under-write"],"timeout_seconds":240}]}
+cfg={"unit_prefix":"gomap-"+STAGE_SHORT+"-prefix-oracle-","outer_timeout_seconds":300,"provenance":{"head":HEAD,"tree":TREE,"inventory_sha256":INV_SHA,"helper_sha256":HELPER_SHA,"collector_sha256":COLLECTOR_SHA,"input_inventory_sha256":INPUT_SHA,"native_test_only":True},"go_commands":[{"name":"native-prefix-oracle","args":["test","-json","-count=1","-timeout=180s","-overlay="+overlay,"-run=^TestTrial24FrozenCanonicalPrefixOraclePreparation$","./cmd/treedb-query-under-write"],"timeout_seconds":240}]}
 write_new(ROOT/"config.json",(json.dumps(cfg)+"\n").encode())
 r=subprocess.run(["python3","-B",RUNNER,str(ROOT)],capture_output=True);write_new(ROOT/"runner-prepare.stdout",r.stdout);write_new(ROOT/"runner-prepare.stderr",r.stderr);write_new(ROOT/"runner-prepare.exit",str(r.returncode).encode());need(r.returncode==0,"runner preparation")
 inner=ROOT/"inner.sh";b=read(inner);marker=b"set -euo pipefail\n";need(b.count(marker)==1,"one generated prefix")
@@ -174,7 +175,7 @@ export=("export GOMAP_TRIAL24_ORACLE_INPUT="+__import__("shlex").quote(str(ROOT/
 b=b.replace(marker,marker+export,1);inner.write_bytes(b)
 after=source_verify();input_after=inputs_verify()
 packet={"state":"PREPARED_NOT_EXECUTED_REQUIRES_ROOT_GENERATED_BYTES_REVIEW","before":before,"after":after,"inputs_before":input_before,"inputs_after":input_after,"files":{},"proposal":proposal}
-for n in ("preparation-sources/source_paths.py","preparation-sources/"+pathlib.Path(HELPER).name,"preparation-sources/"+pathlib.Path(COLLECTOR).name,"config.json","run.sh","inner.sh","oracle-preparation/prefix_oracle_prepare_test.go","oracle-preparation/overlay.json","oracle-preparation/oracle-input.json"):
+for n in ("preparation-sources/workload_profile.py","preparation-sources/source_paths.py","preparation-sources/"+pathlib.Path(HELPER).name,"preparation-sources/"+pathlib.Path(COLLECTOR).name,"config.json","run.sh","inner.sh","oracle-preparation/prefix_oracle_prepare_test.go","oracle-preparation/overlay.json","oracle-preparation/oracle-input.json"):
  raw=read(ROOT/n);packet["files"][n]={"sha256":sha(raw),"base64":base64.b64encode(raw).decode()}
 write_new(ROOT/"prepared-packet.json",(json.dumps(packet)+"\n").encode())
 print(json.dumps(packet))
@@ -200,19 +201,19 @@ for prefix in ("receipts","oracle-preparation"):
  for p in sorted(directory.iterdir()):
   if not p.is_file() or p.is_symlink():continue
   raw=read(p,8<<20);out["files"][prefix+"/"+p.name]={"sha256":sha(raw),"base64":base64.b64encode(raw).decode()}
-for n in ("run-admission.json","prepared-packet.json","config.json","run.sh","inner.sh","initial-oracle.json","oracle-pins.json","git-source-inventory.json","preparation-sources/source_paths.py","preparation-sources/"+pathlib.Path(HELPER).name,"preparation-sources/"+pathlib.Path(COLLECTOR).name,"runner-prepare.stdout","runner-prepare.stderr","runner-prepare.exit"):
+for n in ("run-admission.json","prepared-packet.json","config.json","run.sh","inner.sh","initial-oracle.json","oracle-pins.json","git-source-inventory.json","preparation-sources/workload_profile.py","preparation-sources/source_paths.py","preparation-sources/"+pathlib.Path(HELPER).name,"preparation-sources/"+pathlib.Path(COLLECTOR).name,"runner-prepare.stdout","runner-prepare.stderr","runner-prepare.exit"):
  raw=read(ROOT/n);out["files"][n]={"sha256":sha(raw),"base64":base64.b64encode(raw).decode()}
 print(json.dumps(out))
 '''
 def remote_program(body,input_sha):
-    constants=dict(ROOT=REMOTE,SOURCE=SOURCE,HEAD=HEAD,TREE=TREE,INV_SHA=INVENTORY_SHA,INV_ROWS=INVENTORY_ROWS,INPUT_SHA=input_sha,HELPER=REMOTE+"/preparation-sources/"+pathlib.Path(HELPER).name,HELPER_SHA=HELPER_SHA,COLLECTOR=REMOTE+"/preparation-sources/"+pathlib.Path(COLLECTOR).name,COLLECTOR_SHA=COLLECTOR_SHA,RESOLVER_SHA=RESOLVER_SHA,RUNNER=RUNNER,TEMPLATE=TEMPLATE,RUNNER_PINS=RUNNER_PINS)
+    constants=dict(ROOT=REMOTE,SOURCE=SOURCE,HEAD=HEAD,TREE=TREE,INV_SHA=INVENTORY_SHA,INV_ROWS=INVENTORY_ROWS,INPUT_SHA=input_sha,HELPER=REMOTE+"/preparation-sources/"+pathlib.Path(HELPER).name,HELPER_SHA=HELPER_SHA,COLLECTOR=REMOTE+"/preparation-sources/"+pathlib.Path(COLLECTOR).name,COLLECTOR_SHA=COLLECTOR_SHA,RESOLVER_SHA=RESOLVER_SHA,WORKLOAD_SHA=WORKLOAD_SHA,STAGE_SHORT=W.stage_short,RUNNER=RUNNER,TEMPLATE=TEMPLATE,RUNNER_PINS=RUNNER_PINS)
     return "if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\n"+"\n".join(k+"="+repr(v) for k,v in constants.items())+"\nROOT=__import__('pathlib').Path(ROOT)\n"+REMOTE_COMMON+inspect.getsource(isolate_paths)+"\n"+body
 def inventory_identity(inv):
     need(type(INVENTORY_ROWS) is int and INVENTORY_ROWS>0 and inv["head"]==HEAD and inv["tree"]==TREE and isinstance(inv["rows"],list) and len(inv["rows"])==INVENTORY_ROWS and inv["overlays"]=={},"exact source inventory")
 def transport_argv(program):return SSH+[shlex.join(["python3","-B","-c",program])]
 def prepare(opts):
     # Local artifact construction only; no subprocess is imported or called.
-    helper=source_bytes(HELPER,HELPER_SHA);collector=source_bytes(COLLECTOR,COLLECTOR_SHA);resolver=source_bytes(pathlib.Path(__file__).parent/"source_paths.py",RESOLVER_SHA)
+    helper=source_bytes(HELPER,HELPER_SHA);collector=source_bytes(COLLECTOR,COLLECTOR_SHA);resolver=source_bytes(pathlib.Path(__file__).parent/"source_paths.py",RESOLVER_SHA);workload=source_bytes(pathlib.Path(__file__).parent/"workload_profile.py",WORKLOAD_SHA)
     for n,h in RUNNER_PINS.items():
         source_bytes(pathlib.Path(CONTEXT)/n,h)
     inventory=source_bytes(INVENTORY,INVENTORY_SHA);inv=strict(inventory)
@@ -228,7 +229,7 @@ def prepare(opts):
     out=pathlib.Path(opts.out);need(out.is_absolute() and not out.exists() and not out.is_symlink(),"exclusive local artifact root")
     isolate_paths([out],[SOURCE,pathlib.Path(__file__).resolve().parent,INPUT,ARCHIVE,INVENTORY,opts.initial_oracle])
     out.mkdir(mode=0o700)
-    payload=dict(resolver=base64.b64encode(resolver).decode(),RootAcceptedFinalSourceAndInputs=True,source_inventory=base64.b64encode(inventory).decode(),archive=base64.b64encode(archive).decode(),archive_sha256=opts.archive_sha256,helper=base64.b64encode(helper).decode(),collector=base64.b64encode(collector).decode(),initial_oracle=base64.b64encode(initial).decode(),initial_oracle_sha256=opts.initial_oracle_sha256)
+    payload=dict(workload=base64.b64encode(workload).decode(),resolver=base64.b64encode(resolver).decode(),RootAcceptedFinalSourceAndInputs=True,source_inventory=base64.b64encode(inventory).decode(),archive=base64.b64encode(archive).decode(),archive_sha256=opts.archive_sha256,helper=base64.b64encode(helper).decode(),collector=base64.b64encode(collector).decode(),initial_oracle=base64.b64encode(initial).decode(),initial_oracle_sha256=opts.initial_oracle_sha256)
     (out/"prepare-stdin.json").write_text(json.dumps(payload)+"\n")
     commands={}
     for name,body in (("prepare",REMOTE_PREPARE),("run",REMOTE_RUN),("capture",REMOTE_CAPTURE)):
@@ -246,14 +247,14 @@ def capture_file(path):
     prefix="receipts/00-native-prefix-oracle"
     need(raw[prefix+".exit"].strip()==b"0" and raw["receipts/scope.exit"].strip()==b"0","actual test and scope exit0")
     count=parse_go_json(raw[prefix+".jsonl"])
-    need(sha(raw["preparation-sources/source_paths.py"])==RESOLVER_SHA and sha(raw["preparation-sources/"+pathlib.Path(HELPER).name])==HELPER_SHA and sha(raw["preparation-sources/"+pathlib.Path(COLLECTOR).name])==COLLECTOR_SHA,"actual staged source closure pins")
+    need(sha(raw["preparation-sources/workload_profile.py"])==WORKLOAD_SHA and sha(raw["preparation-sources/source_paths.py"])==RESOLVER_SHA and sha(raw["preparation-sources/"+pathlib.Path(HELPER).name])==HELPER_SHA and sha(raw["preparation-sources/"+pathlib.Path(COLLECTOR).name])==COLLECTOR_SHA,"actual staged source closure pins")
     for name in ("start","end"):
         need(raw["receipts/"+name+"-memory.max.txt"].strip()==b"8589934592" and raw["receipts/"+name+"-memory.swap.max.txt"].strip()==b"0","actual 8GiB/swap0")
         events=dict(line.split() for line in raw["receipts/"+name+"-memory.events.txt"].decode().splitlines())
         need(all(int(events.get(k,"-1"))==0 for k in ("oom","oom_kill")) and int(events.get("oom_group_kill","0"))==0,"actual no OOM")
     peak=int(raw["receipts/end-memory.peak.txt"]);need(0<=peak<=8589934592,"actual finite peak")
     pending=strict(raw["oracle-preparation/native-prefix-oracles-pending.json"])
-    need(pending["state"]=="NATIVE_CANONICAL_PREFIX_ORACLES_GENERATED_PENDING_ROOT_VALIDATION" and pending["source_head"]==HEAD and pending["source_tree"]==TREE and pending["RunID"]=="rf4trial24mixedchangingc1mixedc1v1" and pending["Profile"]=="changing-top10" and len(pending["Prefixes"])==49 and len(pending["OriginalRequests"])==48,"pending native packet shape/source")
+    need(pending["state"]=="NATIVE_CANONICAL_PREFIX_ORACLES_GENERATED_PENDING_ROOT_VALIDATION" and pending["source_head"]==HEAD and pending["source_tree"]==TREE and pending["RunID"]==W.query_run and pending["Profile"]=="changing-top10" and len(pending["Prefixes"])==W.prefixes and len(pending["OriginalRequests"])==W.originals,"pending native packet shape/source")
     admission=strict(raw["run-admission.json"]);prepared=strict(raw["prepared-packet.json"])
     for n,item in prepared["files"].items():need(sha(raw[n])==item["sha256"],"generated runner/payload unchanged")
     need(admission["review"]["RootReviewedGeneratedRunnerAndAdmittedRun"] is True and admission["review"]["prepared_packet_sha256"]==sha(raw["prepared-packet.json"]),"actual root reviewed packet binding")
@@ -261,7 +262,7 @@ def capture_file(path):
     need(sha(raw["git-source-inventory.json"])==INVENTORY_SHA,"captured source inventory digest");inventory_identity(source_inv)
     pins=strict(raw["oracle-pins.json"]);initial=strict(raw["initial-oracle.json"]);cfg=strict(raw["oracle-preparation/oracle-input.json"])
     need(sha(raw["initial-oracle.json"])==pins["initial_oracle_sha256"] and initial["Rows"]==10005 and pending["InitialPopulationSHA256"]==initial["SHA256"]==cfg["InitialPopulationSHA256"],"exact initial full identity")
-    need(cfg["SourceHead"]==HEAD and cfg["SourceTree"]==TREE and cfg["InputInventorySHA256"]==pending["InputInventorySHA256"],"native input/source arguments")
+    need(cfg["RunID"]==W.query_run and cfg["Originals"]==W.originals and cfg["SpacingSeconds"]==W.spacing and cfg["SourceHead"]==HEAD and cfg["SourceTree"]==TREE and cfg["InputInventorySHA256"]==pending["InputInventorySHA256"],"native input/source arguments")
     command=strict(raw["config.json"])["go_commands"]
     expected=[{"name":"native-prefix-oracle","args":["test","-json","-count=1","-timeout=180s","-overlay="+REMOTE+"/oracle-preparation/overlay.json","-run=^"+TEST+"$","./cmd/treedb-query-under-write"],"timeout_seconds":240}]
     need(command==expected and raw["runner-prepare.exit"].strip()==b"0","actual exact one native command")

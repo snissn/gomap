@@ -1,0 +1,39 @@
+{
+  "head": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "collection_manifest_sha256": "b7b71b95ac6de226f614c705e1f7c15b6c8470d72b5e306384780135fd1a2312",
+  "collection_manifest_files": 26,
+  "packet_bindings": {
+    "raw": {
+      "manifest_files": 70,
+      "transfer_manifest_sha256": "0af29eb544a9e6807c2e9046150d69d07c9bdee66a34734874ac69a8291b85a8",
+      "source_identity_sha256": "85e8fada4a8b5931a4c4b9bd61696903f8c2014e0add62af191af25721d1c98e",
+      "binary": {
+        "sha256": "87ae091fb8fe077f68327ab15d573c29768197156377f8570bb7eb8275d6707c",
+        "bytes": 52204929
+      },
+      "private_hash_index_sha256": "ebd9933ffa3a2a945140f9048e9d5cd67b76c8c8b119b2149a0d780e39e2a648"
+    },
+    "mvcc": {
+      "manifest_files": 50,
+      "transfer_manifest_sha256": "8e18f36ee63021e0fc3af119af4be76295e89c33f42f45d13ca3f49d6a9854bc",
+      "source_identity_sha256": "85e8fada4a8b5931a4c4b9bd61696903f8c2014e0add62af191af25721d1c98e",
+      "binary": {
+        "sha256": "68b3b59a5b45409b53096dc71f4b0937f79ef56bba2b69048e2ffae85d58fc15",
+        "bytes": 24821118
+      },
+      "private_hash_index_sha256": "cb4854cffc78510eb01aa26167d982ef3e191017996b7c608e4d43ccb7c67e22"
+    }
+  },
+  "source_type_rows": 7330,
+  "executable_paths": 123,
+  "actual_type_all_regular": true,
+  "git_modes_exact": true,
+  "current_tracked_changes_only_docs_and_CI": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/README.md",
+    "TreeDB/docs/spec/cow-cache-publication.md",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md"
+  ],
+  "private_binary_content_available_locally": false
+}

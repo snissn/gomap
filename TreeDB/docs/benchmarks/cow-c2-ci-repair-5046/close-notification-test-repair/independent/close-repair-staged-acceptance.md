@@ -1,0 +1,26 @@
+# Close repair staged publication acceptance
+
+ACCEPT the bounded source/evidence/publication readiness of actual materialized staged tree `902ca2736369ecb3453b23a815c4ee881b6f273e`, against committed parent `61fbd36655a9a8641f1cacee013c8f2bf2dc1553`. This is not current-head hosted certification or merge approval. No concrete blocker was found within this reviewed delta.
+
+The complete staged delta contains the approved Close test, the CI discovery fingerprint, and the two explicitly named publication additions plus report/provenance/manifest updates. Every other tracked path retains its parent bytes and Git mode. This independently supports unchanged928 members of the previously accepted929 protected source/module/test paths; the sole exception is the approved Close test. I reuse the earlier subset membership proof rather than regenerate its list. The test SHA is `d15253d599b953a09baa79ef182ddf5bfd8814960040beed8243e3e6e6ccd548`. CI differs only in discovery_source_sha256 (`6656b6e8282129db1f956237d713d48ef116a8c68a19bff343a33d5891e0d701`); all14 workflows,56 members and policy/owner fields retain their parent values.
+
+All706 current publication files, including the self-excluded manifest, match the staged Git blobs. All705 manifest entries match actual regular files with no extra files or symlinks. All688 provenance records match both their public bytes and original private input bytes. Of the parent662 manifest entries,660 remain byte-identical; only report.md and publication-provenance.json change, and the self-excluded manifest is regenerated. All795 original integration manifest entries remain unchanged and hash-valid. The old literal benchmark exceptions therefore remain unchanged. The two new nested manifests bind the actual18-file Close packet and13-file template probe packet; the latter intentionally renames probe.go to probe.go.txt without changing bytes. The new literal reviews match their private originals. All23 local/relative file links in the new or modified Markdown resolve.
+
+The Close scope text accurately preserves the original Windows timeout as failure evidence without claiming its phase or classifying it as a flake. The accepted test observes notification entry, permits five seconds for actual Stats/Get completion, retains synchronous callback release and pressure/refusal/zero-drain checks, and gives storage teardown its own finite watchdog with joined cleanup. Published normal/race/safe JSON independently recounts18 test/subcase passes and one package pass per stage, without failures or skips. These are local Darwin results, not Windows execution. The template packet preserves intentional public normalization and the actual six successful profile/mode probes; it does not introduce a caller-option refusal policy or a compiled repository probe. As in the independent template review, the ordering statement concerns opening layout/storage: profile resolution may already perform read-only layout inspection, which does not support the finding's storage-effect/late-refusal causal claim.
+
+The complete staged whitespace check returns2 only for the SHA-bound original unified diff `close-notification-test-repair/local/runtime.diff` (`dc4eebe1a5e3fa6484eb74e785ec15efa00ce8306445799fddb9049c28f90be3`). Excluding exactly that literal input makes the check pass; no source or documentation exception is granted.
+
+The measured runtime remains974d and its historical costs retain their original source/binary identity and scoped applicability. This test-only change affects test compilation inputs; no binary equivalence or fresh performance measurement is asserted. Current final-head strict default performance, required CI, actual Windows runtime and hosted review remain separate gates. Existing diagnostic API limitations and experimental opt-in cost boundaries remain unchanged. No Go/build/test/benchmark/remote/GitHub operations were performed for this audit.
+
+Root may append only these actual review MD/JSON literals and regenerate publication manifest/provenance. Root must then verify the artifact-only descendant delta, protected source and immutable historical packets, bind the actual final committed head, and obtain that head's required hosted gates. This acceptance binds the tree above; it does not silently bind the later descendant.
+
+Bound metadata hashes:
+
+- `publication-manifest.json`: `601ac8aae37cf0f9ab4aadb681fb00d7bb087bbc7461878382ccfe8aa440a97d`
+- `publication-provenance.json`: `8c173e15d34c3bf0bf64363f3352def1e05049ae89ceb2e2de300471e9b938b5`
+- `report.md`: `15222529d5a2d9bec0cef96ad2c91305e339da87f0808562df20fd264cf02ee4`
+- `coordinator-cost-disposition.json`: `de41c2a9bd689279144394326a192d827676d53d4fe84505828ade5da890c56d`
+- `close-notification-test-repair/applicability.md`: `a5222231a5be29d88051e532782c52a1e635261f68a7942f3bc44d5f1bd7b075`
+- `close-notification-test-repair/root-verification.json`: `889b6d08ca355b999b7532643fe1f1ecd88ac73f41045c1d4aa2d163e7403ac8`
+- `template-mode-review-triage/disposition.md`: `969b6bc9e87d629fc0d701cd7819f4d234f78f848e2837ca74287bee656bc059`
+- `template-mode-review-triage/root-verification.json`: `e50a3b9f642972f4e08ca902a58b31307c62d5f64816fd6ec96c55981b0aa49d`

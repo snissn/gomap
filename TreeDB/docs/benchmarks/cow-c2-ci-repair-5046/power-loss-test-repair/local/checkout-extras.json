@@ -1,0 +1,13 @@
+{
+  "ordinary_untracked": [],
+  "ignored_extras": [
+    {
+      "path": "scripts/__pycache__/treedb_vacuum_m0_summarize.cpython-314.pyc",
+      "sha256": "6ddb154ceecd6b509fecca61a1e3dd585da941bab16d2642e4f442b268dc1917",
+      "mtime_unix": 1791279634.0746257,
+      "mtime_before_first_command": true,
+      "disposition": "preserved unrelated ignored Python bytecode; no before-byte binding claimed"
+    }
+  ],
+  "scope": "full 8057 tracked source bytes have exact pre/post identity; ignored existing bytecode is separately observed, not covered by before manifest"
+}

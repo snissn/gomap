@@ -1,0 +1,35 @@
+{
+  "runtime_head": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "all_643_publication_hashes": true,
+  "all_634_private_provenance_hashes": true,
+  "current_frozen_paths": 7330,
+  "changed_original_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/README.md",
+    "TreeDB/docs/spec/cow-cache-publication.md",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md"
+  ],
+  "ci_only_discovery_fingerprint": true,
+  "staged_snapshot_tree": "e3150e4f3bede2396fb2ab2cf718973ddf07c722",
+  "post_snapshot_only_added_artifacts": [
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/final-descendant-applicability.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/final-descendant-applicability.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/publication-manifest.json"
+  ],
+  "current_index_paths": 7974,
+  "doc_file_hashes_match": 19,
+  "private_contents_excluded_inspected_filename_list": true,
+  "sha256": {
+    "publication-manifest.json": "c7ed2a4c68c018ac963168e420cd8885f4d4dec7c3cde19ec6b316dba83ae5f0",
+    "publication-provenance.json": "7c686f051e7efa475e74affb88328c7869733be528853460defbf49a35e18afe",
+    "final-descendant-applicability.json": "f6be00be8fa0ffc23f80f6851f5652ee2e41d80b7ec3f233aef206b3642f36f9",
+    "final-ci-inventory-applicability.json": "cb02e0267afbcb1c3f5db673c382eee1e38d8f3123f797860a3f771661fd7578",
+    "documentation-and-literal-whitespace-check.json": "a39055597e0f55e94f8f7c5a46dddd6611675eaba4dcde1505b66b4ebd752c14",
+    "report.md": "c366108355a05f8fcaa6b0a3b3eb4bdd953c5fbb2cc5ccbd69d8fe7a900d198d",
+    "cost-report.md": "691cd025b9652c7b0cb267c4a4cd771538d1e989a191d67b64abcaeaa6028002",
+    "coordinator-cost-disposition.json": "de41c2a9bd689279144394326a192d827676d53d4fe84505828ade5da890c56d"
+  },
+  "current_verified_staged_tree": "881b20d2c7adbecb5b8f22f6202c908dbf16c471",
+  "current_staged_blob_content_matches": 7974
+}

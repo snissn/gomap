@@ -1,0 +1,10 @@
+{
+  "raw": {
+    "path": "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/treedb-cost.test",
+    "sha256": "642ba1bcbe2b4ead55ef40af994764398f4c191f1b264613f396b9fd139016af"
+  },
+  "mvcc": {
+    "path": "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-4add47-v2/mvcc-cost.test",
+    "sha256": "2bb89709c0e25fb260fbead79e5df75624be8e7e88897d86e7db7f02bc0f1c91"
+  }
+}

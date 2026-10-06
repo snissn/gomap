@@ -1,0 +1,161 @@
+[
+  {
+    "label": "normal-valuelog",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-run",
+      "^Test(COW|CompactLeafNamespaceVolumeOptimizationPreservesLexicalContract)",
+      "./TreeDB/internal/valuelog"
+    ],
+    "started": "2026-10-06T07:23:49.033586+00:00",
+    "finished": "2026-10-06T07:23:50.738361+00:00",
+    "elapsed_seconds": 1.704321125,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "normal-cache",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-run",
+      "^TestCOW(Maintenance|ReadWorkspaceMetadataAdmissionRefusalAndDrain|Pointer)",
+      "./TreeDB/caching"
+    ],
+    "started": "2026-10-06T07:23:50.738737+00:00",
+    "finished": "2026-10-06T07:24:03.255522+00:00",
+    "elapsed_seconds": 12.516748875000001,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "normal-public",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-run",
+      "^TestCOWPublicSelectedSourceRewriteKeepsOldCuts$",
+      "./TreeDB"
+    ],
+    "started": "2026-10-06T07:24:03.256102+00:00",
+    "finished": "2026-10-06T07:24:05.815278+00:00",
+    "elapsed_seconds": 2.559188959000002,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "race-valuelog",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-race",
+      "-run",
+      "^Test(COW|CompactLeafNamespaceVolumeOptimizationPreservesLexicalContract)",
+      "./TreeDB/internal/valuelog"
+    ],
+    "started": "2026-10-06T07:24:05.815835+00:00",
+    "finished": "2026-10-06T07:24:10.195229+00:00",
+    "elapsed_seconds": 4.379388875,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "race-cache",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-race",
+      "-run",
+      "^TestCOW(Maintenance|ReadWorkspaceMetadataAdmissionRefusalAndDrain|Pointer)",
+      "./TreeDB/caching"
+    ],
+    "started": "2026-10-06T07:24:10.195673+00:00",
+    "finished": "2026-10-06T07:24:38.015352+00:00",
+    "elapsed_seconds": 27.8195485,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "race-public",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-race",
+      "-run",
+      "^TestCOWPublicSelectedSourceRewriteKeepsOldCuts$",
+      "./TreeDB"
+    ],
+    "started": "2026-10-06T07:24:38.016156+00:00",
+    "finished": "2026-10-06T07:25:08.706263+00:00",
+    "elapsed_seconds": 30.689957875000005,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "safe-valuelog",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-tags=treedb_safe",
+      "-run",
+      "^Test(COW|CompactLeafNamespaceVolumeOptimizationPreservesLexicalContract)",
+      "./TreeDB/internal/valuelog"
+    ],
+    "started": "2026-10-06T07:25:08.707085+00:00",
+    "finished": "2026-10-06T07:25:09.844372+00:00",
+    "elapsed_seconds": 1.1373045830000024,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "safe-cache",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-tags=treedb_safe",
+      "-run",
+      "^TestCOW(Maintenance|ReadWorkspaceMetadataAdmissionRefusalAndDrain|Pointer)",
+      "./TreeDB/caching"
+    ],
+    "started": "2026-10-06T07:25:09.844961+00:00",
+    "finished": "2026-10-06T07:25:23.342775+00:00",
+    "elapsed_seconds": 13.49776525,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  },
+  {
+    "label": "safe-public",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=1",
+      "-tags=treedb_safe",
+      "-run",
+      "^TestCOWPublicSelectedSourceRewriteKeepsOldCuts$",
+      "./TreeDB"
+    ],
+    "started": "2026-10-06T07:25:23.343541+00:00",
+    "finished": "2026-10-06T07:25:25.924474+00:00",
+    "elapsed_seconds": 2.5809346249999976,
+    "exit": 0,
+    "source_aggregate_sha256": "513b2e8222d564113cd6673ee8c91ae45ebc3fb09c0cbe9969bd2472eeadad8b"
+  }
+]

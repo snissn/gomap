@@ -1,0 +1,54 @@
+[
+  {
+    "label": "windows-valuelog",
+    "command": [
+      "go",
+      "test",
+      "-c",
+      "-o",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/windows-contract-repair/crosscompile-v4/valuelog.test.exe",
+      "-gcflags=github.com/snissn/gomap/TreeDB/internal/valuelog=-m=2",
+      "./TreeDB/internal/valuelog"
+    ],
+    "started": "2026-10-06T07:34:41.983366+00:00",
+    "finished": "2026-10-06T07:34:45.112857+00:00",
+    "elapsed_seconds": 3.12933908298146,
+    "exit": 0,
+    "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+    "binary_sha256": "6abcad1ed3bf11fde0bb5084cddb1717cfe67a416596295931eb114add282e4e"
+  },
+  {
+    "label": "windows-cache",
+    "command": [
+      "go",
+      "test",
+      "-c",
+      "-o",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/windows-contract-repair/crosscompile-v4/cache.test.exe",
+      "./TreeDB/caching"
+    ],
+    "started": "2026-10-06T07:34:45.119850+00:00",
+    "finished": "2026-10-06T07:35:04.909980+00:00",
+    "elapsed_seconds": 19.790054374956526,
+    "exit": 0,
+    "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+    "binary_sha256": "959f8eb4192cca573b93792c96256f259a9ddd93bf52907038332d55c2c303e8"
+  },
+  {
+    "label": "windows-public",
+    "command": [
+      "go",
+      "test",
+      "-c",
+      "-o",
+      "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/windows-contract-repair/crosscompile-v4/public.test.exe",
+      "./TreeDB"
+    ],
+    "started": "2026-10-06T07:35:04.930218+00:00",
+    "finished": "2026-10-06T07:35:25.254251+00:00",
+    "elapsed_seconds": 20.323967333999462,
+    "exit": 0,
+    "source_aggregate_sha256": "0bb12448bfa9bcef66977ed3fd4add4d496ca35b170e6c9a787d6675cb71f750",
+    "binary_sha256": "009a0e52a20d09a0f8a8fdbd20f820983d6dae6a80be60d090a1bbbc91069265"
+  }
+]

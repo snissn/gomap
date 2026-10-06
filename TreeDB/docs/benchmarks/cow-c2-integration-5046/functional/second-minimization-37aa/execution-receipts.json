@@ -1,0 +1,22 @@
+{
+  "candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "original_runner": {
+    "command": "ssh mikers@192.168.0.185 bash /mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/second-minimization-37aa/run-gates.sh",
+    "exit_code": 1,
+    "qualification": "All Go and CI checks exit0; final no-extra verification refused exactly four generated owned .github/scripts/__pycache__ files. Original post-gate-source-check.json retained."
+  },
+  "supplemental_runner": {
+    "command": "ssh mikers@192.168.0.185 bash /mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/second-minimization-37aa/run-inventory-bytecode-disabled.sh",
+    "exit_code": 0,
+    "qualification": "Only exact owned bytecode removed after all expected hashes verified; only two Python inventories repeated with -B/PYTHONDONTWRITEBYTECODE=1; final complete no-extra verification passed."
+  },
+  "push": {
+    "command": "git push origin codex/cow-c2-cache-publication",
+    "exit_code": 0
+  },
+  "gate_receipts": [
+    "initial-exit.tsv",
+    "gate-exits.tsv",
+    "inventory-repair-exits.tsv"
+  ]
+}

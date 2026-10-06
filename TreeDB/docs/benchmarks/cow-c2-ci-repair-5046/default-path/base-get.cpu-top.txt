@@ -1,0 +1,71 @@
+File: base-db.test
+Build ID: af3569732f9957dd495a1cb8acc25277b00e3692
+Type: cpu
+Time: 2026-10-05 21:09:05 HST
+Duration: 7.53s, Total samples = 6.67s (88.61%)
+Showing nodes accounting for 6.34s, 95.05% of 6.67s total
+Dropped 85 nodes (cum <= 0.03s)
+      flat  flat%   sum%        cum   cum%
+     0.86s 12.89% 12.89%      0.86s 12.89%  cmpbody
+     0.65s  9.75% 22.64%      0.94s 14.09%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchLeaf
+     0.64s  9.60% 32.23%      1.57s 23.54%  github.com/snissn/gomap/TreeDB/node.(*Node).SearchInternalChildID
+     0.34s  5.10% 37.33%      0.34s  5.10%  sync/atomic.(*Int32).Add (inline)
+     0.28s  4.20% 41.53%      3.58s 53.67%  github.com/snissn/gomap/TreeDB/tree.(*Tree).lookupLeafValueView
+     0.28s  4.20% 45.73%      0.28s  4.20%  internal/sync.(*Mutex).Unlock (inline)
+     0.26s  3.90% 49.63%      0.26s  3.90%  internal/sync.(*Mutex).Lock (inline)
+     0.25s  3.75% 53.37%      6.61s 99.10%  github.com/snissn/gomap/TreeDB/db.BenchmarkGetVersioned.func2
+     0.21s  3.15% 56.52%      1.31s 19.64%  github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld
+     0.18s  2.70% 59.22%      0.22s  3.30%  github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset
+     0.16s  2.40% 61.62%      0.57s  8.55%  github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint
+     0.16s  2.40% 64.02%      0.16s  2.40%  github.com/snissn/gomap/TreeDB/node.getUint16At (inline)
+     0.12s  1.80% 65.82%      0.12s  1.80%  github.com/snissn/gomap/TreeDB/pager.(*Pager).Get
+     0.12s  1.80% 67.62%      0.12s  1.80%  sync/atomic.(*Uint64).CompareAndSwap (inline)
+     0.11s  1.65% 69.27%      0.30s  4.50%  github.com/snissn/gomap/TreeDB/db.(*SnapshotPool).Put
+     0.10s  1.50% 70.76%      0.13s  1.95%  github.com/snissn/gomap/TreeDB/node.InitFreshNodeView (inline)
+     0.09s  1.35% 72.11%      0.11s  1.65%  github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld.func1
+     0.09s  1.35% 73.46%      0.18s  2.70%  github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryClaimFast
+     0.09s  1.35% 74.81%      0.09s  1.35%  sync/atomic.(*Int32).CompareAndSwap (inline)
+     0.08s  1.20% 76.01%      0.22s  3.30%  github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryKeyAt
+     0.07s  1.05% 77.06%      0.31s  4.65%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafEntryViewWithRevision
+     0.07s  1.05% 78.11%      0.14s  2.10%  github.com/snissn/gomap/TreeDB/node.(*Node).leafEntryLayoutAt
+     0.07s  1.05% 79.16%      0.07s  1.05%  sync/atomic.(*Uint64).Load (inline)
+     0.06s   0.9% 80.06%      0.96s 14.39%  bytes.Compare (inline)
+     0.06s   0.9% 80.96%      0.13s  1.95%  github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).tryJoinFast
+     0.06s   0.9% 81.86%      0.08s  1.20%  github.com/snissn/gomap/TreeDB/pager.(*Pager).IsVerified
+     0.06s   0.9% 82.76%      0.06s   0.9%  internal/runtime/maps.(*Iter).Next
+     0.06s   0.9% 83.66%      0.06s   0.9%  sync/atomic.(*Uint64).Add (inline)
+     0.05s  0.75% 84.41%      0.54s  8.10%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).finalizeCloseIfUnreferenced
+     0.05s  0.75% 85.16%      0.05s  0.75%  sync/atomic.(*Bool).CompareAndSwap (inline)
+     0.04s   0.6% 85.76%      0.04s   0.6%  encoding/binary.littleEndian.Uint64 (inline)
+     0.04s   0.6% 86.36%      6.26s 93.85%  github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend.func1
+     0.04s   0.6% 86.96%      3.81s 57.12%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).GetVersionedAppend
+     0.04s   0.6% 87.56%      0.12s  1.80%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).invalidateBoundIteratorsLocked (inline)
+     0.04s   0.6% 88.16%      0.04s   0.6%  github.com/snissn/gomap/TreeDB/node.getUint64LEAt (inline)
+     0.04s   0.6% 88.76%      0.04s   0.6%  github.com/snissn/gomap/TreeDB/tree.keyAwarePointerReadsEnabled (inline)
+     0.04s   0.6% 89.36%      0.04s   0.6%  internal/bytealg.Compare
+     0.04s   0.6% 89.96%      0.05s  0.75%  math/rand.(*Rand).Int31n
+     0.04s   0.6% 90.55%      0.04s   0.6%  sync/atomic.(*Bool).Load (inline)
+     0.03s  0.45% 91.00%      0.90s 13.49%  github.com/snissn/gomap/TreeDB/db.(*oneShotRead).close
+     0.03s  0.45% 91.45%      0.40s  6.00%  github.com/snissn/gomap/TreeDB/tree.(*Tree).loadChildRefViewInto
+     0.03s  0.45% 91.90%      0.37s  5.55%  github.com/snissn/gomap/TreeDB/tree.(*Tree).loadNodeViewWithLoadKindInto
+     0.02s   0.3% 92.20%      6.28s 94.15%  github.com/snissn/gomap/TreeDB/db.(*DB).GetVersionedAppend
+     0.02s   0.3% 92.50%      1.51s 22.64%  github.com/snissn/gomap/TreeDB/db.(*DB).acquireOneShotReadOrErr
+     0.02s   0.3% 92.80%      0.06s   0.9%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).endRead
+     0.02s   0.3% 93.10%      0.09s  1.35%  github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).Unregister
+     0.02s   0.3% 93.40%      0.26s  3.90%  github.com/snissn/gomap/TreeDB/node.compareLeafKey
+     0.02s   0.3% 93.70%      0.04s   0.6%  github.com/snissn/gomap/TreeDB/tree.(*Tree).pointDefinitelyAbsent
+     0.02s   0.3% 94.00%      0.07s  1.05%  math/rand.(*Rand).Intn
+     0.02s   0.3% 94.30%      0.08s  1.20%  runtime.mapIterStart
+     0.01s  0.15% 94.45%      0.84s 12.59%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).Close
+     0.01s  0.15% 94.60%      0.13s  1.95%  github.com/snissn/gomap/TreeDB/db.(*Snapshot).beginRead (inline)
+     0.01s  0.15% 94.75%      0.32s  4.80%  github.com/snissn/gomap/TreeDB/node.(*Node).GetLeafValueViewWithRevision
+     0.01s  0.15% 94.90%      0.05s  0.75%  github.com/snissn/gomap/TreeDB/node.decodeEntryRevision (inline)
+     0.01s  0.15% 95.05%      0.29s  4.35%  sync.(*Mutex).Unlock (partial-inline)
+         0     0% 95.05%      0.04s   0.6%  github.com/snissn/gomap/TreeDB/db.BenchmarkGetVersioned
+         0     0% 95.05%      0.72s 10.79%  github.com/snissn/gomap/TreeDB/node.compareInternalSuffix (inline)
+         0     0% 95.05%      3.58s 53.67%  github.com/snissn/gomap/TreeDB/tree.(*Tree).GetVersionedAppend
+         0     0% 95.05%      0.26s  3.90%  sync.(*Mutex).Lock (inline)
+         0     0% 95.05%      0.14s  2.10%  sync.(*RWMutex).RLock (inline)
+         0     0% 95.05%      0.13s  1.95%  sync.(*RWMutex).RUnlock (partial-inline)
+         0     0% 95.05%      6.61s 99.10%  testing.(*B).RunParallel.func1
+         0     0% 95.05%      0.04s   0.6%  testing.(*B).runN

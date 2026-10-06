@@ -1,0 +1,184 @@
+{
+  "disposition": "ACCEPT staged metadata/publication readiness; final-head hosted gates remain pending",
+  "at_utc": "2026-10-06T08:48:25.653573+00:00",
+  "reviewed_staged_tree": "b96928b769b9db2f4c2c9fb78c8987c90e95a25a",
+  "tree_object_materialized_and_exists": true,
+  "preintegration_publication_head": "0142519b2cc4c097f50b4e7a64a5b6993ff0d9c6",
+  "merged_main": "edbd68d34b0fdf7152a498b87d373576de029721",
+  "unchanged_runtime_cost_identity": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "staged_content_blobs_verified": 8007,
+  "changed_paths_vs_014": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/collections/api.go",
+    "TreeDB/collections/column_asset_manager.go",
+    "TreeDB/collections/document_materializer.go",
+    "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+    "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+    "TreeDB/collections/r1_lifecycle_5060_test.go",
+    "TreeDB/collections/r1_mutation_5059_test.go",
+    "TreeDB/collections/r1_range_history_5065_test.go",
+    "TreeDB/collections/r1_reads_5058_test.go",
+    "TreeDB/collections/typed_storage_naming_test.go",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/applicability.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/documentation-and-whitespace-check.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/baseline.txt",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/binary-sha256.txt",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/candidate.txt",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/environment.txt",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/summary.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/summary.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-root-reanalysis.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/source-applicability.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/publication-manifest.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/publication-provenance.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md",
+    "TreeDB/docs/evidence/r1-row-store-5061/README.md",
+    "TreeDB/docs/evidence/r1-row-store-5061/publication-manifest.template.json",
+    "TreeDB/docs/guides/README.md",
+    "TreeDB/docs/guides/collections-quickstart.md",
+    "TreeDB/docs/guides/typed-row-store.md",
+    "TreeDB/docs/guides/typed-storage-performance.md",
+    "TreeDB/docs/spec/README.md",
+    "TreeDB/docs/spec/contracts.md",
+    "TreeDB/docs/spec/r1-indexed-mutations.md",
+    "TreeDB/docs/spec/r1-indexed-row-contract.md",
+    "TreeDB/docs/spec/r1-row-lifecycle.md",
+    "TreeDB/docs/spec/r1-row-reads.md",
+    "TreeDB/internal/mappedresource/manager.go",
+    "TreeDB/internal/mappedresource/manager_test.go",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md",
+    "examples/typed_rows/README.md",
+    "examples/typed_rows/main.go",
+    "scripts/r1_lifecycle_capture.py",
+    "scripts/r1_lifecycle_capture.sh",
+    "scripts/r1_lifecycle_capture_test.py",
+    "scripts/r1_lifecycle_validate.py",
+    "scripts/r1_lifecycle_validate_test.py"
+  ],
+  "packet_manifest_entries": 657,
+  "actual_packet_files_including_manifest": 658,
+  "provenance_records_verified_against_private_originals": 644,
+  "main_integrated_path_bindings_verified": 34,
+  "protected_source_scope": {
+    "prior_review_reused": "edbd-main-composition-review.json",
+    "proof_claim": 929,
+    "no_changed_path_outside_reviewed_main_or_publication": true,
+    "compiled_dependency_and_binary_equality_not_claimed": true
+  },
+  "CI_semantic_change_fields": [
+    "discovery_source_sha256"
+  ],
+  "doc_hashes_verified": 20,
+  "relative_file_links_verified": 111,
+  "new_literal_whitespace_exceptions": [
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/baseline.txt",
+      "sha256": "65b7ce843a05430cf360aad0ce177dae2179fb8c341ab529fde09f34f16c2069",
+      "basis": "Byte-preserved actual014 hosted strict benchmark literal; original private source/provenance agree."
+    },
+    {
+      "path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/main-edbd-integration/hosted-014-raw-path/candidate.txt",
+      "sha256": "11dedf0f683c1945c73a9869c8cae21c880d12f8d083f0bf5b8cfe6d2be505d6",
+      "basis": "Byte-preserved actual014 hosted strict benchmark literal; original private source/provenance agree."
+    }
+  ],
+  "hosted_014_actual_samples_reconstructed": 80,
+  "hosted_014_strict_rows": [
+    {
+      "benchmark": "BenchmarkGetVersioned",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 643.8
+      },
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 628.5
+      },
+      "paired_ns_delta_percent": -2.3492271245361183
+    },
+    {
+      "benchmark": "BenchmarkConditionalTxnBaselineBatchWrite",
+      "baseline": {
+        "allocs_per_op": 281.0,
+        "bytes_per_op": 152688.0,
+        "ns_per_op": 124723.0
+      },
+      "candidate": {
+        "allocs_per_op": 281.0,
+        "bytes_per_op": 152745.0,
+        "ns_per_op": 126312.5
+      },
+      "paired_ns_delta_percent": 2.110790081550551
+    },
+    {
+      "benchmark": "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek",
+      "baseline": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 395.8
+      },
+      "candidate": {
+        "allocs_per_op": 0.0,
+        "bytes_per_op": 0.0,
+        "ns_per_op": 381.1
+      },
+      "paired_ns_delta_percent": -3.826720974270248
+    },
+    {
+      "benchmark": "BenchmarkRepeatedIterator",
+      "baseline": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 284.85
+      },
+      "candidate": {
+        "allocs_per_op": 2.0,
+        "bytes_per_op": 112.0,
+        "ns_per_op": 292.25
+      },
+      "paired_ns_delta_percent": 2.5030197993802794
+    },
+    {
+      "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "baseline": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4578.5,
+        "ns_per_op": 254663.5
+      },
+      "candidate": {
+        "allocs_per_op": 17.0,
+        "bytes_per_op": 4578.0,
+        "ns_per_op": 253876.0
+      },
+      "paired_ns_delta_percent": -0.6965940999338782
+    }
+  ],
+  "six_binary_hash_index_bindings_verified": true,
+  "executable_bytes_independently_hashed_locally": false,
+  "bindings_sha256": {
+    "publication-manifest.json": "a7e5d144bcb8bc9876407d7c3e0f07bef4f456c8eb7b5eb54b86f0764b2d6ae1",
+    "publication-provenance.json": "eaa3b04a090f038ad6dd70be8c32a5f5cd8628d59b45ef2e437eafcdf1cf7472",
+    "report.md": "7e126fb9c08f0ff19cd1aff127b7c2f624b31acdca5a15453d2fc34d52cbeefc",
+    "cost-report.md": "691cd025b9652c7b0cb267c4a4cd771538d1e989a191d67b64abcaeaa6028002",
+    "coordinator-cost-disposition.json": "de41c2a9bd689279144394326a192d827676d53d4fe84505828ade5da890c56d",
+    "main-edbd-integration/source-applicability.json": "26695df8cdc7fc7b367eeb14ab4ec69fb4129b47a17c6e2c5cbd96fb2ac556de",
+    "main-edbd-integration/applicability.md": "916d3f251e44e4a4bf14421b515184800d46c72dccb4e3002dda6b07f334721d",
+    "main-edbd-integration/documentation-and-whitespace-check.json": "13ac55287a8d563dd4ed68b56c00aeab3933572dbdb077337d69d02f2c91767d",
+    "main-edbd-integration/hosted-014-root-reanalysis.json": "44893cf36da92d88919a0c0f89bb11b2128f76453b5911b00bb3d4677109223e"
+  },
+  "findings": [],
+  "limitations": [
+    "No new Go jobs, executable execution or live hosted queries.",
+    "Earlier-head 014 hosted samples and Codex comment do not certify the future merged head.",
+    "Changed collections/mappedresource compiled dependencies prevent whole-binary or whole-tree equivalence; historical974 costs keep exact original source identity and scoped executed-path applicability.",
+    "The reviewed existing b969 tree is not a final commit. Appending actual review literals and regenerating manifest/provenance require exact artifact-only descendant verification."
+  ],
+  "finalization_required": [
+    "Append five actual review literals only; regenerate publication manifest/provenance with manifest self-excluded.",
+    "Verify resulting tree differs from reviewed tree only by authorized artifact append/index updates; recheck protected929paths and original795packet hashes.",
+    "Record actual final commit/tree privately and require final-head strict hosted performance, Windows runtime, CI and hosted review before merge."
+  ]
+}

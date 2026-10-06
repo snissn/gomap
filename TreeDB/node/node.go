@@ -88,16 +88,17 @@ func putUint32(dst []byte, v uint32) {
 // Node is a wrapper around a raw page byte slice.
 // It implements the Slotted Page layout.
 type Node struct {
-	data       []byte        // The raw page data (4096 bytes)
-	count      uint16        // Cached count
-	ptype      page.PageType // Cached type
-	keyScratch []byte
-	leafKey    []byte
-	leafLayout leafEntryLayout
-	leafEntry  int
-	leafIndex  uint16
-	leafFlags  byte
-	leafValid  bool
+	data            []byte        // The raw page data (4096 bytes)
+	count           uint16        // Cached count
+	ptype           page.PageType // Cached type
+	keyScratch      []byte
+	fixedKeyScratch bool
+	leafKey         []byte
+	leafLayout      leafEntryLayout
+	leafEntry       int
+	leafIndex       uint16
+	leafFlags       byte
+	leafValid       bool
 
 	leafColPrefixMetaValid     bool
 	leafColPrefixMetaCount     uint16
@@ -184,6 +185,13 @@ func (n *Node) SetKeyScratch(buf []byte) {
 		return
 	}
 	n.keyScratch = buf[:0]
+}
+
+// SetFixedKeyScratch installs caller-owned bounded reconstruction storage.
+// Oversized encoded keys fail with ErrCorruptedNode instead of growing it.
+func (n *Node) SetFixedKeyScratch(buf []byte) {
+	n.SetKeyScratch(buf)
+	n.fixedKeyScratch = true
 }
 
 // TakeKeyScratch detaches and returns the node key scratch buffer, if any.
