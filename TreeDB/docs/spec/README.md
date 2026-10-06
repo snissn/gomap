@@ -82,6 +82,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - [R1 complete-row reads](r1-row-reads.md)
   - ordinary points and bounded index ranges reconstruct owned full rows from
     one captured publication; prepared views preserve their open-time state.
+- [R1 row lifecycle](r1-row-lifecycle.md)
+  - captured-reader protection, recovery and lawful reclamation, with
+    source-bound repeating-churn costs and explicit retention attribution.
 
 - `TreeDB/docs/spec/minima-native-execution.md`
   - #4614/#4615 typed Minima implementation contract, ownership/reuse decisions,
