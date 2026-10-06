@@ -99,10 +99,11 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertEqual(before, sorted(str(p) for p in base.rglob('*')))
                 self.assertEqual(frozen, m.fingerprint(fixture))
 
-    def make_campaign(self, root, candidate=8.0, endpoint=None):
+    def make_campaign(self, root, candidate=8.0, endpoint=None, build_env=None):
         root = root.resolve()
         out = root/'out'; out.mkdir()
-        manifest = dict(sources={name: dict(head=letter*40, binary=name, binary_sha256=letter*64)
+        manifest = dict(build_env=build_env or {'GOWORK': 'off'},
+                        sources={name: dict(head=letter*40, binary=name, binary_sha256=letter*64)
                                 for name, letter in [('A', 'a'), ('B', 'b')]}, receipts={})
         manifest['snapshot_restore'] = 'restore'
         manifest['sources']['restore'] = dict(head='r'*40, binary='restore', binary_sha256='r'*64)
@@ -137,14 +138,14 @@ class MaintenanceTests(unittest.TestCase):
             (directory/'restore.stderr.log').touch()
             m.save(directory/'restore.stdout.json', dict(rebound=True, stores=['maindb'], operation='RebindDurableRootSnapshotLayoutWithContextV1'))
             run = dict(schema=1, cell=cell, source=manifest['sources'][source], fixture=dict(sha256='f'*64, files=4, bytes=7128),
-                       command=m.compact_command('/bin/'+source, directory/'db', cell),
-                       env=dict(GOWORK='off', GOMEMLIMIT='off', GOGC='100',
-                                TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824'),
+                       command=m.compact_command(str(root/'bin'/source), directory/'db', cell),
+                       environment_policy=m.unified.ENVIRONMENT_POLICY,
+                       env=m.unified.capture_environment(manifest['build_env'], root/'working-dbs', inherited={}),
                        harness=dict(collector='h'*64, unified_collector='u'*64, rss_observer='s'*64),
                        native_resolution=dict(libraries={}), started_ns=started, finished_ns=finished,
                        elapsed_seconds=elapsed, rc=0, rss_sampling=summary, validated=True)
             run['restored_fixture'] = dict(run['fixture'])
-            run['snapshot_restore'] = dict(source=manifest['sources']['restore'], command=['/bin/restore', str(directory/'db')], rc=0, native={})
+            run['snapshot_restore'] = dict(source=manifest['sources']['restore'], command=[str(root/'bin'/'restore'), str(directory/'db')], rc=0, native={})
             run['memory'] = m.rss_metrics(directory, summary, started, finished)
             run['artifacts'] = {p.name: m.unified.sha256(p) for p in directory.iterdir() if p.is_file()}
             m.save(directory/'run.json', run); paths[label] = directory/'run.json'
@@ -185,6 +186,9 @@ class MaintenanceTests(unittest.TestCase):
                 # Ambient and manifest heap pressure must not reach the owned
                 # offline command. Keep normal GC and the mapping-domain setting.
                 self.assertEqual({k: kwargs['env'][k] for k in controls}, controls)
+                self.assertNotIn('MALLOC_ARENA_MAX', kwargs['env'])
+                self.assertNotIn('GH_TOKEN', kwargs['env'])
+                effective_env.update(kwargs['env'])
                 kwargs['stdout'].write('failed raw compact output\n'); kwargs['stderr'].write('preserved native diagnostic\n')
                 sample_path.write_text('preserved sample\n')
                 summary = dict(complete=False, cancelled=True, errors=[])
@@ -193,7 +197,8 @@ class MaintenanceTests(unittest.TestCase):
 
             controls = dict(GOMEMLIMIT='off', GOGC='100', GOMAXPROCS='12',
                             TREEDB_VLOG_MAX_MAPPED_SEALED_BYTES='1073741824')
-            with mock.patch.dict(m.os.environ, GOMEMLIMIT='512MiB', GOGC='50'), mock.patch.object(m, 'restore_snapshot'), mock.patch.object(m.unified, 'validate_native'), mock.patch.object(m.owned_process_rss, 'run_with_rss', side_effect=failure):
+            effective_env = {}
+            with mock.patch.dict(m.os.environ, GOMEMLIMIT='512MiB', GOGC='50', MALLOC_ARENA_MAX='1', GH_TOKEN='test-secret'), mock.patch.object(m, 'restore_snapshot') as restore, mock.patch.object(m.unified, 'validate_native') as native, mock.patch.object(m.owned_process_rss, 'run_with_rss', side_effect=failure):
                 with self.assertRaisesRegex(ValueError, 'compact exit: -15'):
                     m.capture(root/'manifest.json', root/'plan.json')
             directory = root/'capture'/'failed'
@@ -202,6 +207,10 @@ class MaintenanceTests(unittest.TestCase):
             run = json.loads((directory/'run.json').read_bytes())
             self.assertIn('error', run); self.assertEqual(run['rc'], -15)
             self.assertEqual({k: run['env'][k] for k in controls}, controls)
+            self.assertEqual(run['environment_policy'], m.unified.ENVIRONMENT_POLICY)
+            self.assertEqual(run['env'], effective_env)
+            self.assertEqual(restore.call_args.args[4], effective_env)
+            self.assertEqual(native.call_args.args[3], effective_env)
             self.assertTrue(run['rss_sampling']['cancelled'])
             self.assertEqual(m.unified.sha256(directory/'stderr.log'), run['artifacts']['stderr.log'])
 
@@ -375,7 +384,7 @@ class MaintenanceTests(unittest.TestCase):
             m.save(parent/'plan.json', plan)
             for run_path in paths.values():
                 self.change(run_path, lambda r: r.update(plan_sha256=m.unified.sha256(parent/'plan.json')))
-            self.change(path, lambda r: r.update(cell=cell, command=m.compact_command('/bin/B', path.parent/'db', cell)))
+            self.change(path, lambda r: r.update(cell=cell, command=m.compact_command(r['command'][0], path.parent/'db', cell)))
             m.save(path.parent/'stdout.json', report())
             self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
             # The single-compact packet is independently valid, but mismatches
@@ -415,6 +424,31 @@ class MaintenanceTests(unittest.TestCase):
                 self.seal_pairs(root)
                 with self.assertRaises(ValueError):
                     m.analyze(root/'bundle.json')
+
+    def test_full_environment_receipts_are_required_and_manifest_bound(self):
+        mutations = [lambda r: r.pop('environment_policy'),
+                     lambda r: r.update(environment_policy='allowlist-v0'),
+                     lambda r: r.update(env=[]),
+                     lambda r: r['env'].update(MALLOC_ARENA_MAX='8'),
+                     lambda r: r['env'].pop('MALLOC_ARENA_MAX'),
+                     lambda r: r['env'].update(UNDECLARED_PROCESS_CONTROL='1')]
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temp:
+                root = pathlib.Path(temp)
+                paths = self.make_campaign(root, build_env=dict(GOWORK='off', MALLOC_ARENA_MAX='2'))
+                run, _ = m.load_run(paths['B1'])
+                self.assertEqual(run['env']['MALLOC_ARENA_MAX'], '2')
+                self.change(paths['B1'], mutation)
+                self.seal_pairs(root)
+                with self.assertRaisesRegex(ValueError, 'environment'):
+                    m.analyze(root/'bundle.json')
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root)
+            for label in ('C1', 'C2', 'C3'):
+                self.change(paths[label], lambda r: r.pop('environment_policy'))
+            with self.assertRaisesRegex(ValueError, 'incomplete environment receipt'):
+                m.calibrate([paths[k] for k in ('C1', 'C2', 'C3')], 'elapsed_seconds', root/'new-noise.json')
+            self.assertFalse((root/'new-noise.json').exists())
 
     def test_incomplete_sampling_and_policy_debt(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -489,9 +523,9 @@ class MaintenanceTests(unittest.TestCase):
                 alternative = other/'B2'/'run.json'
                 self.change(alternative, lambda r: r.update(
                     manifest_sha256=m.unified.sha256(other/'manifest.json'),
-                    command=m.compact_command('/bin/B', alternative.parent/'db', r['cell'])))
+                    command=m.compact_command(r['command'][0], alternative.parent/'db', r['cell'])))
                 self.change(alternative, lambda r: r['snapshot_restore'].update(
-                    command=['/bin/restore', str(alternative.parent/'db')]))
+                    command=[r['snapshot_restore']['command'][0], str(alternative.parent/'db')]))
                 # Each alternate packet is valid on its own, with independently
                 # hashed manifest/receipts. The comparison is the failed gate.
                 m.load_run(alternative)

@@ -15,6 +15,23 @@ reviewed landed collectors and environment. Earlier 2 GiB heap-limit diagnostics
 retain their original receipts; they supply no new calibration or numerical
 comparison for this campaign.
 
+Both collectors construct the same sanitized child environment and record its
+complete contents as `env` with `environment_policy: sanitized-full-v1` in every
+`run.json`. Only ambient `PATH`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`,
+`GLIBC_TUNABLES` and `LD_*` variables are inherited. Existing native checks still
+reject unsupported loader injections. Other controls, including
+`MALLOC_ARENA_MAX`, must be declared in the reviewed manifest `build_env`;
+undeclared allocator settings and ambient credentials are excluded. Explicit
+manifest variables are recorded in full, so do not put credentials there.
+The frozen Go/mapping controls above and root-owned `TMPDIR` override manifest
+values. Restore, native validation, `/usr/bin/time` and the measured child receive
+this identical environment. Comparisons bind every recorded variable, and
+calibration/analysis reject old allowlist-only receipts, missing markers,
+undeclared recorded variables and drift from explicit manifest controls.
+The original unified report validator and offline loader both check this
+contract against the captured manifest, including the original executable-root
+`TMPDIR`; replay does not inherit the analyzer's process environment.
+
 Each cell supplies `label`, manifest `source`, absolute `fixture`,
 `fixture_receipt: {path, sha256}`, `mode: full|exhaustive`, `batch_size`, and an
 optional `timeout_seconds` (default 1800) and `endpoint` (default
