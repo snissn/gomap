@@ -50,6 +50,37 @@ func matches(raw []byte, u user) error {
 	return nil
 }
 
+func verifyIndexes(col *collections.Collection, ada, grace, deleted user) error {
+	checks := []struct {
+		index, value string
+		want         []string
+	}{
+		{"email", "ada@example.test", nil},
+		{"email", ada.Email, []string{ada.ID}},
+		{"email", grace.Email, []string{grace.ID}},
+		{"email", deleted.Email, nil},
+		{"city", "London", nil},
+		{"city", "Paris", nil},
+		{"city", deleted.City, nil},
+		{"city", "Boston", []string{ada.ID, grace.ID}},
+	}
+	for _, check := range checks {
+		ids, err := col.FindByIndex(check.index, check.value)
+		if err != nil {
+			return err
+		}
+		if len(ids) != len(check.want) {
+			return fmt.Errorf("%s=%q: got %d IDs, want %v", check.index, check.value, len(ids), check.want)
+		}
+		for i, expected := range check.want {
+			if string(ids[i]) != expected {
+				return fmt.Errorf("%s=%q: ID %d is %q, want %q", check.index, check.value, i, ids[i], expected)
+			}
+		}
+	}
+	return nil
+}
+
 func run(dir string) (err error) {
 	// Existing DBs are never replaced by this example.
 	if dir == "" {
@@ -208,6 +239,9 @@ func run(dir string) (err error) {
 		}
 		fmt.Println("Boston:", string(rangeRows[i].Document))
 	}
+	if err = verifyIndexes(col, ada, grace, lin); err != nil {
+		return err
+	}
 	if err = manager.FlushAll(); err != nil {
 		return err
 	}
@@ -242,7 +276,10 @@ func run(dir string) (err error) {
 	if raw, found, e := col.GetInto([]byte(lin.ID), nil); e != nil || found || raw != nil {
 		return fmt.Errorf("deleted row after reopen: found=%t err=%v", found, e)
 	}
-	fmt.Println("Verified durable reopen: 2 complete rows; deleted row absent.")
+	if err = verifyIndexes(col, ada, grace, lin); err != nil {
+		return err
+	}
+	fmt.Println("Verified durable reopen: 2 complete rows; current and removed secondary postings; deleted row absent.")
 	return nil
 }
 
