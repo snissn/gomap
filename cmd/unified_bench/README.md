@@ -1267,6 +1267,18 @@ fail the current validator; missing samples are never reconstructed.
 
 ## Native prune foreground causal pilot
 
+Foreground overlap counters retain caller-boundary samples of public-call envelopes.
+Options, payload construction, first-writer notification and result/latency bookkeeping
+sit outside marked calls; each flag clears immediately after the return-boundary
+observation. ACK/completion attribution keeps its first post-PruneVersions activity
+load. Sampling can miss overlap and has unavoidable scheduling uncertainty between
+adjacent caller instructions; it does not prove simultaneous internal critical-section
+execution. The parser requires the complete typed 76-field producer schema, complete
+histogram objects, representable counters, operation/work/phase/stop accounting and
+feasible histogram bounds. Coupled hostile fixtures refresh result checksums and
+reach the schema/accounting boundary without changing retained measurements.
+
+
 Foreground receipts retain `capture_out`, the original absolute capture directory.
 Validation checks archived files in the current `--out` directory against their
 hashes and checks recorded build/run paths against `capture_out`, so moving a
@@ -1305,8 +1317,8 @@ freeze precede expensive qualification collection.
 
 Foreground ACK and completion attribution samples writer activity immediately
 at the public prune return, before counter bookkeeping. The reader and prune loop
-start only after the writer enters its first measured write interval; writer
-duration begins inside the writer goroutine.
+start after the writer announces it has started; overlap is established by the
+sampled call-envelope witnesses. Writer duration begins inside its goroutine.
 
 ## Current source-population audit microbenchmarks
 

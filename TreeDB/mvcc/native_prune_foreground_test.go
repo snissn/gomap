@@ -158,6 +158,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	var cursor *PruneCursor
 	foregroundStarted := false
 	var active atomic.Bool
+	var inQuantum, readInCall, writeInCall atomic.Bool
 	quantum := func() (PruneStats, error, bool) {
 		before := cursor
 		opts := PruneOptions{BatchSize: 1, Mode: CommitRelaxed, Cursor: cursor}
@@ -166,9 +167,17 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			opts.WorkBytes = 1 << 20
 		}
 		start := time.Now()
+		if foregroundStarted {
+			if readInCall.Load() || writeInCall.Load() {
+				r.ForegroundIntervalsAtQuantumStart++
+			}
+			inQuantum.Store(true)
+		}
 		stats, err := s.PruneVersions(opts)
-		// Attribute ACKs and completion at the public return, before bookkeeping.
+		// Keep the first post-return activity snapshot for ACK/completion attribution.
 		writerActiveAtReturn := active.Load()
+		// Flags bracket public calls, excluding the following harness bookkeeping.
+		inQuantum.Store(false)
 		r.QuantumLatency.add(time.Since(start))
 		r.Calls++
 		r.FinalWorkRecords = stats.WorkRecords
@@ -235,7 +244,6 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			fail(fmt.Errorf("no actual private output"))
 		}
 	}
-	var inQuantum, readInCall, writeInCall atomic.Bool
 	var acknowledged atomic.Uint64
 	var stopReads atomic.Bool
 	var wg sync.WaitGroup
@@ -267,17 +275,18 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			if mode != "churn" {
 				ts += i
 			}
-			writeInCall.Store(true)
-			overlap := inQuantum.Load()
-			start := time.Now()
+			mutations := []Mutation{{Key: writer, Value: foregroundPayload(i)}}
 			if i == 1 {
 				active.Store(true)
 				close(writerStarted)
 			}
-			e := s.CommitAt(ts, []Mutation{{Key: writer, Value: foregroundPayload(i)}}, CommitRelaxed)
-			r.WriteLatency.add(time.Since(start))
+			start := time.Now()
+			overlap := inQuantum.Load()
+			writeInCall.Store(true)
+			e := s.CommitAt(ts, mutations, CommitRelaxed)
 			overlap = overlap || inQuantum.Load()
 			writeInCall.Store(false)
+			r.WriteLatency.add(time.Since(start))
 			if overlap {
 				r.WriteIntervalsOverlappingQuantum++
 			}
@@ -317,14 +326,14 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 				afterWriter = true
 			default:
 			}
-			readInCall.Store(true)
-			overlap := inQuantum.Load()
 			lower := acknowledged.Load()
 			start := time.Now()
+			overlap := inQuantum.Load()
+			readInCall.Store(true)
 			v, e := s.GetAt(writer, ^uint64(0))
-			r.ReadLatency.add(time.Since(start))
 			overlap = overlap || inQuantum.Load()
 			readInCall.Store(false)
+			r.ReadLatency.add(time.Since(start))
 			if overlap {
 				r.ReadIntervalsOverlappingQuantum++
 			}
@@ -350,12 +359,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 	completed := false
 	var pruneErr error
 	for i := 0; i < 32768; i++ {
-		if readInCall.Load() || writeInCall.Load() {
-			r.ForegroundIntervalsAtQuantumStart++
-		}
-		inQuantum.Store(true)
 		stats, e, writerActiveAtReturn := quantum()
-		inQuantum.Store(false)
 		if writerActiveAtReturn {
 			r.WriterActiveCalls++
 			r.ACKWhileWriterActive += stats.Pruned
@@ -474,7 +478,7 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		fail(fmt.Errorf("no completed read started after writer stop"))
 	}
 	if r.Writes == 0 || r.Reads == 0 || r.WriterActiveCalls == 0 || r.ForegroundIntervalsAtQuantumStart+r.ReadIntervalsOverlappingQuantum+r.WriteIntervalsOverlappingQuantum == 0 {
-		fail(fmt.Errorf("no genuine overlap/progress witness"))
+		fail(fmt.Errorf("no observed call-envelope overlap/progress witness"))
 	}
 	if completed && r.Pruned != uint64(n-1) {
 		fail(fmt.Errorf("ACK=%d want=%d", r.Pruned, n-1))

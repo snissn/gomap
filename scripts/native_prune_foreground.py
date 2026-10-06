@@ -15,6 +15,87 @@ C = 'gomap-native-foreground-v2'
 MATRIX = [(n, m, 'bounded') for n in (64, 128) for m in ('burst', 'growth', 'churn')] + [(n, 'burst', 'unbounded') for n in (64, 128)]
 BUILD_KEYS = ('CGO_ENABLED', 'GOFLAGS', 'GOWORK', 'GOTOOLCHAIN', 'GOMAXPROCS', 'GOROOT', 'PATH', 'GOGC', 'GOMEMLIMIT', 'GODEBUG')
 
+# Explicit producer schema; missing or unexpected fields require a matching validator change.
+RESULT_TYPES = {
+    'ACKAfterWriterStop': 'uint',
+    'ACKWhileWriterActive': 'uint',
+    'AcceptanceCausePresent': 'bool',
+    'AcceptanceCauseText': 'string',
+    'AcceptanceCauseType': 'string',
+    'AcceptanceCostBytes': 'uint',
+    'AcceptanceCostRecords': 'uint',
+    'Algorithm': 'string',
+    'Bytes': 'uint',
+    'Calls': 'uint',
+    'CancelDrains': 'uint',
+    'CancelTransitions': 'uint',
+    'CompletedAfterStop': 'bool',
+    'CompletedWhileWriterActive': 'bool',
+    'CurrentBackendCommit': 'uint',
+    'CurrentBackendRoot': 'uint',
+    'DrainCalls': 'uint',
+    'Error': 'string',
+    'FinalWorkBytes': 'uint',
+    'FinalWorkRecords': 'uint',
+    'FloorRecaptures': 'uint',
+    'ForcedBudgetError': 'bool',
+    'ForegroundIntervalsAtQuantumStart': 'uint',
+    'LastAcceptancePhase': 'signed',
+    'LastAction': 'byte',
+    'LastBackendCommit': 'uint',
+    'LastBackendRoot': 'uint',
+    'LastCOWAuxiliaryPhase': 'signed',
+    'LastCOWBeginPhase': 'signed',
+    'LastCOWCommit': 'uint',
+    'LastCOWGeneration': 'uint',
+    'LastCOWItem': 'signed',
+    'LastCOWMaterializerPhase': 'signed',
+    'LastCOWPhase': 'signed',
+    'LastCOWPrunePhase': 'signed',
+    'LastCOWSet': 'signed',
+    'LastChunk': 'uint',
+    'LastEnqueuePhase': 'uint',
+    'LastNativeFramePhase': 'byte',
+    'LastNativeLeafPhase': 'byte',
+    'LastNativePhase': 'byte',
+    'LastNativeRunIndex': 'signed',
+    'LastPublicationGeneration': 'uint',
+    'MaxBytes': 'uint',
+    'MaxRecords': 'uint',
+    'MinimumBytes': 'uint',
+    'MinimumRecords': 'uint',
+    'Mode': 'string',
+    'NewPreparations': 'uint',
+    'OldReaderOracle': 'bool',
+    'PID': 'uint',
+    'PartialPrivateOutput': 'bool',
+    'PhysicalOracle': 'bool',
+    'PointerOracle': 'bool',
+    'Pruned': 'uint',
+    'QualificationResets': 'uint',
+    'QuantumLatency': 'latency',
+    'ReadIntervalsOverlappingQuantum': 'uint',
+    'ReadLatency': 'latency',
+    'ReadersStopWithWriter': 'bool',
+    'Reads': 'uint',
+    'ReadsAfterWriterStop': 'uint',
+    'Records': 'uint',
+    'Refusals': 'uint',
+    'ReopenOracle': 'bool',
+    'SourceCostBytes': 'uint',
+    'SourceCostRecords': 'uint',
+    'WriteIntervalsOverlappingQuantum': 'uint',
+    'WriteLatency': 'latency',
+    'WriterActiveCalls': 'uint',
+    'WriterDurationNS': 'uint',
+    'WriterOracle': 'bool',
+    'WriterStopReason': 'string',
+    'Writes': 'uint',
+    'n': 'uint',
+    'schema': 'string',
+}
+LATENCY_FIELDS = {'Count', 'TotalNS', 'MaxNS', 'Buckets'}
+
 def need(x, message):
     if not x:
         raise ValueError(message)
@@ -34,21 +115,40 @@ def bindings(root):
 def digest(source):
     return hashlib.sha256(json.dumps(source, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
+def validate_latency(h, count):
+    need(type(h) is dict and set(h) == LATENCY_FIELDS, 'complete latency schema')
+    need(all(uint(h[k]) and h[k] < 1 << 64 for k in ('Count', 'TotalNS', 'MaxNS')), 'latency types')
+    need(type(h['Buckets']) is list and len(h['Buckets']) == 8 and all(uint(v) and v < 1 << 64 for v in h['Buckets']), 'histogram buckets')
+    need(h['Count'] == count and sum(h['Buckets']) == count and h['MaxNS'] <= h['TotalNS'] <= count * h['MaxNS'], 'latency counters')
+    if count == 0:
+        need(h['TotalNS'] == h['MaxNS'] == 0, 'empty histogram')
+        return
+    limits = (10_000, 100_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000, 100_000_000)
+    maximum = h['MaxNS']
+    bucket = sum(maximum > v for v in limits)
+    need(max(i for i, v in enumerate(h['Buckets']) if v) == bucket, 'histogram maximum bucket')
+    lower = (0,) + tuple(v + 1 for v in limits)
+    upper = limits + (maximum,)
+    minimum_total = sum(v * lower[i] for i, v in enumerate(h['Buckets'])) + maximum - lower[bucket]
+    maximum_total = sum(v * min(upper[i], maximum) for i, v in enumerate(h['Buckets']))
+    need(minimum_total <= h['TotalNS'] <= maximum_total, 'histogram total feasibility')
+
 def validate(x, n, mode, algorithm):
-    need(type(x['n']) is int and x['n'] == n and (x['schema'], x['Mode'], x['Algorithm']) == (C, mode, algorithm), 'identity')
-    need(uint(x['PID']) and x['PID'] > 0, 'PID')
-    strings = {'schema', 'Mode', 'Algorithm', 'Error', 'WriterStopReason', 'AcceptanceCauseType', 'AcceptanceCauseText'}
-    bools = {'ReadersStopWithWriter', 'ForcedBudgetError', 'AcceptanceCausePresent', 'PartialPrivateOutput', 'CompletedWhileWriterActive', 'CompletedAfterStop', 'PhysicalOracle', 'WriterOracle', 'PointerOracle', 'OldReaderOracle', 'ReopenOracle'}
-    for k in strings:
-        need(type(x[k]) is str, 'string ' + k)
-    for k in bools:
-        need(type(x[k]) is bool, 'bool ' + k)
-    signed = {'LastCOWPhase', 'LastCOWSet', 'LastCOWItem', 'LastCOWAuxiliaryPhase', 'LastCOWPrunePhase', 'LastCOWMaterializerPhase', 'LastCOWBeginPhase', 'LastAcceptancePhase', 'LastNativeRunIndex'}
-    for k, v in x.items():
-        if k in signed:
-            need(type(v) is int, 'signed counter ' + k)
-        elif k not in strings | bools | {'ReadLatency', 'WriteLatency', 'QuantumLatency'}:
-            need(uint(v), 'counter ' + k)
+    need(type(x) is dict and set(x) == set(RESULT_TYPES), 'complete foreground result schema')
+    for k, kind in RESULT_TYPES.items():
+        v = x[k]
+        if kind == 'string':
+            need(type(v) is str, 'string ' + k)
+        elif kind == 'bool':
+            need(type(v) is bool, 'bool ' + k)
+        elif kind == 'signed':
+            need(type(v) is int and -(1 << 63) <= v < 1 << 63, 'signed counter ' + k)
+        elif kind in ('uint', 'byte'):
+            need(uint(v) and v < 1 << (8 if kind == 'byte' else 64), 'counter ' + k)
+        else:
+            need(type(v) is dict and set(v) == LATENCY_FIELDS, 'complete latency schema ' + k)
+    need(x['n'] == n and (x['schema'], x['Mode'], x['Algorithm']) == (C, mode, algorithm), 'identity')
+    need(0 < x['PID'] < 1 << 63, 'PID')
     need(0 < x['ReadsAfterWriterStop'] <= x['Reads'], 'post-writer completed read witness')
     need(x['ReadersStopWithWriter'] is False and x['ForcedBudgetError'] is False, 'continuing-reader measurement only')
     need(not x['Error'] and x['Refusals'] == 0, 'failed/refused work')
@@ -59,15 +159,29 @@ def validate(x, n, mode, algorithm):
     need(x['CompletedWhileWriterActive'] != x['CompletedAfterStop'], 'completion distinction')
     need(x['Writes'] <= {'burst': 16, 'growth': 256, 'churn': 1024}[mode], 'write ceiling')
     need(x['WriterStopReason'] in ('finite-burst', 'write-cap', 'observation-duration'), 'writer stop reason')
+    need(0 < x['WriterDurationNS'], 'writer duration')
+    need(x['WriterActiveCalls'] + x['DrainCalls'] <= x['Calls'], 'writer phase call accounting')
+    need(x['ReadIntervalsOverlappingQuantum'] <= x['Reads'] and x['WriteIntervalsOverlappingQuantum'] <= x['Writes'] and x['ForegroundIntervalsAtQuantumStart'] <= x['WriterActiveCalls'] + x['DrainCalls'], 'overlap count bounds')
+    need(x['FinalWorkRecords'] <= x['MaxRecords'] <= x['Records'] <= x['Calls'] * x['MaxRecords'] and x['FinalWorkBytes'] <= x['MaxBytes'] <= x['Bytes'] <= x['Calls'] * x['MaxBytes'], 'work counter accounting')
+    need(all(x[k] <= x['Calls'] for k in ('CancelTransitions', 'CancelDrains', 'FloorRecaptures', 'QualificationResets', 'NewPreparations')), 'transition count bounds')
+    need(x['MinimumRecords'] == x['MinimumBytes'] == 0, 'successful refusal metadata')
+    need(not x['CompletedAfterStop'] or x['DrainCalls'] > 0, 'completion drain witness')
+    need(not x['CompletedWhileWriterActive'] or x['DrainCalls'] == 0, 'active completion phase')
+    need(x['AcceptanceCausePresent'] and bool(x['AcceptanceCauseType']) or not x['AcceptanceCausePresent'] and x['AcceptanceCauseType'] == x['AcceptanceCauseText'] == '', 'acceptance cause shape')
+    if algorithm == 'unbounded':
+        need(x['WriterActiveCalls'] + x['DrainCalls'] == x['Calls'], 'unbounded call phases')
+    if mode != 'burst':
+        need(x['WriterStopReason'] != 'finite-burst', 'nonburst stop shape')
+        if x['WriterStopReason'] == 'write-cap':
+            need(x['Writes'] == {'growth': 256, 'churn': 1024}[mode], 'write-cap shape')
+        else:
+            need(x['WriterDurationNS'] >= 120_000_000, 'observation duration shape')
     if mode == 'burst':
         need(x['Writes'] == 16 and x['WriterStopReason'] == 'finite-burst', 'burst shape')
     if algorithm == 'bounded':
         need(x['MaxRecords'] <= 32 and x['MaxBytes'] <= 1 << 20 and x['PartialPrivateOutput'] is True, 'bounded actual private output')
     for name, count in [('ReadLatency', x['Reads']), ('WriteLatency', x['Writes']), ('QuantumLatency', x['Calls'])]:
-        h = x[name]
-        need(all(uint(h[k]) for k in ('Count', 'TotalNS', 'MaxNS')), 'latency types')
-        need(type(h['Buckets']) is list and len(h['Buckets']) == 8 and all(uint(v) for v in h['Buckets']), 'histogram buckets')
-        need(h['Count'] == count and h['TotalNS'] >= h['MaxNS'] and sum(h['Buckets']) == count, 'latency counters')
+        validate_latency(x[name], count)
 
 def matrix(cases):
     need(type(cases) is list and len(cases) == 8, 'eight cases')
@@ -103,6 +217,91 @@ def packet(out, root=None, receipt=None):
         validate(json.loads((out / c['result']).read_text()), c['n'], c['mode'], c['algorithm'])
     return r
 
+def contract_self_test(out, r):
+    import tempfile
+    c = r['cases'][0]
+    x = json.loads((out / c['result']).read_text())
+    positive = 0
+    for original in r['cases']:
+        validate(json.loads((out / original['result']).read_text()), original['n'], original['mode'], original['algorithm'])
+        positive += 1
+    edge = copy.deepcopy(x)
+    values = (0, 10_000, 10_001, 100_000, 100_001, 1_000_000, 1_000_001, 100_000_001)
+    edge.update(Reads=8, ReadsAfterWriterStop=1, ReadIntervalsOverlappingQuantum=0,
+                AcceptanceCausePresent=False, AcceptanceCauseType='', AcceptanceCauseText='')
+    edge['ReadLatency'] = {'Count': 8, 'TotalNS': sum(values), 'MaxNS': max(values), 'Buckets': [2, 2, 2, 1, 0, 0, 0, 1]}
+    validate(edge, c['n'], c['mode'], c['algorithm']); positive += 1
+    validate_latency({'Count': 0, 'TotalNS': 0, 'MaxNS': 0, 'Buckets': [0] * 8}, 0); positive += 1
+    checks = []
+    for k, kind in RESULT_TYPES.items():
+        checks.append(('missing ' + k, lambda y, k=k: y.pop(k), 'complete foreground result schema'))
+        value = False if kind in ('uint', 'byte', 'signed') else 0 if kind in ('bool', 'string') else []
+        reason = 'counter ' + k if kind in ('uint', 'byte') else 'signed counter ' + k if kind == 'signed' else kind + ' ' + k if kind in ('bool', 'string') else 'complete latency schema ' + k
+        checks.append(('type ' + k, lambda y, k=k, value=value: y.update({k: value}), reason))
+    checks.append(('extra result', lambda y: y.update(UnexpectedCounter=0), 'complete foreground result schema'))
+    for name in ('ReadLatency', 'WriteLatency', 'QuantumLatency'):
+        for k in sorted(LATENCY_FIELDS):
+            checks.append(('missing ' + name + '.' + k, lambda y, name=name, k=k: y[name].pop(k), 'complete latency schema ' + name))
+            value = False if k != 'Buckets' else {}
+            reason = 'latency types' if k != 'Buckets' else 'histogram buckets'
+            checks.append(('type ' + name + '.' + k, lambda y, name=name, k=k, value=value: y[name].update({k: value}), reason))
+        checks.append(('extra ' + name, lambda y, name=name: y[name].update(UnexpectedCounter=0), 'complete latency schema ' + name))
+    checks.extend([
+        ('read overlap', lambda y: y.update(ReadIntervalsOverlappingQuantum=y['Reads'] + 1), 'overlap count bounds'),
+        ('write overlap', lambda y: y.update(WriteIntervalsOverlappingQuantum=y['Writes'] + 1), 'overlap count bounds'),
+        ('entry overlap', lambda y: y.update(ForegroundIntervalsAtQuantumStart=y['Calls'] + 1), 'overlap count bounds'),
+        ('phase calls', lambda y: y.update(DrainCalls=y['Calls']), 'writer phase call accounting'),
+        ('zero duration', lambda y: y.update(WriterDurationNS=0), 'writer duration'),
+        ('maximum records', lambda y: y.update(MaxRecords=y['Records'] + 1), 'work counter accounting'),
+        ('maximum bytes', lambda y: y.update(MaxBytes=y['Bytes'] + 1), 'work counter accounting'),
+        ('final records', lambda y: y.update(FinalWorkRecords=y['MaxRecords'] + 1), 'work counter accounting'),
+        ('final bytes', lambda y: y.update(FinalWorkBytes=y['MaxBytes'] + 1), 'work counter accounting'),
+        ('total records', lambda y: y.update(Records=y['Calls'] * y['MaxRecords'] + 1), 'work counter accounting'),
+        ('total bytes', lambda y: y.update(Bytes=y['Calls'] * y['MaxBytes'] + 1), 'work counter accounting'),
+        ('transition', lambda y: y.update(QualificationResets=y['Calls'] + 1), 'transition count bounds'),
+        ('minimum records', lambda y: y.update(MinimumRecords=1), 'successful refusal metadata'),
+        ('minimum bytes', lambda y: y.update(MinimumBytes=1), 'successful refusal metadata'),
+        ('uint overflow', lambda y: y.update(Records=1 << 64), 'counter Records'),
+        ('byte overflow', lambda y: y.update(LastAction=256), 'counter LastAction'),
+        ('signed overflow', lambda y: y.update(LastCOWPhase=1 << 63), 'signed counter LastCOWPhase'),
+        ('cause', lambda y: y.update(AcceptanceCausePresent=False, AcceptanceCauseType='invented'), 'acceptance cause shape'),
+        ('cause type', lambda y: y.update(AcceptanceCausePresent=True, AcceptanceCauseType=''), 'acceptance cause shape'),
+        ('histogram total', lambda y: y['ReadLatency'].update(TotalNS=y['Reads'] * y['ReadLatency']['MaxNS'] + 1), 'latency counters'),
+    ])
+    # Bucket-edge positives make these feasibility negatives independently discriminating.
+    edge_checks = [
+        ('maximum bucket', lambda y: y['ReadLatency'].update(MaxNS=100_000_000), 'histogram maximum bucket'),
+        ('too-low total', lambda y: y['ReadLatency'].update(TotalNS=y['ReadLatency']['MaxNS']), 'histogram total feasibility'),
+        ('too-high feasible total', lambda y: y['ReadLatency'].update(TotalNS=8 * y['ReadLatency']['MaxNS']), 'histogram total feasibility'),
+    ]
+    with tempfile.TemporaryDirectory(prefix='native-foreground-contract-') as folder:
+        archive = pathlib.Path(folder)
+        for file in out.iterdir():
+            if file.is_file():
+                shutil.copyfile(file, archive / file.name)
+        count = 0
+        for base, probes in ((x, checks), (edge, edge_checks)):
+            for label, mutate, reason in probes:
+                altered = copy.deepcopy(base); mutate(altered)
+                try:
+                    validate(altered, c['n'], c['mode'], c['algorithm'])
+                except ValueError as error:
+                    need(str(error) == reason, label + ': wrong case rejection ' + str(error))
+                else:
+                    raise ValueError(label + ': corrupted result accepted')
+                target = archive / c['result']
+                target.write_text(json.dumps(altered, indent=2) + '\n')
+                receipt = copy.deepcopy(r)
+                receipt['cases'][0]['result_sha256'] = sha(target)
+                try:
+                    packet(archive, receipt=receipt)
+                except ValueError as error:
+                    need(str(error) == reason, label + ': wrong coupled packet rejection ' + str(error))
+                else:
+                    raise ValueError(label + ': coupled corrupted packet accepted')
+                count += 1
+    print(f'{positive} positive schema/histogram cases and {count} checksum-refreshed contract refusals PASS; original packets unchanged')
+
 def self_test(out, root):
     r = packet(out, root)
     x = json.loads((out / r['cases'][0]['result']).read_text())
@@ -124,6 +323,7 @@ def self_test(out, root):
             continue
         raise ValueError('negative receipt accepted')
     print('seventeen in-memory negative checks PASS; retained measurements unchanged')
+    contract_self_test(out, r)
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
