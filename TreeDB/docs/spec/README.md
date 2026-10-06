@@ -59,6 +59,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 - `TreeDB/docs/guides/README.md`
   - index for typed-storage quickstarts, performance profiling, and vector typed-column guidance.
+- [Native indexed typed rows](../guides/typed-row-store.md)
+  - practical durable row example, complete/captured read ownership, indexed
+    mutations, ambiguity reconciliation, and lawful maintenance boundaries.
 - `TreeDB/docs/guides/collections-quickstart.md`
   - runnable hybrid collection smoke plus document-only, typed-row, typed-column, and hybrid layout examples.
 - `TreeDB/docs/guides/typed-storage-performance.md`
