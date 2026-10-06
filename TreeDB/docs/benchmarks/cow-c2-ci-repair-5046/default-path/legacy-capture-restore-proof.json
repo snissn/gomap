@@ -1,0 +1,6 @@
+{
+  "base": "2f626cb4f40e44736257537e38359ad003939ab9",
+  "restored_function_sha256": "82a31d7624ca608b17c7489a051466fdbec3b646535cbe4f14ee5c189ac3d1ee",
+  "byte_equal_to_base_function": true,
+  "bounded_COW_body_changed": false
+}

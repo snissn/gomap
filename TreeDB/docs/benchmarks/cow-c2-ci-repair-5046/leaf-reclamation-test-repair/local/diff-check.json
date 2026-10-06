@@ -1,0 +1,12 @@
+{
+  "command": [
+    "git",
+    "diff",
+    "--check",
+    "--",
+    "TreeDB/cow_public_review_regression_test.go"
+  ],
+  "exit_code": 0,
+  "stdout": "",
+  "stderr": ""
+}

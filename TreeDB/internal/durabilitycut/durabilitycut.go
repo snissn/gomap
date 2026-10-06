@@ -12,16 +12,20 @@ import (
 type Point string
 
 const (
-	BeforeDependencyAppend     Point = "before-dependency-append"
-	AfterDependencyAppend      Point = "after-dependency-append"
-	BeforeUserspaceFlush       Point = "before-userspace-flush"
-	AfterUserspaceFlush        Point = "after-userspace-flush"
-	BeforeDependencyFileSync   Point = "before-dependency-file-sync"
-	AfterDependencyFileSync    Point = "after-dependency-file-sync"
-	BeforeNewFileDirectorySync Point = "before-new-file-directory-sync"
-	AfterNewFileDirectorySync  Point = "after-new-file-directory-sync"
-	BeforeIndexDataSync        Point = "before-index-data-sync"
-	AfterIndexDataSync         Point = "after-index-data-sync"
+	BeforeCOWPreparation         Point = "before-cow-preparation"
+	AfterCOWPreparation          Point = "after-cow-preparation"
+	AfterCOWCanonicalPreparation Point = "after-cow-canonical-preparation"
+	BeforeCOWCutSwap             Point = "before-cow-cut-swap"
+	BeforeDependencyAppend       Point = "before-dependency-append"
+	AfterDependencyAppend        Point = "after-dependency-append"
+	BeforeUserspaceFlush         Point = "before-userspace-flush"
+	AfterUserspaceFlush          Point = "after-userspace-flush"
+	BeforeDependencyFileSync     Point = "before-dependency-file-sync"
+	AfterDependencyFileSync      Point = "after-dependency-file-sync"
+	BeforeNewFileDirectorySync   Point = "before-new-file-directory-sync"
+	AfterNewFileDirectorySync    Point = "after-new-file-directory-sync"
+	BeforeIndexDataSync          Point = "before-index-data-sync"
+	AfterIndexDataSync           Point = "after-index-data-sync"
 	// PublicationSealWrite brackets the exact durable-root-record page write.
 	// The subsequent index sync makes that record and its COW closure stable;
 	// the alternate meta write then makes the record recovery-selectable.

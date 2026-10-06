@@ -320,6 +320,31 @@ maximum observed on-disk segment sequence, preventing later cached writes from
 reusing segment filenames created by compaction, rewrite, leaf packing, or index
 vacuum.
 
+### 5.1 Immutable COW read ownership
+
+Explicit `cow_btree` cuts retain registered value-log subsets and deletion pins
+through the existing DB-scoped physical identity authority. Each newly
+introduced distinct resource receives an independent generation owner; there
+is no owner per historical RID and no second COW GC registry. Both `SetRID` and
+self-contained `SetMaterializedRID` require live read owners. WAL dependency
+custody remains separate even when a materialized frame has no external closure.
+
+Actual produced frame dictionary IDs select retained definitions. Per-read
+scratch, input/output backing and private decoder state are admitted before
+allocation and retained through their real close/drain lifetime; a raw output
+limit alone does not bound codec state or frame window. The native raw1,024-byte
+ZSTD producer can use a 2,048-byte window, which must fit the charged envelope.
+Reader checksum/encoded-payload failures propagate rather than resolving through
+an unrelated global codec/definition cache.
+
+Producer flush makes buffered pointers readable without claiming fsync. Old
+cuts preserve index/vlog/dictionary authority across checkpoint and equivalent
+backend maintenance. GC/rewrite/leaf packing serialize and refresh the backend
+basis through the existing flush fence; retired cleanup runs outside
+writer/admission/publication locks. A referenced or pinned persistent segment
+cannot be deleted because it is old. See
+[COW resource and handoff ownership](cow-cache-publication.md).
+
 ## 6. Rewrite/Compaction
 
 ### 6.1 Online rewrite (`DB.ValueLogRewriteOnline`)

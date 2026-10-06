@@ -89,6 +89,9 @@ func (db *DB) InitConditionalTxnWithSnapshot(tx *ConditionalTxn) error {
 }
 
 func (db *DB) initConditionalTxn(tx *ConditionalTxn, withSnapshot bool) error {
+	if db != nil && db.cow != nil {
+		return backenddb.ErrConditionalTxnUnsupported
+	}
 	if tx == nil {
 		return backenddb.ErrConditionalTxnClosed
 	}

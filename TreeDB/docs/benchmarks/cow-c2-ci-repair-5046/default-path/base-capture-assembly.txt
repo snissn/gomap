@@ -1,0 +1,618 @@
+TEXT github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld(SB) github.com/snissn/gomap/TreeDB/db/db.go
+  db.go:1676				0x99c1e0		4c8d6424b0		LEAQ -0x50(SP), R12														
+  db.go:1676				0x99c1e5		4d3b6610		CMPQ R12, 0x10(R14)														
+  db.go:1676				0x99c1e9		0f86fc090000		JBE 0x99cbeb															
+  db.go:1676				0x99c1ef		55			PUSHQ BP															
+  db.go:1676				0x99c1f0		4889e5			MOVQ SP, BP															
+  db.go:1676				0x99c1f3		4881ecc8000000		SUBQ $0xc8, SP															
+  db.go:1676				0x99c1fa		440f11bc24b8000000	MOVUPS X15, 0xb8(SP)														
+  rwmutex.go:72				0x99c203		48898424d8000000	MOVQ AX, 0xd8(SP)														
+  rwmutex.go:72				0x99c20b		48899c24e0000000	MOVQ BX, 0xe0(SP)														
+  db.go:1676				0x99c213		c644242f00		MOVB $0x0, 0x2f(SP)														
+  db.go:1676				0x99c218		c644242d00		MOVB $0x0, 0x2d(SP)														
+  db.go:1677				0x99c21d		90			NOPL																
+  type.go:94				0x99c21e		be01000000		MOVL $0x1, SI															
+  type.go:94				0x99c223		f00fc1b058070000	LOCK XADDL SI, 0x758(AX)													
+  type.go:94				0x99c22b		ffc6			INCL SI																
+  rwmutex.go:72				0x99c22d		85f6			TESTL SI, SI															
+  rwmutex.go:72				0x99c22f		7d24			JGE 0x99c255															
+  rwmutex.go:74				0x99c231		480554070000		ADDQ $0x754, AX															
+  rwmutex.go:74				0x99c237		31db			XORL BX, BX															
+  rwmutex.go:74				0x99c239		31c9			XORL CX, CX															
+  rwmutex.go:74				0x99c23b		0f1f440000		NOPL 0(AX)(AX*1)														
+  rwmutex.go:74				0x99c240		e89b1dafff		CALL sync.runtime_SemacquireRWMutexR(SB)											
+  db.go:1678				0x99c245		488b8424d8000000	MOVQ 0xd8(SP), AX														
+  db.go:1682				0x99c24d		488b9c24e0000000	MOVQ 0xe0(SP), BX														
+  db.go:1678				0x99c255		488d35240a0000		LEAQ github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld.deferwrap1(SB), SI			
+  db.go:1678				0x99c25c		4889b42488000000	MOVQ SI, 0x88(SP)														
+  db.go:1678				0x99c264		488db048070000		LEAQ 0x748(AX), SI														
+  db.go:1678				0x99c26b		4889b42490000000	MOVQ SI, 0x90(SP)														
+  db.go:1678				0x99c273		488db42488000000	LEAQ 0x88(SP), SI														
+  db.go:1678				0x99c27b		4889b424b8000000	MOVQ SI, 0xb8(SP)														
+  db.go:1678				0x99c283		c644242f01		MOVB $0x1, 0x2f(SP)														
+  type.go:19				0x99c288		8bb030510000		MOVL 0x5130(AX), SI														
+  type.go:19				0x99c28e		85f6			TESTL SI, SI															
+  db.go:1679				0x99c290		7407			JE 0x99c299															
+  db.go:1679				0x99c292		be01000000		MOVL $0x1, SI															
+  db.go:1679				0x99c297		eb0c			JMP 0x99c2a5															
+  type.go:19				0x99c299		8bb0704d0000		MOVL 0x4d70(AX), SI														
+  type.go:19				0x99c29f		85f6			TESTL SI, SI															
+  type.go:19				0x99c2a1		400f95c6		SETNE SI															
+  db.go:1679				0x99c2a5		4084f6			TESTL SI, SI															
+  db.go:1679				0x99c2a8		0f854b050000		JNE 0x99c7f9															
+  db.go:1682				0x99c2ae		4883bbf0010000ff	CMPQ 0x1f0(BX), $-0x1														
+  db.go:1682				0x99c2b6		7531			JNE 0x99c2e9															
+  db.go:1610				0x99c2b8		4889de			MOVQ BX, SI															
+  db.go:1611				0x99c2bb		4889df			MOVQ BX, DI															
+  db.go:1611				0x99c2be		48c1eb21		SHRQ $0x21, BX															
+  db.go:1611				0x99c2c2		4831fb			XORQ DI, BX															
+  db.go:1612				0x99c2c5		48bfcd8c55edd7af51ff	MOVQ $0xff51afd7ed558ccd, DI													
+  db.go:1612				0x99c2cf		480fafdf		IMULQ DI, BX															
+  db.go:1613				0x99c2d3		4889df			MOVQ BX, DI															
+  db.go:1613				0x99c2d6		48c1eb21		SHRQ $0x21, BX															
+  db.go:1613				0x99c2da		4831fb			XORQ DI, BX															
+  db.go:1614				0x99c2dd		83e30f			ANDL $0xf, BX															
+  db.go:1683				0x99c2e0		48899ef0010000		MOVQ BX, 0x1f0(SI)														
+  db.go:1683				0x99c2e7		eb03			JMP 0x99c2ec															
+  db.go:1722				0x99c2e9		4889de			MOVQ BX, SI															
+  db.go:1685				0x99c2ec		90			NOPL																
+  db.go:3114				0x99c2ed		48c744243800000000	MOVQ $0x0, 0x38(SP)														
+  db.go:3115				0x99c2f6		488d7c2438		LEAQ 0x38(SP), DI														
+  db.go:3116				0x99c2fb		4989f8			MOVQ DI, R8															
+  db.go:3116				0x99c2fe		48c1ef07		SHRQ $0x7, DI															
+  db.go:3116				0x99c302		4c31c7			XORQ R8, DI															
+  db.go:3116				0x99c305		49c1e80d		SHRQ $0xd, R8															
+  db.go:3116				0x99c309		4931f8			XORQ DI, R8															
+  db.go:3116				0x99c30c		410fb6f8		MOVZX R8, DI															
+  type.go:94				0x99c310		4c8d04b8		LEAQ 0(AX)(DI*4), R8														
+  type.go:94				0x99c314		4d8d4018		LEAQ 0x18(R8), R8														
+  db.go:1686				0x99c318		90			NOPL																
+  type.go:94				0x99c319		41b901000000		MOVL $0x1, R9															
+  type.go:94				0x99c31f		f0450fc108		LOCK XADDL R9, 0(R8)														
+  db.go:1687				0x99c324		90			NOPL																
+  type.go:195				0x99c325		41b801000000		MOVL $0x1, R8															
+  type.go:195				0x99c32b		f04c0fc18018040000	LOCK XADDQ R8, 0x418(AX)													
+  db.go:1688				0x99c334		4c8d05e5080000		LEAQ github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld.func1(SB), R8			
+  db.go:1688				0x99c33b		4c89442470		MOVQ R8, 0x70(SP)														
+  db.go:1688				0x99c340		4889442478		MOVQ AX, 0x78(SP)														
+  db.go:1688				0x99c345		4889bc2480000000	MOVQ DI, 0x80(SP)														
+  db.go:1688				0x99c34d		488d7c2470		LEAQ 0x70(SP), DI														
+  db.go:1688				0x99c352		4889bc24c0000000	MOVQ DI, 0xc0(SP)														
+  db.go:1688				0x99c35a		c644242f03		MOVB $0x3, 0x2f(SP)														
+  type.go:19				0x99c35f		8bb830510000		MOVL 0x5130(AX), DI														
+  type.go:19				0x99c365		85ff			TESTL DI, DI															
+  db.go:1694				0x99c367		0f8555040000		JNE 0x99c7c2															
+  db.go:1698				0x99c36d		90			NOPL																
+  type.go:58				0x99c36e		488b7810		MOVQ 0x10(AX), DI														
+  db.go:1699				0x99c372		4885ff			TESTQ DI, DI															
+  db.go:1699				0x99c375		0f840e040000		JE 0x99c789															
+  db.go:1699				0x99c37b		4c8b4708		MOVQ 0x8(DI), R8														
+  db.go:1699				0x99c37f		90			NOPL																
+  db.go:1699				0x99c380		4d85c0			TESTQ R8, R8															
+  db.go:1699				0x99c383		0f8400040000		JE 0x99c789															
+  db.go:1699				0x99c389		4c8b4f10		MOVQ 0x10(DI), R9														
+  db.go:1699				0x99c38d		4d85c9			TESTQ R9, R9															
+  db.go:1699				0x99c390		0f84f3030000		JE 0x99c789															
+  db.go:1705				0x99c396		498b5928		MOVQ 0x28(R9), BX														
+  db.go:1706				0x99c39a		4885db			TESTQ BX, BX															
+  db.go:1706				0x99c39d		7419			JE 0x99c3b8															
+  db.go:1706				0x99c39f		4c8b13			MOVQ 0(BX), R10															
+  db.go:1706				0x99c3a2		4d85d2			TESTQ R10, R10															
+  db.go:1706				0x99c3a5		7405			JE 0x99c3ac															
+  db.go:1706				0x99c3a7		4d8b12			MOVQ 0(R10), R10														
+  db.go:1706				0x99c3aa		eb03			JMP 0x99c3af															
+  db.go:1706				0x99c3ac		4531d2			XORL R10, R10															
+  db.go:1706				0x99c3af		4d85d2			TESTQ R10, R10															
+  db.go:1706				0x99c3b2		410f9fc2		SETG R10															
+  db.go:1706				0x99c3b6		eb03			JMP 0x99c3bb															
+  db.go:1706				0x99c3b8		4531d2			XORL R10, R10															
+  db.go:1704				0x99c3bb		4c8b5f18		MOVQ 0x18(DI), R11														
+  db.go:1704				0x99c3bf		90			NOPL																
+  db.go:1706				0x99c3c0		4584d2			TESTL R10, R10															
+  db.go:1707				0x99c3c3		7450			JE 0x99c415															
+  db.go:1708				0x99c3c5		4d85db			TESTQ R11, R11															
+  db.go:1708				0x99c3c8		7414			JE 0x99c3de															
+  db.go:1711				0x99c3ca		90			NOPL																
+  db.go:1706				0x99c3cb		4885db			TESTQ BX, BX															
+  manager.go:2297			0x99c3ce		7445			JE 0x99c415															
+  type.go:128				0x99c3d0		41bc01000000		MOVL $0x1, R12															
+  type.go:128				0x99c3d6		f04c0fc16308		LOCK XADDQ R12, 0x8(BX)														
+  manager.go:2298			0x99c3dc		eb37			JMP 0x99c415															
+  db.go:1709				0x99c3de		c644242d00		MOVB $0x0, 0x2d(SP)														
+  db.go:1709				0x99c3e3		c644242f01		MOVB $0x1, 0x2f(SP)														
+  db.go:1709				0x99c3e8		488b9424c0000000	MOVQ 0xc0(SP), DX														
+  db.go:1709				0x99c3f0		488b02			MOVQ 0(DX), AX															
+  db.go:1709				0x99c3f3		ffd0			CALL AX																
+  db.go:1709				0x99c3f5		c644242f00		MOVB $0x0, 0x2f(SP)														
+  db.go:1709				0x99c3fa		488b9424b8000000	MOVQ 0xb8(SP), DX														
+  db.go:1709				0x99c402		488b02			MOVQ 0(DX), AX															
+  db.go:1709				0x99c405		ffd0			CALL AX																
+  db.go:1709				0x99c407		0fb644242d		MOVZX 0x2d(SP), AX														
+  db.go:1709				0x99c40c		4881c4c8000000		ADDQ $0xc8, SP															
+  db.go:1709				0x99c413		5d			POPQ BP																
+  db.go:1709				0x99c414		c3			RET																
+  db.go:1716				0x99c415		4d8b6020		MOVQ 0x20(R8), R12														
+  db.go:1716				0x99c419		0f1f8000000000		NOPL 0(AX)															
+  db.go:1716				0x99c420		4d85e4			TESTQ R12, R12															
+  db.go:1716				0x99c423		0f8417030000		JE 0x99c740															
+  type.go:58				0x99c429		4889bc24b0000000	MOVQ DI, 0xb0(SP)														
+  db.go:1699				0x99c431		4c898424a8000000	MOVQ R8, 0xa8(SP)														
+  db.go:1699				0x99c439		4c898c24a0000000	MOVQ R9, 0xa0(SP)														
+  db.go:1704				0x99c441		4c895c2458		MOVQ R11, 0x58(SP)														
+  db.go:1705				0x99c446		48895c2460		MOVQ BX, 0x60(SP)														
+  db.go:1706				0x99c44b		448854242e		MOVB R10, 0x2e(SP)														
+  db.go:1722				0x99c450		498b19			MOVQ 0(R9), BX															
+  db.go:1722				0x99c453		488b8ef0010000		MOVQ 0x1f0(SI), CX														
+  db.go:1722				0x99c45a		4c89e0			MOVQ R12, AX															
+  db.go:1722				0x99c45d		0f1f00			NOPL 0(AX)															
+  db.go:1722				0x99c460		e83b3ee6ff		CALL github.com/snissn/gomap/TreeDB/lifecycle.(*ReaderRegistry).RegisterWithHint(SB)						
+  db.go:1722				0x99c465		4889442430		MOVQ AX, 0x30(SP)														
+  db.go:1722				0x99c46a		488bbc24e0000000	MOVQ 0xe0(SP), DI														
+  db.go:1722				0x99c472		48899ff0010000		MOVQ BX, 0x1f0(DI)														
+  db.go:1724				0x99c479		488b9424a0000000	MOVQ 0xa0(SP), DX														
+  db.go:1724				0x99c481		488b7230		MOVQ 0x30(DX), SI														
+  db.go:1724				0x99c485		4885f6			TESTQ SI, SI															
+  db.go:1724				0x99c488		0f845a020000		JE 0x99c6e8															
+  db.go:1725				0x99c48e		488b4e18		MOVQ 0x18(SI), CX														
+  db.go:1725				0x99c492		4c8b4620		MOVQ 0x20(SI), R8														
+  db.go:1725				0x99c496		488b5e10		MOVQ 0x10(SI), BX														
+  db.go:1725				0x99c49a		48894f38		MOVQ CX, 0x38(DI)														
+  db.go:1725				0x99c49e		4c894740		MOVQ R8, 0x40(DI)														
+  db.go:1725				0x99c4a2		833de71e080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1725				0x99c4a9		7410			JE 0x99c4bb															
+  db.go:1725				0x99c4ab		4c8b4f30		MOVQ 0x30(DI), R9														
+  db.go:1725				0x99c4af		e88c7cafff		CALL runtime.gcWriteBarrier2(SB)												
+  db.go:1725				0x99c4b4		49891b			MOVQ BX, 0(R11)															
+  db.go:1725				0x99c4b7		4d894b08		MOVQ R9, 0x8(R11)														
+  db.go:1725				0x99c4bb		48895f30		MOVQ BX, 0x30(DI)														
+  db.go:1726				0x99c4bf		4c8b4a30		MOVQ 0x30(DX), R9														
+  db.go:1726				0x99c4c3		4d8b5140		MOVQ 0x40(R9), R10														
+  db.go:1726				0x99c4c7		4d85d2			TESTQ R10, R10															
+  db.go:1726				0x99c4ca		0f84db000000		JE 0x99c5ab															
+  db.go:1727				0x99c4d0		833db91e080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1727				0x99c4d7		7505			JNE 0x99c4de															
+  db.go:1726				0x99c4d9		4d85d2			TESTQ R10, R10															
+  db.go:1727				0x99c4dc		eb13			JMP 0x99c4f1															
+  db.go:1727				0x99c4de		4c8b4778		MOVQ 0x78(DI), R8														
+  db.go:1727				0x99c4e2		e8597cafff		CALL runtime.gcWriteBarrier2(SB)												
+  db.go:1727				0x99c4e7		4d8913			MOVQ R10, 0(R11)														
+  db.go:1727				0x99c4ea		4d894308		MOVQ R8, 0x8(R11)														
+  db.go:1726				0x99c4ee		4d85d2			TESTQ R10, R10															
+  db.go:1727				0x99c4f1		4c895778		MOVQ R10, 0x78(DI)														
+  leaf_generation_runtime.go:346	0x99c4f5		0f8481000000		JE 0x99c57c															
+  leaf_generation_runtime.go:349	0x99c4fb		488b9c24d8000000	MOVQ 0xd8(SP), BX														
+  leaf_generation_runtime.go:349	0x99c503		4881c318050000		ADDQ $0x518, BX															
+  leaf_generation_runtime.go:349	0x99c50a		4c89d0			MOVQ R10, AX															
+  leaf_generation_runtime.go:349	0x99c50d		e8ceba0a00		CALL github.com/snissn/gomap/TreeDB/db.(*leafGenerationPinSet).retain(SB)							
+  leaf_generation_runtime.go:349	0x99c512		84c0			TESTL AL, AL															
+  db.go:1728				0x99c514		7451			JE 0x99c567															
+  db.go:1729				0x99c516		488b8424e0000000	MOVQ 0xe0(SP), AX														
+  db.go:1729				0x99c51e		4c8b4038		MOVQ 0x38(AX), R8														
+  db.go:1729				0x99c522		4c8b4840		MOVQ 0x40(AX), R9														
+  db.go:1729				0x99c526		4c8b5030		MOVQ 0x30(AX), R10														
+  db.go:1729				0x99c52a		4c894050		MOVQ R8, 0x50(AX)														
+  db.go:1729				0x99c52e		4c894858		MOVQ R9, 0x58(AX)														
+  db.go:1729				0x99c532		833d571e080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1729				0x99c539		7411			JE 0x99c54c															
+  db.go:1729				0x99c53b		4c8b4048		MOVQ 0x48(AX), R8														
+  db.go:1729				0x99c53f		90			NOPL																
+  db.go:1729				0x99c540		e8fb7bafff		CALL runtime.gcWriteBarrier2(SB)												
+  db.go:1729				0x99c545		4d8913			MOVQ R10, 0(R11)														
+  db.go:1729				0x99c548		4d894308		MOVQ R8, 0x8(R11)														
+  db.go:1729				0x99c54c		4c895048		MOVQ R10, 0x48(AX)														
+  db.go:1766				0x99c550		488b442430		MOVQ 0x30(SP), AX														
+  db.go:1752				0x99c555		488b9424a0000000	MOVQ 0xa0(SP), DX														
+  db.go:1733				0x99c55d		488bbc24e0000000	MOVQ 0xe0(SP), DI														
+  db.go:1729				0x99c565		eb37			JMP 0x99c59e															
+  db.go:1766				0x99c567		488b442430		MOVQ 0x30(SP), AX														
+  db.go:1752				0x99c56c		488b9424a0000000	MOVQ 0xa0(SP), DX														
+  db.go:1731				0x99c574		488bbc24e0000000	MOVQ 0xe0(SP), DI														
+  db.go:1731				0x99c57c		440f117f50		MOVUPS X15, 0x50(DI)														
+  db.go:1731				0x99c581		833d081e080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1731				0x99c588		740c			JE 0x99c596															
+  db.go:1731				0x99c58a		4c8b4748		MOVQ 0x48(DI), R8														
+  db.go:1731				0x99c58e		e88d7bafff		CALL runtime.gcWriteBarrier1(SB)												
+  db.go:1731				0x99c593		4d8903			MOVQ R8, 0(R11)															
+  db.go:1731				0x99c596		48c7474800000000	MOVQ $0x0, 0x48(DI)														
+  db.go:1733				0x99c59e		48c7476800000000	MOVQ $0x0, 0x68(DI)														
+  db.go:1733				0x99c5a6		e973020000		JMP 0x99c81e															
+  db.go:1734				0x99c5ab		498b7130		MOVQ 0x30(R9), SI														
+  db.go:1734				0x99c5af		4d8b5128		MOVQ 0x28(R9), R10														
+  db.go:1734				0x99c5b3		49397118		CMPQ 0x18(R9), SI														
+  db.go:1734				0x99c5b7		0f85ce000000		JNE 0x99c68b															
+  db.go:1734				0x99c5bd		0f1f00			NOPL 0(AX)															
+  db.go:1734				0x99c5c0		4885f6			TESTQ SI, SI															
+  db.go:1734				0x99c5c3		0f84c2000000		JE 0x99c68b															
+  db.go:1735				0x99c5c9		488b4f70		MOVQ 0x70(DI), CX														
+  db.go:1735				0x99c5cd		4c8b4760		MOVQ 0x60(DI), R8														
+  db.go:1735				0x99c5d1		4839f1			CMPQ CX, SI															
+  db.go:1735				0x99c5d4		7205			JB 0x99c5db															
+  db.go:1734				0x99c5d6		4889f3			MOVQ SI, BX															
+  db.go:1735				0x99c5d9		eb35			JMP 0x99c610															
+  db.go:1734				0x99c5db		4c89942498000000	MOVQ R10, 0x98(SP)														
+  db.go:1734				0x99c5e3		4889742450		MOVQ SI, 0x50(SP)														
+  db.go:1735				0x99c5e8		4c89c0			MOVQ R8, AX															
+  db.go:1735				0x99c5eb		4889f3			MOVQ SI, BX															
+  db.go:1735				0x99c5ee		4889df			MOVQ BX, DI															
+  db.go:1735				0x99c5f1		488d35287dec00		LEAQ 0xec7d28(IP), SI														
+  db.go:1735				0x99c5f8		e86326afff		CALL runtime.growslice(SB)													
+  db.go:1735				0x99c5fd		4c8b942498000000	MOVQ 0x98(SP), R10														
+  db.go:1735				0x99c605		4989c0			MOVQ AX, R8															
+  db.go:1735				0x99c608		4889de			MOVQ BX, SI															
+  db.go:1735				0x99c60b		488b5c2450		MOVQ 0x50(SP), BX														
+  db.go:1735				0x99c610		48894c2450		MOVQ CX, 0x50(SP)														
+  db.go:1735				0x99c615		4889742448		MOVQ SI, 0x48(SP)														
+  db.go:1735				0x99c61a		4c89842498000000	MOVQ R8, 0x98(SP)														
+  db.go:1735				0x99c622		488d05f77cec00		LEAQ 0xec7cf7(IP), AX														
+  db.go:1735				0x99c629		4889f1			MOVQ SI, CX															
+  db.go:1735				0x99c62c		4c89d7			MOVQ R10, DI															
+  db.go:1735				0x99c62f		4889de			MOVQ BX, SI															
+  db.go:1735				0x99c632		4c89c3			MOVQ R8, BX															
+  db.go:1735				0x99c635		e886e1aeff		CALL runtime.typedslicecopy(SB)													
+  db.go:1735				0x99c63a		488b542448		MOVQ 0x48(SP), DX														
+  db.go:1735				0x99c63f		488b8424e0000000	MOVQ 0xe0(SP), AX														
+  db.go:1735				0x99c647		48895068		MOVQ DX, 0x68(AX)														
+  db.go:1735				0x99c64b		4c8b442450		MOVQ 0x50(SP), R8														
+  db.go:1735				0x99c650		4c894070		MOVQ R8, 0x70(AX)														
+  db.go:1735				0x99c654		833d351d080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1735				0x99c65b		750a			JNE 0x99c667															
+  db.go:1735				0x99c65d		4c8b8c2498000000	MOVQ 0x98(SP), R9														
+  db.go:1735				0x99c665		eb18			JMP 0x99c67f															
+  db.go:1735				0x99c667		4c8b4060		MOVQ 0x60(AX), R8														
+  db.go:1735				0x99c66b		e8d07aafff		CALL runtime.gcWriteBarrier2(SB)												
+  db.go:1735				0x99c670		4c8b8c2498000000	MOVQ 0x98(SP), R9														
+  db.go:1735				0x99c678		4d890b			MOVQ R9, 0(R11)															
+  db.go:1735				0x99c67b		4d894308		MOVQ R8, 0x8(R11)														
+  db.go:1735				0x99c67f		4c894860		MOVQ R9, 0x60(AX)														
+  db.go:1736				0x99c683		90			NOPL																
+  leaf_generation_runtime.go:335	0x99c684		31c9			XORL CX, CX															
+  leaf_generation_runtime.go:242	0x99c686		e9fd040000		JMP 0x99cb88															
+  db.go:1739				0x99c68b		48c7476800000000	MOVQ $0x0, 0x68(DI)														
+  leaf_generation_runtime.go:321	0x99c693		488b8424d8000000	MOVQ 0xd8(SP), AX														
+  leaf_generation_runtime.go:321	0x99c69b		480518050000		ADDQ $0x518, AX															
+  db.go:1740				0x99c6a1		90			NOPL																
+  leaf_generation_runtime.go:321	0x99c6a2		4c89c7			MOVQ R8, DI															
+  leaf_generation_runtime.go:321	0x99c6a5		e8b6c60a00		CALL github.com/snissn/gomap/TreeDB/db.(*leafGenerationPinTracker).pin(SB)							
+  db.go:1741				0x99c6aa		488b8424e0000000	MOVQ 0xe0(SP), AX														
+  db.go:1741				0x99c6b2		488b5038		MOVQ 0x38(AX), DX														
+  db.go:1741				0x99c6b6		488b7040		MOVQ 0x40(AX), SI														
+  db.go:1741				0x99c6ba		4c8b4030		MOVQ 0x30(AX), R8														
+  db.go:1741				0x99c6be		48895050		MOVQ DX, 0x50(AX)														
+  db.go:1741				0x99c6c2		48897058		MOVQ SI, 0x58(AX)														
+  db.go:1741				0x99c6c6		833dc31c080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1741				0x99c6cd		7410			JE 0x99c6df															
+  db.go:1741				0x99c6cf		4c8b4848		MOVQ 0x48(AX), R9														
+  db.go:1741				0x99c6d3		e8687aafff		CALL runtime.gcWriteBarrier2(SB)												
+  db.go:1741				0x99c6d8		4d8903			MOVQ R8, 0(R11)															
+  db.go:1741				0x99c6db		4d894b08		MOVQ R9, 0x8(R11)														
+  db.go:1741				0x99c6df		4c894048		MOVQ R8, 0x48(AX)														
+  db.go:1741				0x99c6e3		e982040000		JMP 0x99cb6a															
+  db.go:1744				0x99c6e8		440f117f38		MOVUPS X15, 0x38(DI)														
+  db.go:1744				0x99c6ed		833d9c1c080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1744				0x99c6f4		741c			JE 0x99c712															
+  db.go:1744				0x99c6f6		4c8b4730		MOVQ 0x30(DI), R8														
+  db.go:1745				0x99c6fa		4c8b4f48		MOVQ 0x48(DI), R9														
+  db.go:1747				0x99c6fe		4c8b5778		MOVQ 0x78(DI), R10														
+  db.go:1744				0x99c702		e8597aafff		CALL runtime.gcWriteBarrier3(SB)												
+  db.go:1744				0x99c707		4d8903			MOVQ R8, 0(R11)															
+  db.go:1745				0x99c70a		4d894b08		MOVQ R9, 0x8(R11)														
+  db.go:1747				0x99c70e		4d895310		MOVQ R10, 0x10(R11)														
+  db.go:1744				0x99c712		48c7473000000000	MOVQ $0x0, 0x30(DI)														
+  db.go:1745				0x99c71a		440f117f50		MOVUPS X15, 0x50(DI)														
+  db.go:1745				0x99c71f		48c7474800000000	MOVQ $0x0, 0x48(DI)														
+  db.go:1746				0x99c727		48c7476800000000	MOVQ $0x0, 0x68(DI)														
+  db.go:1747				0x99c72f		48c7477800000000	MOVQ $0x0, 0x78(DI)														
+  db.go:1747				0x99c737		e9e2000000		JMP 0x99c81e															
+  db.go:1747				0x99c73c		0f1f4000		NOPL 0(AX)															
+  db.go:1706				0x99c740		4584d2			TESTL R10, R10															
+  db.go:1717				0x99c743		740d			JE 0x99c752															
+  db.go:1717				0x99c745		4d85db			TESTQ R11, R11															
+  db.go:1717				0x99c748		7408			JE 0x99c752															
+  db.go:1718				0x99c74a		4c89d8			MOVQ R11, AX															
+  db.go:1718				0x99c74d		e86ee2daff		CALL github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Release(SB)							
+  db.go:1720				0x99c752		c644242d00		MOVB $0x0, 0x2d(SP)														
+  db.go:1720				0x99c757		c644242f01		MOVB $0x1, 0x2f(SP)														
+  db.go:1720				0x99c75c		488b9424c0000000	MOVQ 0xc0(SP), DX														
+  db.go:1720				0x99c764		488b02			MOVQ 0(DX), AX															
+  db.go:1720				0x99c767		ffd0			CALL AX																
+  db.go:1720				0x99c769		c644242f00		MOVB $0x0, 0x2f(SP)														
+  db.go:1720				0x99c76e		488b9424b8000000	MOVQ 0xb8(SP), DX														
+  db.go:1720				0x99c776		488b02			MOVQ 0(DX), AX															
+  db.go:1720				0x99c779		ffd0			CALL AX																
+  db.go:1720				0x99c77b		0fb644242d		MOVZX 0x2d(SP), AX														
+  db.go:1720				0x99c780		4881c4c8000000		ADDQ $0xc8, SP															
+  db.go:1720				0x99c787		5d			POPQ BP																
+  db.go:1720				0x99c788		c3			RET																
+  db.go:1700				0x99c789		c644242d00		MOVB $0x0, 0x2d(SP)														
+  db.go:1700				0x99c78e		c644242f01		MOVB $0x1, 0x2f(SP)														
+  db.go:1700				0x99c793		488b9424c0000000	MOVQ 0xc0(SP), DX														
+  db.go:1700				0x99c79b		488b02			MOVQ 0(DX), AX															
+  db.go:1700				0x99c79e		6690			NOPW																
+  db.go:1700				0x99c7a0		ffd0			CALL AX																
+  db.go:1700				0x99c7a2		c644242f00		MOVB $0x0, 0x2f(SP)														
+  db.go:1700				0x99c7a7		488b9424b8000000	MOVQ 0xb8(SP), DX														
+  db.go:1700				0x99c7af		488b02			MOVQ 0(DX), AX															
+  db.go:1700				0x99c7b2		ffd0			CALL AX																
+  db.go:1700				0x99c7b4		0fb644242d		MOVZX 0x2d(SP), AX														
+  db.go:1700				0x99c7b9		4881c4c8000000		ADDQ $0xc8, SP															
+  db.go:1700				0x99c7c0		5d			POPQ BP																
+  db.go:1700				0x99c7c1		c3			RET																
+  db.go:1695				0x99c7c2		c644242d00		MOVB $0x0, 0x2d(SP)														
+  db.go:1695				0x99c7c7		c644242f01		MOVB $0x1, 0x2f(SP)														
+  db.go:1695				0x99c7cc		488b9424c0000000	MOVQ 0xc0(SP), DX														
+  db.go:1695				0x99c7d4		488b02			MOVQ 0(DX), AX															
+  db.go:1695				0x99c7d7		ffd0			CALL AX																
+  db.go:1695				0x99c7d9		c644242f00		MOVB $0x0, 0x2f(SP)														
+  db.go:1695				0x99c7de		488b9424b8000000	MOVQ 0xb8(SP), DX														
+  db.go:1695				0x99c7e6		488b02			MOVQ 0(DX), AX															
+  db.go:1695				0x99c7e9		ffd0			CALL AX																
+  db.go:1695				0x99c7eb		0fb644242d		MOVZX 0x2d(SP), AX														
+  db.go:1695				0x99c7f0		4881c4c8000000		ADDQ $0xc8, SP															
+  db.go:1695				0x99c7f7		5d			POPQ BP																
+  db.go:1695				0x99c7f8		c3			RET																
+  db.go:1680				0x99c7f9		c644242d00		MOVB $0x0, 0x2d(SP)														
+  db.go:1680				0x99c7fe		c644242f00		MOVB $0x0, 0x2f(SP)														
+  db.go:1680				0x99c803		488b9424b8000000	MOVQ 0xb8(SP), DX														
+  db.go:1680				0x99c80b		488b02			MOVQ 0(DX), AX															
+  db.go:1680				0x99c80e		ffd0			CALL AX																
+  db.go:1680				0x99c810		0fb644242d		MOVZX 0x2d(SP), AX														
+  db.go:1680				0x99c815		4881c4c8000000		ADDQ $0xc8, SP															
+  db.go:1680				0x99c81c		5d			POPQ BP																
+  db.go:1680				0x99c81d		c3			RET																
+  db.go:1750				0x99c81e		833d6b1b080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1750				0x99c825		7517			JNE 0x99c83e															
+  db.go:1751				0x99c827		4c8b8424a8000000	MOVQ 0xa8(SP), R8														
+  db.go:1753				0x99c82f		4c8b4c2458		MOVQ 0x58(SP), R9														
+  db.go:1750				0x99c834		4c8ba424d8000000	MOVQ 0xd8(SP), R12														
+  db.go:1750				0x99c83c		eb4b			JMP 0x99c889															
+  db.go:1750				0x99c83e		4c8b07			MOVQ 0(DI), R8															
+  db.go:1751				0x99c841		4c8b4f08		MOVQ 0x8(DI), R9														
+  db.go:1752				0x99c845		4c8b5710		MOVQ 0x10(DI), R10														
+  db.go:1753				0x99c849		4c8b5f18		MOVQ 0x18(DI), R11														
+  db.go:1753				0x99c84d		4c89d9			MOVQ R11, CX															
+  db.go:1750				0x99c850		e8ab79afff		CALL runtime.gcWriteBarrier8(SB)												
+  db.go:1750				0x99c855		4c8ba424d8000000	MOVQ 0xd8(SP), R12														
+  db.go:1750				0x99c85d		4d8923			MOVQ R12, 0(R11)														
+  db.go:1750				0x99c860		4d894308		MOVQ R8, 0x8(R11)														
+  db.go:1751				0x99c864		4c8b8424a8000000	MOVQ 0xa8(SP), R8														
+  db.go:1751				0x99c86c		4d894310		MOVQ R8, 0x10(R11)														
+  db.go:1751				0x99c870		4d894b18		MOVQ R9, 0x18(R11)														
+  db.go:1752				0x99c874		49895320		MOVQ DX, 0x20(R11)														
+  db.go:1752				0x99c878		4d895328		MOVQ R10, 0x28(R11)														
+  db.go:1753				0x99c87c		4c8b4c2458		MOVQ 0x58(SP), R9														
+  db.go:1753				0x99c881		4d894b30		MOVQ R9, 0x30(R11)														
+  db.go:1753				0x99c885		49894b38		MOVQ CX, 0x38(R11)														
+  db.go:1750				0x99c889		4c8927			MOVQ R12, 0(DI)															
+  db.go:1751				0x99c88c		4c894708		MOVQ R8, 0x8(DI)														
+  db.go:1752				0x99c890		48895710		MOVQ DX, 0x10(DI)														
+  db.go:1753				0x99c894		4c894f18		MOVQ R9, 0x18(DI)														
+  db.go:1754				0x99c898		440fb64c242e		MOVZX 0x2e(SP), R9														
+  db.go:1754				0x99c89e		44884f20		MOVB R9, 0x20(DI)														
+  db.go:1755				0x99c8a2		4c8b8c24b0000000	MOVQ 0xb0(SP), R9														
+  db.go:1755				0x99c8aa		4d8b5120		MOVQ 0x20(R9), R10														
+  db.go:1755				0x99c8ae		4c895728		MOVQ R10, 0x28(DI)														
+  db.go:1756				0x99c8b2		4d8b942448040000	MOVQ 0x448(R12), R10														
+  value_reader.go:54			0x99c8ba		4c8d1dff4d2201		LEAQ go:itab.*github.com/snissn/gomap/TreeDB/internal/valuelog.Set,github.com/snissn/gomap/TreeDB/tree.SlabReader(SB), R11	
+  value_reader.go:54			0x99c8c1		4c899f88000000		MOVQ R11, 0x88(DI)														
+  value_reader.go:54			0x99c8c8		833dc11a080200		CMPL runtime.writeBarrier(SB), $0x0												
+  value_reader.go:54			0x99c8cf		7507			JNE 0x99c8d8															
+  value_reader.go:54			0x99c8d1		4c8b6c2460		MOVQ 0x60(SP), R13														
+  value_reader.go:54			0x99c8d6		eb2a			JMP 0x99c902															
+  value_reader.go:54			0x99c8d8		4c8b9f90000000		MOVQ 0x90(DI), R11														
+  value_reader.go:55			0x99c8df		4c8ba798000000		MOVQ 0x98(DI), R12														
+  value_reader.go:54			0x99c8e6		4c89d9			MOVQ R11, CX															
+  value_reader.go:54			0x99c8e9		e89278afff		CALL runtime.gcWriteBarrier4(SB)												
+  value_reader.go:54			0x99c8ee		4c8b6c2460		MOVQ 0x60(SP), R13														
+  value_reader.go:54			0x99c8f3		4d892b			MOVQ R13, 0(R11)														
+  value_reader.go:54			0x99c8f6		49894b08		MOVQ CX, 0x8(R11)														
+  value_reader.go:55			0x99c8fa		4d895310		MOVQ R10, 0x10(R11)														
+  value_reader.go:55			0x99c8fe		4d896318		MOVQ R12, 0x18(R11)														
+  value_reader.go:54			0x99c902		4c89af90000000		MOVQ R13, 0x90(DI)														
+  value_reader.go:55			0x99c909		4c899798000000		MOVQ R10, 0x98(DI)														
+  db.go:1757				0x99c910		4c8b9790010000		MOVQ 0x190(DI), R10														
+  db.go:1757				0x99c917		4c89542450		MOVQ R10, 0x50(SP)														
+  db.go:1757				0x99c91c		31c9			XORL CX, CX															
+  db.go:1757				0x99c91e		6690			NOPW																
+  db.go:1757				0x99c920		eb55			JMP 0x99c977															
+  db.go:1757				0x99c922		48894c2440		MOVQ CX, 0x40(SP)														
+  db.go:1759				0x99c927		488b9788010000		MOVQ 0x188(DI), DX														
+  db.go:1759				0x99c92e		4a8d0422		LEAQ 0(DX)(R12*1), AX														
+  db.go:1759				0x99c932		488d4008		LEAQ 0x8(AX), AX														
+  db.go:1759				0x99c936		31db			XORL BX, BX															
+  db.go:1759				0x99c938		31c9			XORL CX, CX															
+  db.go:1759				0x99c93a		31ff			XORL DI, DI															
+  db.go:1759				0x99c93c		31f6			XORL SI, SI															
+  db.go:1759				0x99c93e		6690			NOPW																
+  db.go:1759				0x99c940		e85b47d0ff		CALL github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset(SB)									
+  db.go:1757				0x99c945		488b4c2440		MOVQ 0x40(SP), CX														
+  db.go:1757				0x99c94a		48ffc1			INCQ CX																
+  db.go:1766				0x99c94d		488b442430		MOVQ 0x30(SP), AX														
+  db.go:1769				0x99c952		488b9424a0000000	MOVQ 0xa0(SP), DX														
+  db.go:1758				0x99c95a		488bbc24e0000000	MOVQ 0xe0(SP), DI														
+  db.go:1768				0x99c962		4c8b8424a8000000	MOVQ 0xa8(SP), R8														
+  db.go:1782				0x99c96a		4c8b8c24b0000000	MOVQ 0xb0(SP), R9														
+  db.go:1757				0x99c972		4c8b542450		MOVQ 0x50(SP), R10														
+  db.go:1757				0x99c977		4c39d1			CMPQ CX, R10															
+  db.go:1757				0x99c97a		7d3b			JGE 0x99c9b7															
+  db.go:1758				0x99c97c		4c8b9f90010000		MOVQ 0x190(DI), R11														
+  db.go:1758				0x99c983		4c39d9			CMPQ CX, R11															
+  db.go:1758				0x99c986		0f83d9010000		JAE 0x99cb65															
+  db.go:1758				0x99c98c		4c8b9f88010000		MOVQ 0x188(DI), R11														
+  db.go:1758				0x99c993		4c69e1e8000000		IMULQ $0xe8, CX, R12														
+  db.go:1758				0x99c99a		4bc7042300000000	MOVQ $0x0, 0(R11)(R12*1)													
+  db.go:1759				0x99c9a2		4c8b9f90010000		MOVQ 0x190(DI), R11														
+  db.go:1759				0x99c9a9		4c39d9			CMPQ CX, R11															
+  db.go:1759				0x99c9ac		0f8270ffffff		JB 0x99c922															
+  db.go:1759				0x99c9b2		e9a6010000		JMP 0x99cb5d															
+  db.go:1761				0x99c9b7		4883bf9801000010	CMPQ 0x198(DI), $0x10														
+  db.go:1761				0x99c9bf		90			NOPL																
+  db.go:1761				0x99c9c0		7e2d			JLE 0x99c9ef															
+  db.go:1762				0x99c9c2		440f11bf90010000	MOVUPS X15, 0x190(DI)														
+  db.go:1762				0x99c9ca		833dbf19080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1762				0x99c9d1		740f			JE 0x99c9e2															
+  db.go:1762				0x99c9d3		4c8b9788010000		MOVQ 0x188(DI), R10														
+  db.go:1762				0x99c9da		e84177afff		CALL runtime.gcWriteBarrier1(SB)												
+  db.go:1762				0x99c9df		4d8913			MOVQ R10, 0(R11)														
+  db.go:1762				0x99c9e2		48c7878801000000000000	MOVQ $0x0, 0x188(DI)														
+  db.go:1762				0x99c9ed		eb0b			JMP 0x99c9fa															
+  db.go:1764				0x99c9ef		48c7879001000000000000	MOVQ $0x0, 0x190(DI)														
+  db.go:1766				0x99c9fa		48898780000000		MOVQ AX, 0x80(DI)														
+  db.go:1768				0x99ca01		498b5808		MOVQ 0x8(R8), BX														
+  db.go:1768				0x99ca05		48399fe0010000		CMPQ 0x1e0(DI), BX														
+  db.go:1768				0x99ca0c		750d			JNE 0x99ca1b															
+  db.go:1769				0x99ca0e		4c8b97e8010000		MOVQ 0x1e8(DI), R10														
+  db.go:1769				0x99ca15		4c395208		CMPQ 0x8(DX), R10														
+  db.go:1770				0x99ca19		747d			JE 0x99ca98															
+  db.go:1771				0x99ca1b		488d87a0000000		LEAQ 0xa0(DI), AX														
+  db.go:1771				0x99ca22		4881c788000000		ADDQ $0x88, DI															
+  db.go:1771				0x99ca29		488b7208		MOVQ 0x8(DX), SI														
+  db.go:1771				0x99ca2d		488d0dbc492201		LEAQ go:itab.*github.com/snissn/gomap/TreeDB/db.valueReader,github.com/snissn/gomap/TreeDB/tree.SlabReader(SB), CX		
+  db.go:1771				0x99ca34		e86746d0ff		CALL github.com/snissn/gomap/TreeDB/tree.(*Tree).Reset(SB)									
+  db.go:1772				0x99ca39		488b9424a8000000	MOVQ 0xa8(SP), DX														
+  db.go:1772				0x99ca41		488b5208		MOVQ 0x8(DX), DX														
+  db.go:1772				0x99ca45		833d4419080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1772				0x99ca4c		750a			JNE 0x99ca58															
+  db.go:1772				0x99ca4e		488b8c24e0000000	MOVQ 0xe0(SP), CX														
+  db.go:1772				0x99ca56		eb1b			JMP 0x99ca73															
+  db.go:1772				0x99ca58		488b8c24e0000000	MOVQ 0xe0(SP), CX														
+  db.go:1772				0x99ca60		488bb1e0010000		MOVQ 0x1e0(CX), SI														
+  db.go:1772				0x99ca67		e8d476afff		CALL runtime.gcWriteBarrier2(SB)												
+  db.go:1772				0x99ca6c		498913			MOVQ DX, 0(R11)															
+  db.go:1772				0x99ca6f		49897308		MOVQ SI, 0x8(R11)														
+  db.go:1772				0x99ca73		488991e0010000		MOVQ DX, 0x1e0(CX)														
+  db.go:1773				0x99ca7a		488bb424a0000000	MOVQ 0xa0(SP), SI														
+  db.go:1773				0x99ca82		488b7608		MOVQ 0x8(SI), SI														
+  db.go:1773				0x99ca86		4889b1e8010000		MOVQ SI, 0x1e8(CX)														
+  negative_filter.go:55			0x99ca8d		4889cf			MOVQ CX, DI															
+  db.go:1782				0x99ca90		4c8b8c24b0000000	MOVQ 0xb0(SP), R9														
+  db.go:1782				0x99ca98		498b09			MOVQ 0(R9), CX															
+  negative_filter.go:55			0x99ca9b		833dee18080200		CMPL runtime.writeBarrier(SB), $0x0												
+  negative_filter.go:55			0x99caa2		7413			JE 0x99cab7															
+  negative_filter.go:55			0x99caa4		488bb7a0000000		MOVQ 0xa0(DI), SI														
+  negative_filter.go:55			0x99caab		e89076afff		CALL runtime.gcWriteBarrier2(SB)												
+  negative_filter.go:55			0x99cab0		49890b			MOVQ CX, 0(R11)															
+  negative_filter.go:55			0x99cab3		49897308		MOVQ SI, 0x8(R11)														
+  negative_filter.go:55			0x99cab7		48898fa0000000		MOVQ CX, 0xa0(DI)														
+  db.go:1783				0x99cabe		90			NOPL																
+  mutex.go:46				0x99cabf		488d8fc0010000		LEAQ 0x1c0(DI), CX														
+  mutex.go:63				0x99cac6		31c0			XORL AX, AX															
+  mutex.go:63				0x99cac8		be01000000		MOVL $0x1, SI															
+  mutex.go:63				0x99cacd		f00fb1b7c0010000	LOCK CMPXCHGL SI, 0x1c0(DI)													
+  mutex.go:63				0x99cad5		400f94c6		SETE SI																
+  mutex.go:63				0x99cad9		4084f6			TESTL SI, SI															
+  mutex.go:63				0x99cadc		751a			JNE 0x99caf8															
+  mutex.go:46				0x99cade		48894c2468		MOVQ CX, 0x68(SP)														
+  mutex.go:70				0x99cae3		4889c8			MOVQ CX, AX															
+  mutex.go:70				0x99cae6		e895f4afff		CALL internal/sync.(*Mutex).lockSlow(SB)											
+  mutex.go:198				0x99caeb		488b4c2468		MOVQ 0x68(SP), CX														
+  type.go:22				0x99caf0		488bbc24e0000000	MOVQ 0xe0(SP), DI														
+  db.go:1784				0x99caf8		90			NOPL																
+  type.go:22				0x99caf9		31f6			XORL SI, SI															
+  type.go:22				0x99cafb		87b7a0010000		XCHGL SI, 0x1a0(DI)														
+  db.go:1785				0x99cb01		90			NOPL																
+  type.go:184				0x99cb02		31f6			XORL SI, SI															
+  type.go:184				0x99cb04		4887b7b8010000		XCHGQ SI, 0x1b8(DI)														
+  db.go:1786				0x99cb0b		90			NOPL																
+  mutex.go:65				0x99cb0c		90			NOPL																
+  mutex.go:194				0x99cb0d		bbffffffff		MOVL $-0x1, BX															
+  mutex.go:194				0x99cb12		f00fc19fc0010000	LOCK XADDL BX, 0x1c0(DI)													
+  mutex.go:194				0x99cb1a		ffcb			DECL BX																
+  mutex.go:195				0x99cb1c		7408			JE 0x99cb26															
+  mutex.go:198				0x99cb1e		4889c8			MOVQ CX, AX															
+  mutex.go:198				0x99cb21		e83af7afff		CALL internal/sync.(*Mutex).unlockSlow(SB)											
+  db.go:1787				0x99cb26		c644242d01		MOVB $0x1, 0x2d(SP)														
+  db.go:1787				0x99cb2b		c644242f01		MOVB $0x1, 0x2f(SP)														
+  db.go:1787				0x99cb30		488b9424c0000000	MOVQ 0xc0(SP), DX														
+  db.go:1787				0x99cb38		488b02			MOVQ 0(DX), AX															
+  db.go:1787				0x99cb3b		ffd0			CALL AX																
+  db.go:1787				0x99cb3d		c644242f00		MOVB $0x0, 0x2f(SP)														
+  db.go:1787				0x99cb42		488b9424b8000000	MOVQ 0xb8(SP), DX														
+  db.go:1787				0x99cb4a		488b02			MOVQ 0(DX), AX															
+  db.go:1787				0x99cb4d		ffd0			CALL AX																
+  db.go:1787				0x99cb4f		0fb644242d		MOVZX 0x2d(SP), AX														
+  db.go:1787				0x99cb54		4881c4c8000000		ADDQ $0xc8, SP															
+  db.go:1787				0x99cb5b		5d			POPQ BP																
+  db.go:1787				0x99cb5c		c3			RET																
+  db.go:1759				0x99cb5d		0f1f00			NOPL 0(AX)															
+  db.go:1759				0x99cb60		e87b79afff		CALL runtime.panicBounds(SB)													
+  db.go:1758				0x99cb65		e87679afff		CALL runtime.panicBounds(SB)													
+  db.go:1766				0x99cb6a		488b442430		MOVQ 0x30(SP), AX														
+  db.go:1752				0x99cb6f		488b9424a0000000	MOVQ 0xa0(SP), DX														
+  db.go:1750				0x99cb77		488bbc24e0000000	MOVQ 0xe0(SP), DI														
+  db.go:1750				0x99cb7f		90			NOPL																
+  db.go:1750				0x99cb80		e999fcffff		JMP 0x99c81e															
+  leaf_generation_runtime.go:242	0x99cb85		48ffc1			INCQ CX																
+  leaf_generation_runtime.go:242	0x99cb88		4839d1			CMPQ CX, DX															
+  leaf_generation_runtime.go:242	0x99cb8b		7d17			JGE 0x99cba4															
+  leaf_generation_runtime.go:242	0x99cb8d		4d8b04c9		MOVQ 0(R9)(CX*8), R8														
+  leaf_generation_runtime.go:243	0x99cb91		4d85c0			TESTQ R8, R8															
+  leaf_generation_runtime.go:243	0x99cb94		74ef			JE 0x99cb85															
+  type.go:128				0x99cb96		41ba01000000		MOVL $0x1, R10															
+  type.go:128				0x99cb9c		f04d0fc15008		LOCK XADDQ R10, 0x8(R8)														
+  leaf_generation_runtime.go:246	0x99cba2		ebe1			JMP 0x99cb85															
+  db.go:1737				0x99cba4		4c8b4038		MOVQ 0x38(AX), R8														
+  db.go:1737				0x99cba8		4c8b4840		MOVQ 0x40(AX), R9														
+  db.go:1737				0x99cbac		4c8b5030		MOVQ 0x30(AX), R10														
+  db.go:1737				0x99cbb0		4c894050		MOVQ R8, 0x50(AX)														
+  db.go:1737				0x99cbb4		4c894858		MOVQ R9, 0x58(AX)														
+  db.go:1737				0x99cbb8		833dd117080200		CMPL runtime.writeBarrier(SB), $0x0												
+  db.go:1737				0x99cbbf		90			NOPL																
+  db.go:1737				0x99cbc0		7410			JE 0x99cbd2															
+  db.go:1737				0x99cbc2		4c8b4048		MOVQ 0x48(AX), R8														
+  db.go:1737				0x99cbc6		e87575afff		CALL runtime.gcWriteBarrier2(SB)												
+  db.go:1737				0x99cbcb		4d8913			MOVQ R10, 0(R11)														
+  db.go:1737				0x99cbce		4d894308		MOVQ R8, 0x8(R11)														
+  db.go:1737				0x99cbd2		4c895048		MOVQ R10, 0x48(AX)														
+  db.go:1737				0x99cbd6		eb92			JMP 0x99cb6a															
+  db.go:1737				0x99cbd8		e8c343abff		CALL runtime.deferreturn(SB)													
+  db.go:1737				0x99cbdd		0fb644242d		MOVZX 0x2d(SP), AX														
+  db.go:1737				0x99cbe2		4881c4c8000000		ADDQ $0xc8, SP															
+  db.go:1737				0x99cbe9		5d			POPQ BP																
+  db.go:1737				0x99cbea		c3			RET																
+  db.go:1676				0x99cbeb		4889442408		MOVQ AX, 0x8(SP)														
+  db.go:1676				0x99cbf0		48895c2410		MOVQ BX, 0x10(SP)														
+  db.go:1676				0x99cbf5		e8465aafff		CALL runtime.morestack_noctxt.abi0(SB)												
+  db.go:1676				0x99cbfa		488b442408		MOVQ 0x8(SP), AX														
+  db.go:1676				0x99cbff		488b5c2410		MOVQ 0x10(SP), BX														
+  db.go:1676				0x99cc04		e9d7f5ffff		JMP github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld(SB)					
+
+TEXT github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld.func1(SB) github.com/snissn/gomap/TreeDB/db/db.go
+  db.go:1688		0x99cc20		55			PUSHQ BP			
+  db.go:1688		0x99cc21		4889e5			MOVQ SP, BP			
+  db.go:1688		0x99cc24		488b4210		MOVQ 0x10(DX), AX		
+  db.go:1688		0x99cc28		488b4a08		MOVQ 0x8(DX), CX		
+  db.go:1691		0x99cc2c		90			NOPL				
+  type.go:195		0x99cc2d		ba01000000		MOVL $0x1, DX			
+  type.go:195		0x99cc32		f0480fc19118040000	LOCK XADDQ DX, 0x418(CX)	
+  type.go:195		0x99cc3b		0f1f440000		NOPL 0(AX)(AX*1)		
+  db.go:1692		0x99cc40		483d00010000		CMPQ AX, $0x100			
+  db.go:1692		0x99cc46		7313			JAE 0x99cc5b			
+  type.go:94		0x99cc48		488d0481		LEAQ 0(CX)(AX*4), AX		
+  type.go:94		0x99cc4c		488d4018		LEAQ 0x18(AX), AX		
+  type.go:94		0x99cc50		b9ffffffff		MOVL $-0x1, CX			
+  type.go:94		0x99cc55		f00fc108		LOCK XADDL CX, 0(AX)		
+  db.go:1693		0x99cc59		5d			POPQ BP				
+  db.go:1693		0x99cc5a		c3			RET				
+  db.go:1692		0x99cc5b		48c7c100010000		MOVQ $0x100, CX			
+  db.go:1692		0x99cc62		e87978afff		CALL runtime.panicBounds(SB)	
+  db.go:1692		0x99cc67		90			NOPL				
+
+TEXT github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld.deferwrap1(SB) github.com/snissn/gomap/TreeDB/db/db.go
+  db.go:1678		0x99cc80		493b6610		CMPQ SP, 0x10(R14)												
+  db.go:1678		0x99cc84		7629			JBE 0x99ccaf													
+  db.go:1678		0x99cc86		55			PUSHQ BP													
+  db.go:1678		0x99cc87		4889e5			MOVQ SP, BP													
+  db.go:1678		0x99cc8a		4883ec10		SUBQ $0x10, SP													
+  db.go:1678		0x99cc8e		488b4208		MOVQ 0x8(DX), AX												
+  type.go:94		0x99cc92		bbffffffff		MOVL $-0x1, BX													
+  type.go:94		0x99cc97		f00fc15810		LOCK XADDL BX, 0x10(AX)												
+  type.go:94		0x99cc9c		ffcb			DECL BX														
+  type.go:94		0x99cc9e		6690			NOPW														
+  rwmutex.go:120	0x99cca0		85db			TESTL BX, BX													
+  rwmutex.go:120	0x99cca2		7d05			JGE 0x99cca9													
+  rwmutex.go:122	0x99cca4		e83708b0ff		CALL sync.(*RWMutex).rUnlockSlow(SB)										
+  db.go:1678		0x99cca9		4883c410		ADDQ $0x10, SP													
+  db.go:1678		0x99ccad		5d			POPQ BP														
+  db.go:1678		0x99ccae		c3			RET														
+  db.go:1678		0x99ccaf		e8ec58afff		CALL runtime.morestack.abi0(SB)											
+  db.go:1678		0x99ccb4		ebca			JMP github.com/snissn/gomap/TreeDB/db.(*DB).captureSnapshotWithValueLogPublicationLockHeld.deferwrap1(SB)	

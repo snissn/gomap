@@ -1373,6 +1373,34 @@ Repeat without the tag for the default comparator. Fixture setup is excluded;
 1 MiB keys prevent short-input conversion elision from hiding allocation costs.
 See [ownership and qualification scope](../../TreeDB/docs/spec/cow-memtable-ownership.md).
 
+### Standalone COW public integration diagnostics (#5046)
+
+These Go package benchmarks compare `append_only`, `btree` and `cow_btree` on
+identical resolved durability profiles. They emit plain Go benchmark rows
+(ns/op, B/op, allocs/op), latency/counter metrics and ownership receipts; they
+are not benchprof inputs and do not change the unified-bench profile format.
+
+```sh
+GOWORK=off go test ./TreeDB -run '^$' -bench '^BenchmarkCOWPublicDirtyCost$' \
+  -benchmem -benchtime=16x -count=1
+GOWORK=off go test ./TreeDB/mvcc -run '^$' -bench '^BenchmarkCOWIntegratedPublicMVCC$' \
+  -benchmem -benchtime=128x -count=1
+```
+
+The raw KV fixture uses Inline64/Pointer4096 and N=1024/2048, with capture,
+owned read, forward16, incremental write, actual dirty checkpoint and explicit
+write-sync cases. Setup/reseed and final close are outside timing; fixture-total
+COW budget/cut counters and a concrete final-drain receipt remain separate from
+per-operation allocation results. The tiny MVCC fixture retains Store fences,
+uses actual CommitAt/GetAt and full exact-key history, and limits fixed counts
+to128/256. Balanced fresh-process repetitions and all failures/spread must be
+retained before comparing costs. These are bounded integration diagnostics;
+sustained C4 qualification requires its separately landed retained harness.
+See the [current repair and cost packet](../../TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md)
+for exact collection policies, commands and limitations. The
+[earlier integration packet](../../TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md)
+retains its historical source identity.
+
 ### Native prune experiment environment and writer stop boundary
 
 The native memory and foreground drivers construct a minimal environment and

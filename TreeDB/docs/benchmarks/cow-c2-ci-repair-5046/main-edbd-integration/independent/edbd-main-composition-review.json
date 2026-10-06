@@ -1,0 +1,629 @@
+{
+  "disposition": "ACCEPT bounded source composition/applicability; final integrated-head proof/hosted gates HELD",
+  "accepted_C2_head": "0142519b2cc4c097f50b4e7a64a5b6993ff0d9c6",
+  "main_base": "40dc31f44e7bb14a4f85dab254131af029ef820b",
+  "new_main": "edbd68d34b0fdf7152a498b87d373576de029721",
+  "read_only_merge_tree": "ae8f7c61c30ddb7395bd29825debf32cd5238b36",
+  "bindings_file": "edbd-main-composition-bindings.json",
+  "bindings_sha256": "6dbcc7510645c6f13c2ad7035770167a71ddebe169d50994706a2a79bba6ea2c",
+  "changed_paths": [
+    {
+      "status": "M",
+      "path": ".github/ci/ci_impact.json",
+      "main_base": {
+        "git_blob": "d4effc569e361659805b3351430e415accc499ad",
+        "sha256": "49cb6417b98c12afeb0c0247e33180fe996a991606a23766c3c5a1ed6b13efcc"
+      },
+      "main_new": {
+        "git_blob": "fbdfe71283cace2d9ee07345a85787cc0a716793",
+        "sha256": "7c4258bd7e01906792ec8a208289c2c0e6231273e8d614e5307381f4b2305f98"
+      },
+      "c2_before_integration": {
+        "git_blob": "98222a75bb346ec2cafb398de462574601d22c3a",
+        "sha256": "42d4f400866b66fac763c89831dfb66594c8fe622b3390eee80b1a573d8f5a88"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "b256238c5428f5d51dcf151e7547067ff545bc00",
+        "sha256": "a7d837778c8791b6ee75653eeba329903a1b83a89fac1b49247f2e43daf7b371"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/collections/api.go",
+      "main_base": {
+        "git_blob": "68d52943e70288fa9c44da752e90247622f532ee",
+        "sha256": "621f4d3e0c1ca1c9455a01faeab0c79b3c86c5ab76fdad57b05ef5fbb8a6e7dd"
+      },
+      "main_new": {
+        "git_blob": "30f227a1e8121037e934d4ec6bc8955c8414f6b0",
+        "sha256": "9abfcc36d347ab54d0cde49b8c9719be139ca8b6e5549659c79e21d040c7047f"
+      },
+      "c2_before_integration": {
+        "git_blob": "68d52943e70288fa9c44da752e90247622f532ee",
+        "sha256": "621f4d3e0c1ca1c9455a01faeab0c79b3c86c5ab76fdad57b05ef5fbb8a6e7dd"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "30f227a1e8121037e934d4ec6bc8955c8414f6b0",
+        "sha256": "9abfcc36d347ab54d0cde49b8c9719be139ca8b6e5549659c79e21d040c7047f"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/collections/column_asset_manager.go",
+      "main_base": {
+        "git_blob": "c844c03647714eba5936ccdb0969ce7bf7d51945",
+        "sha256": "d2cbd36b7affa2b2b667277eea68bcee46162030f83062c12f4c09f7f5bfc6e8"
+      },
+      "main_new": {
+        "git_blob": "105a0f674bd9a8b40af733eb997de1655a6c4a4e",
+        "sha256": "3db1a45b4b6f1511855b61e6e2c43297c261483e7ababe466df8fda0f8fe28b0"
+      },
+      "c2_before_integration": {
+        "git_blob": "c844c03647714eba5936ccdb0969ce7bf7d51945",
+        "sha256": "d2cbd36b7affa2b2b667277eea68bcee46162030f83062c12f4c09f7f5bfc6e8"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "105a0f674bd9a8b40af733eb997de1655a6c4a4e",
+        "sha256": "3db1a45b4b6f1511855b61e6e2c43297c261483e7ababe466df8fda0f8fe28b0"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/collections/document_materializer.go",
+      "main_base": {
+        "git_blob": "0defceda677d71750c99ddd50bec7c3c4db1f2a5",
+        "sha256": "47f7aa8c55b1e65021425bff6f8a58e55b3be8f947e75a96da4cf3d5c25e6e86"
+      },
+      "main_new": {
+        "git_blob": "a5afa1de427015c9ab559598bd0d5ab8ffbcfee1",
+        "sha256": "063532e755decef3f00e1a9886c4911fe7ccc9c9f2ee9b24992548358ad54388"
+      },
+      "c2_before_integration": {
+        "git_blob": "0defceda677d71750c99ddd50bec7c3c4db1f2a5",
+        "sha256": "47f7aa8c55b1e65021425bff6f8a58e55b3be8f947e75a96da4cf3d5c25e6e86"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "a5afa1de427015c9ab559598bd0d5ab8ffbcfee1",
+        "sha256": "063532e755decef3f00e1a9886c4911fe7ccc9c9f2ee9b24992548358ad54388"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "f6ed624dea76c1b3667f277ceba521cb288a0d7a",
+        "sha256": "21f248fb01810a67c0718186cfc789e11ce7b7ba5db0892457f463449c43dee8"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "f6ed624dea76c1b3667f277ceba521cb288a0d7a",
+        "sha256": "21f248fb01810a67c0718186cfc789e11ce7b7ba5db0892457f463449c43dee8"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "16c65952181245b547f1fc7e085e5af3e77d6721",
+        "sha256": "10878e2d278bbfb01980557422a5bb28db3f39921d9402795499dc0d2b4dbc51"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "16c65952181245b547f1fc7e085e5af3e77d6721",
+        "sha256": "10878e2d278bbfb01980557422a5bb28db3f39921d9402795499dc0d2b4dbc51"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/collections/r1_lifecycle_5060_test.go",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "659a84bb4b5f037e4b9734207ecdfb15b6ee731e",
+        "sha256": "50493ebe0713f6c885289b147ab23397a6744ccb0d80e64ea768be8b360405ab"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "659a84bb4b5f037e4b9734207ecdfb15b6ee731e",
+        "sha256": "50493ebe0713f6c885289b147ab23397a6744ccb0d80e64ea768be8b360405ab"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/collections/r1_mutation_5059_test.go",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+        "sha256": "ebd391f04d6310fb84e7b74006ef08055823d4fb0f069a4cc26d784fe3754dd0"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+        "sha256": "ebd391f04d6310fb84e7b74006ef08055823d4fb0f069a4cc26d784fe3754dd0"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/collections/r1_range_history_5065_test.go",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "91d6d5bfca7171ae6d4b52d442724e571007ebce",
+        "sha256": "e7a221ba079d0f77958cbb4c92eda82a7284b5628980485f0341d091300b55df"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "91d6d5bfca7171ae6d4b52d442724e571007ebce",
+        "sha256": "e7a221ba079d0f77958cbb4c92eda82a7284b5628980485f0341d091300b55df"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/collections/r1_reads_5058_test.go",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "9bfe9f6fe2b282e8eb623e31b71cfd763c17b692",
+        "sha256": "d481f285efa5e6e44fdcf7522f6f63552042541630deac5801d76942d9284265"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "9bfe9f6fe2b282e8eb623e31b71cfd763c17b692",
+        "sha256": "d481f285efa5e6e44fdcf7522f6f63552042541630deac5801d76942d9284265"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/collections/typed_storage_naming_test.go",
+      "main_base": {
+        "git_blob": "da2960ddecf4945b93fb712af90f0458cfc11b35",
+        "sha256": "27f16c9a46aa72e17499b088275ef5dfa4722e5a63056521097dd605d9baaee3"
+      },
+      "main_new": {
+        "git_blob": "45817c0e55524d6fae72d56ebfb43ee740a581ba",
+        "sha256": "fa8da0d9e4b9a379826f83e9d2781869063e55cc215edd3b1756f9f77129ecbb"
+      },
+      "c2_before_integration": {
+        "git_blob": "da2960ddecf4945b93fb712af90f0458cfc11b35",
+        "sha256": "27f16c9a46aa72e17499b088275ef5dfa4722e5a63056521097dd605d9baaee3"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "45817c0e55524d6fae72d56ebfb43ee740a581ba",
+        "sha256": "fa8da0d9e4b9a379826f83e9d2781869063e55cc215edd3b1756f9f77129ecbb"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/docs/evidence/r1-row-store-5061/README.md",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "af6b1d8cd0bf919052f2fe3741eb021d430dac0b",
+        "sha256": "9ddb80f626760be976010d61cb7b129cc68962388c312a8b01cfac3e18a57ecd"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "af6b1d8cd0bf919052f2fe3741eb021d430dac0b",
+        "sha256": "9ddb80f626760be976010d61cb7b129cc68962388c312a8b01cfac3e18a57ecd"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/docs/evidence/r1-row-store-5061/publication-manifest.template.json",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "5dd373aa194fbcb844c270864515404ab1699d38",
+        "sha256": "75441f9b4e7948dbe909e074d2dc9702e4602cbe81ccca0b7ff59991c64430e5"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "5dd373aa194fbcb844c270864515404ab1699d38",
+        "sha256": "75441f9b4e7948dbe909e074d2dc9702e4602cbe81ccca0b7ff59991c64430e5"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/docs/guides/README.md",
+      "main_base": {
+        "git_blob": "d5fc1cf44e8b77263f4c8227db01b23c86d05722",
+        "sha256": "04dc4da194fdbcc13bd07800f7daa9f4225efc95ae7b02f443669db830ada1f9"
+      },
+      "main_new": {
+        "git_blob": "4f5b7e81d8d9a3deb6743600da8d86e648be0fdc",
+        "sha256": "87a25ededb2cfcb64264eb31e429fd4704ff1f7858645cf3099c7b1dd52da5b7"
+      },
+      "c2_before_integration": {
+        "git_blob": "d5fc1cf44e8b77263f4c8227db01b23c86d05722",
+        "sha256": "04dc4da194fdbcc13bd07800f7daa9f4225efc95ae7b02f443669db830ada1f9"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "4f5b7e81d8d9a3deb6743600da8d86e648be0fdc",
+        "sha256": "87a25ededb2cfcb64264eb31e429fd4704ff1f7858645cf3099c7b1dd52da5b7"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/docs/guides/collections-quickstart.md",
+      "main_base": {
+        "git_blob": "8e425d9be5d26431cbe9a97618c8245b6dc0c441",
+        "sha256": "7a88e2ac4a8382b86816cdf9989aabada2bf97adc5256923f9b56374b4f67207"
+      },
+      "main_new": {
+        "git_blob": "54e92936e9ea5b2e4965ba6f3d702894a302a2a3",
+        "sha256": "6be12b6a78e92ba4a44adf77687e790b24aa514a7ed0dace8bed3b21d74b4a79"
+      },
+      "c2_before_integration": {
+        "git_blob": "8e425d9be5d26431cbe9a97618c8245b6dc0c441",
+        "sha256": "7a88e2ac4a8382b86816cdf9989aabada2bf97adc5256923f9b56374b4f67207"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "54e92936e9ea5b2e4965ba6f3d702894a302a2a3",
+        "sha256": "6be12b6a78e92ba4a44adf77687e790b24aa514a7ed0dace8bed3b21d74b4a79"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/docs/guides/typed-row-store.md",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "8d4e7d7a119becbad5acad26ab0c74d88df2d288",
+        "sha256": "b182b549c54c6265eb2fd9885f1d2bd73fcacea18014806c155c904bab8da63c"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "8d4e7d7a119becbad5acad26ab0c74d88df2d288",
+        "sha256": "b182b549c54c6265eb2fd9885f1d2bd73fcacea18014806c155c904bab8da63c"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/docs/guides/typed-storage-performance.md",
+      "main_base": {
+        "git_blob": "f7deb4c53252cb355ea5c182dad671a18217b61d",
+        "sha256": "0254468076ce06794c86ecd890933d08e9e393c293d02263cc458726aa174599"
+      },
+      "main_new": {
+        "git_blob": "18af627430ed2c9a388c4b56c1c77edc4d475d24",
+        "sha256": "9e44760ccb72673446b242f9aded1f7a292408db538a80a986216c3a920b3631"
+      },
+      "c2_before_integration": {
+        "git_blob": "f7deb4c53252cb355ea5c182dad671a18217b61d",
+        "sha256": "0254468076ce06794c86ecd890933d08e9e393c293d02263cc458726aa174599"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "18af627430ed2c9a388c4b56c1c77edc4d475d24",
+        "sha256": "9e44760ccb72673446b242f9aded1f7a292408db538a80a986216c3a920b3631"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/docs/spec/README.md",
+      "main_base": {
+        "git_blob": "a5ad1b57f20fb69ddd26c5bd93767647e45c2590",
+        "sha256": "5ffc6e0dc621d4c7181b5e71bff6d4df0faf77d27fc15be5f7491e0924e6368a"
+      },
+      "main_new": {
+        "git_blob": "b7b8f04f05ceff4228d044cef4c541ed74d04592",
+        "sha256": "116b2452b9a8cb7ca4b1d2a1c4614e998823b5aec546587cdcdd8cece7ac4257"
+      },
+      "c2_before_integration": {
+        "git_blob": "73cc0d29304658e4346b6fe5b99cf31e7a8d0322",
+        "sha256": "7aa241e9ec1b8c957b240d1e02bc207587d3379038fd5134fa90044813c9a712"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "55b6c3ba6fec0c45eabdda6d498c53b21ced7188",
+        "sha256": "2ff525fa5785eeb13a27e524fb04d47c8b7f609a6df0165304b1a5b55febd530"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/docs/spec/contracts.md",
+      "main_base": {
+        "git_blob": "531f38ac0843c85319f48f0322c480972eac0884",
+        "sha256": "355de56a7ddc33a85305727bd1a07a01f07f2baef71293249e1582d40f26833d"
+      },
+      "main_new": {
+        "git_blob": "aacfffbe215117a02651a5b829168248b3a95ba0",
+        "sha256": "e35bb1b2b40c244565549fd07d4fd0d7f21d1da6c31761467f52315e9bd8face"
+      },
+      "c2_before_integration": {
+        "git_blob": "2d89b6cd8495b4074590a5d286c512326484ba84",
+        "sha256": "763cb6bd297496cd494790bb2e1f0768ab511008c08585c21b54530b0a0b0a3e"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "2fe03498f9db467cf656ec5328d503fba37efa55",
+        "sha256": "6c42c3efce70a791865795c4e69f24470bf3503c3c6cdaf276e293b2148f2e90"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/docs/spec/r1-indexed-mutations.md",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "2fffe3619237142a393bbf63593faf2b43a65af2",
+        "sha256": "0b3a64ebd36bb48d53677269fc2a73403c22a2795d8f9ed876164852366c5cc1"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "2fffe3619237142a393bbf63593faf2b43a65af2",
+        "sha256": "0b3a64ebd36bb48d53677269fc2a73403c22a2795d8f9ed876164852366c5cc1"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/docs/spec/r1-indexed-row-contract.md",
+      "main_base": {
+        "git_blob": "eb2f2a9d63d52b67b935ba15d4ebab46279f733a",
+        "sha256": "d61800c5bb85d6d43b091c2574cb79dc7a70fa1d9c62304155f38fcdc0ed199a"
+      },
+      "main_new": {
+        "git_blob": "599d73fa3a136ba857cb148a5d82aa01440ef358",
+        "sha256": "6b2fe78441ab50e9fa2e5517421a744aad7c017dbfc65f39e2d9a56cf2c0e851"
+      },
+      "c2_before_integration": {
+        "git_blob": "eb2f2a9d63d52b67b935ba15d4ebab46279f733a",
+        "sha256": "d61800c5bb85d6d43b091c2574cb79dc7a70fa1d9c62304155f38fcdc0ed199a"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "599d73fa3a136ba857cb148a5d82aa01440ef358",
+        "sha256": "6b2fe78441ab50e9fa2e5517421a744aad7c017dbfc65f39e2d9a56cf2c0e851"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/docs/spec/r1-row-lifecycle.md",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "70f7f995d95cde951e8a6d835e0e3e93f61e8d51",
+        "sha256": "396f22bc2d1794ec08bfd83180bcfe7221965dc54faf05d123ff35a5ddfb388a"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "70f7f995d95cde951e8a6d835e0e3e93f61e8d51",
+        "sha256": "396f22bc2d1794ec08bfd83180bcfe7221965dc54faf05d123ff35a5ddfb388a"
+      }
+    },
+    {
+      "status": "A",
+      "path": "TreeDB/docs/spec/r1-row-reads.md",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "07b9b2701f46fb122148e28056a2bc711b09a070",
+        "sha256": "453465bca4bd4134bb59bd2227fcdcf426c6420a10700882ccd9f08d47ec1c38"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "07b9b2701f46fb122148e28056a2bc711b09a070",
+        "sha256": "453465bca4bd4134bb59bd2227fcdcf426c6420a10700882ccd9f08d47ec1c38"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/internal/mappedresource/manager.go",
+      "main_base": {
+        "git_blob": "9cfc9b6f661d8e030b23cd4a0c5cd6ad8b6a817f",
+        "sha256": "5ab470fa7bad8be10f79da3be010faa3f3efb961a23bec91659192d59d9cf6e3"
+      },
+      "main_new": {
+        "git_blob": "34228a52a9445bb698a88867ad00532a7c3429f0",
+        "sha256": "a685baae863ae5cba173fc3d6311d0de82f40a3b53cfb79ca40c2f5dd36f4027"
+      },
+      "c2_before_integration": {
+        "git_blob": "9cfc9b6f661d8e030b23cd4a0c5cd6ad8b6a817f",
+        "sha256": "5ab470fa7bad8be10f79da3be010faa3f3efb961a23bec91659192d59d9cf6e3"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "34228a52a9445bb698a88867ad00532a7c3429f0",
+        "sha256": "a685baae863ae5cba173fc3d6311d0de82f40a3b53cfb79ca40c2f5dd36f4027"
+      }
+    },
+    {
+      "status": "M",
+      "path": "TreeDB/internal/mappedresource/manager_test.go",
+      "main_base": {
+        "git_blob": "4963943b2c977520f8705a804fb99aebe6c23a63",
+        "sha256": "24039753b876128ec9bc83db2a265511cacedc548eb26f9905c6b3c6e1ed3701"
+      },
+      "main_new": {
+        "git_blob": "80e4d1b9c3e622224e5fa08b05500b0e9c2da971",
+        "sha256": "bea0fd80401dfd5b541997297e4709774691d317201a9c6c319f7a3a9d80a366"
+      },
+      "c2_before_integration": {
+        "git_blob": "4963943b2c977520f8705a804fb99aebe6c23a63",
+        "sha256": "24039753b876128ec9bc83db2a265511cacedc548eb26f9905c6b3c6e1ed3701"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "80e4d1b9c3e622224e5fa08b05500b0e9c2da971",
+        "sha256": "bea0fd80401dfd5b541997297e4709774691d317201a9c6c319f7a3a9d80a366"
+      }
+    },
+    {
+      "status": "M",
+      "path": "cmd/benchprof/README.md",
+      "main_base": {
+        "git_blob": "32b443195a7d1b5a1938706cc46d9f94b63cf608",
+        "sha256": "fdf4631e423a5dcef48cfc9ec4a40799890ebd5b5dc2943d25c8479d8881b44e"
+      },
+      "main_new": {
+        "git_blob": "89000740ca8be63f90da810aa7944deb145f49a0",
+        "sha256": "ba44e92290cdf873f24143cfd928b5d11a034ebc519e76ae5e6ae80484450517"
+      },
+      "c2_before_integration": {
+        "git_blob": "5acbda0b283f5b2487c3d25c07e833efa1ec8be5",
+        "sha256": "1a9791d02f27c8c19166d1f858d328d649547c9124f5a3ca1de09acf623fd28a"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "22506e63095801cb17a1476643e87b7a31329a1f",
+        "sha256": "ed5da38235693d643ef258b840c18a695d199ec12beecf8688dd94477dede468"
+      }
+    },
+    {
+      "status": "M",
+      "path": "cmd/unified_bench/README.md",
+      "main_base": {
+        "git_blob": "44c8800defa2c4c8ed8fc6bb7fd3872ea145f004",
+        "sha256": "aca60bcb8528211d6877ad2f7ed843aed33d0dd22bdf78ff71df56c5d5fb7de1"
+      },
+      "main_new": {
+        "git_blob": "9800f0efcd5627c65656718e5b47df6d695be4f3",
+        "sha256": "0f8e011cd2daa7a515420fe7dd0e6b2f75168dc0d1ef4bba9d42e71d57183e62"
+      },
+      "c2_before_integration": {
+        "git_blob": "c6d41ef0607b6797da9cd14c9a4050e4c27fcbdb",
+        "sha256": "a749f47249b35c14d80456a61627996c87bbc2aa0ee45a994c45ec93e608ce3f"
+      },
+      "automatic_merge_tree": {
+        "git_blob": "54c7b1817d5ec8c434c403f62107d08a49093924",
+        "sha256": "8a5c3d98413859793d1b11e60d0a1225e568a9f0d15a8720dff450b9edc9b550"
+      }
+    },
+    {
+      "status": "A",
+      "path": "examples/typed_rows/README.md",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "a268b790e245aecc77712ee82e04be19cc564b27",
+        "sha256": "4f8d6a29461e5f848a8c71119f6454cfff0a0a48d65c26041631342aabce90e0"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "a268b790e245aecc77712ee82e04be19cc564b27",
+        "sha256": "4f8d6a29461e5f848a8c71119f6454cfff0a0a48d65c26041631342aabce90e0"
+      }
+    },
+    {
+      "status": "A",
+      "path": "examples/typed_rows/main.go",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "f54a456e2d16bbb78cfc637d80f8b6b48410c563",
+        "sha256": "593786d47dfb761ad7b60f6ef344f396e5c33281cdf3f41176d59a13f0f44f2f"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "f54a456e2d16bbb78cfc637d80f8b6b48410c563",
+        "sha256": "593786d47dfb761ad7b60f6ef344f396e5c33281cdf3f41176d59a13f0f44f2f"
+      }
+    },
+    {
+      "status": "A",
+      "path": "scripts/r1_lifecycle_capture.py",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "f3c4b63f6b1a0dbe10db70f57e25e7cfc8bb06e7",
+        "sha256": "11124aa8411cfef0081e3c887a0e804ce4aab5b211857029f3c58e360bee4785"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "f3c4b63f6b1a0dbe10db70f57e25e7cfc8bb06e7",
+        "sha256": "11124aa8411cfef0081e3c887a0e804ce4aab5b211857029f3c58e360bee4785"
+      }
+    },
+    {
+      "status": "A",
+      "path": "scripts/r1_lifecycle_capture.sh",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "c4e9315d462a69f03ec99cfaa65bd2100e35874a",
+        "sha256": "eaf69422dd054f596c70875b4af22fec742c8560cad640a69030192f9346ea04"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "c4e9315d462a69f03ec99cfaa65bd2100e35874a",
+        "sha256": "eaf69422dd054f596c70875b4af22fec742c8560cad640a69030192f9346ea04"
+      }
+    },
+    {
+      "status": "A",
+      "path": "scripts/r1_lifecycle_capture_test.py",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "150c0d4a4c50777cf393e82b6ed71fe074f80595",
+        "sha256": "7408cf768eaba61ade4f9e49db1db91438d1e98c3ff7da8cb6549ed5fb043f80"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "150c0d4a4c50777cf393e82b6ed71fe074f80595",
+        "sha256": "7408cf768eaba61ade4f9e49db1db91438d1e98c3ff7da8cb6549ed5fb043f80"
+      }
+    },
+    {
+      "status": "A",
+      "path": "scripts/r1_lifecycle_validate.py",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "33f309a316ed491d90d06683c0eabf946be04a13",
+        "sha256": "9a4fc465588d5779995f49d5c268061c950b4e8782ddb850f6f54e696b403378"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "33f309a316ed491d90d06683c0eabf946be04a13",
+        "sha256": "9a4fc465588d5779995f49d5c268061c950b4e8782ddb850f6f54e696b403378"
+      }
+    },
+    {
+      "status": "A",
+      "path": "scripts/r1_lifecycle_validate_test.py",
+      "main_base": null,
+      "main_new": {
+        "git_blob": "f6dbaeb1b115aec80bb1a9eab8b2362e06020f43",
+        "sha256": "4d008ad3f7671d47fdfb4dc899190955539c924f9f3149b57cccded8eb730930"
+      },
+      "c2_before_integration": null,
+      "automatic_merge_tree": {
+        "git_blob": "f6dbaeb1b115aec80bb1a9eab8b2362e06020f43",
+        "sha256": "4d008ad3f7671d47fdfb4dc899190955539c924f9f3149b57cccded8eb730930"
+      }
+    }
+  ],
+  "only_conflict": ".github/ci/ci_impact.json",
+  "CI_policy_semantically_identical_except_fingerprint": true,
+  "source_findings": [],
+  "unchanged": [
+    "C2 cache implementation, native db/public DB implementation and C2-specific functional test files",
+    "Both cost fixture source bytes",
+    "MVCC Store/fences and adapters",
+    "Canonical native planner/finalizer/WAL/read/resource/recovery authority",
+    "Root publication and value-log persistent GC/rewrite authority",
+    "Module files",
+    "Existing C2 published evidence bytes"
+  ],
+  "changed_shared_surface": {
+    "path": "TreeDB/internal/mappedresource/manager.go",
+    "actual_added_method": "ActiveHandles",
+    "body": "nil=>0; lock existing mu; return existing stats.ActiveHandles; unlock",
+    "existing_content_exact_after_added_method_removed": true,
+    "new_fields_or_global_state": false,
+    "production_callers": [
+      "TreeDB/collections/column_asset_manager.go:lifecycleStats",
+      "TreeDB/collections/document_materializer.go:assetCounters"
+    ],
+    "C2_timed_path_calls_new_method": false,
+    "existing_acquire_release_PinSummary_GlobalPinSummary_authority_unchanged": true
+  },
+  "collections_scope": "Changed GetInto/index-range typed-row materialization, retained same-snapshot materializer and diagnostics. Main-owned lifecycle/mutation/read tests and standalone R1 benchmark/docs/scripts compose; no claim this review independently qualifies their new behavior. No additional COW mode, pool, resource ledger, M7 authority or C3 fence removal is introduced.",
+  "compiled_closure_limit": "Compiled test-binary closure is not byte-identical: TreeDB root test sources already import collections, so a rebuilt public raw-cost test executable can contain changed collection/mappedresource code. Source review shows those changed methods do not run on the actual C2 raw/publicMVCC timed paths; additive manager method also leaves type layout/globals and all existing methods unchanged. Link/code layout identity or new measurements are not inferred.",
+  "evidence_applicability": "Retain974d actual648-row cost packet and014 accepted source/evidence with original complete source/fixture/binary identities. Reuse C2 executed-path source, admission/ownership, maintenance and actual functional evidence for unchanged C2 surfaces. Do not relabel974d7330 manifest or014 hosted results as full new-tree/final-head results. No automatic45-run recollection solely for new SHA; fresh final-head strict default/Windows/CI/review still required.",
+  "retained_hosted_evidence": {
+    "head": "0142519b2cc4c097f50b4e7a64a5b6993ff0d9c6",
+    "Codex_clean_comment": "https://github.com/snissn/gomap/pull/5069#issuecomment-6012465384",
+    "strict_raw_path_all5_cases_accept": true,
+    "current_local_snapshot_successful_CheckRuns": 26,
+    "current_local_snapshot_completed_check_failures": [],
+    "scope": "Local retained root-fetched snapshots only; pending/queued rows exist and this is not a latest live refresh or new-head approval.",
+    "sha256": {
+      "watch-repaired-0142519b2cc4/pr5069-current-state.json": "2e5fca574eb2a53caefbe26a89985a36a4ba26bf00932e830e391ed45b9e86ad",
+      "watch-repaired-0142519b2cc4/pr5069-hosted-current.json": "7aa228f8a6b53fc2007fe3a7c0019cfd257ececdde377d9aa1f955da03ca8536",
+      "pr5069-014-ci-raw-path/summary.json": "822b39af4bd25c402f16e6842b56f621f2bd84fe06e0f4c223f4d82ec202359d"
+    }
+  },
+  "required_finalization": [
+    "Resolve only discovery fingerprint conflict without policy/owner/rule changes; refresh staged inventory check.",
+    "Verify final merged original014 runtime/module/fixtures and old publication paths byte-identical except the enumerated main delta; verify auto-merged C2 docs/fences and links.",
+    "Append precise main-integration applicability proof/caveat; regenerate publication manifest and bind committed descendant without relabeling measured974d whole tree.",
+    "Obtain required final-head hosted CI/default/actualWindows and current-head review according to coordinator policy."
+  ],
+  "review_limits": [
+    "Git-object read-only composition audit; no source/index changes, Go/jobs/benchmarks, GH writes or new qualification.",
+    "Main collections feature independently landed; source composition is inspected, not a replacement full correctness review of R1 work.",
+    "No statistical/bin-equivalence/production/sustained/default-promotion/C3/C4/parent-completion claim."
+  ]
+}

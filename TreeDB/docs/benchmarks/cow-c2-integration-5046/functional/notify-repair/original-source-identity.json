@@ -1,0 +1,11 @@
+{
+  "base_commit": "730808f7048f90d76e36ca092162222cc45e4b03",
+  "base_manifest": "../read-repair/source-identity.json",
+  "base_files": 6459,
+  "new_witness": "TreeDB/cow_close_notification_test.go",
+  "sync_witness_source": "original-sync-test.go.txt",
+  "sync_witness_sha256": "7de0689c3317845d217ddb9aa0e5e367b9f09f27baf07f10a1f7db393ad5d7d5",
+  "async_witness_source": "original-async-test.go.txt",
+  "async_witness_sha256": "35ebac9f24cf009d570bcfd9f397c57b98d3c7276f8bf306fe9df7a2516bc252",
+  "qualification": "sync witness bytes reconstructed from the exact initial patch after comment/async-test additions; async witness bytes directly captured before repair overlay"
+}

@@ -1,0 +1,9 @@
+{
+	"GOARCH": "amd64",
+	"GOCACHE": "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/cache",
+	"GOMODCACHE": "/home/mikers/.gvm/pkgsets/go1.25/global/pkg/mod",
+	"GOOS": "linux",
+	"GOROOT": "/home/mikers/.gvm/gos/go1.26.3",
+	"GOVERSION": "go1.26.3",
+	"GOWORK": "off"
+}

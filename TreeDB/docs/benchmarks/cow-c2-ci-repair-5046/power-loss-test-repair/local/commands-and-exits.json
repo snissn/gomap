@@ -1,0 +1,128 @@
+[
+  {
+    "name": "normal-coordinator",
+    "args": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-run",
+      "^(TestRetryableFailureRetainsDebtAndFailsOnlyCapturedWaiters|TestRetryableFailureDoesNotFailWaiterAddedInFlight)$",
+      "./TreeDB/internal/rootpublication"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "started_unix": 1791279684.57247,
+    "ended_unix": 1791279687.451284
+  },
+  {
+    "name": "normal-cow-modeled",
+    "args": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-run",
+      "^(TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck|TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts)$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "started_unix": 1791279687.451703,
+    "ended_unix": 1791279712.537698
+  },
+  {
+    "name": "race-coordinator",
+    "args": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-race",
+      "-run",
+      "^(TestRetryableFailureRetainsDebtAndFailsOnlyCapturedWaiters|TestRetryableFailureDoesNotFailWaiterAddedInFlight)$",
+      "./TreeDB/internal/rootpublication"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "started_unix": 1791279712.5382311,
+    "ended_unix": 1791279717.674263
+  },
+  {
+    "name": "race-cow-modeled",
+    "args": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-race",
+      "-run",
+      "^(TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck|TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts)$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "started_unix": 1791279717.674579,
+    "ended_unix": 1791279779.42851
+  },
+  {
+    "name": "safe-coordinator",
+    "args": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-tags",
+      "treedb_safe",
+      "-run",
+      "^(TestRetryableFailureRetainsDebtAndFailsOnlyCapturedWaiters|TestRetryableFailureDoesNotFailWaiterAddedInFlight)$",
+      "./TreeDB/internal/rootpublication"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "started_unix": 1791279779.428948,
+    "ended_unix": 1791279780.911357
+  },
+  {
+    "name": "safe-cow-modeled",
+    "args": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-tags",
+      "treedb_safe",
+      "-run",
+      "^(TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck|TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts)$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "env_overrides": {
+      "GOWORK": "off",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "started_unix": 1791279780.911697,
+    "ended_unix": 1791279803.421827
+  }
+]

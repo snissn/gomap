@@ -169,7 +169,7 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   codec limit does not guarantee a physical key fits a published TreeDB page.
   Oversized exact keys fail before copying that option. Valid options and owned
   results retain the existing floor, error and Close contracts.
-- Canonical exact-version snapshot bounds select the existing frozen point-shard
+- In mutable cache modes, canonical exact-version snapshot bounds select the existing frozen point-shard
   queue and published root when complete shard metadata is available. Snapshot
   cuts still rotate all populated mutable shards and retain the full snapshot
   owner. Span presence is captured during the existing immutable-view clone,
@@ -179,6 +179,8 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   absent published set keeps the existing backend snapshot fallback. Full-queue
   positional range spans are never attached to a filtered queue; newest-source
   duplicate precedence and physical delete filtering are unchanged.
+  Explicit COW mode instead retains the already-published shard/source/backend
+  cut without rotating shards; its initial capability supports forward traversal.
 - A nonzero global discard floor is the greatest timestamp that may be
   discarded, matching Badger managed-mode `SetDiscardTs` boundary semantics.
   Reads and read-timestamp scans at or below it are rejected; commits must be
@@ -301,6 +303,37 @@ side stores do not inherit this main-store budget. No on-disk format changes.
   even when their numeric IDs happen to match the current roots.
 - Saturation safely degrades to exact lookups. Ordinary missing-value, empty
   value, callback ownership and revision contracts remain unchanged.
+
+### 2.5.2 Explicit immutable COW cache
+
+`Options.MemtableMode="cow_btree"` selects the
+[coherent COW cut contract](cow-cache-publication.md). Snapshot capture pins one
+complete shard/source/backend-basis cut without rotation, record copying or
+history sorting. Owned point/versioned reads, presence/prefix queries,
+successors and forward iterators all resolve through that cut, including when
+the cache is empty. Public copies preserve empty-value and missing-key semantics.
+
+Supported mutations are point Set/Delete, explicit sync variants and point
+batches, including encoded MVCC groups and raw physical-delete replay.
+Conditional/callback mutations, range deletion, reverse traversal and manual
+backend/root bypass refuse before callbacks, WAL append, floor changes or
+visible point effects. Mixed unsupported batches are not partially applied.
+These are explicit-mode exceptions to the broader raw/iterator API below;
+existing modes retain their current capabilities. COW supplies immutable
+physical views, not additional MVCC conflict or timestamp semantics.
+
+Finite `COWMemtableLimits` govern generations, sources, views, concrete resource
+identities and actual allocation capacities. An all-zero bundle selects finite
+defaults; a partially specified or inconsistent bundle refuses. Refusal never
+revokes an old view. Snapshot/iterator closure permits retained ownership to
+drain. A public snapshot acquisition can fail under capacity/closed admission;
+callers must check its returned handle.
+
+DB Close denies new COW reads and waits for admitted reads before storage
+teardown. Snapshot/iterator Close remains safe after DB Close, but subsequent
+storage reads return a closed error. `GetManyView` callbacks run outside
+read/writer/publication locks with admitted temporary value ownership; empty
+input still observes closed-handle checks. Store fences remain required.
 
 ### 2.6 Target versioned entry reads
 
@@ -427,7 +460,8 @@ read/precondition validation.
 ### 4.1 Ordering
 
 - `Iterator(start, end)` yields ascending lexicographic keys.
-- `ReverseIterator(start, end)` yields descending order over the same bound domain.
+- `ReverseIterator(start, end)` yields descending order over the same bound domain
+  in modes that support reverse traversal; explicit COW mode refuses it.
 
 ### 4.2 Bounds
 
@@ -524,8 +558,9 @@ preserving admission and ownership without unsafe byte/string borrowing.
 Private cancellation has no visibility; resource callbacks run only after final
 ownership release and outside publication/admission locks. The full internal
 contract is [immutable memtable ownership](cow-memtable-ownership.md). This
-foundation adds no independently usable public DB mode or stronger public
-durability/snapshot semantics before the coherent cached installer is integrated.
+foundation itself does not select a DB mode or change durability. The coherent
+cached installer exposes its explicit mode under section 2.5.2 and
+[COW cached publication](cow-cache-publication.md).
 
 ### 6.1 Process-level locking
 

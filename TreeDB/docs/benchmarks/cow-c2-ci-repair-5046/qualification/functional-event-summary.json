@@ -1,0 +1,66 @@
+{
+  "normal": {
+    "exit": 0,
+    "test_events": {
+      "run": 276,
+      "output": 1518,
+      "pass": 275,
+      "skip": 1
+    },
+    "package_events": {
+      "start": 4,
+      "output": 8,
+      "pass": 4
+    },
+    "failing_events": []
+  },
+  "race": {
+    "exit": 0,
+    "test_events": {
+      "run": 276,
+      "output": 1518,
+      "pass": 275,
+      "skip": 1
+    },
+    "package_events": {
+      "start": 4,
+      "output": 8,
+      "pass": 4
+    },
+    "failing_events": []
+  },
+  "safe": {
+    "exit": 0,
+    "test_events": {
+      "run": 276,
+      "output": 1518,
+      "pass": 275,
+      "skip": 1
+    },
+    "package_events": {
+      "start": 4,
+      "output": 8,
+      "pass": 4
+    },
+    "failing_events": []
+  },
+  "vet": {
+    "exit": 0
+  },
+  "pre_source": {
+    "commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+    "files": 7330,
+    "manifest_sha256": "808d67281e5fa2cf374eb64198725c6e7e60fa4f53bbcf4c5cd6bf39c0cece79",
+    "extra": [],
+    "missing": [],
+    "changed": []
+  },
+  "post_source": {
+    "commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+    "files": 7330,
+    "manifest_sha256": "808d67281e5fa2cf374eb64198725c6e7e60fa4f53bbcf4c5cd6bf39c0cece79",
+    "extra": [],
+    "missing": [],
+    "changed": []
+  }
+}

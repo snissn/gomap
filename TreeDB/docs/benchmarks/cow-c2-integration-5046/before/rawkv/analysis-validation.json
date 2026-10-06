@@ -1,0 +1,13 @@
+{
+  "raw_runs": 27,
+  "rows": 648,
+  "matched_cases": 216,
+  "raw_hashes_verified": true,
+  "stderr_hashes_verified": true,
+  "source_tree_sha256": "b968df3a51076a133abf5d2e330928981a5ef5622ac9346cd9b6b52c250b19b9",
+  "scope": "bounded C2 diagnostic; no statistical significance or sustained C4 acceptance",
+  "fixture_charge_scope": "whole fixture setup/reseeds/last observed cut outside timer; not per-op heap",
+  "close_receipts": 432,
+  "tail_scope": "16/128 fixed samples per case; descriptive percentiles only",
+  "rss_scope": "whole child run includes setup/teardown; receipts are not per-op memory"
+}

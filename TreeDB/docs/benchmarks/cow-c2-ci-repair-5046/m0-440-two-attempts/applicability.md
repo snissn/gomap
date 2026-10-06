@@ -1,0 +1,7 @@
+# Both actual M0 attempts retained
+
+The [original job](https://github.com/snissn/gomap/actions/runs/37441320541/job/112195493758) at440 genuinely failed the unchanged legacy foreground-p99 CV gate:0.150471387557>0.10. Its ten legacy and ten public streams remain intact. Total-vacuum CV0.015951160717 and writer-pause CV0.056885072404 passed; no legacy abort or unexpected public error was observed. The source and full log establish no specific parser or production defect. Host noise or cache behavior are hypotheses without a causal trace.
+
+Independent triage accepted one complete unchanged same-head rerun, with all original samples and thresholds retained. That [actual attempt2 job](https://github.com/snissn/gomap/actions/runs/37441320541/job/112201717204) passed. Its total/pause/p99 CVs are0.004058900087/0.020923345592/0.020217526981. Root independently reconstructed all20 streams and42 metric entries, verified identical fixture/commands and bound all25 files. [Both literal packets](original-failed/summary.md) and [the passing attempt](one-rerun-passed/summary.md) coexist with [review](review/review.md) and [root verification](review/rerun-root-verification.json).
+
+The original failure remains real and unexplained; the passing attempt does not disprove it or prove source equivalence, regression absence, causal attribution or default promotion. This is historical440 evidence; final-head required CI remains necessary after the separate test repair.

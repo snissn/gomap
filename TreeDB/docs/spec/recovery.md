@@ -40,6 +40,28 @@ opens may scan their selected root without replaying it. A bounded scan failure
 leaves exact reads available. Filter contents are never recovered from disk or
 used as durability evidence. See [point lookup coverage](contracts.md#251-optional-negative-point-lookup-coverage).
 
+## Immutable COW cache recovery
+
+`cow_btree` is a process-local cache selection, not a new persistent format or
+WAL command kind. Its cuts, source generations and read leases are constructed
+from accepted recovery state. Existing command scanning, RID resolution,
+recorded revisions, dependency-prefix validation and sealed dual-meta selection
+remain authoritative. Replay consumes recorded point metadata with normal WAL
+suppression; it must not append replacement commands, assign unrelated revisions
+or retry an ambiguous command through a different cache mode.
+
+A COW flush's accepted-prefix receipt is process-local handoff authority. On
+reopen, durable roots and Applied-LSN coverage determine replay/cleanup; an
+in-memory receipt or visible cut does not prove durability. `no_wal_fast` recovery
+continues to select a complete sealed root, and recent relaxed writes can be
+absent. Value-log and dictionary assets referenced by the selected recovery
+state remain persistent dependencies.
+
+Qualification must select COW through actual public Open. Process-crash tests
+and modeled stable-image/power-loss cuts are separate evidence classes; ordinary
+close/reopen or baseline-cache recovery coverage cannot substitute for either.
+See [COW cached publication](cow-cache-publication.md).
+
 ## 1. Recovery Entry Points
 
 Recovery is executed during `Open` for read-write handles.

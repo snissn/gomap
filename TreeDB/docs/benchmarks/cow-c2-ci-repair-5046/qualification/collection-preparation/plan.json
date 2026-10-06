@@ -1,0 +1,64 @@
+{
+  "candidate": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "raw": {
+    "runs": 27,
+    "rows": 540,
+    "groups": {
+      "fresh": {
+        "operations": [
+          "FreshCapture"
+        ],
+        "count": 16
+      },
+      "other": {
+        "operations": [
+          "CaptureReadRelease",
+          "Forward16",
+          "IncrementalWrite"
+        ],
+        "count": 128
+      },
+      "durability": {
+        "operations": [
+          "IncrementalWriteSync"
+        ],
+        "count": 16
+      }
+    },
+    "cells_per_operation": 108
+  },
+  "mvcc": {
+    "runs": 18,
+    "rows": 108,
+    "reads": [
+      "point",
+      "all_versions"
+    ],
+    "counts": [
+      128,
+      256
+    ],
+    "complete_history_output": {
+      "128": 8.5,
+      "256": 16.5
+    }
+  },
+  "source": "all7330 paths exact before/after, no extra source files",
+  "bindings": [
+    "source identity",
+    "fixture sha256",
+    "Go env",
+    "binary sha256/buildinfo",
+    "actual compiled dependencies private",
+    "stdout and stderr sha256",
+    "command/exit/resource/load receipts"
+  ],
+  "scope": "descriptive3repeat current-candidate diagnostic, no significance/sustained acceptance",
+  "omission": "DirtyCheckpoint remains historical, not974d timing",
+  "private_only": [
+    "binaries",
+    "compiled dependency dumps",
+    "process snapshots and foreign argv"
+  ],
+  "checks_sha256": "2c76cb784de6c28cca0e9dff383339ee14bbbfc33f5d704381240fb54e0482f9"
+}

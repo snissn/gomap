@@ -124,8 +124,13 @@ func (db *DB) ValueLogRewriteOnline(ctx context.Context, opts ValueLogRewriteOnl
 			backendOpts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 		}
 	}
-	stats, err := db.backend.ValueLogRewriteOnline(ctx, backendOpts)
-	if err = db.reconcileCachedBackendMaintenance(err); err != nil {
+	var stats treedbdb.ValueLogRewriteStats
+	err = db.runCachedBackendMaintenance(func() error {
+		var runErr error
+		stats, runErr = db.backend.ValueLogRewriteOnline(ctx, backendOpts)
+		return runErr
+	})
+	if err != nil {
 		return ValueLogRewriteStats{}, err
 	}
 	if db.cached != nil && len(stats.SourceFileIDsUnreferenced) > 0 {

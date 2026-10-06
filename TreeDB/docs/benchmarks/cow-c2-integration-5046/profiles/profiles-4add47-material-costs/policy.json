@@ -1,0 +1,87 @@
+{
+  "at": "2026-10-06T06:25:30.848801+00:00",
+  "candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "source_tree_sha256": "ae44d55e023db64fcaced92456f0e671a88886c81ee1b3996d9dba61a3869581",
+  "jobs": [
+    {
+      "kind": "raw",
+      "mode": "btree",
+      "layout": "Inline64",
+      "operation": "Forward16",
+      "count": 8192,
+      "pattern": "^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^btree$/^Inline64$/^N=2048$/^Forward16$"
+    },
+    {
+      "kind": "raw",
+      "mode": "cow_btree",
+      "layout": "Inline64",
+      "operation": "Forward16",
+      "count": 8192,
+      "pattern": "^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^cow_btree$/^Inline64$/^N=2048$/^Forward16$"
+    },
+    {
+      "kind": "raw",
+      "mode": "btree",
+      "layout": "Pointer4096",
+      "operation": "CaptureReadRelease",
+      "count": 8192,
+      "pattern": "^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^btree$/^Pointer4096$/^N=2048$/^CaptureReadRelease$"
+    },
+    {
+      "kind": "raw",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "operation": "CaptureReadRelease",
+      "count": 8192,
+      "pattern": "^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^cow_btree$/^Pointer4096$/^N=2048$/^CaptureReadRelease$"
+    },
+    {
+      "kind": "raw",
+      "mode": "btree",
+      "layout": "Pointer4096",
+      "operation": "IncrementalWrite",
+      "count": 8192,
+      "pattern": "^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^btree$/^Pointer4096$/^N=2048$/^IncrementalWrite$"
+    },
+    {
+      "kind": "raw",
+      "mode": "cow_btree",
+      "layout": "Pointer4096",
+      "operation": "IncrementalWrite",
+      "count": 8192,
+      "pattern": "^BenchmarkCOWPublicDirtyCost$/^no_wal_fast$/^cow_btree$/^Pointer4096$/^N=2048$/^IncrementalWrite$"
+    },
+    {
+      "kind": "mvcc",
+      "mode": "btree",
+      "read": "point",
+      "count": 256,
+      "repeats": 16,
+      "pattern": "^BenchmarkCOWIntegratedPublicMVCC$/^no_wal_fast$/^btree$/^point$"
+    },
+    {
+      "kind": "mvcc",
+      "mode": "cow_btree",
+      "read": "point",
+      "count": 256,
+      "repeats": 16,
+      "pattern": "^BenchmarkCOWIntegratedPublicMVCC$/^no_wal_fast$/^cow_btree$/^point$"
+    }
+  ],
+  "host": {
+    "system": "Linux",
+    "node": "mikers-B560-DS3H-AC-Y1",
+    "release": "6.8.0-138-generic",
+    "version": "#138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC ",
+    "machine": "x86_64",
+    "processor": "x86_64"
+  },
+  "original_memory_controls_removed": {
+    "GOGC": null,
+    "GOMEMLIMIT": null
+  },
+  "GOMAXPROCS": 12,
+  "scope": "Diagnostic profiles of actual material C2 costs; never replacement timings.\n\nUses the retained, source-bound cost binaries. Package CPU/heap profiles include\nfixture setup/teardown and StartTimer/StopTimer bookkeeping. Sampling and larger\nfixed counts differ from the cost matrix. Keep these limitations with findings.\n",
+  "timing_acceptance": false,
+  "exclusivity": "coordinator serial handoff after matched45runs; no other owned185jobs"
+}

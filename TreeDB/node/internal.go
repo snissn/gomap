@@ -462,6 +462,9 @@ func (n *Node) GetInternalEntryRefView(index uint16) (key []byte, childRef page.
 
 		keyLen := len(meta.prefix) + suffixLen
 		out := n.ensureKeyScratch(keyLen)
+		if len(out) != keyLen {
+			return nil, page.ChildRef{}, ErrCorruptedNode
+		}
 		copy(out, meta.prefix)
 		copy(out[len(meta.prefix):], suffix)
 		return out, page.PageChildRef(meta.baseChildID + delta), nil

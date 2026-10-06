@@ -403,6 +403,7 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 		return nil, FrameStats{}, err
 	}
 
+	w.observeProducedRawFrames(dst)
 	return dst, FrameStats{
 		Records:            len(records),
 		RawPayloadBytes:    rawPayloadBytes,
@@ -566,6 +567,7 @@ func (w *Writer) AppendRawFramesBufferedInto(records []Record, k int, dst []page
 		pos = end
 	}
 
+	w.observeProducedRawFrames(dst)
 	return dst, FrameStats{
 		Records:            len(records),
 		RawPayloadBytes:    rawPayloadBytes,

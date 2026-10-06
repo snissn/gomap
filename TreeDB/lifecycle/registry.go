@@ -107,6 +107,35 @@ func (r *ReaderRegistry) RegisterWithHint(seq uint64, hint int) (int64, int) {
 	return int64(idx + 1), registerHintUnset
 }
 
+// RegisterFastWithHint uses only the registry's existing fixed shard storage.
+// It returns zero when all shards hold other sequence cohorts. Bounded callers
+// can refuse admission without growing the fallback seqs/free arrays.
+func (r *ReaderRegistry) RegisterFastWithHint(seq uint64, hint int) (int64, int) {
+	if hint < 0 {
+		hint = int(r.nextFastShard.Add(1)-1) & fastReaderShardMask
+	} else {
+		hint &= fastReaderShardMask
+	}
+	if id := r.tryJoinFast(seq, hint); id != 0 {
+		return id, hint
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := 0; i < fastReaderShardCount; i++ {
+		idx := (hint + i) & fastReaderShardMask
+		if id := r.tryJoinFast(seq, idx); id != 0 {
+			return id, idx
+		}
+	}
+	for i := 0; i < fastReaderShardCount; i++ {
+		idx := (hint + i) & fastReaderShardMask
+		if id := r.tryClaimFast(seq, idx); id != 0 {
+			return id, idx
+		}
+	}
+	return 0, registerHintUnset
+}
+
 // Unregister removes a reader.
 func (r *ReaderRegistry) Unregister(id int64) {
 	if id < 0 {

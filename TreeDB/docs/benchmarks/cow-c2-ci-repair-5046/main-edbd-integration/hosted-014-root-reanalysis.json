@@ -1,0 +1,20 @@
+{
+  "source_head": "0142519b2cc4c097f50b4e7a64a5b6993ff0d9c6",
+  "baseline_head": "40dc31f44e7bb14a4f85dab254131af029ef820b",
+  "workflow_run": 37435921126,
+  "job": 112177573335,
+  "all80samples_retained": 80,
+  "all5rows_reproduced_exact": true,
+  "strict_timing_bytes_allocations": "PASS",
+  "six_binary_hash_index_bindings_match": true,
+  "literal_executable_bytes_independently_hashed_locally": false,
+  "scope": "Actual014 hosted evidence only; not final merged-headCI. Binary digest claims are hash-index/summary mutual bindings, not local executable inspection.",
+  "input_sha256": {
+    "baseline.txt": "65b7ce843a05430cf360aad0ce177dae2179fb8c341ab529fde09f34f16c2069",
+    "candidate.txt": "11dedf0f683c1945c73a9869c8cae21c880d12f8d083f0bf5b8cfe6d2be505d6",
+    "summary.json": "822b39af4bd25c402f16e6842b56f621f2bd84fe06e0f4c223f4d82ec202359d",
+    "summary.md": "0fbb2016095b4b7e5d4653589b10557d43ee79384d7a892a2d1980a7e5648375",
+    "binary-sha256.txt": "151a822db8eecb9e71de6c1893473dc1a2bdc15d07e8c7001fb954d373eecc62",
+    "environment.txt": "235aebc9df76e2a137b3e51ecfda4d4b2ffaa9b298dfcb9211a193570ddce92e"
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "candidate": "37aa0dba5ba25ffe9bfb0a65469a8bfa4b90897c",
+  "source_tree_sha256": "1c49e130fdf3bb9a84cb4fc8574215108a7a8982907cb95d6a003057dcc6db5d",
+  "prior_candidate": "ce808d9d523e6ec7c32fe4c773e87d7ed8dcc2a1",
+  "changed_paths": {
+    ".github/ci/ci_impact.json": {
+      "before": null,
+      "after": "e34b2465fd9eb39564ec7a4497fb1f87653d04f4e0f1b9e70d3bcb0f5c75a58f"
+    },
+    ".github/scripts/ci_impact.py": {
+      "before": null,
+      "after": "5888141dc449dad18dccd8cf328ae2fcb8f785b83727778c65f8352b7bf7bd46"
+    },
+    ".github/scripts/refresh_ci_impact_inventory.py": {
+      "before": null,
+      "after": "b2fecb8b93572a7d379bd33141ceb70f38192a7c803632491054587fed44e62f"
+    },
+    ".github/scripts/test_ci_impact.py": {
+      "before": null,
+      "after": "289b1c7f9821731739f289085e734a2012036ca3cc404a2197361386760c6818"
+    },
+    ".github/scripts/test_refresh_ci_impact_inventory.py": {
+      "before": null,
+      "after": "5375a08b611eb9144092fcf27487ca693b7c2639b91d8e618b1284eba14557c7"
+    },
+    ".github/workflows/treedb-tests.yml": {
+      "before": "ae48a5bd9253120a8f68bba45d341250e31e91ede7a387d0800107526830fa54",
+      "after": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477"
+    },
+    "CONTRIBUTING.md": {
+      "before": "a20ed8c10b32b4a0caed9d5b962e2bab654e268c9562871154d471c9dbec636e",
+      "after": "7842035e4e975b6010532c52ebf55a562f92a5d379f14fa0f2a0de91c5744b9b"
+    },
+    "TreeDB/caching/cow_cost_minimization_test.go": {
+      "before": "7f7e6a0e69e6db3e001299a798468e426097ea4d7d736b39b682228f8782e4a1",
+      "after": "bf8c42ced73b824f94814507b30656769bb04deceea6cb4c29def73efe9a50e8"
+    },
+    "TreeDB/caching/cow_cut.go": {
+      "before": "ff21c9485e3413513bd456b7e2159a857d6576f42f8f4347b60cd197cd6ed475",
+      "after": "9071ad33c1a9e957781fcedb95b1069f5606d1cd9e249ab40aaf2b9bf4448ff5"
+    },
+    "TreeDB/caching/cow_read.go": {
+      "before": "ade7ca9e540ca099ba809da5fab4d3b1f5bd125c13b75bab5b7fb2c5eed9ba36",
+      "after": "78752cd306822676c4574576b54fd05a5fe5c0563a54b57a43a130187a397cb8"
+    },
+    "TreeDB/collections/typed_storage_naming_test.go": {
+      "before": "da3202d673fa8585872da8d8ee5f5a522ec1c08625de852ad2a1f368e9acda4b",
+      "after": "27f16c9a46aa72e17499b088275ef5dfa4722e5a63056521097dd605d9baaee3"
+    },
+    "TreeDB/docs/guides/collections-quickstart.md": {
+      "before": "ad03a7bc0a3631ccfb3552be311095bbac9982248b63b475e43374ac6908d12e",
+      "after": "7a88e2ac4a8382b86816cdf9989aabada2bf97adc5256923f9b56374b4f67207"
+    },
+    "TreeDB/docs/guides/typed-storage-performance.md": {
+      "before": "d5d32a8437790ecdd4f40edd68407ae36d145a5c3191a9c38dd5af8d583f8487",
+      "after": "0254468076ce06794c86ecd890933d08e9e393c293d02263cc458726aa174599"
+    },
+    "TreeDB/docs/spec/README.md": {
+      "before": "7bed9d3f6e7a31ea3f5bfea619a0d8e675cfbbc9bf1d487cc23e7de315a98671",
+      "after": "7aa241e9ec1b8c957b240d1e02bc207587d3379038fd5134fa90044813c9a712"
+    },
+    "TreeDB/docs/spec/contracts.md": {
+      "before": "765066605be03b4bf3267bb95878b267be203ffbbb23235ce5412e4278f21cc9",
+      "after": "763cb6bd297496cd494790bb2e1f0768ab511008c08585c21b54530b0a0b0a3e"
+    },
+    "TreeDB/docs/spec/r1-indexed-row-contract.md": {
+      "before": null,
+      "after": "d61800c5bb85d6d43b091c2574cb79dc7a70fa1d9c62304155f38fcdc0ed199a"
+    },
+    "TreeDB/production_authority_matrix_test.go": {
+      "before": "c5d05d2e20edfd403b7c1e4aee1b6ac88061327d642b20a843719f5260a4b9d1",
+      "after": "48e2b1162de52672cb832e3d5ad8cfab00d84ba1a3dce35af313e6c5b720e422"
+    },
+    "cmd/benchprof/README.md": {
+      "before": "d595e2426b6cfc08306099afcc3b07f9903ef787f3c969446578443e9f98a144",
+      "after": "b1fe2d808b918825dd13ff0bc46ef499fb1d2d13ac775a7f1f955b2593d0b895"
+    },
+    "cmd/collection_bench_matrix/README.md": {
+      "before": "a038b9f97b5ec7fff5b2cae0b810c8d08063bdb877159e17d9995425847c3e20",
+      "after": "4273a9eb0d5cf54d1c219edf89b2229752cbf5700677a039ea949edb745cd0c3"
+    },
+    "cmd/collection_workload_bench/README.md": {
+      "before": "600985f574b82da4b7f40d7f0c1243fd7c205648e4d0d8f599a55bd3a9b89240",
+      "after": "6c919b1e9de7c22c6b9afa876fdf9c62430211545992e9a16f2226b890948dd7"
+    },
+    "cmd/collection_workload_bench/main.go": {
+      "before": "b60353f75f13c562dad2707fde993a37c56279d78e2a0a37c2888d80ee4c4538",
+      "after": "a3f09c5b57311983c96d869a3c7a2b540426792c3af67b4d318243fe4e4d082e"
+    },
+    "cmd/collection_workload_bench/r1.go": {
+      "before": null,
+      "after": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e"
+    },
+    "cmd/collection_workload_bench/r1_sqlite.go": {
+      "before": null,
+      "after": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd"
+    },
+    "cmd/collection_workload_bench/r1_test.go": {
+      "before": null,
+      "after": "9bbe3de5468b2eae5e9f60331eeabe154274d730fed9ff066a62879628745dd4"
+    },
+    "cmd/unified_bench/README.md": {
+      "before": "401e3b9db924a19da03c9313c95dd2a63ba3aae9067dad0dd434d0ddacdcabe1",
+      "after": "d3643f310736e48fb41ee7ad96a201d9122c15702eed75db6b29385d6d237ffd"
+    },
+    "docs/CI_IMPACT_SELECTION.md": {
+      "before": null,
+      "after": "10e3f5fc192a36fa74bc1772d3679c6462ea9f0346f85c30e7ec8097d6567ec0"
+    },
+    "scripts/r1_collection_capture.sh": {
+      "before": null,
+      "after": "063bf7178c39e5f55a4d11c0316921971d480a609309c1c7a8e70fa843160e85"
+    },
+    "scripts/r1_collection_source.py": {
+      "before": null,
+      "after": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c"
+    },
+    "scripts/r1_collection_summary.py": {
+      "before": null,
+      "after": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e"
+    }
+  },
+  "unchanged_files": 6446,
+  "fixture_hashes_unchanged": {
+    "TreeDB/cow_public_cost_bench_test.go": true,
+    "TreeDB/mvcc/cow_integration_bench_test.go": true
+  }
+}

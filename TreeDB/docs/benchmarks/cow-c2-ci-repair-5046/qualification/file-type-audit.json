@@ -1,0 +1,17 @@
+{
+  "commit": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "files": 7330,
+  "git_modes_sha256": "bbef4a6b0c0fefaef8b03d8be9629d28c32fb6670857b0414ddbc0e8b22b64ba",
+  "actual_rows_sha256": "2f096dd64e46e479685f271ebf09901d277d29391cc7bee42dc8a9f8f9e8e810",
+  "actual_kind_counts": {
+    "regular": 7330
+  },
+  "expected_mode_counts": {
+    "100644": 7207,
+    "100755": 123
+  },
+  "symlinks": [],
+  "mode_or_type_mismatches": [],
+  "extra": [],
+  "missing": []
+}

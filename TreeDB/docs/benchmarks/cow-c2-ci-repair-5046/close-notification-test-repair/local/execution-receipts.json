@@ -1,0 +1,52 @@
+[
+  {
+    "stage": "normal",
+    "command": [
+      "go",
+      "test",
+      "-json",
+      "-count=3",
+      "-timeout=5m",
+      "-run=^TestCOWClose(ErrorNotificationCanReadClosedDatabase|HookCanWaitForAsynchronousNotificationRead)$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "GOWORK": "off",
+    "exit_code": 0,
+    "elapsed_seconds": 17.52338695526123
+  },
+  {
+    "stage": "race",
+    "command": [
+      "go",
+      "test",
+      "-race",
+      "-json",
+      "-count=3",
+      "-timeout=5m",
+      "-run=^TestCOWClose(ErrorNotificationCanReadClosedDatabase|HookCanWaitForAsynchronousNotificationRead)$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "GOWORK": "off",
+    "exit_code": 0,
+    "elapsed_seconds": 56.022599935531616
+  },
+  {
+    "stage": "safe",
+    "command": [
+      "go",
+      "test",
+      "-tags=treedb_safe",
+      "-json",
+      "-count=3",
+      "-timeout=5m",
+      "-run=^TestCOWClose(ErrorNotificationCanReadClosedDatabase|HookCanWaitForAsynchronousNotificationRead)$",
+      "./TreeDB"
+    ],
+    "cwd": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+    "GOWORK": "off",
+    "exit_code": 0,
+    "elapsed_seconds": 19.16214919090271
+  }
+]

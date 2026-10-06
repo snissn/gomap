@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "status": "production-index-vacuum-unavailable",
+  "timing_boundary": "one fixed-work vacuum operation; setup excluded",
+  "repetitions": 10,
+  "fixture": {
+    "schema_version": 1,
+    "status": "offline-ceiling",
+    "fixture": "m0-index-debt",
+    "parameters": {
+      "chunk_size": 65536,
+      "collection_documents": 128,
+      "collection_generations": 3,
+      "debt_compactions": 16,
+      "pointer_threshold": 512,
+      "user_generations": 3,
+      "user_keys": 384
+    },
+    "logical_digest": "42a8a8ef9648dced3ae61f8caa35e921058c17d73265ffdf2db47b93a9d9b599",
+    "key_count": 512,
+    "collection_root_span": 1,
+    "index_bytes": 1441792,
+    "offline_index_bytes": 131072,
+    "value_log_bytes": 1207296,
+    "offline_value_log_bytes": 1207296,
+    "leaf_log_bytes": 0,
+    "live_pages": 143,
+    "reclaimable_pages": 208,
+    "reclaimable_page_percent": 59.25925925925926
+  },
+  "environment": {
+    "command": "scripts/treedb_vacuum_m0_capture.sh",
+    "device": "/dev/root",
+    "dirty_state": "clean",
+    "filesystem": "ext4",
+    "git_sha": "4403776d10b6ac82eb9e1839f437f59a78058816",
+    "go_version": "go1.26.8",
+    "goarch": "amd64",
+    "goos": "linux"
+  }
+}

@@ -1,0 +1,131 @@
+{
+  "disposition": "ACCEPT bounded staged metadata/publication readiness; current-head hosted gates remain pending",
+  "reviewed_staged_tree": "902ca2736369ecb3453b23a815c4ee881b6f273e",
+  "parent_head": "61fbd36655a9a8641f1cacee013c8f2bf2dc1553",
+  "at_utc": "2026-10-06T09:10:36.817610+00:00",
+  "source_delta": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/cow_close_notification_test.go"
+  ],
+  "approved_test_sha256": "d15253d599b953a09baa79ef182ddf5bfd8814960040beed8243e3e6e6ccd548",
+  "CI_changed_fields": [
+    "discovery_source_sha256"
+  ],
+  "CI_workflows": 14,
+  "CI_members": 56,
+  "CI_discovery_sha256": "6656b6e8282129db1f956237d713d48ef116a8c68a19bff343a33d5891e0d701",
+  "changed_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/cow_close_notification_test.go",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/applicability.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/independent/close-notification-windows-diagnosis.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/independent/close-notification-windows-diagnosis.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/independent/close-notification-windows-test-review.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/independent/close-notification-windows-test-review.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/after-source.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/before-source.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/before.go.txt",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/completion-source-proof.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/diagnosis-and-change.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/event-summary.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/execution-receipts.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/go-environment.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/handoff.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/normal.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/normal.stderr",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/original-windows-failure-events.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/packet-manifest.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/race.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/race.stderr",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/run-targeted.py",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/runtime.diff",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/safe.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/safe.stderr",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/root-verification.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/publication-manifest.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/publication-provenance.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/report.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/disposition.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/independent/template-mode-preflight-review.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/independent/template-mode-preflight-review.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/actual-cow-open.stderr",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/actual-cow-open.stdout",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/diagnosis.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/execution-receipts.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/existing-template-policy.stderr",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/existing-template-policy.stdout",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/go-environment.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/handoff.md",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/packet-manifest.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/probe.go.txt",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/review-thread.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/run-diagnostic.py",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/source-after.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/local/source-before.json",
+    "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/template-mode-review-triage/root-verification.json"
+  ],
+  "publication_files_including_manifest": 706,
+  "manifest_entries_verified": 705,
+  "provenance_private_and_public_byte_preserved_records_verified": 688,
+  "parent_repair_entries": 662,
+  "parent_repair_entries_changed": [
+    "publication-provenance.json",
+    "report.md"
+  ],
+  "parent_repair_entries_unchanged": 660,
+  "original_integration_entries_verified_unchanged": 795,
+  "protected_scope": "Prior accepted929 source/module/test paths:928 remain unchanged; sole approved test intersects prior scope. Full staged delta independently proves all other tracked paths outside CI/publication unchanged in bytes and Git modes. Prior subset list is reused, not rederived here.",
+  "nested_packet_bindings_verified": {
+    "close-notification-test-repair": 18,
+    "template-mode-review-triage": 13
+  },
+  "actual_local_close_events": {
+    "normal": {
+      "test_subcase_pass": 18,
+      "package_pass": 1,
+      "fail": 0,
+      "skip": 0
+    },
+    "race": {
+      "test_subcase_pass": 18,
+      "package_pass": 1,
+      "fail": 0,
+      "skip": 0
+    },
+    "safe": {
+      "test_subcase_pass": 18,
+      "package_pass": 1,
+      "fail": 0,
+      "skip": 0
+    }
+  },
+  "new_or_modified_markdown_files_checked": 10,
+  "relative_or_local_file_links_checked": 23,
+  "whitespace_check_exit": 2,
+  "only_literal_whitespace_path": "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/close-notification-test-repair/local/runtime.diff",
+  "literal_whitespace_sha256": "dc4eebe1a5e3fa6484eb74e785ec15efa00ce8306445799fddb9049c28f90be3",
+  "source_and_documentation_whitespace_check_excluding_literal_exit": 0,
+  "hashes": {
+    "publication-manifest.json": "601ac8aae37cf0f9ab4aadb681fb00d7bb087bbc7461878382ccfe8aa440a97d",
+    "publication-provenance.json": "8c173e15d34c3bf0bf64363f3352def1e05049ae89ceb2e2de300471e9b938b5",
+    "report.md": "15222529d5a2d9bec0cef96ad2c91305e339da87f0808562df20fd264cf02ee4",
+    "coordinator-cost-disposition.json": "de41c2a9bd689279144394326a192d827676d53d4fe84505828ade5da890c56d",
+    "close-notification-test-repair/applicability.md": "a5222231a5be29d88051e532782c52a1e635261f68a7942f3bc44d5f1bd7b075",
+    "close-notification-test-repair/root-verification.json": "889b6d08ca355b999b7532643fe1f1ecd88ac73f41045c1d4aa2d163e7403ac8",
+    "template-mode-review-triage/disposition.md": "969b6bc9e87d629fc0d701cd7819f4d234f78f848e2837ca74287bee656bc059",
+    "template-mode-review-triage/root-verification.json": "e50a3b9f642972f4e08ca902a58b31307c62d5f64816fd6ec96c55981b0aa49d"
+  },
+  "template_probe_sha256": "2fbec89ed4d16b1e8434358c408a4da33f387652d6d4ad55a2c1f2eb9ecc5f53",
+  "limitations": [
+    "No Go/test/benchmark/build/remote/GitHub operations performed",
+    "Local repaired tests are Darwin results; actual current-head Windows, strict default performance/CI and hosted review remain required",
+    "Costs remain974d-bound with scoped source applicability; test compilation changed and binaries are not asserted equivalent",
+    "Template triage preserves public normalization; no production/test changes made for triage",
+    "Existing same-cut inherited diagnostic API limitations remain outside this repair"
+  ],
+  "required_after_review_append": [
+    "Root append only actual review MD/JSON plus regenerate publication manifest/provenance",
+    "Verify artifact-only descendant delta, protected source and immutable old packets",
+    "Bind actual final committed head; require its hosted merge gates"
+  ]
+}

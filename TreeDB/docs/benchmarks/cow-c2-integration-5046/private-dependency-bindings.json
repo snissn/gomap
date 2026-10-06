@@ -1,0 +1,42 @@
+{
+  "rawkv": {
+    "compiled_dependencies_sha256": "f5ba16c16c6c56551931c872d4585ed5af2986fcba744fed9dc00d5a89de326e",
+    "compiled_dependencies_bytes": 663950,
+    "exclusion": "complete graph and binary retained privately; binary hash/buildinfo published"
+  },
+  "mvcc": {
+    "compiled_dependencies_sha256": "57bd0eb393379c2c07e2cb10c08465af6ac9837bbdb998c7ce5500024085e734",
+    "compiled_dependencies_bytes": 673517,
+    "exclusion": "complete graph and binary retained privately; binary hash/buildinfo published"
+  },
+  "before/rawkv": {
+    "compiled_dependencies_sha256": "e15d9243b70a66d34468a06a7986e0b4987013da1c23537b556eb0ea647e1320",
+    "compiled_dependencies_bytes": 661443,
+    "exclusion": "complete graph and binary retained privately; binary hash/buildinfo published"
+  },
+  "before/mvcc": {
+    "compiled_dependencies_sha256": "cee9ccd935fa4fd076e5e3a2cfc2d13cc3761adeca4e137d3a15ebd3322d1eb9",
+    "compiled_dependencies_bytes": 670950,
+    "exclusion": "complete graph and binary retained privately; binary hash/buildinfo published"
+  },
+  "intermediate/rawkv": {
+    "compiled_dependencies_sha256": "82ff1468bd4693305222a400252b7a344d272569e5a081bc1ea1655c981ca60a",
+    "compiled_dependencies_bytes": 662287,
+    "exclusion": "complete graph and binary retained privately; binary hash/buildinfo published"
+  },
+  "intermediate/mvcc": {
+    "compiled_dependencies_sha256": "07375baa09e434ed56ab3bcb270ae42213d3be1585e3b52dc900e03f6585aab7",
+    "compiled_dependencies_bytes": 671814,
+    "exclusion": "complete graph and binary retained privately; binary hash/buildinfo published"
+  },
+  "default-guard/main": {
+    "compiled_dependencies_sha256": "30a1d4b3d95771e8756221c350fdb97db8beb55b3bd7c251408af2b0488e067f",
+    "compiled_dependencies_bytes": 663508,
+    "exclusion": "full graph/binary retained privately"
+  },
+  "default-guard/candidate": {
+    "compiled_dependencies_sha256": "6056430a68b429cdfe3a85df9ee1ee77035369e74ce55ef9a8c7d0b785b8c556",
+    "compiled_dependencies_bytes": 661390,
+    "exclusion": "full graph/binary retained privately"
+  }
+}

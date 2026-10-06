@@ -1,0 +1,17 @@
+{
+  "files": {
+    "actual-cow-open.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "actual-cow-open.stdout": "cc9c542a525fe218663da751964fa7c216e976672488e6cfacd04c8e2a24cef8",
+    "diagnosis.md": "9c9a4fc6033cf3c52f3679ba8496de0a74361513b2198baa3b0b9d7639d5ba78",
+    "execution-receipts.json": "1104642a073f13f8eb6be53d2ccbc36247998703677a4697364986fc49e619e9",
+    "existing-template-policy.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "existing-template-policy.stdout": "a25c0fe48abb47d75eef6e816bf4196e43411ff11af8c5e4f7dd122801dc907f",
+    "go-environment.json": "e04c8859222fa544cf11aa64205ce3406ba899a1fbc8c47304b162a540aa41b6",
+    "handoff.md": "d23732fbb09611c52ee736f15a7292c58337dd6f969779b8d12d63d94e99349c",
+    "probe.go": "2fbec89ed4d16b1e8434358c408a4da33f387652d6d4ad55a2c1f2eb9ecc5f53",
+    "review-thread.json": "7e5ab9534cc313ffdb448f4a256bbdadd610c49ba9eaa1ec3344ca53dbba5d99",
+    "run-diagnostic.py": "e6c54a0d0fbf0a81aabfe59a917cab6ad8eebbd555a3a8f75505e07a0d9c462c",
+    "source-after.json": "cbe9540d3fc2771469f0aadf1f06f1b21d8dbb46327a45acf14e67c0ce0c2c39",
+    "source-before.json": "b1d4edaade6247b25e4d1dbffefbc02d0679c28516a0a05d957a5313469354e3"
+  }
+}
