@@ -547,7 +547,10 @@ For the rebuilt current index, inherited immutable packed-leaf dependencies
 are selected by the existing exact candidate-root scan whenever the source
 closure contains packs. Selection retains the original producer tokens, exact
 identities, namespace obligations, digest and frontier; it does not reclassify a
-pack as a raw leaf log. Malformed or ambiguous packed identities fail publication.
+pack as a raw leaf log. Canonical packed file IDs and producer generations must
+agree, and the producer physical identity must match the manager's registered
+exact handle (whose identity does not carry that logical generation). Missing,
+malformed, mismatched or physically aliased packed identities fail publication.
 Non-packed dependencies retain their existing ownership rules. The independently
 recovery-selectable older root retains its whole packed closure, including on an
 exact-scan fallback. Only lawful fallback convergence and release of held views

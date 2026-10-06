@@ -1303,6 +1303,7 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p *pager.
 	// token reconstructed from a registered file. Validate every inherited pack
 	// before consuming any scanner references, including obsolete entries.
 	exactPackedFileIDs := make(map[uint32]rootpublication.StableIdentity)
+	exactPackedIdentities := make(map[rootpublication.StableIdentity]struct{})
 	var reachablePacks []rootpublication.StableIdentity
 	for _, descriptor := range source.PhysicalDescriptors() {
 		if descriptor.Kind != rootpublication.ResourceOuterLeafPack {
@@ -1316,6 +1317,18 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p *pager.
 		fileID := uint32(generation)
 		if _, duplicate := exactPackedFileIDs[fileID]; duplicate {
 			return nil, work, fmt.Errorf("%w: ambiguous inherited packed file %d", rootpublication.ErrResourceConflict, fileID)
+		}
+		physicalIdentity := descriptor.Identity()
+		physicalIdentity.Generation = 0
+		if _, alias := exactPackedIdentities[physicalIdentity]; alias {
+			return nil, work, fmt.Errorf("%w: inherited packed file %d aliases another packed identity", rootpublication.ErrResourceConflict, fileID)
+		}
+		exactPackedIdentities[physicalIdentity] = struct{}{}
+		managerIdentity, registered := db.valueLogManager.StableSegmentIdentity(fileID)
+		// Manager identities bind the opened file, not the producer's logical
+		// generation. The canonical generation was checked separately above.
+		if !registered || !rootpublication.SamePhysicalIdentity(managerIdentity, descriptor.Identity()) {
+			return nil, work, fmt.Errorf("%w: inherited packed file %d lacks exact registered authority", rootpublication.ErrUnresolvedResource, fileID)
 		}
 		exactPackedFileIDs[fileID] = descriptor.Identity()
 		if _, reachable := references[fileID]; reachable {

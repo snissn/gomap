@@ -3,8 +3,11 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -147,5 +150,133 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 	}
 	for i := 0; i < 32; i++ {
 		expectLeafGenerationValue(t, reopened, leafGenerationKey("pack-tail", i), 'd')
+	}
+}
+
+// A scanner file ID cannot authorize an unrelated producer file. Reject both
+// absent manager authority and a real, canonical ID bound to the wrong inode.
+func TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
+	dir := t.TempDir()
+	opts := leafGenerationPackPublicationTestOptions(dir)
+	opts.CommandWAL, opts.Durability = true, DurabilityDurable
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeNoErr(t, database)
+	writeLeafGenerationKeys(t, database, "authority", 512, 'a')
+	if _, err := database.CompactStorage(context.Background(), CompactStorageOptions{Mode: CompactStorageExhaustive}); err != nil {
+		t.Fatal(err)
+	}
+	var generation uint64
+	for _, entry := range database.durableRoot.slotResources[database.durableRoot.slot].PhysicalDescriptors() {
+		if entry.Kind == rootpublication.ResourceOuterLeafPack {
+			generation = entry.Generation
+			break
+		}
+	}
+	if generation == 0 {
+		t.Fatal("missing real registered pack")
+	}
+	t.Run("physical-alias", func(t *testing.T) {
+		var packPath string
+		for _, entry := range database.durableRoot.slotResources[database.durableRoot.slot].PhysicalDescriptors() {
+			if entry.Kind == rootpublication.ResourceOuterLeafPack && entry.Generation == generation {
+				packPath = filepath.Join(dir, entry.DiagnosticPath())
+			}
+		}
+		file, err := os.Open(packPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		builder := rootpublication.NewStableResourceSetBuilder()
+		defer builder.Abandon()
+		for _, gen := range []uint64{generation, generation + 10000} {
+			token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+				Kind: rootpublication.ResourceOuterLeafPack, LogicalLane: "leaf-generation-pack",
+				ResourceID: strconv.FormatUint(gen, 10), Generation: gen, DiagnosticPath: "same-physical-pack", File: file,
+				Frontier: rootpublication.DurableFrontier{Bytes: 1}, Digest: sha256.Sum256([]byte("same")),
+				Reachability: rootpublication.ReachabilityOuterLeafPackedPointer,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := builder.Add(token); err != nil {
+				token.Release()
+				t.Fatal(err)
+			}
+		}
+		source, err := builder.Freeze()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer source.Release()
+		if source.Len() != 2 {
+			t.Fatalf("alias fixture coalesced: %d", source.Len())
+		}
+		result, _, err := database.captureRebuiltIndexDurableResourcesWithWorkV1(database.idx.Load().pager, database.meta, source)
+		if result != nil {
+			result.Release()
+			t.Fatal("returned candidate with ambiguous physical alias")
+		}
+		if !errors.Is(err, rootpublication.ErrResourceConflict) {
+			t.Fatalf("alias error=%v", err)
+		}
+	})
+	for _, name := range []string{"wrong-physical", "missing-manager", "malformed-id"} {
+		t.Run(name, func(t *testing.T) {
+			gen := generation
+			if name == "missing-manager" {
+				gen += 10000
+			}
+			resourceID := strconv.FormatUint(gen, 10)
+			if name == "malformed-id" {
+				resourceID = "0" + resourceID
+			}
+			file, err := os.CreateTemp(t.TempDir(), "unrelated-pack")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if _, err := file.Write([]byte("wrong producer bytes")); err != nil {
+				t.Fatal(err)
+			}
+			token, err := rootpublication.NewStableResourceToken(rootpublication.StableResourceSpec{
+				Kind: rootpublication.ResourceOuterLeafPack, LogicalLane: "leaf-generation-pack",
+				ResourceID: resourceID, Generation: gen, DiagnosticPath: "unrelated-pack", File: file,
+				Frontier: rootpublication.DurableFrontier{Bytes: 1}, Digest: sha256.Sum256([]byte("wrong")),
+				Reachability: rootpublication.ReachabilityOuterLeafPackedPointer,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			builder := rootpublication.NewStableResourceSetBuilder()
+			defer builder.Abandon()
+			if err := builder.Add(token); err != nil {
+				token.Release()
+				t.Fatal(err)
+			}
+			source, err := builder.Freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.Release()
+			before := database.State()
+			currentResources := database.durableRoot.slotResources[database.durableRoot.slot]
+			result, _, err := database.captureRebuiltIndexDurableResourcesWithWorkV1(database.idx.Load().pager, database.meta, source)
+			if result != nil {
+				result.Release()
+				t.Fatal("returned candidate with unproved physical authority")
+			}
+			if !errors.Is(err, rootpublication.ErrUnresolvedResource) {
+				t.Fatalf("error=%v", err)
+			}
+			if database.State() != before || database.durableRoot.slotResources[database.durableRoot.slot] != currentResources {
+				t.Fatal("failed capture mutated published authority")
+			}
+			expectLeafGenerationValue(t, database, leafGenerationKey("authority", 0), 'a')
+		})
 	}
 }
