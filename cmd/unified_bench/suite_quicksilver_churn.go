@@ -32,6 +32,8 @@ type quicksilverChurnRound struct {
 	CheckpointSeconds     float64                  `json:"checkpoint_seconds"`
 	VerificationSeconds   float64                  `json:"verification_seconds"`
 	PauseSeconds          float64                  `json:"pause_seconds"`
+	PauseStartedUnixNano  int64                    `json:"pause_started_unix_nano"`
+	PauseFinishedUnixNano int64                    `json:"pause_finished_unix_nano"`
 	VerifiedKeys          int                      `json:"verified_keys"`
 	VerifiedMisses        int                      `json:"verified_misses"`
 	Before                quicksilverChurnSnapshot `json:"before"`
@@ -116,6 +118,7 @@ func quicksilverChurn(db kvstore.DB, c quicksilverConfig, res *quicksilverResult
 		}
 		r.CheckpointSeconds = time.Since(checkpointStart).Seconds()
 		pauseStart := time.Now()
+		r.PauseStartedUnixNano = pauseStart.UnixNano()
 		// Poll the existing wall/RSS guard during the one recorded maintenance pause.
 		for remaining := c.ChurnPause; remaining > 0; remaining = c.ChurnPause - time.Since(pauseStart) {
 			if err := guard.Checkpoint(); err != nil {
@@ -123,7 +126,9 @@ func quicksilverChurn(db kvstore.DB, c quicksilverConfig, res *quicksilverResult
 			}
 			time.Sleep(min(remaining, 50*time.Millisecond))
 		}
-		r.PauseSeconds = time.Since(pauseStart).Seconds()
+		pauseEnd := time.Now()
+		r.PauseFinishedUnixNano = pauseEnd.UnixNano()
+		r.PauseSeconds = pauseEnd.Sub(pauseStart).Seconds()
 		proofStart := time.Now()
 		r.VerifiedKeys, r.VerifiedMisses, err = quicksilverVerify(db, c, res.UpdateStride, guard)
 		if err != nil {

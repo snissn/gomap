@@ -521,12 +521,21 @@ are not benchprof inputs and cannot satisfy the native runtime's exclusive
 retained/peak measurement gate.
 The reported sampled maintenance RSS maximum must equal the maximum of
 eligible named cuts and the retained periodic RSS/call witness; periodic
-sample count and call alignment are validated.
+sample count and call alignment are validated. Memory schema v3 additionally
+retains `RSSPeriodicPeak.ProcessHWM` from the same `/proc/self/status` observation
+as its peak RSS and checks that paired RSS does not exceed its paired HWM. An
+empty witness has exactly zero Call/RSS/ProcessHWM. Linux RSS and VmHWM are
+approximate, independently accounted snapshots: ordered cut HWMs need not be
+monotone, and a later/final HWM is not an upper bound for earlier RSS. Summary
+maxima remain maxima of the observed samples, including fixture/observer work.
+Historical v2 packets keep their original schema, validator and source identity;
+missing paired witnesses fail current validation. Pair consistency and hashes
+cannot authenticate a coordinated rewrite of an entire packet.
 
 Validation recomputes `summary.json` from validated results and receipt labels;
 missing, malformed or inconsistent summaries fail closed.
 
-Memory v2 retains four fixed-size scalar peak witnesses for overall/source
+Memory v3 retains four fixed-size scalar peak witnesses for overall/source
 retirement cells, preparation window and native frames, including the observing
 call and custody phase. Every witness is checked against all reported memory
 and descriptor bounds. InputCount can witness a window before a private build
@@ -541,14 +550,16 @@ still contribute to aggregate memory and do not measure exclusive native heap.
 
 ## Native prune foreground pilot packets
 
-Foreground overlap counters retain caller-boundary samples of public-call envelopes.
+Foreground overlap counters retain approximate caller-boundary samples of public-call envelopes.
+Entry markers publish before peer sampling; return sampling precedes marker clearing.
+These sampled envelopes do not establish continuous public-call overlap.
 Options, payload construction, first-writer notification and result/latency bookkeeping
 sit outside marked calls; each flag clears immediately after the return-boundary
 observation. ACK/completion attribution keeps its first post-PruneVersions activity
 load. Sampling can miss overlap and has unavoidable scheduling uncertainty between
 adjacent caller instructions; it does not prove simultaneous internal critical-section
 execution. The parser requires the complete typed 76-field producer schema, complete
-histogram objects, representable counters, operation/work/phase/stop accounting and
+histogram objects, representable counters, operation/work/phase/stop accounting (after-stop ACKs require drain calls) and
 feasible histogram bounds. Coupled hostile fixtures refresh result checksums and
 reach the schema/accounting boundary without changing retained measurements.
 
@@ -622,10 +633,13 @@ validator and cannot be treated as evidence captured by the revised driver.
 
 Every foreground mode ends public writer activity at its final `CommitAt`
 return, including cap, duration and error stops, before latency/counter cleanup.
-Duration expiry is observed at public returns, preserving the existing approximate duration policy. The same return time binds latency and duration. The retained harness also uses
-that time for `WriterStopNS`; `writerDone` remains the later conservative worker
-join and post-writer read fence. These sampled phase witnesses do not qualify
-performance or prove continuous overlap.
+Duration expiry is observed at public returns, preserving the existing approximate
+duration policy. The same return time binds latency and current H2
+`WriterDurationNS`, the elapsed writer duration at the observed terminal return.
+The pending H3 retained extension (#5043) additionally records
+`retained.WriterStopNS`, measured from `measurementStart`. `writerDone` remains
+the later conservative worker completion and post-writer read fence. These
+sampled phase witnesses do not qualify performance or prove continuous overlap.
 
 The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
 produces a `gomap-r1-row-v1` packet and summary through

@@ -34,10 +34,10 @@ type nativeMemoryPeak struct {
 	State treedb.MaintenanceMemoryStateForTest
 }
 
-// The periodic maximum retains only its observing call and RSS scalar.
-// Named-cut RSS samples already live in the fixed lifecycle cut list.
+// The periodic maximum retains its call and paired approximate RSS/HWM
+// from one nativeMemoryProc observation. Independent cuts are not later bounds.
 type nativeMemoryRSSPeak struct {
-	Call, RSS uint64
+	Call, RSS, ProcessHWM uint64
 }
 
 type nativeMemoryResult struct {
@@ -106,7 +106,7 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 		t.Fatal("invalid memory mode")
 	}
 	pinned := os.Getenv("MVCC_MEMORY_PINNED") == "1"
-	result := nativeMemoryResult{Schema: "gomap-native-memory-v2", PID: os.Getpid(), N: n, Mode: mode, Pinned: pinned, FixedSurvivors: 3}
+	result := nativeMemoryResult{Schema: "gomap-native-memory-v3", PID: os.Getpid(), N: n, Mode: mode, Pinned: pinned, FixedSurvivors: 3}
 	var db *treedb.DB
 	var cursor *PruneCursor
 	var reader treedb.Snapshot
@@ -278,13 +278,13 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 			t.Fatalf("unbounded descriptor inventory: %+v", s)
 		}
 		if calls%128 == 0 {
-			rss, _ := nativeMemoryProc()
-			if rss == 0 {
-				t.Fatal("missing periodic Linux RSS observation")
+			rss, hwm := nativeMemoryProc()
+			if rss == 0 || hwm == 0 {
+				t.Fatal("missing periodic Linux RSS/HWM observation")
 			}
 			result.RSSPeriodicSamples++
 			if rss > result.RSSPeriodicPeak.RSS {
-				result.RSSPeriodicPeak = nativeMemoryRSSPeak{Call: result.Calls, RSS: rss}
+				result.RSSPeriodicPeak = nativeMemoryRSSPeak{Call: result.Calls, RSS: rss, ProcessHWM: hwm}
 			}
 			if rss > result.SampledMaintenanceRSSPeak {
 				result.SampledMaintenanceRSSPeak = rss

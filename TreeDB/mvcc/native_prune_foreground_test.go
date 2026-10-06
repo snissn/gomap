@@ -76,6 +76,21 @@ type foregroundResult struct {
 	Error                                                                                                                                            string
 }
 
+// Sample the required peer state at public return, then end our call bracket.
+// Timing, terminal decisions and accounting belong after this boundary.
+// Publish before sampling the peer. These adjacent caller instructions define
+// an approximate sampled envelope, not continuous internal-call overlap.
+func foregroundEntryBoundary(inCall *atomic.Bool, sample func() bool) bool {
+	inCall.Store(true)
+	return sample()
+}
+
+func foregroundReturnBoundary(inCall, peer *atomic.Bool) bool {
+	sampled := peer.Load()
+	inCall.Store(false)
+	return sampled
+}
+
 func foregroundPayload(i uint64) []byte {
 	p := bytes.Repeat([]byte{0x71}, 8192)
 	binary.LittleEndian.PutUint64(p[len(p)-8:], i)
@@ -168,16 +183,13 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 		}
 		start := time.Now()
 		if foregroundStarted {
-			if readInCall.Load() || writeInCall.Load() {
+			if foregroundEntryBoundary(&inQuantum, func() bool { return readInCall.Load() || writeInCall.Load() }) {
 				r.ForegroundIntervalsAtQuantumStart++
 			}
-			inQuantum.Store(true)
 		}
 		stats, err := s.PruneVersions(opts)
 		// Keep the first post-return activity snapshot for ACK/completion attribution.
-		writerActiveAtReturn := active.Load()
-		// Flags bracket public calls, excluding the following harness bookkeeping.
-		inQuantum.Store(false)
+		writerActiveAtReturn := foregroundReturnBoundary(&inQuantum, &active)
 		r.QuantumLatency.add(time.Since(start))
 		r.Calls++
 		r.FinalWorkRecords = stats.WorkRecords
@@ -281,9 +293,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 				close(writerStarted)
 			}
 			start := time.Now()
-			overlap := inQuantum.Load()
-			writeInCall.Store(true)
+			overlap := foregroundEntryBoundary(&writeInCall, inQuantum.Load)
 			e := s.CommitAt(ts, mutations, CommitRelaxed)
+			overlap = foregroundReturnBoundary(&writeInCall, &inQuantum) || overlap
 			end := time.Now()
 			durationStop := mode != "burst" && end.Sub(writerStart) >= duration
 			// Decide every terminal path at the public write return, before bookkeeping.
@@ -292,8 +304,6 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 				active.Store(false)
 				r.WriterDurationNS = uint64(end.Sub(writerStart))
 			}
-			overlap = overlap || inQuantum.Load()
-			writeInCall.Store(false)
 			r.WriteLatency.add(end.Sub(start))
 			if overlap {
 				r.WriteIntervalsOverlappingQuantum++
@@ -341,11 +351,9 @@ func TestNativePruneForegroundPilot(t *testing.T) {
 			}
 			lower := acknowledged.Load()
 			start := time.Now()
-			overlap := inQuantum.Load()
-			readInCall.Store(true)
+			overlap := foregroundEntryBoundary(&readInCall, inQuantum.Load)
 			v, e := s.GetAt(writer, ^uint64(0))
-			overlap = overlap || inQuantum.Load()
-			readInCall.Store(false)
+			overlap = foregroundReturnBoundary(&readInCall, &inQuantum) || overlap
 			r.ReadLatency.add(time.Since(start))
 			if overlap {
 				r.ReadIntervalsOverlappingQuantum++
@@ -594,5 +602,72 @@ func TestNativePruneForegroundBudgetErrorJoinsWorkers(t *testing.T) {
 	}
 	if !result.ForcedBudgetError || result.Error != "forced harness budget error" || result.Writes != 16 || result.Reads == 0 || result.ReadsAfterWriterStop == 0 || !result.PhysicalOracle || !result.WriterOracle || !result.PointerOracle || !result.OldReaderOracle || !result.ReopenOracle {
 		t.Fatalf("error did not reach joined cleanup/oracles: %+v\n%s", result, raw)
+	}
+}
+
+// A counterpart starting during post-return bookkeeping must not observe an
+// already returned public call, including every terminal write path.
+func TestNativePruneForegroundEntryBoundary(t *testing.T) {
+	for _, operation := range []string{"write", "read", "quantum"} {
+		t.Run(operation, func(t *testing.T) {
+			var inCall, peer atomic.Bool
+			for _, occupied := range []bool{false, true} {
+				inCall.Store(false)
+				peer.Store(occupied)
+				sampled := foregroundEntryBoundary(&inCall, func() bool {
+					if !inCall.Load() {
+						t.Fatal("peer sampled before entry marker publication")
+					}
+					return peer.Load()
+				})
+				if sampled != occupied || !inCall.Load() {
+					t.Fatal("entry did not retain its marker and peer observation")
+				}
+			}
+		})
+	}
+}
+
+func TestNativePruneForegroundReturnBoundary(t *testing.T) {
+	for _, operation := range []string{"write-cap", "write-duration", "write-error", "read", "quantum"} {
+		t.Run(operation, func(t *testing.T) {
+			var inCall, peer, bookkeeping atomic.Bool
+			returned := make(chan bool)
+			resume := make(chan struct{})
+			finished := make(chan struct{})
+			inCall.Store(true)
+			go func() {
+				// Model a completed public call and block before clocks, terminal
+				// state, error delivery or metrics can be recorded.
+				sampled := foregroundReturnBoundary(&inCall, &peer)
+				returned <- sampled
+				<-resume
+				bookkeeping.Store(true)
+				close(finished)
+			}()
+			if sampled := <-returned; sampled || bookkeeping.Load() || inCall.Load() {
+				close(resume)
+				<-finished
+				t.Fatal("returned call leaked into bookkeeping interval")
+			}
+			peer.Store(true) // A new counterpart starts while bookkeeping is paused.
+			if inCall.Load() {
+				t.Error("new counterpart counted a returned call as overlap")
+			}
+			close(resume)
+			<-finished
+			if !bookkeeping.Load() {
+				t.Fatal("caller did not resume bookkeeping")
+			}
+			inCall.Store(true)
+			if !foregroundReturnBoundary(&inCall, &peer) || inCall.Load() {
+				t.Fatal("lost a peer genuinely active at return")
+			}
+			peer.Store(false)
+			inCall.Store(true)
+			if foregroundReturnBoundary(&inCall, &peer) || inCall.Load() {
+				t.Fatal("serialized calls reported overlap")
+			}
+		})
 	}
 }

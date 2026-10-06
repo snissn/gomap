@@ -963,6 +963,13 @@ and pauses to positive durations up to 1m, checked before loading. The additive
 engine stats, Go heap, supported RSS and exact final files after clean close.
 It labels the shape and repeated insert semantics, counts restored keys/commits,
 and timestamps existing memory snapshots with `captured_at_unix_nano`.
+Each round also records `pause_started_unix_nano` and `pause_finished_unix_nano`
+at the actual pause boundaries; `pause_seconds` retains the monotonic elapsed
+duration. The collector rejects unordered/out-of-round boundaries or a wall
+versus monotonic duration difference above 1 millisecond. These stamps identify
+the quiet interval for co-timed RSS observations; apply the frozen boundary
+exclusion and require actual interior samples before claiming quiet residency.
+They add no maintenance work and do not change phase/profile names.
 Ordinary `final_files` remains the census before the ordinary final reopen;
 timed reads, report fields and phase artifact names keep their existing meaning.
 Whole-process HWM, block/mutex and trace include enabled rounds. This is a
@@ -1238,7 +1245,7 @@ artifacts, have no benchprof input contract and do not qualify schema 1's
 native runtime gate. Expensive collection requires reviewed landed tooling
 and an externally recorded exact product/harness source freeze.
 
-Memory v2 retains four fixed-size scalar peak witnesses for overall/source
+Memory v3 retains four fixed-size scalar peak witnesses for overall/source
 retirement cells, preparation window and native frames, including the observing
 call and custody phase. Every witness is checked against all reported memory
 and descriptor bounds. InputCount can witness a window before a private build
@@ -1251,6 +1258,8 @@ to exercise case-level refusals. Work-record/byte maxima are budget checks;
 they are not attained-maximum memory witnesses. These fixed scalar observations
 still contribute to aggregate memory and do not measure exclusive native heap.
 Partial-output cuts require real allocated output and nonzero source retirement.
+Memory integers must fit the producer's uint64, uint8 Phase or nonnegative
+64-bit Go int, as appropriate; zero witnesses retain their exact empty shape.
 Custody bounds and record-count scaling are evaluated separately from this
 presence witness.
 The sampled maintenance RSS peak is checked against the eligible named cuts
@@ -1258,7 +1267,15 @@ and one constant-size periodic maximum witness (RSS and observing call).
 Periodic samples run every 128 maintenance calls; the recorded sample count
 must match that schedule, and missing periodic Linux RSS fails closed.
 The maximum includes terminal maintenance and custody cleanup cuts, even after
-native ownership is released. It remains aggregate process RSS.
+native ownership is released. It remains aggregate process RSS. Memory schema v3
+retains `RSSPeriodicPeak.ProcessHWM` from the same `/proc/self/status` observation
+as its peak RSS and checks only that paired RSS does not exceed paired HWM.
+An empty witness has exactly zero Call/RSS/ProcessHWM. Linux RSS and VmHWM are
+approximate independent snapshots: ordered HWMs need not be monotone, and a
+later/final HWM is not an upper bound for earlier RSS. Historical v2 packets
+keep their original schema, validator and source identity; missing paired
+witnesses fail current validation. Pair consistency and hashes cannot
+authenticate a coordinated rewrite of an entire packet.
 Validation also recomputes `summary.json` from the validated case results and
 receipt labels, refusing missing, malformed, changed or contradictory summaries.
 
@@ -1267,14 +1284,16 @@ fail the current validator; missing samples are never reconstructed.
 
 ## Native prune foreground causal pilot
 
-Foreground overlap counters retain caller-boundary samples of public-call envelopes.
+Foreground overlap counters retain approximate caller-boundary samples of public-call envelopes.
+Entry markers publish before peer sampling; return sampling precedes marker clearing.
+These sampled envelopes do not establish continuous public-call overlap.
 Options, payload construction, first-writer notification and result/latency bookkeeping
 sit outside marked calls; each flag clears immediately after the return-boundary
 observation. ACK/completion attribution keeps its first post-PruneVersions activity
 load. Sampling can miss overlap and has unavoidable scheduling uncertainty between
 adjacent caller instructions; it does not prove simultaneous internal critical-section
 execution. The parser requires the complete typed 76-field producer schema, complete
-histogram objects, representable counters, operation/work/phase/stop accounting and
+histogram objects, representable counters, operation/work/phase/stop accounting (after-stop ACKs require drain calls) and
 feasible histogram bounds. Coupled hostile fixtures refresh result checksums and
 reach the schema/accounting boundary without changing retained measurements.
 
@@ -1370,10 +1389,13 @@ validator and cannot be treated as evidence captured by the revised driver.
 
 Every foreground mode ends public writer activity at its final `CommitAt`
 return, including cap, duration and error stops, before latency/counter cleanup.
-Duration expiry is observed at public returns, preserving the existing approximate duration policy. The same return time binds latency and duration. The retained harness also uses
-that time for `WriterStopNS`; `writerDone` remains the later conservative worker
-join and post-writer read fence. These sampled phase witnesses do not qualify
-performance or prove continuous overlap.
+Duration expiry is observed at public returns, preserving the existing approximate
+duration policy. The same return time binds latency and current H2
+`WriterDurationNS`, the elapsed writer duration at the observed terminal return.
+The pending H3 retained extension (#5043) additionally records
+`retained.WriterStopNS`, measured from `measurementStart`. `writerDone` remains
+the later conservative worker completion and post-writer read fence. These
+sampled phase witnesses do not qualify performance or prove continuous overlap.
 
 The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
 uses `scripts/r1_collection_capture.sh` and the `gomap-r1-row-v1` packet. It reports

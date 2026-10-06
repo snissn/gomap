@@ -181,6 +181,7 @@ def validate(x, n, mode, algorithm):
     need(x['Writes'] <= {'burst': 16, 'growth': 256, 'churn': 1024}[mode], 'write ceiling')
     need(x['WriterStopReason'] in ('finite-burst', 'write-cap', 'observation-duration'), 'writer stop reason')
     need(0 < x['WriterDurationNS'], 'writer duration')
+    need(x['ACKAfterWriterStop'] == 0 or x['DrainCalls'] > 0, 'after-stop ACK without drain call')
     need(x['WriterActiveCalls'] + x['DrainCalls'] <= x['Calls'], 'writer phase call accounting')
     need(x['ReadIntervalsOverlappingQuantum'] <= x['Reads'] and x['WriteIntervalsOverlappingQuantum'] <= x['Writes'] and x['ForegroundIntervalsAtQuantumStart'] <= x['WriterActiveCalls'] + x['DrainCalls'], 'overlap count bounds')
     need(x['FinalWorkRecords'] <= x['MaxRecords'] <= x['Records'] <= x['Calls'] * x['MaxRecords'] and x['FinalWorkBytes'] <= x['MaxBytes'] <= x['Bytes'] <= x['Calls'] * x['MaxBytes'], 'work counter accounting')
@@ -322,6 +323,7 @@ def contract_self_test(out, r):
         ('read overlap', lambda y: y.update(ReadIntervalsOverlappingQuantum=y['Reads'] + 1), 'overlap count bounds'),
         ('write overlap', lambda y: y.update(WriteIntervalsOverlappingQuantum=y['Writes'] + 1), 'overlap count bounds'),
         ('entry overlap', lambda y: y.update(ForegroundIntervalsAtQuantumStart=y['Calls'] + 1), 'overlap count bounds'),
+        ('after-stop ACK without drain', lambda y: y.update(ACKWhileWriterActive=0, ACKAfterWriterStop=y['Pruned'], DrainCalls=0), 'after-stop ACK without drain call'),
         ('phase calls', lambda y: y.update(DrainCalls=y['Calls']), 'writer phase call accounting'),
         ('zero duration', lambda y: y.update(WriterDurationNS=0), 'writer duration'),
         ('maximum records', lambda y: y.update(MaxRecords=y['Records'] + 1), 'work counter accounting'),
@@ -402,6 +404,7 @@ def contract_self_test(out, r):
 def self_test(out, root):
     r = packet(out, root)
     environment_self_test(out, r)
+    ack_drain_self_test(out, r)
     x = json.loads((out / r['cases'][0]['result']).read_text())
     c = r['cases'][0]
     probes = [lambda y: y.update(ReadsAfterWriterStop=0), lambda y: y.update(ReadersStopWithWriter=True), lambda y: y.update(ForcedBudgetError=True), lambda y: y.update(Calls=float(y['Calls'])), lambda y: y.update(Refusals=False), lambda y: y['ReadLatency'].update(Buckets=[-1, y['Reads'] + 1] + [0] * 6)]
@@ -422,6 +425,33 @@ def self_test(out, root):
         raise ValueError('negative receipt accepted')
     print('seventeen in-memory negative checks PASS; retained measurements unchanged')
     contract_self_test(out, r)
+
+
+def ack_drain_self_test(out, receipt):
+    """Every mode/algorithm: refresh checksums without recapturing measurements."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix='native-foreground-ack-drain-') as folder:
+        archive = pathlib.Path(folder)
+        for file in out.iterdir():
+            if file.is_file():
+                shutil.copyfile(file, archive / file.name)
+        for index, case in enumerate(receipt['cases']):
+            target = archive / case['result']
+            original = (out / case['result']).read_bytes()
+            altered = json.loads(original)
+            altered.update(ACKWhileWriterActive=0, ACKAfterWriterStop=altered['Pruned'], DrainCalls=0)
+            target.write_text(json.dumps(altered, indent=2) + '\n')
+            changed = copy.deepcopy(receipt)
+            changed['cases'][index]['result_sha256'] = sha(target)
+            try:
+                packet(archive, receipt=changed)
+            except ValueError as error:
+                need(str(error) == 'after-stop ACK without drain call', 'wrong coupled ACK/drain refusal')
+            else:
+                raise ValueError('checksum-refreshed after-stop ACK without drain accepted')
+            finally:
+                target.write_bytes(original)
+    print(str(len(receipt['cases'])) + ' mode/algorithm checksum-refreshed ACK/drain refusals PASS; original packet unchanged')
 
 
 def environment_self_test(out, receipt):

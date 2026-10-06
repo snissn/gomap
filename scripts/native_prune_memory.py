@@ -8,8 +8,21 @@ This separate contract does not qualify the native-prune benchmark schema.
 """
 import argparse, hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile, time
 
-CONTRACT = 'gomap-native-memory-v2'
-MEASUREMENT_LABELS = {'heap': 'aggregate forced-GC Go runtime, instrumentation included', 'rss': 'aggregate sampled process RSS; maintenance peak sampled at cuts/every128 quanta', 'hwm': 'whole-process VmHWM includes fixture', 'retirement_bytes': 'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP', 'allocations': 'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline', 'reader': 'pinned prune cases read an actually deleted old physical version before release; pinned control/cancel cases read a version retained in the current tree; unpinned cases close their real baseline reader', 'output': 'prune cases have fixed three surviving records; control/cancel retain input history. Actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count', 'control': 'same source shape, no discard floor; retains input history'}
+CONTRACT = 'gomap-native-memory-v3'
+MEASUREMENT_LABELS = {'heap': 'aggregate forced-GC Go runtime, instrumentation included', 'rss': 'aggregate sampled approximate Linux process RSS; maintenance peak sampled at cuts/every128 quanta; periodic peak paired with same-observation VmHWM', 'hwm': 'maximum observed approximate whole-process VmHWM includes fixture; independent snapshots are not monotone or later bounds', 'retirement_bytes': 'RetirementCells*8 logical cell payload lower bound; exclusive native tree heap GAP', 'allocations': 'process_start through directory_cleanup includes discovery, ACK, finish, cancel, cursor Close, DB Close/reopen/final Close; fixture scope separable at fixture_baseline', 'reader': 'pinned prune cases read an actually deleted old physical version before release; pinned control/cancel cases read a version retained in the current tree; unpinned cases close their real baseline reader', 'output': 'prune cases have fixed three surviving records; control/cancel retain input history. Actual noncoalesced page storage may scale. OutputBufferBytes observes one actual held buffer, not total private output memory; allocator Count is exact actual private page-owner count', 'control': 'same source shape, no discard floor; retains input history'}
+# The captured runner is linux/amd64: Go int is signed 64-bit; counters
+# emitted as uint64 and the maintenance Phase uint8 keep their own widths.
+GO_INT_LIMIT = 1 << 63
+GO_UINT_LIMIT = 1 << 64
+RESULT_INT_FIELDS = frozenset(('n','pid','MaxWindow','MaxFrames','MaxFlatRetiredCap','PhysicalBefore','PhysicalAfter','FixedSurvivors'))
+STATE_LIMITS = ({'Phase': 1 << 8, 'InputCount': GO_INT_LIMIT, 'Chunk': GO_UINT_LIMIT},
+                {k: GO_UINT_LIMIT if k == 'RetirementCells' else GO_INT_LIMIT for k in ('AllocatedPages','Dependencies','FlatRetiredLen','FlatRetiredCap','RetirementCells')},
+                {k: GO_UINT_LIMIT if k in ('DecodedLeafBytes','ObservedOutputBufferBytes') else GO_INT_LIMIT for k in ('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes')})
+CUT_LIMITS = {k: GO_INT_LIMIT if k == 'OutputPages' else GO_UINT_LIMIT for k in ('HeapAlloc','HeapInuse','HeapObjects','TotalAlloc','Mallocs','RSS','ProcessHWM','OutputPages','OutputBufferBytes')}
+
+def go_count(value, limit):
+    return type(value) is int and 0 <= value < limit
+
 MAINTENANCE_RSS_CUTS = frozenset(('prepared', 'partial_private_output', 'accepted_relaxed', 'cancel_requested', 'cancel_drained', 'finish', 'cursor_close', 'db_owned_cleanup'))
 BUILD_KEYS = ('CGO_ENABLED', 'GOFLAGS', 'GOWORK', 'GOTOOLCHAIN', 'GOENV', 'HOME', 'PATH')
 FIXED_ENV = {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOENV': 'off'}
@@ -54,9 +67,9 @@ def validate_state(a):
     require(isinstance(a,dict),'missing custody sample')
     p=a.get('Private');require(isinstance(p,dict) and isinstance(p.get('Native'),dict),'missing private sample')
     z=p['Native']
-    for owner, bools, nums in ((a,('Native','Accepted','EOF'),('Phase','InputCount','Chunk')),(p,('Build',),('AllocatedPages','Dependencies','FlatRetiredLen','FlatRetiredCap','RetirementCells')),(z,(),('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes'))):
+    for index, (owner, bools, nums) in enumerate(((a,('Native','Accepted','EOF'),('Phase','InputCount','Chunk')),(p,('Build',),('AllocatedPages','Dependencies','FlatRetiredLen','FlatRetiredCap','RetirementCells')),(z,(),('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes')))):
         require(all(k in owner and type(owner[k]) is bool for k in bools),'missing/malformed owner booleans')
-        require(all(k in owner and type(owner[k]) is int and owner[k]>=0 for k in nums),'missing/malformed owner counts')
+        require(all(k in owner and go_count(owner[k],STATE_LIMITS[index][k]) for k in nums),'missing/malformed owner counts')
     require(p.get('FlatRetiredCap')==0 and z.get('FlatRetiredCap')==0 and 0 <= z.get('Window',-1) <= 32 and 0 <= a.get('InputCount',-1)<=32,'sample descriptor failure')
     require(z['ObservedOutputPages'] in (0,1) and (z['ObservedOutputPages']==0)==(z['ObservedOutputBufferBytes']==0),'invalid scalar output observation')
     require(z['DecodedLeafBytes'] in (0,4096),'invalid retained decoded leaf size')
@@ -80,7 +93,7 @@ def validate_case(x, n, mode, pinned):
     require((x['schema'],x['n'],x['mode'],x['pinned']) == (CONTRACT,n,mode,pinned), 'case identity mismatch')
     for k in required:
         if k not in ('schema','mode','pinned','cuts','RetirementPeak','SourceRetirementPeak','WindowPeak','FramePeak','RSSPeriodicPeak') and not k.endswith('Oracle') and k not in ('PartialOutput','RelaxedCustody','ChargedCancel'):
-            require(type(x[k]) is int and x[k] >= 0, 'invalid numeric field '+k)
+            require(go_count(x[k],GO_INT_LIMIT if k in RESULT_INT_FIELDS else GO_UINT_LIMIT), 'invalid numeric field '+k)
     for k in ('pinned','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel'):
         require(type(x[k]) is bool, 'invalid boolean field '+k)
     require(x['pid'] > 0 and x['Calls'] > 0, 'missing process/work witness')
@@ -108,7 +121,7 @@ def validate_case(x, n, mode, pinned):
     previous_alloc=previous_malloc=0
     for s in cuts:
         for k in ('HeapAlloc','HeapInuse','HeapObjects','TotalAlloc','Mallocs','RSS','ProcessHWM','OutputPages','OutputBufferBytes'):
-            require(k in s and type(s[k]) is int and s[k]>=0,'invalid/missing memory sample '+k)
+            require(k in s and go_count(s[k],CUT_LIMITS[k]),'invalid/missing memory sample '+k)
         require(s['RSS']>0 and s['ProcessHWM']>0,'missing Linux RSS/HWM observation')
         require(s['HeapAlloc']<=s['HeapInuse'],'heap allocation exceeds in-use spans')
         require(s['HeapAlloc']<=s['TotalAlloc'],'heap allocation exceeds cumulative allocation')
@@ -130,17 +143,18 @@ def validate_case(x, n, mode, pinned):
         if s['name'] in ('finish','cancel_drained','cursor_close','db_owned_cleanup','reader_released','db_close','reopen','final_db_close','directory_cleanup'):
             require(not a['Native'] and not a['Accepted'] and not p['Build'] and p['AllocatedPages']==0 and p['Dependencies']==0 and p['RetirementCells']==0 and all(z[k]==0 for k in ('Window','Frames','FlatRetiredLen','FlatRetiredCap','DecodedLeafBytes','ObservedOutputPages','ObservedOutputBufferBytes')),'terminal owner retained')
     periodic=x['RSSPeriodicPeak']
-    require(isinstance(periodic,dict) and all(type(periodic.get(k)) is int and periodic[k]>=0 for k in ('Call','RSS')),'missing/malformed periodic RSS witness')
+    require(type(periodic) is dict and set(periodic)=={'Call','RSS','ProcessHWM'} and all(go_count(periodic[k],GO_UINT_LIMIT) for k in periodic),'missing/malformed periodic RSS/HWM witness')
     require(x['RSSPeriodicSamples']==x['Calls']//128,'missing periodic RSS schedule coverage')
     if x['RSSPeriodicSamples']==0:
-        require(periodic['Call']==0 and periodic['RSS']==0,'nonzero empty periodic RSS witness')
+        require(all(periodic[k]==0 for k in ('Call','RSS','ProcessHWM')),'nonzero empty periodic RSS/HWM witness')
     else:
         require(periodic['RSS']>0 and 128<=periodic['Call']<=x['Calls'] and periodic['Call']%128==0,'invalid periodic RSS witness call/sample')
+    require(periodic['RSS']<=periodic['ProcessHWM'],'periodic RSS exceeds paired process high-water mark')
     observed_rss=max([periodic['RSS']]+[s['RSS'] for s in cuts if s['name'] in MAINTENANCE_RSS_CUTS])
     require(x['SampledMaintenanceRSSPeak']==observed_rss,'unwitnessed sampled maintenance RSS maximum')
     require(x['MaxSourceRetirementCells']<=x['MaxRetirementCells'],'source peak exceeds overall peak')
     for field, maximum in (('RetirementPeak','MaxRetirementCells'),('SourceRetirementPeak','MaxSourceRetirementCells'),('WindowPeak','MaxWindow'),('FramePeak','MaxFrames')):
-        w=x[field];require(isinstance(w,dict) and type(w.get('Call')) is int,'missing/malformed peak witness')
+        w=x[field];require(isinstance(w,dict) and go_count(w.get('Call'),GO_UINT_LIMIT),'missing/malformed peak witness')
         a=w.get('State');p,z=validate_state_bounds(a,x)
         observed=max(a['InputCount'],z['Window']) if field=='WindowPeak' else z['Frames'] if field=='FramePeak' else p['RetirementCells']
         require(observed==x[maximum],'unwitnessed maximum '+maximum)
@@ -252,6 +266,8 @@ def validate_packet(out, root=None):
 def self_test(out):
     r=validate_packet(out)
     environment_self_test(out, r)
+    periodic_hwm_self_test(out, r)
+    integer_self_test(out, r)
     c=r['cases'][0];x=json.loads((out/c['result']).read_text())
     validate_case(x,c['n'],c['mode'],c['pinned'])
     witness_case=next((c for c in r['cases'] if c['mode']!='control'),None)
@@ -332,7 +348,7 @@ def self_test(out):
                 elif fault=='rss-peak-inflated':altered['SampledMaintenanceRSSPeak']+=1
                 elif fault=='rss-witness-missing':del altered['RSSPeriodicPeak']
                 elif fault=='rss-witness-type':altered['RSSPeriodicPeak']['RSS']=True
-                elif fault=='rss-witness-zero':altered['RSSPeriodicPeak']={'Call':0,'RSS':0}
+                elif fault=='rss-witness-zero':altered['RSSPeriodicPeak']={'Call':0,'RSS':0,'ProcessHWM':0}
                 elif fault=='rss-witness-call':altered['RSSPeriodicPeak']['Call']=altered['Calls']+128
                 elif fault=='rss-witness-alignment':altered['RSSPeriodicPeak']['Call']=129
                 elif fault=='rss-schedule-missing':altered['RSSPeriodicSamples']+=1
@@ -490,6 +506,121 @@ def measurement_self_test(out, receipt, witness_case):
             except ValueError as e:require(str(e)=='noncanonical measurement scope labels','malformed scope refusal at wrong boundary')
             else:raise ValueError('malformed scope labels accepted')
     print('measurement contract: '+str(len(fixtures))+' positive parser fixtures, '+str(len(negatives))+' coupled case refusals, 13 canonical-label refusals PASS')
+
+
+def integer_self_test(out, receipt):
+    """Producer-width checks with refreshed checksums and derived summaries."""
+    clone=lambda x:json.loads(json.dumps(x))
+    case=receipt['cases'][0];original=json.loads((out/case['result']).read_text())
+    faults=[]
+    for k,v in original.items():
+        if type(v) is int:
+            limit=GO_INT_LIMIT if k in RESULT_INT_FIELDS else GO_UINT_LIMIT
+            for value in (limit,-1,True,1.0):
+                # Identity remains the first check for n; exercise its width
+                # with the same caller value to reach the numeric boundary.
+                faults.append(('result '+k,lambda y,k=k,value=value:y.update({k:value}),'invalid numeric field '+k,k=='n'))
+    for ci,cut in enumerate(original['cuts']):
+        for k,limit in CUT_LIMITS.items():
+            faults.append(('cut '+k,lambda y,ci=ci,k=k,limit=limit:y['cuts'][ci].update({k:limit}),'invalid/missing memory sample '+k,False))
+    containers=[(('cuts',i,'State'),cut['State']) for i,cut in enumerate(original['cuts'])]
+    containers += [((k,'State'),original[k]['State']) for k in ('RetirementPeak','SourceRetirementPeak','WindowPeak','FramePeak')]
+    def at(y,path):
+        for key in path:y=y[key]
+        return y
+    for path,state in containers:
+        for suffix,limits in zip(((),('Private',),('Private','Native')),STATE_LIMITS):
+            for k,limit in limits.items():
+                faults.append(('state '+k,lambda y,path=path,suffix=suffix,k=k,limit=limit:at(y,path+suffix).update({k:limit}),'missing/malformed owner counts',False))
+    for k in ('RetirementPeak','SourceRetirementPeak','WindowPeak','FramePeak'):
+        faults.append(('witness call',lambda y,k=k:y[k].update(Call=GO_UINT_LIMIT),'missing/malformed peak witness',False))
+    for k in ('Call','RSS','ProcessHWM'):
+        faults.append(('periodic width',lambda y,k=k:y['RSSPeriodicPeak'].update({k:GO_UINT_LIMIT}),'missing/malformed periodic RSS/HWM witness',False))
+    # Width helper positive boundaries distinguish int/byte/uint, including 0;
+    # semantic bounds still independently constrain complete case values.
+    for limit in (1<<8,GO_INT_LIMIT,GO_UINT_LIMIT):
+        require(go_count(0,limit) and go_count(limit-1,limit),'producer width boundary rejected')
+        require(not any(go_count(v,limit) for v in (limit,-1,True,1.0,None)),'producer width boundary accepted')
+    with tempfile.TemporaryDirectory(prefix='native-memory-integer-contract-') as folder:
+        archive=pathlib.Path(folder)
+        for p in out.iterdir():
+            if p.is_file():shutil.copyfile(p,archive/p.name)
+        for name,mutate,reason,identity in faults:
+            x=clone(original);mutate(x)
+            try:validate_case(x,x['n'] if identity else case['n'],case['mode'],case['pinned'])
+            except ValueError as error:require(str(error)==reason,'integer refusal at wrong case boundary: '+name+' '+str(error))
+            else:raise ValueError('producer integer fault accepted: '+name)
+            if identity:continue  # impossible run n is checked separately by packet metadata
+            r=clone(receipt);target=archive/case['result'];target.write_text(json.dumps(x)+'\n')
+            r['cases'][0]['result_sha256']=sha(target)
+            (archive/'receipt.json').write_text(json.dumps(r)+'\n')
+            results=[json.loads((archive/c['result']).read_text()) for c in r['cases']]
+            (archive/'summary.json').write_text(json.dumps(summarize(r,results))+'\n')
+            try:validate_packet(archive)
+            except ValueError as error:require(str(error)==reason,'integer refusal at wrong packet boundary: '+name+' '+str(error))
+            else:raise ValueError('checksum/summary-refreshed producer integer fault accepted: '+name)
+    print(str(len(faults))+' producer-width refusals and zero/max boundaries PASS')
+
+
+def periodic_hwm_self_test(out, receipt):
+    """Paired-observation parser fixtures; originals remain runtime evidence."""
+    clone=lambda x:json.loads(json.dumps(x))
+    periodic_case=next((c for c in receipt['cases'] if json.loads((out/c['result']).read_text())['RSSPeriodicSamples']>0),None)
+    zero_case=next((c for c in receipt['cases'] if json.loads((out/c['result']).read_text())['RSSPeriodicSamples']==0),None)
+    require(periodic_case is not None and zero_case is not None,'self-test needs genuine periodic and zero-periodic cases')
+    original=json.loads((out/periodic_case['result']).read_text())
+    zero=json.loads((out/zero_case['result']).read_text())
+    pair=original['RSSPeriodicPeak']
+    equal=clone(original);equal['RSSPeriodicPeak']['ProcessHWM']=pair['RSS']
+    independent=clone(equal)
+    # A named-cut HWM may decrease without changing same-observation bounds.
+    independent['cuts'][0]['ProcessHWM']=max(s['ProcessHWM'] for s in independent['cuts'])+1
+    later=clone(equal)
+    # Synthetic parser-only proof that the final snapshot is NOT an envelope.
+    peak=max(pair['RSS'],later['cuts'][-1]['RSS']+1)
+    later['RSSPeriodicPeak']['RSS']=peak;later['RSSPeriodicPeak']['ProcessHWM']=peak
+    later['cuts'][-1]['ProcessHWM']=peak-1
+    later['SampledMaintenanceRSSPeak']=max([peak]+[s['RSS'] for s in later['cuts'] if s['name'] in MAINTENANCE_RSS_CUTS])
+    fixtures=[('paired equality',periodic_case,equal,None),('independent decreasing HWM',periodic_case,independent,None),
+              ('periodic RSS above later HWM',periodic_case,later,None),('genuine empty pair',zero_case,zero,None)]
+    bad=clone(equal);bad['RSSPeriodicPeak']['RSS']+=1
+    bad['SampledMaintenanceRSSPeak']=max([bad['RSSPeriodicPeak']['RSS']]+[s['RSS'] for s in bad['cuts'] if s['name'] in MAINTENANCE_RSS_CUTS])
+    fixtures.append(('RSS above its paired HWM',periodic_case,bad,'periodic RSS exceeds paired process high-water mark'))
+    for key in ('Call','RSS','ProcessHWM'):
+        bad=clone(original);del bad['RSSPeriodicPeak'][key]
+        fixtures.append(('missing paired '+key,periodic_case,bad,'missing/malformed periodic RSS/HWM witness'))
+        for value in (True,1.0,'1',None,-1):
+            bad=clone(original);bad['RSSPeriodicPeak'][key]=value
+            fixtures.append(('typed paired '+key+' '+repr(value),periodic_case,bad,'missing/malformed periodic RSS/HWM witness'))
+        bad=clone(zero);bad['RSSPeriodicPeak'][key]=1
+        fixtures.append(('nonzero empty '+key,zero_case,bad,'nonzero empty periodic RSS/HWM witness'))
+    bad=clone(original);bad['RSSPeriodicPeak']['extra']=0
+    fixtures.append(('extra paired field',periodic_case,bad,'missing/malformed periodic RSS/HWM witness'))
+    bad=clone(original);bad['schema']='gomap-native-memory-v2'
+    fixtures.append(('old result schema',periodic_case,bad,'case identity mismatch'))
+    with tempfile.TemporaryDirectory(prefix='native-memory-paired-hwm-contract-') as folder:
+        archive=pathlib.Path(folder)
+        for p in out.iterdir():
+            if p.is_file():shutil.copyfile(p,archive/p.name)
+        for name,case,x,reason in fixtures:
+            # Reset BOTH result cases independently before every mutation.
+            for c in receipt['cases']:shutil.copyfile(out/c['result'],archive/c['result'])
+            r=clone(receipt);p=archive/case['result'];p.write_text(json.dumps(x)+'\n')
+            next(c for c in r['cases'] if c['result']==p.name)['result_sha256']=sha(p)
+            (archive/'receipt.json').write_text(json.dumps(r)+'\n')
+            results=[json.loads((archive/c['result']).read_text()) for c in r['cases']]
+            (archive/'summary.json').write_text(json.dumps(summarize(r,results))+'\n')
+            if reason is None:validate_packet(archive)
+            else:
+                try:validate_packet(archive)
+                except ValueError as error:require(str(error)==reason,'paired HWM refusal at wrong boundary: '+name)
+                else:raise ValueError('checksum/summary-refreshed paired HWM fault accepted: '+name)
+        r=clone(receipt);r['contract']='gomap-native-memory-v2'
+        (archive/'receipt.json').write_text(json.dumps(r)+'\n')
+        try:validate_packet(archive)
+        except ValueError as error:require(str(error)=='invalid source receipt','old receipt refusal at wrong boundary')
+        else:raise ValueError('old receipt contract accepted')
+    print('paired HWM contract: 4 positive parser fixtures and '+str(len(fixtures)-4+1)+' exact coupled refusals PASS')
 
 
 def environment_self_test(out, receipt):
