@@ -18,6 +18,10 @@ Status:
   supported entry points; planned commands in `user-command-wal.md` are not
   supported merely because they appear in that design.
 
+The bounded R1 indexed-row capability and measurement contract is recorded in
+[r1-indexed-row-contract.md](r1-indexed-row-contract.md). It distinguishes current
+ordinary typed-range output gaps from complete prepared materialization.
+
 ## 1. Key Model
 
 - Raw KV keys and values are byte strings.
