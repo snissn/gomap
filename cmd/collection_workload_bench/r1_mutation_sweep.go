@@ -3,6 +3,9 @@ package main
 // This sibling mode leaves the frozen A operation schedule and packet unchanged.
 // It measures actual UpdateBatch request sizes, not the A load/read batch flag.
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -401,6 +404,12 @@ func validateR1Sweep(p r1SweepPacket) error {
 		if a["treedb.command_wal.append.count_total"] < uint64(m.Operations) || a["treedb.command_wal.sync.count_total"] < uint64(m.Operations) || a["treedb.collections.write_domain.update_batch.calls_total"] != uint64(m.Operations) || a["treedb.collections.write_domain.update_batch.items_total"] != uint64(m.Rows) {
 			return errors.New("mutation request/WAL counter coverage mismatch")
 		}
+		// Every serial request changes at least one field and appends new command
+		// bytes before its durable ACK. An already-durable prefix reuse is not a
+		// substitute for syncing the newly appended request.
+		if a["treedb.command_wal.file_sync.calls_total"] < uint64(m.Operations) || a["treedb.command_wal.write.bytes_total"] == 0 {
+			return errors.New("mutation physical WAL write/sync coverage mismatch")
+		}
 		f, err := r1SweepDelta(c.CountersAfterACK, c.CountersAfterFlush)
 		if err != nil || !reflect.DeepEqual(f, c.FlushCounterDelta) {
 			return errors.New("invalid Flush counter delta")
@@ -412,6 +421,13 @@ func validateR1Sweep(p r1SweepPacket) error {
 func validateR1SweepCommand(w io.Writer, args []string) error {
 	f := flag.NewFlagSet("r1-mutation-sweep-validate", flag.ContinueOnError)
 	sourcePath := f.String("source-manifest", "", "independent expected source manifest")
+	semanticOnly := f.Bool("semantic-only", false, "UNQUALIFIED producer check; never accepts retained evidence")
+	commit := f.String("expected-commit", "", "source commit independently frozen by acceptance owner")
+	runtimeHash := f.String("expected-runtime", "", "independently frozen runtime SHA256")
+	harnessHash := f.String("expected-harness", "", "independently frozen harness SHA256")
+	landed := f.String("expected-landed-tooling-commit", "", "independently verified landing SHA; selected source must equal it")
+	binaryHash := f.String("expected-binary-sha256", "", "executing binary SHA256 from separate observed build receipt")
+	packetHash := f.String("expected-packet-sha256", "", "original packet byte SHA256 from separate observed completed-run receipt")
 	if err := f.Parse(args); err != nil {
 		return err
 	}
@@ -420,8 +436,19 @@ func validateR1SweepCommand(w io.Writer, args []string) error {
 	}
 	var p r1SweepPacket
 	var source r1Source
-	if err := readR1JSON(f.Arg(0), &p); err != nil {
+	raw, err := os.ReadFile(f.Arg(0))
+	if err != nil {
 		return err
+	}
+	// Validate the same original bytes that are bound by the external receipt.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err = dec.Decode(&p); err != nil {
+		return err
+	}
+	var extra any
+	if err = dec.Decode(&extra); err != io.EOF {
+		return errors.New("trailing JSON input")
 	}
 	if err := readR1JSON(*sourcePath, &source); err != nil {
 		return err
@@ -429,9 +456,47 @@ func validateR1SweepCommand(w io.Writer, args []string) error {
 	if !reflect.DeepEqual(p.Source, source) {
 		return errors.New("packet differs from frozen source")
 	}
+	if *semanticOnly {
+		if *commit != "" || *runtimeHash != "" || *harnessHash != "" || *landed != "" || *binaryHash != "" || *packetHash != "" {
+			return errors.New("semantic-only cannot be combined with acceptance pins")
+		}
+	} else {
+		if !r1SHA(*commit, 20) || !r1SHA(*landed, 20) || !r1SHA(*runtimeHash, 32) || !r1SHA(*harnessHash, 32) || !r1SHA(*binaryHash, 32) || !r1SHA(*packetHash, 32) {
+			return errors.New("all six independent source/landing/binary/packet receipt pins are required")
+		}
+		if p.Source.Commit != *commit || *commit != *landed || p.Source.RuntimeSHA256 != *runtimeHash || p.Source.HarnessSHA256 != *harnessHash {
+			return errors.New("independent source or exact landed-tooling pin mismatch")
+		}
+		executable, e := os.Executable()
+		if e != nil {
+			return e
+		}
+		binary, e := os.ReadFile(executable)
+		if e != nil {
+			return e
+		}
+		if r1SweepSHA256(binary) != *binaryHash {
+			return errors.New("executing binary differs from independent build receipt")
+		}
+		if r1SweepSHA256(raw) != *packetHash {
+			return errors.New("original packet bytes differ from independent completed-run receipt")
+		}
+	}
 	if err := validateR1Sweep(p); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintln(w, "R1 mutation sweep valid:", p.Config.Qualification, len(p.Cells), "cells")
+	label := "UNQUALIFIED R1 mutation sweep semantic check:"
+	if !*semanticOnly {
+		label = "UNQUALIFIED R1 mutation sweep rehearsal receipt verified:"
+		if p.Config.Qualification == "retained" {
+			label = "R1 mutation sweep retained receipt and semantics verified:"
+		}
+	}
+	_, err = fmt.Fprintln(w, label, p.Config.Qualification, len(p.Cells), "cells")
 	return err
+}
+
+func r1SweepSHA256(raw []byte) string {
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }

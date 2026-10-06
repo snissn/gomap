@@ -1263,6 +1263,11 @@ WAL/sync/publication counters and separate ACK/Flush timers. See the
 [sweep contract](../collection_workload_bench/README.md#r1-mutation-width-and-request-size-sweep)
 for the 16-cell matrix, reviewed/landed requirement and replay command. It emits
 no unified-bench or benchprof profile files.
+Its producer-local `r1-mutation-sweep-validate -semantic-only` check is always
+`UNQUALIFIED`. Retained replay requires six independently supplied source,
+exact landing, executing-binary and original-packet receipt pins, with physical
+file-sync coverage and positive written WAL bytes; the linked contract gives
+the acceptance command.
 
 Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
 live direct-backend online vacuum with before/after census; cached-wrapper

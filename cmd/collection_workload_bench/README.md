@@ -159,13 +159,37 @@ R1_MODE=r1-mutation-sweep R1_OUT=/retained/r1-mutation-sweep-001 \
 A pre-review diagnostic uses `-documents 32 -operations 2 -repetitions 1
 -qualification rehearsal`. Keep it explicitly nonqualifying. Both modes retain
 the source manifest, executable/hash/build information, args, host/toolchain,
-original packet and validator result. This sweep does not emit A's `summary.json`.
-Download/restore the original files and replay:
+original packet and producer-local validator result. The helper runs
+`r1-mutation-sweep-validate -semantic-only`, which always prints `UNQUALIFIED`,
+even when the packet labels its configuration `retained`. It verifies structure
+and measured bounds; producer artifacts cannot certify their own provenance.
+This sweep does not emit A's `summary.json`.
+
+The acceptance owner must independently freeze the reviewed landing and selected
+source/runtime/harness identities before capture, observe the exact build and
+successful run, and freeze the executable and original completed packet byte
+hashes in a separate receipt. Download/restore the original files and replay with
+those externally supplied values (never derive them from the packet being checked):
 
 ```sh
 ./collection_workload_bench r1-mutation-sweep-validate \
-  -source-manifest source.json packet.json
+  -source-manifest independent-expected-source.json \
+  -expected-commit "$SOURCE_COMMIT" \
+  -expected-runtime "$RUNTIME_SHA256" \
+  -expected-harness "$HARNESS_SHA256" \
+  -expected-landed-tooling-commit "$LANDED_SOURCE_COMMIT" \
+  -expected-binary-sha256 "$OBSERVED_BINARY_SHA256" \
+  -expected-packet-sha256 "$OBSERVED_PACKET_SHA256" packet.json
 ```
+
+All six pins are required unless `-semantic-only` is explicitly selected; the
+two modes cannot be combined. This selected route requires source commit to equal
+the independently verified landed tooling commit. The validator hashes its actual
+`os.Executable()` and the same original packet bytes it decodes, so byte changes
+or a rebuilt executable reject the receipt. Receipt verification preserves the
+`UNQUALIFIED` label for rehearsals; retained success requires both receipt and
+semantic checks. These checks bind the acceptance owner's recorded observations;
+they are not cryptographic host attestation or independent proof of landing.
 
 Each acknowledgement observation times request encoding through public durable
 ACK. Caller fixture construction, seeding, stats sampling, final `Flush`, complete
@@ -183,8 +207,11 @@ file-sync, sync and collection publication counters are recorded before requests
 after all ACKs and after `Flush`, with checked deltas. They measure aggregate work
 and may include background/asynchronous activity; no individual-request attribution
 or invented materialization counts is claimed. A measured zero stays zero; a
-missing counter rejects the packet. Go allocations include background activity;
-heap is neither RSS, peak nor collection-owned retained memory. Restricted `meta.*`
+missing counter rejects the packet. Go allocations include background activity.
+Each serial request changes a field and appends new command bytes; recorded ACK
+physical file-sync calls must cover at least the request count and written WAL
+bytes must be positive. No field-width-derived write-size formula is asserted.
+Heap is neither RSS, peak nor collection-owned retained memory. Restricted `meta.*`
 reference preservation remains separately qualified. Original A noisy observations
 remain historical, with no current numerical reuse claim. These packets are not
 unified-bench profiles or benchprof inputs.

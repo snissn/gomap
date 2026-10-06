@@ -556,6 +556,11 @@ It measures public cached durable acknowledgement costs and separate flush
 counters across field widths and actual mutation request sizes. Its JSON,
 source manifest and validator output are separate from benchprof inputs;
 profile filenames and parsers are unchanged.
+The producer's `r1-mutation-sweep-validate -semantic-only` result is always
+`UNQUALIFIED`. Retained replay requires independent source, exact landing,
+executing-binary and original-packet receipt pins; see the linked sweep contract
+for all six required flags. Recorded physical file-sync calls must cover the
+serial requests and written WAL bytes must be positive.
 
 The standalone `BenchmarkR1Lifecycle5060` uses `scripts/r1_lifecycle_capture.sh`
 with the supported-profile `gomap-r1-lifecycle-packet-v3` format, raw calibration/final process logs

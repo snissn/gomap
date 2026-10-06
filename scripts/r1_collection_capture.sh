@@ -44,7 +44,14 @@ if ! cmp -s "$R1_OUT/source.json" "$R1_OUT/source-after.json"; then
   echo "source drifted during capture; preserve packet as rejected, do not qualify" >&2
   exit 1
 fi
-"$R1_OUT/collection_workload_bench" "$R1_MODE-validate" -source-manifest "$R1_OUT/source.json" "$R1_OUT/packet.json" > "$R1_OUT/validation.txt"
+if [[ "$R1_MODE" == r1-mutation-sweep ]]; then
+  # Producer artifacts cannot qualify their own source or completed-run receipt.
+  # The acceptance owner supplies independent pins only after observing capture.
+  "$R1_OUT/collection_workload_bench" r1-mutation-sweep-validate -semantic-only \
+    -source-manifest "$R1_OUT/source.json" "$R1_OUT/packet.json" > "$R1_OUT/validation.txt"
+else
+  "$R1_OUT/collection_workload_bench" r1-validate -source-manifest "$R1_OUT/source.json" "$R1_OUT/packet.json" > "$R1_OUT/validation.txt"
+fi
 if [[ "$R1_MODE" == r1 ]]; then
   python3 scripts/r1_collection_summary.py "$R1_OUT/packet.json" > "$R1_OUT/summary.json"
 fi

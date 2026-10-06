@@ -135,6 +135,12 @@ are neither RSS, peak memory nor retained ownership attribution.
 
 Review and land the harness/schema before retained collection, then freeze exact
 runtime/harness identities and keep source-bound original packets, binaries and
-logs. Restricted `meta.*` reference preservation retains its existing separate
+logs. The capture helper's semantic-only check is explicitly `UNQUALIFIED`.
+Retained replay requires independently supplied exact source/runtime/harness and
+landed-source pins plus the observed executing-binary and original-packet hashes;
+the selected source must equal that verified landing. Physical file-sync deltas
+must cover the serial request count and written WAL bytes must be positive.
+These receipt checks bind recorded observations, not host attestation.
+Restricted `meta.*` reference preservation retains its existing separate
 tests and dimension/batch benchmarks. Unsupported cells stay explicit. These
 measurements neither establish a speedup nor waive unexplained regressions.
