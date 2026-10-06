@@ -403,3 +403,5 @@ The root proof joins both host records to the exact four-CID union.
 Arbitrary commands with valid-looking JSON are refused. Richer resource/staging
 observations use separate raw records and keep their own freshness/admission
 checks; this immutable unused-proof join supplies neither a lock nor permission.
+
+The pure checker requires only this source packet and a fresh explicit fixture directory. Checkpoint historical receipts, rich build receipts, projected host image receipts, reviews and landing envelopes are synthesized there and labelled `synthetic_only`; only inert test module pins are rebound. Production retained receipt pins remain fixed. These fixtures establish source contract behavior, never checkpoint acceptance or runtime qualification. The final-resource expiry controls initialize collector path state and require the actual phase-exhaustion error while retaining owned stops and logs.

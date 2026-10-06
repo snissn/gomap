@@ -7,26 +7,39 @@ def checkpoint_controls():
  root=fixtures/'checkpoint-window-controls';root.mkdir()
  c=load(R/m['roles']['collector']['output']['path'],'checkpoint_actual_collector')
  p=load(R/m['roles']['permission_stage']['output']['path'],'checkpoint_actual_permission')
- historical_root=Path('/Volumes/FlashDrive/gomap-5021-sustained-evidence-root-v1')
- paths={
-  'decision':historical_root/'trial24-checkpoint-window-graph-decision-root-v1.json',
-  'original_budget':historical_root/'trial24-actual-campaign-budget-root-v1.json',
-  'original_predeclaration':Path(c.PREDECLARATION),
-  'original_inactive':Path('/tmp/gomap-4997-4998-rf4trial24mixedchangingc1-final-inactive-root-v1.json'),
-  'refusal':historical_root/'trial24-isolated-permission-refusal-root-disposition-v1.json',
-  'native':historical_root/'trial24-native-root-acceptance-v1.json',
-  'retention':historical_root/'trial24-native-growth-preflight-checkpoint-retention-root-v1/retention-proof.json'}
- raw={str(v):v.read_bytes() for v in paths.values()}
- refs={k:{'path':str(v),'sha256':sha(raw[str(v)])} for k,v in paths.items()}
- assert {k:v['sha256'] for k,v in refs.items()}==c.CHECKPOINT_PINS
- a=json.loads(raw[str(paths['original_inactive'])]);a['collector_sha256']=sha(Path(c.__file__).read_bytes())
+ # All historical schemas below are synthetic. Only this inert test module's
+ # pins are rebound; the production collector's retained pins remain unchanged.
+ raw={}
+ a=c.manifest_template()
+ a.update(synthetic_only=True,Version=1,RunID=c.RUN,remote_root=c.ROOT,
+  source_head=c.CHECKPOINT_RUNTIME[0],source_tree=c.CHECKPOINT_RUNTIME[1],
+  source_inventory_sha256='a'*64,query_image='sha256:'+'b'*64,
+  driver_sha256='c'*64,driver_uid_gid='1000:1000',bootstrap_sha256='d'*64,
+  config_sha256='e'*64,plan_sha256='f'*64,input_inventory_sha256='a'*64,
+  baseline={'PopulationRows':10005,'PopulationSHA256':'b'*64,'HighestCommitIndex':93,'CorpusRows':10000,'AnchorRows':5,'Dimensions':128,'Queries':16},
+  nodes=[{'node':node,'host':host,'image':'sha256:'+'b'*64,'server_sha256':'c'*64,'cid':str(i+1)*64} for i,(node,host) in enumerate(c.HOSTS.items())],
+  receipts={},local_pins={})
+ a.update(dict.fromkeys(c.FLAGS,False))
  c.CHECKPOINT_ALLOWED=True
  c.CHECKPOINT_HARNESS=('7'*40,'8'*40)
  def pin(name,obj):
   path=root/(name+'.json');b=json.dumps(obj,indent=2).encode();path.write_bytes(b)
   raw[str(path)]=b;a['local_pins'][str(path)]=sha(b)
   return {'path':str(path),'sha256':sha(b)}
- for row in refs.values():a['local_pins'][row['path']]=row['sha256']
+ for key in ('source_inventory','build','source_prereview','bootstrap','config','plan','baseline','initial_oracle','prefix_oracles'):
+  a['receipts'][key]=pin('synthetic-unchanged-'+key,{'synthetic_only':True,'receipt':key})['path']
+ refs={}
+ refs['decision']=pin('synthetic-original-decision',{'synthetic_only':True,'original_campaign':{'state':'INCOMPLETE_RETIRED_AFTER_NO_RPC_PERMISSION_SETUP_REFUSAL'},'future_phase':{'phase_id':c.CHECKPOINT_PHASE}})
+ refs['original_predeclaration']=pin('synthetic-original-predeclaration',{'synthetic_only':True,'campaign':c.RUN,'accepted_workload':c.W.declaration(),'runtime_started':False})
+ refs['original_budget']=pin('synthetic-original-budget',{'synthetic_only':True,'predeclaration_sha256':refs['original_predeclaration']['sha256']})
+ refs['original_inactive']=pin('synthetic-original-inactive',copy.deepcopy(a))
+ refs['refusal']=pin('synthetic-original-refusal',{'synthetic_only':True,'state':'ACTUAL_ISOLATED_PERMISSION_BOUNDS_REFUSAL_NO_WINDOW_DISPATCH','reported_measured_attempts':0,'reported_warmup_attempts':0,'window_output_exists':False,'all_nine_activation_flags_false':True})
+ refs['native']=pin('synthetic-original-native',{'synthetic_only':True,'original_budget_sha256':refs['original_budget']['sha256'],'promoted_oracle_sha256':a['local_pins'][a['receipts']['prefix_oracles']]})
+ refs['retention']=pin('synthetic-original-retention',{'synthetic_only':True,'state':'THREE_HASH_VERIFIED_CHECKPOINT_COPIES_NOT_WINDOW_QUALIFICATION','copies_count':3,'qualification_accepted':False})
+ production_pins=dict(c.CHECKPOINT_PINS)
+ c.CHECKPOINT_PINS={key:row['sha256'] for key,row in refs.items()}
+ assert set(c.CHECKPOINT_PINS)==set(production_pins)
+ assert all(json.loads(raw[row['path']])['synthetic_only'] is True for row in refs.values())
  pre={'synthetic_only':True,'state':'PROSPECTIVE_CHECKPOINT_WINDOW_PREDECLARED','PhaseID':c.CHECKPOINT_PHASE,'campaign':c.RUN,'runtime_started':False,'accepted_workload':c.W.declaration(),'runtime_head':a['source_head'],'runtime_tree':a['source_tree'],'harness_head':c.CHECKPOINT_HARNESS[0],'harness_tree':c.CHECKPOINT_HARNESS[1],'checkpoint_refs':refs}
  pr=pin('synthetic-phase-predeclaration',pre);a['receipts']['predeclaration']=pr['path']
  now=time.time()
@@ -217,9 +230,9 @@ def checkpoint_controls():
   for suffix,data in [('stdout',result.stdout),('stderr',result.stderr),('exit',str(result.returncode).encode()),('argv.json',json.dumps(command).encode())]:(root/('verify-staged-'+optimization[1:]+'.'+suffix)).write_bytes(data)
   assert result.returncode!=0 and b'ordinary Python required' in result.stderr and not (root/'must-not-create').exists()
   checks.append('checkpoint_actual_existing_stage_optimized_'+optimization+'_refusal_before_inputs')
- (root/'checkpoint-integration.json').write_text(json.dumps({'state':'SOURCE_ONLY_SYNTHETIC_PHASE_NOT_ACCEPTANCE','original_receipt_refs':refs,'phase_predeclaration':pr,'permission_argv':argv,'runtime_started':False,'network_calls':0,'limitations':['Original public receipt bytes are used only to characterize joins.','Harness review/landing/budget/unused observations are synthetic and never root acceptance.','Ownership of local verifier fixture is supplied by a UID/GID1000 stat facade; no remote files or runtime were accessed.']},indent=2)+'\n')
- # Complete actual source emission retains the real old runtime proof bytes
- # and uses a plainly synthetic separate harness envelope, never acceptance.
+ (root/'checkpoint-integration.json').write_text(json.dumps({'state':'SOURCE_ONLY_SYNTHETIC_PHASE_NOT_ACCEPTANCE','synthetic_receipt_refs':refs,'production_receipt_pins_unchanged':production_pins,'phase_predeclaration':pr,'permission_argv':argv,'runtime_started':False,'network_calls':0,'limitations':['Every receipt is synthesized under the explicit fixture root; the inert test collector alone uses their hashes.','Harness review/landing/budget/unused observations are synthetic and never root acceptance.','Ownership of local verifier fixture is supplied by a UID/GID1000 stat facade; no remote files or runtime were accessed.']},indent=2)+'\n')
+ # Complete actual source emission uses actual producer-shaped synthetic
+ # runtime receipts and a separate synthetic harness envelope, never acceptance.
  hrows=[]
  for path in sorted(R.rglob('*')):
   if not path.is_file():continue
@@ -229,7 +242,34 @@ def checkpoint_controls():
  land=pin('synthetic-harness-landing',{'synthetic_only':True,'state':'LANDED_SOURCE_TREE_VERIFIED','runtime_head':c.CHECKPOINT_HARNESS[0],'runtime_tree':c.CHECKPOINT_HARNESS[1],'merge_commit':'9'*40,'source_inventory_sha256':hi['sha256']})
  ci=pin('synthetic-harness-ci',{'synthetic_only':True,'head':c.CHECKPOINT_HARNESS[0],'required_ci_passed':True,'checks':[{'name':'synthetic-only','conclusion':'SUCCESS','details_url':'https://github.com/synthetic-only/fixture/actions/runs/1'}]})
  acceptance=pin('synthetic-harness-acceptance',{'synthetic_only':True,'outcome':'ACCEPT','candidate_head':c.CHECKPOINT_HARNESS[0],'candidate_tree':c.CHECKPOINT_HARNESS[1],'source_inventory_sha256':hi['sha256'],'landed_source_verified':True,'required_ci_passed':True,'underlying_reviews':reviews,'landing_evidence':land,'ci_evidence':ci})
- declaration=json.loads((historical_root/'trial24-final-source-declaration-root-v1.json').read_bytes())
+ # Reuse the checker's rich-build/projected-image schemas, with the fixed
+ # runtime identity required by the actual checkpoint constructor.
+ declaration=copy.deepcopy(d)
+ runtime_head,runtime_tree=c.CHECKPOINT_RUNTIME
+ declaration.update(source_head=runtime_head,source_tree=runtime_tree,source_root=str(root/'trial24-protected-product'))
+ def runtime_receipt(key):
+  value=json.loads(Path(d[key]['path']).read_bytes());value['synthetic_only']=True
+  value.update(head=runtime_head,tree=runtime_tree)
+  return value
+ inventory_obj=runtime_receipt('source_inventory')
+ declaration['source_inventory']=pin('synthetic-runtime-inventory',inventory_obj)
+ build_obj=runtime_receipt('build');build_obj['source_inventory_sha256']=declaration['source_inventory']['sha256']
+ declaration['build']=pin('synthetic-runtime-build',build_obj)
+ image_obj=runtime_receipt('images');image_obj.update(source_inventory_sha256=declaration['source_inventory']['sha256'],build_proof_sha256=declaration['build']['sha256'])
+ for row in image_obj['images'].values():row.update(head=runtime_head,tree=runtime_tree,source_inventory_sha256=declaration['source_inventory']['sha256'])
+ declaration['images']=pin('synthetic-runtime-images',image_obj)
+ review_obj=json.loads(Path(d['source_prereview']['path']).read_bytes())
+ review_obj.update(synthetic_only=True,candidate_head=runtime_head,candidate_tree=runtime_tree,source_inventory_sha256=declaration['source_inventory']['sha256'])
+ runtime_reviews=[]
+ for i,row in enumerate(review_obj['underlying_reviews']):
+  value=json.loads(Path(row['path']).read_bytes());value.update(synthetic_only=True,candidate_head=runtime_head,candidate_tree=runtime_tree)
+  runtime_reviews.append(pin('synthetic-runtime-review-'+str(i),value))
+ review_obj['underlying_reviews']=runtime_reviews
+ value=json.loads(Path(review_obj['landing_evidence']['path']).read_bytes());value.update(synthetic_only=True,runtime_head=runtime_head,runtime_tree=runtime_tree,source_inventory_sha256=declaration['source_inventory']['sha256'])
+ review_obj['landing_evidence']=pin('synthetic-runtime-landing',value)
+ value=json.loads(Path(review_obj['ci_evidence']['path']).read_bytes());value.update(synthetic_only=True,head=runtime_head)
+ review_obj['ci_evidence']=pin('synthetic-runtime-ci',value)
+ declaration['source_prereview']=pin('synthetic-runtime-acceptance',review_obj)
  declaration.update(output_root=str(root/'trial24-emitted-checkpoint-synthetic-only'),checkpoint_harness={'head':c.CHECKPOINT_HARNESS[0],'tree':c.CHECKPOINT_HARNESS[1],'source_inventory':hi,'source_acceptance':acceptance})
  dr=pin('synthetic-checkpoint-construction-declaration',declaration)
  argv=[sys.executable,'-B',str(R/'instantiate.py'),'--declaration',dr['path'],'--declaration-sha256',dr['sha256']]
@@ -287,7 +327,7 @@ def checkpoint_controls():
  for case in ('resource_expired','audit_expired','foreign_driver'):
   cc=load(R/m['roles']['collector']['output']['path'],'checkpoint_finally_'+case)
   folder=root/('actual-finally-'+case);folder.mkdir()
-  cc.OUTPUT=folder;cc.serial=0;cc.last_record=None;cc.deadline=None
+  cc.OUTPUT=folder;cc.serial=0;cc.last_record=None;cc.deadline=None;cc.paths={}
   cc.phase_budget=expired;cc.NODES=[dict(n,name='synthetic-owned-'+n['node']) for n in a['nodes']]
   cc.APPROVED=a;cc.root=cc.ROOT;cc.image=a['query_image'];cc.launch_nonce='b'*32
   driver='e'*64;running={n['cid']:True for n in cc.NODES};running[driver]=True
@@ -325,8 +365,11 @@ def checkpoint_controls():
   assert all(not running[n['cid']] for n in cc.NODES)
   assert len(json.loads((folder/'voter-stop-receipts.json').read_bytes()))==4
   assert cc.errors and not cc.final_population_passed and not cc.audits_before_stop and not cc.workload_passed
+  assert not any('NameError' in error for error in cc.errors),cc.errors
   if case=='foreign_driver':assert running[driver] and not (folder/'stdout.jsonl').exists()
-  else:assert not running[driver] and (folder/'stdout.jsonl').read_text()==logs
+  else:
+   assert any('prospective checkpoint phase budget exhausted; no replay' in error for error in cc.errors),cc.errors
+   assert not running[driver] and (folder/'stdout.jsonl').read_text()==logs
   (folder/'control-result.json').write_text(json.dumps(dict(state='ACTUAL_FINALLY_TRANSPORT_STUB_NOT_ACCEPTANCE',case=case,commands=commands,errors=cc.errors,all_four_owned_stopped=True,network_calls=0),indent=2)+'\n')
   checks.append('checkpoint_actual_finally_expiry_preserves_closure_'+case)
  c.OUTPUT=root/'actual-transport-boundary';c.OUTPUT.mkdir();c.serial=0;c.deadline=None;c.NODES=a['nodes'];c.phase_budget=expired
