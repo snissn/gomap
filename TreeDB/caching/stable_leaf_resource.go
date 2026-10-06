@@ -24,6 +24,7 @@ type stableOuterLeafCapture struct {
 	builder          *rootpublication.StableResourceSetBuilder
 	tokens           []*rootpublication.StableResourceToken
 	parentGeneration uint64
+	handoff          *applyLeafTokenHandoff
 }
 
 func newStableOuterLeafCapture(db *DB, lane *lane) *stableOuterLeafCapture {
@@ -31,6 +32,13 @@ func newStableOuterLeafCapture(db *DB, lane *lane) *stableOuterLeafCapture {
 		db: db, lane: lane,
 		builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer),
 	}
+}
+
+// applyLeafTokenHandoff belongs to one joined Apply attempt. Raw consumes all
+// supplied tokens on every outcome; child moves a validated set on success.
+type applyLeafTokenHandoff struct {
+	raw   func([]page.ValuePtr, []*rootpublication.StableResourceToken) error
+	child func(*rootpublication.StableResourceSet) error
 }
 
 func (capture *stableOuterLeafCapture) registration(path string, fileID uint32, namespace rootpublication.NamespaceOperation) (valuelog.StableResourceRegistration, error) {
@@ -76,7 +84,7 @@ func (capture *stableOuterLeafCapture) bindParentGeneration(writer stableValueWr
 }
 
 func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableResourceToken) error {
-	if capture == nil || capture.builder == nil || token == nil {
+	if capture == nil || (capture.builder == nil && capture.handoff == nil) || token == nil {
 		return rootpublication.ErrResourceOwnership
 	}
 	capture.tokens = append(capture.tokens, token)
@@ -84,8 +92,11 @@ func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableRes
 }
 
 func (capture *stableOuterLeafCapture) mergeChild(child *rootpublication.StableResourceSet) error {
-	if capture == nil || capture.builder == nil || child == nil {
+	if capture == nil || (capture.builder == nil && capture.handoff == nil) || child == nil {
 		return rootpublication.ErrResourceOwnership
+	}
+	if capture.handoff != nil {
+		return capture.handoff.child(child)
 	}
 	return capture.builder.Merge(child)
 }
@@ -142,27 +153,40 @@ func (capture *stableOuterLeafCapture) captureCurrent(writer valueWriter, path s
 }
 
 func (capture *stableOuterLeafCapture) freeze(ptrs []page.ValuePtr) (*rootpublication.StableResourceSet, error) {
-	if capture == nil || capture.builder == nil {
+	if capture == nil || (capture.builder == nil && capture.handoff == nil) {
 		return nil, rootpublication.ErrResourceOwnership
 	}
 	required := make(map[uint64]struct{}, len(ptrs))
 	for _, ptr := range ptrs {
 		required[uint64(ptr.FileID)] = struct{}{}
 	}
-	for _, token := range capture.tokens {
+	tokens := capture.tokens
+	capture.tokens = nil
+	// Rotations may capture a closed/current segment not referenced by this
+	// append. It never becomes a candidate raw authority.
+	retained := tokens[:0]
+	for _, token := range tokens {
 		if _, ok := required[token.Generation()]; !ok {
 			token.Release()
 			continue
 		}
+		retained = append(retained, token)
+	}
+	if capture.handoff != nil {
+		handoff := capture.handoff
+		capture.handoff = nil
+		return nil, handoff.raw(ptrs, retained)
+	}
+	for i, token := range retained {
 		if err := capture.builder.Add(token); err != nil {
-			token.Release()
+			for _, pending := range retained[i:] {
+				pending.Release()
+			}
 			capture.builder.Abandon()
-			capture.releaseTokens()
 			capture.builder = nil
 			return nil, err
 		}
 	}
-	capture.tokens = nil
 	set, err := capture.builder.Freeze()
 	if err != nil {
 		capture.builder.Abandon()
@@ -180,6 +204,7 @@ func (capture *stableOuterLeafCapture) abandon() {
 	}
 	capture.releaseTokens()
 	capture.builder = nil
+	capture.handoff = nil
 }
 
 func (capture *stableOuterLeafCapture) releaseTokens() {

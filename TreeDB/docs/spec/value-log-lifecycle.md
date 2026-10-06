@@ -865,3 +865,34 @@ capture owns dictionary/template and raw-file frontiers; registration failure
 releases capture authority, while publication transfers or releases the set
 through the existing success, conflict, and abort paths. An absent stable provider
 continues to reject dictionary-dependent publication, including scanner fallback.
+
+### Apply-scoped caching leaf token handoff
+
+The concrete caching outer-leaf producer explicitly implements
+`LeafPageLogApplyTokenProvider`. Its attempt-bound regular appenders, including
+prepared batches, ChildRefs and group lanes, deliver each append's raw tokens to
+the existing Apply builder. Record-length hints and dependency-append hooks are
+forwarded by the hint wrapper. Wrapper interface presence alone does not grant
+this capability: an unsupported inner producer uses the validated public stable
+append path. Public stable APIs on an attempt-bound view still return complete
+owned resource sets.
+
+Each append retains the same writer preflight, namespace-creation certification,
+rotation capture and `StableResourceToken` flush. This is a token ownership
+handoff. Each token's captured segment frontier remains immutable. The receiver
+checks all pointer generations and overflow-safe record ends, complete frontier
+coverage, raw resource kinds/reachability, and exact retained namespace bindings
+before adding tokens. Rotation certificates for the same generation combine
+their maximum immutable frontier. Unreferenced rotation tokens are released. The
+raw callback consumes its entire token inventory on success or failure;
+dependency set Merge transfers ownership only on success. Partial Add failures
+require the Apply owner to abort and abandon the already accepted inventory.
+
+Concurrent lanes share the attempt's synchronized builder. The caller joins all
+appenders before freeze or abort. One final Apply Freeze retains namespace and
+closure checks; exact current logical membership, publication, WAL/replay and
+recovery authority are unchanged. Dictionary/template child sets retain their
+existing validation and ownership; dictionary generation fences remain separate
+from token-local snapshot readers. The optimization removes raw-only child
+Freeze, physical-descriptor copies and child-set Merge topology. It adds no
+persistent cache, generation lease union, durability shortcut or format change.

@@ -3,7 +3,10 @@ package caching
 import (
 	"bytes"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -11,12 +14,39 @@ import (
 
 type ordinaryProjectionGroupBackend struct {
 	*backenddb.DB
-	groups int
+	groups   int
+	handoffs atomic.Int64
 }
 
 func (b *ordinaryProjectionGroupBackend) BeginRootPublicationBuildGroup() (*backenddb.RootPublicationBuildGroup, error) {
 	b.groups++
 	return b.DB.BeginRootPublicationBuildGroup()
+}
+
+// The installed caching group is the actual production producer, including
+// lane forwarding. Count token transfers, not factory presence.
+type ordinaryHandoffWitness struct {
+	*cachingLeafPageLogGroup
+	handoffs *atomic.Int64
+}
+
+func (b *ordinaryProjectionGroupBackend) SetLeafPageLog(log backenddb.LeafPageLog) {
+	if group, ok := log.(*cachingLeafPageLogGroup); ok {
+		log = &ordinaryHandoffWitness{group, &b.handoffs}
+	}
+	b.DB.SetLeafPageLog(log)
+}
+func (log *ordinaryHandoffWitness) LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (backenddb.LeafPageLog, bool, error) {
+	factory, ok := any(log.cachingLeafPageLogGroup).(interface {
+		LeafPageLogForApply(func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, func(*rootpublication.StableResourceSet) error) (backenddb.LeafPageLog, bool, error)
+	})
+	if !ok {
+		return nil, false, nil
+	}
+	return factory.LeafPageLogForApply(func(ptrs []page.ValuePtr, tokens []*rootpublication.StableResourceToken) error {
+		log.handoffs.Add(1)
+		return raw(ptrs, tokens)
+	}, child)
 }
 
 // Exercise the real caching checkpoint planner, stable caching leaf producer,
@@ -57,6 +87,7 @@ func TestCachingCheckpointOrdinaryDestructiveProjection(t *testing.T) {
 	}
 	beforeSeq := backend.State().CommitSeq
 	beforeGroups := wrapped.groups
+	beforeHandoffs := wrapped.handoffs.Load()
 	before := backend.Stats()
 	for i := 0; i < count; i++ {
 		if i%3 == 0 {
@@ -70,6 +101,9 @@ func TestCachingCheckpointOrdinaryDestructiveProjection(t *testing.T) {
 	}
 	if err := cache.Checkpoint(); err != nil {
 		t.Fatal(err)
+	}
+	if wrapped.handoffs.Load() <= beforeHandoffs {
+		t.Fatal("ordinary destructive checkpoint did not hand fresh stable tokens directly to Apply")
 	}
 	if wrapped.groups <= beforeGroups {
 		t.Fatal("checkpoint did not build a real backend chunk group")

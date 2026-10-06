@@ -166,6 +166,9 @@ func TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound(t 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := reboundToken.ValidateStableNamespace(); err != nil {
+		t.Fatal(err)
+	}
 	rebound := freezeAppendMutationResources(t, reboundToken)
 	defer rebound.Release()
 	if err := os.Rename(path, filepath.Join(dir, "old.bin")); err != nil {
@@ -174,6 +177,9 @@ func TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound(t 
 	if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := reboundToken.ValidateStableNamespace(); !errors.Is(err, ErrResourceConflict) && !errors.Is(err, ErrUnresolvedResource) {
+		t.Fatalf("direct namespace rebound=%v", err)
+	}
 	got, err := CloneStableResourceForSelector(rebound, selector)
 	if got != nil {
 		got.Release()
@@ -181,5 +187,22 @@ func TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound(t 
 	}
 	if !errors.Is(err, ErrResourceConflict) && !errors.Is(err, ErrUnresolvedResource) {
 		t.Fatalf("rebound error=%v", err)
+	}
+}
+
+func TestStableResourceTokenValidateStableNamespaceRejectsReleased(t *testing.T) {
+	var missing *StableResourceToken
+	if err := missing.ValidateStableNamespace(); !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("nil token=%v", err)
+	}
+	file := selectorSizedTempFile(t, 8)
+	defer file.Close()
+	token := appendMutationResourceToken(t, file, ResourceColumnAsset, "1", 8, ReachabilityColumnManifest, appendMutationTestObligation(1))
+	if err := token.ValidateStableNamespace(); err != nil {
+		t.Fatal(err)
+	}
+	token.Release()
+	if err := token.ValidateStableNamespace(); !errors.Is(err, ErrResourceOwnership) {
+		t.Fatalf("released token=%v", err)
 	}
 }
