@@ -1336,6 +1336,13 @@ type Manager struct {
 	files map[uint32]*File
 	// retryWaitHook is an internal deterministic lifecycle-test barrier.
 	retryWaitHook func()
+	// Admission and WaitGroup.Add share mu with Close. Channels are lazy so
+	// ordinary reads and writes acquire no extra allocation or routing cost.
+	retryStop    chan struct{}
+	retryWorkers sync.WaitGroup
+	closing      bool
+	closeDone    chan struct{}
+	closeErr     error
 	// currentWritableByLane tracks segments that may still grow and therefore are
 	// allowed to remap aggressively for zero-copy unsafe views. Most lanes have a
 	// single current writer keyed by lane id; lanes listed in
@@ -1749,8 +1756,29 @@ func (m *Manager) SetGroupedFrameCacheMaxBytes(maxBytes int64) {
 }
 
 func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	if m.closeDone != nil {
+		done := m.closeDone
+		m.mu.Unlock()
+		<-done
+		m.mu.RLock()
+		err := m.closeErr
+		m.mu.RUnlock()
+		return err
+	}
+	m.closeDone = make(chan struct{})
+	m.closing = true
+	if m.retryStop != nil {
+		close(m.retryStop)
+	}
+	m.mu.Unlock()
+	// Workers take mu while validating identity and completing deletion. Join
+	// them before closing their file handles, without holding that same mutex.
+	m.retryWorkers.Wait()
+	m.mu.Lock()
 	var err error
 	for _, f := range m.files {
 		if e := m.unobserveStableFileLocked(f); e != nil {
@@ -1761,6 +1789,9 @@ func (m *Manager) Close() error {
 		}
 	}
 	m.files = nil
+	m.closeErr = err
+	close(m.closeDone)
+	m.mu.Unlock()
 	return err
 }
 
@@ -2322,6 +2353,41 @@ func (m *Manager) Release(set *Set) error {
 	return err
 }
 
+// startZombieRetry admits one owned worker per exact tracked zombie.
+func (m *Manager) startZombieRetry(f *File) {
+	if m == nil || f == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.closing || m.files[f.ID] != f || f.RefCount.Load() != 0 || !f.IsZombie.Load() || !f.retryDeletePending.CompareAndSwap(false, true) {
+		m.mu.Unlock()
+		return
+	}
+	if m.retryStop == nil {
+		m.retryStop = make(chan struct{})
+	}
+	m.retryWorkers.Add(1)
+	m.mu.Unlock()
+	go func() { defer m.retryWorkers.Done(); m.retryZombieDelete(f) }()
+}
+
+func (m *Manager) waitZombieRetry(backoff time.Duration) bool {
+	if m.retryWaitHook != nil {
+		m.retryWaitHook()
+	}
+	m.mu.RLock()
+	stop := m.retryStop
+	m.mu.RUnlock()
+	timer := time.NewTimer(backoff)
+	defer timer.Stop()
+	select {
+	case <-stop:
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 func (m *Manager) retryZombieDelete(f *File) {
 	if m == nil || f == nil {
 		return
@@ -2332,7 +2398,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 	for {
 		m.mu.RLock()
 		cur, exists := m.files[f.ID]
-		keepRetrying := exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load()
+		keepRetrying := !m.closing && exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load()
 		m.mu.RUnlock()
 		if !keepRetrying {
 			return
@@ -2342,10 +2408,9 @@ func (m *Manager) retryZombieDelete(f *File) {
 			// The conflict can be either an identity pin or a different identity
 			// holding the pathname lease. Backoff handles both without spinning on
 			// an already-ready per-identity pin channel.
-			if m.retryWaitHook != nil {
-				m.retryWaitHook()
+			if !m.waitZombieRetry(backoff) {
+				return
 			}
-			time.Sleep(backoff)
 			if backoff < 2*time.Second {
 				backoff *= 2
 			}
@@ -2385,10 +2450,9 @@ func (m *Manager) retryZombieDelete(f *File) {
 		}
 		abortStableDeleteLease(lease)
 
-		if m.retryWaitHook != nil {
-			m.retryWaitHook()
+		if !m.waitZombieRetry(backoff) {
+			return
 		}
-		time.Sleep(backoff)
 		if backoff < 2*time.Second {
 			backoff *= 2
 		}
@@ -2856,8 +2920,8 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 	lease, err := m.stableDeleteLease(f)
 	if errors.Is(err, ErrFilePinned) {
 		m.mu.Unlock()
-		if f.IsZombie.Load() && f.retryDeletePending.CompareAndSwap(false, true) {
-			go m.retryZombieDelete(f)
+		if f.IsZombie.Load() {
+			m.startZombieRetry(f)
 		}
 		return false, nil
 	}
