@@ -1334,6 +1334,8 @@ type Manager struct {
 
 	mu    sync.RWMutex
 	files map[uint32]*File
+	// retryWaitHook is an internal deterministic lifecycle-test barrier.
+	retryWaitHook func()
 	// currentWritableByLane tracks segments that may still grow and therefore are
 	// allowed to remap aggressively for zero-copy unsafe views. Most lanes have a
 	// single current writer keyed by lane id; lanes listed in
@@ -2340,6 +2342,9 @@ func (m *Manager) retryZombieDelete(f *File) {
 			// The conflict can be either an identity pin or a different identity
 			// holding the pathname lease. Backoff handles both without spinning on
 			// an already-ready per-identity pin channel.
+			if m.retryWaitHook != nil {
+				m.retryWaitHook()
+			}
 			time.Sleep(backoff)
 			if backoff < 2*time.Second {
 				backoff *= 2
@@ -2380,6 +2385,9 @@ func (m *Manager) retryZombieDelete(f *File) {
 		}
 		abortStableDeleteLease(lease)
 
+		if m.retryWaitHook != nil {
+			m.retryWaitHook()
+		}
 		time.Sleep(backoff)
 		if backoff < 2*time.Second {
 			backoff *= 2
@@ -2943,6 +2951,9 @@ func removeSegmentFileWithRetry(path string) (bool, error) {
 		if !isWindowsSharingViolationError(err) {
 			break
 		}
+		if m.retryWaitHook != nil {
+			m.retryWaitHook()
+		}
 		time.Sleep(backoff)
 		if backoff < 200*time.Millisecond {
 			backoff *= 2
@@ -2973,6 +2984,9 @@ func removeSegmentFileWithRetryStable(path string, identity rootpublication.Stab
 		lastErr = err
 		if runtime.GOOS != "windows" || i >= attempts-1 || !isWindowsSharingViolationError(err) {
 			break
+		}
+		if m.retryWaitHook != nil {
+			m.retryWaitHook()
 		}
 		time.Sleep(backoff)
 		if backoff < 200*time.Millisecond {
