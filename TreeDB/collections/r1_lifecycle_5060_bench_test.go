@@ -64,18 +64,21 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 	result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), "ingest"))
 
 	samples := make([]int64, 0, callsPerEpoch*b.N)
+	seenIDs := make(map[string]int, min(documents, callsPerEpoch/2))
 	var heapHigh, loopBytes, loopAllocs, apiElapsed, totalCalls uint64
 	b.ReportAllocs()
 	b.ResetTimer()
 	for epoch := 0; epoch < b.N; epoch++ {
 		b.StopTimer()
+		epochIDs := make(map[string]struct{}, min(documents, callsPerEpoch/2))
 		// Every two calls address one row; only index fields change on indexed
 		// updates. The live population is restored before the next pair.
 		var before runtime.MemStats
 		runtime.ReadMemStats(&before)
 		b.StartTimer()
 		for call := range callsPerEpoch {
-			ordinal := ((epoch*callsPerEpoch/2 + call/2) * 37) % documents
+			// Repeat the same deterministic bounded working set every epoch.
+			ordinal := ((call / 2) * 37) % documents
 			id := fmt.Sprintf("row-%03d", ordinal)
 			current := want[id]
 			started := time.Now()
@@ -168,6 +171,7 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 			apiElapsed += elapsed
 			totalCalls++
 			result.Operations[operations[(call/2)%4*2+call%2]]++
+			epochIDs[id] = struct{}{}
 		}
 		b.StopTimer()
 		var after runtime.MemStats
@@ -175,6 +179,21 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 		loopBytes += after.TotalAlloc - before.TotalAlloc
 		loopAllocs += after.Mallocs - before.Mallocs
 		heapHigh = max(heapHigh, before.HeapAlloc, after.HeapAlloc)
+		coverage := r1LifecycleIDCoverage5060{Epoch: epoch, DistinctIDs: len(epochIDs)}
+		ids := make([]string, 0, len(epochIDs))
+		for id := range epochIDs {
+			ids = append(ids, id)
+			if seenIDs[id] > 0 {
+				coverage.RevisitedIDs++
+			}
+			seenIDs[id]++
+		}
+		slices.Sort(ids)
+		coverage.IDsSHA256 = fmt.Sprintf("%x", sha256.Sum256([]byte(strings.Join(ids, "\n")+"\n")))
+		coverage.NewIDs = coverage.DistinctIDs - coverage.RevisitedIDs
+		coverage.CumulativeDistinctIDs = len(seenIDs)
+		result.IDCoverage = append(result.IDCoverage, coverage)
+		result.RevisitedIDs += coverage.RevisitedIDs
 		r1LifecycleCurrent5060(b, col, want, known)
 		if epoch == 0 {
 			r1LifecycleAssert5060(b, held, captured, known)
@@ -201,8 +220,8 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 			b.Fatal(err)
 		}
 		maintenanceNS := time.Since(started).Nanoseconds()
-		b.Logf("epoch=%d maintenance_ns=%d overlay=%+v typed_deleted=%d typed_retained=%d typed_rewrite_debt=%d vlog_deleted=%d vlog_pending=%d vlog_retained=%d", epoch, maintenanceNS, compact, gc.SegmentsDeleted, gc.BytesRetained, gc.Plan.RewriteDebtBytes, vlog.SegmentsDeleted, vlog.SegmentsPending, vlog.BytesReferenced+vlog.BytesProtected)
-		result.Maintenance = append(result.Maintenance, r1LifecycleMaintenanceRecord5060{Epoch: epoch, CheckpointNS: checkpointNS, MaintenanceNS: maintenanceNS, Overlay: compact, TypedDeleted: uint64(gc.SegmentsDeleted), TypedRetained: uint64(gc.BytesRetained), TypedRewriteDebt: uint64(gc.Plan.RewriteDebtBytes), VlogDeleted: uint64(vlog.SegmentsDeleted), VlogPending: uint64(vlog.SegmentsPending), VlogRetained: uint64(vlog.BytesReferenced + vlog.BytesProtected)})
+		b.Logf("epoch=%d maintenance_ns=%d overlay=%+v typed_deleted=%d typed_retained=%d typed_rewrite_debt=%d vlog_deleted=%d vlog_pending=%d vlog_referenced_plus_protected=%d", epoch, maintenanceNS, compact, gc.SegmentsDeleted, gc.BytesRetained, gc.Plan.RewriteDebtBytes, vlog.SegmentsDeleted, vlog.SegmentsPending, vlog.BytesReferenced+vlog.BytesProtected)
+		result.Maintenance = append(result.Maintenance, r1LifecycleMaintenanceRecord5060{Epoch: epoch, CheckpointNS: checkpointNS, MaintenanceNS: maintenanceNS, Overlay: compact, TypedDeleted: uint64(gc.SegmentsDeleted), TypedRetained: uint64(gc.BytesRetained), TypedRewriteDebt: uint64(gc.Plan.RewriteDebtBytes), VlogDeleted: uint64(vlog.SegmentsDeleted), VlogPending: uint64(vlog.SegmentsPending), VlogReferencedPlusProtected: uint64(vlog.BytesReferenced + vlog.BytesProtected), TypedGC: r1LifecycleAggregateGC5060(gc), ValueLogGC: vlog})
 		r1LifecycleCurrent5060(b, col, want, known)
 		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("maintenance-%d", epoch)))
 		if epoch == 0 {
@@ -213,9 +232,12 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 			if stats := held.assetManager.Stats(); stats.ActiveHandles != 0 {
 				b.Fatalf("held view release leaked handles: %+v", stats)
 			}
-			if _, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{}); err != nil {
+			started := time.Now()
+			releaseGC, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
+			if err != nil {
 				b.Fatal(err)
 			}
+			result.AfterViewReleaseGC = &r1LifecycleReleaseGC5060{DurationNS: time.Since(started).Nanoseconds(), TypedGC: r1LifecycleAggregateGC5060(releaseGC)}
 			result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), "after_view_release"))
 		}
 		b.StartTimer()
@@ -248,10 +270,17 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 	runtime.KeepAlive(known)
 	runtime.KeepAlive(captured)
 	runtime.KeepAlive(samples)
+	runtime.KeepAlive(seenIDs)
 	b.ReportMetric(float64(retained.HeapAlloc), "process-retained-heap-B")
 	result.TotalCalls, result.CallNS, result.LoopBytes, result.LoopAllocs = totalCalls, apiElapsed, loopBytes, loopAllocs
 	result.P95NS, result.P99NS = uint64(samples[(len(samples)-1)*95/100]), uint64(samples[(len(samples)-1)*99/100])
 	result.SampledHeapHigh, result.ProcessRetainedHeap = heapHigh, retained.HeapAlloc
+	result.DistinctIDs = len(seenIDs)
+	for _, epochsSeen := range seenIDs {
+		if epochsSeen > 1 {
+			result.RevisitedDistinctIDs++
+		}
+	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		b.Fatal(err)
@@ -325,24 +354,29 @@ func r1LifecycleDimension5060(b *testing.B, suffix string, fallback, multiple in
 }
 
 type r1LifecycleResult5060 struct {
-	PID                 int                                `json:"pid"`
-	GOMAXPROCS          int                                `json:"gomaxprocs"`
-	Schema              string                             `json:"schema"`
-	Epochs              int                                `json:"epochs"`
-	Documents           int                                `json:"documents"`
-	CallsPerEpoch       int                                `json:"calls_per_epoch"`
-	FixtureSHA256       string                             `json:"fixture_sha256"`
-	TotalCalls          uint64                             `json:"total_calls"`
-	CallNS              uint64                             `json:"call_ns"`
-	LoopBytes           uint64                             `json:"loop_bytes"`
-	LoopAllocs          uint64                             `json:"loop_allocs"`
-	P95NS               uint64                             `json:"p95_ns"`
-	P99NS               uint64                             `json:"p99_ns"`
-	SampledHeapHigh     uint64                             `json:"sampled_heap_high_bytes"`
-	ProcessRetainedHeap uint64                             `json:"process_retained_heap_bytes"`
-	Census              []r1LifecycleCensusRecord5060      `json:"census"`
-	Maintenance         []r1LifecycleMaintenanceRecord5060 `json:"maintenance"`
-	Operations          map[string]uint64                  `json:"operations"`
+	DistinctIDs          int                                `json:"distinct_ids"`
+	RevisitedIDs         int                                `json:"cross_epoch_revisited_ids"`
+	RevisitedDistinctIDs int                                `json:"revisited_distinct_ids"`
+	IDCoverage           []r1LifecycleIDCoverage5060        `json:"id_coverage"`
+	AfterViewReleaseGC   *r1LifecycleReleaseGC5060          `json:"after_view_release_gc"`
+	PID                  int                                `json:"pid"`
+	GOMAXPROCS           int                                `json:"gomaxprocs"`
+	Schema               string                             `json:"schema"`
+	Epochs               int                                `json:"epochs"`
+	Documents            int                                `json:"documents"`
+	CallsPerEpoch        int                                `json:"calls_per_epoch"`
+	FixtureSHA256        string                             `json:"fixture_sha256"`
+	TotalCalls           uint64                             `json:"total_calls"`
+	CallNS               uint64                             `json:"call_ns"`
+	LoopBytes            uint64                             `json:"loop_bytes"`
+	LoopAllocs           uint64                             `json:"loop_allocs"`
+	P95NS                uint64                             `json:"p95_ns"`
+	P99NS                uint64                             `json:"p99_ns"`
+	SampledHeapHigh      uint64                             `json:"sampled_heap_high_bytes"`
+	ProcessRetainedHeap  uint64                             `json:"process_retained_heap_bytes"`
+	Census               []r1LifecycleCensusRecord5060      `json:"census"`
+	Maintenance          []r1LifecycleMaintenanceRecord5060 `json:"maintenance"`
+	Operations           map[string]uint64                  `json:"operations"`
 }
 
 type r1LifecycleCensusRecord5060 struct {
@@ -356,14 +390,36 @@ type r1LifecycleCensusRecord5060 struct {
 }
 
 type r1LifecycleMaintenanceRecord5060 struct {
-	Epoch            int    `json:"epoch"`
-	CheckpointNS     int64  `json:"checkpoint_ns"`
-	MaintenanceNS    int64  `json:"maintenance_ns"`
-	Overlay          any    `json:"overlay"`
-	TypedDeleted     uint64 `json:"typed_deleted_segments"`
-	TypedRetained    uint64 `json:"typed_retained_bytes"`
-	TypedRewriteDebt uint64 `json:"typed_rewrite_debt_bytes"`
-	VlogDeleted      uint64 `json:"vlog_deleted_segments"`
-	VlogPending      uint64 `json:"vlog_pending_segments"`
-	VlogRetained     uint64 `json:"vlog_retained_bytes"`
+	Epoch                       int                       `json:"epoch"`
+	CheckpointNS                int64                     `json:"checkpoint_ns"`
+	MaintenanceNS               int64                     `json:"maintenance_ns"`
+	Overlay                     any                       `json:"overlay"`
+	TypedDeleted                uint64                    `json:"typed_deleted_segments"`
+	TypedRetained               uint64                    `json:"typed_retained_bytes"`
+	TypedRewriteDebt            uint64                    `json:"typed_rewrite_debt_bytes"`
+	VlogDeleted                 uint64                    `json:"vlog_deleted_segments"`
+	VlogPending                 uint64                    `json:"vlog_pending_segments"`
+	VlogReferencedPlusProtected uint64                    `json:"vlog_referenced_plus_protected_bytes"`
+	TypedGC                     ColumnAssetGCStats        `json:"typed_gc"`
+	ValueLogGC                  backenddb.ValueLogGCStats `json:"vlog_gc"`
+}
+
+type r1LifecycleIDCoverage5060 struct {
+	Epoch                 int    `json:"epoch"`
+	DistinctIDs           int    `json:"distinct_ids"`
+	NewIDs                int    `json:"new_ids"`
+	RevisitedIDs          int    `json:"revisited_ids"`
+	CumulativeDistinctIDs int    `json:"cumulative_distinct_ids"`
+	IDsSHA256             string `json:"ids_sha256"`
+}
+
+type r1LifecycleReleaseGC5060 struct {
+	DurationNS int64              `json:"duration_ns"`
+	TypedGC    ColumnAssetGCStats `json:"typed_gc"`
+}
+
+// Retain all aggregate attribution without per-reference/segment lists.
+func r1LifecycleAggregateGC5060(stats ColumnAssetGCStats) ColumnAssetGCStats {
+	stats.Plan.Entries, stats.Plan.SegmentEntries = nil, nil
+	return stats
 }

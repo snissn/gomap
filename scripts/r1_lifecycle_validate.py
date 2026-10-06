@@ -35,6 +35,52 @@ def manifest_hash(manifest):
     return digest.hexdigest()
 
 
+def working_set(config):
+    ids = sorted({f"row-{pair * 37 % config['documents']:03d}" for pair in range(config['calls_per_epoch'] // 2)})
+    return {'policy': 'repeat-stride-37-each-epoch', 'stride': 37,
+            'nominal_limit': min(config['documents'], config['calls_per_epoch'] // 2),
+            'distinct_ids_per_epoch': len(ids),
+            'expected_distinct_ids_total': len(ids),
+            'expected_cross_epoch_revisited_ids': len(ids) * (config['epochs'] - 1),
+            'expected_revisited_distinct_ids': len(ids) if config['epochs'] > 1 else 0,
+            'ids_sha256': hashlib.sha256(('\n'.join(ids) + '\n').encode()).hexdigest()}
+
+
+def counters_valid(values, required, label):
+    require(type(values) is dict and set(required) <= values.keys(), f'missing {label} attribution')
+    require(all(integer(value) for value in values.values()), f'malformed {label} counters')
+
+
+def typed_gc_valid(stats):
+    require(stats['DryRun'] is False, 'typed GC reported dry run as completed work')
+    counters_valid({key: value for key, value in stats.items() if key not in ('DryRun', 'Plan')},
+                   ('SegmentsEligible', 'SegmentsDeleted', 'SegmentsRetained', 'BytesEligible', 'BytesDeleted', 'BytesRetained'), 'typed GC')
+    require(stats['SegmentsDeleted'] <= stats['SegmentsEligible'] and stats['BytesDeleted'] <= stats['BytesEligible'], 'typed deletion exceeds eligibility')
+    plan = stats['Plan']
+    require(plan['Complete'] is True and type(plan['ProtectOnly']) is bool, 'incomplete typed reachability plan')
+    require(plan['Entries'] is None and plan['SegmentEntries'] is None, 'unbounded per-reference/segment packet detail')
+    require(integer(plan['RewriteDebtBytes']), 'missing rewrite debt')
+    counters_valid(plan['Sources'], ('ManifestRoots', 'ManifestRecords', 'ActiveManifestRefs', 'RecoveryManifestRefs',
+                    'CandidateRefs', 'PendingRefs', 'PreparedRefs', 'PreparedQueryRefs', 'QuarantineRefs',
+                    'QuarantineSegmentRecords', 'PinnedRefs', 'MappedResourcePins', 'ActiveManifestBytes',
+                    'RecoveryManifestBytes', 'CandidateBytes', 'PendingBytes', 'PreparedBytes', 'PreparedQueryBytes',
+                    'QuarantineBytes', 'QuarantineSegmentBytes', 'PinnedBytes', 'MappedResourcePinBytes'), 'typed reachability sources')
+    counters_valid(plan['Refs'], ('Total', 'Protected', 'Reclaimable', 'Uncertain', 'BytesTotal', 'BytesProtected', 'BytesReclaimable', 'BytesUncertain'), 'typed refs')
+    counters_valid(plan['Segments'], ('Total', 'Protected', 'Reclaimable', 'Mixed', 'Unknown', 'Missing',
+                    'OutOfBoundsRefs', 'QuarantineSegments', 'QuarantineSegmentMismatches', 'BytesTotal',
+                    'BytesProtected', 'BytesReclaimable', 'BytesWholeReclaimable', 'BytesUnknown', 'BytesQuarantined'), 'typed segments')
+    counters_valid(plan['MappedResources'], ('ActiveHandles', 'ActiveMappedBytes', 'ActiveHeapCopyBytes',
+                    'ActiveDerivedMetadataBytes', 'PinnedRefs', 'PinnedBytes', 'UnconvertiblePins', 'DeniedResources', 'FallbackReads'), 'mapped resources')
+
+
+def vlog_gc_valid(stats):
+    classes = ('Total', 'Referenced', 'Active', 'Protected', 'ProtectedInUse', 'ProtectedRetained',
+               'ProtectedOverlap', 'ProtectedOther', 'Eligible', 'Deleted', 'Pending')
+    required = [prefix + suffix for prefix in ('Segments', 'Bytes') for suffix in classes]
+    counters_valid(stats, required, 'value-log GC')
+    require(stats['SegmentsDeleted'] <= stats['SegmentsEligible'] and stats['BytesDeleted'] <= stats['BytesEligible'], 'value-log deletion exceeds eligibility')
+
+
 def unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -84,6 +130,17 @@ def result_valid(result, config):
     require(result['p95_ns'] <= result['p99_ns'] <= result['call_ns'], 'invalid latency ordering')
     require(set(result['operations']) == OPERATIONS and all(integer(value, 1) and value == total // 8
             for value in result['operations'].values()), 'wrong actual operation mix/denominators')
+    selected = working_set(config)
+    distinct = selected['distinct_ids_per_epoch']
+    require(integer(result['distinct_ids'], 1) and result['distinct_ids'] == distinct
+            and integer(result['cross_epoch_revisited_ids']) and result['cross_epoch_revisited_ids'] == distinct * (epochs - 1)
+            and integer(result['revisited_distinct_ids']) and result['revisited_distinct_ids'] == (distinct if epochs > 1 else 0), 'result does not repeat bounded working set')
+    require(len(result['id_coverage']) == epochs, 'missing actual epoch ID coverage')
+    for epoch, coverage in enumerate(result['id_coverage']):
+        require(all(integer(coverage[key]) for key in ('epoch', 'distinct_ids', 'new_ids', 'revisited_ids', 'cumulative_distinct_ids')), 'malformed actual ID coverage')
+        require(coverage == {'epoch': epoch, 'distinct_ids': distinct, 'new_ids': distinct if epoch == 0 else 0,
+                'revisited_ids': 0 if epoch == 0 else distinct, 'cumulative_distinct_ids': distinct,
+                'ids_sha256': selected['ids_sha256']}, 'epoch expands or changes bounded working set')
     phases = ['ingest']
     for epoch in range(epochs):
         phases += [f'churn-{epoch}', f'checkpoint-{epoch}', f'maintenance-{epoch}']
@@ -101,8 +158,19 @@ def result_valid(result, config):
         require(row['epoch'] == epoch and integer(row['checkpoint_ns'], 1) and integer(row['maintenance_ns'], 1), 'invalid maintenance timer')
         require(type(row['overlay']) is dict and bool(row['overlay']), 'missing actual overlay result')
         for key in ('typed_deleted_segments', 'typed_retained_bytes', 'typed_rewrite_debt_bytes',
-                    'vlog_deleted_segments', 'vlog_pending_segments', 'vlog_retained_bytes'):
+                    'vlog_deleted_segments', 'vlog_pending_segments', 'vlog_referenced_plus_protected_bytes'):
             require(integer(row[key]), f'invalid maintenance {key}')
+        typed_gc_valid(row['typed_gc'])
+        vlog_gc_valid(row['vlog_gc'])
+        require(row['typed_deleted_segments'] == row['typed_gc']['SegmentsDeleted']
+                and row['typed_retained_bytes'] == row['typed_gc']['BytesRetained']
+                and row['typed_rewrite_debt_bytes'] == row['typed_gc']['Plan']['RewriteDebtBytes']
+                and row['vlog_deleted_segments'] == row['vlog_gc']['SegmentsDeleted']
+                and row['vlog_pending_segments'] == row['vlog_gc']['SegmentsPending']
+                and row['vlog_referenced_plus_protected_bytes'] == row['vlog_gc']['BytesReferenced'] + row['vlog_gc']['BytesProtected'], 'maintenance aggregates disagree')
+    release = result['after_view_release_gc']
+    require(integer(release['duration_ns'], 1), 'missing after-view-release GC timer')
+    typed_gc_valid(release['typed_gc'])
 
 
 def raw_results(text, config, pid):
@@ -156,6 +224,7 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
     require(integer(config['epochs'], 1) and config['epochs'] <= 1000, 'invalid epochs')
     for key, multiple in (('documents', 32), ('calls_per_epoch', 8)):
         require(integer(config[key], multiple) and config[key] % multiple == 0 and config[key] <= 1 << 20, 'invalid fixture dimensions')
+    require(config['working_set'] == working_set(config), 'mislabeled deterministic working set config')
     before = packet['source_before']
     source_valid(before)
     source_valid(packet['source_after'])
@@ -207,7 +276,8 @@ def summarize(packet, results):
     text = ['# Standalone R1 lifecycle diagnostic', '',
             f"Qualification: **{packet['config']['qualification']}**. No SQLite or cross-fixture speed comparison.",
             f"Source `{packet['source_before']['commit']}`; runtime `{packet['source_before']['runtime_sha256']}`; harness `{packet['source_before']['harness_sha256']}`.",
-            f"{len(results)} fresh processes; {packet['config']['epochs']} final epochs/process; {packet['config']['documents']} live rows; {packet['config']['calls_per_epoch']} calls/epoch.", '',
+            f"{len(results)} fresh processes; {packet['config']['epochs']} final epochs/process; {packet['config']['documents']} live rows; {packet['config']['calls_per_epoch']} calls/epoch.",
+            f"Every final epoch revisits the same {packet['config']['working_set']['distinct_ids_per_epoch']} IDs. Full row/posting oracles cover the live population; timed churn covers this bounded working set. This is finite hot-set evidence, not full-population or unlimited-capacity qualification.", '',
             '| Final metric | Median | Minimum | Maximum | max/min |', '| --- | ---: | ---: | ---: | ---: |']
     for key in sorted(METRICS):
         values = [row['go_metrics'][key] for row in results]
@@ -226,17 +296,27 @@ def summarize(packet, results):
         cells += [statistics.median(totals), statistics.median(files), statistics.median(growth)]
         text.append('| ' + phase['phase'] + ' | ' + ' | '.join(f'{n:.6g}' for n in cells) + ' |')
     text += ['', 'Maintenance medians (zero deleted segments remain zero):', '',
-             '| Epoch | checkpoint ns | maintenance ns | typed deleted | typed retained bytes | typed rewrite debt | vlog deleted | vlog pending | vlog retained bytes |',
+             '| Epoch | checkpoint ns | maintenance ns | typed deleted | typed retained bytes | typed rewrite debt | vlog deleted | vlog pending | vlog referenced+protected bytes |',
              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
     for epoch in range(packet['config']['epochs']):
         keys = ['checkpoint_ns', 'maintenance_ns', 'typed_deleted_segments', 'typed_retained_bytes',
-                'typed_rewrite_debt_bytes', 'vlog_deleted_segments', 'vlog_pending_segments', 'vlog_retained_bytes']
+                'typed_rewrite_debt_bytes', 'vlog_deleted_segments', 'vlog_pending_segments', 'vlog_referenced_plus_protected_bytes']
         cells = [statistics.median(row['result']['maintenance'][epoch][key] for row in results) for key in keys]
         text.append('| ' + str(epoch) + ' | ' + ' | '.join(f'{n:.6g}' for n in cells) + ' |')
+    text += ['', 'Post-view-release typed GC medians:', '',
+             '| ns | eligible segments | deleted segments | retained segments | eligible bytes | deleted bytes | retained bytes | rewrite debt bytes |',
+             '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    released = [row['result']['after_view_release_gc'] for row in results]
+    cells = [statistics.median(row['duration_ns'] for row in released)]
+    cells += [statistics.median(row['typed_gc'][key] for row in released)
+              for key in ('SegmentsEligible', 'SegmentsDeleted', 'SegmentsRetained', 'BytesEligible', 'BytesDeleted', 'BytesRetained')]
+    cells += [statistics.median(row['typed_gc']['Plan']['RewriteDebtBytes'] for row in released)]
+    text.append('| ' + ' | '.join(f'{n:.6g}' for n in cells) + ' |')
     text += ['', 'Go calibration results remain in raw logs and are excluded from this table.',
-             'Call timers include encoding, full-row decode/oracle and callback bookkeeping. Epoch metrics also include ID preparation and latency/count bookkeeping. Maintenance and phase oracles are excluded.',
+             'Call timers include encoding, full-row decode/oracle and callback bookkeeping. Epoch metrics also include ID preparation and latency/count/visited-ID bookkeeping. Maintenance, coverage aggregation and phase oracles are excluded.',
              'Heap high is sampled at epoch boundaries; retained heap after GC includes live oracle maps and latency samples. RSS and unsampled peak are unavailable.',
              'Component census uses logical file lengths, including redo WAL separately; no-op maintenance is recorded without a reclamation claim.',
+             'Full aggregate typed reachability sources/ref/segment/mapped attribution and value-log active/pending/protected/referenced classifications remain separate in the packet. Source classes can overlap; referenced+protected is an explicit sum, not unique retained bytes. Release GC is recorded; no-op or protected work is not reclamation.',
              'Raw logs and packet retain per-epoch checkpoint/maintenance/debt/component observations and actual host load. Spread is descriptive; this diagnostic supplies no automatic performance acceptance threshold.', '']
     return '\n'.join(text)
 

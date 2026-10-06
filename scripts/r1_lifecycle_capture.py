@@ -11,7 +11,7 @@ import subprocess
 import time
 
 from r1_collection_source import source_identity as collection_source
-from r1_lifecycle_validate import hexadecimal, source_valid, validate, summarize
+from r1_lifecycle_validate import hexadecimal, source_valid, validate, summarize, working_set
 
 
 def run(args, **kwargs):
@@ -137,6 +137,7 @@ def main():
               'epochs': args.epochs, 'documents': args.documents, 'calls_per_epoch': args.calls_per_epoch,
               'recipe': 'r1MutationRow5059; ascending IDs; load batches 32; deterministic stride 37; eight-call paired mix',
               'landed_tooling_commit': args.landed_tooling_commit, 'review_url': args.review_url}
+    config['working_set'] = working_set(config)
     invocation = [str(binary), '-test.run=^$', '-test.bench=^BenchmarkR1Lifecycle5060$',
                   f'-test.benchtime={args.epochs}x', '-test.count=1', '-test.benchmem', '-test.v']
     process_env = dict(os.environ, GOMAP_R1_LIFECYCLE_DOCUMENTS=str(args.documents),

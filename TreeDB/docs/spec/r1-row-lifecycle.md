@@ -167,7 +167,17 @@ supplies no automatic capacity threshold.
 The fixture is frozen by the compiled `r1MutationRow5059` recipe and a SHA-256
 of its ascending-ID JSON rows (newline delimited), not assumed equal to the
 #5057 fixture. Load batches contain 32 rows. The deterministic ordinal stride
-is 37; there is no random seed. Each eight-call block performs ordinary get,
+is 37 with no epoch offset and no random seed. Every epoch addresses the same
+bounded working set: the default repeats 512 distinct IDs over 4,096 live rows,
+and the 32-row/eight-call rehearsal repeats four IDs. The nominal bound is
+`min(documents, calls/2)`; the recorded actual distinct count accounts for stride
+aliasing in custom dimensions divisible by 37. There is no rotating full-population
+churn claim. Each epoch records its actual distinct/new/revisited/cumulative ID
+counts and a hash of its sorted visited ID set. Revisited counts refer to IDs
+seen in an earlier epoch, not the second call in a same-epoch pair. Final result
+counts retain total distinct IDs, unique revisited IDs, and the sum of per-epoch
+cross-epoch revisits. Config records expected final counts, and the validator
+independently binds the repeated set. Each eight-call block performs ordinary get,
 fresh-view prepared get, indexed update, native replacement, delete, native
 insert, native upsert, and post-upsert ordinary get once each. Recorded actual
 counts must equal epochs × calls/epoch, with each operation exactly one eighth
@@ -184,19 +194,32 @@ epoch result must exist exactly once and agree with Go's printed metrics.
 A one-epoch rehearsal emits one result. Phase component inventories, heap
 samples, checkpoint/maintenance times, actual overlay results, typed and
 value-log deletion/retention/debt are retained for every final epoch. File sizes
-are logical lengths. Maintenance no-ops remain visible. The benchmark's
-ordinary value-log GC is measured here; the separate correctness tests exercise
+are logical lengths. Maintenance no-ops remain visible. Each epoch retains full
+aggregate typed GC statistics and reachability plan
+source/ref/segment/mapped-resource attribution, including eligible/reclaimable
+counts and bytes, protected/retained bytes, and rewrite debt. Per-reference and
+per-segment entries are omitted. Full scalar value-log GC statistics preserve
+active, pending, eligible, deleted, referenced and protected classes separately,
+including overlap/protected-source breakdown; these classes may overlap and
+must not be added as unique retained storage. The convenience
+`vlog_referenced_plus_protected_bytes` field is an explicitly labeled sum. The
+post-view-release typed GC is timed and its complete aggregate result retained,
+so release, GC attempt, and actual reclaimed work remain distinct facts.
+The benchmark's ordinary value-log GC is measured here; the separate correctness
+tests exercise
 typed rewrite/remap and lawful reclaimed-segment proof.
 
 Per-call latency starts after ordinal/ID/current-row preparation and includes
 caller encoding, callback work, full-row decoding/oracle and mutation-map
 bookkeeping. Epoch ns/op also includes ID preparation, latency sample insertion
-and operation-count bookkeeping. Loop allocation deltas cover the whole call
+and operation-count/visited-ID bookkeeping. Coverage aggregation runs outside
+the epoch timer. Loop allocation deltas cover the whole call
 loop. Sample storage is preallocated before timing. Full phase row/posting
 oracles, storage walks, checkpoint and maintenance are outside both call and
 epoch timers. Prepared reads include opening/closing their own view, not warmed
 reuse. The post-GC heap snapshot deliberately keeps `want`, `known`, `captured`
-and latency samples alive; it includes these diagnostic objects. Heap high is
+and latency samples alive; it also retains visited-ID accounting and includes
+these diagnostic objects. Heap high is
 sampled only at epoch boundaries. RSS, allocated blocks and unsampled peaks
 remain unavailable.
 
@@ -244,7 +267,8 @@ failed processes, missing metrics or phases, calibration/final confusion,
 incorrect operation or epoch denominators, and relabeled tiny rehearsals.
 The printed enclosing epoch timer must cover the sum of measured call timers,
 allowing only Go's printed rounding. Effective temporary-directory/filesystem
-metadata is mandatory; older provisional packets without it remain preserved
+metadata and repeated-working-set/aggregate-maintenance attribution are
+mandatory; older provisional packets without them remain preserved
 under their original harness identity and fail the new validator.
 `--expected-runtime`, `--expected-harness` and `--expected-commit` additionally
 bind a packet to the coordinator's independently frozen identities. The real
@@ -253,3 +277,11 @@ raw checksums, so those failures exercise the semantic gate. This packet is
 standalone lifecycle evidence and is neither a #5057 comparator packet nor a
 benchprof profile input. Review and landing still precede expensive collection;
 a valid rehearsal does not satisfy retained acceptance.
+
+Five final epochs on the repeated bounded set establish a finite hot-set
+diagnostic. Full row/posting oracles cover all live rows, but this timed churn
+does not qualify full-population stress or unlimited sustained capacity. Any
+further lifecycle action follows measured completed work, blockers and debt;
+this harness adds no unconditional rewrite or destructive shortcut. The active
+#5037 rewrite-resource owner remains authoritative. Earlier packets with the
+rotating epoch offset stay nonqualifying under their original harness identity.
