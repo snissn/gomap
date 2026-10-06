@@ -187,7 +187,7 @@ func (s *r1SQLite) rangeIDs(city string, limit int) ([][]byte, error) {
 	}
 	return out, rows.Err()
 }
-func (s *r1SQLite) storage() (int64, int64, error) { return r1Storage(s.dir) }
+func (s *r1SQLite) storage() (int64, int64, int64, error) { return r1Storage(s.dir) }
 func (s *r1SQLite) stats() map[string]string {
 	var version string
 	_ = s.db.QueryRow("SELECT sqlite_version()").Scan(&version)
