@@ -104,7 +104,7 @@ def uint(x):
     return type(x) is int and x >= 0
 
 
-def measurement_labels(retained=False):
+def measurement_labels():
     labels = {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}
     return labels
 
@@ -168,6 +168,8 @@ def validate(x, n, mode, algorithm):
     need(x['WriterActiveCalls'] + x['DrainCalls'] <= x['Calls'], 'writer phase call accounting')
     need(x['ReadIntervalsOverlappingQuantum'] <= x['Reads'] and x['WriteIntervalsOverlappingQuantum'] <= x['Writes'] and x['ForegroundIntervalsAtQuantumStart'] <= x['WriterActiveCalls'] + x['DrainCalls'], 'overlap count bounds')
     need(x['FinalWorkRecords'] <= x['MaxRecords'] <= x['Records'] <= x['Calls'] * x['MaxRecords'] and x['FinalWorkBytes'] <= x['MaxBytes'] <= x['Bytes'] <= x['Calls'] * x['MaxBytes'], 'work counter accounting')
+    if algorithm == 'bounded':
+        need(all(x[k] > 0 for k in ('Records', 'Bytes', 'MaxRecords', 'MaxBytes')), 'missing charged physical work')
     need(all(x[k] <= x['Calls'] for k in ('CancelTransitions', 'CancelDrains', 'FloorRecaptures', 'QualificationResets', 'NewPreparations')), 'transition count bounds')
     need(x['MinimumRecords'] == x['MinimumBytes'] == 0, 'successful refusal metadata')
     need(not x['CompletedAfterStop'] or x['DrainCalls'] > 0, 'completion drain witness')
@@ -194,6 +196,51 @@ def matrix(cases):
         need(type(c['n']) is int and type(c['mode']) is str and type(c['algorithm']) is str and type(c['exit_code']) is int and c['exit_code'] == 0, 'case identity/process')
     need(len({(c['n'], c['mode'], c['algorithm']) for c in cases}) == 8 and {(c['n'], c['mode'], c['algorithm']) for c in cases} == set(MATRIX), 'unique matrix')
 
+def validate_version(out, receipt):
+    for name, key in [('version-command.json', 'version_command_sha256'), ('version.log', 'version_log_sha256')]:
+        value = receipt.get(key)
+        need(type(value) is str and len(value) == 64 and all(c in '0123456789abcdef' for c in value) and (out / name).is_file() and sha(out / name) == value, 'version artifact binding ' + name)
+    command = json.loads((out / 'version-command.json').read_text())
+    go = receipt['go']
+    need(type(go['path']) is str and pathlib.Path(go['path']).is_absolute() and type(go['sha256']) is str and len(go['sha256']) == 64 and all(c in '0123456789abcdef' for c in go['sha256']), 'version Go identity')
+    need(command == {'cwd': receipt['source_root'], 'argv': [go['path'], 'version'], 'env': receipt['build_env'], 'go_path': go['path'], 'go_sha256': go['sha256']}, 'version invocation binding')
+    need(receipt.get('version_go_before_sha256') == receipt.get('version_go_after_sha256') == go['sha256'], 'version executable stability')
+    output = go.get('version_output')
+    need(type(output) is str and (out / 'version.log').read_bytes() == output.encode() and type(go['version']) is str and go['version'].startswith('go version ') and output == go['version'] + '\n' and '\n' not in go['version'], 'version output binding')
+
+
+def capture_version(go_path, root, env, out, errors):
+    build_env = {k: env.get(k) for k in BUILD_KEYS}
+    before = artifact_sha(go_path)
+    command = {'cwd': str(root), 'argv': [str(go_path), 'version'], 'env': build_env, 'go_path': str(go_path), 'go_sha256': before}
+    (out / 'version-command.json').write_text(json.dumps(command, indent=2) + '\n')
+    command_before = artifact_sha(out / 'version-command.json')
+    raw = None
+    go = {'path': str(go_path), 'version': None, 'version_output': None, 'sha256': before}
+    if before is None:
+        errors.append('Go executable unreadable before version capture')
+    else:
+        version, process_error = run_logged(command['argv'], root, env, out / 'version.log', 30)
+        if version.returncode != 0:
+            errors.append('Go version failed: ' + (process_error or str(version.returncode)))
+        else:
+            raw = (version.stdout or b'') + (version.stderr or b'')
+            output = raw.decode(errors='replace')
+            go.update(version=output.strip(), version_output=output)
+            if output.encode() != raw or not go['version'].startswith('go version ') or output != go['version'] + '\n' or '\n' in go['version']:
+                errors.append('invalid Go version output')
+    after = artifact_sha(go_path)
+    stable = before is not None and before == after
+    if not stable:
+        errors.append('Go executable drift during version capture')
+    metadata = {'version_command_sha256': artifact_sha(out / 'version-command.json'), 'version_log_sha256': artifact_sha(out / 'version.log'), 'version_go_before_sha256': before, 'version_go_after_sha256': after}
+    if command_before is None or metadata['version_command_sha256'] != command_before:
+        errors.append('version command drift during capture')
+    if raw is not None and metadata['version_log_sha256'] != hashlib.sha256(raw).hexdigest():
+        errors.append('version output drift during capture')
+    return go, build_env, metadata, stable
+
+
 def packet(out, root=None, receipt=None):
     r = receipt if receipt is not None else json.loads((out / 'receipt.json').read_text())
     source = json.loads((out / 'source-bindings.json').read_text())
@@ -213,6 +260,7 @@ def packet(out, root=None, receipt=None):
     need(build['cwd'] == r['source_root'] and build['argv'] == [r['go']['path'], 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if r['race'] else []) + ['-o', str(capture / 'foreground.test'), './TreeDB/mvcc'], 'build invocation')
     need(build['env'] == r['build_env'] and all(k in r['build_env'] for k in BUILD_KEYS), 'build environment binding')
     need(all(r['build_env'][k] == v for k, v in {'CGO_ENABLED': '1', 'GOFLAGS': '-p=2', 'GOWORK': 'off', 'GOTOOLCHAIN': 'local', 'GOROOT': None, 'GOGC': None, 'GOMEMLIMIT': None, 'GODEBUG': None}.items()), 'controlled build environment')
+    validate_version(out, r)
     for c in r['cases']:
         for key in ('raw', 'result', 'command'):
             need(type(c[key]) is str and pathlib.Path(c[key]).name == c[key] and valid_sha(c[key + '_sha256']) and sha(out / c[key]) == c[key + '_sha256'], 'case binding ' + key)
@@ -371,16 +419,10 @@ def main():
     env = {k: v for k, v in os.environ.items() if not k.startswith('MVCC_FOREGROUND_')}; env.pop('GOROOT', None); env.update(CGO_ENABLED='1', GOWORK='off', GOTOOLCHAIN='local', GOFLAGS='-p=2', MVCC_FOREGROUND_READER_STOP_WITH_WRITER='0', MVCC_FOREGROUND_FORCE_BUDGET_ERROR='0')
     for key in ('GOGC', 'GOMEMLIMIT', 'GODEBUG'):
         env.pop(key, None)
-    go_path = pathlib.Path(shutil.which(args.go, path=env.get('PATH')) or args.go).resolve(); need(go_path.is_file(), 'Go executable')
+    go_path = pathlib.Path(shutil.which(args.go, path=env.get('PATH')) or args.go).resolve()
     env['PATH'] = str(go_path.parent) + os.pathsep + env.get('PATH', '')
     cases = []; errors = []; binary_sha = None; source_stable = True
-    version_cmd = [str(go_path), 'version']
-    (out / 'version-command.json').write_text(json.dumps({'cwd': str(root), 'argv': version_cmd}, indent=2) + '\n')
-    version, process_error = run_logged(version_cmd, root, env, out / 'version.log', 30)
-    if version.returncode != 0: errors.append('Go version failed: ' + (process_error or str(version.returncode)))
-    go = {'path': str(go_path), 'version': version.stdout.decode(errors='replace').strip() if version.returncode == 0 else None, 'sha256': artifact_sha(go_path)}; build_env = {k: env.get(k) for k in BUILD_KEYS}
-    if version.returncode == 0 and not go['version'].startswith('go version '): errors.append('invalid Go version output')
-    if go['sha256'] is None: errors.append('Go executable unreadable')
+    go, build_env, version_metadata, source_stable = capture_version(go_path, root, env, out, errors)
     binary = out / 'foreground.test'; cmd = [str(go_path), 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if args.race else []) + ['-o', str(binary), './TreeDB/mvcc']
     (out / 'build-command.json').write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'go': go, 'env': build_env}, indent=2) + '\n')
     if not errors:
@@ -429,7 +471,10 @@ def main():
         if not case_accepted: break
     final_source = final_bindings(root, errors)
     if source != final_source: source_stable = False; errors.append('source drift after collection')
-    receipt = {'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source_stable, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': artifact_sha(out / 'build-command.json'), 'build_log_sha256': artifact_sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': measurement_labels()}
+    receipt = {'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source_stable, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': artifact_sha(out / 'build-command.json'), 'build_log_sha256': artifact_sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': measurement_labels(), **version_metadata}
+    if not errors:
+        try: validate_version(out, receipt)
+        except (OSError,ValueError,KeyError,TypeError) as error: errors.append('version capture invalid: '+str(error))
     (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n'); need(not errors, 'causal failures ' + repr(errors)); packet(out, root)
     print('causal packet PASS; retained latency qualification outstanding')
 

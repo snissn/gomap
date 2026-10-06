@@ -69,6 +69,8 @@ def validate_case(x, n, mode, pinned):
         require(type(x[k]) is bool, 'invalid boolean field '+k)
     require(x['pid'] > 0 and x['Calls'] > 0, 'missing process/work witness')
     require(x['MaxRecords'] <= x['Records'] <= x['Calls']*x['MaxRecords'] and x['MaxBytes'] <= x['Bytes'] <= x['Calls']*x['MaxBytes'], 'work total/max/call accounting')
+    if x['Pruned'] or x['PartialOutput'] or x['ChargedCancel']:
+        require(all(x[k] > 0 for k in ('Records','Bytes','MaxRecords','MaxBytes')), 'missing charged physical work')
     require(x['MaxRecords'] <= 32 and x['MaxBytes'] <= 1<<20 and x['MaxWindow'] <= 32 and x['MaxFrames'] <= 64 and x['MaxFlatRetiredCap'] == 0, 'bounded-work/descriptor failure')
     require(all(x[k] for k in ('PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle')), 'missing lifecycle oracle')
     require(x['PhysicalBefore'] == n+2 and x['FixedSurvivors'] == 3, 'fixture shape mismatch')
@@ -140,6 +142,51 @@ def summarize(receipt, results):
         summary.append({'n':c['n'],'mode':c['mode'],'pinned':c['pinned'],'calls':x['Calls'],'source_retirement_cells_pre_eof':x['MaxSourceRetirementCells'],'producer_retirement_logical_payload_lower_bound_bytes':8*x['MaxRetirementCells'],'max_window':x['MaxWindow'],'max_flat_retirement_capacity':x['MaxFlatRetiredCap'],'aggregate_forced_gc_heap_alloc_cut_max':max(s['HeapAlloc'] for s in x['cuts']),'sampled_maintenance_rss_peak':x['SampledMaintenanceRSSPeak'],'whole_process_hwm_includes_fixture':max(s['ProcessHWM'] for s in x['cuts']),'process_total_alloc_through_directory_cleanup':last['TotalAlloc']-start['TotalAlloc'],'fixture_total_alloc':baseline['TotalAlloc']-start['TotalAlloc'],'maintenance_through_final_cleanup_total_alloc':last['TotalAlloc']-baseline['TotalAlloc'],'maintenance_through_finish_or_cancel_total_alloc':terminal['TotalAlloc']-baseline['TotalAlloc'],'close_reopen_final_cleanup_total_alloc':last['TotalAlloc']-terminal['TotalAlloc'],'process_mallocs_through_directory_cleanup':last['Mallocs']-start['Mallocs']})
     return {'labels':receipt['labels'],'cases':summary}
 
+def validate_version(out, receipt):
+    for name, key in [('version-command.json', 'version_command_sha256'), ('version.log', 'version_log_sha256')]:
+        value = receipt.get(key)
+        require(type(value) is str and len(value) == 64 and all(c in '0123456789abcdef' for c in value) and (out / name).is_file() and sha(out / name) == value, 'version artifact binding ' + name)
+    command = json.loads((out / 'version-command.json').read_text())
+    go = receipt['go']
+    require(type(go['path']) is str and pathlib.Path(go['path']).is_absolute() and type(go['sha256']) is str and len(go['sha256']) == 64 and all(c in '0123456789abcdef' for c in go['sha256']), 'version Go identity')
+    require(command == {'cwd': receipt['source_root'], 'argv': [go['path'], 'version'], 'env': receipt['build_env'], 'go_path': go['path'], 'go_sha256': go['sha256']}, 'version invocation binding')
+    require(receipt.get('version_go_before_sha256') == receipt.get('version_go_after_sha256') == go['sha256'], 'version executable stability')
+    output = go.get('version_output')
+    require(type(output) is str and (out / 'version.log').read_bytes() == output.encode() and type(go['version']) is str and go['version'].startswith('go version ') and output == go['version'] + '\n' and '\n' not in go['version'], 'version output binding')
+
+
+def capture_version(go_path, root, env, out, errors):
+    build_env = {k: env.get(k) for k in BUILD_KEYS}
+    before = artifact_sha(go_path)
+    command = {'cwd': str(root), 'argv': [str(go_path), 'version'], 'env': build_env, 'go_path': str(go_path), 'go_sha256': before}
+    (out / 'version-command.json').write_text(json.dumps(command, indent=2) + '\n')
+    command_before = artifact_sha(out / 'version-command.json')
+    raw = None
+    go = {'path': str(go_path), 'version': None, 'version_output': None, 'sha256': before}
+    if before is None:
+        errors.append('Go executable unreadable before version capture')
+    else:
+        version, process_error = run_logged(command['argv'], root, env, out / 'version.log', 30)
+        if version.returncode != 0:
+            errors.append('Go version failed: ' + (process_error or str(version.returncode)))
+        else:
+            raw = (version.stdout or b'') + (version.stderr or b'')
+            output = raw.decode(errors='replace')
+            go.update(version=output.strip(), version_output=output)
+            if output.encode() != raw or not go['version'].startswith('go version ') or output != go['version'] + '\n' or '\n' in go['version']:
+                errors.append('invalid Go version output')
+    after = artifact_sha(go_path)
+    stable = before is not None and before == after
+    if not stable:
+        errors.append('Go executable drift during version capture')
+    metadata = {'version_command_sha256': artifact_sha(out / 'version-command.json'), 'version_log_sha256': artifact_sha(out / 'version.log'), 'version_go_before_sha256': before, 'version_go_after_sha256': after}
+    if command_before is None or metadata['version_command_sha256'] != command_before:
+        errors.append('version command drift during capture')
+    if raw is not None and metadata['version_log_sha256'] != hashlib.sha256(raw).hexdigest():
+        errors.append('version output drift during capture')
+    return go, build_env, metadata, stable
+
+
 def validate_packet(out, root=None):
     receipt=json.loads((out/'receipt.json').read_text())
     source=json.loads((out/'source-bindings.json').read_text())
@@ -156,6 +203,7 @@ def validate_packet(out, root=None):
     require(build['go']==go and type(go['path']) is str and pathlib.Path(go['path']).is_absolute() and type(go['version']) is str and go['version'].startswith('go version ') and type(go['sha256']) is str and len(go['sha256'])==64 and all(c in '0123456789abcdef' for c in go['sha256']),'Go identity')
     require(build['env']==env and all(k in env for k in BUILD_KEYS) and all(env[k]==v for k,v in {'CGO_ENABLED':'1','GOFLAGS':'-p=2','GOWORK':'off','GOTOOLCHAIN':'local','GOROOT':None,'GOGC':None,'GOMEMLIMIT':None,'GODEBUG':None}.items()),'controlled build environment')
     require(build['cwd']==receipt['source_root'] and build['argv']==[go['path'],'test','-c']+(['-race'] if receipt['race'] else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(capture/'native-memory.test'),'./TreeDB/mvcc'],'build invocation')
+    validate_version(out, receipt)
     cases=receipt['cases'];require(isinstance(cases,list) and cases,'missing cases')
     n=receipt['n']
     expected={(n,'prune',True),(2*n,'prune',True),(n,'cancel',True),(n,'control',True)} if receipt['smoke'] else {(size,mode,pin) for size in (n,2*n) for mode in ('prune','control','cancel') for pin in (False,True)}
@@ -212,7 +260,7 @@ def self_test(out):
     # Parser fixtures copy the complete real packet; measurements stay untouched.
     with tempfile.TemporaryDirectory(prefix='native-memory-validator-') as tmp:
         tmp=pathlib.Path(tmp)
-        for name in {'source-bindings.json','native-memory.test','build-command.json','build.log','summary.json'} | {c[k] for c in r['cases'] for k in ('raw','result','command')}:
+        for name in {'source-bindings.json','native-memory.test','build-command.json','build.log','version-command.json','version.log','summary.json'} | {c[k] for c in r['cases'] for k in ('raw','result','command')}:
             shutil.copyfile(out/name,tmp/name)
         (tmp/'receipt.json').write_text(json.dumps(r));validate_packet(tmp)
         witness_index=r['cases'].index(witness_case)
@@ -431,16 +479,10 @@ def run(args):
     (out/'source-bindings.json').write_text(json.dumps(before,indent=2)+'\n')
     env={k:v for k,v in os.environ.items() if not k.startswith('MVCC_MEMORY_')};env.pop('GOROOT',None);env.update(CGO_ENABLED='1',GOWORK='off',GOTOOLCHAIN='local',GOFLAGS='-p=2')
     for key in ('GOGC','GOMEMLIMIT','GODEBUG'):env.pop(key,None)
-    go_path=pathlib.Path(shutil.which(args.go,path=env.get('PATH')) or args.go).resolve();require(go_path.is_file(),'Go executable')
+    go_path=pathlib.Path(shutil.which(args.go,path=env.get('PATH')) or args.go).resolve()
     env['PATH']=str(go_path.parent)+os.pathsep+env.get('PATH','')
     cases=[];errors=[];binary_sha=None;source_stable=True
-    version_cmd=[str(go_path),'version']
-    (out/'version-command.json').write_text(json.dumps({'cwd':str(root),'argv':version_cmd},indent=2)+'\n')
-    version,process_error=run_logged(version_cmd,root,env,out/'version.log',30)
-    if version.returncode != 0: errors.append('Go version failed: '+(process_error or str(version.returncode)))
-    go={'path':str(go_path),'version':version.stdout.decode(errors='replace').strip() if version.returncode==0 else None,'sha256':artifact_sha(go_path)};build_env={k:env.get(k) for k in BUILD_KEYS}
-    if version.returncode == 0 and not go['version'].startswith('go version '): errors.append('invalid Go version output')
-    if go['sha256'] is None: errors.append('Go executable unreadable')
+    go,build_env,version_metadata,source_stable=capture_version(go_path,root,env,out,errors)
     binary=out/'native-memory.test'
     build=[str(go_path),'test','-c']+(['-race'] if args.race else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(binary),'./TreeDB/mvcc']
     (out/'build-command.json').write_text(json.dumps({'cwd':str(root),'argv':build,'go':go,'env':build_env},indent=2)+'\n')
@@ -480,7 +522,10 @@ def run(args):
         print(name+' PASS',flush=True)
     after=final_bindings(root,errors)
     if before!=after: source_stable=False;errors.append('source drift after collection')
-    receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':artifact_sha(out/'build-command.json'),'build_log_sha256':artifact_sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':source_stable,'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':dict(MEASUREMENT_LABELS)}
+    receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':artifact_sha(out/'build-command.json'),'build_log_sha256':artifact_sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':source_stable,'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':dict(MEASUREMENT_LABELS),**version_metadata}
+    if not errors:
+        try: validate_version(out, receipt)
+        except (OSError,ValueError,KeyError,TypeError) as error: errors.append('version capture invalid: '+str(error))
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
     require(not errors,'capture failures '+repr(errors))
     results=[json.loads((out/c['result']).read_text()) for c in cases]
