@@ -84,3 +84,20 @@ warmups plus three ABBA cycles. Raw distributions and matched comparisons are
 descriptive, with no retained-tail or native qualification claim. Successful
 collection and analysis remain separate from current-head review, race tests,
 actual runtime evidence and coordinator acceptance.
+
+The analyzer binds ordinary ACKs to observed command-WAL counters in write-only
+windows. Seed and growth each append one command per 16-key group; each joined
+epoch adds two such group series and one ordinary command. Durable mode requires
+one file sync per ordinary command, relaxed mode requires zero ordinary syncs,
+and NoWAL requires zero appends and syncs. A checkpoint counter change inside
+these windows refuses attribution. Explicit checkpoint and later read-cleanup
+windows remain separate observations; read cleanup can trigger additional
+automatic checkpoints, whose run counts remain retained.
+
+Call intervals must also follow the finite lifecycle order. Each caller's calls
+are sequential, all three overlap workers finish before their epoch checkpoint,
+and checkpoint, pin release, Close, reopen, and final Close follow their declared
+stages. Configuration uses the shared canonical variant-path and Git-identity
+validators. Copied-positive smoke cases include zero observed WAL appends, zero
+durable ordinary syncs, unexplained relaxed syncs, premature checkpoints, and
+Close before seed; updating artifact hashes cannot make these acceptable.

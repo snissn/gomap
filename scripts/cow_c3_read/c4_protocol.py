@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import re
 
-from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write
+from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids
 
 SCHEMA = "gomap-cow-sustained-public-v1"
 PROFILES = ("command_wal_durable", "command_wal_relaxed", "no_wal_fast")
@@ -79,7 +79,7 @@ def validate_config(c):
     need(set(c["variants"])=={"baseline","candidate"},"exact variants required")
     for v in c["variants"].values():
         exact(v,("production_commit","production_git_tree","source","manifest","manifest_sha256","source_tree_sha256","binary","binary_sha256","build_receipt","build_receipt_sha256"),"variant")
-        for k in ("production_commit","production_git_tree"):need(re.fullmatch(r"[0-9a-f]{40}",v[k] or ""),"exact Git identity")
+        variant_paths(v,live=False);variant_git_ids(v)
         for k in ("manifest_sha256","source_tree_sha256","binary_sha256","build_receipt_sha256"):need(re.fullmatch(r"[0-9a-f]{64}",v[k] or ""),"exact artifact identity")
     expected=set(itertools.product(PROFILES,MODES,LAYOUTS,SIZES));cells=[]
     for x in c["cases"]:
@@ -137,6 +137,63 @@ def expected_calls(n,e,mode):
     add("released_checkpoint","Checkpoint",1,0,0);add("close","Close",1,0,0);add("reopen","Open",1,0,1);add("final_close","Close",1,0,0)
     return result
 
+def validate_stage_order(calls,epochs,mode):
+    # One stage contains either one sequential caller, or the three explicitly
+    # joined overlap workers. All calls must finish before the next stage starts.
+    stages=[]
+    def stage(phase,*operations):stages.append([(phase,op) for op in operations])
+    stage("setup","Open");stage("seed","CommitGroupAt");stage("pin","IterateVersions.acquire")
+    for op in ("GetAt","IterateVersions.full"):stage("seed_oracle",op)
+    for epoch in range(1,epochs+1):
+        prefix=f"epoch_{epoch}"
+        stage(prefix+"_growth","CommitGroupAt");stage(prefix+"_ordinary","CommitAt");stage(prefix+"_replacement","CommitGroupAt")
+        for op in ("GetAt","GetAt.historical","IterateVersions.full"):stage(prefix+"_oracle",op)
+        stage(prefix+"_overlap","CommitGroupAt","GetAt","IterateVersions.full")
+        stage(prefix+"_checkpoint" if epoch<epochs else "pinned_checkpoint","Checkpoint")
+    if mode=="cow_btree":stage("unsupported_prune","PruneVersions")
+    stage("old_pin_release","IterateVersions.consume_close")
+    for op in ("GetAt","GetAt.historical","IterateVersions.full"):stage("released_oracle",op)
+    stage("released_checkpoint","Checkpoint");stage("close","Close");stage("reopen","Open")
+    for op in ("GetAt","GetAt.historical","IterateVersions.full"):stage("reopen_oracle",op)
+    stage("final_close","Close")
+    previous=0
+    for keys in stages:
+        group=[c for c in calls if (c["phase"],c["operation"]) in keys]
+        need(group and min(c["start_ns"] for c in group)>=previous,"lifecycle stage reordered or workers not joined: "+keys[0][0])
+        for key in keys:
+            actor=sorted((c for c in group if (c["phase"],c["operation"])==key),key=lambda c:c["start_ns"])
+            need(all(a["completion_ns"]<=b["start_ns"] for a,b in zip(actor,actor[1:])),"sequential public caller overlaps itself: "+key[0])
+        previous=max(c["completion_ns"] for c in group)
+
+def validate_ordinary_ack(boundaries,profile,keys,epochs):
+    append="treedb.command_wal.append.count_total"
+    sync="treedb.command_wal.file_sync.calls_total"
+    checkpoints="treedb.cache.checkpoint.runs"
+    fields=(append,sync,checkpoints)
+    previous=boundaries["opened"]
+    need(all(int(previous[k])==0 for k in fields),"unexpected opened WAL/checkpoint counters")
+    def writes(phase,count):
+        nonlocal previous
+        current=boundaries[phase]
+        need(int(current[checkpoints])==int(previous[checkpoints]),"unexpected checkpoint during ordinary write window")
+        need(int(current[append])-int(previous[append])==(0 if profile=="no_wal_fast" else count),"ordinary WAL append/work mismatch: "+phase)
+        need(int(current[sync])-int(previous[sync])==(count if profile=="command_wal_durable" else 0),"ordinary WAL sync/ACK mismatch: "+phase)
+        previous=current
+    writes("seed",keys//16)
+    for epoch in range(1,epochs+1):
+        writes(f"epoch_{epoch}_growth",keys//16)
+        writes(f"epoch_{epoch}_joined",2*(keys//16)+1)
+        phase=f"epoch_{epoch}_checkpoint" if epoch<epochs else "pinned_checkpoint"
+        current=boundaries[phase]
+        need(int(current[append])==int(previous[append]) and int(current[checkpoints])==int(previous[checkpoints])+1,"public checkpoint changed ordinary append or run count")
+        previous=current
+    released=boundaries["released"]
+    need(all(int(released[k])==int(previous[k]) for k in fields),"pin release/prune changed WAL/checkpoint counters")
+    preclose=boundaries["preclose"]
+    need(int(preclose[append])==int(released[append]) and int(preclose[checkpoints])>=int(released[checkpoints])+1,"released checkpoint missing or changed ordinary append")
+    need(all(int(boundaries["reopened"][k])==0 for k in fields),"reopened read oracle changed WAL/checkpoint counters")
+    if profile=="no_wal_fast":need(all(int(s[append])==int(s[sync])==0 for s in boundaries.values()),"NoWAL observed WAL effects")
+
 RAW_FIELDS=("lifecycle_outcome","lifecycle_error","schema_version","leaf","profile","mode","layout","keys","epochs","group_width","pin_ring","recorder_capacity","limits","shards","flush_threshold","background_checkpoint_interval","disable_side_stores","pointer_threshold","force_pointers","ordinary_ack","read_cut_capability","calls","boundaries","oracle_receipts","native_eligibility","whole_maintenance_charge","qualification","overlapping_readers")
 CALL_FIELDS=("phase","operation","input","output","start_ns","completion_ns","duration_ns","outcome","error")
 COW_COUNTERS=("total_bytes","history_bytes","reserved_bytes","retired_bytes","peak_bytes","control_bytes","deferred_bytes","external_bytes","views","generations","sources","external_leases","active_cuts","current_roots","frozen_roots","capture_calls_total","prepare_calls_total","publications_total","rollovers_total","handoffs_total")
@@ -163,6 +220,7 @@ def validate_raw(r,case,epochs):
         intervals.append((call["start_ns"],call["completion_ns"]))
     need(seen==collections.Counter({k:v[0] for k,v in expected.items()}),"missing/duplicate phase/work/Close")
     need([x[0] for x in intervals]==sorted(x[0] for x in intervals),"raw records not ordered by call start")
+    validate_stage_order(r["calls"],epochs,mode)
     overlap=0
     for epoch in range(1,epochs+1):
         calls=[x for x in r["calls"] if x["phase"]==f"epoch_{epoch}_overlap"]
@@ -176,8 +234,7 @@ def validate_raw(r,case,epochs):
         if epoch<epochs:boundaries.append(f"epoch_{epoch}_checkpoint")
     boundaries.extend(("pinned_checkpoint","released","preclose","reopen_counter_reset","reopened"))
     need([b.get("phase") for b in r["boundaries"]]==boundaries,"missing/duplicate lifecycle boundaries")
-    required=["treedb.commit_seq","treedb.cache.snapshot.rotations_total","treedb.cache.snapshot.rotated_shards_total","treedb.cache.snapshot.enqueued_records_total"]
-    if case["profile"]!="no_wal_fast":required.extend(("treedb.command_wal.append.count_total","treedb.command_wal.file_sync.calls_total"))
+    required=["treedb.command_wal.append.count_total","treedb.command_wal.file_sync.calls_total","treedb.cache.checkpoint.runs","treedb.commit_seq","treedb.cache.snapshot.rotations_total","treedb.cache.snapshot.rotated_shards_total","treedb.cache.snapshot.enqueued_records_total"]
     if mode=="cow_btree":required.extend("treedb.cache.cow."+name for name in COW_COUNTERS)
     previous={};boundary_map={}
     for boundary in r["boundaries"]:
@@ -190,6 +247,7 @@ def validate_raw(r,case,epochs):
         previous=stats;boundary_map[boundary["phase"]]=stats
     if mode=="cow_btree":
         need(int(boundary_map["released"]["treedb.cache.cow.views"])==0 and int(boundary_map["preclose"]["treedb.cache.cow.views"])==0,"public pin owners not released")
+    validate_ordinary_ack(boundary_map,case["profile"],n,epochs)
     baseline=int(boundary_map["opened"]["treedb.commit_seq"])
     observed_sequence=[int(b["stats"]["treedb.commit_seq"]) for b in r["boundaries"] if b["stats"] and b["phase"]!="reopened"]
     need(observed_sequence==sorted(observed_sequence),"backend sequence regression")

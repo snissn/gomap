@@ -35,9 +35,9 @@ def config_mutation(key,value):
         c=load(packet/"config.json");c[key]=value;replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
     return run
 
-def raw_mutation(change):
+def raw_mutation(change,profile=None):
     def run(packet):
-        receipts=load(packet/"receipts.json");r=receipts[0];entry=r["raw_lifecycles"][-1];path=packet/(r["label"]+"-lifecycle")/entry["path"]
+        receipts=load(packet/"receipts.json");r=next((r for r in receipts if profile is None or r["case"].startswith(profile+"-")));entry=r["raw_lifecycles"][-1];path=packet/(r["label"]+"-lifecycle")/entry["path"]
         raw=load(path);change(raw);replace_json(path,raw);entry["sha256"]=sha(path);replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
     return run
 
@@ -60,6 +60,21 @@ def missing_close(raw):raw["calls"]=[call for call in raw["calls"] if call["phas
 def partial_history(raw):
     call=next(c for c in raw["calls"] if c["operation"]=="IterateVersions.full");call["output"]-=1
 
+def zero_counter(raw,key):
+    for boundary in raw["boundaries"]:
+        if boundary["stats"]:boundary["stats"][key]="0"
+
+def relaxed_sync(raw):
+    key="treedb.command_wal.file_sync.calls_total"
+    for boundary in raw["boundaries"]:
+        if boundary["phase"] not in ("opened","reopen_counter_reset","reopened"):
+            boundary["stats"][key]=str(int(boundary["stats"][key])+1)
+
+def retime_call(raw,phase,start):
+    call=next(c for c in raw["calls"] if c["phase"]==phase)
+    call["start_ns"]=start;call["completion_ns"]=start+call["duration_ns"]
+    raw["calls"].sort(key=lambda c:c["start_ns"])
+
 def main():
     p=argparse.ArgumentParser();p.add_argument("--positive",type=Path,required=True);p.add_argument("--out",type=Path,required=True);args=p.parse_args()
     positive=args.positive.resolve();out=args.out.resolve();need(not out.exists() and not out.is_relative_to(positive),"smoke output needs distinct new directory")
@@ -73,6 +88,11 @@ def main():
         "wrong-resolved-ack":raw_mutation(lambda r:r.update(ordinary_ack="unsafe")),
         "zero-finite-limit":raw_mutation(lambda r:r["limits"].update(MaxTotalBytes=0)),
         "missing-close":raw_mutation(missing_close),
+        "close-before-seed":raw_mutation(lambda r:retime_call(r,"final_close",0)),
+        "checkpoint-before-worker-join":raw_mutation(lambda r:retime_call(r,"pinned_checkpoint",min(c["start_ns"] for c in r["calls"] if c["phase"]==f"epoch_{r['epochs']}_overlap"))),
+        "ordinary-wal-append-zero":raw_mutation(lambda r:zero_counter(r,"treedb.command_wal.append.count_total"),"command_wal_durable"),
+        "durable-ordinary-sync-zero":raw_mutation(lambda r:zero_counter(r,"treedb.command_wal.file_sync.calls_total"),"command_wal_durable"),
+        "relaxed-unexplained-ordinary-sync":raw_mutation(relaxed_sync,"command_wal_relaxed"),
         "unknown-phase":raw_mutation(lambda r:r["calls"][0].update(phase="invented_phase")),
         "missing-epoch-phase":raw_mutation(lambda r:r.update(calls=[c for c in r["calls"] if c["phase"]!="epoch_1_replacement"])),
         "counter-regression":raw_mutation(lambda r:r["boundaries"][1]["stats"].update({"treedb.cache.snapshot.rotations_total":"0"}) if int(r["boundaries"][0]["stats"]["treedb.cache.snapshot.rotations_total"])>0 else r["boundaries"][0]["stats"].update({"treedb.cache.snapshot.rotations_total":"999999999999999999"})),
