@@ -116,11 +116,11 @@ func (b *Batch) cowAddEntry(e batch.Entry, owned bool) error {
 		}
 		start := len(b.copyArena)
 		b.copyArena = append(b.copyArena, e.Key...)
-		e.Key = b.copyArena[start:len(b.copyArena):len(b.copyArena)]
+		e.Key = normalizeRawKVPointKey(b.copyArena[start:len(b.copyArena):len(b.copyArena)])
 		if e.Type == batch.OpPut {
 			start = len(b.copyArena)
 			b.copyArena = append(b.copyArena, e.Value...)
-			e.Value = b.copyArena[start:len(b.copyArena):len(b.copyArena)]
+			e.Value = normalizeRawKVValue(b.copyArena[start:len(b.copyArena):len(b.copyArena)])
 		}
 	} else {
 		b.hasViewOps = true
