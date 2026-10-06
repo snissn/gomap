@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo
+from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo, build_inputs
 from build import verify_git_receipt, objects
 
 def wait_child(child, timeout, grace=3.0):
@@ -114,7 +114,7 @@ def main():
             # Root must retain actual build command/exit and go env/list module /
             # compiled dependency/buildinfo outputs, not just asserted labels.
             need(build["exit_code"] == 0 and build["command"] and build["artifacts"], "missing actual successful build receipt")
-            required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source", "toolchain"}
+            required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
             need(set(build["artifacts"]) == required, "missing/extra build provenance artifacts")
             frozen_artifacts = {}
             for key, artifact in build["artifacts"].items():
@@ -126,7 +126,12 @@ def main():
                 frozen_artifacts[key] = {"path": destination.name, "sha256": sha(destination)}
             need(build["effective_module_identity"] == frozen_artifacts["effective_module_graph"]["sha256"], "unbound canonical effective module graph")
             build_toolchain(build, c, json.loads((out / (variant + "-toolchain.raw")).read_text()))
-            validate_no_cgo(objects((out / (variant + "-compiled_dependencies.raw")).read_text()))
+            packages = objects((out / (variant + "-compiled_dependencies.raw")).read_text())
+            validate_no_cgo(packages)
+            build_inputs(build, c, packages,
+                         json.loads((out / (variant + "-compiled_inputs_before.raw")).read_text()),
+                         json.loads((out / (variant + "-compiled_input_closure.raw")).read_text()),
+                         json.loads((out / (variant + "-generated_nonpersistent_inputs.raw")).read_text()), str(source))
             verify_git_receipt(source, ident["original_manifest"], json.loads((out / (variant + "-git_source.raw")).read_text()))
             go_env = json.loads((out / (variant + "-go_env.raw")).read_text())
             validate_go_environment(go_env, env)

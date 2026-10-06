@@ -25,7 +25,7 @@ def main():
     value["host"].update(node="synthetic", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(out), tmpdir_device=out.stat().st_dev)
     value["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
     value.update(go_binary="/synthetic/go/bin/go", go_binary_sha256="4" * 64,
-                 go_version="synthetic Go version", toolchain_identity="5" * 64)
+                 go_version="synthetic Go version", toolchain_identity="5" * 64, external_input_identity="6" * 64)
     for index, (name, variant) in enumerate(value["variants"].items(), 1):
         variant.update(production_commit=str(index) * 40, production_git_tree=str(index + 2) * 40)
         variant.update(binary_sha256=str(index) * 64, source_tree_sha256=str(index + 2) * 64)
@@ -120,6 +120,10 @@ def main():
     for name in ("compile", "link", "asm", "cgo"):
         path_value = tools / name
         path_value.write_text("synthetic " + name + "\n"); path_value.chmod(0o755)
+    include = goroot / "pkg/include"
+    include.mkdir(parents=True)
+    for name in ("textflag.h", "funcdata.h"):
+        (include / name).write_text("synthetic header " + name + "\n")
     inventory = toolchain_inventory(goroot)
     frozen = {"go_version": "synthetic", "go_binary_sha256": sha(go), "toolchain_identity": validate_toolchain(inventory)}
     build_toolchain(frozen, frozen, inventory)
@@ -136,6 +140,19 @@ def main():
             results.append({"label": label, "refused": str(error)})
         else:
             raise AssertionError("changed toolchain accepted")
+    (tools / "new-tool").unlink()
+    for label, mutate in (("include-bytes", lambda: (include / "textflag.h").write_text("changed\n")),
+                          ("include-mode", lambda: (include / "funcdata.h").chmod(0o600))):
+        for name in ("textflag.h", "funcdata.h"):
+            (include / name).write_text("synthetic header " + name + "\n")
+            (include / name).chmod(0o644)
+        mutate()
+        try:
+            build_toolchain(frozen, frozen, toolchain_inventory(goroot))
+        except ValueError as error:
+            results.append({"label": label, "refused": str(error)})
+        else:
+            raise AssertionError("changed include accepted")
     link = tools / "linked-tool"
     link.symlink_to(tools / "asm")
     try:
@@ -160,6 +177,14 @@ def main():
                 cell["rules"][variant][unit] = rule
             refuse(label + "-" + variant_name, damage, "profile WAL")
     refuse("missing-wal-comparability", lambda c: c["cases"][0]["comparable_metrics"].remove("wal_syncs/op"), "WAL comparability")
+    for variant_name in ("baseline", "candidate"):
+        for unit in ("layout_expected_records", "layout_before_pointer", "layout_after_inline", "ack_routing_before_ok", "ack_routing_after_ok"):
+            def damage(c, unit=unit, variant=variant_name):
+                c["cases"][0]["rules"][variant][unit] = {"eq": 99}
+            refuse("physical-routing-" + unit + "-" + variant_name, damage, "actual layout/routing")
+        def damage_nowal(c, variant=variant_name):
+            next(case for case in c["cases"] if case["profile"] == "no_wal_fast")["rules"][variant]["wal_appends_before"] = {"min": 0}
+        refuse("nowal-absolute-" + variant_name, damage_nowal, "actual WAL boundary")
     if args.protocol_only:
         write(out / "result.json", {"scope": "portable config/toolchain protocol refusals only; no Linux host or timing acceptance",
                                    "valid_cases": 54, "refusals": results, "script_sha256": sha(Path(__file__))})
