@@ -84,6 +84,7 @@ def main():
         "product-result-class":config_mutation("result_class","product-qualified"),
         "matched-same-product":config_mutation("result_class","matched-supported-evidence"),
         "missing-toolchain-identity":config_mutation("toolchain_identity",None),
+        "unbound-go-launcher":config_mutation("go_binary","/synthetic/unbound/go"),
         "unknown-parameter":mutate_config(lambda c:c.update(unlimited=True)),
         "unfrozen-config":config_mutation("status","draft-unfrozen"),
         "wrong-resolved-mode":raw_mutation(lambda r:r.update(mode="append_only" if r["mode"]=="cow_btree" else "cow_btree")),

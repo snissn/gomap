@@ -108,6 +108,6 @@ Both classes use the shared 15-key fixed process environment with
 `CGO_ENABLED=0`. The 11-artifact build closure includes Go launcher and compiler
 executable inventories. Offline analysis requires the retained live Go version
 and inventory to match both build receipts and the frozen toolchain identity.
-Copied-positive cases cover missing toolchain identity and an invalid matched
+Copied-positive cases cover an unbound Go launcher, missing toolchain identity and an invalid matched
 same-product configuration; source-manifest corruption is a corruption refusal,
 not a claim to have exercised a valid semantic source-mode mutation.
