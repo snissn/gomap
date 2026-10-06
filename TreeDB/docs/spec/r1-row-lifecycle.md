@@ -62,11 +62,14 @@ resource handles protect that segment. Captured documents and indexes remain
 unchanged. Closing both views must release all of their active handles.
 
 After release, typed rewrite must copy/remap live manifest references and leave
-the old source segment on disk. An immediate GC must preserve it while a
-selectable durable generation still references it. The final `RefreshCommandWALCheckpointFallback` call lawfully converges both
-selectable durable slots after root-changing maintenance. Its before/after
-root identities, CommitSeq, AppliedLSN and NextLSN show unchanged logical
-coverage. Only then must an ordinary `ColumnAssetGC` delete the eligible old segment
+the old source segment on disk. A checkpoint settles the rewrite publication,
+then GC must preserve it while a selectable durable generation still references
+it. The existing final maintenance helper invokes
+`RefreshCommandWALCheckpointFallback` to converge both recovery slots to the
+same live roots without an unrelated command. Recorded root identities,
+CommitSeq, AppliedLSN and NextLSN verify unchanged logical coverage and both
+selectable durable slots. Only then must a fresh ordinary `ColumnAssetGC`
+delete the eligible old segment
 and report positive deleted bytes. Current full rows and postings must remain
 identical after remap, GC and final reopen. This phase reuses the production
 reachability scanner, identity fences, pins, remapper and GC; it adds no scanner,

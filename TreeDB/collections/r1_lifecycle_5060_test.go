@@ -308,10 +308,15 @@ func r1LifecycleMaintenance5060(t *testing.T, db *backenddb.DB, col *Collection,
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatalf("rewrite must retain source before GC: %v", err)
 	}
+	// Settle the rewrite's asynchronous durable publication before asking GC
+	// to preserve the still-selectable older fallback. This does not refresh it.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint rewritten roots before protected GC: %v", err)
+	}
 	candidates := append(slices.Clone(rewrite.SupersededRefs), candidate)
 	gc, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{Detailed: true, CandidateRefs: candidates})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("GC before fallback refresh: %v", err)
 	}
 	if gc.SegmentsDeleted != 0 {
 		t.Fatalf("selectable recovery generation reclaimed early: %+v", gc)

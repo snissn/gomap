@@ -214,7 +214,7 @@ func TestR1TypedRowGetIntoUsesSharedMaterializer(t *testing.T) {
 	}
 	// A one-document view must still reject malformed unrelated manifest
 	// entries, even when its requested row is already in the decoded cache.
-	view.singleDocument = true
+	view.orderedPointRowRefs = true
 	original := *view.columnSnapshotView
 	part := original.AssetRefs[0]
 	for _, tc := range []struct {
@@ -294,5 +294,57 @@ func TestR1TypedRowRangeConcurrentPublication(t *testing.T) {
 	}
 	if readErr != nil {
 		t.Fatal(readErr)
+	}
+}
+
+func TestR1TypedRowOrderedPartLookupHistory5065(t *testing.T) {
+	col, ids, want, _ := r1RangeHistoryFixture5065(t)
+	view, err := col.OpenCollectionReadView()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer view.Close()
+	view.orderedPointRowRefs = true
+	response, err := view.FetchDocumentsByID(ids, DocumentFetchOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.pointRowRefs != nil || view.validatedPointRowRefs == nil || view.validatedPointRowRefs != view.columnSnapshotView {
+		t.Fatal("ordered lookup allocated a part map or failed to retain snapshot validation")
+	}
+	if response.Stats.VisibilityScans != 0 || response.Stats.RowLocatorBuilds != 0 {
+		t.Fatalf("ordered lookup scanned historical rows: %+v", response.Stats)
+	}
+	for i := range response.Results {
+		if !response.Results[i].Found {
+			t.Fatalf("missing row%d", i)
+		}
+		r1RequireCompleteRow(t, response.Results[i].Document, want[i])
+	}
+	// A distinct snapshot cache must be fully revalidated, even if its first
+	// requested block is already cached and only an unrelated tail is corrupt.
+	original := *view.columnSnapshotView
+	for _, kind := range []string{"duplicate", "kind", "order"} {
+		t.Run(kind, func(t *testing.T) {
+			corrupt := original
+			corrupt.AssetRefs = append([]columnManifestAssetRefForScan(nil), original.AssetRefs...)
+			n := len(corrupt.AssetRefs)
+			switch kind {
+			case "duplicate":
+				corrupt.AssetRefs[n-1] = corrupt.AssetRefs[n-2]
+			case "kind":
+				corrupt.AssetRefs[n-1].Ref.Kind = ColumnAssetKindTCS1TypedColumnPart
+			case "order":
+				corrupt.AssetRefs[n-1], corrupt.AssetRefs[n-2] = corrupt.AssetRefs[n-2], corrupt.AssetRefs[n-1]
+			}
+			view.columnSnapshotView = &corrupt
+			if _, err := view.FetchDocumentsByID(ids[:1], DocumentFetchOptions{}); err == nil {
+				t.Fatal("ordered lookup accepted unrelated malformed manifest tail")
+			}
+		})
+	}
+	view.clearDerivedRowFetchCaches()
+	if view.validatedPointRowRefs != nil {
+		t.Fatal("derived cache reset retained old manifest validation")
 	}
 }
