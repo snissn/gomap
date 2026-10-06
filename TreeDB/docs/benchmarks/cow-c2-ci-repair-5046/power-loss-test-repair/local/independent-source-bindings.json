@@ -1,0 +1,304 @@
+{
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "tree": "513bc7aece83bd5ac3640ffa93a4f80adf719b9d",
+  "inputs": {
+    "artifacts/c2/pr5069-440-windows-core5-failed-packet/treedb-test.jsonl": "e455a73b05178ec5a048984587b7d07b90ece22873ef6741c0fd49bf604475c0",
+    "artifacts/c2/pr5069-440-windows-core5-failed-packet/treedb-test.jsonl.summary.md": "6f562224f1e0a773e2bad5a6d650e61714e728121181ea3b971d08a9a25220fb",
+    "artifacts/c2/pr5069-440-windows-core5-failure.log": "ae67152ee5107154aec002d7f6d1427bee2142acd31510c47e7619ad99a16543"
+  },
+  "source_bindings": {
+    "TreeDB/cow_power_loss_test.go": {
+      "git_blob": "da18720240e442f14dddb4ce8c4a7cede8f50ca2",
+      "sha256": "b9c8b406409431618f78eedf92e101427c5d44a3346e18ffd63e165dbbe1faad"
+    },
+    "TreeDB/internal/durabilitycut/durabilitycut.go": {
+      "git_blob": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+      "sha256": "7afdf8e19275b15062b1ce3dc2d7de0e58899b512616584d1189ba3f02ebfdd3"
+    },
+    "TreeDB/internal/powerlossoracle/model.go": {
+      "git_blob": "10bad40358231e3f21fb9437813ffb1859e6b5c2",
+      "sha256": "a95d335c22cdaa03f8ecb60741d7cddc252c1381f323f6f4a143f3c42309aaeb"
+    },
+    "TreeDB/internal/rootpublication/coordinator.go": {
+      "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+      "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f"
+    },
+    "TreeDB/db/root_publication_activation.go": {
+      "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+      "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132"
+    },
+    "TreeDB/db/durable_root_runtime.go": {
+      "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+      "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d"
+    },
+    "TreeDB/db/root_publication_build_group.go": {
+      "git_blob": "0e26a8af745f6aaf5ad8c126e6a9099dd2589468",
+      "sha256": "a7861ae20338bdb97c4197740e9b4f682bc9a873b325efc366a36929602f5df2"
+    },
+    "TreeDB/db/command_wal_raw.go": {
+      "git_blob": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+      "sha256": "15b3e97a4a9ee2e726b013443900d72ef5667d7a71eb9685435d0470163d4db9"
+    },
+    "TreeDB/db/db.go": {
+      "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+      "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50"
+    },
+    "TreeDB/caching/cow_flush.go": {
+      "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036",
+      "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e"
+    },
+    "TreeDB/caching/flush_run_planner.go": {
+      "git_blob": "aad2590d32de67367f6c107eac8ac29fa7326ef2",
+      "sha256": "d5d58d6e566d9494bb813f27b85310b22366125cb9307119ca9e7387f4b75858"
+    },
+    "TreeDB/caching/cow_checkpoint.go": {
+      "git_blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+      "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9"
+    },
+    "TreeDB/command_wal_public_cached.go": {
+      "git_blob": "e989f3fe292918fe9431c24a0851b676f3513414",
+      "sha256": "01f9874ef67d733112166f7b12e0e4c8bb03069d400dad1f05f97186be3ef331"
+    }
+  },
+  "json_event_counts": {
+    "skip_package": 2,
+    "pass_test": 777,
+    "pass_package": 11,
+    "skip_test": 11,
+    "fail_test": 2,
+    "fail_package": 1
+  },
+  "cut_leaf_counts": {
+    "pass": 35,
+    "fail": 1
+  },
+  "cut_leaf_results": [
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-dependency-file-sync",
+      "Action": "pass",
+      "Elapsed": 8.36
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-dependency-file-sync",
+      "Action": "pass",
+      "Elapsed": 9.93
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-new-file-directory-sync",
+      "Action": "pass",
+      "Elapsed": 7.76
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-new-file-directory-sync",
+      "Action": "pass",
+      "Elapsed": 7.77
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-index-data-sync",
+      "Action": "pass",
+      "Elapsed": 7.91
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-index-data-sync",
+      "Action": "pass",
+      "Elapsed": 8.54
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+      "Action": "fail",
+      "Elapsed": 2.13
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-publication-seal-write",
+      "Action": "pass",
+      "Elapsed": 11.12
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-write",
+      "Action": "pass",
+      "Elapsed": 8.44
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-write",
+      "Action": "pass",
+      "Elapsed": 10.34
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+      "Action": "pass",
+      "Elapsed": 9.14
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/after-meta-sync",
+      "Action": "pass",
+      "Elapsed": 7.88
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-dependency-file-sync",
+      "Action": "pass",
+      "Elapsed": 7.81
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-dependency-file-sync",
+      "Action": "pass",
+      "Elapsed": 7.81
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-new-file-directory-sync",
+      "Action": "pass",
+      "Elapsed": 7.77
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-new-file-directory-sync",
+      "Action": "pass",
+      "Elapsed": 7.78
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-index-data-sync",
+      "Action": "pass",
+      "Elapsed": 7.89
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-index-data-sync",
+      "Action": "pass",
+      "Elapsed": 7.87
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-publication-seal-write",
+      "Action": "pass",
+      "Elapsed": 7.87
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-publication-seal-write",
+      "Action": "pass",
+      "Elapsed": 7.87
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-write",
+      "Action": "pass",
+      "Elapsed": 7.89
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-write",
+      "Action": "pass",
+      "Elapsed": 8
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/before-meta-sync",
+      "Action": "pass",
+      "Elapsed": 11.89
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_relaxed/after-meta-sync",
+      "Action": "pass",
+      "Elapsed": 8.11
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-dependency-file-sync",
+      "Action": "pass",
+      "Elapsed": 0.38
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-dependency-file-sync",
+      "Action": "pass",
+      "Elapsed": 0.26
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-new-file-directory-sync",
+      "Action": "pass",
+      "Elapsed": 0.31
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-new-file-directory-sync",
+      "Action": "pass",
+      "Elapsed": 0.28
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-index-data-sync",
+      "Action": "pass",
+      "Elapsed": 0.32
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-index-data-sync",
+      "Action": "pass",
+      "Elapsed": 0.29
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-publication-seal-write",
+      "Action": "pass",
+      "Elapsed": 0.3
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-publication-seal-write",
+      "Action": "pass",
+      "Elapsed": 0.31
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+      "Action": "pass",
+      "Elapsed": 0.3
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+      "Action": "pass",
+      "Elapsed": 0.33
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+      "Action": "pass",
+      "Elapsed": 0.45
+    },
+    {
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+      "Action": "pass",
+      "Elapsed": 0.39
+    }
+  ],
+  "fail_events": [
+    {
+      "Time": "2026-10-06T09:28:36.5286416Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+      "Elapsed": 2.13
+    },
+    {
+      "Time": "2026-10-06T09:31:05.9417843Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+      "Elapsed": 201.84
+    },
+    {
+      "Time": "2026-10-06T09:33:20.8304637Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Elapsed": 528.851
+    }
+  ],
+  "failure_outputs": [
+    {
+      "Time": "2026-10-06T09:28:34.3947843Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+      "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write\n"
+    },
+    {
+      "Time": "2026-10-06T09:28:36.5048188Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+      "Output": "    cow_power_loss_test.go:212: interruption classification err=<nil>\n"
+    },
+    {
+      "Time": "2026-10-06T09:28:36.5286416Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+      "Output": "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write (2.13s)\n"
+    }
+  ],
+  "worktree_current_head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "worktree_delta": "M TreeDB/cow_power_loss_test.go"
+}

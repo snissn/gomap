@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -316,28 +315,8 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Physical zombie deletion can finish after compaction returns. Keep
-			// the old cut pinned throughout; its live segment must stay readable
-			// while the unrelated unused segment is actually reclaimed.
-			cowPublicContractSnapshotValue(t, old, "a", value, true)
-			started := time.Now()
-			deadline := started.Add(5 * time.Second)
-			polls := 0
-			for {
-				cowPublicContractSnapshotValue(t, old, "a", value, true)
-				polls++
-				_, statErr := os.Stat(unusedLeaf)
-				if os.IsNotExist(statErr) {
-					t.Logf("unused leaf physically reclaimed: polls=%d elapsed=%s", polls, time.Since(started))
-					break
-				}
-				if statErr != nil {
-					t.Fatalf("stat unused rotated leaf segment %s: %v", unusedLeaf, statErr)
-				}
-				if !time.Now().Before(deadline) {
-					t.Fatalf("unused rotated leaf segment %s was not reclaimed: polls=%d elapsed=%s compaction=%+v", unusedLeaf, polls, time.Since(started), compaction)
-				}
-				time.Sleep(10 * time.Millisecond)
+			if _, err := os.Stat(unusedLeaf); !os.IsNotExist(err) {
+				t.Fatalf("unused rotated leaf segment %s was not reclaimed: stat=%v compaction=%+v", unusedLeaf, err, compaction)
 			}
 			cowPublicContractSnapshotValue(t, old, "a", value, true)
 			if err := database.Set([]byte("a"), []byte("after-empty-checkpoint")); err != nil {

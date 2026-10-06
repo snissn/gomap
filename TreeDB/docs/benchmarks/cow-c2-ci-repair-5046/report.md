@@ -155,3 +155,7 @@ keep their original bytes as `.go.txt` with original-path mapping, so they are n
 compiled repository packages. Literal build-info tabs and patch context whitespace
 retain their hashes rather than being reformatted. The final manifest and provenance
 bind every published literal and derived artifact.
+
+[The persistent power-loss observer repair](power-loss-test-repair/applicability.md) retains the actual failed440 Windows cut and all repaired local receipts. [Both M0 attempts](m0-440-two-attempts/applicability.md) preserve the original stability failure and one passing complete rerun. [Actual440 strict raw-path results](strict-raw-path-440/applicability.md) retain all original thresholds. Each packet keeps its original source identity; final-head Windows/strict/required CI and hosted review remain required.
+
+[The bounded eventual leaf reclamation assertion](leaf-reclamation-test-repair/applicability.md) keeps the original user snapshot alive and readable, requires actual unused-file absence, and preserves the distinct440 Windows failure. Local removals were immediate; final-head Windows remains required.

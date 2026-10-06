@@ -1,0 +1,56 @@
+{
+  "disposition": "REVISE original one-shot fault-injection test; narrow persistent observer source repair ACCEPT, functional/Windows gates pending",
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "tree": "513bc7aece83bd5ac3640ffa93a4f80adf719b9d",
+  "failed_packet_preserved": true,
+  "actual": {
+    "event_counts": {
+      "skip_package": 2,
+      "pass_test": 777,
+      "pass_package": 11,
+      "skip_test": 11,
+      "fail_test": 2,
+      "fail_package": 1
+    },
+    "cut_leaf_counts": {
+      "pass": 35,
+      "fail": 1
+    },
+    "failed_test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-publication-seal-write",
+    "classification": "captured cut, operation error nil; stable-image assertions not reached"
+  },
+  "input_sha256": {
+    "artifacts/c2/pr5069-440-windows-core5-failed-packet/treedb-test.jsonl": "e455a73b05178ec5a048984587b7d07b90ece22873ef6741c0fd49bf604475c0",
+    "artifacts/c2/pr5069-440-windows-core5-failed-packet/treedb-test.jsonl.summary.md": "6f562224f1e0a773e2bad5a6d650e61714e728121181ea3b971d08a9a25220fb",
+    "artifacts/c2/pr5069-440-windows-core5-failure.log": "ae67152ee5107154aec002d7f6d1427bee2142acd31510c47e7619ad99a16543"
+  },
+  "source_bindings_file_sha256": "463e58618f6b90393272d503277618abeb4c847d6bd8ae17e80675d67bc6bd23",
+  "finding": {
+    "priority": "P2",
+    "file": "TreeDB/cow_power_loss_test.go",
+    "line": 174,
+    "trigger": "Publication attempt consumes one-shot pre-meta cut before operation checkpoint waiter joins that attempt; later waiter explicitly retries.",
+    "impact": "Test reports a successful retry as failed interruption even though injected error was retryable and later attempt was no longer interrupted.",
+    "causal_confidence": "Source-supported explanation, not a traced hosted attempt timeline."
+  },
+  "caller_calibration": "Exact cached COW physical group opts do not set preparedLimits. Other prepared-limit callers do wait at activation931; they must not be conflated with this route. Attempt capture before waiter attach can occur with either finalizer route.",
+  "proposed_source": {
+    "test_sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+    "git_diff_sha256": "f86f549e72f168558bfd3aa1bde939768be70b54616af6a0c525b2f530dcfc5a",
+    "only_modified_path": [
+      "TreeDB/cow_power_loss_test.go"
+    ],
+    "all_36_cases_and_recovery_assertions_unchanged": true,
+    "source_verdict": "ACCEPT bounded test repair only"
+  },
+  "required_evidence": [
+    "Actual full modeled-cut normal/race/safe results, retaining all profiles/cuts and existing coordinator captured/late waiter witnesses.",
+    "Current-head actual Windows hosted gate remains required; local source diagnosis does not certify Windows.",
+    "Preserve original failure, strict nil rejection, existing narrowly scoped AfterMetaWrite recovery sentinel, and all stable-image/ACK/group assertions."
+  ],
+  "limitations": [
+    "No Go, build, benchmark, remote, or GitHub jobs performed.",
+    "Original failed leaf lacks captured resource, coordinator attempt and retry counts; exact hosted schedule and candidate identity cannot be reconstructed.",
+    "No runtime defect established or waived. Test-only change does not alter production runtime/cost fixture bytes, but compiled test binary differs; current CI authority remains separate."
+  ]
+}

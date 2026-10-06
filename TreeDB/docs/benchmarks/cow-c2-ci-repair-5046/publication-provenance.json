@@ -3448,5 +3448,710 @@
     "original_private_path": "candidate-11474-independent-review/close-repair-staged-acceptance.json",
     "sha256": "a18debac2406045d654e1ad97cdfcae965f3f735d2b5d5d1817874f347ec955c",
     "byte_preserved": true
+  },
+  "power-loss-test-repair/local/checkout-extras.json": {
+    "original_private_path": "power-loss-windows440-repair/checkout-extras.json",
+    "sha256": "578a24bfaee8ac909a4c086d3af443a242c7ca148c7cc3d4d28f549e9b9474f9",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/commands-and-exits.json": {
+    "original_private_path": "power-loss-windows440-repair/commands-and-exits.json",
+    "sha256": "31b5ee2038cff6151ebab13d4baac23ce2b18d6d27314ee51cc78a8656f2483e",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/cow_power_loss_test.go.txt": {
+    "original_private_path": "power-loss-windows440-repair/cow_power_loss_test.go.txt",
+    "sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/diagnosis.json": {
+    "original_private_path": "power-loss-windows440-repair/diagnosis.json",
+    "sha256": "e3d219106dfe12e01ac8e4dd9b63ab7fe42095bf9bb7574684abbb313abdbd50",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/diagnosis.md": {
+    "original_private_path": "power-loss-windows440-repair/diagnosis.md",
+    "sha256": "62d47c66e0ce83d6eb3be96799aebaaa6d50126dc13a0669129619ea1b7df35d",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/environment.json": {
+    "original_private_path": "power-loss-windows440-repair/environment.json",
+    "sha256": "ae4c19ce0e97b6aba1ce9acf92749aa676b721666f980a45841f07c83056d953",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/event-summary.json": {
+    "original_private_path": "power-loss-windows440-repair/event-summary.json",
+    "sha256": "998d733d8a2e864c3917f2bd874134ccb15d9a9f58566f91ca17dfa710495091",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/handoff.md": {
+    "original_private_path": "power-loss-windows440-repair/handoff.md",
+    "sha256": "dbb8f8bb2376200dc7e7a0a473621dba27aadf23b9f05fbfb0c5d7645c64b780",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/identity.json": {
+    "original_private_path": "power-loss-windows440-repair/identity.json",
+    "sha256": "43d668190e0cd3ecceb136c7c10ed9c7354593c520b767c4e1fc79a5d0592cce",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/independent-diagnosis.json": {
+    "original_private_path": "power-loss-windows440-repair/independent-diagnosis.json",
+    "sha256": "3416188467e1bd6a32dbeb1f1dddeacc5e992446671f0ea4bd7705023137f6bf",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/independent-diagnosis.md": {
+    "original_private_path": "power-loss-windows440-repair/independent-diagnosis.md",
+    "sha256": "34f39beee61ac3bd5ce08261bfbaf31ffef1e11e01dfb347f11d7d4c0f2930dc",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/independent-source-bindings.json": {
+    "original_private_path": "power-loss-windows440-repair/independent-source-bindings.json",
+    "sha256": "463e58618f6b90393272d503277618abeb4c847d6bd8ae17e80675d67bc6bd23",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/normal-coordinator.jsonl": {
+    "original_private_path": "power-loss-windows440-repair/normal-coordinator.jsonl",
+    "sha256": "ab2ee11072b12e83b2504cb73b24d7d8794d26d796e2348ab77c1e36f7d3b232",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/normal-coordinator.stderr": {
+    "original_private_path": "power-loss-windows440-repair/normal-coordinator.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/normal-cow-modeled.jsonl": {
+    "original_private_path": "power-loss-windows440-repair/normal-cow-modeled.jsonl",
+    "sha256": "13acf932ce226dd5f5c5b5a06ceae5a6dc9906eaab31a565db247e9aa2e34c73",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/normal-cow-modeled.stderr": {
+    "original_private_path": "power-loss-windows440-repair/normal-cow-modeled.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/original-power-loss-events.json": {
+    "original_private_path": "power-loss-windows440-repair/original-power-loss-events.json",
+    "sha256": "c69d0c1b66b123c49d80dbf580058be93fe39fb0d47ef9fe007aaf031f9d2ab6",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/race-coordinator.jsonl": {
+    "original_private_path": "power-loss-windows440-repair/race-coordinator.jsonl",
+    "sha256": "2d3e29115ab8f228fa19ebf0e7c4debf0adcf2c63ab10136093fb5656b59b342",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/race-coordinator.stderr": {
+    "original_private_path": "power-loss-windows440-repair/race-coordinator.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/race-cow-modeled.jsonl": {
+    "original_private_path": "power-loss-windows440-repair/race-cow-modeled.jsonl",
+    "sha256": "9156671d0cbf4a101c7a11c036c3b143c52503141d33014e5e472797225be637",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/race-cow-modeled.stderr": {
+    "original_private_path": "power-loss-windows440-repair/race-cow-modeled.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/run-targeted.py": {
+    "original_private_path": "power-loss-windows440-repair/run-targeted.py",
+    "sha256": "4d0a28ed7e7881b3b62babbdb5fb86a82531ab26fbeac597bacc2c83d0977746",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/runtime-test.patch": {
+    "original_private_path": "power-loss-windows440-repair/runtime-test.patch",
+    "sha256": "f86f549e72f168558bfd3aa1bde939768be70b54616af6a0c525b2f530dcfc5a",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/safe-coordinator.jsonl": {
+    "original_private_path": "power-loss-windows440-repair/safe-coordinator.jsonl",
+    "sha256": "61d08793cd3b3de77276065b3a4720f70b67041941dba2b1f72b20cbb6dd638d",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/safe-coordinator.stderr": {
+    "original_private_path": "power-loss-windows440-repair/safe-coordinator.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/safe-cow-modeled.jsonl": {
+    "original_private_path": "power-loss-windows440-repair/safe-cow-modeled.jsonl",
+    "sha256": "c51f9bdea6f764662a6ba658d854cf06cbd6c9a4bb810e4cc96e64f17120931a",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/safe-cow-modeled.stderr": {
+    "original_private_path": "power-loss-windows440-repair/safe-cow-modeled.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/source-post.json": {
+    "original_private_path": "power-loss-windows440-repair/source-post.json",
+    "sha256": "f321934eda545fb152231b69b2ca4412440790418ddc4801668640c478ec924f",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/source-pre.json": {
+    "original_private_path": "power-loss-windows440-repair/source-pre.json",
+    "sha256": "f321934eda545fb152231b69b2ca4412440790418ddc4801668640c478ec924f",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/source-proof.json": {
+    "original_private_path": "power-loss-windows440-repair/source-proof.json",
+    "sha256": "9e0a1e48331e7503c867cf04c0004cb424be3005a70efc7fdddfb285fbdefd51",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/local/packet-manifest.json": {
+    "original_private_path": "power-loss-windows440-repair/packet-manifest.json",
+    "sha256": "f9d15d4cdfc0a76a2d7abf88515867d23da19e24fa194d9ec36f93fda4a4617f",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/independent/power-loss-windows440-functional-review.md": {
+    "original_private_path": "power-loss-windows440-functional-review.md",
+    "sha256": "1e50778217768af0f5d947994206113644f61f5392869a6acedd734f3e519b9d",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/independent/power-loss-windows440-functional-review.json": {
+    "original_private_path": "power-loss-windows440-functional-review.json",
+    "sha256": "55d2905c1e9059a02d2eca3c96ecb6d93b8a0e59b69e0645c1de2a32c43846f7",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/original-windows/treedb-test.jsonl": {
+    "original_private_path": "pr5069-440-windows-core5-failed-packet/treedb-test.jsonl",
+    "sha256": "e455a73b05178ec5a048984587b7d07b90ece22873ef6741c0fd49bf604475c0",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/original-windows/treedb-test.jsonl.summary.md": {
+    "original_private_path": "pr5069-440-windows-core5-failed-packet/treedb-test.jsonl.summary.md",
+    "sha256": "6f562224f1e0a773e2bad5a6d650e61714e728121181ea3b971d08a9a25220fb",
+    "byte_preserved": true
+  },
+  "power-loss-test-repair/original-windows/full-job.log": {
+    "original_private_path": "pr5069-440-windows-core5-failure.log",
+    "sha256": "ae67152ee5107154aec002d7f6d1427bee2142acd31510c47e7619ad99a16543",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/commands.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/commands.txt",
+    "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/fixture.json": {
+    "original_private_path": "pr5069-440-m0-failed-packet/fixture.json",
+    "sha256": "5996ea1eba4f31e3ae21892ceee0f7c4b7ecc144bcc2692c872b22f0a9bc9fd3",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/legacy-benchstat-input.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/legacy-benchstat-input.txt",
+    "sha256": "ca91991336fdcf396d49ca53113585153fe334ef671e6f9b88cc25fbe4d35a01",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-1.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-1.txt",
+    "sha256": "bf9126460a08e295a1a93f2a4c7d7502c26567b3c36e8083e4abdd981f42977d",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-10.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-10.txt",
+    "sha256": "ade5e156f33e882bb89aec5d59f7ff343e4e105969b3b2b3ada8db56a977fb6d",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-2.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-2.txt",
+    "sha256": "dfa1981437f06bb8cc5af5f5da160e34919ebe4da8e8a3d690964013501ec01b",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-3.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-3.txt",
+    "sha256": "68e1ac3a88ae03680a4198bc561b471e91bed9aa685cde0125c179f68017c44a",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-4.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-4.txt",
+    "sha256": "79543fb525578e0b01b89fe450922ef4fad0cc1cf3fdf0f78910a9094868551f",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-5.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-5.txt",
+    "sha256": "f2bf661f68ef14744b8c9d134dc5e98ac784accf68d4c013c45deb5488923e35",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-6.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-6.txt",
+    "sha256": "b42ba206b09ad0b639bbdc7c5bcaf4a90fd61e998d49d3366d38e0052f5bafb1",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-7.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-7.txt",
+    "sha256": "b0bf6496d60f38d7a3b6a2ab60b99f8a20cf95d5b9408a20abf84f0eecf69b65",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-8.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-8.txt",
+    "sha256": "481e2c274c3e238ed2f9b11265c403d3c278e6c7b396f423c784019e8bc2cd6d",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/legacy-9.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/legacy-9.txt",
+    "sha256": "02eafc5ecb0b5742b511ff31cfe63528d32e419916a734a4e49f8c6458d78289",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-1.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-1.txt",
+    "sha256": "652480c820ee1b36b1ada688e6a40e3a5e6a4121e03494343755168314a4ee14",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-10.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-10.txt",
+    "sha256": "8060d9f7e539c0ed67e822fd15f2ae8b78b1c2372cd21412e41e0b3e7ac47931",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-2.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-2.txt",
+    "sha256": "50ff5b37994d238247797a68a9b5624f66a0037f21ba92b7108b3c38c10b2aab",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-3.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-3.txt",
+    "sha256": "f2a5ebaa214bb2a444464869078b6f79dc1971da72f09f4fc76343f07c905ccd",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-4.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-4.txt",
+    "sha256": "5a3c146c9f0de867c3d77be08bf0567371cee42515e5622dd3ad3afbfab4c22b",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-5.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-5.txt",
+    "sha256": "4bafda39a5d39592efef4e2127762eb335f10998bd79b12da6e2863e3c405128",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-6.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-6.txt",
+    "sha256": "8f10b04777742667a6b464f4e6fb9761b66fa63ed3e8dbb71791c9cb487399d3",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-7.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-7.txt",
+    "sha256": "d86a9c84a4c2229434e7caaa5e2889f05cce1ffa78c736c98ac8b9a5b9cdf171",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-8.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-8.txt",
+    "sha256": "80e58336b730e47b8cae8929e2c8fa0d9cde0b88a19ca83f679a719db52af05f",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/raw/public-9.txt": {
+    "original_private_path": "pr5069-440-m0-failed-packet/raw/public-9.txt",
+    "sha256": "ee137e8870781003b20176024f6ca325a2abadb63509d64cbb523ffffff867fd",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/results.json": {
+    "original_private_path": "pr5069-440-m0-failed-packet/results.json",
+    "sha256": "2762b3bdbe39de7e4fa42d23f06d2c51fabe6f29539e0393e73d2eae09f9e589",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/original-failed/summary.md": {
+    "original_private_path": "pr5069-440-m0-failed-packet/summary.md",
+    "sha256": "b677826fa80720620580c56aed6d46d97f5079504f369788af155b1e74ad0465",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/commands.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/commands.txt",
+    "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/fixture.json": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/fixture.json",
+    "sha256": "5996ea1eba4f31e3ae21892ceee0f7c4b7ecc144bcc2692c872b22f0a9bc9fd3",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/legacy-benchstat-input.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/legacy-benchstat-input.txt",
+    "sha256": "8c73edfdd65545dd621b50ac04e148de6ce4884eea486eca18f408573f68d256",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-1.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-1.txt",
+    "sha256": "236dfcc44f1415ec79b76c9d9d278c35ccc569c7a5f707575b952f788126e780",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-10.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-10.txt",
+    "sha256": "5112d57eb5b69ec31fa68ade3287a4f4610387015d9ab8b38b7e944c7ffc6ad6",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-2.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-2.txt",
+    "sha256": "db21031b1b156c557be933383d3107592335e9e6c2c16020c00d32933e83afb9",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-3.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-3.txt",
+    "sha256": "07454ab7ead33a2d8866c0b47f912f3bb078b3f6289f34f823e87153ca9f7455",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-4.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-4.txt",
+    "sha256": "f955cd8b878770afce8742d2f8f50bc545a48daf4f97cbe528258bdedc395ef2",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-5.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-5.txt",
+    "sha256": "3b591582c702fb7b7b39bb6b04579b75bb6c00774cb86853f7730822863b71e8",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-6.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-6.txt",
+    "sha256": "893c6013193877aaf8cb2132c474d8efece11f08c5c8751ab6234ddb6c2b9802",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-7.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-7.txt",
+    "sha256": "09ed3089373210ea63ed44569a531f5338babeca1f8dbd01a45c31792d2fc562",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-8.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-8.txt",
+    "sha256": "3c4a386ad124b6802649ba80355f7da3b4039bc513c71a97cf4f565b4218cefe",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/legacy-9.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/legacy-9.txt",
+    "sha256": "b425af39d8653eab5acdcdeb76c706bf8659b9b3e4f1973cf88fe92089db74ba",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-1.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-1.txt",
+    "sha256": "5b40a38afbb771f9762953a09ddd26ba97f1eb6ca0e60dc36d8a1d7a5729dbee",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-10.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-10.txt",
+    "sha256": "c51bd5e5f4707b516c1079367e003793e7e8ecf26672c78d62e3c37758b2bc9c",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-2.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-2.txt",
+    "sha256": "6adb17fea5276e697abfaa71e97b020161c6bf6885f846a9990410c1ec0c5b5d",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-3.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-3.txt",
+    "sha256": "33ec498238e7966fa0749e08ca977970e0f549017f03303fef98ef1f706cd681",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-4.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-4.txt",
+    "sha256": "694450adc3713c3fbc270b268b9f6745c7936c9c68cd239fffb4a282b0ac711e",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-5.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-5.txt",
+    "sha256": "109f15ffa03cad770e12e9b1465c64bace6591c64d51beeb1a1b5c0ec500766d",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-6.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-6.txt",
+    "sha256": "fa26e203cc9ad92886b1af80f80857a34d51edd6924dcf4496cda2455aa60612",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-7.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-7.txt",
+    "sha256": "89dc684061875ef12c3a72236266e2358e4811dede53e5af850e8a1923e933d9",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-8.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-8.txt",
+    "sha256": "ee0f5b24dc788442be7d6560e9ed060f9ad57d53a47b1fb4230dcc1b40208980",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/raw/public-9.txt": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/raw/public-9.txt",
+    "sha256": "9040ea17b6f363790eee17742af166b6bc520df0e76b1ac9a6c920455c6f21e1",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/results.json": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/results.json",
+    "sha256": "dde909196c0dc4ae2972965556e8c1aec5494407f190f99ff417999dcf0476c7",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/one-rerun-passed/summary.md": {
+    "original_private_path": "pr5069-440-m0-rerun-packet/summary.md",
+    "sha256": "3ca714974f03ad7b938599cd5393bc1adf1e33729223e58542a5a0210d851886",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/review/review.md": {
+    "original_private_path": "m0-440-triage/review.md",
+    "sha256": "176999d2fa6c1a15d4942aa46832b1abd48e9b3b0013ebef8177efdce89486f5",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/review/review.json": {
+    "original_private_path": "m0-440-triage/review.json",
+    "sha256": "3652923dbfc5dc6e704dd1d7cb7d0d398aff4cbbdc8f19cfe6c5905331ea2782",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/review/one-complete-rerun-execution.json": {
+    "original_private_path": "m0-440-triage/one-complete-rerun-execution.json",
+    "sha256": "bfc424493bca5d86a37bbc0649d78868520e0fa721215d2dd481d85b270ce38e",
+    "byte_preserved": true
+  },
+  "m0-440-two-attempts/review/rerun-root-verification.json": {
+    "original_private_path": "m0-440-triage/rerun-root-verification.json",
+    "sha256": "4f09204a7f21328121564b9794d7d7280119c0080cf5061d5fc983bd16166b3a",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/actual/baseline.txt": {
+    "original_private_path": "pr5069-440-ci-raw-path/baseline.txt",
+    "sha256": "f1690aa6a43cf651c8c5b9c45aaf06296b49ca21158d2b5b312c5603f2756be2",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/actual/candidate.txt": {
+    "original_private_path": "pr5069-440-ci-raw-path/candidate.txt",
+    "sha256": "fa9f4abadfa7ed59237c5d23f07c6f7bdbef4cd762ad6a4fc2fb356fdefb8dba",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/actual/binary-sha256.txt": {
+    "original_private_path": "pr5069-440-ci-raw-path/binary-sha256.txt",
+    "sha256": "1dcfa84e50dddcfb5da2f54c70d84d075e0929e85375c9ea000ef86cd820b899",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/actual/environment.txt": {
+    "original_private_path": "pr5069-440-ci-raw-path/environment.txt",
+    "sha256": "fa6c7a5d4cb5d42e8c7564e6420e23260289581d8820734f7d06bc0811bc82ac",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/actual/summary.json": {
+    "original_private_path": "pr5069-440-ci-raw-path/summary.json",
+    "sha256": "9a3ee79615dda0a1f0b54c7ea590aa7d56fcc0be2053859653d4cf51b699e31e",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/actual/summary.md": {
+    "original_private_path": "pr5069-440-ci-raw-path/summary.md",
+    "sha256": "ac0d14436ba82a9c2aa8f331cf683ffc2006aa08e5b80427e8a2e3a544c14502",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/independent/hosted-440-independent-review.md": {
+    "original_private_path": "hosted-440-independent-review.md",
+    "sha256": "7a517d29f4384716e0c3ea06b0dff1d7fe039c8624ebd4677415bad23f030cf5",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/independent/hosted-440-independent-review.json": {
+    "original_private_path": "hosted-440-independent-review.json",
+    "sha256": "050fdd2e10fa954756cfd3f2abd24939d8f97eeec1174ee79248609167b07379",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/independent/hosted-440-independent-review-bindings.json": {
+    "original_private_path": "hosted-440-independent-review-bindings.json",
+    "sha256": "041fb911673a1719cef6942f4b56d7d254ab0cc978ff70e4a75efcd7dca4de6c",
+    "byte_preserved": true
+  },
+  "strict-raw-path-440/independent/hosted-440-independent-reanalysis.py": {
+    "original_private_path": "hosted-440-independent-reanalysis.py",
+    "sha256": "febd7d7168afec61687bc591648c17951c83ed303cd84b35412048da62724a81",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/commands-and-exits.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/commands-and-exits.json",
+    "sha256": "972bb9c4aa55d3e8f2c8c4ca140845856e90c77d8c3cae73e4efd6c721ec453a",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/diagnosis-source-bindings.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/diagnosis-source-bindings.json",
+    "sha256": "88f491d070b6b1c0c2204c5f2a9b07a76f105bca7e84fb209c7af1483b38f4eb",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/diagnosis.md": {
+    "original_private_path": "leaf-reclamation-windows440-repair/diagnosis.md",
+    "sha256": "9b4da045c071752bef0ad1e7215bd772d8d411c0e95ec1258d8d55ba12da1211",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/diff-check.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/diff-check.json",
+    "sha256": "3c35e34bbb915d60893854633f7e0774f901d3bdc8c309da0e1d62ce19ea3c55",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/environment.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/environment.json",
+    "sha256": "33409393fe57fb5dfc970d1e969eb999225c12902b72484a18bc6b33386ab103",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/event-summary.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/event-summary.json",
+    "sha256": "2b6bc57d748428844602c5fd2702db8e6a7219dddddb4e27a4a7218d3befdf0a",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/handoff.md": {
+    "original_private_path": "leaf-reclamation-windows440-repair/handoff.md",
+    "sha256": "e67664c6f550285d1eaabc5b8e27f598d8d1697e55b355fb562ef7d5dd7ea752",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/normal.jsonl": {
+    "original_private_path": "leaf-reclamation-windows440-repair/normal.jsonl",
+    "sha256": "e83a12738182ecdf27ea7d4a8d1e3fc841ba6da850db4f3a076e7250cdda537f",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/normal.stderr": {
+    "original_private_path": "leaf-reclamation-windows440-repair/normal.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/original-evidence-bindings.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/original-evidence-bindings.json",
+    "sha256": "d7acf5b1897f8de3fe97678f599baa8c28139a8dec4ce66bc42a134bafbdf9cf",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/original-test.go.txt": {
+    "original_private_path": "leaf-reclamation-windows440-repair/original-test.go.txt",
+    "sha256": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/pre-edit-state.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/pre-edit-state.json",
+    "sha256": "16911d46bbf4502acb9e5e2fcc30fb515e8c34bc690bbca4cb96797fbd6f90a0",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/race.jsonl": {
+    "original_private_path": "leaf-reclamation-windows440-repair/race.jsonl",
+    "sha256": "64ba7f7502932da1a6181ad4ebad84cfc993e0213a821bf0a41bdf168ba38fbb",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/race.stderr": {
+    "original_private_path": "leaf-reclamation-windows440-repair/race.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/run-targeted.py": {
+    "original_private_path": "leaf-reclamation-windows440-repair/run-targeted.py",
+    "sha256": "a26ea645f3908d5a1a4433065eec5c6e1cae0e7334105cb3ac0a992771eb98d0",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/runtime-test.patch": {
+    "original_private_path": "leaf-reclamation-windows440-repair/runtime-test.patch",
+    "sha256": "fe7bb94bf94c0cb3e7b51bc5214b909c4353a771b1e5e2977ad9bd8e807f95a6",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/safe.jsonl": {
+    "original_private_path": "leaf-reclamation-windows440-repair/safe.jsonl",
+    "sha256": "b5c12d929713a3940c63d6eccd50b1d73768d1b624d132135cd946569149702a",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/safe.stderr": {
+    "original_private_path": "leaf-reclamation-windows440-repair/safe.stderr",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/source-post.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/source-post.json",
+    "sha256": "3b48738ac7a4343ff7b63fe4f287293da91faf330c25fbc42e85d30311aaa5fc",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/source-pre.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/source-pre.json",
+    "sha256": "3b48738ac7a4343ff7b63fe4f287293da91faf330c25fbc42e85d30311aaa5fc",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/source-proof.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/source-proof.json",
+    "sha256": "5101f7dcaf036145ac488ede0046290eb90ab73e9f214b62a941f81e418ed742",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/test.go.txt": {
+    "original_private_path": "leaf-reclamation-windows440-repair/test.go.txt",
+    "sha256": "068b828c9639f6e47733746522bf6685fe554f0c5905219a0e3107e0cdb68f48",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/local/packet-manifest.json": {
+    "original_private_path": "leaf-reclamation-windows440-repair/packet-manifest.json",
+    "sha256": "456061807c89ff3c72c06064a191beca1b8b56a0d01269642e65aa0be5087fb7",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/independent/leaf-reclamation-windows440-independent.md": {
+    "original_private_path": "leaf-reclamation-windows440-independent.md",
+    "sha256": "bb038db2641e77c909e9828402a6c6a4355da6055c84d1a32826db191e5ae233",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/independent/leaf-reclamation-windows440-independent.json": {
+    "original_private_path": "leaf-reclamation-windows440-independent.json",
+    "sha256": "631e93eaf3487e56d8252a72ab4083544afb958410210c086d9e8e5b19b7e002",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/independent/leaf-reclamation-windows440-functional-review.md": {
+    "original_private_path": "leaf-reclamation-windows440-functional-review.md",
+    "sha256": "c4884e5e2e00c0bbc693f7f6214df04384179e3eb3f08b74b8f2b6a2e17a40ea",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/independent/leaf-reclamation-windows440-functional-review.json": {
+    "original_private_path": "leaf-reclamation-windows440-functional-review.json",
+    "sha256": "048e584cc63d48966364cb03d56512ae5bb859c838241c4882115b328e9978eb",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/artifact-provenance.json": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/artifact-provenance.json",
+    "sha256": "1fd1433bf8bd5e39e3057a2c998cdae711886e18e0d7adf7cde9a3b6af6d3434",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/artifact.zip": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/artifact.zip",
+    "sha256": "75037e6124b38dc987e64da84f02569d0b0de01893853982b037813d4a64d778",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/diagnosis.json": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/diagnosis.json",
+    "sha256": "1a5a1d56dbd00a02ee8862b17b144e623dd52763c585bc90a58b91ed19cf7140",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/diagnosis.md": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/diagnosis.md",
+    "sha256": "fa5908075d073b933c1f05b0a092db55205edcb495e2fcd67a7014f5d5c45a93",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/event-analysis.json": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/event-analysis.json",
+    "sha256": "8caee822f3d3fce3ee6dbb0d649876bea5d4d597aaea636d12dc80a4f305fcec",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/job.json": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/job.json",
+    "sha256": "c2673f03509343a4c598755668445cb9239189813b99e42133bccb349797ee49",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/packet-manifest.json": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/packet-manifest.json",
+    "sha256": "95fbc97480931aebfa1bdbc67bff1587181eb4b33e6927f2198c605afe745be7",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/retrieval-commands.json": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/retrieval-commands.json",
+    "sha256": "b3087f7e572029472e1eaa393acee1e6cd417242c09003d4a5df1f551b89c8e8",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/source-bindings.json": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/source-bindings.json",
+    "sha256": "d7e177736a1ef26160419e36d649625c34137d5f3b43c5d56e13246bbdb78faf",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/treedb-test.jsonl": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/treedb-test.jsonl",
+    "sha256": "0570f197b365dc69759302b66a9b886719d091a9cda5dafb8ac426fe2283daa8",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/treedb-test.jsonl.summary.md": {
+    "original_private_path": "pr5069-440-windows-core3-failed-packet/treedb-test.jsonl.summary.md",
+    "sha256": "d7c6b0dcbe17fe78ac1de4432ce46fbe7f4827c2a7f00f95ca8efd38ea4d826d",
+    "byte_preserved": true
+  },
+  "leaf-reclamation-test-repair/original-windows/full-job.log": {
+    "original_private_path": "pr5069-440-windows-core3-failure.log",
+    "sha256": "a02a226e3740ea0d1d485ae9de0cfe3000174030526a7cf1309a82d5ae2950fb",
+    "byte_preserved": true
+  },
+  "two-test-publication-review/two-test-staged-acceptance.md": {
+    "original_private_path": "two-test-staged-acceptance.md",
+    "sha256": "89ba9373c22e51ac6ec764e732ae80836109c18d18987226591c8d4f7d259e02",
+    "byte_preserved": true
+  },
+  "two-test-publication-review/two-test-staged-acceptance.json": {
+    "original_private_path": "two-test-staged-acceptance.json",
+    "sha256": "946d8e5ceeba305abf27d3f22c2b72778ca966f3d1ee8f088394717804c49f08",
+    "byte_preserved": true
   }
 }

@@ -1,0 +1,17 @@
+{
+  "original_log": {
+    "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core3-failure.log",
+    "bytes": 2249532,
+    "sha256": "a02a226e3740ea0d1d485ae9de0cfe3000174030526a7cf1309a82d5ae2950fb"
+  },
+  "original_json": {
+    "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core3-failed-packet/treedb-test.jsonl",
+    "bytes": 1955172,
+    "sha256": "0570f197b365dc69759302b66a9b886719d091a9cda5dafb8ac426fe2283daa8"
+  },
+  "original_provenance": {
+    "path": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-440-windows-core3-failed-packet/artifact-provenance.json",
+    "bytes": 707,
+    "sha256": "1fd1433bf8bd5e39e3057a2c998cdae711886e18e0d7adf7cde9a3b6af6d3434"
+  }
+}
