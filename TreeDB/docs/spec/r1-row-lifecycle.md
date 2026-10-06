@@ -284,12 +284,28 @@ harness source and supply `--qualification retained --source-commit SHA
 --review-url https://github.com/... --out /durable/new-directory`. The capture
 checks the declared landed tooling commit is an ancestor of the measured clean
 source; coordinator review verifies the declaration against actual landing.
-Independent retained validation requires `--expected-landed-tooling-commit SHA`
-and `--expected-commit SHA --expected-runtime HASH --expected-harness HASH`.
-The verifier supplies these frozen values from independently checked landing,
-review and source evidence, never by copying declarations from the packet.
+Independent retained validation requires `--expected-landed-tooling-commit SHA`,
+`--expected-commit SHA --expected-runtime HASH --expected-harness HASH`, and
+`--expected-binary-sha256 HASH --expected-packet-sha256 HASH`. The coordinator
+freezes these values in a trusted receipt separate from the capture packet:
+verify actual reviewed tooling landing and source lineage, observe the clean
+source-bound build and its executable hash, then observe the completed run and
+freeze the exact packet bytes. The receipt must cover that same measured binary,
+source and completed run; copying claims or recomputing expected hashes from an
+untrusted submitted packet is not independent verification.
+
+The binary binding identifies the executable that actually ran. The exact packet
+binding transitively fixes its source/toolchain/environment declarations, process
+metadata, build-log hash and every raw-run hash; validation checks those hashes
+against the supplied files. A sibling binary/log substitution or relabeled source
+cannot qualify merely by recomputing the packet's self-hashes. Capture checks its
+own just-built binary and completed packet for consistency; that self-check and
+its summary do not constitute an independently verified receipt or retained
+acceptance. The final verifier obtains expected values from the separately trusted
+receipt, not the submitted artifact.
+
 Validation does not contact GitHub or require the historical checkout; rehearsal
-semantic replay needs no landing binding. Earlier frozen validators and packets
+semantic replay needs no external receipt. Earlier frozen validators and packets
 remain historical evidence, rather than being relabeled with this repair.
 Defaults supply the retained five-by-five dimensions. A distinct output directory
 is mandatory and must be outside the source checkout. Each capture creates a
@@ -311,8 +327,8 @@ allowing only Go's printed rounding. Effective temporary-directory/filesystem
 metadata and repeated-working-set/aggregate-maintenance attribution are
 mandatory; older provisional packets without them remain preserved
 under their original harness identity and fail the new validator.
-`--expected-runtime`, `--expected-harness` and `--expected-commit` additionally
-bind a packet to the coordinator's independently frozen identities. The real
+The external source, landing, binary and exact-packet bindings additionally
+bind retained artifacts to the coordinator's independently frozen receipt. The real
 rehearsal rejection suite deliberately alters raw semantic values and rebinds
 raw checksums, so those failures exercise the semantic gate. This packet is
 standalone lifecycle evidence and is neither a #5057 comparator packet nor a

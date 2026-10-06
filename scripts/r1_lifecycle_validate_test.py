@@ -258,7 +258,11 @@ class RealPacketTests(unittest.TestCase):
         return {'expected_runtime': source['runtime_sha256'],
                 'expected_harness': source['harness_sha256'],
                 'expected_commit': source['commit'],
-                'expected_landed_tooling_commit': source['commit']}
+                'expected_landed_tooling_commit': source['commit'],
+                'expected_binary_sha256': self.original['toolchain']['binary_sha256'],
+                # The intentionally rebound retained declaration is only a
+                # negative fixture: matching its bytes reaches provenance guards.
+                'expected_packet_sha256': hashlib.sha256(self.path.read_bytes()).hexdigest()}
 
     def test_relabel_valid_landing_shape_requires_independent_binding(self):
         self.retained_declaration()
@@ -286,6 +290,92 @@ class RealPacketTests(unittest.TestCase):
                 bindings = self.frozen_bindings()
                 bindings.pop(key)
                 with self.assertRaisesRegex(ValueError, 'retained validation requires independent source bindings'):
+                    validate(self.path, **bindings)
+
+    def trusted_rehearsal_receipt(self):
+        # Freeze an unchanged copy of actual successful bytes before corruption.
+        self.save()
+        return {'expected_binary_sha256': self.original['toolchain']['binary_sha256'],
+                'expected_packet_sha256': hashlib.sha256(self.path.read_bytes()).hexdigest()}
+
+    def substitute_binary(self):
+        # Never alter the original binary behind the temporary symlink.
+        binary = self.path.parent / 'collections.test'
+        binary.unlink()
+        binary.write_bytes(b'sibling executable substitution, never executed\n')
+        self.packet['toolchain']['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
+        self.save()
+
+    def test_actual_packet_accepts_independent_binary_and_packet_receipt(self):
+        receipt = self.trusted_rehearsal_receipt()
+        self.assertEqual(len(validate(self.path, **receipt)), self.original['config']['repetitions'])
+
+    def test_binary_substitution_with_rebound_self_hash_rejects_original_receipt(self):
+        receipt = self.trusted_rehearsal_receipt()
+        self.substitute_binary()
+        # Internal consistency alone allows this sibling substitution.
+        validate(self.path)
+        with self.assertRaisesRegex(ValueError, 'frozen packet hash mismatch'):
+            validate(self.path, **receipt)
+
+    def test_binary_binding_rejects_substitution_even_with_matching_packet_fixture(self):
+        receipt = self.trusted_rehearsal_receipt()
+        self.substitute_binary()
+        # Deliberately match only the corrupted packet fixture to reach the
+        # independent executable guard; NEVER change the expected binary hash.
+        receipt['expected_packet_sha256'] = hashlib.sha256(self.path.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(ValueError, 'frozen binary hash mismatch'):
+            validate(self.path, **receipt)
+
+    def test_raw_substitution_with_rebound_self_hash_rejects_original_receipt(self):
+        receipt = self.trusted_rehearsal_receipt()
+        self.edit_raw(lambda text: text + '\n')
+        self.save()
+        validate(self.path)
+        with self.assertRaisesRegex(ValueError, 'frozen packet hash mismatch'):
+            validate(self.path, **receipt)
+
+    def test_metadata_substitution_rejects_original_receipt(self):
+        receipt = self.trusted_rehearsal_receipt()
+        self.packet['runs'][0]['before']['utc'] = '2000-01-01T00:00:00Z'
+        self.save()
+        validate(self.path)
+        with self.assertRaisesRegex(ValueError, 'frozen packet hash mismatch'):
+            validate(self.path, **receipt)
+
+    def test_source_relabel_rejects_original_receipt(self):
+        receipt = self.trusted_rehearsal_receipt()
+        for key in ('source_before', 'source_after'):
+            self.packet[key]['commit'] = 'f' * 40
+        self.save()
+        validate(self.path)
+        with self.assertRaisesRegex(ValueError, 'frozen packet hash mismatch'):
+            validate(self.path, **receipt)
+
+    def test_build_log_substitution_with_rebound_self_hash_rejects_original_receipt(self):
+        receipt = self.trusted_rehearsal_receipt()
+        log = self.path.parent / 'build.log'
+        log.write_bytes(log.read_bytes() + b'\n')
+        self.packet['build_log_sha256'] = hashlib.sha256(log.read_bytes()).hexdigest()
+        self.save()
+        validate(self.path)
+        with self.assertRaisesRegex(ValueError, 'frozen packet hash mismatch'):
+            validate(self.path, **receipt)
+
+    def test_exact_packet_bytes_bound_even_with_identical_decoded_metadata(self):
+        receipt = self.trusted_rehearsal_receipt()
+        self.path.write_bytes(self.path.read_bytes() + b'\n')
+        validate(self.path)
+        with self.assertRaisesRegex(ValueError, 'frozen packet hash mismatch'):
+            validate(self.path, **receipt)
+
+    def test_retained_requires_independent_binary_and_packet_bindings(self):
+        self.retained_declaration()
+        for key in ('expected_binary_sha256', 'expected_packet_sha256'):
+            with self.subTest(key=key):
+                bindings = self.frozen_bindings()
+                bindings.pop(key)
+                with self.assertRaisesRegex(ValueError, 'retained validation requires independent binary and packet bindings'):
                     validate(self.path, **bindings)
 
     def test_unknown_effective_child_environment_rejected(self):

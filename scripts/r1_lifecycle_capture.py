@@ -179,10 +179,13 @@ def main():
               'build_command': command, 'build_log_sha256': sha(out / 'build.log'),
               'invocation': invocation, 'runs': records}
     write(out / 'packet.json', packet)
+    # These locally computed hashes check capture consistency only. Independent
+    # retained acceptance supplies a separately verified coordinator receipt.
     results = validate(out / 'packet.json', args.runtime_sha256, args.harness_sha256,
-                       args.source_commit, args.landed_tooling_commit)
+                       args.source_commit, args.landed_tooling_commit,
+                       toolchain['binary_sha256'], sha(out / 'packet.json'))
     (out / 'summary.md').write_text(summarize(packet, results))
-    print(f'{args.qualification}: validated {len(results)} fresh processes; {out}/packet.json')
+    print(f'{args.qualification}: consistency-checked {len(results)} fresh processes; {out}/packet.json')
 
 
 if __name__ == '__main__':
