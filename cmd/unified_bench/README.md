@@ -1338,3 +1338,18 @@ Retain raw Go benchmark output and compare identical helper bytes in balanced
 fresh processes. These package microbenchmarks are diagnostic artifacts, not
 benchprof inputs or evidence of service throughput, recall or cluster capacity;
 the unified-bench profile format and parser contract are unchanged.
+
+### Standalone immutable memtable safe-build witness
+
+`BenchmarkCOWLargeKeyLookup` is a package benchmark, outside the unified-bench
+adapters and benchprof profile pipeline. Capture its Get/CursorSeek/Estimate/
+RefusedPrepare sub-benchmarks as plain Go test logs:
+
+```sh
+GOWORK=off go test -tags treedb_safe ./TreeDB/internal/memtable -run '^$' \
+  -bench '^BenchmarkCOWLargeKeyLookup$' -benchmem -benchtime=100x -count=3
+```
+
+Repeat without the tag for the default comparator. Fixture setup is excluded;
+1 MiB keys prevent short-input conversion elision from hiding allocation costs.
+See [ownership and qualification scope](../../TreeDB/docs/spec/cow-memtable-ownership.md).

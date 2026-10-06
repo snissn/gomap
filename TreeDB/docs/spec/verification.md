@@ -2,6 +2,39 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+Immutable memtable foundation: `TestCOWOwnedHeadersAndBytes` covers old header
+identity, caller/output alias attempts and legacy arena poison/reset isolation;
+`TestCOWPrivatePreparationCancelAndResourceOwnership` covers private cancellation,
+preallocated publication and independently retained exact-once resource owners.
+`TestCOWSplitDeleteBatchHeightAndMetadata`, `TestCOWDependencyLayoutContract`,
+`TestCOWDependencyReserveWitness`, `TestCOWBatchReserveWitness` and
+`TestCOWRebalanceCapacityHistoryWitness` bind allocation reserves to dependency
+layout, split/rebalance/capacity and batch-height boundaries.
+`TestCOWConcurrentTraversalAndClose`, `TestCOWBudgetCloseKeepsExistingViews` and
+`TestCOWSuccessorAndChargedCursorAdapter` cover concurrent traversal/lifetime and
+allocation-free successor dispatch. `TestCOWLimitsAndRefusal`,
+`TestCOWFiniteReplacementHistoryAndResume` and `TestCOWRetainedGenerationPlateau`
+cover finite admission, cumulative replacement history, pinned residency and
+release/resumption. `BenchmarkCOWPrepareReplace`, `BenchmarkCOWCapture` and
+`BenchmarkCOWScan` witness internal N/2N preparation/capture/output costs; the
+[capture commands and scope](cow-memtable-ownership.md) keep these distinct from
+future integrated DB lifecycle qualification.
+`TestCOWRetainCloseRace` covers shutdown refusing fresh root ownership;
+`TestCOWCursorGeometricStackWitness` and `TestCOWPointerAllocationCharge` bind
+discarded stack backings and GC allocation headers to the reservation proof.
+`TestCOWExternalAdmissionLifetimeAndRefusal` and
+`TestCOWExternalAdmissionSharesPrepareAndRetirementBounds` cover external storage
+admission before allocation, finite shared capacity, overflow, concurrent Close
+and shutdown control lifetime. `BenchmarkCOWExternalLease` reports its wrapper
+allocation/admission cost. `TestCOWDeferredCleanupRemainsChargedAndCopiesDrainOnce`
+keeps deferred callbacks/storage charged through copy-safe cleanup.
+`TestCOWLargeKeyAdmissionAndReadAllocations` and
+`TestCOWByteLookupAcrossLevels` cover conversion-free pre-admission estimation,
+refusal, owned-key replacement/removal, reads/ranges/cursor seeks and three-level
+ordering in both default and `treedb_safe` builds. `BenchmarkCOWLargeKeyLookup`
+reports the safe-build rank-search cost and zero key-conversion allocations;
+[build-tag commands and scope](cow-memtable-ownership.md) bind the comparator.
+
 `TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
 forced serialized, and physical build-group publication with multiple real
 within-apply rotations and an empty current lane. It requires zero fresh-load

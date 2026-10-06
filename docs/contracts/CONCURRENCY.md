@@ -23,6 +23,21 @@
 - A TreeDB iterator is a point-in-time view of the DB as of iterator creation.
 - The iterator must be closed to release pinned resources.
 
+### Immutable memtable foundation
+
+The internal immutable memtable foundation uses writer-private preparation and
+separate immutable read headers with owned strings. Retained views/cursors keep
+their source generation and concrete resource owners alive until Close; budget
+Close denies new admissions, including root Retain and external allocation
+leases, while existing views remain valid. External leases reserve caller
+storage before allocation and close idempotently after owned cleanup.
+Both default and `treedb_safe` builds avoid key-conversion allocation during
+estimation/refusal and lookup/seek; safe rank search costs O(log N * height).
+Release callbacks
+are deferred outside publication/admission locks. It supplies no standalone
+public DB mode at this stage. See
+[the precise ownership contract](../../TreeDB/docs/spec/cow-memtable-ownership.md).
+
 ### Typed graph reads
 
 An ordinary typed graph read may use the previous coherent generation while an
