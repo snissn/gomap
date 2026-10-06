@@ -1,3 +1,5 @@
+//go:build darwin || linux || freebsd || netbsd || openbsd
+
 package db
 
 import (
@@ -222,8 +224,23 @@ func TestLeafManifestRevisionGCReboundChild5066(t *testing.T) {
 }
 
 func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
-	database, writer := openLeafGenerationGCTestDB(t)
-	writeLeafGenerationKeys(t, database, "revision", 64, 'a')
+	dirRoot := t.TempDir()
+	if err := SaveFormatConfig(dirRoot, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}, IndexOuterLeavesInValueLog: true, IndexPackedValuePtr: true}); err != nil {
+		t.Fatal(err)
+	}
+	database, err := Open(Options{Dir: dirRoot, CommandWAL: true, IndexOuterLeavesInValueLog: true, IndexPackedValuePtr: true, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := newRewriteWriter(ValueLogDirPath(dirRoot), 0, 0, 64<<20)
+	writer.ConfigureLeafLog(LeafLogDirPath(dirRoot), rewriteLeafLogLaneID, 0)
+	database.SetLeafPageLog(writer)
+	t.Cleanup(func() { closeNoErr(t, writer) })
+	t.Cleanup(func() { closeNoErr(t, database) })
+	writeLeafGenerationKeys(t, database, "revision", 1024, 'a')
+	if err := database.rootPublication.coordinator.WaitThrough(context.Background(), database.State().CommitSeq); err != nil {
+		t.Fatal(err)
+	}
 	held := database.AcquireSnapshot()
 	if held == nil {
 		t.Fatal("missing held snapshot")
@@ -233,7 +250,19 @@ func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
 	if err := writer.rotateLeaf(); err != nil {
 		t.Fatal(err)
 	}
-	writeLeafGenerationKeys(t, database, "revision", 64, 'b')
+	writeLeafGenerationKeys(t, database, "revision", 32, 'b')
+	if err := database.rootPublication.coordinator.WaitThrough(context.Background(), database.State().CommitSeq); err != nil {
+		t.Fatal(err)
+	}
+	// Packing live old-generation leaves publishes an exact manifest dependency.
+	if stats, err := database.LeafGenerationPack(context.Background(), LeafGenerationPackOptions{GenerationIDs: []uint64{1}, Force: true, Sync: true, ReserveRIDs: writer.reserveRecordRIDs}); err != nil {
+		t.Fatal(err)
+	} else if stats.GenerationsMatched != 1 {
+		t.Fatalf("pack did not publish a generation: %+v", stats)
+	}
+	if err := database.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatal(err)
+	}
 	dir := LeafLogDirPath(database.dir)
 	var recoveryNames []string
 	database.durablePublishMu.Lock()
@@ -275,8 +304,8 @@ func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Supersede both old durable slots through ordinary complete root writes.
-	writeLeafGenerationKeys(t, database, "revision", 64, 'c')
-	writeLeafGenerationKeys(t, database, "revision", 64, 'd')
+	writeLeafGenerationKeys(t, database, "revision", 1024, 'c')
+	writeLeafGenerationKeys(t, database, "revision", 1024, 'd')
 	stats, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
 	if err != nil {
 		t.Fatal(err)

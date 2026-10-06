@@ -37,6 +37,7 @@ type LeafGenerationGCStats struct {
 	BytesDeleted        int64
 
 	// Immutable manifest revisions are accounted separately from leaf segments.
+	ManifestRevisionGCUnsupported bool
 	ManifestRevisionsTotal        int
 	ManifestRevisionsProtected    int
 	ManifestRevisionsEligible     int

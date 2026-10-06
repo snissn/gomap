@@ -26,6 +26,15 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 	if err := db.admitLeafGenerationMaintenance(ctx, opts.MaintenanceLimits); err != nil {
 		return err
 	}
+	// Compatibility stores cannot mint immutable revision authority. Preserve
+	// the lawful segment phase without requiring a stable revision capture.
+	if db.leafGenerationManifestStore == nil {
+		return rootpublication.ErrUnresolvedResource
+	}
+	if db.leafGenerationManifestStore.mode == leafGenerationManifestCompatibility {
+		stats.ManifestRevisionGCUnsupported = true
+		return nil
+	}
 	var roots *RecoverableRootSet
 	var err error
 	if opts.DryRun {
@@ -46,9 +55,6 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 	// pins. Ordinary snapshots retain these pins, not a manifest token.
 	db.rootReuseMu.Lock()
 	defer db.rootReuseMu.Unlock()
-	if db.leafGenerationManifestStore == nil {
-		return rootpublication.ErrUnresolvedResource
-	}
 	return db.leafGenerationManifestStore.gcRevisionsWithHeldViews(ctx, opts, stats, func(m *leafGenerationManifest) bool {
 		for _, gen := range m.Generations {
 			if db.leafGenerationPins.count(gen.GenerationID) > 0 {
