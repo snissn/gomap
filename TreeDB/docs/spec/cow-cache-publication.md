@@ -83,6 +83,9 @@ cut and admitted scratch through Close. Snapshot Close invalidates its bound
 iterators, and physical ownership drains after admitted operations/cursors
 finish. DB Close denies new reads and waits for admitted reads before storage
 teardown; it does not promise storage reads after DB Close.
+During the final Close flush, the existing backend read barrier remains active
+for private COW build chunks: a later chunk may read external leaves buffered
+by an earlier chunk. Close removes that authority before lane teardown.
 
 `GetManyView` retains one immutable snapshot, materializes bounded admitted
 temporary value ownership per callback, and invokes callbacks outside read,

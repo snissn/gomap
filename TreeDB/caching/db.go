@@ -4946,7 +4946,7 @@ func dispatchBackendValueLogReadBarrierWithSize(key uintptr, fileID uint32) (int
 	size := int64(-1)
 	sizeSafe := len(dbs) == 1
 	for _, db := range dbs {
-		if db == nil || db.closing.Load() {
+		if db == nil || (db.closing.Load() && !db.cowCloseReadBarrier.Load()) {
 			continue
 		}
 		l := db.valueLogLaneForFileID(fileID)
@@ -10048,8 +10048,11 @@ type DB struct {
 	processPeakVlogMmapSealedSegments  atomic.Uint64
 
 	// Lifecycle
-	closeCh                    chan struct{}
-	closing                    atomic.Bool
+	closeCh chan struct{}
+	closing atomic.Bool
+	// Close denies public admissions before draining the COW frontier. Its
+	// private multi-chunk build still needs visibility of newly buffered leaves.
+	cowCloseReadBarrier        atomic.Bool
 	flushCh                    chan struct{}
 	wg                         sync.WaitGroup
 	releasePoolPressureSampler func()
@@ -26373,7 +26376,9 @@ func (db *DB) Close() error {
 		unregister()
 	}
 	db.cancelActiveRetainedValueLogPrune()
-	db.clearBackendValueLogReadBarrier()
+	if db.cow == nil {
+		db.clearBackendValueLogReadBarrier()
+	}
 	unregisterTreeDBExpvarStatsDB(db)
 	db.stopDomainIngressWorkers()
 	db.waitForRetainedValueLogPrune()
@@ -26389,9 +26394,12 @@ func (db *DB) Close() error {
 	db.writeMu.Lock()
 	writeMuHeld := true
 	if db.cow != nil {
+		db.cowCloseReadBarrier.Store(true)
 		if err := db.closeCOWFrontier(); err != nil {
 			errs = append(errs, err)
 		}
+		db.cowCloseReadBarrier.Store(false)
+		db.clearBackendValueLogReadBarrier()
 		writeMuHeld = false
 	}
 	db.mu.Lock()
