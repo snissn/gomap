@@ -568,3 +568,8 @@ retained before comparing costs. These are bounded integration diagnostics;
 sustained C4 qualification requires its separately landed retained harness.
 See the [source-bound integration packet](../../TreeDB/docs/benchmarks/cow-c2-integration-5046/report.md)
 for exact collection policies, commands and limitations.
+
+The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
+produces a `gomap-r1-row-v1` packet and summary through
+`scripts/r1_collection_capture.sh`. These dedicated workload artifacts are not
+benchprof inputs and do not change the unified-bench profile filename contract.
