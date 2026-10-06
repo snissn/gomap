@@ -10,13 +10,42 @@ import (
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/collections"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
+	"io"
 	"math"
+	"net/http"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
+
+type colocatedAuditVisibilityTransportV1 struct {
+	*http.Transport
+	visibilityCalls atomic.Int64
+	mu              sync.Mutex
+	lastToken       []byte
+}
+
+func (t *colocatedAuditVisibilityTransportV1) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/v1/vector-mutation-visibility" {
+		t.visibilityCalls.Add(1)
+		body, err := request.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		defer body.Close()
+		var payload fixedPeerRequestV1
+		if err := json.NewDecoder(io.LimitReader(body, 32<<10)).Decode(&payload); err != nil {
+			return nil, err
+		}
+		t.mu.Lock()
+		t.lastToken = bytes.Clone(payload.VectorMutationVisibility)
+		t.mu.Unlock()
+	}
+	return t.Transport.RoundTrip(request)
+}
 
 func TestColocatedAuditPlanBoundsV1(t *testing.T) {
 	for _, p := range []ColocatedAuditPlanV1{{}, {Version: 1, RunID: "run"}, {Version: 2, RunID: "run", Writes: make([]ColocatedAuditWriteV1, 6)}} {
@@ -54,6 +83,14 @@ func TestColocatedAuditPopulationOnlyDecodeV1(t *testing.T) {
 }
 
 func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
+	testFixedPeerColocatedAuditCurrentAuthorityV1(t, 6)
+}
+
+func TestFixedPeerColocatedAuditVariableLengthCurrentAuthorityV2(t *testing.T) {
+	testFixedPeerColocatedAuditCurrentAuthorityV1(t, 63)
+}
+
+func testFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T, originals int) {
 	runFixedPeerVectorPrepareRealRaftV1(t, false, false, false, 4, false, func(t *testing.T, parent context.Context, nodes []*FixedPeerTCPRuntimeV1) {
 		ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 		defer cancel()
@@ -66,7 +103,7 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		}
 		defer client.Close()
 		// Reuse the real fixture's warm-router pattern. Restore its exact original
-		// canonical document with the sixth write for unchanged snapshot/tail checks.
+		// canonical document with the last original for unchanged snapshot/tail checks.
 		search := public.SearchRequestV1{Version: 1, Generation: g, Query: []float32{-1, 0}, Metric: public.MetricCosineV1, TopK: 3, Probes: 1, EfSearch: 16, Consistency: public.ConsistencyGenerationSnapshotV1, Limits: public.SearchLimitsV1{RequestBytes: 1 << 20, CandidateBytes: 8 << 20, ResponseBytes: 1 << 20, MergeEntries: 8}}
 		if _, err = client.VectorSearchStrictV1(ctx, search); err != nil {
 			t.Fatal(err)
@@ -98,9 +135,9 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			}
 		}
 		p := ColocatedAuditPlanV1{Version: 1, RunID: "audit-test", Population: &population}
-		for i := 0; i < 6; i++ {
+		for i := 0; i < originals; i++ {
 			document := []byte(fmt.Sprintf(`{"embedding":[-1,0],"kind":"audit-%d"}`, i))
-			if i == 5 {
+			if i == originals-1 {
 				document = original
 			}
 			request := public.ReplaceRequestV1{Version: 1, Generation: g, ID: []byte("base-minus-x"), IdempotencyKey: []byte(fmt.Sprintf("audit-%d", i)), Vector: []float32{-1, 0}, Document: document}
@@ -128,9 +165,26 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		for _, n := range nodes {
 			// CLI/client attachment goes through the EXISTING authenticated diagnostics
 			// operation and validates actual per-voter current-FSM state.
+			leader, err := n.client.leader(ctx, n.config.Groups[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			transport := &colocatedAuditVisibilityTransportV1{Transport: n.client.http.Transport.(*http.Transport)}
+			n.client.http.Transport = transport
 			report, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, p)
-			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.RetainedCount != 6 || len(report.ColocatedAudit.Witnesses) != 6 || len(report.ColocatedAudit.Final) != 1 || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 {
+			n.client.http.Transport = transport.Transport
+			if err != nil || report.ColocatedAudit == nil || report.ColocatedAudit.RetainedCount != uint64(originals) || len(report.ColocatedAudit.Witnesses) != originals || len(report.ColocatedAudit.Final) != 1 || report.ColocatedAudit.Population == nil || report.ColocatedAudit.Population.SHA256 != population.SHA256 {
 				t.Fatalf("audit voter%s=%+v err%v", n.config.NodeID, report.ColocatedAudit, err)
+			}
+			wantCalls := int64(1)
+			if leader == n.config.NodeID {
+				wantCalls = 0
+			}
+			if got := transport.visibilityCalls.Load(); got != wantCalls {
+				t.Fatalf("audit voter%s made%d visibility RPCs for%d witnesses; want%d", n.config.NodeID, got, originals, wantCalls)
+			}
+			if wantCalls != 0 && !bytes.Equal(transport.lastToken, p.Writes[len(p.Writes)-1].Response.VisibilityToken) {
+				t.Fatal("audit forwarded an earlier visibility token")
 			}
 		}
 		legacy := p
@@ -148,8 +202,13 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		token.Outcome.CommandDigest[0] ^= 1
 		encoded, _ := json.Marshal(token)
 		bad.Writes[0].Response.VisibilityToken = append([]byte(colocatedVectorVisibilityMagicV1), encoded...)
-		if _, err = node.client.DiagnosticsWithColocatedAuditV1(ctx, node.config.NodeID, bad); err == nil {
-			t.Fatal("forged command digest admitted")
+		if err := ValidateColocatedAuditPlanV1(ctx, bad); err != nil {
+			t.Fatal("earlier digest forgery must exercise current witness verification:", err)
+		}
+		for _, n := range nodes {
+			if _, err = node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, bad); err == nil {
+				t.Fatalf("forged earlier command digest admitted on voter%s", n.config.NodeID)
+			}
 		}
 		_ = json.Unmarshal(raw, &bad)
 		bad.Writes[0].Replace.Vector[0] = 1
@@ -160,6 +219,22 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 		bad.Writes = bad.Writes[:5]
 		if _, err = node.client.DiagnosticsWithColocatedAuditV1(ctx, node.config.NodeID, bad); err == nil {
 			t.Fatal("incomplete witnesses admitted")
+		}
+		if originals > 6 {
+			// This shorter plan is internally complete, but cannot stand in for
+			// the actual fresh collection's full retained-outcome ledger.
+			subset := p
+			// Omit the first witness while preserving the actual final source and floor.
+			// Refusal must come from the complete retained-count boundary.
+			subset.Writes = p.Writes[1:]
+			if err := ValidateColocatedAuditPlanV1(ctx, subset); err != nil {
+				t.Fatal("complete shorter plan admission:", err)
+			}
+			for _, n := range nodes {
+				if _, err := node.client.DiagnosticsWithColocatedAuditV1(ctx, n.config.NodeID, subset); err == nil {
+					t.Fatal("omitted retained outcome accepted")
+				}
+			}
 		}
 		// Matching bytes from an unrelated DB are insufficient authority. This
 		// explicit wrong-current handle must fail before attempting any proof.
@@ -251,7 +326,7 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			select {
 			case result := <-written:
 				response = result.response
-				if result.err != nil || response.Matched != 1 || response.Modified != 0 || response.LiveRevision != p.Writes[5].Response.LiveRevision {
+				if result.err != nil || response.Matched != 1 || response.Modified != 0 || response.LiveRevision != p.Writes[originals-1].Response.LiveRevision {
 					t.Fatalf("concurrent no-op response %+v err%v", response, result.err)
 				}
 			case <-ctx.Done():
@@ -263,6 +338,14 @@ func TestFixedPeerColocatedAuditCurrentAuthorityV1(t *testing.T) {
 			})
 		})
 		t.Run("UntouchedCurrentPopulation", func(t *testing.T) {
+			// Begin this planned population phase with a fresh caller-owned socket.
+			// The preceding complete audits can exceed the server's idle timeout;
+			// this is setup before a new mutation, never a retry after ambiguity.
+			client, err := DialContext(ctx, "tcp", node.config.VectorInitialization.PublicAddresses[node.config.NodeID])
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer client.Close()
 			originalY, err := node.vector.collection.Get([]byte("base-minus-y"))
 			if err != nil {
 				t.Fatal(err)
