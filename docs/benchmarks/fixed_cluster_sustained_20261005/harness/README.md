@@ -405,3 +405,27 @@ observations use separate raw records and keep their own freshness/admission
 checks; this immutable unused-proof join supplies neither a lock nor permission.
 
 The pure checker requires only this source packet and a fresh explicit fixture directory. Checkpoint historical receipts, rich build receipts, projected host image receipts, reviews and landing envelopes are synthesized there and labelled `synthetic_only`; only inert test module pins are rebound. Production retained receipt pins remain fixed. These fixtures establish source contract behavior, never checkpoint acceptance or runtime qualification. The final-resource expiry controls initialize collector path state and require the actual phase-exhaustion error while retaining owned stops and logs.
+
+Retained recall means use a zero-initialized binary64 accumulator in successful
+ledger order, then divide by the successful count, matching the immutable Go
+producer in `cmd/treedb-query-under-write/window_v1.go` and `recall_v1.go`.
+Python 3.12+ `sum` compensates rounding and can disagree with those producer
+bits. Both measured and paired means retain exact equality, finite per-attempt
+checks and the configured recall floor. Run the focused pure regression controls
+with `python3 -B /absolute/path/harness/recall_aggregation_checks.py`; they execute
+actual aggregate and per-attempt gate statements without scoring or replay.
+
+A postcapture accounting correction must preserve the original frozen source
+packet, failed accounting output and receipts, active manifest, collector source,
+raw observations and measured runtime/harness identities. Root may create a fresh
+accounting-only source directory from the original frozen inert dependencies,
+replace only `shared_read.py` with its separately reviewed and landed repaired
+bytes, and bind only the original generated read/audit helper's `READ` locator
+and `READ_SHA` to those bytes. Independently review that exact transform and
+record its input/output hashes with the repaired harness commit, subtree/blob
+identities and applicability to the unchanged observations in a separate source
+supplement. The corrected accounting source identity does not replace the
+original collector or measured harness identity. Run the corrected helper only
+against the same pinned raw packet; no new collector, active admission, workload
+replay or native oracle is implied. Generic full-role instantiation is not this
+postcapture correction. Root retains artifact acceptance and publication.

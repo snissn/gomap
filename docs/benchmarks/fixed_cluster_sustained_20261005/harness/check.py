@@ -1050,4 +1050,6 @@ checks.append('metadata_repair_preserves_top_level_signed_zero_selectors')
 assert len(checks)==590
 exec(compile((R/'matched_workload_checks.py').read_bytes(),'matched_workload_checks.py','exec'),globals())
 exec(compile((R/'checkpoint_window_checks.py').read_bytes(),'checkpoint_window_checks.py','exec'),globals())
+from recall_aggregation_checks import recall_aggregation_controls
+checks.extend(recall_aggregation_controls(R)['checks'])
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, native declared-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))
