@@ -20,8 +20,8 @@ def draft():
                  "point_calls/op": {"eq": point}, "scan_calls/op": {"eq": scan},
                  "visited/op": {"eq": 2 * scan}, "output/op": {"eq": point + 2 * scan},
                  "readers_while_writer_active/op": {"min": 0, "max": 2} if workload == "concurrent" else {"eq": 0},
-                 "wal_appends/op": {"eq": 0} if profile == "no_wal_fast" else {"min": 1},
-                 "wal_syncs/op": {"eq": 0} if profile == "no_wal_fast" else {"min": 0},
+                 "wal_appends/op": {"eq": 0 if profile == "no_wal_fast" else 1},
+                 "wal_syncs/op": {"eq": 1 if profile == "command_wal_durable" else 0},
                  "close_ok": {"eq": 1}}
         for name in ("snapshot_rotations/op", "rotated_shards/op", "enqueued_records/op"):
             rules[name] = {"eq": 0} if mode == "cow_btree" else {"min": 0}
@@ -50,9 +50,9 @@ def draft():
             "benchmark": "/".join(("BenchmarkC3PublicReadAdmission", profile, mode, shape, leaf)),
             "package": "github.com/snissn/gomap/TreeDB/mvcc", "iterations": 1024, "warmup_iterations": 128,
             "latency_groups": latency, "rules": {"baseline": rules, "candidate": rules},
-            "comparable_metrics": ["point_calls/op", "scan_calls/op", "visited/op", "output/op"],
+            "comparable_metrics": ["point_calls/op", "scan_calls/op", "visited/op", "output/op", "wal_appends/op", "wal_syncs/op"],
             "comparison_metrics": comparisons,
-            "ack_contract": "CommitRelaxed; resolved profile ordinary ACK; verify WAL sync rules from final smoke",
+            "ack_contract": "CommitRelaxed; durable WAL append/sync=1/1, relaxed=1/0, NoWAL=0/0; exact profile counts required",
             "timed_scope": "actual calls, owned point output, borrowed complete EntryView scan, validation, clocks; seed/stats/Close excluded",
             "workload_contract": {"keys": ["c3-a", "c3-ab"], "seed_timestamps": [10, 20], "read_timestamp": 100,
                 "value_bytes": 256, "value_byte": 99, "history_growth": False,

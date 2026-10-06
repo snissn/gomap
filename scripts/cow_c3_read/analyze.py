@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
-from protocol import command, config, digest, identity, label, need, row, schedule, sha, write
+from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment
 from collect import host_gate
 from build import verify_git_receipt
 
@@ -20,6 +20,9 @@ def main():
     packet = args.packet.resolve()
     need(not (packet / "failure.json").exists(), "failed capture retained; no graceful analysis fallback")
     c = config(packet / "config.json")
+    env = process_environment(c["environment"])
+    need(json.loads((packet / "environment.json").read_text()) ==
+         {"effective_controls": c["environment"], "effective_process_environment": env}, "captured process environment mismatch")
     completion = json.loads((packet / "completion.json").read_text())
     for key, file in (("config_sha256", "config.json"), ("receipts_sha256", "receipts.json"), ("script_identity_sha256", "script-identity.json")):
         need(sha(packet / file) == completion[key], "packet identity mismatch " + file)
@@ -34,12 +37,15 @@ def main():
         build = json.loads(receipt_path.read_text())
         need(build["binary_sha256"] == declaration["binary_sha256"] and build["source_tree_sha256"] == declaration["source_tree_sha256"], "unbound build receipt")
         need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "build controls drift")
+        need(build.get("effective_process_environment") == env, "build process environment mismatch")
         artifacts = json.loads((packet / (variant + "-build-artifacts.json")).read_text())
         required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source"}
         need(set(artifacts) == set(build["artifacts"]) == required, "missing/extra build provenance map")
         for name, artifact in artifacts.items():
             need(artifact["path"] == variant + "-" + name + ".raw" and artifact["sha256"] == build["artifacts"][name]["sha256"], "artifact receipt binding drift")
             need(sha(packet / artifact["path"]) == artifact["sha256"], "build provenance drift")
+        go_env = json.loads((packet / (variant + "-go_env.raw")).read_text())
+        validate_go_environment(go_env, env)
         observed = identity(packet / (variant + "-source-manifest.json"))
         need(observed == json.loads((packet / (variant + "-identity.json")).read_text()), "source identity drift")
         need(observed["manifest_sha256"] == declaration["manifest_sha256"] and observed["tree_sha256"] == declaration["source_tree_sha256"], "unbound source manifest")

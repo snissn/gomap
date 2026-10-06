@@ -4,6 +4,7 @@ import hashlib
 import itertools
 import json
 import math
+import os
 import re
 from pathlib import Path
 
@@ -23,6 +24,24 @@ def case_names(case):
 def need(value, message):
     if not value:
         raise ValueError(message)
+
+def process_environment(controls):
+    """Build the complete child environment without reading ambient settings."""
+    need(set(controls) == CONTROLS and all(isinstance(v, str) for v in controls.values()),
+         "missing/extra/non-string process controls")
+    cache = Path(controls["GOMODCACHE"])
+    need(cache.is_absolute() and str(cache) == controls["GOMODCACHE"] and ".." not in cache.parts
+         and cache.parent.parent != Path("/"), "unresolved GOMODCACHE/GOPATH")
+    return dict(controls, PATH=os.defpath, GOENV="off", GOTOOLCHAIN="local",
+                GOPATH=str(cache.parent.parent), LC_ALL="C")
+
+def validate_go_environment(observed, env):
+    # Go's cfg.EnvFile reports the disabled GOENV=off setting as an empty
+    # filename in `go env -json`; the actual process environment still is off.
+    for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH"):
+        expected = "" if key == "GOENV" else env[key]
+        need(observed[key] == expected, "actual go env mismatch " + key)
+    need(observed["GOOS"] == "linux" and observed["GOARCH"] == "amd64", "actual build platform mismatch")
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -77,6 +96,7 @@ def config(path):
     need(set(c["environment"]) == CONTROLS, "missing/extra explicit environment controls")
     need(all(isinstance(v, str) for v in c["environment"].values()), "unresolved environment controls")
     need(c["environment"]["GOFLAGS"] == "", "GOFLAGS must be empty")
+    process_environment(c["environment"])
     need(c["host"]["system"] == "Linux" and c["host"]["cpu_count"] >= 4, "Linux host contract")
     tmpdir = Path(c["environment"]["TMPDIR"])
     need(tmpdir.is_absolute() and str(tmpdir) == c["environment"]["TMPDIR"] and ".." not in tmpdir.parts, "unresolved TMPDIR")
@@ -106,6 +126,13 @@ def config(path):
         need(type(x["warmup_iterations"]) is int and x["warmup_iterations"] > 0, "separate warmup required")
         need(x["workload_contract"] and x["comparable_metrics"] and x["timed_scope"] and x["ack_contract"], "missing work/ACK comparability")
         need(set(x["rules"]) == {"baseline", "candidate"}, "variant metric rules missing")
+        need({"wal_appends/op", "wal_syncs/op"} <= set(x["comparable_metrics"]), "WAL comparability missing")
+        expected_wal = {"command_wal_durable": (1, 1), "command_wal_relaxed": (1, 0), "no_wal_fast": (0, 0)}[x["profile"]]
+        for variant in ("baseline", "candidate"):
+            for unit, expected in zip(("wal_appends/op", "wal_syncs/op"), expected_wal):
+                rule = x["rules"][variant].get(unit)
+                need(isinstance(rule, dict) and set(rule) == {"eq"} and type(rule["eq"]) is int
+                     and rule["eq"] == expected, "profile WAL exact rule mismatch")
         units = set(x["rules"]["baseline"])
         need(units == set(x["rules"]["candidate"]), "unmatched metric sets")
         need({"ns/op", "B/op", "allocs/op"} <= units and x["latency_groups"], "allocation/latency metrics missing")
