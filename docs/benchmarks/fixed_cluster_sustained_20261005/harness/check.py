@@ -3,7 +3,10 @@ import argparse,ast,base64,copy,difflib,hashlib,importlib.util,json,math,re,stru
 from pathlib import Path
 sys.dont_write_bytecode=True
 R=Path(__file__).parent
-ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--fixtures-root',type=Path);args=ap.parse_args()
+ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--fixtures-root',type=Path,required=True,help='absolute fixture directory outside this source packet');args=ap.parse_args()
+from source_paths import isolate_paths
+try:isolate_paths([args.fixtures_root],[R.resolve()])
+except ValueError as error:ap.error(str(error))
 checks=[]
 def sha(b):return hashlib.sha256(b).hexdigest()
 def good(name,f):f();checks.append(name)
@@ -87,7 +90,7 @@ exit_guard(b'0\n',sha(b'0\n'));checks.append('actual_external_exit0_guard')
 bad('actual_external_nonzero_exit',lambda:exit_guard(b'1\n',sha(b'1\n')))
 bad('actual_external_exit_raw_hash_mismatch',lambda:exit_guard(b'0\n','0'*64))
 # Synthetic final-pin declaration tests exercise the real pre-output validator.
-fixtures=args.fixtures_root or R/'synthetic-final-pin-fixtures'
+fixtures=args.fixtures_root
 fixtures.mkdir(exist_ok=True)
 head,tree='1'*40,'2'*40
 # Produce distinct ELF receipt schemas from the actual inert adapter seams.

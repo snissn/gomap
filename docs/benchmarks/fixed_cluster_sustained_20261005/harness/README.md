@@ -205,3 +205,8 @@ interior probe must finish before its next mutation. The complete pure checker
 runs the actual Trial24 adapted read verifier with six and 48 synthetic writes,
 including the final48 probe and rejected slot5 boundary crossing. These reports
 test accounting only and grant no native-oracle or campaign authority.
+
+The checker requires --fixtures-root with an absolute destination outside the
+source packet. Missing arguments and resolved path overlap (including parent
+aliases) fail before fixture creation. Use a fresh owned external directory;
+the checker has no in-tree fixture fallback.
