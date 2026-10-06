@@ -81,3 +81,71 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	}
 	return result, nil
 }
+
+// CloneStableResourceSetSelectingPhysicalKind independently retains selected
+// exact identities of one kind and every non-excluded entry of other kinds.
+// Selection is a maintenance proof supplied by the caller; this operation
+// never opens diagnostic paths or creates producer authority from metadata.
+// Missing identities, physical-only views, and released sources fail closed.
+func CloneStableResourceSetSelectingPhysicalKind(source *StableResourceSet, kind ResourceKind, selected []StableIdentity, excluded ...ResourceKind) (*StableResourceSet, error) {
+	if kind == "" || source == nil || source.physicalOnly {
+		return nil, ErrResourceOwnership
+	}
+	wanted := make(map[StableIdentity]bool, len(selected))
+	for _, identity := range selected {
+		if !identity.valid() || identity.Generation == 0 {
+			return nil, ErrUnresolvedResource
+		}
+		if _, duplicate := wanted[identity]; duplicate {
+			return nil, ErrResourceConflict
+		}
+		wanted[identity] = false
+	}
+	omitted := make(map[ResourceKind]bool, len(excluded))
+	for _, excludedKind := range excluded {
+		if excludedKind == kind {
+			return nil, ErrResourceConflict
+		}
+		omitted[excludedKind] = true
+	}
+	builder := NewStableResourceSetBuilder()
+	defer builder.Abandon()
+	source.mu.Lock()
+	owner := ResourceOwnerState(source.owner.Load())
+	if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
+		source.mu.Unlock()
+		return nil, ErrResourceOwnership
+	}
+	var cloneErr error
+	source.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
+		token := activeEntryToken(*entry)
+		if token == nil || token.released.Load() {
+			cloneErr = ErrResourceOwnership
+			return false
+		}
+		if token.kind == kind {
+			if err := token.namespace.validateStable(); err != nil {
+				cloneErr = err
+				return false
+			}
+			if _, keep := wanted[token.identity]; !keep {
+				return true
+			}
+			wanted[token.identity] = true
+		} else if omitted[token.kind] {
+			return true
+		}
+		cloneErr = cloneStableResourceEntryIntoBuilder(builder, entry)
+		return cloneErr == nil
+	})
+	source.mu.Unlock()
+	if cloneErr != nil {
+		return nil, cloneErr
+	}
+	for _, found := range wanted {
+		if !found {
+			return nil, ErrUnresolvedResource
+		}
+	}
+	return builder.Freeze()
+}

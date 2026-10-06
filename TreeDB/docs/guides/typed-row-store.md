@@ -5,8 +5,9 @@ string fields, complete-row reads, and scalar indexes. This guide accompanies
 the selected [R1 contract](../spec/r1-indexed-row-contract.md),
 [read contract](../spec/r1-row-reads.md),
 [mutation contract](../spec/r1-indexed-mutations.md), and
-[lifecycle contract](../spec/r1-row-lifecycle.md). R1 integration and retained
-performance acceptance remain provisional. TreeDB is pre-alpha; APIs and disk
+[lifecycle contract](../spec/r1-row-lifecycle.md). The read and mutation integration landed in
+[PR #5065](https://github.com/snissn/gomap/pull/5065); retained lifecycle and
+performance qualification remain pending. TreeDB is pre-alpha; APIs and disk
 formats may change without migration guarantees.
 
 ## Run the example
@@ -160,6 +161,15 @@ for logical typed history folding or proof that this row workload is bounded.
 See the [value/leaf-log lifecycle](../spec/value-log-lifecycle.md) and the
 [R1 maintenance scope](../spec/r1-row-lifecycle.md).
 
+Immutable leaf-manifest revision GC keeps at most 16 selected deletion handles,
+one scan child or quarantine placeholder, and one temporary link-validation
+handle (at most 18 GC child descriptors, separate from existing parent/manager
+and other process descriptors). It validates the full directory for each batch
+while holding writer and snapshot-admission locks for the whole explicit GC call.
+Worst-case repeated scanning is O(N²/16); footprint admission limits are not
+cumulative work or pause budgets. Assess the recorded finite-workload maintenance
+cost and remaining physical bytes before claiming sustained capacity.
+
 ## Interpret measurements
 
 The [R1 source-bound benchmark methodology](../spec/r1-indexed-row-contract.md)
@@ -169,9 +179,13 @@ runtime/harness identities. The lifecycle spec defines a separate sustained
 diagnostic, its bounded repeated working set, timer scope, and maintenance
 attribution. Its packets are not interchangeable with the comparator matrix.
 The example and comparator use `OpenBackendWithCachedLeafLog`; the lifecycle
-benchmark uses a direct durable command-WAL backend with background prune
-disabled. Its same-live-backend `VacuumIndexOnlineWithStats` observation excludes
-cached-wrapper checkpoint/reconciliation overhead. It establishes neither route
-equivalence nor the cost of the high-level storage orchestration above.
+benchmark uses `OptionsFor(ProfileCommandWALDurable)` plus `OpenBackend`, with
+background prune disabled and its supported persisted/effective format checked
+at creation and reopen. Its same-live-backend vacuum and exhaustive
+`CompactStorage` stages record actual owner admission, phase work and debt; a
+final fallback refresh precedes typed and leaf GC. These costs exclude
+cached-wrapper checkpoint/reconciliation overhead. Full-root file censuses
+include side stores and immutable manifest metadata. Route equivalence and
+physical-growth acceptance remain pending.
 Use reviewed, landed tooling and frozen sources for retained evidence. This
 example and guide establish usage, with no measured speedup or capacity claim.

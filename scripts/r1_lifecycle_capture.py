@@ -174,7 +174,7 @@ def main():
     write(out / 'source-after.json', after)
     if before != after or sha(binary) != toolchain['binary_sha256']:
         raise ValueError('product, harness, source cleanliness or binary changed during capture')
-    packet = {'schema': 'gomap-r1-lifecycle-packet-v2', 'config': config,
+    packet = {'schema': 'gomap-r1-lifecycle-packet-v3', 'config': config,
               'source_before': before, 'source_after': after, 'toolchain': toolchain,
               'build_command': command, 'build_log_sha256': sha(out / 'build.log'),
               'invocation': invocation, 'runs': records}
