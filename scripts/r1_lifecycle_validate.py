@@ -627,7 +627,8 @@ def raw_results(text, config, pid):
     return {'result': final, 'go_metrics': values, 'calibration_epochs': expected_epochs[:-1]}
 
 
-def validate(path, expected_runtime=None, expected_harness=None, expected_commit=None):
+def validate(path, expected_runtime=None, expected_harness=None, expected_commit=None,
+             expected_landed_tooling_commit=None):
     path = Path(path)
     packet = decode(path.read_text())
     require(packet['schema'] == 'gomap-r1-lifecycle-packet-v3', 'wrong packet schema')
@@ -651,6 +652,12 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
                 and config['documents'] == 4096 and config['calls_per_epoch'] == 1024, 'weakened retained fixture/source gate')
         require(hexadecimal(config['landed_tooling_commit'], 40) and isinstance(config['review_url'], str)
                 and config['review_url'].startswith('https://github.com/'), 'missing review/landing declaration')
+        # Expected values come from the verifier's independently checked freeze,
+        # never from this packet. This also works during offline artifact replay.
+        require(hexadecimal(expected_landed_tooling_commit, 40), 'missing independently verified landing binding')
+        require(config['landed_tooling_commit'] == expected_landed_tooling_commit, 'verified landing commit mismatch')
+        require(hexadecimal(expected_runtime, 64) and hexadecimal(expected_harness, 64)
+                and hexadecimal(expected_commit, 40), 'retained validation requires independent source bindings')
     toolchain = packet['toolchain']
     require(toolchain['go'] == 'go version go1.26.4 linux/amd64' and bool(toolchain['cc']) and bool(toolchain['uname']['system'])
             and bool(toolchain['binary_buildinfo']) and bool(toolchain['filesystem']), 'missing actual build/host identity')
@@ -662,9 +669,15 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
     require(integer(toolchain['capture_filesystem_device']) and integer(toolchain['benchmark_filesystem_device'])
             and toolchain['benchmark_filesystem_device'] == toolchain['capture_filesystem_device']
             and bool(toolchain['benchmark_filesystem']), 'benchmark/capture filesystem mismatch or missing observation')
-    require(toolchain['process_environment'] == {**config['runtime_environment'], 'TMPDIR': toolchain['benchmark_tmpdir'], 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
+    required_environment = {**config['runtime_environment'], 'TMPDIR': toolchain['benchmark_tmpdir'], 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
             'GOMAP_R1_LIFECYCLE_DOCUMENTS': str(config['documents']),
-            'GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH': str(config['calls_per_epoch'])}, 'effective benchmark environment mismatch')
+            'GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH': str(config['calls_per_epoch'])}
+    process_environment = toolchain['process_environment']
+    require(isinstance(process_environment, dict)
+            and all(process_environment.get(key) == value for key, value in required_environment.items())
+            and set(process_environment) <= set(required_environment) | {'PATH', 'HOME', 'GODEBUG'}
+            and all(isinstance(value, str) for value in process_environment.values())
+            and process_environment.get('GODEBUG', '') == '', 'effective benchmark environment mismatch')
     require(hashlib.sha256((path.parent / 'collections.test').read_bytes()).hexdigest() == toolchain['binary_sha256'], 'binary hash mismatch')
     require(hashlib.sha256((path.parent / 'build.log').read_bytes()).hexdigest() == packet['build_log_sha256'], 'build log hash mismatch')
     invocation = packet['invocation']
@@ -743,6 +756,9 @@ if __name__ == '__main__':
     parser.add_argument('--expected-runtime')
     parser.add_argument('--expected-harness')
     parser.add_argument('--expected-commit')
+    parser.add_argument('--expected-landed-tooling-commit',
+                        help='independently verified landing SHA; required with source bindings for retained packets')
     args = parser.parse_args()
-    rows = validate(args.packet, args.expected_runtime, args.expected_harness, args.expected_commit)
+    rows = validate(args.packet, args.expected_runtime, args.expected_harness, args.expected_commit,
+                    args.expected_landed_tooling_commit)
     print(summarize(decode(Path(args.packet).read_text()), rows))
