@@ -191,3 +191,140 @@ func TestLeafManifestRevisionGCGates5066(t *testing.T) {
 		})
 	}
 }
+
+func TestLeafManifestRevisionGCReboundChild5066(t *testing.T) {
+	s, old, _ := newRevisionStore5066(t)
+	old.Release()
+	name := leafGenerationDurableManifestFileName(old.Generation())
+	path := filepath.Join(s.leafDir, name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := path + ".original"
+	s.hooks.BeforeRename = func() error {
+		if err := os.Rename(path, moved); err != nil {
+			return err
+		}
+		return os.WriteFile(path, data, 0600)
+	}
+	stats := LeafGenerationGCStats{}
+	err = s.gcRevisions(context.Background(), LeafGenerationGCOptions{}, &stats)
+	if !errors.Is(err, ErrRecoveryRequired) || stats.ManifestRevisionsDeleted != 0 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
+	}
+	if _, err := os.Stat(moved); err != nil {
+		t.Fatalf("captured original identity lost: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("rebound canonical identity lost: %v", err)
+	}
+}
+
+func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
+	database, writer := openLeafGenerationGCTestDB(t)
+	writeLeafGenerationKeys(t, database, "revision", 64, 'a')
+	held := database.AcquireSnapshot()
+	if held == nil {
+		t.Fatal("missing held snapshot")
+	}
+	defer held.Close()
+	heldName := leafGenerationDurableManifestFileName(held.state.LeafGenerations.sourceManifest.ManifestRevision)
+	if err := writer.rotateLeaf(); err != nil {
+		t.Fatal(err)
+	}
+	writeLeafGenerationKeys(t, database, "revision", 64, 'b')
+	dir := LeafLogDirPath(database.dir)
+	var recoveryNames []string
+	database.durablePublishMu.Lock()
+	for _, resources := range database.durableRoot.slotResources {
+		for _, token := range resources.Tokens() {
+			if token.Kind() == rootpublication.ResourceOuterLeafManifest {
+				recoveryNames = append(recoveryNames, token.ResourceID())
+			}
+		}
+	}
+	database.durablePublishMu.Unlock()
+	if len(recoveryNames) < 2 {
+		t.Fatalf("both recovery slots not represented: %v", recoveryNames)
+	}
+	for range 5 {
+		closure, err := database.PrepareLeafGenerationManifestStableClosure()
+		if err != nil {
+			t.Fatal(err)
+		}
+		closure.Release()
+	}
+	if _, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	files := revisionFiles5066(t, dir)
+	if !files[heldName] {
+		t.Fatalf("held snapshot revision %s deleted", heldName)
+	}
+	for _, name := range recoveryNames {
+		if !files[name] {
+			t.Fatalf("recoverable slot revision %s deleted", name)
+		}
+	}
+	got, err := held.Get([]byte("revision-0000"))
+	if err != nil || len(got) != 32 || got[0] != 'a' {
+		t.Fatalf("held row=%q err=%v", got, err)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Supersede both old durable slots through ordinary complete root writes.
+	writeLeafGenerationKeys(t, database, "revision", 64, 'c')
+	writeLeafGenerationKeys(t, database, "revision", 64, 'd')
+	stats, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.ManifestRevisionsDeleted == 0 {
+		t.Fatalf("released old closure was not reclaimed: %+v", stats)
+	}
+	files = revisionFiles5066(t, dir)
+	if files[heldName] {
+		t.Fatalf("released held revision still retained: %s", heldName)
+	}
+	got, err = database.Get([]byte("revision-0000"))
+	if err != nil || len(got) != 32 || got[0] != 'd' {
+		t.Fatalf("current row=%q err=%v", got, err)
+	}
+}
+
+func TestLeafManifestRevisionGCReadOnly5066(t *testing.T) {
+	opts := Options{Dir: t.TempDir(), IndexOuterLeavesInValueLog: true, DisableBackgroundPrune: true}
+	database, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		closure, err := database.PrepareLeafGenerationManifestStableClosure()
+		if err != nil {
+			t.Fatal(err)
+		}
+		closure.Release()
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	opts.ReadOnly = true
+	database, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	before := revisionFiles5066(t, LeafLogDirPath(opts.Dir))
+	if _, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{}); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("apply read-only: %v", err)
+	}
+	if _, err := database.LeafGenerationGC(context.Background(), LeafGenerationGCOptions{DryRun: true}); err != nil {
+		t.Fatalf("dry read-only: %v", err)
+	}
+	after := revisionFiles5066(t, LeafLogDirPath(opts.Dir))
+	if len(after) != len(before) {
+		t.Fatalf("read-only changed revisions: %d -> %d", len(before), len(after))
+	}
+}

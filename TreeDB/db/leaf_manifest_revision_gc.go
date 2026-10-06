@@ -42,10 +42,21 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 	if err := roots.Revalidate(); err != nil {
 		return err
 	}
+	// Freeze snapshot admission while consulting existing stale-view generation
+	// pins. Ordinary snapshots retain these pins, not a manifest token.
+	db.rootReuseMu.Lock()
+	defer db.rootReuseMu.Unlock()
 	if db.leafGenerationManifestStore == nil {
 		return rootpublication.ErrUnresolvedResource
 	}
-	return db.leafGenerationManifestStore.gcRevisions(ctx, opts, stats)
+	return db.leafGenerationManifestStore.gcRevisionsWithHeldViews(ctx, opts, stats, func(m *leafGenerationManifest) bool {
+		for _, gen := range m.Generations {
+			if db.leafGenerationPins.count(gen.GenerationID) > 0 {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 type leafManifestRevisionGCFile struct {
@@ -53,9 +64,14 @@ type leafManifestRevisionGCFile struct {
 	file     *os.File
 	identity rootpublication.StableIdentity
 	size     int64
+	manifest *leafGenerationManifest
 }
 
 func (s *leafGenerationManifestStore) gcRevisions(ctx context.Context, opts LeafGenerationGCOptions, stats *LeafGenerationGCStats) error {
+	return s.gcRevisionsWithHeldViews(ctx, opts, stats, nil)
+}
+
+func (s *leafGenerationManifestStore) gcRevisionsWithHeldViews(ctx context.Context, opts LeafGenerationGCOptions, stats *LeafGenerationGCStats, held func(*leafGenerationManifest) bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -150,6 +166,7 @@ func (s *leafGenerationManifestStore) gcRevisions(ctx context.Context, opts Leaf
 			if err != nil {
 				return err
 			}
+			files[len(files)-1].manifest = manifest
 			if name != leafGenerationDurableManifestFileName(manifest.ManifestRevision) {
 				return rootpublication.ErrResourceConflict
 			}
@@ -173,7 +190,7 @@ func (s *leafGenerationManifestStore) gcRevisions(ctx context.Context, opts Leaf
 			return err
 		}
 		stats.ManifestRevisionsTotal++
-		if f.name == currentName {
+		if f.name == currentName || (held != nil && held(f.manifest)) {
 			stats.ManifestRevisionsProtected++
 			continue
 		}
@@ -216,6 +233,12 @@ func (s *leafGenerationManifestStore) deleteRevisionLocked(f leafManifestRevisio
 		return err
 	}
 	_ = placeholder.Close()
+	if s.hooks.BeforeRename != nil {
+		if err := s.hooks.BeforeRename(); err != nil {
+			_ = rootpublication.RemoveStableChildFile(s.parent, quarantine)
+			return err
+		}
+	}
 	if err := rootpublication.RenameStableChildFile(s.parent, f.name, quarantine); err != nil {
 		_ = rootpublication.RemoveStableChildFile(s.parent, quarantine)
 		return err
