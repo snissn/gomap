@@ -288,6 +288,7 @@ func materializeCapturedRaftSnapshotV1(ctx context.Context, files *snapshotCaptu
 	options.Dir = mainDir
 	options.ReadOnly = true
 	options.PhysicalSnapshotSideStoreCapture = nil
+	options.DictionaryIndexGenerationLease = nil
 	closeSides, err := wireRaftSnapshotSideStoreLookupsV1(sideDir, &options)
 	if err != nil {
 		return raftcluster.RaftSnapshotV1{}, err

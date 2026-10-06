@@ -93,6 +93,7 @@ func openReadOnly(opts Options) (*DB, error) {
 	db := &DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
+		dictionaryIndexGenerationLease:     opts.DictionaryIndexGenerationLease,
 
 		readOnly:                       true,
 		resolvedProfile:                opts.ResolvedProfile,
@@ -258,6 +259,7 @@ func openReadOnlyNoLock(opts Options) (*DB, error) {
 	db := &DB{
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
+		dictionaryIndexGenerationLease:     opts.DictionaryIndexGenerationLease,
 
 		readOnly:                       true,
 		resolvedProfile:                opts.ResolvedProfile,

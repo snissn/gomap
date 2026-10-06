@@ -2782,6 +2782,28 @@ func (db *DB) validateGenericDurableDependencyEntry(builder *rootpublication.Sta
 	if entry.LogicalLane == "" || entry.ResourceID == "" || len(entry.Reachability) == 0 {
 		return fmt.Errorf("%w: durable dependency %q lane=%q resource_id=%q reachability=%d", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath, entry.LogicalLane, entry.ResourceID, len(entry.Reachability))
 	}
+	var generationRelease func()
+	if rootpublication.ClaimsDictionaryIndexGenerationV1(entry) {
+		if err := rootpublication.ValidateDictionaryIndexGenerationEntryV1(entry); err != nil {
+			return err
+		}
+		if db.dictionaryIndexGenerationLease == nil {
+			return fmt.Errorf("%w: canonical dictdb index lacks generation owner", rootpublication.ErrUnresolvedResource)
+		}
+		var err error
+		generationRelease, err = db.dictionaryIndexGenerationLease(entry)
+		defer func() {
+			if generationRelease != nil {
+				generationRelease()
+			}
+		}()
+		if err != nil {
+			return err
+		}
+		if generationRelease == nil {
+			return fmt.Errorf("%w: dictionary generation owner returned no lease", rootpublication.ErrUnresolvedResource)
+		}
+	}
 	path, err := durableDependencyPathForKindV1(db.dir, "", entry.Kind, entry.DiagnosticPath)
 	if err != nil {
 		return fmt.Errorf("%w: invalid durable dependency path %q", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath)
@@ -2841,7 +2863,8 @@ func (db *DB) validateGenericDurableDependencyEntry(builder *rootpublication.Sta
 			Generation: entry.Generation, DiagnosticPath: entry.DiagnosticPath, File: file,
 			Frontier: entry.Frontier, Digest: entry.Digest, Reachability: reachability,
 			Namespace: namespace, LogicalObligations: obligations, ContentSynced: true, PinRegistry: registry,
-			OnRelease: func() { _ = registry.Unobserve(identity) },
+			OnRelease:           func() { _ = registry.Unobserve(identity) },
+			OnLastPinnedRelease: generationRelease,
 		}, policy.Classification)
 		if err != nil {
 			if observed {
@@ -2851,6 +2874,7 @@ func (db *DB) validateGenericDurableDependencyEntry(builder *rootpublication.Sta
 			return err
 		}
 		observed = false
+		generationRelease = nil // Successful construction owns the one pinned family lease.
 		if err := builder.Add(token); err != nil {
 			token.Release()
 			namespace.Release()

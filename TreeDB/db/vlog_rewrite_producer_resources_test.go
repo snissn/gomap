@@ -5,6 +5,7 @@ package db
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"testing"
@@ -321,6 +322,263 @@ func TestRewriteExactClosureReplayLeafProducerSharesRIDNamespace(t *testing.T) {
 		got, ok := byRID[startRID+uint64(i)]
 		if !ok || got.FileID != ptr.FileID || got.Offset != ptr.Offset || page.ValuePtrIsGrouped(got) != page.ValuePtrIsGrouped(ptr) || page.ValuePtrSubIndex(got) != page.ValuePtrSubIndex(ptr) {
 			t.Fatalf("RID %d resolved=%+v found=%v want %+v", startRID+uint64(i), got, ok, ptr)
+		}
+	}
+}
+
+// The installed production adapters must share immutable dictionary authority
+// across every stable append belonging to one private COW Apply attempt.
+func TestApplyLeafDictionaryCaptureIsAttemptScoped(t *testing.T) {
+	for _, replay := range []bool{false, true} {
+		t.Run(fmt.Sprintf("replay=%v", replay), func(t *testing.T) {
+			database, writer, _, _ := setupExactRewritePair(t)
+			if replay {
+				writer = installExactRewriteReplayLeafProducer(t, database)
+			}
+			pages := [][]byte{buildRewriteLeafPageFixture(t, "scope-a"), buildRewriteLeafPageFixture(t, "scope-b"), buildRewriteLeafPageFixture(t, "scope-c")}
+			compact := make([][]byte, len(pages))
+			for i := range pages {
+				var err error
+				compact[i], _, err = valuelog.MaybeCompactLeafLogPayload(pages[i])
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			const dictID = uint64(7408)
+			dictionary, err := zstd.BuildDict(zstd.BuildDictOptions{ID: uint32(dictID), Contents: compact, History: append([]byte(nil), compact[0]...), Offsets: [3]int{1, 4, 8}, Level: zstd.SpeedFastest})
+			if err != nil {
+				t.Fatal(err)
+			}
+			provider := newTestStableDictionaryProvider(t, dictID, dictionary)
+			database.SetStableDictionaryResourceProvider(provider)
+			writer.blockCompression = true
+			writer.SetLeafDictMode(dictID, dictionary, false)
+			capture, err := newApplyLeafResourceLog(database.leafPageLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer capture.abandon()
+			for i, data := range pages {
+				var log LeafPageLog = capture
+				if !replay && i == 1 {
+					var ok bool
+					log, ok = capture.LeafPageLogLane(1)
+					if !ok {
+						t.Fatal("installed rewrite producer did not expose cloned lane")
+					}
+				}
+				if _, err := log.AppendLeafPage(data); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := provider.captureCalls.Load(); got != 1 {
+				t.Fatalf("dictionary captures=%d want one per Apply attempt", got)
+			}
+			resources, err := capture.freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resources.Release()
+			if provider.releaseCalls.Load() != 0 {
+				t.Fatal("provider snapshot lease released before frozen output")
+			}
+			if err := ValidateStableDictionaryResourceClosure(resources, dictID, dictionary); err != nil {
+				t.Fatalf("frozen dictionary authority: %v", err)
+			}
+			next, err := newApplyLeafResourceLog(database.leafPageLog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := next.AppendLeafPage(pages[0]); err != nil {
+				t.Fatal(err)
+			}
+			next.abandon()
+			if provider.captureCalls.Load() != 2 || provider.releaseCalls.Load() != 1 {
+				t.Fatalf("retry ownership captures=%d releases=%d", provider.captureCalls.Load(), provider.releaseCalls.Load())
+			}
+			if err := provider.file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for _, token := range resources.Tokens() {
+				if token.Kind() != rootpublication.ResourceDictionary {
+					continue
+				}
+				got := make([]byte, len(dictionary))
+				if _, err := token.ReadAt(got, 0); err != nil || !bytes.Equal(got, dictionary) {
+					t.Fatalf("frozen exact dictionary pin lost after scope/provider release: %v", err)
+				}
+			}
+			resources.Release()
+			if provider.releaseCalls.Load() != 2 {
+				t.Fatal("frozen output leaked provider snapshot lease")
+			}
+		})
+	}
+}
+
+type nonComparableDictionaryProvider struct {
+	provider *testStableDictionaryProvider
+	unused   []byte
+}
+
+func (p nonComparableDictionaryProvider) CaptureDictionaryResources(ctx context.Context, id uint64) (*rootpublication.StableResourceSet, error) {
+	return p.provider.CaptureDictionaryResources(ctx, id)
+}
+
+func TestApplyLeafDictionaryCaptureAuthorityBoundaries(t *testing.T) {
+	const id = uint64(7410)
+	dictionary := []byte("immutable writer dictionary definition")
+	writer := &rewriteWriter{}
+	writer.SetLeafDictMode(id, dictionary, false)
+	definition := append([]byte(nil), writer.leafDict...)
+	dictionary[0] ^= 1
+	if !bytes.Equal(writer.leafDict, definition) {
+		t.Fatal("writer retained mutable caller dictionary bytes")
+	}
+	provider := newTestStableDictionaryProvider(t, id, definition)
+	var scope applyLeafDictionaryCapture
+	defer scope.release()
+	capture := func(provider StableDictionaryResourceProvider) {
+		t.Helper()
+		resources, err := scope.capture(context.Background(), writer, provider, id, writer.leafDict)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resources.Release()
+	}
+	capture(provider)
+	capture(provider)
+	if provider.captureCalls.Load() != 1 {
+		t.Fatal("unchanged immutable definition was recaptured")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if resources, err := scope.capture(ctx, writer, provider, id, writer.leafDict); resources != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled reuse returned resources=%v err=%v", resources != nil, err)
+	}
+	other := newTestStableDictionaryProvider(t, id, definition)
+	capture(other)
+	if other.captureCalls.Load() != 1 {
+		t.Fatal("provider replacement reused another provider's authority")
+	}
+	writer.SetLeafDictMode(id, definition, false)
+	capture(provider)
+	if provider.captureCalls.Load() != 2 {
+		t.Fatal("same-ID reconfiguration reused an earlier definition")
+	}
+	writer.SetLeafDictMode(id, []byte("mismatched same-ID definition"), false)
+	for i := 0; i < 2; i++ {
+		resources, err := scope.capture(context.Background(), writer, provider, id, writer.leafDict)
+		if resources != nil || !errors.Is(err, rootpublication.ErrResourceConflict) {
+			t.Fatalf("changed definition reused authority: resources=%v err=%v", resources != nil, err)
+		}
+	}
+	if provider.captureCalls.Load() != 4 {
+		t.Fatal("failed validation was retained as reusable authority")
+	}
+	writer.SetLeafDictMode(id, definition, false)
+	generic := nonComparableDictionaryProvider{provider: provider}
+	capture(generic)
+	capture(generic)
+	if provider.captureCalls.Load() != 6 {
+		t.Fatal("unidentifiable provider skipped full validation")
+	}
+	scope.release()
+	if provider.releaseCalls.Load() != provider.captureCalls.Load() || other.releaseCalls.Load() != other.captureCalls.Load() {
+		t.Fatal("attempt abandon leaked captured authority")
+	}
+}
+
+type snapshotDictionaryProvider struct {
+	*testStableDictionaryProvider
+	database *DB
+}
+
+func (p *snapshotDictionaryProvider) CaptureDictionaryResources(ctx context.Context, id uint64) (*rootpublication.StableResourceSet, error) {
+	resources, err := p.testStableDictionaryProvider.CaptureDictionaryResources(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	snapshot := p.database.AcquireStableSnapshot()
+	if snapshot == nil {
+		resources.Release()
+		return nil, ErrClosed
+	}
+	token, err := snapshot.NewStableIndexGenerationResourceToken(rootpublication.StableResourceSpec{
+		Kind: rootpublication.ResourceDictionary, LogicalLane: "test/dictionary-index", ResourceID: "index",
+		Digest: sha256.Sum256([]byte("test-dictionary-index")), ContentSynced: true,
+		Reachability: rootpublication.ReachabilityDictionaryGeneration,
+		LogicalObligations: []rootpublication.StableLogicalObligation{{
+			Class: "dictionary-generation", Kind: "dictionary", Namespace: "test", Generation: id, FileID: id,
+			Length: int64(len(p.dictionary)), Reachability: rootpublication.ReachabilityDictionaryGeneration,
+			Digest: sha256.Sum256(p.dictionary),
+		}},
+	}, rootpublication.NewStableResourceToken)
+	if err != nil {
+		resources.Release()
+		_ = snapshot.Close()
+		return nil, err
+	}
+	builder := rootpublication.NewStableResourceSetBuilder()
+	defer builder.Abandon()
+	if err := builder.Merge(resources); err != nil {
+		resources.Release()
+		token.Release()
+		return nil, err
+	}
+	if err := builder.Add(token); err != nil {
+		token.Release()
+		return nil, err
+	}
+	return builder.Freeze()
+}
+
+func TestApplyLeafDictionaryCaptureRetainsSnapshotFence(t *testing.T) {
+	database, err := Open(Options{Dir: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	const id = uint64(7412)
+	dictionary := []byte("dictionary with real stable index capture lease")
+	provider := &snapshotDictionaryProvider{testStableDictionaryProvider: newTestStableDictionaryProvider(t, id, dictionary), database: database}
+	writer := &rewriteWriter{}
+	writer.SetLeafDictMode(id, dictionary, false)
+	for _, abandon := range []bool{false, true} {
+		capture, err := newApplyLeafResourceLog(&stableContractTestLeafLog{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 3; i++ {
+			resources, err := capture.capture.dictionaries.capture(context.Background(), writer, provider, id, writer.leafDict)
+			if err != nil || resources != nil {
+				capture.abandon()
+				t.Fatalf("private authority capture resources=%v err=%v", resources != nil, err)
+			}
+		}
+		if database.stableIndexCaptures.Load() != 1 {
+			capture.abandon()
+			t.Fatal("cached authority lost original stable snapshot fence")
+		}
+		if abandon {
+			capture.abandon()
+		} else {
+			resources, err := capture.freeze()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if database.stableIndexCaptures.Load() != 1 {
+				resources.Release()
+				t.Fatal("freeze released provider fence before output release")
+			}
+			if err := database.VacuumIndexOnline(context.Background()); !errors.Is(err, rootpublication.ErrResourcePinned) {
+				resources.Release()
+				t.Fatalf("vacuum crossed live dictionary fence: %v", err)
+			}
+			resources.Release()
+		}
+		if database.stableIndexCaptures.Load() != 0 || provider.releaseCalls.Load() != provider.captureCalls.Load() {
+			t.Fatal("completed attempt leaked original snapshot authority")
 		}
 	}
 }

@@ -15,7 +15,13 @@ import (
 )
 
 // StableDictionaryResourceProvider captures the exact durable transitive
-// closure needed to decode one dictionary generation.
+// closure needed to decode one dictionary generation. A provider may explicitly
+// certify GenerationScopedDictionaryResources() bool for private Apply reuse:
+// independent exact token clones must retain a generation-wide maintenance fence
+// after the original snapshot/token-local callbacks end. Physical coalescing may
+// retain either equivalent generation representative; logical aliases must not
+// require historical snapshot owners. Providers without this certification retain
+// full capture/move behavior on each append.
 type StableDictionaryResourceProvider interface {
 	CaptureDictionaryResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
 }
@@ -335,6 +341,19 @@ func (snapshot *Snapshot) StableValueLogRecordLength(ptr page.ValuePtr) (uint32,
 // index handle and namespace owned by this stable snapshot. The token takes
 // ownership of the snapshot maintenance pin on success.
 func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)) (*rootpublication.StableResourceToken, error) {
+	return snapshot.newStableIndexResourceToken(spec, constructor, false)
+}
+
+// NewStableIndexGenerationResourceToken additionally retains the namespace
+// replacement fence through the last shared physical handle reference. Only
+// the lightweight counter lease is shared; snapshot readers/state and caller
+// OnRelease remain owned by the original token. External transitive authority
+// uses this method; the DB's own candidate index capture remains token-local.
+func (snapshot *Snapshot) NewStableIndexGenerationResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)) (*rootpublication.StableResourceToken, error) {
+	return snapshot.newStableIndexResourceToken(spec, constructor, true)
+}
+
+func (snapshot *Snapshot) newStableIndexResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error), generationFence bool) (*rootpublication.StableResourceToken, error) {
 	if snapshot == nil || constructor == nil {
 		return nil, fmt.Errorf("%w: stable index snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
@@ -382,11 +401,25 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		spec.Frontier.Bytes = uint64(info.Size())
 		spec.Namespace = namespace
 		spec.PinRegistry = registry
+		releaseFence := func() {
+			if leaseTransferred.CompareAndSwap(true, false) && captureCounter != nil {
+				captureCounter.Add(-1)
+			}
+		}
+		if generationFence {
+			callerLastRelease := spec.OnLastPinnedRelease
+			spec.OnLastPinnedRelease = func() {
+				releaseFence()
+				if callerLastRelease != nil {
+					callerLastRelease()
+				}
+			}
+		}
 		callerRelease := spec.OnRelease
 		spec.OnRelease = func() {
 			_ = snapshot.Close()
-			if leaseTransferred.CompareAndSwap(true, false) && captureCounter != nil {
-				captureCounter.Add(-1)
+			if !generationFence {
+				releaseFence()
 			}
 			if callerRelease != nil {
 				callerRelease()

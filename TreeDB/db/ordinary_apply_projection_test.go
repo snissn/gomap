@@ -12,6 +12,40 @@ import (
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
+func TestOrdinaryApplyLeafCaptureForwardsPreparedCapabilities(t *testing.T) {
+	database, producer, _ := openLeafLogLaneReadTestDB(t, -1)
+	defer closeLeafLogLaneGCTestDB(t, database, producer)
+	// Reinstalling the existing group keeps the real hint view outside it.
+	database.SetLeafPageLog(database.leafPageLog)
+	capture, err := newApplyLeafResourceLog(database.leafPageLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer capture.abandon()
+	if provider, ok := any(capture).(interface{ LeafPageLogLaneAny(int) (any, bool) }); !ok {
+		t.Fatal("Apply wrapper omitted the zipper-compatible lane bridge")
+	} else if lane, ok := provider.LeafPageLogLaneAny(1); !ok || lane == nil {
+		t.Fatal("Apply wrapper did not forward the zipper-compatible lane")
+	}
+	lane, ok := capture.LeafPageLogLane(1)
+	if !ok {
+		t.Fatal("installed producer lacks cloned lane")
+	}
+	for _, log := range []*applyLeafResourceLog{capture, lane.(*applyLeafResourceLog)} {
+		if log.PreparedLeafPageAppends() || log.PreparedLeafPageBatchAppends() {
+			t.Fatal("Apply wrapper advertised prepared payloads rejected by installed producer")
+		}
+	}
+	generic, err := newApplyLeafResourceLog(&stableContractTestLeafLog{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer generic.abandon()
+	if !generic.PreparedLeafPageAppends() || !generic.PreparedLeafPageBatchAppends() {
+		t.Fatal("generic prepared stable producer lost its supported capability")
+	}
+}
+
 func TestOrdinaryExactClosureDeletesRangesAndInlineReplacement(t *testing.T) {
 	db, _, old, fresh := setupExactRewritePairWithValueLogOptions(t, ValueLogOptions{})
 	scans := 0

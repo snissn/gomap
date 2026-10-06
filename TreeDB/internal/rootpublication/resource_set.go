@@ -958,6 +958,23 @@ func (builder *StableResourceSetBuilder) addToViewsLocked(token *StableResourceT
 	return nil
 }
 
+// preferIncomingStableResourceRepresentative preserves both exact namespace
+// authority and the optional shared physical-generation fence. A recovered
+// token can have the former without the latter. Coalescing must not discard a
+// newly captured fence merely because the old token already has a namespace.
+// Incomparable authorities cannot be represented by either single handle family;
+// reject them before committing metadata or consuming source ownership.
+func preferIncomingStableResourceRepresentative(existing, incoming *StableResourceToken) (bool, error) {
+	addsNamespace := existing.namespace == nil && incoming.namespace != nil
+	losesNamespace := existing.namespace != nil && incoming.namespace == nil
+	addsFence := existing.onLastPinnedRelease == nil && incoming.onLastPinnedRelease != nil
+	losesFence := existing.onLastPinnedRelease != nil && incoming.onLastPinnedRelease == nil
+	if (addsNamespace || addsFence) && (losesNamespace || losesFence) {
+		return false, fmt.Errorf("%w: incomparable namespace and physical-generation authority %+v", ErrResourceConflict, existing.identityKey())
+	}
+	return addsNamespace || addsFence, nil
+}
+
 func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResourceToken) error {
 	logicalKey := token.logicalKey()
 	for i := range *entries {
@@ -976,13 +993,17 @@ func mergeOwnedTokenLinear(entries *[]stableResourceEntry, token *StableResource
 		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
+		replaceRepresentative, err := preferIncomingStableResourceRepresentative(existing, token)
+		if err != nil {
+			return err
+		}
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, newStableLogicalObligationView(token.logicalObligations)); err != nil {
 			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability[token.reachability] = struct{}{}
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
-		if existing.namespace == nil && token.namespace != nil {
+		if replaceRepresentative {
 			entry.token = token
 			entry.pins = nil
 			entry.pinIndex = nil
@@ -1033,15 +1054,19 @@ func mergeOwnedToken(entries *[]stableResourceEntry, lookup *stableResourceEntry
 		if !existing.namespaceCompatible(token) || !frontierCompatible(entry.frontier, token.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
+		replaceRepresentative, err := preferIncomingStableResourceRepresentative(existing, token)
+		if err != nil {
+			return err
+		}
 		if err := mergeStableLogicalObligations(&entry.logicalObligations, newStableLogicalObligationView(token.logicalObligations)); err != nil {
 			return err
 		}
 		entry.frontier = maxFrontier(entry.frontier, token.frontier)
 		entry.reachability[token.reachability] = struct{}{}
 		mergeStableResourceDescriptorIdentity(entry, token.logicalLane, token.resourceID, token.diagnosticPath)
-		if existing.namespace == nil && token.namespace != nil {
-			// Preserve the one namespace-creation obligation independently of
-			// insertion order by making its exact-handle token representative.
+		if replaceRepresentative {
+			// Preserve namespace and generation authority independently of
+			// insertion order by retaining the stronger exact-handle family.
 			entry.token = token
 			lookup.replaceRepresentative(i, existing, token)
 			entry.pins = nil
@@ -1163,6 +1188,10 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 		if !existing.namespaceCompatible(incoming.token) || (mode != stableResourceViewValidatedCount && !frontierCompatible(entry.frontier, incoming.frontier)) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
+		replaceRepresentative, err := preferIncomingStableResourceRepresentative(existing, incoming.token)
+		if err != nil {
+			return err
+		}
 		if mode != stableResourceViewPhysicalPinned && mode != stableResourceViewPhysicalCount {
 			if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
 				return err
@@ -1185,7 +1214,7 @@ func mergeViewEntry(entries *[]stableResourceEntry, lookup *stableResourceEntryL
 				appendUniquePins(entry, incoming.pins...)
 			}
 		}
-		if existing.namespace == nil && incoming.token.namespace != nil {
+		if replaceRepresentative {
 			entry.token = incoming.token
 			lookup.replaceRepresentative(i, existing, incoming.token)
 			if mode != stableResourceViewPinned && mode != stableResourceViewPhysicalPinned {
@@ -1233,6 +1262,10 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 		if !existing.namespaceCompatible(incoming.token) || (mode != stableResourceViewValidatedCount && !frontierCompatible(entry.frontier, incoming.frontier)) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
+		replaceRepresentative, err := preferIncomingStableResourceRepresentative(existing, incoming.token)
+		if err != nil {
+			return err
+		}
 		if mode != stableResourceViewPhysicalPinned && mode != stableResourceViewPhysicalCount {
 			if err := mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations); err != nil {
 				return err
@@ -1255,7 +1288,7 @@ func mergeViewEntryLinear(entries *[]stableResourceEntry, incoming stableResourc
 				appendUniquePins(entry, incoming.pins...)
 			}
 		}
-		if existing.namespace == nil && incoming.token.namespace != nil {
+		if replaceRepresentative {
 			entry.token = incoming.token
 			if mode != stableResourceViewPinned && mode != stableResourceViewPhysicalPinned {
 				entry.pins = nil
@@ -1295,6 +1328,10 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 		if !existing.namespaceCompatible(incoming.token) || !frontierCompatible(entry.frontier, incoming.frontier) {
 			return fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 		}
+		replaceRepresentative, err := preferIncomingStableResourceRepresentative(existing, incoming.token)
+		if err != nil {
+			return err
+		}
 		if incoming.logicalObligations.directory != nil {
 			err = mergeStableLogicalObligations(&entry.logicalObligations, incoming.logicalObligations)
 		} else {
@@ -1308,7 +1345,7 @@ func mergeAppendOnlyViewEntryLinear(entries *[]stableResourceEntry, incoming sta
 		for field := range incoming.reachability {
 			entry.reachability[field] = struct{}{}
 		}
-		if existing.namespace == nil && incoming.token.namespace != nil {
+		if replaceRepresentative {
 			entry.token = incoming.token
 			entry.pins = nil
 			entry.pinIndex = nil
@@ -1957,7 +1994,12 @@ func certifiedAppendOnlyPhysicalCoalesce(target, incoming map[ResourceKind]stabl
 			}
 			// Representative replacement remains on the exact path because the
 			// canonical token would otherwise move between ownership ropes.
-			if existing.token.namespace == nil && child.token.namespace != nil {
+			replaceRepresentative, authorityErr := preferIncomingStableResourceRepresentative(existing.token, child.token)
+			if authorityErr != nil {
+				preflightErr = authorityErr
+				return false
+			}
+			if replaceRepresentative {
 				certified = false
 				return false
 			}
@@ -2323,6 +2365,11 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 				err = fmt.Errorf("%w: incompatible duplicate stable identity %+v", ErrResourceConflict, existing.identityKey())
 				break
 			}
+			replaceRepresentative, authorityErr := preferIncomingStableResourceRepresentative(existing, incoming.token)
+			if authorityErr != nil {
+				err = authorityErr
+				break
+			}
 			incomingValues := incoming.logicalObligations.deltaSlice()
 			entry.logicalObligations, err = entry.logicalObligations.appendCertified(incomingValues, &work)
 			if err != nil {
@@ -2333,7 +2380,7 @@ func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(c
 			for field := range incoming.reachability {
 				entry.reachability[field] = struct{}{}
 			}
-			if existing.namespace == nil && incoming.token.namespace != nil {
+			if replaceRepresentative {
 				entry.token = incoming.token
 				lookup.replaceRepresentative(i, existing, incoming.token)
 				entry.pins = nil
@@ -3706,7 +3753,9 @@ func CloneStableResourceSetForLogicalObligationsWithWork(source *StableResourceS
 			work.CopiedEntries++
 			var cloned *StableResourceToken
 			var namespace *StableNamespaceToken
-			if allFieldsUnscoped {
+			// A generation fence belongs to the exact shared handle family even
+			// when logical filtering narrows its immutable obligation view.
+			if allFieldsUnscoped || token.onLastPinnedRelease != nil {
 				if err := token.namespace.validateStable(); err != nil {
 					return nil, work, err
 				}

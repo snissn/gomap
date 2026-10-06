@@ -1246,6 +1246,10 @@ func (a *replayInlineAppender) AppendLeafPage(leafPage []byte) (page.LeafLogPtr,
 // replay wrapper. Registration failure releases the set; success transfers it
 // to the COW publication collector, whose existing abort/success paths own it.
 func (a *replayInlineAppender) appendLeafPagesWithStableResources(leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return a.appendLeafPagesWithDictionaryCapture(leafPages, nil)
+}
+
+func (a *replayInlineAppender) appendLeafPagesWithDictionaryCapture(leafPages [][]byte, dictionaries *applyLeafDictionaryCapture) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if a == nil {
 		return nil, nil, fmt.Errorf("commitlog: replay leaf-page log unavailable")
 	}
@@ -1254,7 +1258,7 @@ func (a *replayInlineAppender) appendLeafPagesWithStableResources(leafPages [][]
 	if a.writer == nil {
 		return nil, nil, fmt.Errorf("commitlog: replay leaf-page log unavailable")
 	}
-	ptrs, resources, err := a.writer.AppendLeafPagesWithStableResources(leafPages)
+	ptrs, resources, err := a.writer.appendLeafPagesWithDictionaryCapture(leafPages, dictionaries)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -66,6 +66,10 @@ func newTestStableDictionaryProvider(t *testing.T, dictID uint64, dictionary []b
 	return &testStableDictionaryProvider{file: file, dictID: dictID, dictionary: append([]byte(nil), dictionary...)}
 }
 
+// This fixture explicitly certifies a shared physical lifetime; its callback
+// observes that lifetime rather than an arbitrary token-local provider owner.
+func (provider *testStableDictionaryProvider) GenerationScopedDictionaryResources() bool { return true }
+
 func (provider *testStableDictionaryProvider) CaptureDictionaryResources(_ context.Context, dictID uint64) (*rootpublication.StableResourceSet, error) {
 	provider.captureCalls.Add(1)
 	if provider == nil || provider.file == nil || dictID != provider.dictID {
@@ -86,7 +90,7 @@ func (provider *testStableDictionaryProvider) CaptureDictionaryResources(_ conte
 			Digest:             sha256.Sum256([]byte("test-dictionary-physical-v1")),
 			Reachability:       rootpublication.ReachabilityDictionaryGeneration,
 			LogicalObligations: []rootpublication.StableLogicalObligation{logical}, ContentSynced: true,
-			OnRelease: func() { provider.releaseCalls.Add(1) },
+			OnLastPinnedRelease: func() { provider.releaseCalls.Add(1) },
 		},
 		"authoritative-transitive",
 	)

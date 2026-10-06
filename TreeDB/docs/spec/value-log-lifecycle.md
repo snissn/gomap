@@ -447,6 +447,73 @@ frozen resources release on abort/conflict, and successful publication transfers
 ownership to the existing slot/runtime resource sets. Dictionary/template proofs
 and packed-generation authority retain their existing inherited-closure rules.
 
+Within one private Apply chain, the installed rewrite producer captures each
+immutable writer-owned dictionary definition once per identifiable provider that
+explicitly certifies `GenerationScopedDictionaryResources`. Cloned lanes share
+that definition. The attempt owner retains each original closure and provider
+snapshot lease through freeze. It derives an independent exact token view using
+the closure's complete dictionary-generation obligations, then releases the
+original snapshot/read state and provider callbacks; abandon releases originals
+without producing a view. A kind-only clone can share original token chunks and
+their snapshot owner, so that clone alone does not provide this boundary.
+Private append captures omit duplicate
+dictionary closures; public stable append APIs keep their full closure contract.
+A later attempt captures afresh.
+Reconfiguration installs new immutable bytes, including reuse of a logical ID,
+and provider replacement selects new authority. Uncertified or unidentifiable
+providers and arbitrary definitions continue to capture and validate on every
+append. Capture
+errors are never retained. Provider relocation does not invalidate a pinned
+immutable definition: the retained closure still names its exact prior physical
+generation, without reopening paths or substituting a newer generation. Generic
+stable producers keep their original append/capture behavior. This bounds repeated
+dictionary decoding and hashing by definitions per attempt, rather than output
+leaves; retention is limited to the closures needed by that attempt.
+
+dictdb's external index authority explicitly uses
+`NewStableIndexGenerationResourceToken`. Its original token still owns
+`Snapshot.Close` and any caller `OnRelease`; only the stable-index maintenance
+counter follows the exact shared file-handle family through
+`OnLastPinnedRelease`. This lightweight fence prevents online vacuum from
+renaming/unlinking the namespace generation while candidate, queued, pending,
+or physical-only coordinator views still name it. Logical filtering preserves
+the same handle family. Coalescing overlapping captures retains one physical
+representative and ends the discarded capture's fence. If the existing
+representative has namespace authority but no inherited generation fence,
+coalescing selects the fresh fenced representative; certified append falls back
+to exact composition for this replacement. Selection preserves both namespace
+and generation authority. Incomparable generic authorities fail before source
+ownership transfers rather than silently dropping either protection. Coalescing
+never unions lists of prior Apply owners or retains prior snapshot state. The
+surviving fence ends once at the final handle release. The DB's own `ResourceIndex` capture continues
+to use the token-local maintenance lease, so durable candidate clones do not
+introduce a persistent fence against the DB's own index vacuum.
+
+Recovery recognizes dictdb's canonical mutable index digest before accepting its
+lane, ID, path, namespace and single dictionary-generation reachability field.
+The public, backend and restored Raft constructors install the concrete side
+backend's expected-generation lease before main durable-slot selection; side
+options clear inherited parent hooks. A missing owner or malformed canonical
+claim fails closed. Custom immutable dictionary producers and template resources
+keep their existing recovery contract.
+
+Under the side backend's maintenance lock, this lease validates the currently
+owned exact index handle, parent/child namespace identity and required frontier,
+then reserves only the stable-index maintenance counter. Persisted generation
+labels do not substitute for physical identity or have to match a reopened
+backend's runtime generation number. The recovered token transfers the lease to
+one exact shared handle family, including retained slots and physical-only
+views. Acquisition or validation failures unwind it; the final handle release
+ends it exactly once. This holds no snapshot, reader, DB state or historical
+Apply group and performs no nested checkpoint, lookup or publication. Recovery
+cannot let a registry pin alone authorize dictdb vacuum's namespace replacement.
+The side owner remains open through main backend and resource-view teardown.
+
+The Apply wrapper also forwards the installed producer's prepared-payload
+capability and the zipper-compatible lane bridge. A hint wrapper exposing an
+optional stable method does not authorize unsupported prepared output; concurrent
+span output continues to use the actual selected lanes and shared Apply owner.
+
 Registry-owned producer creation uses the narrower stable creation capability.
 Windows can certify this operation by validating the exact retained-parent child
 and flushing the exact child handle; it does not require rename, removal, or
