@@ -9,6 +9,8 @@ import (
 	"fmt"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/caching"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
+	"github.com/snissn/gomap/TreeDB/node"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,6 +43,14 @@ type c4Boundary struct {
 	Phase string            `json:"phase"`
 	Stats map[string]string `json:"stats"`
 }
+type c4LayoutProof struct {
+	Phase        string            `json:"phase"`
+	Entries      uint64            `json:"entries"`
+	Pointers     uint64            `json:"pointers"`
+	Inline       uint64            `json:"inline"`
+	OwnersBefore map[string]string `json:"owners_before"`
+	OwnersAfter  map[string]string `json:"owners_after"`
+}
 type c4Record struct {
 	LifecycleOutcome             string                   `json:"lifecycle_outcome"`
 	LifecycleError               string                   `json:"lifecycle_error"`
@@ -65,6 +75,7 @@ type c4Record struct {
 	ReadCutCapability            bool                     `json:"read_cut_capability"`
 	Calls                        []c4Call                 `json:"calls"`
 	Boundaries                   []c4Boundary             `json:"boundaries"`
+	LayoutProofs                 []c4LayoutProof          `json:"layout_proofs"`
 	OracleReceipts               []string                 `json:"oracle_receipts"`
 	NativeEligibility            string                   `json:"native_eligibility"`
 	WholeMaintenanceCharge       string                   `json:"whole_maintenance_charge"`
@@ -182,10 +193,10 @@ func c4History(s *Store, want []Version, ts uint64) (uint64, error) {
 }
 func (r *c4Record) boundary(db *treedb.DB, phase string) error {
 	stats := db.Stats()
-	required := []string{"treedb.cache.snapshot.rotations_total", "treedb.cache.snapshot.rotated_shards_total", "treedb.cache.snapshot.enqueued_records_total", "treedb.commit_seq"}
-	if r.Profile != string(treedb.ProfileNoWALFast) {
-		required = append(required, "treedb.command_wal.append.count_total", "treedb.command_wal.file_sync.calls_total")
+	if err := cowPublicACKRouting(treedb.Profile(r.Profile), stats); err != nil {
+		return err
 	}
+	required := []string{"treedb.cache.snapshot.rotations_total", "treedb.cache.snapshot.rotated_shards_total", "treedb.cache.snapshot.enqueued_records_total", "treedb.commit_seq", "treedb.command_wal.append.count_total", "treedb.command_wal.file_sync.calls_total"}
 	if r.Mode == "cow_btree" {
 		for _, k := range []string{"total_bytes", "history_bytes", "reserved_bytes", "retired_bytes", "peak_bytes", "control_bytes", "deferred_bytes", "external_bytes", "views", "generations", "sources", "external_leases", "active_cuts", "current_roots", "frozen_roots", "capture_calls_total", "prepare_calls_total", "publications_total", "rollovers_total", "handoffs_total"} {
 			required = append(required, "treedb.cache.cow."+k)
@@ -195,6 +206,9 @@ func (r *c4Record) boundary(db *treedb.DB, phase string) error {
 		x, err := strconv.ParseUint(stats[k], 10, 64)
 		if err != nil {
 			return fmt.Errorf("required counter %s: %w", k, err)
+		}
+		if r.Profile == string(treedb.ProfileNoWALFast) && strings.HasPrefix(k, "treedb.command_wal.") && x != 0 {
+			return fmt.Errorf("NoWAL observed nonzero counter %s", k)
 		}
 		if len(r.Boundaries) > 0 && strings.HasSuffix(k, "_total") {
 			prev := r.Boundaries[len(r.Boundaries)-1].Stats[k]
@@ -207,6 +221,79 @@ func (r *c4Record) boundary(db *treedb.DB, phase string) error {
 		}
 	}
 	r.Boundaries = append(r.Boundaries, c4Boundary{phase, stats})
+	return nil
+}
+
+// Representation diagnostics are outside the epoch timer. Each actual public
+// snapshot call is retained; the pure layout validator performs no public calls.
+// MVCC logical tombstones are ordinary stored values and obey the same layout.
+func (r *c4Record) proveLayout(db *treedb.DB, phase string, want []Version, pointers bool) (err error) {
+	proof := c4LayoutProof{Phase: phase, OwnersBefore: map[string]string{}, OwnersAfter: map[string]string{}}
+	ownerKeys := []string{"treedb.cache.cow.views", "treedb.cache.cow.active_cuts", "treedb.cache.cow.external_leases"}
+	if r.Mode == "cow_btree" {
+		stats := db.Stats()
+		for _, k := range ownerKeys {
+			if _, e := strconv.ParseUint(stats[k], 10, 64); e != nil {
+				return fmt.Errorf("layout owner counter %s: %w", k, e)
+			}
+			proof.OwnersBefore[k] = stats[k]
+		}
+	}
+	var snapshot treedb.Snapshot
+	err = r.call(phase, "AcquireSnapshot", 0, func() (uint64, error) {
+		snapshot = db.AcquireSnapshot()
+		if snapshot == nil {
+			return 0, errors.New("layout snapshot unavailable")
+		}
+		return 1, nil
+	})
+	if snapshot != nil {
+		defer func() {
+			err = errors.Join(err, r.call(phase, "Snapshot.Close", 0, func() (uint64, error) { return 0, snapshot.Close() }))
+			if r.Mode == "cow_btree" {
+				stats := db.Stats()
+				for _, k := range ownerKeys {
+					proof.OwnersAfter[k] = stats[k]
+					if stats[k] != proof.OwnersBefore[k] {
+						err = errors.Join(err, fmt.Errorf("layout diagnostic leaked owner %s: %s -> %s", k, proof.OwnersBefore[k], stats[k]))
+					}
+				}
+			}
+			if err == nil {
+				r.LayoutProofs = append(r.LayoutProofs, proof)
+			}
+		}()
+	}
+	if err != nil {
+		return err
+	}
+	for _, version := range want {
+		physical, e := mvcckey.Encode(version.Key, version.Timestamp)
+		if e != nil {
+			return e
+		}
+		if err = r.call(phase, "Snapshot.GetEntryExact", 1, func() (uint64, error) {
+			entry, e := snapshot.GetEntryExact(physical)
+			if e != nil {
+				return 0, e
+			}
+			if !bytes.Equal(entry.Key, physical) {
+				return 0, errors.New("layout physical key mismatch")
+			}
+			if e = cowPublicValueLayout(entry, pointers); e != nil {
+				return 0, e
+			}
+			proof.Entries++
+			if entry.Flags&node.FlagPointer != 0 {
+				proof.Pointers++
+			} else {
+				proof.Inline++
+			}
+			return 1, nil
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func c4Emit(r *c4Record) error {
@@ -295,7 +382,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	if ptr {
 		layout = "forced_pointer"
 	}
-	capacity := n*(epochs*8+8) + 512
+	capacity := n*(epochs*8+8) + 512 + n*(3+6*epochs) + 6
 	r := &c4Record{LifecycleOutcome: "success", SchemaVersion: 1, Leaf: fmt.Sprintf("%s/%s/%s/N%d", p, mode, layout, n), Profile: string(p), Mode: mode, Layout: layout, Keys: n, Epochs: epochs, GroupWidth: c4GroupWidth, PinRing: 2, RecorderCapacity: capacity, Options: opts.COWMemtableLimits, Shards: 4, FlushThreshold: 16 << 20, BackgroundCheckpointInterval: -1, DisableSideStores: true, PointerThreshold: opts.ValueLog.PointerThreshold, ForcePointers: ptr, OrdinaryACK: p.OrdinaryAckClass(), ReadCutCapability: mode == "cow_btree", NativeEligibility: "PENDING", WholeMaintenanceCharge: "PENDING", Qualification: "pending_native_observations", Calls: make([]c4Call, 0, capacity), Boundaries: make([]c4Boundary, 0, epochs*8+16), origin: time.Now()}
 	var db *treedb.DB
 	var pins []*VersionIterator
@@ -325,7 +412,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		if stats["treedb.profile.resolved"] != string(p) || stats["treedb.cache.memtable_mode"] != mode || stats["treedb.profile.ordinary_ack_class"] != p.OrdinaryAckClass() || db.SupportsMVCCReadCut() != (mode == "cow_btree") {
 			return errors.New("resolved mode/profile/ACK/capability mismatch")
 		}
-		return nil
+		return cowPublicACKRouting(p, stats)
 	}
 	if err = validate(); err != nil {
 		return r, err
@@ -436,6 +523,9 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	if err = check("seed_oracle", 0); err != nil {
 		return r, err
 	}
+	if err = r.proveLayout(db, "seed_layout", oracle[0], ptr); err != nil {
+		return r, err
+	}
 	if bench != nil {
 		bench.StartTimer()
 	}
@@ -473,9 +563,11 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		// All concurrent reads use the already committed epoch; replacement writes
 		// preserve bytes and timestamps, making every coherent cut oracle exact.
 		start := make(chan struct{})
+		ready := make(chan struct{}, 3)
 		results := make(chan error, 3)
 		first := len(r.Calls)
 		go func() {
+			ready <- struct{}{}
 			<-start
 			var x error
 			for j := 0; j < n/c4GroupWidth && x == nil; j++ {
@@ -484,6 +576,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 			results <- x
 		}()
 		go func() {
+			ready <- struct{}{}
 			<-start
 			var x error
 			for _, key := range keys {
@@ -501,9 +594,15 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 			results <- x
 		}()
 		go func() {
+			ready <- struct{}{}
 			<-start
 			results <- call(phase+"_overlap", "IterateVersions.full", 0, func() (uint64, error) { return c4History(s, oracle[e], 0) })
 		}()
+		// Join startup before releasing real calls. Readiness itself is not an
+		// overlapping public operation; only the recorded call intervals count.
+		for j := 0; j < 3; j++ {
+			<-ready
+		}
 		close(start)
 		for j := 0; j < 3; j++ {
 			err = errors.Join(err, <-results)
@@ -603,6 +702,9 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		}
 		r.OracleReceipts = append(r.OracleReceipts, "forced_pointer:positive_single_value_vlog_raw_bytes")
 	}
+	if err = r.proveLayout(db, "checkpoint_layout", oracle[epochs], ptr); err != nil {
+		return r, err
+	}
 	for _, it := range pins {
 		if err = call("old_pin_release", "IterateVersions.consume_close", 0, func() (uint64, error) { return c4CheckIterator(it, oracle[0]) }); err != nil {
 			return r, err
@@ -637,6 +739,9 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	// ledger rather than pretending monotonicity across the Close boundary.
 	r.Boundaries = append(r.Boundaries, c4Boundary{Phase: "reopen_counter_reset", Stats: map[string]string{}})
 	if err = check("reopen_oracle", epochs); err != nil {
+		return r, err
+	}
+	if err = r.proveLayout(db, "reopen_layout", oracle[epochs], ptr); err != nil {
 		return r, err
 	}
 	if err = r.boundary(db, "reopened"); err != nil {

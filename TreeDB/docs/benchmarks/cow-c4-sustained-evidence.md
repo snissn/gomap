@@ -18,6 +18,10 @@ historical, prefix-neighbor, state, timestamp, payload and iterator-count
 oracles inspect actual outputs. Three joined ordinary callers perform grouped
 replacement, point reads and full history reads; interval receipts establish
 actual public-call overlap without claiming internal publication atomicity.
+All three callers reach a readiness barrier before their shared release. The
+barrier lies outside each public-call timer and is included in epoch overhead;
+readiness alone does not prove overlap. A scheduler that produces zero actual
+overlap causes a retained refusal, without added writes, retries or exclusions.
 
 Two old version iterators retain the seed image through every epoch checkpoint,
 then are consumed and released after the last pinned checkpoint. Every mode
@@ -27,12 +31,19 @@ advance at that checkpoint; the completed checkpoint alone resets the baseline.
 Legacy comparator snapshots can rotate and enqueue tables, so their actual
 backend progress is retained and checked for nonregression. Logical retained
 history grows across epochs even though the cached generation is checkpointed.
-Forced-pointer
-cases require a positive single-value value-log raw-byte counter at checkpoint,
-which observes the persistent write path. Complete point/history payload
-oracles after checkpoint, Close and reopen prove readability; the byte counter
-alone does not inspect every index pointer. Close is a successful public call,
-not an engine resource census after Close.
+Representation diagnostics inspect every expected physical MVCC entry through
+public `AcquireSnapshot`, `GetEntryExact` and snapshot `Close`, before epochs,
+after the final pinned checkpoint, and after reopen. Seed checks cover `keys`
+entries; checkpoint and reopen each cover `keys*(1+3*epochs)`, including logical
+tombstones, which are ordinary stored values. Actual flags and value pointers
+must match the declared layout, and observed inline/pointer counts are retained.
+Pointer entries require a nonzero pointer to a value-log file; a zero optional
+length hint remains valid. All diagnostic snapshots close, including on error;
+COW view, cut and external-lease counts must return to their preceding values.
+Forced-pointer cases also require a positive single-value value-log raw-byte
+counter at checkpoint. Complete logical point/history payload oracles prove
+readability separately. Close is a successful public call, not an engine
+resource census after Close.
 
 COW functional tests separately fill a finite cut-owner bound and require
 public point/history refusal without fallback, release and successful retry.
@@ -53,10 +64,16 @@ the separate pending native whole-call 32-record/1-MiB contract.
 Values are immutable shared 256-byte fixture payloads. Go timed allocations
 include epoch checkpoints, call recorder, oracle checks and boundary Stats
 overhead during epochs;
-seed/oracle construction and cleanup are outside the benchmark timer. Engine
+seed/oracle construction, all representation diagnostics and cleanup are outside
+the benchmark timer. Diagnostic snapshots can affect setup state and lifetime
+high-water charges even while excluded from timed allocations. Legacy snapshots
+can rotate pending mutable tables; COW snapshots acquire and release read owners.
+Engine
 charges, Go B/op/allocs/op and caller process RSS are distinct observations.
 Raw call durations include setup, checkpoint, Close and reopen, with all errors;
 summing overlapping durations does not produce elapsed wall time.
+`public_calls/op` counts the complete recorded lifecycle, including diagnostics,
+divided by epochs; `ns/op` covers only the declared timed epoch scope.
 
 The test binary flag `-cow-c4-public-output-dir` must name an absolute existing
 directory outside source and database storage. Each actual benchmark invocation
@@ -91,7 +108,11 @@ The analyzer binds ordinary ACKs to observed command-WAL counters in write-only
 windows. Seed and growth each append one command per 16-key group; each joined
 epoch adds two such group series and one ordinary command. Durable mode requires
 one file sync per ordinary command, relaxed mode requires zero ordinary syncs,
-and NoWAL requires zero appends and syncs. A checkpoint counter change inside
+and NoWAL requires observed absolute zero appends and syncs at every boundary.
+All profiles require parseable actual counters and effective command-WAL/redo
+routing: command profiles use external command WAL with cached redo disabled;
+NoWAL uses disabled command WAL and disabled-unsafe cached redo. NoWAL does not
+disable persistent value-log storage. A checkpoint counter change inside
 these windows refuses attribution. Explicit checkpoint and later read-cleanup
 windows remain separate observations; read cleanup can trigger additional
 automatic checkpoints, whose run counts remain retained.
@@ -102,12 +123,20 @@ and checkpoint, pin release, Close, reopen, and final Close follow their declare
 stages. Configuration uses the shared canonical variant-path and Git-identity
 validators. Copied-positive smoke cases include zero observed WAL appends, zero
 durable ordinary syncs, unexplained relaxed syncs, premature checkpoints, and
-Close before seed; updating artifact hashes cannot make these acceptable.
+Close before seed, plus actual routing, representation counts, logical-tombstone
+coverage, diagnostic snapshot ownership and zero actual overlap; updating
+artifact hashes cannot make these acceptable. Each diagnostic acquisition,
+lookup and close has its own retained call. Recorder capacity includes the
+additional `keys*(3+6*epochs)+6` calls outside the unchanged timed epoch work.
 
 Both classes use the shared 15-key fixed process environment with
-`CGO_ENABLED=0`. The 11-artifact build closure includes Go launcher and compiler
-executable inventories. Offline analysis requires the retained live Go version
-and inventory to match both build receipts and the frozen toolchain identity.
+`CGO_ENABLED=0`. The 12-artifact build closure includes Go launcher/compiler
+executables, implicit assembler include headers, and actual selected persistent
+inputs before and after compilation, with file bytes and modes. External
+GOROOT/module inputs use normalized identities that must match both builds;
+repository candidate source may differ. Offline analysis requires the retained
+live Go version and inventory to match both build receipts and the frozen
+toolchain identity.
 Copied-positive cases cover an unbound Go launcher, missing toolchain identity and an invalid matched
 same-product configuration; source-manifest corruption is a corruption refusal,
 not a claim to have exercised a valid semantic source-mode mutation.

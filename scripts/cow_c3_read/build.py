@@ -14,7 +14,7 @@ import stat
 import subprocess
 import time
 
-from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo
+from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest
 
 GIT_SOURCE_SCHEMA = "gomap-git-export-authority-v1"
 
@@ -284,25 +284,21 @@ def main():
         validate_go_environment(go_env, env)
         binary = out / "mvcc-normal.test"
         argv = [str(go), "test", "-c", "-o", str(binary), "./TreeDB/mvcc"]
+        before_packages = objects(run("compiled-dependencies-before", [str(go), "list", "-compiled", "-deps", "-test", "-json", "./TreeDB/mvcc"]))
+        validate_no_cgo(before_packages)
+        compiled_modules(before_packages, source)
+        before, generated_before = selected_inputs(before_packages, source, controls)
+        write(out / "compiled-inputs-before.json", before)
         run("build", argv)
         packages = objects(run("compiled-dependencies", [str(go), "list", "-compiled", "-deps", "-test", "-json", "./TreeDB/mvcc"]))
         validate_no_cgo(packages)
         modules = compiled_modules(packages, source)
         write(out / "module-graph.stdout", modules)
         write(out / "effective-module-graph.json", canonical_modules(modules, source))
-        closure, generated_missing = {}, []
-        for package in packages:
-            directory = Path(package.get("Dir", "."))
-            for category in ("GoFiles", "CgoFiles", "CFiles", "HFiles", "SFiles", "SysoFiles", "EmbedFiles", "CompiledGoFiles"):
-                for name in package.get(category, []):
-                    path = directory / name
-                    if path.is_file():
-                        closure[str(path)] = {"sha256": sha(path), "bytes": path.stat().st_size}
-                    else:
-                        generated_missing.append({"package": package.get("ImportPath"), "category": category, "path": str(path)})
-        for name in ("go.mod", "go.sum"):
-            path = source / name
-            closure[str(path)] = {"sha256": sha(path), "bytes": path.stat().st_size}
+        closure, generated_missing = selected_inputs(packages, source, controls)
+        need(closure == before and generated_missing == generated_before, "selected persistent inputs drift during build")
+        external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")}
+                    for key, value in closure.items() if not key.startswith("REPO/")}
         write(out / "compiled-input-closure.json", closure)
         write(out / "generated-nonpersistent-inputs.json", generated_missing)
         run("binary-buildinfo", [str(go), "version", "-m", str(binary)])
@@ -316,6 +312,7 @@ def main():
             "compiled_dependencies": "compiled-dependencies.stdout", "binary_buildinfo": "binary-buildinfo.stdout",
             "build_stdout": "build.stdout", "build_stderr": "build.stderr",
             "compiled_input_closure": "compiled-input-closure.json",
+            "compiled_inputs_before": "compiled-inputs-before.json",
             "generated_nonpersistent_inputs": "generated-nonpersistent-inputs.json",
         }
         artifacts = {name: {"path": str(out / file), "sha256": sha(out / file)} for name, file in bindings.items()}
@@ -328,7 +325,8 @@ def main():
             "race": False, "build_tags": [], "go_version": version, "go_binary_sha256": toolchain["go_binary_sha256"],
             "toolchain_identity": validate_toolchain(toolchain),
             "command": argv, "exit_code": 0, "module_scope": "actual compiled package/test dependency Module records; all declared go.mod/go.sum retained separately",
-            "module_producer_command": commands[-2]["command"], "effective_module_identity": sha(out / "effective-module-graph.json"),
+            "module_producer_command": next(item["command"] for item in commands if item["name"] == "compiled-dependencies"), "effective_module_identity": sha(out / "effective-module-graph.json"),
+            "external_input_identity": digest(external), "compiled_inputs_before_sha256": sha(out / "compiled-inputs-before.json"),
             "artifacts": artifacts, "compiled_input_closure_sha256": sha(out / "compiled-input-closure.json"),
             "generated_nonpersistent_inputs_sha256": sha(out / "generated-nonpersistent-inputs.json")})
         print(json.dumps({"binary": str(binary), "sha256": sha(binary), "source_tree_sha256": ident["tree_sha256"]}), flush=True)

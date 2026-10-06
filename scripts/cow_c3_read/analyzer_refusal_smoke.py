@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from prepare_config import draft
-from protocol import C3_FIXTURE, identity, process_environment, sha, write, validate_toolchain
+from protocol import C3_FIXTURE, identity, process_environment, sha, write, validate_toolchain, selected_input_paths, digest
 from build import git_source_authority
 
 def main():
@@ -28,7 +28,9 @@ def main():
     config["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
     toolchain = {"go_binary_sha256": "4" * 64, "executables": [
         {"path": "pkg/tool/linux_amd64/" + name, "sha256": "5" * 64, "bytes": 1, "mode": 0o755}
-        for name in ("asm", "compile", "link")]}
+        for name in ("asm", "compile", "link")], "headers": [
+        {"path": "pkg/include/" + name, "sha256": "6" * 64, "bytes": 1, "mode": 0o644}
+        for name in ("funcdata.h", "textflag.h")]}
     config.update(go_binary="/synthetic/go/bin/go", go_binary_sha256=toolchain["go_binary_sha256"],
                   go_version="synthetic Go version", toolchain_identity=validate_toolchain(toolchain))
     # Real tiny Git objects exercise offline provenance without pretending the
@@ -70,7 +72,13 @@ def main():
         write(original / (variant + "-identity.json"), bound)
         write(original / (variant + "-source-before.json"), {"drift": []})
         write(original / (variant + "-build-source-after.json"), {"drift": []})
-        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source", "toolchain"}
+        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
+        packages = [{"ImportPath": "synthetic/no-cgo", "Dir": declaration["source"], "GoFiles": ["fixture.go"]},
+                    {"ImportPath": "synthetic/standard", "Standard": True, "Dir": "/synthetic/go/src/standard", "GoFiles": ["standard.go"]}]
+        selected, generated = selected_input_paths(packages, declaration["source"], config["environment"])
+        closure = {key: {"path": value, "sha256": "7" * 64, "bytes": 1, "mode": 0o644} for key, value in selected.items()}
+        external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in closure.items() if not key.startswith("REPO/")}
+        config["external_input_identity"] = digest(external)
         retained, artifacts = {}, {}
         for name in sorted(required):
             path = original / (variant + "-" + name + ".raw")
@@ -79,7 +87,11 @@ def main():
             elif name == "toolchain":
                 write(path, toolchain)
             elif name == "compiled_dependencies":
-                write(path, {"ImportPath": "synthetic/no-cgo", "GoFiles": ["fixture.go"]})
+                path.write_text("\n".join(json.dumps(item) for item in packages) + "\n")
+            elif name in ("compiled_input_closure", "compiled_inputs_before"):
+                write(path, closure)
+            elif name == "generated_nonpersistent_inputs":
+                write(path, generated)
             elif name == "go_env":
                 effective = process_environment(config["environment"])
                 write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH", "CGO_ENABLED")}, "GOENV": "", "GOOS": "linux", "GOARCH": "amd64"})
@@ -92,7 +104,10 @@ def main():
         write(receipt, {"binary_sha256": declaration["binary_sha256"], "source_tree_sha256": declaration["source_tree_sha256"],
                         "environment": config["environment"], "effective_process_environment": process_environment(config["environment"]),
                         "go_version": config["go_version"], "go_binary_sha256": config["go_binary_sha256"], "toolchain_identity": config["toolchain_identity"],
-                        "race": False, "build_tags": [], "artifacts": artifacts})
+                        "race": False, "build_tags": [], "artifacts": artifacts,
+                        "external_input_identity": config["external_input_identity"],
+                        **{field: artifacts[name]["sha256"] for field, name in (("compiled_inputs_before_sha256", "compiled_inputs_before"),
+                        ("compiled_input_closure_sha256", "compiled_input_closure"), ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs"))}})
         declaration.update(build_receipt="/synthetic/" + variant + "-build/build-receipt.json", build_receipt_sha256=sha(receipt))
     write(original / "config.json", config)
     write(original / "live-toolchain.json", {"go_version": config["go_version"], "inventory": toolchain})
@@ -142,10 +157,10 @@ def main():
         completion["config_sha256"] = sha(packet / "config.json")
         write(packet / "completion.json", completion)
 
-    def damage_toolchain(packet):
+    def damage_toolchain(packet, header=False):
         raw = packet / "baseline-toolchain.raw"
         value = json.loads(raw.read_text())
-        value["executables"][1]["sha256"] = "6" * 64
+        value["headers" if header else "executables"][0 if header else 1]["sha256"] = "8" * 64
         write(raw, value)
         artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
         artifacts["toolchain"]["sha256"] = sha(raw)
@@ -188,9 +203,36 @@ def main():
             value["go_version"] = "different live version"
         elif field == "launcher":
             value["inventory"]["go_binary_sha256"] = "7" * 64
+        elif field == "header":
+            value["inventory"]["headers"][0]["sha256"] = "8" * 64
         else:
             value["inventory"]["executables"][1]["sha256"] = "6" * 64
         write(path, value)
+
+    def damage_inputs(packet, kind):
+        receipt = packet / "baseline-build-receipt.json"
+        build = json.loads(receipt.read_text())
+        artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
+        names = ("compiled_input_closure",) if kind == "build-drift" else ("compiled_inputs_before", "compiled_input_closure")
+        for name in names:
+            raw = packet / ("baseline-" + name + ".raw")
+            value = json.loads(raw.read_text())
+            key = next(key for key in value if key.startswith("GOROOT/"))
+            if kind == "missing":
+                del value[key]
+            elif kind == "mode":
+                value[key]["mode"] = 0o600
+            else:
+                value[key]["sha256"] = "8" * 64
+            write(raw, value)
+            artifacts[name]["sha256"] = build["artifacts"][name]["sha256"] = sha(raw)
+            build["compiled_inputs_before_sha256" if name == "compiled_inputs_before" else "compiled_input_closure_sha256"] = sha(raw)
+        if kind in ("mode", "bytes"):
+            external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in value.items() if not key.startswith("REPO/")}
+            build["external_input_identity"] = digest(external)
+        write(packet / "baseline-build-artifacts.json", artifacts)
+        write(receipt, build)
+        rebind_receipt(packet, receipt)
 
     cases = [
         ("incomplete-runs", None, "missing/extra runs"),
@@ -208,12 +250,18 @@ def main():
         ("wrong-frozen-fixture", damage_fixture, "fixture differs from frozen source"),
         ("same-product", damage_same_product, "distinct production_commit"),
         ("rehashed-toolchain", damage_toolchain, "Go toolchain inventory mismatch"),
+        ("rehashed-assembler-header", lambda p: damage_toolchain(p, True), "Go toolchain inventory mismatch"),
         ("rehashed-go-version", lambda p: damage_build_toolchain(p, "go_version", "different"), "toolchain mismatch"),
         ("rehashed-go-launcher", lambda p: damage_build_toolchain(p, "go_binary_sha256", "7" * 64), "toolchain mismatch"),
         ("rehashed-compiled-cgo", damage_compiled_cgo, "compiled Cgo inputs forbidden"),
+        ("rehashed-external-bytes", lambda p: damage_inputs(p, "bytes"), "actual external compiler inputs differ"),
+        ("rehashed-external-mode", lambda p: damage_inputs(p, "mode"), "actual external compiler inputs differ"),
+        ("rehashed-build-input-drift", lambda p: damage_inputs(p, "build-drift"), "selected persistent inputs drift"),
+        ("rehashed-missing-persistent-input", lambda p: damage_inputs(p, "missing"), "selected persistent input closure mismatch"),
         ("missing-live-toolchain", lambda p: (p / "live-toolchain.json").unlink(), "FileNotFoundError"),
         ("changed-live-version", lambda p: damage_live_toolchain(p, "version"), "live toolchain version mismatch"),
         ("changed-live-launcher", lambda p: damage_live_toolchain(p, "launcher"), "Go toolchain inventory mismatch"),
+        ("changed-live-assembler-header", lambda p: damage_live_toolchain(p, "header"), "Go toolchain inventory mismatch"),
         ("changed-live-compiler", lambda p: damage_live_toolchain(p, "compiler"), "Go toolchain inventory mismatch"),
     ]
     results = []

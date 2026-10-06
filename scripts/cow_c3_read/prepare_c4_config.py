@@ -2,7 +2,7 @@
 import argparse
 import itertools
 from pathlib import Path
-from c4_protocol import SCHEMA,PROFILES,MODES,LAYOUTS,SIZES,case_names,metric_rules,workload,write
+from c4_protocol import SCHEMA,PROFILES,MODES,LAYOUTS,SIZES,TIMED_SCOPE,case_names,metric_rules,workload,write
 from prepare_config import draft as c3_draft
 
 
@@ -18,7 +18,7 @@ def draft():
         case_id,benchmark=case_names(case)
         case.update(id=case_id,benchmark=benchmark,package="github.com/snissn/gomap/TreeDB/mvcc",iterations=1,warmup_iterations=1,
                     workload_contract=workload(keys,1),comparable_metrics=["public_calls/op","close_ok"],comparison_metrics={"ns/op":"lower","B/op":"lower","allocs/op":"lower"},
-                    timed_scope="epochs include oracle/recorder/boundary overhead; seed and cleanup excluded; raw complete call durations retained",ack_contract="CommitRelaxed; resolved profile ordinary ACK",rules=metric_rules(),latency_groups=[])
+                    timed_scope=TIMED_SCOPE,ack_contract="CommitRelaxed; resolved profile ordinary ACK",rules=metric_rules(),latency_groups=[])
         base["cases"].append(case)
     return base
 

@@ -11,7 +11,7 @@ import subprocess
 from unittest.mock import patch
 
 from build import compiled_modules, objects, canonical_modules
-from protocol import process_environment, sha, write
+from protocol import process_environment, sha, write, selected_inputs, build_inputs, digest
 
 def environment_smoke(out):
     """Exercise the actual environment helper and a child, without invoking Go."""
@@ -60,6 +60,65 @@ def environment_smoke(out):
           "checks": checks})
     return checks
 
+def inputs_smoke(out):
+    """Actual finite files prove stability/equality without executing Go."""
+    base = out / "selected-inputs"
+    source, goroot, module, cache = (base / name for name in ("source", "go", "module", "cache"))
+    for directory in (source, goroot / "src/standard", module, cache):
+        directory.mkdir(parents=True)
+    for path in (source / "fixture.go", source / "go.mod", source / "go.sum", goroot / "src/standard/standard.go", module / "external.go", module / "go.mod"):
+        path.write_text("selected input " + path.name + "\n")
+        path.chmod(0o644)
+    packages = [{"ImportPath": "product", "Dir": str(source), "GoFiles": ["fixture.go"]},
+                {"ImportPath": "standard", "Standard": True, "Dir": str(goroot / "src/standard"), "GoFiles": ["standard.go"]},
+                {"ImportPath": "external", "Dir": str(module), "GoFiles": ["external.go"],
+                 "Module": {"Path": "example.invalid/external", "Version": "v1.0.0", "Sum": "same checksum", "GoModSum": "same mod checksum", "Dir": str(module), "GoMod": str(module / "go.mod")}}]
+    env = {"GOROOT": str(goroot), "GOCACHE": str(cache)}
+    before, generated = selected_inputs(packages, source, env)
+    def receipt(inputs):
+        external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in inputs.items() if not key.startswith("REPO/")}
+        value = {"environment": env, "external_input_identity": digest(external), "artifacts": {}}
+        for field, name in (("compiled_inputs_before_sha256", "compiled_inputs_before"), ("compiled_input_closure_sha256", "compiled_input_closure"), ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs")):
+            value[field] = "1" * 64
+            value["artifacts"][name] = {"sha256": value[field]}
+        return value
+    frozen = receipt(before)
+    build_inputs(frozen, frozen, packages, before, before, generated, str(source))
+    checks = [{"label": "actual-selected-files-stable", "passed": True}]
+    for owner, path in (("GOROOT", goroot / "src/standard/standard.go"), ("module", module / "external.go"), ("module-metadata", module / "go.mod")):
+        original = path.read_bytes()
+        for mutation in ("bytes", "mode", "missing"):
+            if mutation == "bytes": path.write_bytes(original + b"changed")
+            elif mutation == "mode": path.chmod(0o600)
+            else: path.unlink()
+            try:
+                changed, ledger = selected_inputs(packages, source, env)
+                build_inputs(receipt(changed), frozen, packages, changed, changed, ledger, str(source))
+            except ValueError as error:
+                checks.append({"label": owner + "-" + mutation, "refused": str(error)})
+            else: raise AssertionError("external changed input accepted")
+            path.write_bytes(original); path.chmod(0o644)
+    (source / "fixture.go").write_text("candidate product change\n")
+    candidate, ledger = selected_inputs(packages, source, env)
+    build_inputs(receipt(candidate), frozen, packages, candidate, candidate, ledger, str(source))
+    checks.append({"label": "repository-product-delta-allowed", "passed": True})
+    try: build_inputs(frozen, frozen, packages, before, candidate, generated, str(source))
+    except ValueError as error: checks.append({"label": "persistent-build-drift", "refused": str(error)})
+    else: raise AssertionError("build drift accepted")
+    missing = copy.deepcopy(packages); missing[0]["HFiles"] = ["missing.h"]
+    try: selected_inputs(missing, source, env)
+    except ValueError as error: checks.append({"label": "ordinary-missing-is-not-generated", "refused": str(error)})
+    else: raise AssertionError("ordinary missing input exempted")
+    relocated = copy.deepcopy(candidate)
+    relocated_packages = json.loads(json.dumps(packages).replace(str(base), str(base) + "-relocated"))
+    relocated_env = json.loads(json.dumps(env).replace(str(base), str(base) + "-relocated"))
+    for value in relocated.values(): value["path"] = value["path"].replace(str(base), str(base) + "-relocated")
+    relocated_build = receipt(relocated); relocated_build["environment"] = relocated_env
+    build_inputs(relocated_build, frozen, relocated_packages, relocated, relocated, [], str(source).replace(str(base), str(base) + "-relocated"))
+    checks.append({"label": "normalized-external-relocation-allowed", "passed": True})
+    write(out / "selected-input-construction.json", {"scope": "actual finite selected-input helper checks; no Go execution or performance claim", "checks": checks})
+    return checks
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiled-packages", type=Path, required=True)
@@ -68,6 +127,7 @@ def main():
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=False)
     environment_checks = environment_smoke(args.out)
+    input_checks = inputs_smoke(args.out)
     packages = objects(args.compiled_packages.read_text())
     mains = {p["Module"]["Dir"] for p in packages if p.get("Module", {}).get("Main")}
     assert len(mains) == 1
@@ -109,11 +169,11 @@ def main():
     ]
     write(args.out / "result.json", {"scope": "real compiled-module metadata, hermetic environment construction and synthetic damaged-copy refusal only; no Go build or timing acceptance",
         "input_sha256": sha(args.compiled_packages), "packages": len(packages), "compiled_modules": canonical,
-        "checks": results, "environment_checks": environment_checks,
+        "checks": results, "environment_checks": environment_checks, "selected_input_checks": input_checks,
         "script_sha256": sha(Path(__file__)), "build_script_sha256": sha(Path(__file__).parent / "build.py"),
         "protocol_script_sha256": sha(Path(__file__).parent / "protocol.py")})
     print(json.dumps({"compiled_modules": len(modules), "module_refusals": len(results),
-                      "environment_checks": len(environment_checks)}))
+                      "environment_checks": len(environment_checks), "selected_input_checks": len(input_checks)}))
 
 if __name__ == "__main__":
     main()

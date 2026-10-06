@@ -8,6 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"strconv"
 	"testing"
+	"time"
 )
 
 func TestCOWSustainedPublicMVCCConstruction(t *testing.T) {
@@ -58,6 +59,56 @@ func TestCOWSustainedPublicMVCCFiniteSchedule(t *testing.T) {
 	}
 	if len(c4Expected(keys, 1)) != 4096 {
 		t.Fatal("necessary history count")
+	}
+}
+
+// A readable value in the opposite physical layout must refuse qualification
+// and release its actual snapshot before the same database can be inspected again.
+func TestCOWSustainedPublicMVCCRepresentationRefusalClosesSnapshot(t *testing.T) {
+	for _, profile := range []treedb.Profile{treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed, treedb.ProfileNoWALFast} {
+		for _, pointers := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/pointer_%t", profile, pointers), func(t *testing.T) {
+				db, err := treedb.Open(c4Options(profile, "cow_btree", pointers, t.TempDir()))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if err := db.Close(); err != nil {
+						t.Error(err)
+					}
+				}()
+				store := New(db)
+				keys := c4Keys(16)
+				mutations := make([]Mutation, len(keys))
+				for i, key := range keys {
+					mutations[i] = Mutation{Key: key, Value: c4Value(0)}
+				}
+				if err := store.CommitAt(1, mutations, CommitRelaxed); err != nil {
+					t.Fatal(err)
+				}
+				before := db.Stats()
+				r := &c4Record{Mode: "cow_btree", Calls: make([]c4Call, 0, 64), origin: time.Now()}
+				if err := r.proveLayout(db, "wrong_layout", c4Expected(keys, 0), !pointers); err == nil {
+					t.Fatal("readable opposite representation accepted")
+				}
+				after := db.Stats()
+				for _, k := range []string{"treedb.cache.cow.views", "treedb.cache.cow.active_cuts", "treedb.cache.cow.external_leases"} {
+					if before[k] != after[k] {
+						t.Fatalf("refused diagnostic leaked %s: %s -> %s", k, before[k], after[k])
+					}
+				}
+				last := r.Calls[len(r.Calls)-1]
+				if len(r.LayoutProofs) != 0 || last.Operation != "Snapshot.Close" || last.Outcome != "success" {
+					t.Fatal("refused proof omitted its successful actual snapshot close")
+				}
+				if _, err := c4History(store, c4Expected(keys, 0), 0); err != nil {
+					t.Fatal(err)
+				}
+				if err := r.proveLayout(db, "correct_layout", c4Expected(keys, 0), pointers); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 

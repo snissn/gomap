@@ -45,7 +45,7 @@ def analyze(packet,emit=True):
             phase=phases[call["phase"]]
             for key in ("input","output"):phase[key]+=call[key]
             phase["calls"]+=1;phase["call_duration_sum_ns"]+=call["duration_ns"]
-        raw_summary.append({"label":receipt["label"],"ordinary_ack":raw["ordinary_ack"],"limits":raw["limits"],"boundaries":raw["boundaries"],"phase_work":dict(phases),"foreground":{name:quantiles(values) for name,values in durations.items()},"whole_call_duration_sum_ns":sum(x["duration_ns"] for x in raw["calls"]),"calls":final["calls"],"epochs":epochs,"raw_lifecycles":observed})
+        raw_summary.append({"label":receipt["label"],"ordinary_ack":raw["ordinary_ack"],"limits":raw["limits"],"boundaries":raw["boundaries"],"layout_proofs":raw["layout_proofs"],"phase_work":dict(phases),"foreground":{name:quantiles(values) for name,values in durations.items()},"whole_call_duration_sum_ns":sum(x["duration_ns"] for x in raw["calls"]),"calls":final["calls"],"epochs":epochs,"raw_lifecycles":observed})
         key=(case["id"],epochs);need(key not in work or work[key]==final["call_work_sha256"],"unmatched supported public work/oracles");work[key]=final["call_work_sha256"]
     results=[]
     if c["result_class"]=="matched-supported-evidence":

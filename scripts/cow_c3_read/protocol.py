@@ -59,7 +59,7 @@ def matched_products(variants):
     need(not a.is_relative_to(b) and not b.is_relative_to(a), "matched products must have independent build custody")
 
 def validate_toolchain(value):
-    need(set(value) == {"go_binary_sha256", "executables"}
+    need(set(value) == {"go_binary_sha256", "executables", "headers"}
          and isinstance(value["go_binary_sha256"], str)
          and re.fullmatch(r"[0-9a-f]{64}", value["go_binary_sha256"]), "invalid Go toolchain inventory")
     records = value["executables"]
@@ -78,6 +78,19 @@ def validate_toolchain(value):
         paths.append(item["path"])
     need(paths == sorted(set(paths)) and {"compile", "link", "asm"} <= {Path(p).name for p in paths},
          "incomplete/duplicate Go toolchain inventory")
+    headers = value["headers"]
+    need(isinstance(headers, list) and headers, "empty Go assembler header inventory")
+    paths = []
+    for item in headers:
+        need(set(item) == {"path", "sha256", "bytes", "mode"}, "invalid Go assembler header")
+        path = Path(item["path"])
+        need(not path.is_absolute() and str(path) == item["path"] and ".." not in path.parts
+             and path.parts[:2] == ("pkg", "include") and len(path.parts) >= 3,
+             "invalid Go assembler header path")
+        file_identity(item)
+        paths.append(item["path"])
+    need(paths == sorted(set(paths)) and {"pkg/include/textflag.h", "pkg/include/funcdata.h"} <= set(paths),
+         "incomplete/duplicate Go assembler header inventory")
     return digest(value)
 
 def toolchain_inventory(goroot):
@@ -99,7 +112,19 @@ def toolchain_inventory(goroot):
         if mode & 0o111:
             records.append({"path": path.relative_to(root).as_posix(), "sha256": sha(path),
                             "bytes": path.stat().st_size, "mode": stat.S_IMODE(mode)})
-    value = {"go_binary_sha256": sha(go), "executables": records}
+    directory = root / "pkg/include"
+    need(directory.is_dir() and not directory.is_symlink() and directory.resolve() == directory,
+         "invalid Go assembler include directory custody")
+    headers = []
+    for path in sorted(directory.rglob("*")):
+        need(not path.is_symlink(), "symlink in Go assembler include directory")
+        mode = path.stat().st_mode
+        if stat.S_ISDIR(mode):
+            continue
+        need(stat.S_ISREG(mode), "nonregular Go assembler header")
+        headers.append({"path": path.relative_to(root).as_posix(), "sha256": sha(path),
+                        "bytes": path.stat().st_size, "mode": stat.S_IMODE(mode)})
+    value = {"go_binary_sha256": sha(go), "executables": records, "headers": headers}
     validate_toolchain(value)
     return value
 
@@ -112,6 +137,91 @@ def build_toolchain(build, frozen, inventory):
 
 def validate_no_cgo(packages):
     need(packages and not any(package.get("CgoFiles") for package in packages), "compiled Cgo inputs forbidden")
+
+def file_identity(item):
+    need(isinstance(item.get("sha256"), str) and re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+         and type(item.get("bytes")) is int and item["bytes"] >= 0
+         and type(item.get("mode")) is int and 0 <= item["mode"] <= 0o777,
+         "invalid persistent input identity")
+
+def selected_input_paths(packages, source, environment):
+    """Derive finite persistent inputs and recognized generated test-main inputs.
+
+    Paths are retained for same-build custody; normalized keys separate repository
+    product deltas from actual external compiler inputs and survive relocation.
+    """
+    source, goroot, cache = Path(source), Path(environment["GOROOT"]), Path(environment["GOCACHE"])
+    files, generated = {}, []
+    def add(key, path):
+        path = Path(path)
+        need(path.is_absolute() and ".." not in path.parts, "invalid selected input path")
+        need(key not in files or files[key] == str(path), "conflicting selected input custody")
+        files[key] = str(path)
+    for package in packages:
+        directory = Path(package["Dir"])
+        module = package.get("Module", {})
+        effective = module.get("Replace", module)
+        external = not package.get("Standard") and not module.get("Main") and effective.get("Version")
+        module_key = digest({k: effective[k] for k in ("Path", "Version", "Sum", "GoModSum") if k in effective})
+        for category in ("GoFiles", "CgoFiles", "CFiles", "HFiles", "SFiles", "SysoFiles", "EmbedFiles", "CompiledGoFiles"):
+            for name in package.get(category, []):
+                path = directory / name
+                # go list -test emits a derived test main in GOCACHE. No ordinary
+                # missing Go/header/assembly input is granted this exception.
+                if (package.get("ImportPath", "").endswith(".test") and category in ("GoFiles", "CompiledGoFiles")
+                        and Path(name).is_absolute() and path.is_relative_to(cache) and path.name.endswith("-d")):
+                    generated.append({"package": package["ImportPath"], "category": category,
+                                      "kind": "go-list-generated-test-main", "path": str(path)})
+                    continue
+                if path.is_relative_to(source):
+                    key = "REPO/" + path.relative_to(source).as_posix()
+                elif package.get("Standard") and path.is_relative_to(goroot):
+                    key = "GOROOT/" + path.relative_to(goroot).as_posix()
+                elif external and path.is_relative_to(Path(effective["Dir"])):
+                    key = "MODULE/" + module_key + "/" + path.relative_to(Path(effective["Dir"])).as_posix()
+                else:
+                    need(False, "unrecognized persistent compiler input: " + str(path))
+                add(key, path)
+        if external:
+            need(effective.get("GoMod"), "selected module metadata missing")
+            add("MODULE_META/" + module_key + "/go.mod", effective["GoMod"])
+    for name in ("go.mod", "go.sum"):
+        add("REPO/" + name, source / name)
+    need(files and any(key.startswith("GOROOT/") for key in files), "empty selected external input closure")
+    return dict(sorted(files.items())), sorted(generated, key=lambda item: (item["package"], item["category"], item["path"]))
+
+def selected_inputs(packages, source, environment):
+    paths, generated = selected_input_paths(packages, source, environment)
+    result = {}
+    for key, name in paths.items():
+        path = Path(name)
+        need(path.is_file() and not path.is_symlink() and path.resolve() == path,
+             "missing/nonregular/noncanonical persistent compiler input: " + name)
+        result[key] = {"path": name, "sha256": sha(path), "bytes": path.stat().st_size,
+                       "mode": stat.S_IMODE(path.stat().st_mode)}
+    return result, generated
+
+def build_inputs(build, frozen, packages, before, after, generated, source):
+    """Validate retained actual inputs offline, without reading original host paths."""
+    paths, expected_generated = selected_input_paths(packages, source, build["environment"])
+    need(set(before) == set(after) == set(paths), "selected persistent input closure mismatch")
+    for key, name in paths.items():
+        for closure in (before, after):
+            item = closure[key]
+            need(set(item) == {"path", "sha256", "bytes", "mode"} and item["path"] == name,
+                 "selected persistent input custody mismatch")
+            file_identity(item)
+    need(before == after, "selected persistent inputs drift during build")
+    need(generated == expected_generated, "unrecognized generated compiler inputs")
+    external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")}
+                for key, value in after.items() if not key.startswith("REPO/")}
+    need(digest(external) == build["external_input_identity"] == frozen["external_input_identity"],
+         "actual external compiler inputs differ")
+    for field, artifact in (("compiled_inputs_before_sha256", "compiled_inputs_before"),
+                            ("compiled_input_closure_sha256", "compiled_input_closure"),
+                            ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs")):
+        need(build[field] == build["artifacts"][artifact]["sha256"], "unbound selected compiler input artifact")
+    return external
 
 def case_names(case):
     shape = "forced_pointer" if case["layout"] == "pointer" else "inline"
@@ -196,7 +306,7 @@ def config(path):
     need(c["environment"]["GOFLAGS"] == "", "GOFLAGS must be empty")
     process_environment(c["environment"])
     need(isinstance(c["go_version"], str) and c["go_version"], "missing frozen Go version")
-    for key in ("go_binary_sha256", "toolchain_identity"):
+    for key in ("go_binary_sha256", "toolchain_identity", "external_input_identity"):
         need(isinstance(c[key], str) and re.fullmatch(r"[0-9a-f]{64}", c[key]), "missing frozen " + key)
     need(c["go_binary"] == str(Path(c["environment"]["GOROOT"]) / "bin/go"), "unbound Go launcher path")
     need(c["host"]["system"] == "Linux" and c["host"]["cpu_count"] >= 4, "Linux host contract")
@@ -245,6 +355,25 @@ def config(path):
                 rule = x["rules"][variant].get(unit)
                 need(isinstance(rule, dict) and set(rule) == {"eq"} and type(rule["eq"]) is int
                      and rule["eq"] == expected, "profile WAL exact rule mismatch")
+        need(x["workload_contract"].get("physical_layout_records") == 4
+             and x["workload_contract"].get("layout_probes_outside_counter_boundaries") is True,
+             "physical layout work contract mismatch")
+        for variant in ("baseline", "candidate"):
+            expected_layout = {"layout_expected_records": 4, "ack_routing_before_ok": 1, "ack_routing_after_ok": 1}
+            for phase in ("before", "after"):
+                expected_layout["layout_" + phase + "_inline"] = 4 if x["layout"] == "inline" else 0
+                expected_layout["layout_" + phase + "_pointer"] = 4 if x["layout"] == "pointer" else 0
+                for counter in ("wal_appends", "wal_syncs"):
+                    expected = {"eq": 0} if x["profile"] == "no_wal_fast" else {"min": 0, "integer": True}
+                    rule = x["rules"][variant].get(counter + "_" + phase)
+                    need(isinstance(rule, dict) and rule == expected
+                         and (type(rule.get("eq")) is int if "eq" in expected
+                              else type(rule.get("min")) is int and rule.get("integer") is True),
+                         "actual WAL boundary rule mismatch")
+            for unit, expected in expected_layout.items():
+                rule = x["rules"][variant].get(unit)
+                need(isinstance(rule, dict) and set(rule) == {"eq"} and type(rule["eq"]) is int and rule["eq"] == expected,
+                     "actual layout/routing exact rule mismatch")
         units = set(x["rules"]["baseline"])
         need(units == set(x["rules"]["candidate"]), "unmatched metric sets")
         need({"ns/op", "B/op", "allocs/op"} <= units and x["latency_groups"], "allocation/latency metrics missing")
@@ -310,6 +439,10 @@ def row(stdout, stderr, case, variant, phase):
             need(not rule.get("integer") or value.is_integer(), "noninteger counter " + unit)
         count = case["warmup_iterations"] if phase == "warmup" else case["iterations"]
         need(int(matched[1]) == count, "unexpected benchmark work count")
+        for counter, unit in (("wal_appends", "wal_appends/op"), ("wal_syncs", "wal_syncs/op")):
+            before, after = metrics[counter + "_before"], metrics[counter + "_after"]
+            need(after >= before and after - before == metrics[unit] * count,
+                 "actual WAL boundary/delta mismatch")
         for group in case["latency_groups"]:
             need(metrics[group + "_p50_ns"] <= metrics[group + "_p95_ns"] <= metrics[group + "_p99_ns"], "invalid latency ordering")
         found.append({"iterations": count, "metrics": metrics})

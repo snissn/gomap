@@ -100,7 +100,9 @@ The builder hashes the Go launcher and every regular executable below
 `GOROOT/pkg/tool` before and after all build/provenance commands, refusing drift,
 symlinks and an incomplete compiler/linker/assembler inventory. It retains one
 `toolchain.json` artifact with relative paths, file sizes, executable modes and
-SHA256 hashes. Freeze its canonical `toolchain_identity` digest alongside
+SHA256 hashes. The same inventory includes every regular file below
+`GOROOT/pkg/include`, including assembler textflag/funcdata headers and their
+permission modes; header changes or missing/extra/symlink inputs refuse. Freeze its canonical `toolchain_identity` digest alongside
 `go_version` and `go_binary_sha256`; both build receipts, live collection and
 offline analysis require the same identity. Collection checks the actual
 inventory before and after capture. Offline analysis needs only retained bytes.
@@ -109,11 +111,42 @@ analysis refuse any compiled CgoFiles. The public MVCC fixture uses no CGO or
 network-specific behavior. Earlier CGO-enabled construction evidence is retained
 under its original profile; both matched binaries need fresh disabled-CGO
 builds and ordinary fixture smokes. The inventory binds Go tool executables;
-the compiled input closure separately binds actual Go/assembly/header inputs.
+the selected persistent input closure separately binds actual Go/assembly/header,
+syso, embed and selected external module-metadata bytes and permission modes.
+The builder derives this finite closure with `go list -compiled -deps -test`
+before compilation and observes it again afterward, refusing drift or disappearance.
+Its 12 artifact bindings include `compiled_inputs_before` and the existing
+post-build `compiled_input_closure`. Repository inputs retain full Git authority;
+GOROOT and effective external-module inputs use relative normalized identities,
+so repository product changes and source/cache relocation remain admissible.
+Freeze the actual `external_input_identity` in configuration. Both builds,
+collection and offline analysis require identical external input identities,
+beyond module version/checksum labels. Offline checks reconstruct the exact
+selected paths from retained package records and compare pre/post inventory,
+without reading the original host. Only Go's recognized generated test main
+under GOCACHE is excluded from persistent inputs and recorded as a derivation;
+an ordinary missing source/header is never classified as generated.
 It does not claim an immutable copy of every GOROOT file or external system
 libraries that this disabled-CGO measurement does not compile against.
 Each profile also requires exact ordinary WAL counts in both variant rules
 and comparable metrics: durable append/sync 1/1, relaxed 1/0, NoWAL 0/0.
+The fixture observes the command-WAL/external-durability/redo-log routing at both
+counter boundaries, parses actual append/sync counters for every profile, and
+requires absolute zero at both NoWAL boundaries. Offline parsing binds each
+counter delta to the reported per-operation count; disabled WAL does not imply
+zero persistent value-log I/O or zero global fsync activity.
+
+Physical layout is observed through public `AcquireSnapshot`, `GetEntryExact`
+and `Close`, using the encoded keys for all four seeded versions before timing
+and after timing. The fixture checks exact key identity, pointer flag, valid
+persistent vlog FileID and zero inline ValuePtr; omitted pointer length hints
+remain valid. Both phases report actual inline/pointer counts and expected count
+four, and both variant rules require the requested representation. The pre-probe
+finishes before the baseline stats; the post-probe starts after endpoint stats,
+with no extra checkpoint. COW view/lease/cut census must return to its pre-probe
+state. Non-COW acquisition may rotate pending memtables; COW acquisition may
+raise lifetime residency high-water marks. Those diagnostics are outside timed
+and delta counters, while lifetime peak metrics include setup/diagnostic residency.
 The builder requires a Git repository containing the declared commit/tree.
 Configuration accepts complete 40-character SHA1 or 64-character SHA256 Git
 object IDs of matching width; the object proof enforces repository format.
@@ -128,7 +161,7 @@ Invoke Python tools with `-B`, as shown, so importing them does not create
 bytecode files in immutable source exports. Its output stays outside source
 and retains full source manifests, actual
 go env/module graph/compiled dependencies/build streams/buildinfo, complete
-compiled input hashes and explicitly missing transient generated inputs.
+selected persistent input hashes/modes and explicitly recognized derived test-main inputs.
 Actual compiled-package/test dependency Module records, selected versions/checksums
 and in-tree local replacement bytes are canonicalized without hiding dependency
 changes. Non-standard compiled packages without valid module identity, missing

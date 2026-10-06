@@ -5,12 +5,131 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 )
+
+// cowPublicACKRouting validates observed routing without acquiring resources.
+// Shared by the C3/C4 public fixtures; disabled WAL does not disable the vlog.
+func cowPublicACKRouting(profile treedb.Profile, stats map[string]string) error {
+	enabled, mode := "true", "external_command_wal"
+	switch profile {
+	case treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed:
+	case treedb.ProfileNoWALFast:
+		enabled, mode = "false", "disabled_unsafe"
+	default:
+		return fmt.Errorf("unknown ACK profile %q", profile)
+	}
+	for key, expected := range map[string]string{
+		"treedb.command_wal.enabled":                   enabled,
+		"treedb.cache.command_wal.external_durability": enabled,
+		"treedb.cache.redo_log.enabled":                "false",
+		"treedb.cache.redo_log.mode":                   mode,
+	} {
+		if stats[key] != expected {
+			return fmt.Errorf("actual ACK routing %s=%q, want %q", key, stats[key], expected)
+		}
+	}
+	return nil
+}
+
+// cowPublicValueLayout checks the physical entry, without calls or ownership.
+// A zero length hint is valid for persistent vlog pointers.
+func cowPublicValueLayout(entry node.LeafEntry, pointers bool) error {
+	if entry.Flags&node.FlagTombstone != 0 {
+		return fmt.Errorf("physical tombstone in value layout proof")
+	}
+	actual := entry.Flags&node.FlagPointer != 0
+	if actual != pointers {
+		return fmt.Errorf("actual pointer=%v, requested=%v", actual, pointers)
+	}
+	if actual {
+		if entry.ValuePtr == (page.ValuePtr{}) || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
+			return fmt.Errorf("invalid persistent value pointer")
+		}
+	} else if entry.ValuePtr != (page.ValuePtr{}) {
+		return fmt.Errorf("inline entry has value pointer")
+	}
+	return nil
+}
+
+// cowPublicWALCounters requires actual boundary observations even in NoWAL.
+func cowPublicWALCounters(profile treedb.Profile, before, after map[string]string, key string) (uint64, uint64, error) {
+	values := [2]uint64{}
+	for i, stats := range []map[string]string{before, after} {
+		raw, ok := stats[key]
+		if !ok {
+			return 0, 0, fmt.Errorf("missing actual counter %s", key)
+		}
+		value, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return 0, 0, fmt.Errorf("counter %s: %w", key, err)
+		}
+		values[i] = value
+	}
+	if values[1] < values[0] {
+		return 0, 0, fmt.Errorf("WAL counter regression")
+	}
+	if profile == treedb.ProfileNoWALFast && (values[0] != 0 || values[1] != 0) {
+		return 0, 0, fmt.Errorf("actual NoWAL counter nonzero: %s", key)
+	}
+	return values[0], values[1], nil
+}
+
+// cowC3ValueLayout owns one public snapshot and probes every seeded physical
+// record. Its callers put setup before the counter baseline and teardown after
+// the endpoint. Non-COW snapshots can rotate pending memtables; COW captures
+// affect lifetime residency high-water marks, but Close releases their leases.
+func cowC3ValueLayout(db *treedb.DB, groups []CommitGroup, pointers, cow bool) (inline, pointer uint64, err error) {
+	before := db.Stats()
+	snapshot := db.AcquireSnapshot()
+	if snapshot == nil {
+		return 0, 0, fmt.Errorf("layout snapshot missing")
+	}
+	defer func() {
+		err = errors.Join(err, snapshot.Close())
+		if cow {
+			after := db.Stats()
+			for _, key := range []string{"external_leases", "views", "active_cuts"} {
+				name := "treedb.cache.cow." + key
+				if before[name] == "" || before[name] != after[name] {
+					err = errors.Join(err, fmt.Errorf("layout probe did not restore %s", name))
+				}
+			}
+		}
+	}()
+	for _, group := range groups {
+		for _, mutation := range group.Mutations {
+			physical, e := mvcckey.Encode(mutation.Key, group.Timestamp)
+			if e != nil {
+				return inline, pointer, e
+			}
+			entry, e := snapshot.GetEntryExact(physical)
+			if e != nil {
+				return inline, pointer, e
+			}
+			if !bytes.Equal(entry.Key, physical) {
+				return inline, pointer, fmt.Errorf("missing/wrong physical layout entry")
+			}
+			if e := cowPublicValueLayout(entry, pointers); e != nil {
+				return inline, pointer, e
+			}
+			if entry.Flags&node.FlagPointer != 0 {
+				pointer++
+			} else {
+				inline++
+			}
+		}
+	}
+	return inline, pointer, nil
+}
 
 // BenchmarkC3PublicReadAdmission is a bounded, fixed-history actual Store
 // fixture. Use fixed -benchtime=128x (smoke) or 1024x (collection), fresh process
@@ -58,6 +177,9 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 						if receipt["treedb.profile.resolved"] != string(profile) || receipt["treedb.cache.memtable_mode"] != mode || receipt["treedb.profile.ordinary_ack_class"] != profile.OrdinaryAckClass() {
 							b.Fatal("resolved fixture mismatch")
 						}
+						if err := cowPublicACKRouting(profile, receipt); err != nil {
+							b.Fatal(err)
+						}
 						store := New(db)
 						key := []byte("c3-a")
 						other := []byte("c3-ab")
@@ -103,7 +225,19 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 						if _, err := history(); err != nil {
 							b.Fatal(err)
 						}
+						expectedLayout := uint64(0)
+						for _, group := range groups {
+							expectedLayout += uint64(len(group.Mutations))
+						}
+						preInline, prePointer, e := cowC3ValueLayout(db, groups, pointers, mode == "cow_btree")
+						if e != nil || preInline+prePointer != expectedLayout {
+							b.Fatalf("seed physical layout: %d/%d: %v", preInline, prePointer, e)
+						}
 						before := db.Stats()
+						if err := cowPublicACKRouting(profile, before); err != nil {
+							b.Fatal(err)
+						}
+
 						writerTimes := make([]int64, b.N)
 						pointTimes := make([]int64, b.N)
 						scanTimes := make([]int64, b.N)
@@ -212,6 +346,26 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							b.Fatal(err)
 						}
 						after := db.Stats()
+						if err := cowPublicACKRouting(profile, after); err != nil {
+							b.Fatal(err)
+						}
+						for _, stats := range []map[string]string{before, after} {
+							if stats["treedb.profile.resolved"] != string(profile) || stats["treedb.cache.memtable_mode"] != mode || stats["treedb.profile.ordinary_ack_class"] != profile.OrdinaryAckClass() {
+								b.Fatal("actual boundary fixture mismatch")
+							}
+						}
+						postInline, postPointer, e := cowC3ValueLayout(db, groups, pointers, mode == "cow_btree")
+						if e != nil || postInline+postPointer != expectedLayout {
+							b.Fatalf("final physical layout: %d/%d: %v", postInline, postPointer, e)
+						}
+						b.ReportMetric(float64(expectedLayout), "layout_expected_records")
+						b.ReportMetric(float64(preInline), "layout_before_inline")
+						b.ReportMetric(float64(prePointer), "layout_before_pointer")
+						b.ReportMetric(float64(postInline), "layout_after_inline")
+						b.ReportMetric(float64(postPointer), "layout_after_pointer")
+						b.ReportMetric(1, "ack_routing_before_ok")
+						b.ReportMetric(1, "ack_routing_after_ok")
+
 						if workload == "concurrent" {
 							if pointPhase <= 0 || scanPhase <= 0 {
 								b.Fatal("missing reader-phase elapsed")
@@ -240,17 +394,14 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 								}
 							}
 						}
-						for _, counter := range []struct{ metric, key string }{{"wal_appends/op", "treedb.command_wal.append.count_total"}, {"wal_syncs/op", "treedb.command_wal.file_sync.calls_total"}} {
-							if profile != treedb.ProfileNoWALFast {
-								x := cowIntegrationCounter(b, before, counter.key)
-								y := cowIntegrationCounter(b, after, counter.key)
-								if y < x {
-									b.Fatal("counter regression")
-								}
-								b.ReportMetric(float64(y-x)/float64(b.N), counter.metric)
-							} else {
-								b.ReportMetric(0, counter.metric)
+						for _, counter := range []struct{ metric, key, absolute string }{{"wal_appends/op", "treedb.command_wal.append.count_total", "wal_appends"}, {"wal_syncs/op", "treedb.command_wal.file_sync.calls_total", "wal_syncs"}} {
+							x, y, e := cowPublicWALCounters(profile, before, after, counter.key)
+							if e != nil {
+								b.Fatal(e)
 							}
+							b.ReportMetric(float64(y-x)/float64(b.N), counter.metric)
+							b.ReportMetric(float64(x), counter.absolute+"_before")
+							b.ReportMetric(float64(y), counter.absolute+"_after")
 						}
 						for _, counter := range []struct{ metric, key string }{{"snapshot_rotations/op", "treedb.cache.snapshot.rotations_total"}, {"rotated_shards/op", "treedb.cache.snapshot.rotated_shards_total"}, {"enqueued_records/op", "treedb.cache.snapshot.enqueued_records_total"}} {
 							x := cowIntegrationCounter(b, before, counter.key)

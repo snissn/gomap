@@ -70,10 +70,29 @@ def relaxed_sync(raw):
         if boundary["phase"] not in ("opened","reopen_counter_reset","reopened"):
             boundary["stats"][key]=str(int(boundary["stats"][key])+1)
 
-def retime_call(raw,phase,start):
-    call=next(c for c in raw["calls"] if c["phase"]==phase)
+def retime_call(raw,phase,start,operation=None):
+    call=next(c for c in raw["calls"] if c["phase"]==phase and (operation is None or c["operation"]==operation))
     call["start_ns"]=start;call["completion_ns"]=start+call["duration_ns"]
     raw["calls"].sort(key=lambda c:c["start_ns"])
+
+def serialize_public_calls(raw):
+    # Keep real work and positive durations but remove all interval overlap.
+    # A requested/reported overlap count cannot substitute for actual intervals.
+    cursor=1
+    for call in raw["calls"]:
+        call["start_ns"]=cursor;call["completion_ns"]=cursor+call["duration_ns"]
+        cursor=call["completion_ns"]+1
+    raw["overlapping_readers"]=1
+
+def nowal_nonzero_baseline(raw):
+    for boundary in raw["boundaries"]:
+        if boundary["stats"]:boundary["stats"]["treedb.command_wal.append.count_total"]="1"
+
+def omit_tombstone_proof(raw):
+    for proof in raw["layout_proofs"][1:]:
+        omitted=raw["keys"]*raw["epochs"]
+        proof["entries"]-=omitted
+        proof["pointers" if raw["layout"]=="forced_pointer" else "inline"]-=omitted
 
 def main():
     p=argparse.ArgumentParser();p.add_argument("--positive",type=Path,required=True);p.add_argument("--out",type=Path,required=True);args=p.parse_args()
@@ -96,6 +115,19 @@ def main():
         "ordinary-wal-append-zero":raw_mutation(lambda r:zero_counter(r,"treedb.command_wal.append.count_total"),"command_wal_durable"),
         "durable-ordinary-sync-zero":raw_mutation(lambda r:zero_counter(r,"treedb.command_wal.file_sync.calls_total"),"command_wal_durable"),
         "relaxed-unexplained-ordinary-sync":raw_mutation(relaxed_sync,"command_wal_relaxed"),
+        "nowal-nonzero-absolute-zero-delta":raw_mutation(nowal_nonzero_baseline,"no_wal_fast"),
+        "nowal-missing-actual-counter":raw_mutation(lambda r:r["boundaries"][0]["stats"].pop("treedb.command_wal.append.count_total"),"no_wal_fast"),
+        "nowal-unexpected-command-wal":raw_mutation(lambda r:r["boundaries"][0]["stats"].update({"treedb.command_wal.enabled":"true"}),"no_wal_fast"),
+        "wrong-actual-redo-route":raw_mutation(lambda r:r["boundaries"][0]["stats"].update({"treedb.cache.redo_log.mode":"journal"})),
+        "reported-overlap-with-serial-public-calls":raw_mutation(serialize_public_calls),
+        "missing-layout-stage":raw_mutation(lambda r:r["layout_proofs"].pop()),
+        "partial-layout-observations":raw_mutation(lambda r:r["layout_proofs"][0].update(entries=r["keys"]-1)),
+        "wrong-actual-layout-count":raw_mutation(lambda r:r["layout_proofs"][0].update(pointers=r["layout_proofs"][0]["inline"],inline=r["layout_proofs"][0]["pointers"])),
+        "logical-tombstones-exempted-from-layout":raw_mutation(omit_tombstone_proof),
+        "missing-layout-snapshot-close":raw_mutation(lambda r:r.update(calls=[c for c in r["calls"] if (c["phase"],c["operation"])!=("checkpoint_layout","Snapshot.Close")])),
+        "layout-close-before-lookups":raw_mutation(lambda r:retime_call(r,"reopen_layout",0,"Snapshot.Close")),
+        "layout-diagnostic-owner-leak":raw_mutation(lambda r:r["layout_proofs"][0]["owners_after"].update({"treedb.cache.cow.views":str(int(r["layout_proofs"][0]["owners_before"]["treedb.cache.cow.views"])+1)})),
+        "old-recorder-capacity":raw_mutation(lambda r:r.update(recorder_capacity=r["keys"]*(r["epochs"]*8+8)+512)),
         "unknown-phase":raw_mutation(lambda r:r["calls"][0].update(phase="invented_phase")),
         "missing-epoch-phase":raw_mutation(lambda r:r.update(calls=[c for c in r["calls"] if c["phase"]!="epoch_1_replacement"])),
         "counter-regression":raw_mutation(lambda r:r["boundaries"][1]["stats"].update({"treedb.cache.snapshot.rotations_total":"0"}) if int(r["boundaries"][0]["stats"]["treedb.cache.snapshot.rotations_total"])>0 else r["boundaries"][0]["stats"].update({"treedb.cache.snapshot.rotations_total":"999999999999999999"})),

@@ -17,6 +17,15 @@ SCRIPTS = ("protocol.py", "build.py", "collect.py", "analyze.py", "c4_protocol.p
 LIMITS = {"MaxViews":256,"MaxGenerations":64,"MaxSources":32,"MaxResources":256,
           "MaxGenerationBytes":256<<20,"MaxTotalBytes":2<<30,"MaxRetiredBytes":2<<30,"MaxInFlightBytes":64<<20}
 ACK = {"command_wal_durable":"durable_wal_prefix", "command_wal_relaxed":"relaxed", "no_wal_fast":"relaxed"}
+ACK_ROUTE = {
+    "treedb.command_wal.enabled":"true",
+    "treedb.cache.command_wal.external_durability":"true",
+    "treedb.cache.redo_log.enabled":"false",
+    "treedb.cache.redo_log.mode":"external_command_wal",
+}
+LAYOUT_PHASES = ("seed_layout", "checkpoint_layout", "reopen_layout")
+LAYOUT_OWNER_KEYS = ("treedb.cache.cow.views", "treedb.cache.cow.active_cuts", "treedb.cache.cow.external_leases")
+TIMED_SCOPE = "epochs include startup/oracle/recorder/boundary overhead; seed, representation diagnostics and cleanup excluded; raw complete call durations retained"
 # Resolve ACK literals against Profile.OrdinaryAckClass before freeze; this is
 # a source contract, not permission to accept the requested profile string.
 
@@ -46,12 +55,13 @@ def workload(keys, epochs):
             "seed_timestamp":1,"epoch_timestamp_stride":10,"growth_offsets":[1,2,3],
             "tombstone_offset":2,"value_bytes":256,"writers":1,"point_readers":1,
             "history_readers":1,"same_timestamp_replacement":True,"checkpoint_each_epoch":True,
+            "representation_diagnostics":{"stages":list(LAYOUT_PHASES),"seed_entries":keys,"final_entries":keys*(1+3*epochs),"logical_tombstones_checked":True},
             "native_qualification":"PENDING","maintenance_cap_records":32,"maintenance_cap_bytes":1<<20}
 
 def validate_config(c):
     exact(c, ("schema","suite","status","coordinator_acceptance","result_class","qualification",
               "native_requirements","cycles","order","timeout_seconds","go_binary","go_binary_sha256",
-              "go_version","toolchain_identity","environment","host","noise_policy","fixtures","variants","cases",
+              "go_version","toolchain_identity","external_input_identity","environment","host","noise_policy","fixtures","variants","cases",
               "comparison_metrics"), "configuration")
     need(c["schema"] == SCHEMA and c["suite"] == "c4-sustained", "wrong sustained schema/suite")
     need(c["status"] == "frozen-approved" and type(c["coordinator_acceptance"]) is str and c["coordinator_acceptance"], "missing coordinator freeze")
@@ -65,7 +75,7 @@ def validate_config(c):
     need(c["environment"]["GOWORK"] == "off" and c["environment"]["GOMAXPROCS"] == "4" and c["environment"]["GOFLAGS"] == "", "runtime controls mismatch")
     need(c["go_binary"] == str(Path(c["environment"]["GOROOT"]) / "bin/go"), "unbound Go launcher path")
     need(c["go_version"].startswith("go version go1.26.3 "), "pinned Go 1.26.3 required")
-    for key in ("go_binary_sha256","toolchain_identity"):
+    for key in ("go_binary_sha256","toolchain_identity","external_input_identity"):
         need(re.fullmatch(r"[0-9a-f]{64}",c[key] or ""), "toolchain hash required")
     for name in ("GOROOT","GOCACHE","GOMODCACHE","TMPDIR"):
         p=Path(c["environment"][name]);need(p.is_absolute() and str(p)==c["environment"][name] and ".." not in p.parts, "resolved environment path " + name)
@@ -92,7 +102,7 @@ def validate_config(c):
         need(x["package"]=="github.com/snissn/gomap/TreeDB/mvcc","wrong package")
         for k in ("iterations","warmup_iterations"):finite(x[k],k,True,True);need(x[k]<=8,"finite epoch bound")
         need(x["workload_contract"]==workload(x["keys"],x["iterations"]),"schedule/work contract mismatch")
-        need(x["ack_contract"]=="CommitRelaxed; resolved profile ordinary ACK" and x["timed_scope"]=="epochs include oracle/recorder/boundary overhead; seed and cleanup excluded; raw complete call durations retained","ACK/timing scope")
+        need(x["ack_contract"]=="CommitRelaxed; resolved profile ordinary ACK" and x["timed_scope"]==TIMED_SCOPE,"ACK/timing scope")
         need(x["comparable_metrics"]==["public_calls/op","close_ok"] and x["comparison_metrics"]=={"ns/op":"lower","B/op":"lower","allocs/op":"lower"},"unfrozen comparison scope")
         need(x["latency_groups"]==[],"raw call distributions required")
         need(x["rules"]==metric_rules(),"metric rules mismatch")
@@ -128,6 +138,10 @@ def expected_calls(n,e,mode):
     def add(phase,op,count,inp,out):result[(phase,op)]=(count,inp,out)
     add("setup","Open",1,0,1);add("seed","CommitGroupAt",n//16,16,16);add("pin","IterateVersions.acquire",2,0,1)
     add("seed_oracle","GetAt",n,1,1);add("seed_oracle","IterateVersions.full",1,0,n)
+    for phase in LAYOUT_PHASES:
+        add(phase,"AcquireSnapshot",1,0,1)
+        add(phase,"Snapshot.GetEntryExact",n if phase=="seed_layout" else n*(1+3*e),1,1)
+        add(phase,"Snapshot.Close",1,0,0)
     for epoch in range(1,e+1):
         prefix=f"epoch_{epoch}"
         add(prefix+"_growth","CommitGroupAt",n//16,48,48);add(prefix+"_ordinary","CommitAt",1,1,1);add(prefix+"_replacement","CommitGroupAt",n//16,16,16)
@@ -147,6 +161,7 @@ def validate_stage_order(calls,epochs,mode):
     def stage(phase,*operations):stages.append([(phase,op) for op in operations])
     stage("setup","Open");stage("seed","CommitGroupAt");stage("pin","IterateVersions.acquire")
     for op in ("GetAt","IterateVersions.full"):stage("seed_oracle",op)
+    for op in ("AcquireSnapshot","Snapshot.GetEntryExact","Snapshot.Close"):stage("seed_layout",op)
     for epoch in range(1,epochs+1):
         prefix=f"epoch_{epoch}"
         stage(prefix+"_growth","CommitGroupAt");stage(prefix+"_ordinary","CommitAt");stage(prefix+"_replacement","CommitGroupAt")
@@ -154,10 +169,12 @@ def validate_stage_order(calls,epochs,mode):
         stage(prefix+"_overlap","CommitGroupAt","GetAt","IterateVersions.full")
         stage(prefix+"_checkpoint" if epoch<epochs else "pinned_checkpoint","Checkpoint")
     if mode=="cow_btree":stage("unsupported_prune","PruneVersions")
+    for op in ("AcquireSnapshot","Snapshot.GetEntryExact","Snapshot.Close"):stage("checkpoint_layout",op)
     stage("old_pin_release","IterateVersions.consume_close")
     for op in ("GetAt","GetAt.historical","IterateVersions.full"):stage("released_oracle",op)
     stage("released_checkpoint","Checkpoint");stage("close","Close");stage("reopen","Open")
     for op in ("GetAt","GetAt.historical","IterateVersions.full"):stage("reopen_oracle",op)
+    for op in ("AcquireSnapshot","Snapshot.GetEntryExact","Snapshot.Close"):stage("reopen_layout",op)
     stage("final_close","Close")
     previous=0
     for keys in stages:
@@ -197,7 +214,7 @@ def validate_ordinary_ack(boundaries,profile,keys,epochs):
     need(all(int(boundaries["reopened"][k])==0 for k in fields),"reopened read oracle changed WAL/checkpoint counters")
     if profile=="no_wal_fast":need(all(int(s[append])==int(s[sync])==0 for s in boundaries.values()),"NoWAL observed WAL effects")
 
-RAW_FIELDS=("lifecycle_outcome","lifecycle_error","schema_version","leaf","profile","mode","layout","keys","epochs","group_width","pin_ring","recorder_capacity","limits","shards","flush_threshold","background_checkpoint_interval","disable_side_stores","pointer_threshold","force_pointers","ordinary_ack","read_cut_capability","calls","boundaries","oracle_receipts","native_eligibility","whole_maintenance_charge","qualification","overlapping_readers")
+RAW_FIELDS=("lifecycle_outcome","lifecycle_error","schema_version","leaf","profile","mode","layout","keys","epochs","group_width","pin_ring","recorder_capacity","limits","shards","flush_threshold","background_checkpoint_interval","disable_side_stores","pointer_threshold","force_pointers","ordinary_ack","read_cut_capability","calls","boundaries","layout_proofs","oracle_receipts","native_eligibility","whole_maintenance_charge","qualification","overlapping_readers")
 CALL_FIELDS=("phase","operation","input","output","start_ns","completion_ns","duration_ns","outcome","error")
 COW_COUNTERS=("total_bytes","history_bytes","reserved_bytes","retired_bytes","peak_bytes","control_bytes","deferred_bytes","external_bytes","views","generations","sources","external_leases","active_cuts","current_roots","frozen_roots","capture_calls_total","prepare_calls_total","publications_total","rollovers_total","handoffs_total")
 
@@ -208,7 +225,7 @@ def validate_raw(r,case,epochs):
     finite(r["epochs"],"raw epochs",True,True)
     finite(r["overlapping_readers"],"raw overlap",True,True)
     n=case["keys"];mode=case["mode"];need(r["leaf"]==case["benchmark"].split("/",1)[1] and r["epochs"]==epochs,"raw leaf/epochs mismatch")
-    fixed={"group_width":16,"pin_ring":2,"shards":4,"flush_threshold":16<<20,"background_checkpoint_interval":-1,"disable_side_stores":True,"limits":LIMITS,"recorder_capacity":n*(epochs*8+8)+512,"force_pointers":case["layout"]=="forced_pointer","pointer_threshold":1 if case["layout"]=="forced_pointer" else 1<<30,"read_cut_capability":mode=="cow_btree"}
+    fixed={"group_width":16,"pin_ring":2,"shards":4,"flush_threshold":16<<20,"background_checkpoint_interval":-1,"disable_side_stores":True,"limits":LIMITS,"recorder_capacity":n*(epochs*8+8)+512+n*(3+6*epochs)+6,"force_pointers":case["layout"]=="forced_pointer","pointer_threshold":1 if case["layout"]=="forced_pointer" else 1<<30,"read_cut_capability":mode=="cow_btree"}
     for k,v in fixed.items():need(type(r[k]) is type(v) and r[k]==v,"raw option mismatch "+k)
     need(r["ordinary_ack"]==ACK[case["profile"]],"wrong resolved ordinary ACK")
     need(r["native_eligibility"]==r["whole_maintenance_charge"]=="PENDING" and r["qualification"]=="pending_native_observations","native qualification unavailable")
@@ -224,6 +241,17 @@ def validate_raw(r,case,epochs):
     need(seen==collections.Counter({k:v[0] for k,v in expected.items()}),"missing/duplicate phase/work/Close")
     need([x[0] for x in intervals]==sorted(x[0] for x in intervals),"raw records not ordered by call start")
     validate_stage_order(r["calls"],epochs,mode)
+    need(type(r["layout_proofs"]) is list and len(r["layout_proofs"])==3,"missing/extra representation proof stages")
+    for proof,phase in zip(r["layout_proofs"],LAYOUT_PHASES):
+        exact(proof,("phase","entries","pointers","inline","owners_before","owners_after"),"representation proof")
+        need(proof["phase"]==phase,"representation proof stage mismatch")
+        entries=n if phase=="seed_layout" else n*(1+3*epochs)
+        expected_counts={"entries":entries,"pointers":entries if case["layout"]=="forced_pointer" else 0,"inline":entries if case["layout"]=="inline" else 0}
+        for k,value in expected_counts.items():need(type(proof[k]) is int and proof[k]==value,"incomplete/wrong actual representation count "+phase+" "+k)
+        for side in ("owners_before","owners_after"):
+            exact(proof[side],LAYOUT_OWNER_KEYS if mode=="cow_btree" else (),"representation owner census")
+            for k,value in proof[side].items():need(type(value) is str and re.fullmatch(r"[0-9]+",value),"invalid representation owner counter "+k)
+        need(proof["owners_before"]==proof["owners_after"],"representation diagnostic owner leak")
     overlap=0
     for epoch in range(1,epochs+1):
         calls=[x for x in r["calls"] if x["phase"]==f"epoch_{epoch}_overlap"]
@@ -247,6 +275,8 @@ def validate_raw(r,case,epochs):
             value=stats.get(k);need(type(value) is str and re.fullmatch(r"[0-9]+",value),"missing/invalid required counter "+k)
             if k.endswith("_total") and k in previous:need(int(value)>=int(previous[k]),"counter regression "+k)
         need(stats.get("treedb.profile.resolved")==case["profile"] and stats.get("treedb.cache.memtable_mode")==mode and stats.get("treedb.profile.ordinary_ack_class")==ACK[case["profile"]],"resolved boundary profile/mode/ACK mismatch")
+        route=ACK_ROUTE if case["profile"]!="no_wal_fast" else dict(ACK_ROUTE, **{"treedb.command_wal.enabled":"false","treedb.cache.command_wal.external_durability":"false","treedb.cache.redo_log.mode":"disabled_unsafe"})
+        need(all(stats.get(k)==v for k,v in route.items()),"actual WAL/redo routing mismatch")
         previous=stats;boundary_map[boundary["phase"]]=stats
     if mode=="cow_btree":
         need(int(boundary_map["released"]["treedb.cache.cow.views"])==0 and int(boundary_map["preclose"]["treedb.cache.cow.views"])==0,"public pin owners not released")
