@@ -3794,3 +3794,52 @@ controls remain required. These are authored controls until root normal/race
 execution is attached; no runtime recall or full-source population result follows
 from source inspection. See command README for validation/retention benchmarks,
 allocation boundaries and the optional external population attachment distinction.
+
+
+### Bounded sustained mixed harness and complete outcome audit (#5021)
+
+`TestMixedSustainedAdmissionV1` rejects the superseded58/300s/5s/3s proposal
+and admits the revised48/300s/6s/3s declaration and feasible maximum63 count.
+`TestMixedCumulativeRPCBudgetV1` checks every serial write-plus-visibility
+budget, strict equality, both spacing-dominant and RPC-dominant schedules, and
+refusal before input/network access. Six/60s with3s RPCs remains feasible;
+omitted or explicit six with the shared10s RPC default correctly refuses.
+The ordinary60s read-window ceiling remains a separate control.
+`TestMixedSustainedMaximumPlanV1` independently reconstructs all64 native
+canonical prefixes, checks distinct original keys and alternating changed
+replacements of surviving A, and preserves the original six operations.
+`TestMixedSustainedPrefixBit63V1` checks bit63, all64 compatibility bits and
+range/overflow/duplicate/missing-oracle refusals.
+`TestMixedSustainedCLIAndBoundsV1` refuses explicit zero/non-mixed options and
+identical extended vector directions, and verifies the exact uint64 encoding
+fits the unchanged per-prefix retention allowance. Existing conservative
+recall, exact postjoin recomputation, canceled calls, retry identity, visibility
+and final-slot controls remain required. The UNKNOWN control exercises six and
+58 originals with one and four independent readers and retains every unissued
+original after the first ambiguous result.
+
+`TestFixedPeerColocatedAuditVariableLengthCurrentAuthorityV2` uses the existing
+real four-voter fixture with63 committed originals and complete all-voter
+witness/population proofs. A first-witness omission keeps the final source and
+floor unchanged so rejection isolates the exact retained-count requirement.
+The six-outcome current-authority control remains separate.
+`TestColocatedAuditSustainedBoundsV1` checks matching pre-marshal count/byte
+bounds, repeated original refusal and cancellation using explicitly synthetic
+local admission inputs, which are not runtime authority. The attachment registry
+is unchanged: no opcode, binary section or WAL-format extension is introduced.
+
+Compare identical base/candidate `BenchmarkMixedPrefixValidationGuardV1`,
+`BenchmarkMixedRetainedCallV1`, `BenchmarkWindowRetainedCallGuardV1` and
+`BenchmarkPopulationLegacyColocatedPlanGuardV1/{validate,decode}` with B/op and
+allocs/op. Candidate `BenchmarkMixedSustained58V1/{plan,validate-all-compatible}`
+measures bounded native-oracle setup and worst compatible-prefix validation on
+the documented small128D fixture; it is not a10K serving benchmark.
+`BenchmarkColocatedAuditSustained58V1/{validate,decode}` times complete synthetic
+58-outcome encoded ledger/token validation, excluding authenticated transport,
+current-FSM witness lookup and source scans. Exact tooling, fixture/source
+identity, commands, isolation and raw results must accompany measured claims.
+These58-outcome synthetic costs remain conservative source guardrails, not
+relabelled48-write runtime evidence. Actual48-outcome audit/resource costs and
+all49 native truths remain fresh qualification obligations.
+See command README for allocation ownership and planned operational bounds;
+source controls alone establish no sustained service result.

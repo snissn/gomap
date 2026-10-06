@@ -1723,13 +1723,20 @@ currently in use). See `vector-partition-raft-v1.md` for outcome/floor semantics
 ### Bounded colocated audit diagnostics attachment
 
 The existing fixed-peer control `diagnostics` JSON request may carry optional
-`ColocatedAudit` (version1, encoded plan <=524288 bytes, six original replace or
+`ColocatedAudit` (version1, encoded plan <=524288 bytes, 6..63 original replace or
 delete requests/ACKs and final unique-ID states). Other operations reject the
 attachment. Ordinary diagnostics omit it. This changes no public vector binary
 section, command opcode, deterministic entry or WAL format. The optional reply
-`ColocatedAudit` carries six exact original witnesses, retained chain/count/bytes,
+`ColocatedAudit` carries every declared exact original witness, retained chain/count/bytes,
 current-FSM applied/root/physical-WAL identity and final known-ID source/live
 proofs. It is evidence only, never caller-supplied commit authority. Missing,
 malformed, stale or torn authority refuses the attachment without retry or
 repair; it is not downgraded to a successful ordinary diagnostic. See the
 mixed-window README and `mixed-report-v1.schema.json` for shape and limits.
+
+The bounded count extension (#5021) preserves the six-outcome default and
+requires the actual retained count to equal the declared ledger length. It
+changes only this existing optional diagnostics attachment admission; no binary
+section or deterministic registry entry changes. The separate population-only
+mode still requires empty outcome/final ledgers and cannot replace any original
+outcome proof.

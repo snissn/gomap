@@ -1374,3 +1374,8 @@ Duration expiry is observed at public returns, preserving the existing approxima
 that time for `WriterStopNS`; `writerDone` remains the later conservative worker
 join and post-writer read fence. These sampled phase witnesses do not qualify
 performance or prove continuous overlap.
+
+The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
+uses `scripts/r1_collection_capture.sh` and the `gomap-r1-row-v1` packet. It reports
+public full-row and prepared-view boundaries with matched SQLite durability;
+these dedicated artifacts are not `-profile-dir` or benchprof inputs.
