@@ -301,18 +301,23 @@ func r1LifecycleMaintenance5060(t *testing.T, db *backenddb.DB, col *Collection,
 	if _, err := os.Stat(oldPath); err != nil {
 		t.Fatalf("rewrite must retain source before GC: %v", err)
 	}
+	// Settle the rewrite's asynchronous durable publication before asking GC
+	// to preserve the still-selectable older fallback. This does not refresh it.
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint rewritten roots before protected GC: %v", err)
+	}
 	candidates := append(slices.Clone(rewrite.SupersededRefs), candidate)
 	gc, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{Detailed: true, CandidateRefs: candidates})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("GC before fallback refresh: %v", err)
 	}
 	if gc.SegmentsDeleted != 0 {
 		t.Fatalf("selectable recovery generation reclaimed early: %+v", gc)
 	}
-	advanceColumnAssetDurableFallbackM15C(t, db)
+	r1LifecycleRefreshFallback5060(t, db)
 	gc, err = col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{Detailed: true, CandidateRefs: candidates})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("GC after fallback refresh: %v", err)
 	}
 	if gc.SegmentsDeleted != 1 || gc.BytesDeleted <= 0 {
 		t.Fatalf("released settled segment not reclaimed: %+v", gc)
@@ -327,6 +332,49 @@ func r1LifecycleMaintenance5060(t *testing.T, db *backenddb.DB, col *Collection,
 		t.Logf("post-release vlog GC deleted=%d pending=%d bytes=%d", stats.SegmentsDeleted, stats.SegmentsPending, stats.BytesDeleted)
 	}
 	r1LifecycleCurrent5060(t, col, want, known)
+}
+
+// Refresh the same live roots without introducing an unrelated application
+// command. Checkpoint waits for queued publication; refresh then converges both
+// durable slots while preserving logical roots and command-WAL coverage.
+func r1LifecycleRefreshFallback5060(t *testing.T, db *backenddb.DB) {
+	t.Helper()
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint before fallback refresh: %v", err)
+	}
+	before, nextLSN := db.State(), db.CommandWALNextLSN()
+	if before == nil || before.AppliedCommandLSN == 0 {
+		t.Fatalf("fallback refresh requires applied command state: %+v", before)
+	}
+	if err := db.RefreshCommandWALCheckpointFallback(); err != nil {
+		t.Fatalf("refresh same-LSN fallback: %v", err)
+	}
+	after := db.State()
+	if after == nil || after.RootPageID != before.RootPageID || after.SystemRootPageID != before.SystemRootPageID ||
+		after.AppliedCommandLSN != before.AppliedCommandLSN || db.CommandWALNextLSN() != nextLSN {
+		t.Fatalf("fallback refresh changed roots/command coverage: before=%+v after=%+v nextLSN=%d want=%d", before, after, db.CommandWALNextLSN(), nextLSN)
+	}
+	roots, err := db.CaptureRecoverableRootSet(context.Background())
+	if err != nil {
+		t.Fatalf("capture refreshed recovery roots: %v", err)
+	}
+	defer roots.Release()
+	durable := 0
+	for _, root := range roots.Roots() {
+		if !root.Durable {
+			continue
+		}
+		durable++
+		if root.UserRootPageID != after.RootPageID || root.SystemRootPageID != after.SystemRootPageID || root.AppliedCommandLSN != before.AppliedCommandLSN {
+			t.Fatalf("fallback did not converge to unchanged live roots: root=%+v state=%+v", root, after)
+		}
+	}
+	if durable != 2 {
+		t.Fatalf("refreshed durable roots=%d want both recovery slots", durable)
+	}
+	if err := roots.Revalidate(); err != nil {
+		t.Fatalf("refreshed recovery authority unstable: %v", err)
+	}
 }
 
 // Reuse #5059's actual command-WAL cut process after mixed churn, compaction,

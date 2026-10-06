@@ -62,9 +62,11 @@ resource handles protect that segment. Captured documents and indexes remain
 unchanged. Closing both views must release all of their active handles.
 
 After release, typed rewrite must copy/remap live manifest references and leave
-the old source segment on disk. An immediate GC must preserve it while a
-selectable durable generation still references it. The existing durable
-fallback-advance helper checkpoints and lawfully advances that generation.
+the old source segment on disk. A checkpoint first settles the rewrite publication, then GC must preserve it
+while a selectable durable generation still references it. A second checkpoint
+and the existing `RefreshCommandWALCheckpointFallback` converge both recovery
+slots to the same live roots without an unrelated command. The test verifies
+both durable roots and unchanged applied/next command LSNs.
 Only then must a fresh ordinary `ColumnAssetGC` delete the eligible old segment
 and report positive deleted bytes. Current full rows and postings must remain
 identical after remap, GC and final reopen. This phase reuses the production
