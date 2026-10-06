@@ -196,3 +196,41 @@ func TestLeafManifestRevisionGCLaterInventoryFailure(t *testing.T) {
 		t.Fatalf("remaining deletion: stats=%+v err=%v", rest, err)
 	}
 }
+
+// Protection is re-evaluated for every later batch. An initial eligibility
+// census is not authority to unlink a revision that becomes held meanwhile.
+func TestLeafManifestRevisionGCFreshHeldProtection(t *testing.T) {
+	s, old, current := newRevisionStore5066(t)
+	old.Release()
+	current.Release()
+	for range 40 {
+		token, err := s.Replace(newLeafGenerationManifest(1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		token.Release()
+	}
+	protected := false
+	renames := 0
+	s.hooks.BeforeRename = func() error {
+		renames++
+		if renames == 16 {
+			protected = true
+		}
+		return nil
+	}
+	stats := LeafGenerationGCStats{}
+	held := func(*leafGenerationManifest) bool { return protected }
+	if err := s.gcRevisionsWithHeldViews(context.Background(), LeafGenerationGCOptions{}, &stats, held); err != nil || stats.ManifestRevisionsDeleted != 16 || stats.ManifestRevisionsEligible != 41 {
+		t.Fatalf("fresh held protection: stats=%+v err=%v", stats, err)
+	}
+	if remaining := revisionFiles5066(t, s.leafDir); len(remaining) != 26 {
+		t.Fatalf("protected remaining=%v", remaining)
+	}
+	protected = false
+	s.hooks.BeforeRename = nil
+	released := LeafGenerationGCStats{}
+	if err := s.gcRevisionsWithHeldViews(context.Background(), LeafGenerationGCOptions{}, &released, held); err != nil || released.ManifestRevisionsDeleted != 25 {
+		t.Fatalf("released pending revisions: stats=%+v err=%v", released, err)
+	}
+}
