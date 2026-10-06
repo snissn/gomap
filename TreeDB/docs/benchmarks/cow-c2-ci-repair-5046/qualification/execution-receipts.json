@@ -1,0 +1,38 @@
+{
+  "raw_driver": {
+    "exec_session": 93007,
+    "command": [
+      "python3",
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-integrated-974d/collect.py",
+      "--source",
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/OWNED/c2-pr5069-integrated-974d/source",
+      "--identity",
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-integrated-974d/source-identity.json",
+      "--out",
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-integrated-974d"
+    ],
+    "environment_override": {
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "exit_code": 0,
+    "stdout_scope": "driver printed the same per-run receipt JSON; durable receipts.json retains every receipt. Each actual benchmark stdout/stderr has an independent retained hash. Driver stream itself was delivered through exec rather than separately redirected."
+  },
+  "following_serial_driver": {
+    "exec_session": 69245,
+    "command": [
+      "bash",
+      "/mnt/fast4tb/gomap-cow-execution-o2nauuzm/artifacts/c2/pr5069-integrated-974d/run-mvcc-after-raw.sh"
+    ],
+    "exit_code": 0,
+    "named_streams": [
+      "raw-analysis",
+      "mvcc-driver",
+      "mvcc-analysis"
+    ]
+  },
+  "file_type_audit": {
+    "exit_code": 0,
+    "expected_modes_sha256": "bbef4a6b0c0fefaef8b03d8be9629d28c32fb6670857b0414ddbc0e8b22b64ba"
+  },
+  "runner_release": "no owned Go/test/collector processes remained after all45runs; private process snapshots preserved"
+}

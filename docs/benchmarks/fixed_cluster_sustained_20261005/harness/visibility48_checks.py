@@ -10,6 +10,7 @@ def visibility_fixture(consumer,originals):
  text=ast.unparse(ast.Module(body=body,type_ignores=[]))
  # Adapt only the retained fixture builder, never the verifier being tested.
  substitutions={"c.causal_range(":"causal_range(","range(7)":"range(originals+1)","range(6)":"range(originals)","account([], 6)":"account([], originals)","account(r['Writes'], 6)":"account(r['Writes'], originals)","[20000000] * 6":"[20000000] * originals","'doc%02d'":"'doc-%06d'","5000000000":"6000000000","HighestNewCommitIndex=16":"HighestNewCommitIndex=10+originals","RequiredAppliedIndex=16":"RequiredAppliedIndex=10+originals","AppliedIndex=16":"AppliedIndex=10+originals","ready(0, 16)":"ready(0, 10+originals)","utc(61000000000)":"utc(DURATION+1000000000)","16 / 60":"16 / (DURATION/1e9)","('PostRecall', 'quiescent-after-mixed', 16)":"('PostRecall', 'quiescent-after-mixed', 10+originals)","ACCEPT_MIXED_INVARIANT_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION":"ACCEPT_MIXED_CHANGING_TOP10_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION"}
+ substitutions['5000000000']=str(consumer.SPACING)
  for before,after in substitutions.items():
   assert before in text,('fixture builder seam',before)
   text=text.replace(before,after)

@@ -142,6 +142,97 @@ func TestRetainedValueLogPruneCertifiedQuietProgress(t *testing.T) {
 	}
 }
 
+// The integrated publisher packs actual source lanes into one private group.
+// Its accepted closure must retain every winning pointer for B's membership
+// proof; only an unrelated, proven-closed segment may be retired afterward.
+func TestRetainedPruneOwnedPointPrefixMembership(t *testing.T) {
+	cache, backend := ownedPointValueFixture(t, 1, true)
+	cache.testSkipRetainedPrune = true
+	value := string(bytes.Repeat([]byte("cross-lane-persistent-value|"), 128))
+	for lane, keys := range [][]string{{"prefix/a", "prefix/c"}, {"prefix/b", "prefix/d"}} {
+		for _, key := range keys {
+			if err := cache.Set(ownedPointKey(t, cache, lane, key), []byte(value)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		cache.mu.Lock()
+		err := cache.rotateMemtableLocked(false)
+		cache.mu.Unlock()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	seq := backend.State().CommitSeq
+	cache.flushAll(true)
+	if backend.groups.Load() != 1 || backend.writes.Load() != 4 || backend.State().CommitSeq != seq+1 {
+		t.Fatalf("fixture missed real multi-lane shared publication: groups=%d writes=%d seq=%d err=%v", backend.groups.Load(), backend.writes.Load(), backend.State().CommitSeq, cache.backgroundError())
+	}
+	// Replace the genesis slot through real durable publications; keep the
+	// accepted multi-lane values in both selectable roots.
+	for i := 0; i < 2; i++ {
+		if err := cache.Set([]byte("advance-slot"), []byte(fmt.Sprint(i))); err != nil {
+			t.Fatal(err)
+		}
+		if err := cache.Checkpoint(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot := backend.AcquireSnapshot()
+	defer snapshot.Close()
+	live, work, err := snapshot.RecoverableValueLogMembership(context.Background())
+	if err != nil || work.CertifiedRoots == 0 || work.UncoveredRoots != 0 || work.FullRootScans != 0 {
+		t.Fatalf("accepted prefix closure: work=%+v err=%v", work, err)
+	}
+	for lane, keys := range [][]string{{"prefix/a", "prefix/c"}, {"prefix/b", "prefix/d"}} {
+		for _, key := range keys {
+			entry, err := snapshot.GetEntry(ownedPointKey(t, cache, lane, key))
+			if err != nil || entry.ValuePtr.FileID == 0 {
+				t.Fatalf("missing actual pointer %s: entry=%+v err=%v", key, entry, err)
+			}
+			if _, present := live[entry.ValuePtr.FileID]; !present {
+				t.Fatalf("accepted source pointer lost from physical membership: %s file=%d", key, entry.ValuePtr.FileID)
+			}
+		}
+	}
+	stalePath, staleID := seedRetainedPruneSegment(t, cache, 406, 128)
+	for _, seq := range []uint32{407, 408} {
+		path, _ := seedRetainedPruneSegment(t, cache, seq, 128)
+		cache.forgetValueLogRetain(path)
+	}
+	if err := backend.RefreshValueLogSet(); err != nil {
+		t.Fatal(err)
+	}
+	pin := backend.AcquireSnapshot()
+	defer pin.Close()
+	cache.lastForegroundWriteUnixNano.Store(time.Now().Add(-2 * retainedPruneQuietWindow).UnixNano())
+	out := cache.pruneRetainedValueLogsWithObservedContextOptions(context.Background(), false, nil, retainedValueLogPruneRunOptions{
+		fullLiveIDScanBudget: cache.retainedPruneBackgroundFullLiveIDScanBudget(),
+	})
+	if out.ScanError || out.AbortedForegroundWrites || out.AbortedScanBudget || out.GCCalls != 1 || len(out.GCStats.ZombieMarkedFileIDs) != 1 || out.GCStats.ZombieMarkedFileIDs[0] != staleID || len(out.PendingFileIDs) != 1 || out.PendingFileIDs[0] != staleID {
+		t.Fatalf("prefix prune did not mark exactly the unrelated pinned identity: %+v", out)
+	}
+	if out.ScanStats.Membership.FullRootScans != 0 || out.GCStats.Membership.FullRootScans != 0 || cache.valueLogRetained(stalePath) {
+		t.Fatal("prefix prune fell back or failed to retire the exact retained identity")
+	}
+	if _, err := os.Stat(stalePath); err != nil {
+		t.Fatalf("marked identity unlinked before its real pin released: %v", err)
+	}
+	if err := pin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+		t.Fatalf("marked identity survives final pin release: %v", err)
+	}
+	for lane, keys := range [][]string{{"prefix/a", "prefix/c"}, {"prefix/b", "prefix/d"}} {
+		for _, key := range keys {
+			got, err := snapshot.Get(ownedPointKey(t, cache, lane, key))
+			if err != nil || string(got) != value {
+				t.Fatalf("retained accepted source corrupted by prune: %s err=%v", key, err)
+			}
+		}
+	}
+}
+
 func TestRetainedValueLogPruneBatchCutoverFences(t *testing.T) {
 	for _, mode := range []string{"foreground", "domain", "contention", "cancel", "stale-publication"} {
 		t.Run(mode, func(t *testing.T) {

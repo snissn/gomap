@@ -1,0 +1,12 @@
+{
+  "status": "PASS",
+  "checked_at": "2026-10-06T08:10:47.193083+00:00",
+  "only_changed_field": "discovery_source_sha256",
+  "old": "4c69a772f9a9fb5b56aedd6bdd59fb2c7c0b73930d91f8767c842dad3ac9f34d",
+  "new": "4a521c72fb2a7a1a8355f4309a9c4af5398847e86e6f8d7fc6a36bcbca236350",
+  "workflows": 14,
+  "members": 56,
+  "owners_rules_harness_inputs_and_policy_byte_semantics_unchanged": true,
+  "old_contract_tests": "ci-contracts/receipts.json",
+  "applicability": "All policy and CI-contract helper logic unchanged. Current fingerprint binds staged runtime and published reproduction scripts; original15/21/6/16 test results retain applicability. Final staged --check additionally required."
+}

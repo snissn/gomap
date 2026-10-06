@@ -1,0 +1,17 @@
+{
+  "candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "runner_exit": 0,
+  "runner": "bash run-gates.sh via SSH",
+  "stages": {
+    "initial": 0,
+    "normal": 0,
+    "race": 0,
+    "safe": 0,
+    "vet": 0,
+    "final-no-extra-proof": 0
+  },
+  "post_source_matches": true,
+  "package_events_separate_from_test_events": true,
+  "go_jobs_at_release": 0,
+  "original_red": "8d743 initial exit1; other stages unexecuted"
+}

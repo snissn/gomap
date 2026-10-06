@@ -109,7 +109,12 @@ func (db *DB) ValueLogGC(ctx context.Context, opts ValueLogGCOptions) (ValueLogG
 		}
 	}
 
-	stats, err := db.backend.ValueLogGC(ctx, backendOpts)
+	var stats treedbdb.ValueLogGCStats
+	err = db.runCachedBackendMaintenance(func() error {
+		var runErr error
+		stats, runErr = db.backend.ValueLogGC(ctx, backendOpts)
+		return runErr
+	})
 	if err != nil {
 		return out, err
 	}

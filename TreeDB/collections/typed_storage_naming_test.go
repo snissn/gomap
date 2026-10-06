@@ -760,6 +760,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/internal/typedcolumn/query_ready_open.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "docs/architecture/query-ready-encoded-execution.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	{path: "docs/architecture/query-ready-generation-open.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
+	// Byte-preserved historical CI events retain compatibility API test names.
+	{path: "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/leaf-reclamation-test-repair/original-windows/full-job.log", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 6},
+	{path: "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/leaf-reclamation-test-repair/original-windows/treedb-test.jsonl", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 6},
 	// Retained benchmark configuration/Stats preserve public compatibility field names.
 	{path: "docs/benchmarks/treedb_quicksilver_generic_20261004/RESULTS.json", classification: typedStorageLegacyCompatibility, matchingLines: 559, occurrences: 559},
 	{path: "docs/benchmarks/treedb_jsonbench_canonical_contract.md", classification: typedStorageLegacyTrueColumn, matchingLines: 1, occurrences: 1},

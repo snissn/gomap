@@ -1,0 +1,70 @@
+[
+  {
+    "label": "test_refresh_ci_impact_inventory",
+    "command": [
+      "uv",
+      "run",
+      "--with",
+      "pyyaml",
+      "python",
+      "-B",
+      ".github/scripts/test_refresh_ci_impact_inventory.py"
+    ],
+    "started": "2026-10-06T07:39:17.387667+00:00",
+    "finished": "2026-10-06T07:39:46.006306+00:00",
+    "elapsed_seconds": 28.61819933296647,
+    "exit": 0,
+    "source_aggregate_sha256": "b6fe950245e7945304ca904f31311017f1841719fa2c6ceface4c94217c8d1b0"
+  },
+  {
+    "label": "test_ci_impact",
+    "command": [
+      "uv",
+      "run",
+      "--with",
+      "pyyaml",
+      "python",
+      "-B",
+      ".github/scripts/test_ci_impact.py"
+    ],
+    "started": "2026-10-06T07:39:46.006954+00:00",
+    "finished": "2026-10-06T07:40:16.294057+00:00",
+    "elapsed_seconds": 30.286961083998904,
+    "exit": 0,
+    "source_aggregate_sha256": "b6fe950245e7945304ca904f31311017f1841719fa2c6ceface4c94217c8d1b0"
+  },
+  {
+    "label": "test_treedb_ci_contract",
+    "command": [
+      "uv",
+      "run",
+      "--with",
+      "pyyaml",
+      "python",
+      "-B",
+      ".github/scripts/test_treedb_ci_contract.py"
+    ],
+    "started": "2026-10-06T07:40:16.295023+00:00",
+    "finished": "2026-10-06T07:40:16.529413+00:00",
+    "elapsed_seconds": 0.23444095900049433,
+    "exit": 0,
+    "source_aggregate_sha256": "b6fe950245e7945304ca904f31311017f1841719fa2c6ceface4c94217c8d1b0"
+  },
+  {
+    "label": "test_treedb_windows_core_headroom",
+    "command": [
+      "uv",
+      "run",
+      "--with",
+      "pyyaml",
+      "python",
+      "-B",
+      ".github/scripts/test_treedb_windows_core_headroom.py"
+    ],
+    "started": "2026-10-06T07:40:16.530049+00:00",
+    "finished": "2026-10-06T07:40:17.580650+00:00",
+    "elapsed_seconds": 1.0507068749866448,
+    "exit": 0,
+    "source_aggregate_sha256": "b6fe950245e7945304ca904f31311017f1841719fa2c6ceface4c94217c8d1b0"
+  }
+]

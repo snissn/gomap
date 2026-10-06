@@ -34,7 +34,7 @@ native_text=(R/m['roles']['native_runner']['output']['path']).read_text()
 native_site=next(n for n in ast.walk(ast.parse(native_text)) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and len(n.value.args)>1 and isinstance(n.value.args[1],ast.Constant) and n.value.args[1].value=='pending native packet shape/source')
 pending={'state':'NATIVE_CANONICAL_PREFIX_ORACLES_GENERATED_PENDING_ROOT_VALIDATION','source_head':d['source_head'],'source_tree':d['source_tree'],'RunID':'rf4trial24mixedchangingc1mixedc1v1','Profile':'changing-top10','Prefixes':[{}]*49,'OriginalRequests':[{}]*48}
 def capture_shape(p):
- exec(compile(ast.Module(body=[native_site],type_ignores=[]),'actual-native-capture-campaign-shape','exec'),{'need':nr.need,'pending':p,'HEAD':d['source_head'],'TREE':d['source_tree']})
+ exec(compile(ast.Module(body=[native_site],type_ignores=[]),'actual-native-capture-campaign-shape','exec'),{'need':nr.need,'pending':p,'HEAD':d['source_head'],'TREE':d['source_tree'],'W':nr.W})
 capture_shape(pending);checks.append('cumulative48_actual_native_capture48_49_positive')
 for key,size in [('Prefixes',59),('OriginalRequests',58)]:
  p=copy.deepcopy(pending);p[key]=[{}]*size
@@ -44,7 +44,7 @@ adapted_ast=ast.parse(ra.adapted)
 verifier=next(n for n in adapted_ast.body if isinstance(n,ast.FunctionDef))
 fixed_site=next(n for n in verifier.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='fixed' for t in n.targets))
 ns=dict(ra.rd.__dict__);exec(compile(ast.Module(body=[fixed_site],type_ignores=[]),'actual-campaign-read-fixed-fields','exec'),ns)
-assert ns['fixed']['PaceInterval']==6000000000 and "'PaceInterval':5_000_000_000" in ra.original
+assert ns['fixed']['PaceInterval']==6000000000 and "'PaceInterval':SPACING" in ra.original and ra.rd.SPACING==6000000000
 checks.append('cumulative48_actual_adapted_read_interval6_generic5_controls_preserved')
 fixed_index=verifier.body.index(fixed_site)
 fixed_loop=verifier.body[fixed_index+1]
@@ -58,8 +58,8 @@ bad('cumulative48_actual_adapted_read_rejects_repinned_interval5',lambda:campaig
 # The helper is inspected as actual source; native Go is never executed here.
 helper_text=(R/m['roles']['oracle_helper']['output']['path']).read_text()
 go_source=next(n.value.value for n in ast.parse(helper_text).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='GO_SOURCE' for t in n.targets))
-assert 'Originals:48' in go_source and 'PaceInterval:6*time.Second' in go_source and 'Originals:58' not in go_source
-assert 'len(r.Writes)!=48||len(r.Prefixes)!=49' in go_source
+assert 'Originals:cfg.Originals' in go_source and 'PaceInterval:time.Duration(cfg.SpacingSeconds)*time.Second' in go_source and 'cfg.Originals!=48||cfg.SpacingSeconds!=6' in go_source
+assert 'len(r.Writes)!=cfg.Originals||len(r.Prefixes)!=cfg.Originals+1' in go_source
 checks.append('cumulative48_actual_native_helper_source48_49_interval6')
 # Repin each stale JSON honestly; rejection must occur before output creation.
 campaign_receipts=[]

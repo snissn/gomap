@@ -130,6 +130,53 @@ func TestApplyLeafTokenHandoffPartialAddAbortAndRetry(t *testing.T) {
 
 type unsupportedApplyLeafProvider struct{ *stableContractTestLeafLog }
 
+type applyProducerOwnerWitness struct {
+	*stableContractTestLeafLog
+	releases int
+}
+
+func (w *applyProducerOwnerWitness) LeafPageLogForApply(func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error) {
+	return w, true, nil
+}
+
+func (w *applyProducerOwnerWitness) ReleaseLeafPageLogApplyResources() { w.releases++ }
+
+func TestApplyLeafTokenHandoffProducerOwnerThroughHintFreezeAndAbort(t *testing.T) {
+	for _, abort := range []bool{false, true} {
+		t.Run(fmt.Sprint("abort=", abort), func(t *testing.T) {
+			owner := &applyProducerOwnerWitness{stableContractTestLeafLog: &stableContractTestLeafLog{}}
+			log, err := newApplyLeafResourceLog(&leafPageLogWithRecordLengthHints{inner: owner})
+			if err != nil {
+				t.Fatal(err)
+			}
+			released := 0
+			id := page.ValueLogFileID(11)
+			if err := log.capture.acceptRaw([]page.ValuePtr{{FileID: id, Offset: 32, Length: 16}}, []*rootpublication.StableResourceToken{directLeafTestToken(t, uint64(id), 48, &released)}); err != nil {
+				t.Fatal(err)
+			}
+			if owner.releases != 0 {
+				t.Fatal("owner ended before joined freeze/abort")
+			}
+			if abort {
+				log.abandon()
+			} else {
+				set, err := log.freeze()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if released != 0 {
+					t.Fatal("owner completion released independent output")
+				}
+				set.Release()
+			}
+			log.abandon()
+			if owner.releases != 1 || released != 1 {
+				t.Fatalf("owner/output releases=%d/%d", owner.releases, released)
+			}
+		})
+	}
+}
+
 func (*unsupportedApplyLeafProvider) LeafPageLogForApply(func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error) {
 	return nil, false, nil
 }

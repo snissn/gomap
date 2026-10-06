@@ -1,0 +1,83 @@
+{
+  "at_utc": "2026-10-06T09:58:24.263835+00:00",
+  "base_head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "test_sha256": "068b828c9639f6e47733746522bf6685fe554f0c5905219a0e3107e0cdb68f48",
+  "packet_manifest_sha256": "456061807c89ff3c72c06064a191beca1b8b56a0d01269642e65aa0be5087fb7",
+  "literal_worker_entries": 22,
+  "tracked_pre_post_bytes_verified": 8161,
+  "actual_counts": {
+    "normal": {
+      "test_subcase_pass": 12,
+      "package_pass": 1,
+      "physical_removal_receipts": 9,
+      "profile_coverage": {
+        "command_wal_durable": 3,
+        "command_wal_relaxed": 3,
+        "no_wal_fast": 3
+      },
+      "polls": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 7.376506090164185
+    },
+    "race": {
+      "test_subcase_pass": 12,
+      "package_pass": 1,
+      "physical_removal_receipts": 9,
+      "profile_coverage": {
+        "command_wal_durable": 3,
+        "command_wal_relaxed": 3,
+        "no_wal_fast": 3
+      },
+      "polls": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 10.394418001174927
+    },
+    "safe": {
+      "test_subcase_pass": 12,
+      "package_pass": 1,
+      "physical_removal_receipts": 9,
+      "profile_coverage": {
+        "command_wal_durable": 3,
+        "command_wal_relaxed": 3,
+        "no_wal_fast": 3
+      },
+      "polls": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 6.1901538372039795
+    }
+  },
+  "original_failed_hosted_packet_bound": true,
+  "actual_repaired_windows_execution": false,
+  "delayed_removal_reproduced_locally": false,
+  "runtime_changes": []
+}

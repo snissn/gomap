@@ -1,0 +1,77 @@
+{
+  "reviewer": "independent /root/cow_c2_candidate_review; exact GPT-6.1 Sol",
+  "disposition": "ACCEPT final source/evidence/publication readiness for experimental opt-in C2; merge HELD on current-head external gates",
+  "runtime_candidate": "974d1ce9bd5cd91d17f5851d53663bf71643b288",
+  "runtime_tree": "b06dc9f41b8593f1c9f87d5b6d0e1a23a853b822",
+  "repair_base": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+  "checked_staged_snapshot_tree": "881b20d2c7adbecb5b8f22f6202c908dbf16c471",
+  "checked_staged_paths": 7974,
+  "publication_files_including_self_manifest": 644,
+  "not_final_commit": "Index snapshot verified before these literal review files are appended; no new committed-descendant identity is claimed.",
+  "snapshot_hashes": {
+    "publication-manifest.json": "c7ed2a4c68c018ac963168e420cd8885f4d4dec7c3cde19ec6b316dba83ae5f0",
+    "publication-provenance.json": "7c686f051e7efa475e74affb88328c7869733be528853460defbf49a35e18afe",
+    "final-descendant-applicability.json": "f6be00be8fa0ffc23f80f6851f5652ee2e41d80b7ec3f233aef206b3642f36f9",
+    "final-ci-inventory-applicability.json": "cb02e0267afbcb1c3f5db673c382eee1e38d8f3123f797860a3f771661fd7578",
+    "documentation-and-literal-whitespace-check.json": "a39055597e0f55e94f8f7c5a46dddd6611675eaba4dcde1505b66b4ebd752c14",
+    "report.md": "c366108355a05f8fcaa6b0a3b3eb4bdd953c5fbb2cc5ccbd69d8fe7a900d198d",
+    "cost-report.md": "691cd025b9652c7b0cb267c4a4cd771538d1e989a191d67b64abcaeaa6028002",
+    "coordinator-cost-disposition.json": "de41c2a9bd689279144394326a192d827676d53d4fe84505828ade5da890c56d"
+  },
+  "additional_evidence_hashes": {
+    "974-final-publication-structural-check.json": "68cbcf3a8e16ef3c7aaff804a7ee31b09efa4ecea62c42c692cff7874ccadb54",
+    "974-final-publication-claims-check.json": "e7cfa74fe8c03c57627d4e924bf9965ca4f0fee8553d1986fa669ffaa2783d4d",
+    "974-integrated-source-review.json": "4abbe46eab2a6abd8f5f9f2b75d1334d024e5cd72b999acc1f66d35bce4f3cd5",
+    "974-integrated-functional-collector-review.json": "6575996dd3d290f23e52c210ade1f5536cea4f71dbbc67ed189861877eebe0d6",
+    "974-current-cost-evidence-review.json": "49ef5034e9c8ca80cc31662de55f7b343fc564b4ea44882e4578606cdcb9e9bb"
+  },
+  "verified": {
+    "publication_manifest_entries": 643,
+    "provenance_records_byte_preserved": 634,
+    "staged_blob_contents_all_exact": 7974,
+    "frozen_original_paths_compared": 7330,
+    "unchanged_original_paths": 7325,
+    "changed_original_paths": [
+      ".github/ci/ci_impact.json",
+      "TreeDB/README.md",
+      "TreeDB/docs/spec/cow-cache-publication.md",
+      "cmd/benchprof/README.md",
+      "cmd/unified_bench/README.md"
+    ],
+    "staged_preproof_tree": "e3150e4f3bede2396fb2ab2cf718973ddf07c722",
+    "later_snapshot_paths_artifact_only": [
+      "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/final-descendant-applicability.json",
+      "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/final-descendant-applicability.md",
+      "TreeDB/docs/benchmarks/cow-c2-ci-repair-5046/publication-manifest.json"
+    ],
+    "no_added_compiled_Go": true,
+    "old_publication_unchanged": true,
+    "all_numeric_table_rows": 48,
+    "raw_N2048_disposition_rows": 48,
+    "MVCC_N256_costs": 18,
+    "MVCC_N256_ratios": 12,
+    "relative_file_links": 100,
+    "bound_document_hashes": 19,
+    "literal_whitespace_exceptions": 31,
+    "CI_change_only_discovery_source_sha256": true
+  },
+  "source_and_functional_applicability": "Reuse exact974d independent source ACCEPT and affected FUNCTIONAL ACCEPT. Runtime, modules, tests, canonical native authority and both benchmark fixture bytes are unchanged; only four owning-doc links and CI discovery fingerprint changed. Integrated normal/race/safe each275 test/subcase pass events+4 package passes, sole subprocess-helper skip; vet0. Windows crosscompile/Unix evidence retains its actual original scope.",
+  "current_cost_applicability": "All45 actual runs/648 rows independently reconstructed, all90streams bound, all180raw+36publicMVCC matched cases and complete histories exact; all360 real retained-cache Close receipts zero live/positive peak. Own-copy analyzers emitted identical derivatives. Full3repeat spread retained. Current matrices omit DirtyCheckpoint; historical costs/profiles retain historical source.",
+  "residual_cost_judgment": "Coordinator quantified and accepted experimental opt-in C2 residuals across all profiles. The material pointer decode/ACK/public-point and WAL allocation gaps remain explicitly visible. Reviewed authority/producer boundaries support that bounded implementation disposition without performance recommendation. No established directly removable dead owner remains identified within the current canonical planning/finalizer/native-read seams; this is not global optimality, irreducibility or an exact allocation lower bound. Nonempty retained-backend successor still uses the general merge fallback.",
+  "blocking_findings": [],
+  "external_merge_gates": [
+    "Current final committed-head strict default raw-path performance",
+    "Actual current-head hosted Windows runtime",
+    "All required current-head hosted CI",
+    "Current-head hosted Codex review and resolution of prior Drain thread"
+  ],
+  "limits": [
+    "No acceptance of unrun current hosted evidence; local native/tiny timing does not establish strict hosted pass.",
+    "Private executable/dependency/process bytes remain unpublished and were not independently locally content-hashed; local hash indexes/receipts mutually bind them.",
+    "Actual archive type audit establishes7330regular/123executable/noextra; generic byte drift checker alone does not prove file types.",
+    "Small fixed-count shared-host measurements do not establish significance, production tails, workload suitability, sustained retention economics or default promotion.",
+    "No C3 fence removal, C4 qualification or parent goal completion.",
+    "Inherited Print/FragmentationReport Close diagnostic limitations remain outside ordinary point/forward/snapshot repair."
+  ],
+  "required_after_review_append": "Root must copy these exact literal MD/JSON to publication, regenerate publication-manifest.json excluding itself, bind new copies in provenance as appropriate, verify all original measured runtime/module/fixture bytes and old packet unchanged, verify every new post-snapshot path is artifact-only, then bind exact committed descendant. Current staged snapshot and preproof are not relabeled as that future commit."
+}

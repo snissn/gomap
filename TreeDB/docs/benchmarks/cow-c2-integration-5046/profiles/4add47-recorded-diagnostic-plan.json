@@ -1,0 +1,22 @@
+{
+  "recorded_utc": "2026-10-06T06:07:00.531434+00:00",
+  "candidate": "4add47f71f165e2c7ee5e01f3cb7d6e6eefa6cad",
+  "source_tree_sha256": "ae44d55e023db64fcaced92456f0e671a88886c81ee1b3996d9dba61a3869581",
+  "collector_sha256": "67d03065ee921cc67f20a372253eb8052160ea7cbcfa36fad31bae77abd962e8",
+  "collector": "unchanged repaired actual supported profile collector",
+  "expected_jobs": 8,
+  "raw_jobs": "NoWAL N2048 btree/cow InlineForward16, PointerCaptureReadRelease, PointerIncrementalWrite 8192x each",
+  "mvcc_jobs": "NoWAL point btree/cow256x count16 each",
+  "prerequisites": [
+    "complete45 new4add47 cost runs strictly analyzed; actual same immutable candidate binaries",
+    "no185 timing jobs remain",
+    "frozen source and retained binaries match full identities"
+  ],
+  "exclusive_owner": "/root",
+  "outputs": "profiles-4add47-material-costs",
+  "scope": "Diagnostic CPU/alloc profiles including setup/teardown, not replacement timings or exact lower bounds. Retain complete originals and changed paths; independently review cause evidence and residual impact.",
+  "whole_C2_acceptance": false,
+  "state": "PREPARED UNEXECUTED",
+  "recollection_reason": "Actual scalar staging, captured cache-cursor elision and empty-backend public successor paths changed since ce808; material publicMVCC and raw pointer/inline ownership costs remain unresolved. Diagnostic profiles qualify changed cost classes and remaining concrete ownership mechanisms, not a new timing requirement merely for a new SHA.",
+  "historical_evidence": "ce8088profiles and b98profiles retain their original sources and receipts; never relabeled4add47"
+}

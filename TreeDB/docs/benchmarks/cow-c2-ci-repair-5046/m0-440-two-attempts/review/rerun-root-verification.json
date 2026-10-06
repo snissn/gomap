@@ -1,0 +1,175 @@
+{
+  "at_utc": "2026-10-06T09:40:34.106939+00:00",
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "attempt": 2,
+  "job": "https://github.com/snissn/gomap/actions/runs/37441320541/job/112201717204",
+  "all20streams_complete": true,
+  "all42metrics_recomputed": 42,
+  "all_actual_metrics_equal_summary": true,
+  "fixture_identical_to_failed_attempt": true,
+  "commands_identical_to_failed_attempt": true,
+  "unchanged_analyzer_sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+  "gates": {
+    "legacy_cv_at_most_10_percent": true,
+    "legacy_completed_without_abort": true,
+    "public_status_explicit": true
+  },
+  "required_metrics": {
+    "vacuum-total-ns/op": {
+      "samples": [
+        16422990817.0,
+        16445204229.0,
+        16648497218.0,
+        16437901513.0,
+        16456437877.0,
+        16443100352.0,
+        16421506006.0,
+        16468277682.0,
+        16432346631.0,
+        16452948545.0
+      ],
+      "mean": 16462921087.0,
+      "median": 16444152290.5,
+      "cv": 0.004058900086958891
+    },
+    "max-writer-pause-ns": {
+      "samples": [
+        65577801.0,
+        66803421.0,
+        61903770.0,
+        64731106.0,
+        64217500.0,
+        65630053.0,
+        63591242.0,
+        65703121.0,
+        65115277.0,
+        64450588.0
+      ],
+      "mean": 64772387.9,
+      "median": 64923191.5,
+      "cv": 0.02092334559245847
+    },
+    "foreground-p99-ns/op": {
+      "samples": [
+        38695323.0,
+        38726483.0,
+        40048301.0,
+        38331675.0,
+        38865996.0,
+        38524991.0,
+        39987667.0,
+        37901529.0,
+        40080620.0,
+        38459527.0
+      ],
+      "mean": 38962211.2,
+      "median": 38710903.0,
+      "cv": 0.02021752698120778
+    }
+  },
+  "packet_files": {
+    "commands.txt": {
+      "bytes": 383,
+      "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+    },
+    "fixture.json": {
+      "bytes": 1215,
+      "sha256": "5996ea1eba4f31e3ae21892ceee0f7c4b7ecc144bcc2692c872b22f0a9bc9fd3"
+    },
+    "legacy-benchstat-input.txt": {
+      "bytes": 11130,
+      "sha256": "8c73edfdd65545dd621b50ac04e148de6ce4884eea486eca18f408573f68d256"
+    },
+    "raw/legacy-1.txt": {
+      "bytes": 1113,
+      "sha256": "236dfcc44f1415ec79b76c9d9d278c35ccc569c7a5f707575b952f788126e780"
+    },
+    "raw/legacy-10.txt": {
+      "bytes": 1113,
+      "sha256": "5112d57eb5b69ec31fa68ade3287a4f4610387015d9ab8b38b7e944c7ffc6ad6"
+    },
+    "raw/legacy-2.txt": {
+      "bytes": 1113,
+      "sha256": "db21031b1b156c557be933383d3107592335e9e6c2c16020c00d32933e83afb9"
+    },
+    "raw/legacy-3.txt": {
+      "bytes": 1113,
+      "sha256": "07454ab7ead33a2d8866c0b47f912f3bb078b3f6289f34f823e87153ca9f7455"
+    },
+    "raw/legacy-4.txt": {
+      "bytes": 1113,
+      "sha256": "f955cd8b878770afce8742d2f8f50bc545a48daf4f97cbe528258bdedc395ef2"
+    },
+    "raw/legacy-5.txt": {
+      "bytes": 1113,
+      "sha256": "3b591582c702fb7b7b39bb6b04579b75bb6c00774cb86853f7730822863b71e8"
+    },
+    "raw/legacy-6.txt": {
+      "bytes": 1113,
+      "sha256": "893c6013193877aaf8cb2132c474d8efece11f08c5c8751ab6234ddb6c2b9802"
+    },
+    "raw/legacy-7.txt": {
+      "bytes": 1113,
+      "sha256": "09ed3089373210ea63ed44569a531f5338babeca1f8dbd01a45c31792d2fc562"
+    },
+    "raw/legacy-8.txt": {
+      "bytes": 1113,
+      "sha256": "3c4a386ad124b6802649ba80355f7da3b4039bc513c71a97cf4f565b4218cefe"
+    },
+    "raw/legacy-9.txt": {
+      "bytes": 1113,
+      "sha256": "b425af39d8653eab5acdcdeb76c706bf8659b9b3e4f1973cf88fe92089db74ba"
+    },
+    "raw/public-1.txt": {
+      "bytes": 661,
+      "sha256": "5b40a38afbb771f9762953a09ddd26ba97f1eb6ca0e60dc36d8a1d7a5729dbee"
+    },
+    "raw/public-10.txt": {
+      "bytes": 665,
+      "sha256": "c51bd5e5f4707b516c1079367e003793e7e8ecf26672c78d62e3c37758b2bc9c"
+    },
+    "raw/public-2.txt": {
+      "bytes": 661,
+      "sha256": "6adb17fea5276e697abfaa71e97b020161c6bf6885f846a9990410c1ec0c5b5d"
+    },
+    "raw/public-3.txt": {
+      "bytes": 665,
+      "sha256": "33ec498238e7966fa0749e08ca977970e0f549017f03303fef98ef1f706cd681"
+    },
+    "raw/public-4.txt": {
+      "bytes": 661,
+      "sha256": "694450adc3713c3fbc270b268b9f6745c7936c9c68cd239fffb4a282b0ac711e"
+    },
+    "raw/public-5.txt": {
+      "bytes": 661,
+      "sha256": "109f15ffa03cad770e12e9b1465c64bace6591c64d51beeb1a1b5c0ec500766d"
+    },
+    "raw/public-6.txt": {
+      "bytes": 665,
+      "sha256": "fa26e203cc9ad92886b1af80f80857a34d51edd6924dcf4496cda2455aa60612"
+    },
+    "raw/public-7.txt": {
+      "bytes": 666,
+      "sha256": "89dc684061875ef12c3a72236266e2358e4811dede53e5af850e8a1923e933d9"
+    },
+    "raw/public-8.txt": {
+      "bytes": 661,
+      "sha256": "ee0f5b24dc788442be7d6560e9ed060f9ad57d53a47b1fb4230dcc1b40208980"
+    },
+    "raw/public-9.txt": {
+      "bytes": 661,
+      "sha256": "9040ea17b6f363790eee17742af166b6bc520df0e76b1ac9a6c920455c6f21e1"
+    },
+    "results.json": {
+      "bytes": 16731,
+      "sha256": "dde909196c0dc4ae2972965556e8c1aec5494407f190f99ff417999dcf0476c7"
+    },
+    "summary.md": {
+      "bytes": 2024,
+      "sha256": "3ca714974f03ad7b938599cd5393bc1adf1e33729223e58542a5a0210d851886"
+    }
+  },
+  "original_failed_packet_preserved": true,
+  "original_failure_not_explained_or_disproven": true,
+  "scope": "Fresh within-capture stability passes unchanged gates; no causal attribution/regression/binary-equivalence/default-promotion claim"
+}

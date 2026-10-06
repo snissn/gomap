@@ -61,6 +61,26 @@ Public raw operations that cannot yet be represented as deterministic typed
 commands fail closed under command WAL; today that includes callback-based `Update`
 and `UpdateSync`.
 
+## Explicit immutable cache selection
+
+Set `opts.MemtableMode = "cow_btree"` before public Open to select immutable
+raw-point cached publication independently of the profile. The default remains
+adaptive. `COWMemtableLimits` supplies finite generation/source/view/resource
+and byte admission; an all-zero bundle uses finite defaults, while a partial or
+invalid bundle refuses. COW uses four fixed shards unless explicitly configured.
+
+Point Set/Delete and point batches, including encoded MVCC groups, prepare all
+changed roots and concrete read leases before command acceptance. Canonical
+RID/revision payload and WAL dependency custody remain with the existing intent;
+one already-prepared cut installs after append. Snapshots pin that cut without
+rotating buffered writes. COW callback/conditional mutations, range deletion,
+reverse traversal and backend/manual-root bypass refuse before effects.
+
+`no_wal_fast` explicit sync releases writer/admission locks before Checkpoint. Flush
+keeps exact captured-prefix precedence until one backend publication and safe
+basis handoff; an accepted-plus-error receipt prevents stale reapplication.
+See the [COW publication contract](../TreeDB/docs/spec/cow-cache-publication.md).
+
 ## Collection and catalog routing
 
 Supported collection, catalog, dictionary/template, typed-column, vector, and

@@ -1,0 +1,8 @@
+{
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "file_count": 8057,
+  "before_manifest_sha256": "f321934eda545fb152231b69b2ca4412440790418ddc4801668640c478ec924f",
+  "after_manifest_sha256": "f321934eda545fb152231b69b2ca4412440790418ddc4801668640c478ec924f",
+  "changed_paths": [],
+  "git_status": " M TreeDB/cow_power_loss_test.go\n"
+}

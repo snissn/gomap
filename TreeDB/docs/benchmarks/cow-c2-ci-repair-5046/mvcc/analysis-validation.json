@@ -1,0 +1,14 @@
+{
+  "raw_runs": 18,
+  "rows": 108,
+  "matched_cases": 36,
+  "raw_hashes_verified": true,
+  "stderr_hashes_verified": true,
+  "source_tree_sha256": "1b2e288f2a9a5707649be0a7b596aac6240eb295ed3d119328177ad595659077",
+  "scope": "tiny growing-history C2 public-MVCC diagnostic; fences retained; no sustained, significance, C3 or C4 claim",
+  "complete_history_outputs": {
+    "128": 8.5,
+    "256": 16.5
+  },
+  "final_close_drain": "validated separately by root-package dirty fixture"
+}

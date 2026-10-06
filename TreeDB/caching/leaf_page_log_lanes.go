@@ -13,6 +13,12 @@ type cachingLeafPageLogGroup struct {
 	handoff *applyLeafTokenHandoff
 }
 
+func (g *cachingLeafPageLogGroup) ReleaseLeafPageLogApplyResources() {
+	if g != nil {
+		g.handoff.release()
+	}
+}
+
 var _ backenddb.LeafPageLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageBatchLog = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageStableLog = (*cachingLeafPageLogGroup)(nil)

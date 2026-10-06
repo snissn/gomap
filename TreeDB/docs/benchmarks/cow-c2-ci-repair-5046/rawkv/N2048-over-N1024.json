@@ -1,0 +1,3062 @@
+[
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.4693075269536706,
+          1.8038047392064744,
+          1.2507401475441662
+        ],
+        "median": 1.4693075269536706
+      },
+      "B/op": {
+        "values": [
+          0.999932531204318,
+          0.999932531204318,
+          0.999932531204318
+        ],
+        "median": 0.999932531204318
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.4339925173703902,
+          0.8541458541458542,
+          0.70355871886121
+        ],
+        "median": 0.8541458541458542
+      },
+      "B/op": {
+        "values": [
+          0.9990375360923965,
+          0.9980769230769231,
+          0.9990375360923965
+        ],
+        "median": 0.9990375360923965
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.2423603793466806,
+          1.055742211362248,
+          0.9739130434782609
+        ],
+        "median": 1.055742211362248
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          0.9789513968618446,
+          0.9785768936495792
+        ],
+        "median": 0.9789513968618446
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9832451736714867,
+          1.0050591199590986,
+          0.9067277895981485
+        ],
+        "median": 0.9832451736714867
+      },
+      "B/op": {
+        "values": [
+          1.0170394036208732,
+          1.0170394036208732,
+          1.0138004246284502
+        ],
+        "median": 1.0170394036208732
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.003169768868262,
+          1.0305454643935419,
+          0.9835112436723904
+        ],
+        "median": 1.003169768868262
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0295044155785131,
+          1.5139236884769773,
+          1.2159249375914607
+        ],
+        "median": 1.2159249375914607
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.4082160763383471,
+          1.5080426531718778,
+          0.8321143617021277
+        ],
+        "median": 1.4082160763383471
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          0.9968244517217426
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1069936358903083,
+          1.0818097420628283,
+          0.9233642160803628
+        ],
+        "median": 1.0818097420628283
+      },
+      "B/op": {
+        "values": [
+          0.9999897101344886,
+          0.9999897158489053,
+          0.9994343716897889
+        ],
+        "median": 0.9999897101344886
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9174854024324902,
+          0.9926341924932053,
+          1.0013328274170321
+        ],
+        "median": 0.9926341924932053
+      },
+      "B/op": {
+        "values": [
+          0.8521510526902083,
+          0.8720708234928087,
+          0.8480956903552601
+        ],
+        "median": 0.8521510526902083
+      },
+      "allocs/op": {
+        "values": [
+          0.9574468085106383,
+          1.0222222222222221,
+          1.0454545454545454
+        ],
+        "median": 1.0222222222222221
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9832262952152959,
+          1.0239478620665619,
+          1.0190757886617519
+        ],
+        "median": 1.0190757886617519
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0902255639097744,
+          1.1744118218938362,
+          1.0238923531342303
+        ],
+        "median": 1.0902255639097744
+      },
+      "B/op": {
+        "values": [
+          0.9989373007438895,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          0.9583333333333334,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9112576064908722,
+          0.9352306182531894,
+          1.2301150575287645
+        ],
+        "median": 0.9352306182531894
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0009633911368014,
+          0.9980769230769231
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0209957054238905,
+          0.8072380952380952,
+          1.0983420026007802
+        ],
+        "median": 1.0209957054238905
+      },
+      "B/op": {
+        "values": [
+          1.0191404839292164,
+          1.0,
+          1.0195086705202312
+        ],
+        "median": 1.0191404839292164
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0013440486167964,
+          1.00503997703699,
+          0.9868172810108174
+        ],
+        "median": 1.0013440486167964
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          0.9927536231884058,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.024415692821369,
+          1.0016930276766125,
+          1.020021123430366
+        ],
+        "median": 1.020021123430366
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9747889305816135,
+          1.1571582900354958,
+          1.0520152181666864
+        ],
+        "median": 1.0520152181666864
+      },
+      "B/op": {
+        "values": [
+          0.8861859252823632,
+          0.9990205680705191,
+          1.0009803921568627
+        ],
+        "median": 0.9990205680705191
+      },
+      "allocs/op": {
+        "values": [
+          0.96,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.65428853105488,
+          0.7307772236076475,
+          1.1689130703598367
+        ],
+        "median": 0.7307772236076475
+      },
+      "B/op": {
+        "values": [
+          1.0000995520159284,
+          1.0,
+          1.0000995520159284
+        ],
+        "median": 1.0000995520159284
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0079770249296542,
+          0.9078661008427589,
+          0.9916950702151018
+        ],
+        "median": 0.9916950702151018
+      },
+      "B/op": {
+        "values": [
+          1.000112879557512,
+          0.9995895162448946,
+          0.9995792584687061
+        ],
+        "median": 0.9995895162448946
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1118705355646503,
+          1.002559643033234,
+          0.9962409820131073
+        ],
+        "median": 1.002559643033234
+      },
+      "B/op": {
+        "values": [
+          0.8789817528434861,
+          0.8657116827393373,
+          0.8772993959240377
+        ],
+        "median": 0.8772993959240377
+      },
+      "allocs/op": {
+        "values": [
+          0.9777777777777777,
+          1.0,
+          0.9787234042553191
+        ],
+        "median": 0.9787234042553191
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9733455421005162,
+          0.9986598496030034,
+          1.0204677355623273
+        ],
+        "median": 0.9986598496030034
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0741967538920172,
+          1.001268230818009,
+          1.017549668874172
+        ],
+        "median": 1.017549668874172
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.2259225922592258,
+          1.056701030927835,
+          1.032967032967033
+        ],
+        "median": 1.056701030927835
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0328341013824884,
+          1.099250936329588,
+          0.9920962199312715
+        ],
+        "median": 1.0328341013824884
+      },
+      "B/op": {
+        "values": [
+          0.9993906154783668,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9961049788851812,
+          0.9992970184201481,
+          1.0961040849685557
+        ],
+        "median": 0.9992970184201481
+      },
+      "B/op": {
+        "values": [
+          1.1077642656688493,
+          1.1076606491441399,
+          1.1123479887745558
+        ],
+        "median": 1.1077642656688493
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0313461848800005,
+          0.9853863813703425,
+          1.0112697418085885
+        ],
+        "median": 1.0112697418085885
+      },
+      "B/op": {
+        "values": [
+          1.1090445619335347,
+          1.108761329305136,
+          1.108761329305136
+        ],
+        "median": 1.108761329305136
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.921760391198044,
+          0.9043408360128617,
+          1.0583358919250845
+        ],
+        "median": 0.921760391198044
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.7590253330572238,
+          0.722451017097217,
+          0.8632961758297281
+        ],
+        "median": 0.7590253330572238
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9951671142293287,
+          0.7495717420126952,
+          0.9982950661778413
+        ],
+        "median": 0.9951671142293287
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.010799371148918,
+          0.994964942812821,
+          1.0929641113822608
+        ],
+        "median": 1.010799371148918
+      },
+      "B/op": {
+        "values": [
+          1.0018922398657875,
+          0.9236630293738716,
+          0.9404937963354204
+        ],
+        "median": 0.9404937963354204
+      },
+      "allocs/op": {
+        "values": [
+          0.9915254237288136,
+          0.9831932773109243,
+          0.9915254237288136
+        ],
+        "median": 0.9915254237288136
+      }
+    }
+  },
+  {
+    "profile": "command_wal_durable",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0026899674020855,
+          1.0108110293778159,
+          1.0068863633436973
+        ],
+        "median": 1.0068863633436973
+      },
+      "B/op": {
+        "values": [
+          1.0470072775879995,
+          1.0470072775879995,
+          1.0469718911291819
+        ],
+        "median": 1.0470072775879995
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.8962425573424448,
+          0.9368133923937576,
+          1.0107576013691972
+        ],
+        "median": 0.9368133923937576
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.8305489260143198,
+          1.2629848783694937,
+          1.1258064516129032
+        ],
+        "median": 1.1258064516129032
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0308285163776494,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9902008819206272,
+          1.0166142007694998,
+          0.908449600250823
+        ],
+        "median": 0.9902008819206272
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9234911375364595,
+          0.9621550591327201,
+          0.9693135935397039
+        ],
+        "median": 0.9621550591327201
+      },
+      "B/op": {
+        "values": [
+          1.02020202020202,
+          1.02020202020202,
+          1.02020202020202
+        ],
+        "median": 1.02020202020202
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9957823683935375,
+          1.0116407321218013,
+          1.2061095108317896
+        ],
+        "median": 1.0116407321218013
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9937384856100855,
+          0.981886333307167,
+          0.9052939333820612
+        ],
+        "median": 0.981886333307167
+      },
+      "B/op": {
+        "values": [
+          0.9999775083781292,
+          1.0000224921277552,
+          0.9256714553404123
+        ],
+        "median": 0.9999775083781292
+      },
+      "allocs/op": {
+        "values": [
+          0.95,
+          1.0526315789473684,
+          0.8636363636363636
+        ],
+        "median": 0.95
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.933387208496883,
+          0.9717444717444718,
+          1.0771470160116448
+        ],
+        "median": 0.9717444717444718
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0000995520159284
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9930184789131137,
+          1.004475588057783,
+          1.0167502024814246
+        ],
+        "median": 1.004475588057783
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0005553498704183
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1027804988320398,
+          0.906358294410125,
+          1.033953449570368
+        ],
+        "median": 1.033953449570368
+      },
+      "B/op": {
+        "values": [
+          0.9075849495489265,
+          0.9917465825693451,
+          0.9845002482797759
+        ],
+        "median": 0.9845002482797759
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0135073873639073,
+          0.9633544464761163,
+          1.0181079827328727
+        ],
+        "median": 1.0135073873639073
+      },
+      "B/op": {
+        "values": [
+          1.0855186236846501,
+          1.0849749582637729,
+          1.0855186236846501
+        ],
+        "median": 1.0855186236846501
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1138899288655935,
+          0.8196957081220195,
+          1.1643117593436645
+        ],
+        "median": 1.1138899288655935
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.001063829787234
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0434782608695652
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.7981381675649192,
+          1.0527654164017801,
+          1.0175438596491229
+        ],
+        "median": 1.0175438596491229
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0143484132343012,
+          1.0545602605863191,
+          0.934927606962746
+        ],
+        "median": 1.0143484132343012
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.01941049604601
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0689384010484928,
+          1.0246618933969769,
+          0.8816524908869988
+        ],
+        "median": 1.0246618933969769
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.001511470337192,
+          0.6125144203441217,
+          0.9967044349297179
+        ],
+        "median": 0.9967044349297179
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0143030303030303,
+          0.987657604936958,
+          1.1349022633744856
+        ],
+        "median": 1.0143030303030303
+      },
+      "B/op": {
+        "values": [
+          0.6361380554928941,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          0.575,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0682808716707022,
+          0.8910432962432522,
+          1.532260979577083
+        ],
+        "median": 1.0682808716707022
+      },
+      "B/op": {
+        "values": [
+          1.0031856645097064,
+          1.0000995520159284,
+          0.999900457893689
+        ],
+        "median": 1.0000995520159284
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9510963782036265,
+          1.1111849183320837,
+          1.0169448092507767
+        ],
+        "median": 1.0169448092507767
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0005540734660374
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.4141228674164181,
+          1.1098686776752047,
+          0.8394565217391304
+        ],
+        "median": 1.1098686776752047
+      },
+      "B/op": {
+        "values": [
+          1.0163404808573089,
+          0.9435518296836541,
+          0.9999903037824944
+        ],
+        "median": 0.9999903037824944
+      },
+      "allocs/op": {
+        "values": [
+          1.0666666666666667,
+          0.9411764705882353,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9936779808826486,
+          1.0044302103244669,
+          0.9535485295156382
+        ],
+        "median": 0.9936779808826486
+      },
+      "B/op": {
+        "values": [
+          1.0037356992762083,
+          1.0037356992762083,
+          1.0037356992762083
+        ],
+        "median": 1.0037356992762083
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0233281493001556,
+          0.7879014189693802,
+          0.9401885680612846
+        ],
+        "median": 0.9401885680612846
+      },
+      "B/op": {
+        "values": [
+          1.0186170212765957,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.3144848954298993,
+          1.4408602150537635,
+          1.118491921005386
+        ],
+        "median": 1.3144848954298993
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9894328989080662,
+          0.5701620906384386,
+          0.9788485465445086
+        ],
+        "median": 0.9788485465445086
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.057791948983659,
+          1.406033766952671,
+          1.122749945781826
+        ],
+        "median": 1.122749945781826
+      },
+      "B/op": {
+        "values": [
+          1.1092771770062606,
+          1.1091719624395333,
+          1.1091719624395333
+        ],
+        "median": 1.1091719624395333
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.003720154749778,
+          1.1296743588045555,
+          0.9854832191014821
+        ],
+        "median": 1.003720154749778
+      },
+      "B/op": {
+        "values": [
+          1.1090445619335347,
+          1.108761329305136,
+          1.108761329305136
+        ],
+        "median": 1.108761329305136
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0904949893713938,
+          0.9647908516400843,
+          1.0746691871455576
+        ],
+        "median": 1.0746691871455576
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.867418011270169,
+          0.6488035761241125,
+          0.8212322338428533
+        ],
+        "median": 0.8212322338428533
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          0.9999771569545651
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.997166724410055,
+          1.2379871697055571,
+          0.9427154902327217
+        ],
+        "median": 0.997166724410055
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.6725353666393088,
+          0.7105126923890682,
+          0.8138401247223646
+        ],
+        "median": 0.7105126923890682
+      },
+      "B/op": {
+        "values": [
+          0.8902308443296696,
+          0.8819639100727122,
+          0.9034097678801599
+        ],
+        "median": 0.8902308443296696
+      },
+      "allocs/op": {
+        "values": [
+          0.9833333333333333,
+          0.9833333333333333,
+          0.9888268156424581
+        ],
+        "median": 0.9833333333333333
+      }
+    }
+  },
+  {
+    "profile": "command_wal_relaxed",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0033584157564561,
+          1.0186914972482453,
+          1.011824109111779
+        ],
+        "median": 1.011824109111779
+      },
+      "B/op": {
+        "values": [
+          1.0652653125492049,
+          1.065438223482164,
+          1.0648880494235233
+        ],
+        "median": 1.0652653125492049
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9124386337705296,
+          1.0369893710847675,
+          0.9989232749047812
+        ],
+        "median": 0.9989232749047812
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.5730816077953715,
+          0.9902801600914809,
+          0.9958699019101703
+        ],
+        "median": 0.9958699019101703
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0096908939014202,
+          1.2162892869212572,
+          1.0954673750622614
+        ],
+        "median": 1.0954673750622614
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0211019929660023,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.8940170940170941,
+          1.0956263899184582,
+          1.0350413223140498
+        ],
+        "median": 1.0350413223140498
+      },
+      "B/op": {
+        "values": [
+          1.0303605313092978,
+          1.0303605313092978,
+          1.0303605313092978
+        ],
+        "median": 1.0303605313092978
+      },
+      "allocs/op": {
+        "values": [
+          null,
+          null,
+          null
+        ],
+        "median": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0314101296547664,
+          1.041314760340263,
+          1.0398733981457533
+        ],
+        "median": 1.0398733981457533
+      },
+      "B/op": {
+        "values": [
+          1.0077138637540803,
+          1.000134345978419,
+          0.9985535030007241
+        ],
+        "median": 1.000134345978419
+      },
+      "allocs/op": {
+        "values": [
+          1.0077120822622108,
+          0.9974358974358974,
+          0.9961389961389961
+        ],
+        "median": 0.9974358974358974
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.229468826521002,
+          1.0396479323513994,
+          1.0302065196151344
+        ],
+        "median": 1.0396479323513994
+      },
+      "B/op": {
+        "values": [
+          1.0029464687359424,
+          0.8568950563746748,
+          0.8736776602364654
+        ],
+        "median": 0.8736776602364654
+      },
+      "allocs/op": {
+        "values": [
+          1.0526315789473684,
+          0.06934306569343066,
+          0.08016877637130802
+        ],
+        "median": 0.08016877637130802
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0389610389610389,
+          0.970504172859266,
+          1.046376811594203
+        ],
+        "median": 1.0389610389610389
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0097822523095914,
+          0.9889489420423183,
+          1.009035346212015
+        ],
+        "median": 1.009035346212015
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          0.9994446501295816
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9614465032875075,
+          0.8412789037967456,
+          0.6913691821057388
+        ],
+        "median": 0.8412789037967456
+      },
+      "B/op": {
+        "values": [
+          0.8869328184451133,
+          1.1697692172176875,
+          0.907405247813411
+        ],
+        "median": 0.907405247813411
+      },
+      "allocs/op": {
+        "values": [
+          0.0,
+          2.0,
+          0.0
+        ],
+        "median": 0.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "append_only",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0269929726523648,
+          1.0125774338197993,
+          1.0100953976489138
+        ],
+        "median": 1.0125774338197993
+      },
+      "B/op": {
+        "values": [
+          0.97843030825191,
+          0.9779852244853016,
+          0.9830302736620117
+        ],
+        "median": 0.97843030825191
+      },
+      "allocs/op": {
+        "values": [
+          1.0098231827111985,
+          1.04369918699187,
+          1.0157635467980295
+        ],
+        "median": 1.0157635467980295
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0819502074688796,
+          1.4327201322860685,
+          0.8317722455016021
+        ],
+        "median": 1.0819502074688796
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.1392136025504782,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1270923744575325,
+          0.8189349112426035,
+          0.8753784056508577
+        ],
+        "median": 0.8753784056508577
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          0.9691714836223507,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9052102950408035,
+          1.0187924134330955,
+          0.7161347072128675
+        ],
+        "median": 0.9052102950408035
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0369039843239714,
+          3.2590194264569843,
+          4.203639823956227
+        ],
+        "median": 3.2590194264569843
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          null,
+          null,
+          null
+        ],
+        "median": null
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0289628929424888,
+          1.003175752897393,
+          0.8058781652224561
+        ],
+        "median": 1.003175752897393
+      },
+      "B/op": {
+        "values": [
+          1.0277542709049559,
+          1.0035805796985964,
+          1.010479421774491
+        ],
+        "median": 1.010479421774491
+      },
+      "allocs/op": {
+        "values": [
+          1.0025906735751295,
+          0.9987080103359173,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0783377541998231,
+          0.7026113411645398,
+          0.962380132776002
+        ],
+        "median": 0.962380132776002
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          0.21771018296919634,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          0.9583333333333334,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.8543046357615894,
+          0.9723568479626638,
+          1.1397701937918023
+        ],
+        "median": 0.9723568479626638
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          0.9968143354902936,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9939659638914352,
+          1.0056824803584705,
+          0.9584486387373446
+        ],
+        "median": 0.9939659638914352
+      },
+      "B/op": {
+        "values": [
+          0.9999897323216248,
+          1.0005540734660374,
+          1.0000102677838016
+        ],
+        "median": 1.0000102677838016
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.8545673076923077,
+          1.0062582969846388,
+          1.486249407302039
+        ],
+        "median": 1.0062582969846388
+      },
+      "B/op": {
+        "values": [
+          1.0284887401646017,
+          0.9329700524140478,
+          1.0990454391760085
+        ],
+        "median": 1.0284887401646017
+      },
+      "allocs/op": {
+        "values": [
+          1.1666666666666667,
+          0.6666666666666666,
+          1.6666666666666667
+        ],
+        "median": 1.1666666666666667
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.018078168147986,
+          1.0129337614960119,
+          1.0087493700290362
+        ],
+        "median": 1.0129337614960119
+      },
+      "B/op": {
+        "values": [
+          0.914862254856717,
+          0.9202253992742669,
+          0.9183933909878548
+        ],
+        "median": 0.9183933909878548
+      },
+      "allocs/op": {
+        "values": [
+          1.0068560235063664,
+          1.0078508341511285,
+          1.002932551319648
+        ],
+        "median": 1.0068560235063664
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0128990648178007,
+          1.0563011456628477,
+          0.8811827956989248
+        ],
+        "median": 1.0128990648178007
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.8796985815602837,
+          0.9673500379650721,
+          1.4770459081836327
+        ],
+        "median": 0.9673500379650721
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9983087702343562,
+          1.5046253469010176,
+          1.0174804098854733
+        ],
+        "median": 1.0174804098854733
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.1154724521838424,
+          2.2758387445887447,
+          1.123679822123402
+        ],
+        "median": 1.123679822123402
+      },
+      "B/op": {
+        "values": [
+          1.117001828153565,
+          1.117001828153565,
+          1.117001828153565
+        ],
+        "median": 1.117001828153565
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Inline64",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0129465199104946,
+          1.0231544637782015,
+          0.8058125455395246
+        ],
+        "median": 1.0129465199104946
+      },
+      "B/op": {
+        "values": [
+          1.0382578900555752,
+          1.0812165160965879,
+          1.0439087014144233
+        ],
+        "median": 1.0439087014144233
+      },
+      "allocs/op": {
+        "values": [
+          1.007226738934056,
+          1.013537906137184,
+          1.006317689530686
+        ],
+        "median": 1.007226738934056
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "FreshCapture",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0465646369260828,
+          0.9470332850940666,
+          1.2231155778894471
+        ],
+        "median": 1.0465646369260828
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "CaptureReadRelease",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.6676826204910071,
+          0.5800232977775748,
+          0.7426779019265749
+        ],
+        "median": 0.6676826204910071
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "Forward16",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.0102563480118465,
+          1.0111151245789132,
+          0.9952939016309684
+        ],
+        "median": 1.0102563480118465
+      },
+      "B/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWrite",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          0.9662676466009553,
+          1.0148854862156915,
+          0.9947354223409532
+        ],
+        "median": 0.9947354223409532
+      },
+      "B/op": {
+        "values": [
+          0.9771109673244904,
+          1.0461985089166015,
+          0.9764883384673414
+        ],
+        "median": 0.9771109673244904
+      },
+      "allocs/op": {
+        "values": [
+          1.0,
+          1.0,
+          0.9883720930232558
+        ],
+        "median": 1.0
+      }
+    }
+  },
+  {
+    "profile": "no_wal_fast",
+    "mode": "cow_btree",
+    "layout": "Pointer4096",
+    "operation": "IncrementalWriteSync",
+    "numerator_records": 2048,
+    "denominator_records": 1024,
+    "metrics": {
+      "ns/op": {
+        "values": [
+          1.160382895006829,
+          1.2233710756706808,
+          1.1076141821257317
+        ],
+        "median": 1.160382895006829
+      },
+      "B/op": {
+        "values": [
+          1.2195392200921644,
+          1.228614212461938,
+          1.2185915752603926
+        ],
+        "median": 1.2195392200921644
+      },
+      "allocs/op": {
+        "values": [
+          1.088257292445774,
+          1.0921348314606742,
+          1.0865671641791044
+        ],
+        "median": 1.088257292445774
+      }
+    }
+  }
+]

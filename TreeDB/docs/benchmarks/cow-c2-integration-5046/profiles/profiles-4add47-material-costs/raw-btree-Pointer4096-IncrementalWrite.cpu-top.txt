@@ -1,0 +1,162 @@
+File: treedb-cost.test
+Build ID: dc554d4125657f01c83024f6c6bd09f05d363ff8
+Type: cpu
+Time: 2026-10-05 20:25:37 HST
+Duration: 829.87ms, Total samples = 360ms (43.38%)
+Showing nodes accounting for 360ms, 100% of 360ms total
+      flat  flat%   sum%        cum   cum%
+      80ms 22.22% 22.22%       80ms 22.22%  runtime.futex
+      30ms  8.33% 30.56%       40ms 11.11%  runtime.lock2
+      20ms  5.56% 36.11%       20ms  5.56%  github.com/snissn/compress/zstd.matchLen
+      20ms  5.56% 41.67%       20ms  5.56%  runtime.(*mcache).releaseAll
+      20ms  5.56% 47.22%       20ms  5.56%  runtime.asyncPreempt
+      20ms  5.56% 52.78%       20ms  5.56%  runtime.memclrNoHeapPointers
+      10ms  2.78% 55.56%       10ms  2.78%  aeshashbody
+      10ms  2.78% 58.33%       10ms  2.78%  fmt.newPrinter
+      10ms  2.78% 61.11%       10ms  2.78%  github.com/golang/snappy.encodeBlock
+      10ms  2.78% 63.89%       20ms  5.56%  github.com/snissn/compress/zstd.(*fseEncoder).buildCTable
+      10ms  2.78% 66.67%       40ms 11.11%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogOneInternal
+      10ms  2.78% 69.44%       10ms  2.78%  internal/runtime/atomic.(*Uint64).Add (inline)
+      10ms  2.78% 72.22%       10ms  2.78%  internal/runtime/syscall/linux.Syscall6
+      10ms  2.78% 75.00%       10ms  2.78%  runtime.(*spanSet).push
+      10ms  2.78% 77.78%       10ms  2.78%  runtime.checkTimersNoP
+      10ms  2.78% 80.56%       50ms 13.89%  runtime.lock (inline)
+      10ms  2.78% 83.33%       40ms 11.11%  runtime.notetsleep_internal
+      10ms  2.78% 86.11%       20ms  5.56%  runtime.preemptone
+      10ms  2.78% 88.89%       10ms  2.78%  runtime.procyieldAsm
+      10ms  2.78% 91.67%       10ms  2.78%  runtime.scanObject
+      10ms  2.78% 94.44%       10ms  2.78%  runtime.tgkill
+      10ms  2.78% 97.22%       10ms  2.78%  runtime.unlock2
+      10ms  2.78%   100%       10ms  2.78%  sync/atomic.(*Bool).Load (inline)
+         0     0%   100%       10ms  2.78%  bufio.(*Scanner).Scan
+         0     0%   100%       10ms  2.78%  fmt.Sprintf
+         0     0%   100%       10ms  2.78%  github.com/golang/snappy.Encode
+         0     0%   100%       10ms  2.78%  github.com/snissn/compress/huff0.(*Scratch).prepare
+         0     0%   100%       10ms  2.78%  github.com/snissn/compress/huff0.Compress1X
+         0     0%   100%       50ms 13.89%  github.com/snissn/compress/zstd.(*DictEncodeWorkspace).EncodeAllWithDict
+         0     0%   100%       20ms  5.56%  github.com/snissn/compress/zstd.(*Encoder).EncodeAll
+         0     0%   100%       60ms 16.67%  github.com/snissn/compress/zstd.(*Encoder).encodeAll
+         0     0%   100%       20ms  5.56%  github.com/snissn/compress/zstd.(*blockEnc).encode
+         0     0%   100%       10ms  2.78%  github.com/snissn/compress/zstd.(*encoderOptions).setDefault (inline)
+         0     0%   100%       20ms  5.56%  github.com/snissn/compress/zstd.(*fastBase).matchlen (inline)
+         0     0%   100%       20ms  5.56%  github.com/snissn/compress/zstd.(*fastEncoder).EncodeNoHist
+         0     0%   100%       20ms  5.56%  github.com/snissn/compress/zstd.(*fastEncoderDict).Reset
+         0     0%   100%       20ms  5.56%  github.com/snissn/compress/zstd.(*fseEncoder).normalizeCount
+         0     0%   100%       10ms  2.78%  github.com/snissn/compress/zstd.BuildDict
+         0     0%   100%       10ms  2.78%  github.com/snissn/compress/zstd.dictWorkspaceEncodeOptions
+         0     0%   100%       50ms 13.89%  github.com/snissn/gomap/TreeDB.(*DB).Set
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB.(*DB).Stats
+         0     0%   100%      200ms 55.56%  github.com/snissn/gomap/TreeDB.BenchmarkCOWPublicDirtyCost.func1
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB.Open
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB.cowPublicCostCounter
+         0     0%   100%      200ms 55.56%  github.com/snissn/gomap/TreeDB.cowPublicDirtyCost
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB.openResolved
+         0     0%   100%       50ms 13.89%  github.com/snissn/gomap/TreeDB/caching.(*DB).Set
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB/caching.(*DB).Stats
+         0     0%   100%       40ms 11.11%  github.com/snissn/gomap/TreeDB/caching.(*DB).appendValueLogOneRaw (inline)
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).pickLane
+         0     0%   100%       50ms 13.89%  github.com/snissn/gomap/TreeDB/caching.(*DB).set
+         0     0%   100%       50ms 13.89%  github.com/snissn/gomap/TreeDB/caching.(*DB).setDirect
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).valueLogDictCollectSampleForClass
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).valueLogDictCollectSampleForLane
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/caching.(*DB).vlogDictPrepareLoop.func1
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/caching.Open
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB/db.(*DB).Stats
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/db.(*DB).appendDurableRootStats
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/db.(*DB).appendOrderedRootSpanNativeStats
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/db.DetectPhysicalCores (inline)
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/db.detectPhysicalCoreCount
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).Collect
+         0     0%   100%       70ms 19.44%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).appendSample.func1
+         0     0%   100%       70ms 19.44%  github.com/snissn/gomap/TreeDB/internal/compression.(*Trainer).train
+         0     0%   100%       40ms 11.11%  github.com/snissn/gomap/TreeDB/internal/compression.ChooseKForDictOptions
+         0     0%   100%       30ms  8.33%  github.com/snissn/gomap/TreeDB/internal/compression.batchTotalsWithEncodeWorkspace
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/internal/compression.buildAndValidateDict
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/internal/compression.decodeCostEstimate
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB/internal/compression.shapeAndValidateDict
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB/internal/compression.validateDict
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).PrepareFrameInto
+         0     0%   100%       10ms  2.78%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*FramePreparer).prepareBlockFrameBody
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).AppendFrameWithStatsInto
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).AppendOneFrameWithStats
+         0     0%   100%       20ms  5.56%  github.com/snissn/gomap/TreeDB/internal/valuelog.(*Writer).appendBlockFrameWithStats
+         0     0%   100%       30ms  8.33%  github.com/snissn/gomap/TreeDB/internal/valuelog.encodeBlockPayloadWithScratch
+         0     0%   100%       10ms  2.78%  internal/poll.(*FD).Read
+         0     0%   100%       10ms  2.78%  internal/poll.ignoringEINTRIO (inline)
+         0     0%   100%       10ms  2.78%  os.(*File).Read
+         0     0%   100%       10ms  2.78%  os.(*File).read (inline)
+         0     0%   100%       10ms  2.78%  runtime.(*gcControllerState).update
+         0     0%   100%       20ms  5.56%  runtime.(*mcache).nextFree
+         0     0%   100%       20ms  5.56%  runtime.(*mcache).refill
+         0     0%   100%       10ms  2.78%  runtime.(*mcentral).uncacheSpan
+         0     0%   100%       10ms  2.78%  runtime.GOMAXPROCS
+         0     0%   100%      110ms 30.56%  runtime.ReadMemStats
+         0     0%   100%       50ms 13.89%  runtime.ReadMemStats.func1
+         0     0%   100%       30ms  8.33%  runtime.asyncPreempt2.func1
+         0     0%   100%       10ms  2.78%  runtime.chansend
+         0     0%   100%       10ms  2.78%  runtime.concatstring4
+         0     0%   100%       10ms  2.78%  runtime.concatstrings
+         0     0%   100%       60ms 16.67%  runtime.findRunnable
+         0     0%   100%       50ms 13.89%  runtime.flushallmcaches
+         0     0%   100%       50ms 13.89%  runtime.flushmcache
+         0     0%   100%       60ms 16.67%  runtime.futexsleep
+         0     0%   100%       20ms  5.56%  runtime.futexwakeup
+         0     0%   100%       10ms  2.78%  runtime.gcBgMarkWorker
+         0     0%   100%       10ms  2.78%  runtime.gcBgMarkWorker.func2
+         0     0%   100%       10ms  2.78%  runtime.gcDrain
+         0     0%   100%       10ms  2.78%  runtime.gcDrainMarkWorkerDedicated (inline)
+         0     0%   100%       30ms  8.33%  runtime.gcstopm
+         0     0%   100%       50ms 13.89%  runtime.gopreempt_m (inline)
+         0     0%   100%       10ms  2.78%  runtime.goready (inline)
+         0     0%   100%       50ms 13.89%  runtime.goschedImpl
+         0     0%   100%       40ms 11.11%  runtime.lockWithRank (inline)
+         0     0%   100%       30ms  8.33%  runtime.mPark (inline)
+         0     0%   100%       20ms  5.56%  runtime.makeslice
+         0     0%   100%       40ms 11.11%  runtime.mallocgc
+         0     0%   100%       20ms  5.56%  runtime.mallocgcLarge
+         0     0%   100%       10ms  2.78%  runtime.mallocgcSmallNoscan
+         0     0%   100%       10ms  2.78%  runtime.mallocgcSmallScanHeader
+         0     0%   100%       10ms  2.78%  runtime.mapassign_faststr
+         0     0%   100%       50ms 13.89%  runtime.mcall
+         0     0%   100%       20ms  5.56%  runtime.memclrNoHeapPointersChunked
+         0     0%   100%       20ms  5.56%  runtime.morestack
+         0     0%   100%       10ms  2.78%  runtime.newobject
+         0     0%   100%       20ms  5.56%  runtime.newstack
+         0     0%   100%       30ms  8.33%  runtime.notesleep
+         0     0%   100%       40ms 11.11%  runtime.notetsleep
+         0     0%   100%       20ms  5.56%  runtime.notewakeup
+         0     0%   100%       20ms  5.56%  runtime.park_m
+         0     0%   100%       10ms  2.78%  runtime.preemptM (inline)
+         0     0%   100%       20ms  5.56%  runtime.preemptall
+         0     0%   100%       10ms  2.78%  runtime.procyield (inline)
+         0     0%   100%       10ms  2.78%  runtime.rawstring (inline)
+         0     0%   100%       10ms  2.78%  runtime.rawstringtmp
+         0     0%   100%       50ms 13.89%  runtime.readmemstats_m
+         0     0%   100%       10ms  2.78%  runtime.ready
+         0     0%   100%       60ms 16.67%  runtime.schedule
+         0     0%   100%       10ms  2.78%  runtime.selectnbsend
+         0     0%   100%       10ms  2.78%  runtime.send
+         0     0%   100%       10ms  2.78%  runtime.send.goready.func1
+         0     0%   100%       10ms  2.78%  runtime.signalM
+         0     0%   100%       30ms  8.33%  runtime.stackcache_clear
+         0     0%   100%       10ms  2.78%  runtime.startm
+         0     0%   100%       60ms 16.67%  runtime.stopTheWorld
+         0     0%   100%       60ms 16.67%  runtime.stopTheWorld.func1
+         0     0%   100%       60ms 16.67%  runtime.stopTheWorldWithSema
+         0     0%   100%       30ms  8.33%  runtime.stopm
+         0     0%   100%      130ms 36.11%  runtime.systemstack
+         0     0%   100%       10ms  2.78%  runtime.unlock (inline)
+         0     0%   100%       10ms  2.78%  runtime.unlockWithRank (inline)
+         0     0%   100%       20ms  5.56%  runtime.wakep
+         0     0%   100%       10ms  2.78%  syscall.RawSyscall6
+         0     0%   100%       10ms  2.78%  syscall.Read (inline)
+         0     0%   100%       10ms  2.78%  syscall.Syscall
+         0     0%   100%       10ms  2.78%  syscall.read
+         0     0%   100%       60ms 16.67%  testing.(*B).StartTimer
+         0     0%   100%       50ms 13.89%  testing.(*B).StopTimer
+         0     0%   100%      180ms 50.00%  testing.(*B).launch
+         0     0%   100%       20ms  5.56%  testing.(*B).run1.func1
+         0     0%   100%      200ms 55.56%  testing.(*B).runN
+         0     0%   100%       10ms  2.78%  testing.(*common).TempDir
+         0     0%   100%       10ms  2.78%  testing.(*common).makeTempDir

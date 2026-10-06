@@ -409,6 +409,31 @@ maximum observed on-disk segment sequence, preventing later cached writes from
 reusing segment filenames created by compaction, rewrite, leaf packing, or index
 vacuum.
 
+### 5.1 Immutable COW read ownership
+
+Explicit `cow_btree` cuts retain registered value-log subsets and deletion pins
+through the existing DB-scoped physical identity authority. Each newly
+introduced distinct resource receives an independent generation owner; there
+is no owner per historical RID and no second COW GC registry. Both `SetRID` and
+self-contained `SetMaterializedRID` require live read owners. WAL dependency
+custody remains separate even when a materialized frame has no external closure.
+
+Actual produced frame dictionary IDs select retained definitions. Per-read
+scratch, input/output backing and private decoder state are admitted before
+allocation and retained through their real close/drain lifetime; a raw output
+limit alone does not bound codec state or frame window. The native raw1,024-byte
+ZSTD producer can use a 2,048-byte window, which must fit the charged envelope.
+Reader checksum/encoded-payload failures propagate rather than resolving through
+an unrelated global codec/definition cache.
+
+Producer flush makes buffered pointers readable without claiming fsync. Old
+cuts preserve index/vlog/dictionary authority across checkpoint and equivalent
+backend maintenance. GC/rewrite/leaf packing serialize and refresh the backend
+basis through the existing flush fence; retired cleanup runs outside
+writer/admission/publication locks. A referenced or pinned persistent segment
+cannot be deleted because it is old. See
+[COW resource and handoff ownership](cow-cache-publication.md).
+
 ## 6. Rewrite/Compaction
 
 ### 6.1 Online rewrite (`DB.ValueLogRewriteOnline`)
@@ -868,6 +893,32 @@ continues to reject dictionary-dependent publication, including scanner fallback
 
 ### Apply-scoped caching leaf token handoff
 
+The concrete cached value-log writer can retain one physical producer family
+per selected lane within that same Apply owner. The first capture uses the full
+stable producer constructor. Repeated captures flush the actual same writer,
+validate its exact handle identity and retained namespace, and read its current
+file size to issue a new immutable frontier certificate. Ordinary pinned-view
+cloning alone cannot certify frontier growth. Each certificate acquires its own
+registry pin and shared-handle/namespace reference; it inherits no arbitrary
+caller callback or dictionary snapshot owner. A changed writer handle, file ID,
+or complete registration constructs a fresh family before releasing the old
+attempt reference. Rotation's closed/current authority remains independently
+captured, and final candidate membership still recaptures registered resources.
+
+The private view explicitly implements `LeafPageLogApplyResourceOwner`. Group
+and lane views share its bounded family slots, and record-length hint adapters
+forward that ownership. After all appenders join, freeze or abandon releases
+each attempt reference. Output certificates retain the exact physical handle
+independently until their existing builder/candidate ownership ends. Append
+failure closes the private owner; retry creates a new attempt. A terminal private
+view rejects further appends. Per-lane certificate operations remain independent,
+and release synchronizes with in-flight family operations. Public stable APIs
+still construct full owned resources on every call; unknown writer implementations
+use that original validated path. Dictionary/template capture, generation fences,
+durability barriers and final closure validation are unchanged. This reduces
+handle and namespace construction by current writer generations per attempt,
+while frontier validation and token ownership remain per append.
+
 The concrete caching outer-leaf producer explicitly implements
 `LeafPageLogApplyTokenProvider`. Its attempt-bound regular appenders, including
 prepared batches, ChildRefs and group lanes, deliver each append's raw tokens to
@@ -878,7 +929,7 @@ append path. Public stable APIs on an attempt-bound view still return complete
 owned resource sets.
 
 Each append retains the same writer preflight, namespace-creation certification,
-rotation capture and `StableResourceToken` flush. This is a token ownership
+rotation capture and the actual writer flush. This is a token ownership
 handoff. Each token's captured segment frontier remains immutable. The receiver
 checks all pointer generations and overflow-safe record ends, complete frontier
 coverage, raw resource kinds/reachability, and exact retained namespace bindings

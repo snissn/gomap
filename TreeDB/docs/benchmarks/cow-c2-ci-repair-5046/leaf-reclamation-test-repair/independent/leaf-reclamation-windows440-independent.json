@@ -1,0 +1,163 @@
+{
+  "head": "4403776d10b6ac82eb9e1839f437f59a78058816",
+  "tree": "513bc7aece83bd5ac3640ffa93a4f80adf719b9d",
+  "verdict": "Original immediate-reclamation test assumption REVISE; no runtime leak established; narrow eventual observation repair justified pending evidence",
+  "inputs": {
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/treedb-test.jsonl": "0570f197b365dc69759302b66a9b886719d091a9cda5dafb8ac426fe2283daa8",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/artifact.zip": "75037e6124b38dc987e64da84f02569d0b0de01893853982b037813d4a64d778",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/packet-manifest.json": "95fbc97480931aebfa1bdbc67bff1587181eb4b33e6927f2198c605afe745be7",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/retrieval-commands.json": "b3087f7e572029472e1eaa393acee1e6cd417242c09003d4a5df1f551b89c8e8",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/source-bindings.json": "d7e177736a1ef26160419e36d649625c34137d5f3b43c5d56e13246bbdb78faf",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/event-analysis.json": "8caee822f3d3fce3ee6dbb0d649876bea5d4d597aaea636d12dc80a4f305fcec",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/job.json": "c2673f03509343a4c598755668445cb9239189813b99e42133bccb349797ee49",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/treedb-test.jsonl.summary.md": "d7c6b0dcbe17fe78ac1de4432ce46fbe7f4827c2a7f00f95ca8efd38ea4d826d",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/artifact-provenance.json": "1fd1433bf8bd5e39e3057a2c998cdae711886e18e0d7adf7cde9a3b6af6d3434",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/diagnosis.md": "fa5908075d073b933c1f05b0a092db55205edcb495e2fcd67a7014f5d5c45a93",
+    "artifacts/c2/pr5069-440-windows-core3-failed-packet/diagnosis.json": "1a5a1d56dbd00a02ee8862b17b144e623dd52763c585bc90a58b91ed19cf7140",
+    "artifacts/c2/pr5069-440-windows-core3-failure.log": "a02a226e3740ea0d1d485ae9de0cfe3000174030526a7cf1309a82d5ae2950fb"
+  },
+  "source_bindings": {
+    "TreeDB/cow_public_review_regression_test.go": {
+      "sha256": "612cc07d788800376ba71557849d59984d6954899ea82bbd2af3d31a93c0ad21",
+      "git_blob": "ee008c7ee5f2021ad03153e5e56897333346ae76"
+    },
+    "TreeDB/compact_storage.go": {
+      "sha256": "3c0608099575a2fbddb5bfb278c7c82650751d1d5817c332a2975d93afe7d322",
+      "git_blob": "ab9aa54ee3a894cfbc07a7ce00a3fe635c3522db"
+    },
+    "TreeDB/db/compact_storage.go": {
+      "sha256": "59d57c87ce42abbdc32ecd168eeae26ce4a377ef8ad6b05cf0607a7c826d6e21",
+      "git_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e"
+    },
+    "TreeDB/db/leaf_generation_gc.go": {
+      "sha256": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+      "git_blob": "4559626cfefcacf4ead036eec69e98df49ea0c0a"
+    },
+    "TreeDB/db/leaf_generation_runtime.go": {
+      "sha256": "f50000ceeb93faf0d640c454e8e962e87dc52f83ba465ba7390b5c0b53b6ab05",
+      "git_blob": "ebc0d07004456ca061dafcabae4245b6af9eac87"
+    },
+    "TreeDB/db/bounded_read_owner.go": {
+      "sha256": "6b5d4621c36c4596721fa991b7cc2fe891e9ded24b22a787b0786d68df031e2d",
+      "git_blob": "e6f67a19d852561668ee4df8bc62cdeedeb72a55"
+    },
+    "TreeDB/db/db.go": {
+      "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+      "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8"
+    },
+    "TreeDB/caching/cow_cut.go": {
+      "sha256": "9071ad33c1a9e957781fcedb95b1069f5606d1cd9e249ab40aaf2b9bf4448ff5",
+      "git_blob": "1568701b933c818192b09b7e353318a35f9b9129"
+    },
+    "TreeDB/caching/cow_maintenance.go": {
+      "sha256": "41a80a482023fb306eb4f1ec221fc352a6df71d8da18db7995adad322dd887c5",
+      "git_blob": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e"
+    },
+    "TreeDB/caching/cow_flush.go": {
+      "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+      "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036"
+    },
+    "TreeDB/caching/db.go": {
+      "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+      "git_blob": "26285636844230d33d1b56da08c8bb8c43fe95c9"
+    },
+    "TreeDB/caching/leaf_page_log.go": {
+      "sha256": "ff9b827c89c8f00f4a13452363e7d891c6b3200da2dcd8f555caf4c84dc5ef5b",
+      "git_blob": "efb18be74a988df0bc291ec3c3c3fe971d1f023c"
+    },
+    "TreeDB/internal/valuelog/manager.go": {
+      "sha256": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+      "git_blob": "881b1d4bfb041c13c9210be43a2df7b9c2e24082"
+    },
+    "TreeDB/internal/valuelog/stable_resource.go": {
+      "sha256": "271def2d2ecafa4871dbc0497deb71230a2d73cd00979f908b7a4bad8b5fe5c8",
+      "git_blob": "27af14233e201939895b1cc216f6f7419349ad6a"
+    },
+    "TreeDB/internal/valuelog/identity_pin_manager_test.go": {
+      "sha256": "6b10dfc98609f0456f05027a3dcf8d1a503646c8d5ca629e5587f2e9cb359978",
+      "git_blob": "14a6248b95035e6bc029dc5c85b6616f42d5a8b0"
+    }
+  },
+  "actual_json_counts": {
+    "skip_package": 3,
+    "pass_test": 1929,
+    "pass_package": 9,
+    "skip_test": 60,
+    "fail_test": 2,
+    "fail_package": 1
+  },
+  "failed_events": [
+    {
+      "Time": "2026-10-06T09:41:33.4231382Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Elapsed": 3.47
+    },
+    {
+      "Time": "2026-10-06T09:41:36.5153109Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+      "Elapsed": 17.59
+    },
+    {
+      "Time": "2026-10-06T09:44:57.4644244Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Elapsed": 381.302
+    }
+  ],
+  "focused_results": [
+    {
+      "Time": "2026-10-06T09:41:29.9502618Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable",
+      "Elapsed": 11.03
+    },
+    {
+      "Time": "2026-10-06T09:41:33.4231382Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed",
+      "Elapsed": 3.47
+    },
+    {
+      "Time": "2026-10-06T09:41:36.5153109Z",
+      "Action": "pass",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+      "Elapsed": 3.09
+    },
+    {
+      "Time": "2026-10-06T09:41:36.5153109Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB",
+      "Test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+      "Elapsed": 17.59
+    }
+  ],
+  "actual_failure_full_output": "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed\n    cow_public_review_regression_test.go:319: unused rotated leaf segment C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\leaf_vlog\\value-l255-000002.log was not reclaimed: stat=<nil> compaction={Mode:full DryRun:false Before:[{Name:index Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\index.db Bytes:4194304 Files:1 ZeroByteFiles:0} {Name:wal Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\wal Bytes:0 Files:2 ZeroByteFiles:2} {Name:value_vlog Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\value_vlog Bytes:119 Files:3 ZeroByteFiles:2} {Name:leaf_vlog Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\leaf_vlog Bytes:852 Files:6 ZeroByteFiles:2} {Name:total Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb Bytes:4195275 Files:12 ZeroByteFiles:6}] After:[{Name:index Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\index.db Bytes:4194304 Files:1 ZeroByteFiles:0} {Name:wal Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\wal Bytes:0 Files:2 ZeroByteFiles:2} {Name:value_vlog Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\value_vlog Bytes:119 Files:3 ZeroByteFiles:2} {Name:leaf_vlog Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb\\leaf_vlog Bytes:884 Files:6 ZeroByteFiles:2} {Name:total Path:C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestCOWPublicEmptyCheckpointLeafRegistrationProgresscommand_wal3906558575\\001\\maindb Bytes:4195307 Files:12 ZeroByteFiles:6}] Phases:[{Name:checkpoint Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:0} {Name:value-log-rewrite Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:513800} {Name:checkpoint-after-value-log-rewrite Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:0} {Name:value-log-gc Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:146741900} {Name:checkpoint-after-value-log-gc Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:0} {Name:leaf-generation-pack-1 Status: Required:false Reason: Skipped:true SkipReason:plan_admission:no_candidates WallTimeNanos:584000} {Name:leaf-generation-gc Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:9840100} {Name:checkpoint-after-leaf-generation-gc Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:0} {Name:index-vacuum Status:not_required Required:false Reason:none Skipped:true SkipReason:no index vacuum policy debt WallTimeNanos:0} {Name:prune-empty-value-log-files Status: Required:false Reason: Skipped:false SkipReason: WallTimeNanos:0}] Audit:{SharedScans:3 StructuralReuseHits:0 StructuralReuseMisses:3 RevalidationRetries:0 RootSets:6 PagesVisited:6 MemoHits:0 PointerProjections:3 GroupedRecordDedupeHits:0 PhysicalBytesRead:36864 LastStructuralReuseMissReason:cold} ValueLogRewritePlan:{SourceFileIDs:[] SelectedSegments:[] SegmentsTotal:3 SegmentsSelected:0 BytesTotal:119 BytesLive:115 BytesStale:4 SelectedBytesTotal:0 SelectedBytesLive:0 SelectedBytesStale:0 AgeBlockedSegments:0 AgeBlockedBytesTotal:0 AgeBlockedBytesLive:0 AgeBlockedBytesStale:0 AgeBlockedMinRemainingAge:0s} ValueLogRewrite:{SegmentsBefore:3 SegmentsAfter:3 BytesBefore:119 BytesAfter:119 RecordsCopied:0 ValueRecordsCopied:0 ValueBytesCopied:0 SourceSegmentsRequested:0 SourceChunksRequested:0 SourceSegmentsStillReferenced:0 SourceSegmentsUnreferenced:0 SourceBytesRequested:0 SourceBytesStillReferenced:0 SourceBytesUnreferenced:0 SourceBytesProcessed:0 SourceFileIDsStillReferenced:[] SourceFileIDsUnreferenced:[] SourceSegmentsReclaimed:0 SourceBytesReclaimed:0 SourceSegmentsRetainedRecoverableRootStale:0 SourceBytesRetainedRecoverableRootStale:0 LeafGenerationCleanupRetainedRecoverableRootStale:false TemplateRecordsAttempted:0 TemplateRecordsKept:0 TemplateInputBytes:0 TemplateOutputBytes:0 TemplatePointerRecordsAttempted:0 TemplatePointerRecordsKept:0 TemplatePointerInputBytes:0 TemplatePointerOutputBytes:0 TemplatePointerReasons:map[] TemplateOuterLeafRecordsAttempted:0 TemplateOuterLeafRecordsKept:0 TemplateOuterLeafInputBytes:0 TemplateOuterLeafOutputBytes:0 TemplateOuterLeafReasons:map[]} ValueLogGC:{SegmentsTotal:3 SegmentsReferenced:1 SegmentsActive:2 SegmentsProtected:0 SegmentsProtectedInUse:0 SegmentsProtectedRetained:0 SegmentsProtectedOverlap:0 SegmentsProtectedOther:0 SegmentsEligible:0 SegmentsDeleted:0 SegmentsPending:0 BytesTotal:119 BytesReferenced:119 BytesActive:0 BytesProtected:0 BytesProtectedInUse:0 BytesProtectedRetained:0 BytesProtectedOverlap:0 BytesProtectedOther:0 BytesEligible:0 BytesDeleted:0 BytesPending:0 ObservedSourceSegments:0 ObservedSourceSegmentsReferenced:0 ObservedSourceSegmentsActive:0 ObservedSourceSegmentsProtected:0 ObservedSourceSegmentsProtectedInUse:0 ObservedSourceSegmentsProtectedRetained:0 ObservedSourceSegmentsProtectedOverlap:0 ObservedSourceSegmentsProtectedOther:0 ObservedSourceSegmentsEligible:0 ObservedSourceSegmentsDeleted:0 ObservedSourceSegmentsPending:0 ObservedSourceBytes:0 ObservedSourceBytesReferenced:0 ObservedSourceBytesActive:0 ObservedSourceBytesProtected:0 ObservedSourceBytesProtectedInUse:0 ObservedSourceBytesProtectedRetained:0 ObservedSourceBytesProtectedOverlap:0 ObservedSourceBytesProtectedOther:0 ObservedSourceBytesEligible:0 ObservedSourceBytesDeleted:0 ObservedSourceBytesPending:0} LeafGenerationPlan:{CurrentCommitSeq:3 CurrentGenerationID:3 Generations:[{GenerationID:1 State:sealed FileIDs:[2139095041] FileCount:1 BytesTotal:101 BytesLive:101 BytesDead:0 BytesToCopy:101 LivePages:1 AgeCommits:0 PinnedCount:2 DeadRatioPPM:0 LiveRatioPPM:1000000 WholeGenerationGCEligible:false Eligible:false SkipReason:no_dead_bytes} {GenerationID:2 State:deleted FileIDs:[2139095042] FileCount:1 BytesTotal:0 BytesLive:0 BytesDead:0 BytesToCopy:0 LivePages:0 AgeCommits:0 PinnedCount:1 DeadRatioPPM:0 LiveRatioPPM:0 WholeGenerationGCEligible:false Eligible:false SkipReason:deleted_generation} {GenerationID:3 State:writable FileIDs:[2139095043] FileCount:1 BytesTotal:0 BytesLive:0 BytesDead:0 BytesToCopy:0 LivePages:0 AgeCommits:0 PinnedCount:1 DeadRatioPPM:0 LiveRatioPPM:0 WholeGenerationGCEligible:false Eligible:false SkipReason:writable_generation}] Candidates:[] CandidateGenerationIDs:[] CandidateBytesTotal:0 CandidateBytesLive:0 CandidateBytesDead:0 CandidateBytesToCopy:0 CandidateLivePages:0 ExpectedReclaimBytes:0 ExpectedReclaimRatioPPM:0 ExpectedReclaimPerByteCopiedPPM:0 Admission:no_candidates stateKey:{commitSeq:0 rootID:0 systemRoot:0 leafGenerationStamp:0 protectedRoots:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]} liveStats:{Generations:map[]}} LeafGenerationPacks:[{Plan:{CurrentCommitSeq:3 CurrentGenerationID:3 Generations:[{GenerationID:1 State:sealed FileIDs:[2139095041] FileCount:1 BytesTotal:101 BytesLive:101 BytesDead:0 BytesToCopy:101 LivePages:1 AgeCommits:0 PinnedCount:1 DeadRatioPPM:0 LiveRatioPPM:1000000 WholeGenerationGCEligible:false Eligible:false SkipReason:no_dead_bytes} {GenerationID:2 State:sealed FileIDs:[2139095042] FileCount:1 BytesTotal:0 BytesLive:0 BytesDead:0 BytesToCopy:0 LivePages:0 AgeCommits:0 PinnedCount:0 DeadRatioPPM:0 LiveRatioPPM:0 WholeGenerationGCEligible:false Eligible:false SkipReason:no_dead_bytes} {GenerationID:3 State:writable FileIDs:[2139095043] FileCount:1 BytesTotal:0 BytesLive:0 BytesDead:0 BytesToCopy:0 LivePages:0 AgeCommits:0 PinnedCount:0 DeadRatioPPM:0 LiveRatioPPM:0 WholeGenerationGCEligible:false Eligible:false SkipReason:writable_generation}] Candidates:[] CandidateGenerationIDs:[] CandidateBytesTotal:0 CandidateBytesLive:0 CandidateBytesDead:0 CandidateBytesToCopy:0 CandidateLivePages:0 ExpectedReclaimBytes:0 ExpectedReclaimRatioPPM:0 ExpectedReclaimPerByteCopiedPPM:0 Admission:no_candidates stateKey:{commitSeq:3 rootID:9 systemRoot:3 leafGenerationStamp:2 protectedRoots:[0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0]} liveStats:{Generations:map[1:{LivePages:1 LiveBytes:101}]}} Selection:{GenerationIDs:[] Generations:[] BytesTotal:0 BytesLive:0 BytesDead:0 BytesToCopy:0 LivePages:0 ExpectedReclaimBytes:0 ExpectedReclaimRatioPPM:0 ExpectedReclaimPerByteCopiedPPM:0} Pack:{GenerationsRequested:0 GenerationsMatched:0 SourceGenerationIDs:[] SourceFilesRequested:0 SourceFileIDs:[] SourceBytesTotal:0 SourceBytesLive:0 SourceBytesDead:0 SourceBytesToCopy:0 ExpectedReclaimBytes:0 ExpectedReclaimRatioPPM:0 ExpectedReclaimPerByteCopiedPPM:0 LeafPagesCopied:0 BytesCopied:0 LeafFramesWritten:0 MaxLeafFrameK:0 InternalPagesVisited:0 SubtreesPruned:0 CreatedFileIDs:[] CopyAttempts:0 CopyAborts:0 RetryCopyTimeNanos:0 CopyTimeNanos:0 PublishWaitNanos:0 PublishHoldNanos:0 PrivatePagesAllocated:0 PrivatePagesDiscarded:0 ApplyStages:{SetupTimeNanos:0 TreeRewriteTimeNanos:0 LeafSyncTimeNanos:0 CopyCloseTimeNanos:0 RevalidateTimeNanos:0 PromotionTimeNanos:0 RelocationTimeNanos:0 PageSyncTimeNanos:0 DirectorySyncTimeNanos:0 DirectorySyncWaitTimeNanos:0 RegistrationTimeNanos:0 CollectionPublishTimeNanos:0 FinalizeTimeNanos:0 PostWorkTimeNanos:0 CleanupTimeNanos:0} RetryApplyStages:{SetupTimeNanos:0 TreeRewriteTimeNanos:0 LeafSyncTimeNanos:0 CopyCloseTimeNanos:0 RevalidateTimeNanos:0 PromotionTimeNanos:0 RelocationTimeNanos:0 PageSyncTimeNanos:0 DirectorySyncTimeNanos:0 DirectorySyncWaitTimeNanos:0 RegistrationTimeNanos:0 CollectionPublishTimeNanos:0 FinalizeTimeNanos:0 PostWorkTimeNanos:0 CleanupTimeNanos:0} WallTimeNanos:0} Ran:false SkipReason:plan_admission:no_candidates}] LeafGenerationGC:{GenerationsTotal:3 GenerationsWritable:1 GenerationsLive:1 GenerationsRetiring:0 GenerationsEligible:1 GenerationsDeleted:0 FilesDeleted:0 BytesEligible:0 BytesDeleted:0} IndexVacuum:{AttemptID:0 Phase: TotalDuration:0s UserTreeDuration:0s SystemReserveDuration:0s CollectionBasisDuration:0s PreflushDuration:0s CutoverDuration:0s SystemTreeDuration:0s FinalPagerSyncDuration:0s SwapPublishDuration:0s MaxWriterPause:0s PrecloneTraversalPages:0 RecloneTraversalPages:0 CutoverCloneTraversalPages:0 DirtyDescriptors:0 UserTailMutations:0 UserTailPointMutations:0 UserTailRangeMutations:0 DeferredCutovers:0 ConcurrentMutationAborts:0 RecoverableSetCaptureDuration:0s RecoverableSetCaptureAttempts:0 RecoverableSetCaptures:0 RecoverableSetRecaptureAttempts:0 RecoverableSetRecaptures:0 RecoverableRoots:0 OlderRootRebuildDuration:0s OlderRootRebuilds:0 OlderRootDurableResourceCaptureDuration:0s OlderRootDurableResourceCaptures:0 OlderRootDurableResourceDescriptors:0 OlderRootDurableResourceBytes:0 OlderRootExactCandidateScans:0 OlderRootProjections:0 OlderRootProjectionFallbacks:0 OlderRootProjectionFallbackReason: OlderRootReusedNonValueLogDescriptors:0 OlderRootUniqueExternalSegments:0 DurableResourceCaptureDuration:0s DurableResourceCaptures:0 DurableResourceDescriptors:0 DurableResourceBytes:0 DurableResourceExactCandidateScans:0 DurableResourceProjections:0 DurableResourceProjectionFallbacks:0 DurableResourceProjectionFallbackReason: OlderRootRebuiltPages:0 ReplacementPagerPages:0 ExactCandidateScan:false ReusedNonValueLogDescriptors:0 UniqueExternalSegments:0 WorkCompleted:false Canceled:false} ZeroByteValueLogFilesDeleted:0 RemainingDebt:{ValueLogRewriteSegments:0 ValueLogRewriteBytes:0 ValueLogGCSegments:0 ValueLogGCBytes:0 LeafPackGenerations:0 LeafPackBytes:0 LeafGCGenerations:0 LeafGCBytes:0 ZeroByteValueLogFiles:0 IndexVacuumRequired:false IndexVacuumReason:none IndexVacuumTotalPages:86 IndexVacuumUserPages:1 IndexVacuumUserSpan:1 IndexVacuumUserSpanRatioPPM:1000000 IndexVacuumFreelistReclaimablePages:0 IndexVacuumFreelistReclaimableRatioPPM:0 IndexVacuumCollectionRootPages:0 IndexVacuumCollectionRootSpan:0 IndexVacuumCollectionRootSpanRatioPPM:0} FullyCompacted:true PolicyFullyCompacted:true ByteMinimized:false}\n--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed (3.47s)\n",
+  "close_notification_passes": [
+    "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_durable",
+    "TestCOWCloseErrorNotificationCanReadClosedDatabase/command_wal_relaxed",
+    "TestCOWCloseErrorNotificationCanReadClosedDatabase"
+  ],
+  "supported_mechanism": "Leaf GC logical deletion precedes physical prune. Releasing a COW basis snapshot can reach manager zero-ref zombie deletion while separate basis identity pins remain held; conflicts schedule asynchronous retry. Public maintenance refresh subsequently drains old basis. Windows sharing retries are an additional possibility.",
+  "confidence": "Exact hosted pin/lease/refcount branch and later unlink timing are untraced; immediate existence cannot distinguish safely pending deletion from a real leak.",
+  "repair_criteria": [
+    "Single actual CompactStorage call remains, without closing user old cut or manually deleting target.",
+    "Finite5s native-convention poll for exact unused rotated leaf absence; any stat error other than nil/NotExist fails immediately.",
+    "Old cut remains readable before/during/after waiting; maintain late write/checkpoint/Close/reopen regression.",
+    "Retain all3profiles, actual poll count/elapsed diagnostics, original failed packet and no platform skips.",
+    "Actual local normal/race/safe and new-head hosted Windows remain distinct authorities.",
+    "No production GC authority, pin lifetime/order, age deletion, shared registry or test cause/semantic relaxation."
+  ],
+  "limits": [
+    "GC eligibility/deleted state is not physical deletion; FilesDeleted counts manifest-pruned missing files.",
+    "Reported final-plan PinnedCount1 is captured inside backend compaction before public COW basis refresh; not a measured postreturn pin leak.",
+    "No assertion that FullyCompacted certifies immediate deletion of every retained leaf; pending audit/report semantics are separate from physical observation.",
+    "No Go/build/benchmark/remote/GitHub jobs or source edits performed."
+  ]
+}

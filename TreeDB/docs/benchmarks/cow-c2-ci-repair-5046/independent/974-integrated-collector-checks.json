@@ -1,0 +1,176 @@
+{
+  "current_measurements": false,
+  "script_hashes": {
+    "analyze_mvcc.py": "65f0f44c860f52dcf5f5b17e9bbcee543b6c95bf51e1f8b3c8ecaf8bfea7c47c",
+    "collect.py": "5767db90236ef2b3ae38d7873cee24a7163e5f94b0c3680f5ec4ad817765687e",
+    "collect_mvcc.py": "21830b08199bcfb0e353c92b1f24f08dcb10eebc7061c104ceec6c01533305fe",
+    "analyze.py": "31ff665da22e579074835568f39c1bcf4ee8986f16c008cc206ce9d32b0a3a53"
+  },
+  "plan_sha256": "bf52d6b6c607c2f4ac1cb180351546ddfb55644f40b2cba33a8750056d91b19c",
+  "contract_checks_sha256": "2c76cb784de6c28cca0e9dff383339ee14bbbfc33f5d704381240fb54e0482f9",
+  "reconstructed_actual_history_and_refusal_checks": [
+    {
+      "case": "append_only/fresh",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-append_only-fresh.log",
+      "log_sha256": "fdd46126efb95fa53a7c136b2d499d59d24636a089deccabfbc2ade20894532c",
+      "selected_validation": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "append_only/fresh/duplicate",
+      "refused": true
+    },
+    {
+      "case": "append_only/other",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-append_only-other.log",
+      "log_sha256": "620ca73c7a52cb98243dcef1997779a1ff3e74cd2c1f32d140a279de5a84d540",
+      "selected_validation": {
+        "rows": 36,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "append_only/other/duplicate",
+      "refused": true
+    },
+    {
+      "case": "append_only/durability",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-append_only-durability.log",
+      "log_sha256": "97090f39332247fa1aa2211a51ef3978cc351fbb42b6a1693a09fa16a5040cba",
+      "selected_validation": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "append_only/durability/duplicate",
+      "refused": true
+    },
+    {
+      "case": "btree/fresh",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-btree-fresh.log",
+      "log_sha256": "9ced10efbc313627c8fc426aa5ea91126bd0c22f0faba8614094d12b4deb54a0",
+      "selected_validation": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "btree/fresh/duplicate",
+      "refused": true
+    },
+    {
+      "case": "btree/other",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-btree-other.log",
+      "log_sha256": "660806b616c1bd3b988d117453272cbcb5c60d8d0dfd87ce5f8ebdb00f648b1a",
+      "selected_validation": {
+        "rows": 36,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "btree/other/duplicate",
+      "refused": true
+    },
+    {
+      "case": "btree/durability",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-btree-durability.log",
+      "log_sha256": "32cc9319c11bc6c2beb7391447ef44c582f88fd42adc71cf18852cb8eff3ee09",
+      "selected_validation": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "btree/durability/duplicate",
+      "refused": true
+    },
+    {
+      "case": "cow_btree/fresh",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-cow_btree-fresh.log",
+      "log_sha256": "cf5a616f8ceb318ec5a20005cd6f160c2689235d292572c64f371c2d42c78a5e",
+      "selected_validation": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "cow_btree/fresh/duplicate",
+      "refused": true
+    },
+    {
+      "case": "cow_btree/other",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-cow_btree-other.log",
+      "log_sha256": "e4883ee65c8d3cac6d88d9d34588a04a787cc33ce3ef898524dcb5d3a2aa6fc2",
+      "selected_validation": {
+        "rows": 36,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "cow_btree/other/duplicate",
+      "refused": true
+    },
+    {
+      "case": "cow_btree/durability",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/cost-final-4add47-v2/r1-cow_btree-durability.log",
+      "log_sha256": "e989728dab0df737f57b045d20f529472f3b979efb6cfcb8c8ddd33a79891496",
+      "selected_validation": {
+        "rows": 12,
+        "exact_case_set": true,
+        "iterations": 16
+      }
+    },
+    {
+      "case": "cow_btree/durability/duplicate",
+      "refused": true
+    },
+    {
+      "case": "live-close-charge",
+      "refused": true
+    },
+    {
+      "case": "mvcc/append_only",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-4add47-v2/r1-append_only-N128.log",
+      "log_sha256": "e8e4e2c4837a9b3de37357eabab9af69c8a14c56f5b56ecdedfa81681135d7b1",
+      "selected_validation": {
+        "rows": 6,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "mvcc/btree",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-4add47-v2/r1-btree-N128.log",
+      "log_sha256": "23ba45790db14ee2065fd7a1358872d30b74087a4306a42feaa8cebe4d0bca84",
+      "selected_validation": {
+        "rows": 6,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    },
+    {
+      "case": "mvcc/cow_btree",
+      "actual_historical_log": "/private/tmp/gomap-cow-execution-o2nauuzm/artifacts/c2/mvcc-final-4add47-v2/r1-cow_btree-N128.log",
+      "log_sha256": "146634cc9f5c1c037a358435c512a24063a851650489e874f523a9993c00f0c7",
+      "selected_validation": {
+        "rows": 6,
+        "exact_case_set": true,
+        "iterations": 128
+      }
+    }
+  ],
+  "check_count": 22,
+  "parsers_AST_exact_existing": true,
+  "scope": "actual historical log parsing plus deliberately rejected mutations; no current timing or invented benchmark pass"
+}
