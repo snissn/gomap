@@ -1,0 +1,1326 @@
+package memtable
+
+import (
+	"errors"
+	"fmt"
+	"math/rand"
+	"reflect"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/tidwall/btree"
+)
+
+func cowTestWriter(t testing.TB, limits COWLimits) (*COWBudget, *COWWriter) {
+	t.Helper()
+	b, e := NewCOWBudget(limits)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w, e := NewCOWWriter(b)
+	if e != nil {
+		t.Fatal(e)
+	}
+	return b, w
+}
+func cowTestPublish(t testing.TB, w *COWWriter, entries []COWMutation) *COWRoot {
+	t.Helper()
+	p, e := w.Prepare(entries, COWPrepareOptions{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	return p.Publish()
+}
+func cowTestRelease(r *COWRoot) { d := r.Release(); d.Drain() }
+func cowTestClose(w *COWWriter) { d := w.Close(); d.Drain() }
+func cowTestEntries(n int) []COWMutation {
+	e := make([]COWMutation, n)
+	for i := range e {
+		e[i] = COWMutation{Key: []byte(fmt.Sprintf("%08d", i)), Value: []byte("value"), Flags: node.FlagInline, Revision: page.EntryRevision(i + 1)}
+	}
+	return e
+}
+
+func TestCOWOwnedHeadersAndBytes(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	key, value := []byte("key"), []byte("old")
+	old := cowTestPublish(t, w, []COWMutation{{Key: key, Value: value, Flags: node.FlagInline, Revision: 7}})
+	oldHeaderID := reflect.ValueOf(old.tree).Elem().FieldByName("isoid").Uint()
+	key[0] = 'X'
+	value[0] = 'X'
+	view, e := old.Acquire(0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 100; i++ {
+		next := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("new")}})
+		cowTestRelease(next)
+	}
+	deleted := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Remove: true}})
+	cowTestRelease(deleted)
+	got, ok, e := view.Get([]byte("key"))
+	if e != nil || !ok || got.Value != "old" || got.Revision != 7 {
+		t.Fatalf("old view=%+v found=%v err=%v", got, ok, e)
+	}
+	copyValue := []byte(got.Value)
+	copyValue[0] = '!'
+	again, _ := old.Get([]byte("key"))
+	if got := reflect.ValueOf(old.tree).Elem().FieldByName("isoid").Uint(); got != oldHeaderID {
+		t.Fatal("published header was copied or mutated")
+	}
+	if again.Value != "old" {
+		t.Fatal("safe output alias changed owned bytes")
+	}
+	// Poison/reuse the legacy arena; the COW capability accepts no arena/steal.
+	legacy := NewBTree()
+	legacy.Set([]byte("key"), []byte("poison"))
+	legacy.Reset()
+	legacy.Set([]byte("key"), []byte("reset!"))
+	if _, ok := any(w).(Table); ok {
+		t.Fatal("COW writer must not expose legacy mutable table capabilities")
+	}
+	cowTestClose(w)
+	cowTestRelease(old)
+	if b.Stats().HistoryBytes == 0 {
+		t.Fatal("live view lost generation history")
+	}
+	view.Close()
+	view.Close()
+	b.Close()
+	if s := b.Stats(); s.TotalBytes != 0 || s.Generations != 0 || s.Views != 0 {
+		t.Fatalf("leak: %+v", s)
+	}
+}
+
+func TestCOWPrivatePreparationCancelAndResourceOwnership(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	old := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+	before := b.Stats()
+	p, e := w.Prepare([]COWMutation{{Key: []byte("key"), Value: []byte("new")}}, COWPrepareOptions{ResourceSlots: 2, ResourceBytes: 128, ExtraBytes: 256})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.Root().Retain() {
+		t.Fatal("staged root was retainable before publication")
+	}
+	if _, e := w.Prepare(nil, COWPrepareOptions{}); !errors.Is(e, ErrCOWPending) {
+		t.Fatal(e)
+	}
+	var released atomic.Int32
+	ids := []COWResourceID{{Kind: 1, ID: 9}, {Kind: 2, ID: 4}}
+	if e = p.AttachResources(ids, func() { released.Add(1) }); e != nil {
+		t.Fatal(e)
+	}
+	if got, _ := old.Get([]byte("key")); got.Value != "old" {
+		t.Fatal("private preparation became visible")
+	}
+	d := p.Cancel()
+	if released.Load() != 0 {
+		t.Fatal("callback ran inside cancellation")
+	}
+	d.Drain()
+	d.Drain()
+	if released.Load() != 1 {
+		t.Fatal("cancel release not exactly once")
+	}
+	if got := b.Stats(); got.TotalBytes != before.TotalBytes || got.ReservedBytes != 0 {
+		t.Fatalf("cancel charge %+v before %+v", got, before)
+	}
+	p, e = w.Prepare(nil, COWPrepareOptions{ResourceSlots: 2, ResourceBytes: 128})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = p.AttachResources(ids, func() { released.Add(1) }); e != nil {
+		t.Fatal(e)
+	}
+	root := p.Publish()
+	if !w.HasResource(ids[0]) {
+		t.Fatal("resource identity missing")
+	}
+	p, e = w.Prepare(nil, COWPrepareOptions{ResourceSlots: 1})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if e = p.AttachResources(ids[:1], func() { t.Fatal("duplicate owner transferred") }); e == nil {
+		t.Fatal("duplicate resource accepted")
+	}
+	d = p.Cancel()
+	d.Drain()
+	if e = w.Freeze(); e != nil {
+		t.Fatal(e)
+	}
+	cowTestClose(w)
+	cowTestRelease(root)
+	if released.Load() != 1 {
+		t.Fatal("old header did not retain generation resources")
+	}
+	cowTestRelease(old)
+	b.Close()
+	if released.Load() != 2 || b.Stats().TotalBytes != 0 {
+		t.Fatalf("final release=%d stats=%+v", released.Load(), b.Stats())
+	}
+}
+
+func TestCOWFiniteReplacementHistoryAndResume(t *testing.T) {
+	l := DefaultCOWLimits()
+	l.MaxGenerationBytes = 160 << 10
+	l.MaxTotalBytes = 512 << 10
+	l.MaxRetiredBytes = 512 << 10
+	l.MaxInFlightBytes = 160 << 10
+	b, w := cowTestWriter(t, l)
+	old := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+	accepted := 0
+	var last *COWRoot
+	for i := 0; i < 1000; i++ {
+		p, e := w.Prepare([]COWMutation{{Key: []byte("key"), Value: []byte("new")}}, COWPrepareOptions{})
+		if errors.Is(e, ErrCOWCapacity) {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		accepted++
+		if last != nil {
+			cowTestRelease(last)
+		}
+		last = p.Publish()
+	}
+	if accepted == 0 || accepted == 1000 {
+		t.Fatalf("unbounded or unusable replacements: %d", accepted)
+	}
+	if got, _ := old.Get([]byte("key")); got.Value != "old" {
+		t.Fatal("pinned predecessor invalidated")
+	}
+	if e := w.Freeze(); e != nil {
+		t.Fatal(e)
+	}
+	cowTestClose(w)
+	cowTestRelease(last)
+	if s := b.Stats(); s.RetiredBytes == 0 || s.TotalBytes > l.MaxTotalBytes || s.ReservedBytes != 0 {
+		t.Fatalf("retention %+v", s)
+	}
+	cowTestRelease(old)
+	fresh, e := NewCOWWriter(b)
+	if e != nil {
+		t.Fatal(e)
+	}
+	root := cowTestPublish(t, fresh, []COWMutation{{Key: []byte("key"), Value: []byte("resumed")}})
+	cowTestRelease(root)
+	cowTestClose(fresh)
+	t.Logf("accepted constant-size replacements=%d peak engine charge=%d", accepted, b.Stats().PeakBytes)
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWSplitDeleteBatchHeightAndMetadata(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	entries := cowTestEntries(4096)
+	p, e := w.Prepare(entries, COWPrepareOptions{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if p.Charge().Height < 3 {
+		t.Fatalf("batch height bound %d", p.Charge().Height)
+	}
+	old := p.Publish()
+	for i := range entries {
+		entries[i].Remove = true
+	}
+	next := cowTestPublish(t, w, entries)
+	if old.Len() != 4096 || next.Len() != 0 {
+		t.Fatalf("old/new counts %d/%d", old.Len(), next.Len())
+	}
+	for _, i := range []int{0, 63, 1024, 4095} {
+		got, ok := old.Get([]byte(fmt.Sprintf("%08d", i)))
+		if !ok || got.Revision != page.EntryRevision(i+1) || got.Value != "value" {
+			t.Fatalf("old record %d %+v", i, got)
+		}
+	}
+	cowTestRelease(old)
+	cowTestRelease(next)
+	cowTestClose(w)
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWConcurrentTraversalAndClose(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	old := cowTestPublish(t, w, cowTestEntries(1024))
+	view, e := old.Acquire(0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var wg sync.WaitGroup
+	for j := 0; j < 4; j++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for k := 0; k < 20; k++ {
+				c, e := old.Cursor(nil, nil)
+				if e != nil {
+					t.Error(e)
+					return
+				}
+				n := 0
+				for {
+					r, ok, e := c.Record()
+					if e != nil || !ok {
+						break
+					}
+					if r.Value != "value" {
+						t.Error("old traversal changed")
+					}
+					n++
+					_ = c.Next()
+				}
+				c.Close()
+				if n != 1024 {
+					t.Errorf("count %d", n)
+				}
+			}
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		next := cowTestPublish(t, w, []COWMutation{{Key: []byte("00000001"), Value: []byte("replacement")}})
+		cowTestRelease(next)
+	}
+	c, e := view.Cursor(nil, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_ = c.Next()
+			_ = c.Seek([]byte("00000010"))
+			_, _, _ = c.Record()
+		}
+	}()
+	go func() { defer wg.Done(); c.Close(); view.Close() }()
+	wg.Wait()
+	c.Close()
+	view.Close()
+	cowTestRelease(old)
+	cowTestClose(w)
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWLimitsAndRefusal(t *testing.T) {
+	if _, err := ModeFromString("cow_btree"); err == nil {
+		t.Fatal("C1 exposed incomplete DB mode")
+	}
+	l := DefaultCOWLimits()
+	l.MaxViews = 1
+	l.MaxGenerations = 1
+	l.MaxSources = 1
+	l.MaxResources = 1
+	b, w := cowTestWriter(t, l)
+	if _, e := NewCOWWriter(b); !errors.Is(e, ErrCOWCapacity) {
+		t.Fatal("generation cap", e)
+	}
+	root := cowTestPublish(t, w, nil)
+	v, e := root.Acquire(0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = root.Acquire(0); !errors.Is(e, ErrCOWCapacity) {
+		t.Fatal("view cap", e)
+	}
+	v.Close()
+	before := b.Stats()
+	if _, e = w.Prepare([]COWMutation{{Flags: node.FlagPointer | node.FlagTombstone}}, COWPrepareOptions{}); e == nil {
+		t.Fatal("invalid flags admitted")
+	}
+	if _, e = w.Prepare(nil, COWPrepareOptions{ExtraBytes: ^uint64(0)}); !errors.Is(e, ErrCOWCapacity) {
+		t.Fatal("overflow", e)
+	}
+	if _, e = w.Prepare(nil, COWPrepareOptions{ResourceSlots: 2}); !errors.Is(e, ErrCOWCapacity) {
+		t.Fatal("resource cap", e)
+	}
+	if after := b.Stats(); after.TotalBytes != before.TotalBytes || after.ReservedBytes != 0 {
+		t.Fatal("refusal changed budget", after)
+	}
+	if e = w.Freeze(); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = w.Prepare(nil, COWPrepareOptions{}); !errors.Is(e, ErrCOWCapacity) {
+		t.Fatal("frozen writer mutated", e)
+	}
+	cowTestClose(w)
+	cowTestRelease(root)
+	if _, e = root.Acquire(0); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal("released root admitted view", e)
+	}
+	l.MaxViews = 0
+	if _, e = NewCOWBudget(l); e == nil {
+		t.Fatal("unlimited limit accepted")
+	}
+}
+
+func TestCOWDependencyLayoutContract(t *testing.T) {
+	mapType := reflect.TypeOf(btree.Map[string, cowValue]{})
+	root, ok := mapType.FieldByName("root")
+	if !ok {
+		t.Fatal("dependency root layout changed")
+	}
+	actualNode := root.Type.Elem()
+	if actualNode.Size() != unsafe.Sizeof(cowNodeLayout{}) {
+		t.Fatalf("dependency node size %d mirror %d", actualNode.Size(), unsafe.Sizeof(cowNodeLayout{}))
+	}
+	items, ok := actualNode.FieldByName("items")
+	if !ok {
+		t.Fatal("dependency items layout changed")
+	}
+	if items.Type.Elem().Size() != unsafe.Sizeof(cowPairLayout{}) {
+		t.Fatalf("pair size %d mirror %d", items.Type.Elem().Size(), unsafe.Sizeof(cowPairLayout{}))
+	}
+	for _, name := range []string{"isoid", "count", "items", "children"} {
+		got, ok := actualNode.FieldByName(name)
+		want, _ := reflect.TypeOf(cowNodeLayout{}).FieldByName(name)
+		if !ok || got.Offset != want.Offset {
+			t.Fatalf("dependency node field %s changed", name)
+		}
+	}
+	m := btree.NewMap[string, cowValue](32)
+	v := reflect.ValueOf(m).Elem()
+	if v.FieldByName("copyValues").Bool() || v.FieldByName("isoCopyValues").Bool() {
+		t.Fatal("immutable values unexpectedly invoke dependency copying")
+	}
+	for i := 0; i < 4096; i++ {
+		m.Set(fmt.Sprintf("%08d", i), cowValue{value: "owned"})
+	}
+	for i := 0; i < 2048; i++ {
+		m.Delete(fmt.Sprintf("%08d", i))
+	}
+	pairLimit := cowAllocation(126 * uint64(unsafe.Sizeof(cowPairLayout{})))
+	childLimit := cowAllocation(128 * uint64(unsafe.Sizeof(uintptr(0))))
+	var check func(reflect.Value)
+	check = func(p reflect.Value) {
+		if p.IsNil() {
+			return
+		}
+		n := p.Elem()
+		items := n.FieldByName("items")
+		if uint64(items.Cap())*uint64(items.Type().Elem().Size()) > pairLimit {
+			t.Fatal("item capacity escaped reserve")
+		}
+		children := n.FieldByName("children")
+		if !children.IsNil() {
+			a := children.Elem()
+			if uint64(a.Cap())*uint64(a.Type().Elem().Size()) > childLimit {
+				t.Fatal("child capacity escaped reserve")
+			}
+			for i := 0; i < a.Len(); i++ {
+				check(a.Index(i))
+			}
+		}
+	}
+	check(reflect.ValueOf(m).Elem().FieldByName("root"))
+}
+
+func TestCOWDependencyReserveWitness(t *testing.T) {
+	for _, n := range []int{1, 31, 63, 64, 1024, 2046, 2047, 4096} {
+		for _, kind := range []string{"insert", "replace", "delete"} {
+			t.Run(fmt.Sprintf("%d/%s", n, kind), func(t *testing.T) {
+				m := btree.NewMap[string, cowValue](32)
+				for i := 0; i < n; i++ {
+					m.Set(fmt.Sprintf("%08d", i), cowValue{value: "old"})
+				}
+				old := m.Copy()
+				height := cowMaximumHeight(n + 1)
+				if m.Height() > height {
+					height = m.Height()
+				}
+				charge := cowNodeReserveFor(height, kind == "replace", kind == "delete", n+1) + 2*cowAllocation(uint64(unsafe.Sizeof(btree.Map[string, cowValue]{})))
+				runtime.GC()
+				var a, z runtime.MemStats
+				runtime.ReadMemStats(&a)
+				private := m.Copy()
+				switch kind {
+				case "insert":
+					private.Set("99999999", cowValue{value: "new"})
+				case "replace":
+					private.Set("00000000", cowValue{value: "new"})
+				case "delete":
+					private.Delete("00000000")
+				}
+				read := private.Copy()
+				runtime.ReadMemStats(&z)
+				allocated := z.TotalAlloc - a.TotalAlloc
+				if allocated > charge {
+					t.Fatalf("dependency allocated %d > reserve %d", allocated, charge)
+				}
+				t.Logf("n=%d kind=%s height=%d allocated=%d reserve=%d ratio=%.2f", n, kind, height, allocated, charge, float64(charge)/float64(allocated))
+				runtime.KeepAlive(old)
+				runtime.KeepAlive(read)
+			})
+		}
+	}
+}
+
+func TestCOWBatchReserveWitness(t *testing.T) {
+	for _, kind := range []string{"insert", "replace", "delete", "mixed"} {
+		for _, n := range []int{63, 1024, 4096} {
+			t.Run(fmt.Sprintf("%s/%d", kind, n), func(t *testing.T) {
+				limits := DefaultCOWLimits()
+				limits.MaxGenerationBytes = 1 << 30
+				limits.MaxInFlightBytes = 1 << 30
+				limits.MaxTotalBytes = 2 << 30
+				limits.MaxRetiredBytes = 2 << 30
+				_, w := cowTestWriter(t, limits)
+				var old *COWRoot
+				if kind != "insert" {
+					old = cowTestPublish(t, w, cowTestEntries(n))
+				}
+				entries := cowTestEntries(n)
+				for i := range entries {
+					switch kind {
+					case "delete":
+						entries[i].Remove = true
+					case "mixed":
+						entries[i].Remove = i%2 == 0
+						if i%3 == 0 {
+							entries[i].Key = []byte(fmt.Sprintf("new-%08d", i))
+						}
+					}
+				}
+				estimate, e := w.Estimate(entries, COWPrepareOptions{})
+				if e != nil {
+					t.Fatal(e)
+				}
+				runtime.GC()
+				var a, z runtime.MemStats
+				runtime.ReadMemStats(&a)
+				p, e := w.Prepare(entries, COWPrepareOptions{})
+				if e != nil {
+					t.Fatal(e)
+				}
+				root := p.Publish()
+				runtime.ReadMemStats(&z)
+				if got := z.TotalAlloc - a.TotalAlloc; got > estimate.Total() {
+					t.Fatalf("allocated=%d reserve=%d", got, estimate.Total())
+				}
+				t.Logf("kind=%s n=%d allocated=%d reserved=%d node-reserve=%d height=%d", kind, n, z.TotalAlloc-a.TotalAlloc, estimate.Total(), estimate.Nodes, estimate.Height)
+				if old != nil {
+					cowTestRelease(old)
+				}
+				cowTestRelease(root)
+				cowTestClose(w)
+			})
+		}
+	}
+}
+
+func TestCOWMixedDeletionDoesNotUseDeleteOnlyBound(t *testing.T) {
+	_, w := cowTestWriter(t, DefaultCOWLimits())
+	old := cowTestPublish(t, w, cowTestEntries(1024))
+	entries := []COWMutation{{Key: []byte("00000000"), Remove: true}, {Key: []byte("new"), Value: []byte("new")}}
+	c, e := w.Estimate(entries, COWPrepareOptions{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	want := cowNodeReserveFor(c.Height, false, true, 1026) + cowNodeReserveFor(c.Height, false, false, 1026)
+	if c.Nodes > want || c.Nodes <= cowNodeReserveFor(c.Height, false, false, 1026) {
+		t.Fatalf("mixed bound=%d outside operation bounds (max %d)", c.Nodes, want)
+	}
+	cowTestRelease(old)
+	cowTestClose(w)
+}
+
+func TestCOWRebalanceCapacityHistoryWitness(t *testing.T) {
+	l := DefaultCOWLimits()
+	l.MaxGenerationBytes = 256 << 20
+	l.MaxInFlightBytes = 256 << 20
+	_, w := cowTestWriter(t, l)
+	old := cowTestPublish(t, w, cowTestEntries(2048))
+	cowTestRelease(old)
+	rng := rand.New(rand.NewSource(1))
+	for step := 0; step < 80; step++ {
+		entries := make([]COWMutation, 32)
+		for i := range entries {
+			entries[i] = COWMutation{Key: []byte(fmt.Sprintf("%08d", rng.Intn(4096))), Value: []byte("replacement"), Remove: rng.Intn(2) == 0}
+		}
+		c, e := w.Estimate(entries, COWPrepareOptions{})
+		if e != nil {
+			t.Fatal(e)
+		}
+		var a, z runtime.MemStats
+		runtime.ReadMemStats(&a)
+		p, e := w.Prepare(entries, COWPrepareOptions{})
+		if e != nil {
+			t.Fatal(e)
+		}
+		root := p.Publish()
+		runtime.ReadMemStats(&z)
+		if z.TotalAlloc-a.TotalAlloc > c.Total() {
+			t.Fatalf("step %d alloc=%d reserved=%d", step, z.TotalAlloc-a.TotalAlloc, c.Total())
+		}
+		cowTestRelease(root)
+	}
+	cowTestClose(w)
+}
+
+func TestCOWRetainedGenerationPlateau(t *testing.T) {
+	l := DefaultCOWLimits()
+	l.MaxGenerationBytes = 128 << 10
+	l.MaxInFlightBytes = 128 << 10
+	l.MaxTotalBytes = 1 << 20
+	l.MaxRetiredBytes = 1 << 20
+	l.MaxSources = 16
+	l.MaxGenerations = 16
+	b, e := NewCOWBudget(l)
+	if e != nil {
+		t.Fatal(e)
+	}
+	var pinned []*COWRoot
+	var peakHeap, peakInuse uint64
+	writes := 0
+	for generation := 0; generation < 32; generation++ {
+		w, e := NewCOWWriter(b)
+		if errors.Is(e, ErrCOWCapacity) {
+			break
+		}
+		if e != nil {
+			t.Fatal(e)
+		}
+		first := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte(fmt.Sprintf("generation-%d", generation))}})
+		pinned = append(pinned, first)
+		for i := 0; i < 1000; i++ {
+			p, e := w.Prepare([]COWMutation{{Key: []byte("key"), Value: []byte("replacement")}}, COWPrepareOptions{})
+			if errors.Is(e, ErrCOWCapacity) {
+				break
+			}
+			if e != nil {
+				t.Fatal(e)
+			}
+			r := p.Publish()
+			cowTestRelease(r)
+			writes++
+		}
+		if e = w.Freeze(); e != nil {
+			t.Fatal(e)
+		}
+		cowTestClose(w)
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		if m.HeapAlloc > peakHeap {
+			peakHeap = m.HeapAlloc
+		}
+		if m.HeapInuse > peakInuse {
+			peakInuse = m.HeapInuse
+		}
+		if b.Stats().TotalBytes > l.MaxTotalBytes {
+			t.Fatal("budget overrun")
+		}
+	}
+	if len(pinned) < 2 || len(pinned) == 32 {
+		t.Fatalf("retention not finite: %d", len(pinned))
+	}
+	for i, r := range pinned {
+		got, ok := r.Get([]byte("key"))
+		if !ok || got.Value != fmt.Sprintf("generation-%d", i) {
+			t.Fatalf("pinned generation %d changed", i)
+		}
+	}
+	runtime.GC()
+	var held runtime.MemStats
+	runtime.ReadMemStats(&held)
+	charged := b.Stats()
+	for _, r := range pinned {
+		cowTestRelease(r)
+	}
+	pinned = nil
+	runtime.GC()
+	var drained runtime.MemStats
+	runtime.ReadMemStats(&drained)
+	w, e := NewCOWWriter(b)
+	if e != nil {
+		t.Fatal("release did not resume admission", e)
+	}
+	cowTestClose(w)
+	t.Logf("writes=%d generations=%d engine=%d retired=%d peak-charge=%d sampled-heap-high=%d sampled-inuse-high=%d held-heap=%d drained-heap=%d", writes, charged.Generations, charged.TotalBytes, charged.RetiredBytes, charged.PeakBytes, peakHeap, peakInuse, held.HeapAlloc, drained.HeapAlloc)
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWBudgetCloseKeepsExistingViews(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	root := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+	view, e := root.Acquire(0)
+	if e != nil {
+		t.Fatal(e)
+	}
+	b.Close()
+	b.Close()
+	if root.Retain() {
+		t.Fatal("budget close admitted another root owner")
+	}
+	beforeFreeze := b.Stats()
+	if e = w.Freeze(); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal("budget close admitted a source rollover", e)
+	}
+	if after := b.Stats(); after != beforeFreeze {
+		t.Fatalf("refused rollover changed accounting: before=%+v after=%+v", beforeFreeze, after)
+	}
+	if _, e = root.Acquire(0); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal(e)
+	}
+	if _, e = w.Prepare(nil, COWPrepareOptions{}); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal(e)
+	}
+	if _, e = NewCOWWriter(b); !errors.Is(e, ErrCOWClosed) {
+		t.Fatal(e)
+	}
+	cowTestClose(w)
+	cowTestRelease(root)
+	got, ok, e := view.Get([]byte("key"))
+	if e != nil || !ok || got.Value != "old" {
+		t.Fatal("budget close revoked existing view")
+	}
+	if b.Stats().ControlBytes == 0 {
+		t.Fatal("budget control owner released before old view")
+	}
+	view.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWPointerAllocationCharge(t *testing.T) {
+	for _, count := range []int{64, 128, 256, 512, 1024, 4096} {
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		data := make([]*int, count)
+		runtime.ReadMemStats(&after)
+		charge := COWAllocationCharge(uint64(count) * uint64(unsafe.Sizeof(uintptr(0))))
+		allocated := after.TotalAlloc - before.TotalAlloc
+		if allocated > charge {
+			t.Fatalf("pointer backing count=%d allocated=%d charge=%d", count, allocated, charge)
+		}
+		t.Logf("pointer backing count=%d allocated=%d charge=%d", count, allocated, charge)
+		runtime.KeepAlive(data)
+	}
+}
+
+func TestCOWExternalAdmissionLifetimeAndRefusal(t *testing.T) {
+	l := DefaultCOWLimits()
+	l.MaxGenerationBytes = 1024
+	l.MaxTotalBytes = 4096
+	l.MaxRetiredBytes = 2048
+	l.MaxInFlightBytes = 256
+	b, err := NewCOWBudget(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := b.Stats()
+	var leases []*COWExternalLease
+	for {
+		lease, err := b.AcquireExternal(COWAllocationCharge(32))
+		if errors.Is(err, ErrCOWCapacity) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		leases = append(leases, lease)
+	}
+	plateau := b.Stats()
+	if len(leases) != 4 || plateau.ExternalBytes != 256 || plateau.ReservedBytes != 256 || plateau.ExternalLeases != 4 || plateau.TotalBytes-baseline.TotalBytes != 256 {
+		t.Fatalf("external plateau %+v leases=%d", plateau, len(leases))
+	}
+	if allocations := testing.AllocsPerRun(100, func() {
+		lease, err := b.AcquireExternal(1)
+		if lease != nil || !errors.Is(err, ErrCOWCapacity) {
+			panic("refusal admitted storage")
+		}
+	}); allocations != 0 {
+		t.Fatalf("refusal allocated %g objects", allocations)
+	}
+	if _, err := b.AcquireExternal(^uint64(0)); !errors.Is(err, ErrCOWCapacity) {
+		t.Fatal("overflow admitted", err)
+	}
+	if b.Stats() != plateau {
+		t.Fatal("refused lease changed accounting")
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); leases[0].Close() }()
+	}
+	wg.Wait()
+	lease, err := b.AcquireExternal(32)
+	if err != nil {
+		t.Fatal("release did not restore admission", err)
+	}
+	leases = append(leases, lease)
+	b.Close()
+	if b.Stats().ControlBytes == 0 {
+		t.Fatal("external leases lost budget control")
+	}
+	if _, err := b.AcquireExternal(0); !errors.Is(err, ErrCOWClosed) {
+		t.Fatal("closed budget admitted external allocation", err)
+	}
+	for _, lease := range leases {
+		lease.Close()
+		lease.Close()
+	}
+	if got := b.Stats(); got.TotalBytes != 0 || got.ReservedBytes != 0 || got.ExternalBytes != 0 || got.ExternalLeases != 0 {
+		t.Fatal(got)
+	}
+	var nilLease *COWExternalLease
+	nilLease.Close()
+}
+
+func TestCOWExternalAdmissionSharesPrepareAndRetirementBounds(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	charge, err := w.Estimate(nil, COWPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Fill in-flight storage so another Prepare cannot allocate its candidate.
+	lease, err := b.AcquireExternal(b.Limits().MaxInFlightBytes - charge.Total())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := b.Stats()
+	if allocations := testing.AllocsPerRun(100, func() {
+		p, e := w.Prepare(nil, COWPrepareOptions{})
+		if p != nil || !errors.Is(e, ErrCOWCapacity) {
+			panic("Prepare ignored external admission")
+		}
+	}); allocations != 0 {
+		t.Fatal("refused preparation allocated", allocations)
+	}
+	if b.Stats() != before {
+		t.Fatal("refused preparation changed charge")
+	}
+	lease.Close()
+	p, err := w.Prepare(nil, COWPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Cancel()
+	d.Drain()
+	cowTestClose(w)
+	b.Close()
+	// Retirement may be smaller than in-flight: external admission must not
+	// allow its reserved bytes to underflow later retirement subtraction.
+	l := DefaultCOWLimits()
+	l.MaxGenerationBytes = 1024
+	l.MaxRetiredBytes = 1024
+	l.MaxInFlightBytes = 4096
+	b, err = NewCOWBudget(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err = b.AcquireExternal(1024)
+	if !errors.Is(err, ErrCOWCapacity) || lease != nil {
+		t.Fatal("retirement bound ignored", err)
+	}
+	if !cowFits(10, 10, 0) || cowFits(10, 11, 0) || cowFits(10, 0, ^uint64(0)) {
+		t.Fatal("capacity arithmetic underflow")
+	}
+	b.Close()
+}
+
+func TestCOWRetainCloseRace(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	root := cowTestPublish(t, w, nil)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 128; j++ {
+				if root.Retain() {
+					cowTestRelease(root)
+				}
+			}
+		}()
+	}
+	close(start)
+	b.Close()
+	wg.Wait()
+	if root.Retain() {
+		t.Fatal("post-close root retained")
+	}
+	if root.Len() != 0 {
+		t.Fatal("existing source invalidated")
+	}
+	cowTestRelease(root)
+	cowTestClose(w)
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWFreezeCloseRace(t *testing.T) {
+	for i := 0; i < 64; i++ {
+		b, w := cowTestWriter(t, DefaultCOWLimits())
+		root := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+		start := make(chan struct{})
+		result := make(chan error, 1)
+		go func() {
+			<-start
+			result <- w.Freeze()
+		}()
+		close(start)
+		b.Close()
+		err := <-result
+		stats := b.Stats()
+		switch {
+		case err == nil:
+			if stats.Sources != 1 || stats.RetiredBytes != stats.HistoryBytes {
+				t.Fatalf("admitted rollover lost accounting: %+v", stats)
+			}
+			// A repeated freeze changes no ownership and remains idempotent.
+			if err = w.Freeze(); err != nil || b.Stats() != stats {
+				t.Fatal("existing frozen source changed after close", err, b.Stats())
+			}
+		case errors.Is(err, ErrCOWClosed):
+			if stats.Sources != 0 || stats.RetiredBytes != 0 {
+				t.Fatalf("refused rollover consumed retention: %+v", stats)
+			}
+		default:
+			t.Fatal(err)
+		}
+		if got, ok := root.Get([]byte("key")); !ok || got.Value != "old" {
+			t.Fatal("close/freeze race invalidated admitted root")
+		}
+		cowTestClose(w)
+		cowTestRelease(root)
+		if stats := b.Stats(); stats.TotalBytes != 0 || stats.Sources != 0 || stats.Generations != 0 {
+			t.Fatalf("close/freeze race leaked ownership: %+v", stats)
+		}
+	}
+}
+
+func TestCOWCursorGeometricStackWitness(t *testing.T) {
+	for _, count := range []int{64, 256, 1024, 4096} {
+		b, w := cowTestWriter(t, DefaultCOWLimits())
+		// Only this immutable iterator fixture uses degree2 to reach heights
+		// cheaply. Production COW construction remains fixed at degree32.
+		m := btree.NewMap[string, cowValue](2)
+		for i := 0; i < count; i++ {
+			m.Set(fmt.Sprintf("%08d", i), cowValue{})
+		}
+		root := &COWRoot{tree: m, generation: w.generation, refs: 1}
+		w.generation.retain()
+		beforeCharge := b.Stats().TotalBytes
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		cursor, err := root.Cursor(nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.ReadMemStats(&after)
+		charge := b.Stats().TotalBytes - beforeCharge
+		if after.TotalAlloc-before.TotalAlloc > charge {
+			t.Fatalf("height%d allocated%d charge%d", root.Height(), after.TotalAlloc-before.TotalAlloc, charge)
+		}
+		t.Logf("iterator height=%d allocated=%d charge=%d", root.Height(), after.TotalAlloc-before.TotalAlloc, charge)
+		cursor.Close()
+		cowTestRelease(root)
+		cowTestClose(w)
+		b.Close()
+	}
+	type frame struct {
+		pointer *int
+		index   int
+	}
+	for _, height := range []int{9, 33, 65, 257, 4097} {
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		var stack []frame
+		for i := 0; i < height; i++ {
+			stack = append(stack, frame{})
+		}
+		runtime.ReadMemStats(&after)
+		charge, ok := cowCursorStackCharge(height)
+		if !ok || after.TotalAlloc-before.TotalAlloc > charge {
+			t.Fatalf("stack height%d allocated%d charge%d", height, after.TotalAlloc-before.TotalAlloc, charge)
+		}
+		t.Logf("synthetic stack height=%d allocated=%d charge=%d", height, after.TotalAlloc-before.TotalAlloc, charge)
+		runtime.KeepAlive(stack)
+	}
+	if _, ok := cowCursorStackCharge(int(^uint(0) >> 1)); ok {
+		t.Fatal("unbounded stack charge overflow accepted")
+	}
+}
+
+func TestCOWSuccessorAndChargedCursorAdapter(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	root := cowTestPublish(t, w, cowTestEntries(1024))
+	start, end := []byte("00000010"), []byte("00000012")
+	if a := testing.AllocsPerRun(100, func() {
+		r, ok := root.SeekGE(start, end)
+		if !ok || r.Key != "00000010" {
+			panic("bad successor")
+		}
+	}); a != 0 {
+		t.Fatalf("SeekGE allocations %g", a)
+	}
+	if a := testing.AllocsPerRun(100, func() {
+		r, ok := root.Get(start)
+		if !ok || r.Key != "00000010" {
+			panic("bad point lookup")
+		}
+	}); a != 0 {
+		t.Fatalf("Get allocations %g", a)
+	}
+	if _, ok := root.SeekGE(end, end); ok {
+		t.Fatal("empty domain matched")
+	}
+	before := b.Stats()
+	cursor, e := root.CursorWithExtraBytes(start, end, 512)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if b.Stats().TotalBytes-before.TotalBytes < 512 {
+		t.Fatal("adapter extra bytes not charged")
+	}
+	for _, key := range []string{"00000010", "00000011"} {
+		r, ok, e := cursor.Record()
+		if e != nil || !ok || r.Key != key {
+			t.Fatalf("cursor %+v %v %v", r, ok, e)
+		}
+		_ = cursor.Next()
+	}
+	if _, ok, _ := cursor.Record(); ok {
+		t.Fatal("cursor escaped domain")
+	}
+	cursor.Close()
+	cowTestRelease(root)
+	cowTestClose(w)
+	b.Close()
+	if b.Stats().TotalBytes != 0 {
+		t.Fatal(b.Stats())
+	}
+}
+
+func TestCOWDeferredCleanupRemainsChargedAndCopiesDrainOnce(t *testing.T) {
+	for _, cancel := range []bool{false, true} {
+		t.Run(fmt.Sprint("cancel=", cancel), func(t *testing.T) {
+			l := DefaultCOWLimits()
+			l.MaxGenerations = 1
+			l.MaxSources = 1
+			b, w := cowTestWriter(t, l)
+			old := cowTestPublish(t, w, []COWMutation{{Key: []byte("key"), Value: []byte("old")}})
+			baseline := b.Stats()
+			entered, resume := make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			p, err := w.Prepare(nil, COWPrepareOptions{ResourceSlots: 1, ResourceBytes: 1024})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = p.AttachResources([]COWResourceID{{Kind: 1, ID: 1}}, func() {
+				calls.Add(1)
+				_ = b.Stats() // Callback must run outside the budget lock.
+				close(entered)
+				<-resume
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var retirement COWRetirement
+			if cancel {
+				retirement = p.Cancel()
+				if b.Stats().DeferredBytes < 1024 {
+					t.Fatal("cancel refunded live owners")
+				}
+			} else {
+				root := p.Publish()
+				cowTestRelease(root)
+				cowTestClose(w)
+				retirement = old.Release()
+				if b.Stats().Generations != 1 {
+					t.Fatal("generation refunded before cleanup")
+				}
+			}
+			charged := b.Stats()
+			copy := retirement
+			done := make(chan struct{})
+			go func() { retirement.Drain(); close(done) }()
+			<-entered
+			copy.Drain() // Shared claim must also be safe while original pauses.
+			if got := b.Stats(); got != charged {
+				t.Fatalf("early refund: %+v want %+v", got, charged)
+			}
+			if _, err := NewCOWWriter(b); !errors.Is(err, ErrCOWCapacity) {
+				t.Fatalf("admitted charged generation: %v", err)
+			}
+			if cancel {
+				got, ok := old.Get([]byte("key"))
+				if !ok || got.Value != "old" {
+					t.Fatal("paused cleanup blocked live reader")
+				}
+			}
+			close(resume)
+			<-done
+			copy.Drain()
+			retirement.Drain()
+			if calls.Load() != 1 {
+				t.Fatal("copied descriptor repeated callback")
+			}
+			if cancel {
+				if got := b.Stats(); got.TotalBytes != baseline.TotalBytes || got.DeferredBytes != 0 {
+					t.Fatalf("cancel cleanup leak: %+v", got)
+				}
+				cowTestRelease(old)
+				cowTestClose(w)
+			} else if b.Stats().HistoryBytes != 0 {
+				t.Fatal("generation not refunded after cleanup")
+			}
+			b.Close()
+			if got := b.Stats(); got.TotalBytes != 0 {
+				t.Fatal(got)
+			}
+		})
+	}
+}
+
+// Large inputs exceed the runtime's small conversion buffer and expose safe-
+// build copies that short literal keys can hide through compiler elision.
+func TestCOWLargeKeyAdmissionAndReadAllocations(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	key := make([]byte, 1<<20)
+	for i := range key {
+		key[i] = 'k'
+	}
+	end := append([]byte(nil), key...)
+	end[len(end)-1]++
+	root := cowTestPublish(t, w, []COWMutation{{Key: key, Value: []byte("old")}})
+	defer func() { cowTestRelease(root); cowTestClose(w); b.Close() }()
+	entries := []COWMutation{{Key: key, Value: []byte("new")}}
+	if a := testing.AllocsPerRun(10, func() {
+		if _, e := w.Estimate(entries, COWPrepareOptions{}); e != nil {
+			t.Fatal(e)
+		}
+	}); a != 0 {
+		t.Errorf("large-key Estimate allocated %g", a)
+	}
+	lease, e := b.AcquireExternal(b.Limits().MaxInFlightBytes - cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if e != nil {
+		t.Fatal(e)
+	}
+	before := b.Stats()
+	if a := testing.AllocsPerRun(10, func() {
+		if _, e := w.Prepare(entries, COWPrepareOptions{}); !errors.Is(e, ErrCOWCapacity) {
+			t.Fatalf("refusal=%v", e)
+		}
+	}); a != 0 {
+		t.Errorf("refused large-key Prepare allocated %g", a)
+	}
+	if b.Stats() != before {
+		t.Fatal("refusal changed budget")
+	}
+	missing := append([]byte(nil), key...)
+	missing[0]++
+	missingEntries := []COWMutation{{Key: missing}}
+	if a := testing.AllocsPerRun(10, func() {
+		if _, e := w.Estimate(missingEntries, COWPrepareOptions{}); e != nil {
+			t.Fatal(e)
+		}
+		if _, e := w.Prepare(missingEntries, COWPrepareOptions{}); !errors.Is(e, ErrCOWCapacity) {
+			t.Fatal(e)
+		}
+	}); a != 0 {
+		t.Errorf("missing large-key estimate/refusal allocated %g", a)
+	}
+	lease.Close()
+	if a := testing.AllocsPerRun(10, func() {
+		r, ok := root.Get(key)
+		if !ok || r.Value != "old" {
+			t.Fatal("Get mismatch")
+		}
+		r, ok = root.SeekGE(key, end)
+		if !ok || r.Value != "old" {
+			t.Fatal("SeekGE mismatch")
+		}
+	}); a != 0 {
+		t.Errorf("large-key read allocated %g", a)
+	}
+	cursor, e := root.Cursor(key, end)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer cursor.Close()
+	if a := testing.AllocsPerRun(10, func() {
+		if e := cursor.Seek(key); e != nil {
+			t.Fatal(e)
+		}
+		r, ok, e := cursor.Record()
+		if e != nil || !ok || r.Value != "old" {
+			t.Fatal("cursor mismatch")
+		}
+	}); a != 0 {
+		t.Errorf("large-key cursor Seek allocated %g", a)
+	}
+	// After admission, replacement reuses the existing owned large key.
+	var beforeAlloc, afterAlloc runtime.MemStats
+	runtime.ReadMemStats(&beforeAlloc)
+	p, e := w.Prepare(entries, COWPrepareOptions{})
+	runtime.ReadMemStats(&afterAlloc)
+	if e != nil {
+		t.Fatal(e)
+	}
+	actual := afterAlloc.TotalAlloc - beforeAlloc.TotalAlloc
+	t.Logf("large replacement actual=%d reserve=%d keyBytes=%d", actual, p.Charge().Total(), len(key))
+	if actual > p.Charge().Total() || actual >= uint64(len(key))/2 {
+		t.Fatal("replacement allocated an uncharged temporary key")
+	}
+	if p.Charge().Payload != cowAllocation(3) {
+		t.Fatal("replacement key copied into payload charge")
+	}
+	next := p.Publish()
+	key[0] = 'x'
+	r, ok := next.SeekGE(nil, nil)
+	if !ok || r.Key[0] != 'k' || r.Value != "new" {
+		t.Fatal("replacement borrowed key")
+	}
+	cowTestRelease(next)
+}
+
+func TestCOWByteLookupAcrossLevels(t *testing.T) {
+	b, w := cowTestWriter(t, DefaultCOWLimits())
+	entries := make([]COWMutation, 4096)
+	for i := range entries {
+		entries[i] = COWMutation{Key: []byte(fmt.Sprintf("%08d", 2*i)), Value: []byte("old")}
+	}
+	root := cowTestPublish(t, w, entries)
+	if root.Height() < 3 {
+		t.Fatalf("fixture height=%d", root.Height())
+	}
+	cursor, e := root.Cursor(nil, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer func() { cursor.Close(); cowTestRelease(root); cowTestClose(w); b.Close() }()
+	queries := []int{-1, 0, 1, 62, 63, 64, 2047, 2048, 4095, 8190, 8191, 9999}
+	for _, n := range queries {
+		key := []byte(fmt.Sprintf("%08d", n))
+		want := n
+		if want < 0 {
+			want = 0
+		}
+		if want%2 != 0 {
+			want++
+		}
+		found := want <= 8190
+		r, ok := root.Get(key)
+		if ok != (found && n == want) || (ok && r.Key != string(key)) {
+			t.Fatalf("Get %d: %+v/%v", n, r, ok)
+		}
+		r, ok = root.SeekGE(key, nil)
+		if ok != found || (ok && r.Key != fmt.Sprintf("%08d", want)) {
+			t.Fatalf("SeekGE %d: %+v/%v", n, r, ok)
+		}
+		if e := cursor.Seek(key); e != nil {
+			t.Fatal(e)
+		}
+		r, ok, e = cursor.Record()
+		if e != nil || ok != found || (ok && r.Key != fmt.Sprintf("%08d", want)) {
+			t.Fatalf("cursor %d: %+v/%v/%v", n, r, ok, e)
+		}
+		if ok && want < 8190 {
+			if e := cursor.Next(); e != nil {
+				t.Fatal(e)
+			}
+			r, ok, e = cursor.Record()
+			if e != nil || !ok || r.Key != fmt.Sprintf("%08d", want+2) {
+				t.Fatal("successor mismatch")
+			}
+		}
+		if _, ok := root.SeekGE(key, key); ok {
+			t.Fatal("equal bound admitted")
+		}
+	}
+	// A failed above-max seek must not leave the iterator unrecoverable.
+	if e := cursor.Seek([]byte("00000000")); e != nil {
+		t.Fatal(e)
+	}
+	if r, ok, e := cursor.Record(); e != nil || !ok || r.Key != "00000000" {
+		t.Fatal("seek recovery mismatch")
+	}
+	// Empty key, strict prefixes and lexicographic byte values remain distinct.
+	mixed := cowTestPublish(t, w, []COWMutation{{Key: nil}, {Key: []byte{'a'}}, {Key: []byte{'a', 0}}, {Key: []byte{'a', 255}}})
+	if _, ok := mixed.SeekGE(nil, []byte{}); ok {
+		t.Fatal("empty end must bound empty key")
+	}
+	emptyBound, e := mixed.Cursor(nil, []byte{})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, ok, _ := emptyBound.Record(); ok {
+		t.Fatal("empty end cursor must be empty")
+	}
+	emptyBound.Close()
+	unbounded, e := mixed.Cursor(nil, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if r, ok, e := unbounded.Record(); e != nil || !ok || r.Key != "" {
+		t.Fatal("nil end must be unbounded")
+	}
+	unbounded.Close()
+	for _, key := range [][]byte{nil, {'a'}, {'a', 0}, {'a', 255}} {
+		if r, ok := mixed.Get(key); !ok || r.Key != string(key) {
+			t.Fatal("byte ordering mismatch")
+		}
+	}
+	if _, ok := mixed.SeekGE([]byte{'a'}, []byte{'a'}); ok {
+		t.Fatal("empty range")
+	}
+	bounded, e := mixed.Cursor([]byte{'a'}, []byte{'a', 255})
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, want := range []string{"a", "a\x00"} {
+		r, ok, e := bounded.Record()
+		if e != nil || !ok || r.Key != want {
+			t.Fatal("bounded cursor mismatch")
+		}
+		if e := bounded.Next(); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if _, ok, _ := bounded.Record(); ok {
+		t.Fatal("cursor crossed exclusive end")
+	}
+	bounded.Close()
+	cowTestRelease(mixed)
+	next := cowTestPublish(t, w, []COWMutation{{Key: []byte("00002048"), Value: []byte("new")}, {Key: []byte("00002050"), Remove: true}, {Key: []byte("00002049"), Remove: true}})
+	if r, ok := next.Get([]byte("00002048")); !ok || r.Value != "new" {
+		t.Fatal("replacement mismatch")
+	}
+	if _, ok := next.Get([]byte("00002050")); ok {
+		t.Fatal("removal mismatch")
+	}
+	if r, ok := next.SeekGE([]byte("00002049"), nil); !ok || r.Key != "00002052" {
+		t.Fatal("removed successor mismatch")
+	}
+	if r, ok := root.Get([]byte("00002050")); !ok || r.Value != "old" {
+		t.Fatal("old owner mutated")
+	}
+	cowTestRelease(next)
+}

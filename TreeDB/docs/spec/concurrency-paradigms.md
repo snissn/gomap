@@ -243,6 +243,20 @@ Limits:
 - the update callback runs while the stripe lock is held and should not recurse
   into `Update` for the same key/stripe.
 
+### 3.12 Immutable COW memtable ownership
+
+The internal COW memtable foundation uses a shared finite allocation budget and
+writer/frozen/root/view generation references. Published dependency headers
+never Copy or mutate, so independent immutable cursors do not hold the writer
+lock. One view/cursor serializes traversal versus its own Close. Preparation
+reserves cumulative node/payload history and eventual retirement before private
+allocation; long readers may stop new writes. External allocation leases reserve
+caller scratch/cut wrappers before allocation and share finite in-flight
+capacity until cleanup; Close refuses fresh leases and root Retain. The budget
+control owner survives all such leases. Deferred resource callbacks run
+outside publication and admission locks. This capability is not yet a public
+DB dispatch mode; see [ownership and accounting](cow-memtable-ownership.md).
+
 ## 4. Lock and Barrier Topology
 
 ### 4.1 Cached layer lock roles
