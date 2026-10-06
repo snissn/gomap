@@ -304,6 +304,15 @@ its summary do not constitute an independently verified receipt or retained
 acceptance. The final verifier obtains expected values from the separately trusted
 receipt, not the submitted artifact.
 
+The recorded invocation, compilation output/package and Go build-info header
+must all name the original capture's `collections.test`. Validate the deterministic
+recipe, serial process intervals enclosing the final measured timers, integer
+repetition numbers and actual UTC/nullable CPU-affinity observations as well.
+These are consistency checks; independently observed build/run receipts retain
+their separate authority. During relocated replay, recorded capture paths remain
+historical provenance and artifacts are read beside the replay packet. Validation
+does not resolve, execute or require those original paths to exist.
+
 Validation does not contact GitHub or require the historical checkout; rehearsal
 semantic replay needs no external receipt. Earlier frozen validators and packets
 remain historical evidence, rather than being relabeled with this repair.
