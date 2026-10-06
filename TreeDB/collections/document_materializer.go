@@ -194,6 +194,7 @@ type CollectionReadView struct {
 	pointRowRefs                    map[documentRowPartKey]columnManifestAssetRefForScan
 	pointRowBlocks                  map[documentRowPartKey]*columnPhysicalRowReaderBlock
 	pointRowProjection              *columnPhysicalScanProjection
+	singleDocument                  bool // ephemeral GetInto view; do not allocate a full part lookup map
 	forceAssetReadAtFallbackForTest bool
 }
 
@@ -1040,6 +1041,25 @@ func (v *CollectionReadView) pointRowAssetRef(view columnPhysicalScanSnapshotVie
 	var ok bool
 	if v.preparedMaterializer != nil {
 		assetRef, ok = materializerPartRef(v.preparedMaterializer.AssetRefs, ref.Generation, ref.PartID)
+	} else if v.singleDocument {
+		// The manifest iterator returns big-endian generation/part keys in
+		// order. Validate every row ref before binary search, preserving the
+		// map path's duplicate/kind checks without its per-GetInto allocation.
+		for i, candidate := range view.AssetRefs {
+			if candidate.Ref.Kind != ColumnAssetKindTCS1PartImage {
+				return columnManifestAssetRefForScan{}, fmt.Errorf("collections: document row ref unsupported asset kind %q", candidate.Ref.Kind)
+			}
+			if i > 0 {
+				order := compareMaterializerPartRefs(view.AssetRefs[i-1], candidate)
+				if order == 0 {
+					return columnManifestAssetRefForScan{}, fmt.Errorf("collections: duplicate document row ref asset generation=%d part_id=%d", candidate.Ref.Generation, candidate.Ref.PartID)
+				}
+				if order > 0 {
+					return columnManifestAssetRefForScan{}, errors.New("collections: document row ref assets are not ordered by generation/part")
+				}
+			}
+		}
+		assetRef, ok = materializerPartRef(view.AssetRefs, ref.Generation, ref.PartID)
 	} else {
 		if v.pointRowRefs == nil {
 			v.pointRowRefs = make(map[documentRowPartKey]columnManifestAssetRefForScan, len(view.AssetRefs))

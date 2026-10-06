@@ -22684,6 +22684,7 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	var reconstructed []byte
 	if catalog.rootID(collectionColumnRowLocatorRootName(catalog.meta.Name)) != 0 && catalog.meta.Options.ColumnStore.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
 		view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+		view.singleDocument = true
 		reconstructed, err = view.materializeRetainedTypedDocument(documentID, value)
 		err = errors.Join(err, view.Close())
 	} else {

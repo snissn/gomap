@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/workstats"
@@ -211,6 +212,30 @@ func TestR1TypedRowGetIntoUsesSharedMaterializer(t *testing.T) {
 	if response.Stats.VisibilityScans != 0 || response.Stats.PointRowDecodes != 1 || response.Stats.RowLocatorLookups != 1 {
 		t.Fatalf("shared route did not point-decode: %+v", response.Stats)
 	}
+	// A one-document view must still reject malformed unrelated manifest
+	// entries, even when its requested row is already in the decoded cache.
+	view.singleDocument = true
+	original := *view.columnSnapshotView
+	part := original.AssetRefs[0]
+	for _, tc := range []struct {
+		name string
+		refs []columnManifestAssetRefForScan
+		want string
+	}{
+		{name: "duplicate", refs: []columnManifestAssetRefForScan{part, part}, want: "duplicate document row ref"},
+		{name: "unrelated kind", refs: []columnManifestAssetRefForScan{part, {Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Generation: part.Ref.Generation + 1}}}, want: "unsupported asset kind"},
+		{name: "unordered", refs: []columnManifestAssetRefForScan{{Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Generation: part.Ref.Generation + 1}}, part}, want: "not ordered"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := original
+			corrupt.AssetRefs = tc.refs
+			view.columnSnapshotView = &corrupt
+			if _, err := view.materializeRetainedTypedDocument([]byte("a"), []byte(`{"id":"a","score":7}`)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("corrupt manifest err=%v want %q", err, tc.want)
+			}
+		})
+	}
+	view.columnSnapshotView = &original
 }
 
 // A range must never join the index key from one publication with typed or
