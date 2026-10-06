@@ -26,7 +26,7 @@
       },
       "output": {
         "path": "shared_read.py",
-        "sha256": "1c530020f63f302e0fdec26ce2486e7951b61853d30aa00d60f5cfd8b21d0b9b"
+        "sha256": "171dd9a1e11116241e96e3f211c30a5a447189d2e9cf7b8ae9061afd8dc30c57"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
@@ -40,7 +40,7 @@
       },
       "output": {
         "path": "shared_audit.py",
-        "sha256": "688356e80a8724f41c628b3a7007a74cc381910f6cd643f87114100699e85fab"
+        "sha256": "c39b40fd528a6a08dd20ed48be43ede0679182081510a8b6748df4adca14b65c"
       },
       "changes": [
         "Count from optional Originals (0/omitted legacy6); all ledger/prefix/witness limits follow N; uint64-compatible states <=64",
@@ -67,7 +67,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py",
-        "sha256": "e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1"
+        "sha256": "901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9"
       },
       "changes": [
         [
@@ -127,7 +127,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py",
-        "sha256": "75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63"
+        "sha256": "bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -141,7 +141,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-preflight-prepare-root-v1.py",
-        "sha256": "1e3f92fb7d889bc6e701c24fb88ea4ddeeb2d9a4c4859af3251b2d12623114f6"
+        "sha256": "a8e286f4984db8d56dfb5f4c1ab6aec7c9d3b610bf20196ddf20fc79a16a40c0"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -154,7 +154,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-lifecycle-prepare-root-v1.py",
-        "sha256": "3579815b5401bc2bc262ed5fa7fe28e2a1b84da6d4dc748e78b884ac7c237b6e"
+        "sha256": "68956d7fa14d76815318dab2f865ebcaa9674e5f091d79e654af1660a9f44244"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -167,7 +167,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-pre-input-freeze-root-v1.py",
-        "sha256": "5e043fa3a7279e1370529e676a64a759826421b171b275ab3fd7c89a8846927f"
+        "sha256": "6ed967a8ba918776b3be3d1dedc9d4c29913d9ad82b893b6280f759a12f20fdf"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -181,7 +181,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-growth-prepare-root-v1.py",
-        "sha256": "0408dc56dafdcb78005f5accf015d8c31beb07b609cc89af7c3783d9581de46f"
+        "sha256": "146021550873e4c1d4e13ab48cff628ce497021196b858b89ad71d4d396fcb93"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -195,7 +195,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "9453f5ff3349d7d086cab67dbf49984214012f6a750f636ebad986da374ea243"
+        "sha256": "2fe1a3d21cc2472ab06e82e2ae23f2d489c64059fca56ac363381a78bc5599fd"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -209,7 +209,7 @@
       },
       "output": {
         "path": "gomap-trial24-prefix-oracle-prepare-root-v1.py",
-        "sha256": "5adc332c8c84982e4561e43ebb135679dd05f2dd2ba965f351045cdf8651ec5c"
+        "sha256": "a9652589b8609cdb7f6ca480d64f4508490a739fd71684e3e1f87ae397048c8c"
       },
       "changes": [
         [
@@ -241,7 +241,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "2fdf586548e6f365bb407acf573b37cc75bb44950a7316893a254b920444e467"
+        "sha256": "d4db431089c09b1611ab6ba0be81c2e541a107c4fc32b96f50f9a9fed5bfe125"
       },
       "changes": [
         [
@@ -269,7 +269,7 @@
       },
       "output": {
         "path": "gomap-trial24-permission-stage-prepare-root-v1.py",
-        "sha256": "35ed429c9f4b9929721e32f5ef565660b4beeaa68ee4a6e40de2715435b9f08c"
+        "sha256": "ff90b35659597fb2ab812480fb501a9506c2b1df2430762410f8a190b87b875b"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -282,7 +282,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "43ce98bee6504ec232bded81d8dc14c9356cb17adafd4dc19671b1581e93448e"
+        "sha256": "ebba9bed8495fa1a7e42b4f146ac31e30428c1be7a24c780106e9a7399f5b26e"
       },
       "changes": [
         [
@@ -315,7 +315,7 @@
       },
       "output": {
         "path": "gomap-trial24-resource-accounting-root-v1.py",
-        "sha256": "ca3c3c0ccacd1bcf3032f888bfc2486efd88a18d45a6fbdea6bb60d758ee3814"
+        "sha256": "626ae08aff1cb82491e38ca9f260e2bc6d4b21f4af519e350081a82693f0301b"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -427,13 +427,13 @@
   "root_owned_adapters": {
     "runtime-build-prepare-root-v1.py": {
       "path": "root-adapters/runtime-build-prepare-root-v1.py",
-      "sha256": "00dfcf5b0cb69792a3877bf970fe96988320f133b895b1e81e4dc7ce74f25f93",
+      "sha256": "35056cd5a63e42657963db616f438d61965efa52474ed9dded426910fd894d16",
       "owner": "root",
       "state": "INERT_SOURCE_ADAPTER_NOT_A_TEMPLATE_ROLE_NOT_EXECUTED"
     },
     "runtime-images-prepare-root-v1.py": {
       "path": "root-adapters/runtime-images-prepare-root-v1.py",
-      "sha256": "608c09799787bbb795e276c06f6c3cc4e784ad5a4e9096f63bffc44665250e91",
+      "sha256": "0438b3cd884b3989658e38d8742e51ee423be2c08522b0a41806342ce2ae9dd0",
       "owner": "root",
       "state": "INERT_SOURCE_ADAPTER_NOT_A_TEMPLATE_ROLE_NOT_EXECUTED"
     }

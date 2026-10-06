@@ -1,4 +1,6 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths
 """Inert local constructor for an offline test-only oracle overlay.
 Does not invoke Go/Git/subprocess/network. Root supplies frozen final pins and
@@ -6,7 +8,7 @@ runs the proposed command separately. Native output is pending root acceptance.
 """
 import argparse, hashlib, importlib.util, json, os, pathlib, re, shlex
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1'
+COLLECTOR_SHA='901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
 GO_SOURCE=r'''package main
 
 import (

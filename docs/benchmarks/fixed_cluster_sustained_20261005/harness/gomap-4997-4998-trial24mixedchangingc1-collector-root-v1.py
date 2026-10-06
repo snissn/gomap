@@ -5,6 +5,8 @@ The manifest pins fresh receipts and exact owned CIDs; no prior population/image
 Import is inert. Root alone may execute --approved after exact-source prereview.
 """
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import isolate_paths
 import argparse
 import base64

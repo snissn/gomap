@@ -1,4 +1,6 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths
 """Inert source-only derivation. Root reviews/pins generated sources before any run."""
 import argparse, ast, hashlib, importlib.util, inspect, json, pathlib, re
@@ -27,7 +29,7 @@ def validate_path_bindings(texts,bindings):
         assert isinstance(new,str) and pathlib.Path(new).is_absolute() and new!=old, 'fresh absolute reviewed path'
         no_historical_paths(new)
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
+PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
 def product_module():
  assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
  spec=importlib.util.spec_from_file_location('trial24_frozen_product',PLAN_MODULE)

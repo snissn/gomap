@@ -3,6 +3,7 @@ if not __debug__: raise RuntimeError('ordinary Python required; assertions must 
 import hashlib, json, pathlib, shlex, subprocess, time
 
 import sys,re,inspect
+sys.dont_write_bytecode=True
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 from source_paths import isolate_paths
 

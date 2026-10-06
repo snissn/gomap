@@ -1,9 +1,11 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths
 """Root-owned Trial24 read-only bootstrap preflight; inert on import."""
 import argparse,hashlib,importlib.util,json,pathlib,shlex,subprocess,time,os
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
+PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
 def main():
  assert __debug__
  q=argparse.ArgumentParser()

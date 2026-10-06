@@ -1,4 +1,6 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths, reviewer_identity
 """Inert Trial24 bootstrap constructor. Root supplies final accepted pins; no network here."""
 import argparse,hashlib,importlib.util,json,pathlib,re,subprocess,ssl

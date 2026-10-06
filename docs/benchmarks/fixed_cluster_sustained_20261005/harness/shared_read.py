@@ -1,4 +1,6 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path
 """Pure retained-read/accounting gate only; never campaign acceptance.
 Input ptext/text are exact Report JSON strings, states are seven populations
@@ -9,7 +11,6 @@ import argparse, copy, hashlib, importlib.util, json, math, sys
 from pathlib import Path
 CORE_PATH=source_path('/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py')
 CORE_SHA='dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769'
-sys.dont_write_bytecode=True
 if hashlib.sha256(Path(CORE_PATH).read_bytes()).hexdigest()!=CORE_SHA:
  raise ValueError('frozen core pin mismatch')
 spec=importlib.util.spec_from_file_location('mixed_frozen_core',CORE_PATH)

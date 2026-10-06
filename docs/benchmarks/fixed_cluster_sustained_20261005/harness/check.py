@@ -816,4 +816,71 @@ output_receipts.append({'writer':'native_staged_dynamic_import','actual_exit':pr
 
 (fixtures/'output-isolation-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_WRITER_PREWRITE_AND_PRIVATE_RUNNER_EMISSION_ONLY','cases':output_receipts,'runtime_started':False,'Go_started':False,'network_calls':0,'limits':['Admission/population dependencies are controlled where marked; no actual campaign authorization.','Collector and generated growth checks execute actual prewrite code through first mutation; subsequent workloads remain inert.','Private runner preparation emits shell commands but executes neither shell nor Go.','Resolved path checks do not protect against concurrent symlink replacement.']},indent=2)+'\n')
 
+
+# Ordinary Python must not cache packet dependencies before admission.
+assert len(checks)==533
+import_order_receipts=[]
+active_importers=[]
+for apath in sorted(R.glob('*.py'))+sorted((R/'root-adapters').glob('*.py')):
+ at=ast.parse(apath.read_bytes())
+ local=next((n for n in at.body if isinstance(n,ast.ImportFrom) and n.module=='source_paths'),None)
+ if local is None or apath.name=='check.py':continue
+ active_importers.append((apath,local))
+assert len(active_importers)==17
+for apath,local in active_importers:
+ at=ast.parse(apath.read_bytes())
+ name=str(apath.relative_to(R));folder=fixtures/('ordinary-import-'+apath.stem);folder.mkdir();packet=folder/'packet';packet.mkdir()
+ copied=packet/name;copied.parent.mkdir(parents=True,exist_ok=True);copied.write_bytes(apath.read_bytes());(packet/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes())
+ prefix=''.join(apath.read_text().splitlines(keepends=True)[:local.end_lineno])
+ program='import sys\nsys.path.insert(0,'+repr(str(packet))+')\n__file__='+repr(str(copied))+'\n'+prefix+"\nprint('ACTUAL_IMPORT_PREFIX_COMPLETE')\n"
+ before=protected_snapshot(packet)
+ argv=[sys.executable,'-c',program];proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
+ for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv)+'\n'),('program.py',program)]: (folder/('actual-prefix.'+suffix)).write_text(value)
+ assert proc.returncode==0 and protected_snapshot(packet)==before and not list(packet.rglob('*.pyc')), (name,proc.stderr)
+ checks.append('ordinary_python_actual_import_prefix_no_packet_cache_'+name)
+ import_order_receipts.append({'path':name,'kind':'actual_module_prefix_through_local_import','ordinary_python_no_B':True,'actual_exit':proc.returncode,'packet_bytes_unchanged':True})
+ if name.startswith('root-adapters/'):
+  argv=[sys.executable,str(copied)];proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
+  for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv)+'\n')]: (folder/('actual-cli-refusal.'+suffix)).write_text(value)
+  expected=1 if 'runtime-build-' in name else 2
+  assert proc.returncode==expected and protected_snapshot(packet)==before and not list(packet.rglob('*.pyc')),(name,proc.stderr)
+  checks.append('ordinary_python_actual_adapter_cli_refusal_no_packet_cache_'+apath.stem)
+  import_order_receipts.append({'path':name,'kind':'actual_cli_omitted_arguments_refusal','ordinary_python_no_B':True,'actual_exit':proc.returncode,'packet_bytes_unchanged':True})
+  kind='build' if 'runtime-build-' in name else 'images'
+  inputs=fixtures/('output-adapter-'+kind+'-positive_sibling')
+  inventory=inputs/'git-source-inventory.json';receipt=inputs/'receipt.json';invsha=sha(inventory.read_bytes())
+  build_name='gomap-5021-sustained-runtime-build-root-v987654';image_name='gomap-5021-sustained-runtime-images-root-v987654'
+  if kind=='build':
+   actual_args=[head,tree,'/home/mikers/gomap-5021-sustained-final-source-root-v987654/source',str(inventory),str(receipt),build_name]
+  else:
+   actual_args=['--head',head,'--tree',tree,'--build-proof',str(receipt),'--build-proof-sha256',sha(receipt.read_bytes()),'--source-inventory-sha256',invsha,'--build-root-name',build_name,'--root-name',image_name,'--parent-111','sha256:'+'a'*64,'--parent-185','sha256:'+'b'*64,'--go-version','go1.26.0','--foreign-185-cid','c'*64,'--foreign-185-image','sha256:'+'d'*64]
+  af=copy.deepcopy(next(n for n in at.body if isinstance(n,ast.FunctionDef) and n.name=='main'))
+  boundary=next(i for i,n in enumerate(af.body) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='LOCAL' and n.value.func.attr=='mkdir')
+  af.name='actual_admission_prefix'
+  af.body=[n for n in af.body[:boundary+1] if not (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='LOCAL' for t in n.targets))]
+  target=folder/'admitted'
+  admitted_program=program+"\nLOCAL=__import__('pathlib').Path("+repr(str(target))+")\n"+ast.unparse(ast.fix_missing_locations(af))+'\nactual_admission_prefix('+repr(actual_args)+")\nprint('SYNTHETIC_ACTUAL_ADMISSION_PREFIX_ONLY_NO_TRANSPORT')\n"
+  argv=[sys.executable,'-c',admitted_program];proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
+  for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv)+'\n'),('program.py',admitted_program)]: (folder/('actual-valid-admission-prefix.'+suffix)).write_text(value)
+  assert proc.returncode==0 and target.is_dir() and protected_snapshot(packet)==before and not list(packet.rglob('*.pyc')),(name,proc.stderr)
+  checks.append('ordinary_python_actual_adapter_valid_admission_prefix_no_packet_cache_'+apath.stem)
+  import_order_receipts.append({'path':name,'kind':'actual_valid_admission_prefix_through_first_mkdir','ordinary_python_no_B':True,'actual_exit':proc.returncode,'packet_bytes_unchanged':True,'namespace_assignment_controlled':True,'external_commands':0})
+
+# A supported sealer child process must suppress caches before SourceFileLoader
+# loads the collector; the parent's flag is not inherited by a new interpreter.
+sealer_folder=fixtures/'ordinary-emitted-post-sealer';sealer_folder.mkdir();packet=sealer_folder/'packet';packet.mkdir()
+collector_copy=packet/Path(portable_sources['collector']).name;collector_copy.write_bytes(Path(portable_sources['collector']).read_bytes());(packet/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes())
+st=ast.parse(post_source);top=[n for n in st.body if not (isinstance(n,ast.If) and isinstance(n.test,ast.Compare) and isinstance(n.test.left,ast.Name) and n.test.left.id=='__name__')]
+main_node=next(n for n in st.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+loader_nodes=[n for n in main_node.body if (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('spec','c') for t in n.targets)) or (isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='exec_module')]
+assert len(loader_nodes)==3
+program="import sys\nsys.path.insert(0,"+repr(str(packet))+")\n"+ast.unparse(ast.Module(body=top,type_ignores=[]))+"\nCOLLECTOR=Path("+repr(str(collector_copy))+")\n"+ast.unparse(ast.Module(body=loader_nodes,type_ignores=[]))+"\nprint('ACTUAL_EMITTED_SEALER_COLLECTOR_LOAD_COMPLETE')\n"
+before=protected_snapshot(packet);argv=[sys.executable,'-c',program];proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
+for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv)+'\n'),('program.py',program)]: (sealer_folder/('actual-child.'+suffix)).write_text(value)
+assert proc.returncode==0 and protected_snapshot(packet)==before and not list(packet.rglob('*.pyc')),proc.stderr
+checks.append('ordinary_python_actual_emitted_post_sealer_collector_load_no_packet_cache')
+import_order_receipts.append({'path':'actual_emitted_post_sealer','kind':'actual_top_level_and_collector_loader_statements','ordinary_python_no_B':True,'actual_exit':proc.returncode,'packet_bytes_unchanged':True,'collector_locator_controlled':True,'external_commands':0})
+
+(fixtures/'adapter-import-order-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_ORDINARY_PYTHON_IMPORTS_AND_ADMISSION_PREFIXES_NOT_ACCEPTANCE','cases':import_order_receipts,'runtime_started':False,'Go_started':False,'network_calls':0,'limits':['Entrypoints execute through actual first local import; native/cluster workloads remain unexecuted.','Adapter valid admission controls stop after first mkdir using a fixture namespace assignment, with synthetic reviewed-shaped receipts.','Arbitrary external importlib loaders must suppress bytecode before loading an entrypoint itself; supported direct CLI and caller contracts are exercised here.']},indent=2)+'\n')
+
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

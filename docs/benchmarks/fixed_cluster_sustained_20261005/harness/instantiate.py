@@ -1,4 +1,6 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import isolate_paths, reviewer_identity
 """Explicit final-pin source instantiation ONLY. Never admits or runs a campaign.
 Uses a frozen, reviewed provisional packet and root's exact final source evidence;
@@ -7,7 +9,7 @@ writes only a fresh declared source-output directory using exclusive creation.
 import argparse,ast,hashlib,json,re
 from pathlib import Path
 ROOT=Path(__file__).parent
-PACKET_SHA='f621cbe868d427da2f0aad486539912fac400300ad41f42013981d3a172470a9'
+PACKET_SHA='1f10c5935bfa1d8469ce93a3c39baa48b385b06a1077b6c6c688d28272be1901'
 def need(ok,label):
  if not ok:raise ValueError(label)
 def sha(b):return hashlib.sha256(b).hexdigest()

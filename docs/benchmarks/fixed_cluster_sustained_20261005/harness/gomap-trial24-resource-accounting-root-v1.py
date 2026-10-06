@@ -1,4 +1,6 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path
 """Pure bounded resource/gate/ownership accounting; never whole-campaign acceptance.
 No subprocess/network calls. Historical top-level is never imported/executed.
@@ -7,13 +9,12 @@ requires retained raw evidence, not a collector status as authority.
 """
 import ast, base64, copy, datetime, hashlib, importlib.util, json, math, re, shlex, sys
 from pathlib import Path
-sys.dont_write_bytecode=True
 CORE=source_path('/tmp/gomap-4994-mixed-window-artifact-verify-root-v7.py')
 CORE_SHA='dfe7eb2f29fd459264d96f796b5253f08d7c8e396a6756ffef920d595c46f769'
 OLD=source_path('/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py')
 OLD_SHA='60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1'
+COLLECTOR_SHA='901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
 RUN='rf4trial24mixedchangingc1'; QUERY_RUN=RUN+'mixedc1v1'
 C=Path('/tmp/gomap-4997-4998-trial24mixedchangingc1-window-root-v1')
 ROOT='/home/mikers/gomap-4250-twohost-'+RUN

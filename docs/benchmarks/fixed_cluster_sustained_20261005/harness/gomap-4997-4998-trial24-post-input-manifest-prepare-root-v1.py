@@ -1,11 +1,13 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths
 """Inert local-only derivation: seal fresh inputs, native Go oracle, finalize inactive manifest."""
 import argparse, ast, hashlib, importlib.util, json, pathlib, re
 TEMPLATE = source_path('/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py')
 TEMPLATE_SHA256 = '8586f38a885357a1e042d3507a57396c64ac88d08e626188e74a33c46f18e7b5'
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA256 = 'e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1'
+COLLECTOR_SHA256 = '901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 def collector():
     assert sha(pathlib.Path(COLLECTOR).read_bytes()) == COLLECTOR_SHA256
@@ -13,7 +15,7 @@ def collector():
     c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c); return c
 
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
+PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
 def product_module():
  assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
  spec=importlib.util.spec_from_file_location('trial24_frozen_product',PLAN_MODULE)
@@ -100,7 +102,7 @@ def main():
     guard=ast.unparse(next(n for n in ast.parse(pathlib.Path(__file__).with_name('source_paths.py').read_bytes()).body if isinstance(n,ast.FunctionDef) and n.name=='isolate_paths'))
     marker='    OUT.mkdir()';assert marker in text
     text=text.replace(marker, "    isolate_paths([OUT,ARCHIVE,MANIFEST,PROMOTION_PROOF],["+repr('__ROOT_FROZEN_SOURCE_ROOT__')+",Path("+repr(str(pathlib.Path(__file__).resolve().parent))+"),PRE,PROBE,PROOF,LIFECYCLE,BOOT_REVIEW,LANDED,BUILD,SOURCE_REVIEW,SOURCE_INV,ARTIFACT_REVIEW_PATH])\n"+marker,1)
-    text=guard+'\n'+text
+    text="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport sys\nsys.dont_write_bytecode=True\n"+guard+'\n'+text
     ast.parse(text, str(out)); out.write_text(text)
     print(json.dumps(dict(state='UNEXECUTED_SEALER_REQUIRES_INDEPENDENT_SOURCE_REVIEW', source=str(out), sha256=sha(out.read_bytes()), template_sha256=TEMPLATE_SHA256, collector_sha256=COLLECTOR_SHA256)))
 if __name__ == '__main__': main()

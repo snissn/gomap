@@ -1,10 +1,12 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths
 """One fresh canonical-score C1 bootstrap; close only its recorded voter CIDs, never retry writes."""
 import hashlib,json,pathlib,re,shlex,subprocess,time
 CAMPAIGN='rf4trial24mixedchangingc1'
 IMAGES=None
-PLAN_SHA='75d6e2bbc45ced856aca3b752807470e7b641d3eb23bb286718d93610ff76f63'
+PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
 
 def owned(x,node,cid):
  assert x['Id']==cid and x['Name']=='/treedb-4250-'+CAMPAIGN+'-'+node

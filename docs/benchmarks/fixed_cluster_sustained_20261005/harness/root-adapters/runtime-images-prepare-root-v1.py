@@ -18,6 +18,7 @@ if not __debug__: raise RuntimeError('ordinary Python required; assertions must 
 import argparse, hashlib, json, pathlib, re, shlex, subprocess, time
 
 import sys,inspect
+sys.dont_write_bytecode=True
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 from source_paths import isolate_paths
 

@@ -1,15 +1,16 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+import sys
+sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths
 """Inert Trial24 native-prefix transport constructor. No automatic execution/retry.
 --prepare writes a local packet and proposed ROOT-ONLY commands.
 --capture-file validates a root-retained capture; never promotes oracle authority.
 """
 import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, pathlib, re, shlex, sys, tarfile
-sys.dont_write_bytecode=True
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="5adc332c8c84982e4561e43ebb135679dd05f2dd2ba965f351045cdf8651ec5c"
+HELPER_SHA="a9652589b8609cdb7f6ca480d64f4508490a739fd71684e3e1f87ae397048c8c"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA="e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1"
+COLLECTOR_SHA="901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')
 RUNNER_PINS={"gomap-1242-bounded-runner-prepare.py":"1993a5de4d50dece596e884afd7b3f9566765787f65e41c8ec7cc50dd1ee5229","run.sh":"e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a","inner.sh":"0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98"}
 REMOTE="/home/mikers/gomap-4997-4998-trial24-oracle-root-v1"
