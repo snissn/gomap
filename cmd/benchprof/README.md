@@ -645,3 +645,21 @@ The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-
 produces a `gomap-r1-row-v1` packet and summary through
 `scripts/r1_collection_capture.sh`. These dedicated workload artifacts are not
 benchprof inputs and do not change the unified-bench profile filename contract.
+
+Native capture build provenance uses two separate maps. `source-bindings.json`
+is the offline Go/module/policy/driver preflight map. The drivers also require
+`gomap-in-repo-build-inputs-v1`: exact-tool/environment/tag/race `go list -deps
+-test -json` commands, raw metadata, and the resolved in-repo input hashes before
+and after build and after collection. This includes ordinary/test/external-test
+Go sources, cgo/native/assembly/SWIG/system-object fields, and main/test/external-test
+embedded assets. Local module replacements outside the source root refuse.
+
+Validation rehashes archived compiled files before any metadata subprocess, then
+checks the current resolved graph for additions, removals or rerouting. H3's
+invalid expected-source admission still makes no output or subprocess calls;
+compiled-graph failures after admission retain the normal failed receipt. These
+maps bind Go-enumerated repository inputs, not external module/toolchain/system
+files or arbitrary compiler includes outside Go's package metadata. Original
+receipts with only the offline map remain unchanged and require their archived
+validator; they do not prove this newer compiled-input boundary. Runtime result
+schemas and earlier measured results retain their original source identities.

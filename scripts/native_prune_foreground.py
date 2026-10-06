@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import tempfile
 """Fresh-process foreground causal pilot; no retained latency qualification."""
 import argparse
 import copy
@@ -131,7 +132,132 @@ def valid_sha(x):
     return type(x) is str and len(x) == 64 and all(c in '0123456789abcdef' for c in x)
 
 def bindings(root):
+    # Offline Go/module/policy/driver preflight only; compiled inputs are separate.
     return {str(p.relative_to(root)): sha(p) for p in sorted(root.rglob('*')) if p.is_file() and '.git' not in p.parts and (p.suffix in ('.go', '.mod', '.sum') or p.name == 'AGENTS.md' or p == root / 'scripts/native_prune_foreground.py')}
+
+# The offline source map above admits reviewed Go/module/policy/driver bytes.
+# Go resolves the separate compiled-input graph; do not parse go:embed ourselves.
+BUILD_INPUT_CONTRACT = 'gomap-in-repo-build-inputs-v1'
+BUILD_INPUT_FIELDS = ('GoFiles', 'CgoFiles', 'CFiles', 'CXXFiles', 'MFiles',
+                      'HFiles', 'FFiles', 'SFiles', 'SwigFiles', 'SwigCXXFiles',
+                      'SysoFiles', 'TestGoFiles', 'XTestGoFiles', 'EmbedFiles',
+                      'TestEmbedFiles', 'XTestEmbedFiles')
+
+def build_input_paths(raw, root):
+    # Archived metadata is lexical: its original host paths need not exist.
+    root = pathlib.Path(os.path.normpath(str(root)))
+    decoder = json.JSONDecoder()
+    paths = set()
+    packages = {}
+    remaining = raw
+    while remaining.strip():
+        package, end = decoder.raw_decode(remaining.lstrip())
+        remaining = remaining.lstrip()[end:]
+        need(type(package) is dict and not package.get('Error') and not package.get('DepsErrors') and not package.get('Incomplete'), 'incomplete Go build metadata')
+        need(type(package.get('Dir')) is str and pathlib.Path(package['Dir']).is_absolute() and type(package.get('ImportPath')) is str and package['ImportPath'], 'malformed Go package identity')
+        directory = pathlib.Path(os.path.normpath(package['Dir']))
+        module = package.get('Module', {})
+        need(type(module) is dict and type(module.get('Replace', {})) is dict, 'malformed Go module metadata')
+        replacement = module.get('Replace', {})
+        if replacement and not replacement.get('Version'):
+            need(pathlib.Path(os.path.normpath(replacement['Dir'])).is_relative_to(root), 'local module replacement outside source root')
+        if not directory.is_relative_to(root):
+            continue  # External modules/stdlib are outside this in-repo contract.
+        selected = {}
+        for field in BUILD_INPUT_FIELDS:
+            names = package.get(field, [])
+            need(type(names) is list and all(type(name) is str and name for name in names), 'malformed Go build input field')
+            selected[field] = []
+            for name in names:
+                path = directory / name
+                # Synthetic testmain GoFiles live in Go's cache, not the repo.
+                if pathlib.Path(name).is_absolute():
+                    need(package.get('Name') == 'main' and package['ImportPath'].endswith('.test') and field == 'GoFiles', 'absolute Go build input')
+                    continue
+                need(path.is_relative_to(root), 'Go build input escapes source root')
+                relative = str(path.relative_to(root))
+                need('..' not in pathlib.Path(relative).parts, 'Go build input escapes source root')
+                selected[field].append(relative)
+                paths.add(relative)
+            selected[field].sort()
+        module = package.get('Module', {})
+        module = module.get('Replace', module)
+        if module.get('GoMod'):
+            path = pathlib.Path(os.path.normpath(module['GoMod']))
+            need(path.is_relative_to(root), 'in-repo package module escapes source root')
+            paths.add(str(path.relative_to(root)))
+        packages[package['ImportPath']] = selected
+    need(packages and paths, 'empty in-repo Go build metadata')
+    return {'schema': BUILD_INPUT_CONTRACT, 'packages': packages, 'files': sorted(paths)}
+
+def hash_build_inputs(paths, root):
+    root = root.resolve()
+    result = {}
+    for name in paths:
+        path = root / name
+        need(path.resolve().is_relative_to(root), 'Go build input escapes source root')
+        result[name] = sha(path)
+    return result
+
+def build_input_argv(build):
+    tags = build[build.index('-tags') + 1]
+    return [build[0], 'list', '-deps', '-test', '-json', '-tags', tags] + (['-race'] if '-race' in build else []) + ['./TreeDB/mvcc']
+
+def capture_build_inputs(build, root, env, out, name, go_sha, errors):
+    command = {'cwd': str(root), 'argv': build_input_argv(build), 'env': dict(env), 'go_sha256': go_sha}
+    (out / (name + '-command.json')).write_text(json.dumps(command, indent=2) + '\n')
+    inventory = None
+    if artifact_sha(pathlib.Path(build[0])) != go_sha:
+        errors.append('Go executable drift before ' + name)
+    else:
+        process, process_error = run_logged(command['argv'], root, env, out / (name + '.log'), 180)
+        if process.returncode != 0:
+            errors.append('Go build inventory failed: ' + (process_error or str(process.returncode)))
+        else:
+            try:
+                inventory = build_input_paths((process.stdout or b'').decode(), root)
+                inventory['files'] = hash_build_inputs(inventory['files'], root)
+                (out / (name + '.json')).write_text(json.dumps(inventory, indent=2) + '\n')
+            except (ValueError, KeyError, TypeError, OSError, UnicodeError) as error:
+                errors.append('Go build inventory invalid: ' + str(error))
+    if artifact_sha(pathlib.Path(build[0])) != go_sha:
+        errors.append('Go executable drift after ' + name)
+    metadata = {key: artifact_sha(out / (name + suffix)) for key, suffix in
+                (('command_sha256', '-command.json'), ('raw_sha256', '.log'), ('inventory_sha256', '.json'))}
+    return inventory, metadata
+
+def build_inputs_stable(inventory, root):
+    return inventory is not None and inventory['files'] == hash_build_inputs(inventory['files'], root)
+
+def validate_build_inputs(out, receipt, build, root=None):
+    need(receipt.get('build_input_contract') == BUILD_INPUT_CONTRACT, 'missing compiled build-input contract')
+    queries = receipt.get('build_input_queries')
+    need(type(queries) is dict and set(queries) == {'inputs-before', 'inputs-after', 'inputs-final'}, 'missing compiled build-input queries')
+    inventories = []
+    for name, metadata in queries.items():
+        need(type(metadata) is dict and set(metadata) == {'command_sha256', 'raw_sha256', 'inventory_sha256'}, 'compiled build-input query bindings')
+        for key, suffix in (('command_sha256', '-command.json'), ('raw_sha256', '.log'), ('inventory_sha256', '.json')):
+            need(type(metadata[key]) is str and len(metadata[key]) == 64 and all(c in '0123456789abcdef' for c in metadata[key]) and sha(out / (name + suffix)) == metadata[key], 'compiled build-input artifact ' + key)
+        command = json.loads((out / (name + '-command.json')).read_text())
+        need(command == {'cwd': receipt['source_root'], 'argv': build_input_argv(build['argv']), 'env': receipt['build_env'], 'go_sha256': receipt['go']['sha256']}, 'compiled build-input invocation')
+        inventory = json.loads((out / (name + '.json')).read_text())
+        paths = build_input_paths((out / (name + '.log')).read_text(), pathlib.Path(receipt['source_root']))
+        need(type(inventory) is dict and set(inventory) == {'schema', 'packages', 'files'} and type(inventory['files']) is dict, 'compiled build-input inventory')
+        need(dict(inventory, files=sorted(inventory['files'])) == paths and all(type(v) is str and len(v) == 64 and all(c in '0123456789abcdef' for c in v) for v in inventory['files'].values()), 'compiled build-input metadata/map binding')
+        inventories.append(inventory)
+    need(all(i == inventories[0] for i in inventories), 'compiled build-input graph drift')
+    if root is not None:
+        # Content/deletion drift must refuse before launching the metadata query.
+        need(build_inputs_stable(inventories[0], root), 'compiled build-input content drift')
+        go = pathlib.Path(receipt['go']['path'])
+        need(sha(go) == receipt['go']['sha256'], 'Go executable drift before build-input validation')
+        process = subprocess.run(build_input_argv(build['argv']), cwd=root, env=receipt['build_env'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+        need(process.returncode == 0, 'Go build-input validation query failed')
+        current = build_input_paths(process.stdout.decode(), root)
+        current['files'] = hash_build_inputs(current['files'], root)
+        need(sha(go) == receipt['go']['sha256'], 'Go executable drift after build-input validation')
+        need(current == inventories[0], 'compiled build-input graph drift')
+    return inventories[0]
 
 def digest(source):
     return hashlib.sha256(json.dumps(source, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
@@ -227,6 +353,93 @@ def validate_version(out, receipt):
     need(type(output) is str and (out / 'version.log').read_bytes() == output.encode() and type(go['version']) is str and go['version'].startswith('go version ') and output == go['version'] + '\n' and '\n' not in go['version'], 'version output binding')
 
 
+def build_input_self_test():
+    """Synthetic inventory fixtures; no real Go process or historical upgrade."""
+    from unittest import mock
+    with tempfile.TemporaryDirectory(prefix='native-build-input-contract-') as temporary:
+        root = pathlib.Path(temporary) / 'source'; root.mkdir(); root = root.resolve()
+        package = root / 'pkg'; package.mkdir()
+        go = root / 'go'; go.write_bytes(b'fixture Go executable')
+        (root / 'go.mod').write_text('module fixture\n')
+        names = {field: [field + '.input'] for field in BUILD_INPUT_FIELDS}
+        for field, files in names.items():
+            (package / files[0]).write_text(field + '\n')
+        listing = {'Dir': str(package), 'ImportPath': 'fixture/pkg', 'Name': 'pkg',
+                   'Module': {'GoMod': str(root / 'go.mod')}, **names}
+        raw = json.dumps(listing).encode()
+        build = [str(go), 'test', '-c', '-tags', 'fixture', '-race', '-o', '/fixture/test', './TreeDB/mvcc']
+        env = {'fixture': 'synthetic'}
+        out = pathlib.Path(temporary) / 'packet'; out.mkdir()
+        errors = []; queries = {}
+        def logged(argv, cwd, environment, log, timeout):
+            log.write_bytes(raw)
+            return subprocess.CompletedProcess(argv, 0, raw), ''
+        with mock.patch.dict(globals(), run_logged=logged):
+            for name in ('inputs-before', 'inputs-after', 'inputs-final'):
+                inventory, queries[name] = capture_build_inputs(build, root, env, out, name, sha(go), errors)
+        need(not errors and len(inventory['files']) == len(BUILD_INPUT_FIELDS) + 1, 'build-input positive fields')
+        receipt = {'build_input_contract': BUILD_INPUT_CONTRACT, 'build_input_queries': queries,
+                   'source_root': str(root), 'build_env': env, 'go': {'path': str(go), 'sha256': sha(go)}}
+        binding = {'argv': build}
+        with mock.patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, raw)) as run:
+            validate_build_inputs(out, receipt, binding, root)
+            need(run.call_count == 1, 'build-input positive graph query')
+        refusals = []
+        def refused(label, expected, root_arg=root):
+            with mock.patch.object(subprocess, 'run', side_effect=AssertionError('unexpected metadata process')) as run:
+                try: validate_build_inputs(out, receipt, binding, root_arg)
+                except (ValueError, OSError) as error:
+                    need(str(error) == expected or isinstance(error, OSError) and expected == 'missing input', 'build-input wrong refusal ' + label + ': ' + str(error))
+                    need(not run.called, 'build-input drift launched metadata process')
+                    refusals.append(label)
+                else: raise ValueError('build-input fault accepted: ' + label)
+        for field in BUILD_INPUT_FIELDS:
+            path = package / names[field][0]; original = path.read_bytes()
+            path.write_bytes(b'changed')
+            refused(field + ' content', 'compiled build-input content drift')
+            path.unlink(); refused(field + ' deletion', 'missing input'); path.write_bytes(original)
+        original_contract = receipt.pop('build_input_contract')
+        refused('old receipt', 'missing compiled build-input contract', None)
+        receipt['build_input_contract'] = original_contract
+        for field, value in (('cwd', '/other'), ('argv', [str(go), 'version']), ('env', {'inherited': 'bad'}), ('go_sha256', '0' * 64)):
+            name = 'inputs-before'; path = out / (name + '-command.json'); original = path.read_bytes()
+            command = json.loads(original); command[field] = value; path.write_text(json.dumps(command))
+            queries[name]['command_sha256'] = sha(path)
+            refused('refreshed command ' + field, 'compiled build-input invocation', None)
+            path.write_bytes(original); queries[name]['command_sha256'] = sha(path)
+        # Refresh both metadata and inventory checksums, so a rewritten
+        # selected input must reach graph equality rather than hash refusal.
+        name = 'inputs-before'; raw_path = out / (name + '.log'); map_path = out / (name + '.json')
+        raw_original = raw_path.read_bytes(); map_original = map_path.read_bytes()
+        altered = dict(listing); altered['EmbedFiles'] = []
+        raw_path.write_text(json.dumps(altered))
+        altered_map = build_input_paths(raw_path.read_text(), root)
+        altered_map['files'] = hash_build_inputs(altered_map['files'], root)
+        map_path.write_text(json.dumps(altered_map))
+        queries[name]['raw_sha256'] = sha(raw_path); queries[name]['inventory_sha256'] = sha(map_path)
+        refused('refreshed embed removal', 'compiled build-input graph drift', None)
+        raw_path.write_bytes(raw_original); map_path.write_bytes(map_original)
+        queries[name]['raw_sha256'] = sha(raw_path); queries[name]['inventory_sha256'] = sha(map_path)
+        # A newly selected embed/native input changes graph membership even
+        # when every previously archived input still has its original bytes.
+        changed = dict(listing); changed['EmbedFiles'] = names['EmbedFiles'] + ['new.asset']
+        (package / 'new.asset').write_bytes(b'new')
+        with mock.patch.object(subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, json.dumps(changed).encode())) as run:
+            try: validate_build_inputs(out, receipt, binding, root)
+            except ValueError as error: need(str(error) == 'compiled build-input graph drift', 'new input wrong refusal')
+            else: raise ValueError('new build input accepted')
+            need(run.call_count == 1, 'new input membership query')
+        for label, altered in (('local replace', dict(listing, Module={'Replace': {'Dir': '/outside', 'GoMod': '/outside/go.mod'}})),
+                               ('package error', dict(listing, Error={'Err': 'failed'})),
+                               ('incomplete package', dict(listing, Incomplete=True))):
+            try: build_input_paths(json.dumps(altered), root)
+            except ValueError: refusals.append(label)
+            else: raise ValueError('unsafe build metadata accepted: ' + label)
+        result = {'synthetic_build_input_fields': len(BUILD_INPUT_FIELDS), 'offline_refusals': refusals,
+                  'added_input_query_refused': True, 'real_subprocesses': 0}
+        print(json.dumps(result, indent=2))
+        return result
+
 def capture_version(go_path, root, env, out, errors):
     validate_environment(env, str(go_path))
     build_env = dict(env)
@@ -280,6 +493,7 @@ def packet(out, root=None, receipt=None):
     need(build['env'] == r['build_env'], 'build environment binding')
     validate_environment(r['build_env'], r['go']['path'])
     validate_version(out, r)
+    validate_build_inputs(out, r, build, root)
     for c in r['cases']:
         for key in ('raw', 'result', 'command'):
             need(type(c[key]) is str and pathlib.Path(c[key]).name == c[key] and valid_sha(c[key + '_sha256']) and sha(out / c[key]) == c[key + '_sha256'], 'case binding ' + key)
@@ -402,6 +616,7 @@ def contract_self_test(out, r):
     print(f'{positive} positive schema/histogram cases and {count} checksum-refreshed contract refusals PASS; original packets unchanged')
 
 def self_test(out, root):
+    build_input_self_test()
     r = packet(out, root)
     environment_self_test(out, r)
     ack_drain_self_test(out, r)
@@ -538,6 +753,10 @@ def main():
     go, build_env, version_metadata, source_stable = capture_version(go_path, root, env, out, errors)
     binary = out / 'foreground.test'; cmd = [str(go_path), 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if args.race else []) + ['-o', str(binary), './TreeDB/mvcc']
     (out / 'build-command.json').write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'go': go, 'env': build_env}, indent=2) + '\n')
+    inventory_build = list(cmd)
+    build_inventory = None; build_queries = {}
+    if not errors:
+        build_inventory, build_queries['inputs-before'] = capture_build_inputs(cmd, root, env, out, 'inputs-before', go['sha256'], errors)
     if not errors:
         result, process_error = run_logged(cmd, root, env, out / 'build.log', 180)
         if result.returncode != 0: errors.append('build failed: ' + (process_error or str(result.returncode)))
@@ -546,10 +765,14 @@ def main():
             after = final_bindings(root, errors)
             if source != after or binary_sha is None or artifact_sha(go_path) != go['sha256']:
                 source_stable = False; errors.append('source/executable drift after build')
+    if not errors:
+        after_inventory, build_queries['inputs-after'] = capture_build_inputs(inventory_build, root, env, out, 'inputs-after', go['sha256'], errors)
+        if build_inventory != after_inventory:
+            source_stable = False; errors.append('compiled build-input graph drift after build')
     for n, mode, algorithm in (MATRIX if not errors else []):
         try:
-            stable = source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
-        except OSError:
+            stable = build_inputs_stable(build_inventory, root) and source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
+        except (OSError, ValueError):
             stable = False
         if not stable:
             source_stable = False
@@ -563,8 +786,8 @@ def main():
         result, process_error = run_logged(cmd, root, ee, raw, 150)
         if result.returncode != 0: errors.append('process ' + name + ': ' + (process_error or str(result.returncode)))
         try:
-            stable = source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
-        except OSError:
+            stable = build_inputs_stable(build_inventory, root) and source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
+        except (OSError, ValueError):
             stable = False
         c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'process_error': process_error, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': artifact_sha(binary)}
         for key, file in [('raw', raw), ('result', output), ('command', command)]:
@@ -584,7 +807,11 @@ def main():
         if not case_accepted: break
     final_source = final_bindings(root, errors)
     if source != final_source: source_stable = False; errors.append('source drift after collection')
-    receipt = {'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source_stable, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': artifact_sha(out / 'build-command.json'), 'build_log_sha256': artifact_sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': measurement_labels(), **version_metadata}
+    if not errors:
+        final_inventory, build_queries['inputs-final'] = capture_build_inputs(inventory_build, root, env, out, 'inputs-final', go['sha256'], errors)
+        if build_inventory != final_inventory:
+            source_stable = False; errors.append('compiled build-input graph drift after collection')
+    receipt = {'build_input_contract': BUILD_INPUT_CONTRACT, 'build_input_queries': build_queries, 'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source_stable, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': artifact_sha(out / 'build-command.json'), 'build_log_sha256': artifact_sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': measurement_labels(), **version_metadata}
     if not errors:
         try: validate_version(out, receipt)
         except (OSError,ValueError,KeyError,TypeError) as error: errors.append('version capture invalid: '+str(error))
