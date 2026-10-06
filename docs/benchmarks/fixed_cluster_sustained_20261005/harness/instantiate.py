@@ -9,7 +9,7 @@ writes only a fresh declared source-output directory using exclusive creation.
 import argparse,ast,hashlib,json,re
 from pathlib import Path
 ROOT=Path(__file__).parent
-PACKET_SHA='5925e53d8079c8cfeb317615483311d9165440fa57d4d3c93f34a962d178ea03'
+PACKET_SHA='6b3b881aee33ab7a4fe6f459806669109c021a2873eb3fe942ac8ed699dc4443'
 def need(ok,label):
  if not ok:raise ValueError(label)
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -61,7 +61,7 @@ def product_acceptance(review,head,tree,inventory):
 
 def declaration(d,m):
  required={'Version','campaign','workload','source_head','source_tree','source_root','source_inventory','build','images','source_prereview','RootAcceptedFinalSourcePins','output_root'}
- need(set(d)==required and d['Version']==1 and d['RootAcceptedFinalSourcePins'] is True,'explicit root frozen declaration')
+ need(set(d) in (required,required|{'checkpoint_harness'}) and d['Version']==1 and d['RootAcceptedFinalSourcePins'] is True,'explicit root frozen declaration')
  profile=workload_source.accepted(d['campaign'],d['workload'])
  if d['campaign']==m['campaign']:need(d['workload']==m['workload'],'exact predeclared sustained workload and caps')
  for k in ('source_head','source_tree'):need(digest(d[k],40),'final source '+k)
@@ -95,8 +95,32 @@ def declaration(d,m):
    elf=image['ELFs'][name];need(digest(elf['sha256']) and type(elf['bytes']) is int and elf['bytes']>0 and elf['sha256']==build['ELFs'][name]['sha256'] and elf['bytes']==build['ELFs'][name]['bytes'],'actual packaged ELF/build equality')
  review=pins['source_prereview'];need(review.get('source_inventory_sha256')==d['source_inventory']['sha256'],'product acceptance inventory identity')
  protected_reviews=product_acceptance(review,d['source_head'],d['source_tree'],inv)
+ harness_head,harness_tree=d['source_head'],d['source_tree']
+ if 'checkpoint_harness' in d:
+  need(d['campaign']=='rf4trial24mixedchangingc1' and (d['source_head'],d['source_tree'])==('484c6e131ba72357155d512ed06f2842c0a866a3','5a3ff182ebe4f86aca1fcf171f7d44b90643528a'),'checkpoint retains exact runtime source')
+  h=d['checkpoint_harness'];need(set(h)=={'head','tree','source_inventory','source_acceptance'},'separate checkpoint harness pins')
+  need(digest(h['head'],40) and digest(h['tree'],40),'exact harness identity');harness_head,harness_tree=h['head'],h['tree']
+  hp={}
+  for key in ('source_inventory','source_acceptance'):
+   row=h[key];need(set(row)=={'path','sha256'} and digest(row['sha256']),'harness evidence pin')
+   raw=read(row['path']);need(sha(raw)==row['sha256'],'actual harness evidence bytes');hp[key]=strict(raw);protected_reviews.append(row['path'])
+  need(hp['source_acceptance']['source_inventory_sha256']==h['source_inventory']['sha256'],'harness acceptance inventory bytes')
+  hi=hp['source_inventory'];need(hi['head']==harness_head and hi['tree']==harness_tree and hi['overlays']=={},'actual separate landed harness inventory')
+  rows=hi['rows'];need(isinstance(rows,list) and rows,'complete harness source inventory')
+  blobs={}
+  for row in rows:
+   need(set(row)=={'path','mode','git_blob'} and row['path'] not in blobs and row['mode'] in ('100644','100755') and digest(row['git_blob'],40),'unique harness Git rows')
+   blobs[row['path']]=row
+  prefix='docs/benchmarks/fixed_cluster_sustained_20261005/harness/'
+  for path in ROOT.rglob('*'):
+   if not path.is_file():continue
+   need(not path.is_symlink(),'immutable harness source file')
+   raw=path.read_bytes();name=prefix+path.relative_to(ROOT).as_posix()
+   blob=hashlib.sha1(b'blob '+str(len(raw)).encode()+b'\0'+raw).hexdigest()
+   need(name in blobs and blobs[name]['git_blob']==blob and blobs[name]['mode']==('100755' if path.stat().st_mode&0o111 else '100644'),'current template bytes equal separately landed harness inventory')
+  protected_reviews+=product_acceptance(hp['source_acceptance'],harness_head,harness_tree,hi)
  isolate_paths([d['output_root']],[d['source_root'],ROOT]+protected_reviews+[d[k]['path'] for k in ('source_inventory','build','images','source_prereview')])
- return {'__ROOT_FROZEN_DRIVER_SHA__':build['ELFs']['treedb-query-under-write']['sha256'],'__ROOT_FROZEN_IMAGES_SHA__':d['images']['sha256'],'__ROOT_FROZEN_ACCEPTANCE_SHA__':d['source_prereview']['sha256'],'__ROOT_FROZEN_BUILD_PATH__':d['build']['path'],'__ROOT_FROZEN_IMAGES_PATH__':d['images']['path'],'__ROOT_FROZEN_ACCEPTANCE_PATH__':d['source_prereview']['path'],'__ROOT_FROZEN_IMAGE111__':images['images']['111']['image'],'__ROOT_FROZEN_IMAGE185__':images['images']['185']['image'],'__ROOT_FROZEN_SERVER_SHA__':build['ELFs']['treedb-fixed-peer']['sha256'],'__ROOT_FROZEN_BUILD_SHA__':d['build']['sha256'],'__ROOT_FROZEN_HEAD__':d['source_head'],'__ROOT_FROZEN_TREE__':d['source_tree'],'__ROOT_FROZEN_SOURCE_ROOT__':d['source_root'],'__ROOT_FROZEN_INVENTORY_PATH__':d['source_inventory']['path'],'__ROOT_FROZEN_INVENTORY_SHA__':d['source_inventory']['sha256'],'"__ROOT_FROZEN_INVENTORY_ROWS__"':str(len(inv['rows']))}
+ return {'"__ROOT_FROZEN_CHECKPOINT_ALLOWED__"':repr('checkpoint_harness' in d),'__ROOT_FROZEN_HARNESS_HEAD__':harness_head,'__ROOT_FROZEN_HARNESS_TREE__':harness_tree,'__ROOT_FROZEN_DRIVER_SHA__':build['ELFs']['treedb-query-under-write']['sha256'],'__ROOT_FROZEN_IMAGES_SHA__':d['images']['sha256'],'__ROOT_FROZEN_ACCEPTANCE_SHA__':d['source_prereview']['sha256'],'__ROOT_FROZEN_BUILD_PATH__':d['build']['path'],'__ROOT_FROZEN_IMAGES_PATH__':d['images']['path'],'__ROOT_FROZEN_ACCEPTANCE_PATH__':d['source_prereview']['path'],'__ROOT_FROZEN_IMAGE111__':images['images']['111']['image'],'__ROOT_FROZEN_IMAGE185__':images['images']['185']['image'],'__ROOT_FROZEN_SERVER_SHA__':build['ELFs']['treedb-fixed-peer']['sha256'],'__ROOT_FROZEN_BUILD_SHA__':d['build']['sha256'],'__ROOT_FROZEN_HEAD__':d['source_head'],'__ROOT_FROZEN_TREE__':d['source_tree'],'__ROOT_FROZEN_SOURCE_ROOT__':d['source_root'],'__ROOT_FROZEN_INVENTORY_PATH__':d['source_inventory']['path'],'__ROOT_FROZEN_INVENTORY_SHA__':d['source_inventory']['sha256'],'"__ROOT_FROZEN_INVENTORY_ROWS__"':str(len(inv['rows']))}
 def main():
  need(__debug__,'ordinary Python required')
  q=argparse.ArgumentParser();q.add_argument('--declaration',required=True);q.add_argument('--declaration-sha256',required=True);a=q.parse_args()
@@ -135,6 +159,7 @@ def main():
   dest.parent.mkdir(parents=True,exist_ok=True)
   with dest.open('xb') as f:f.write(b)
  receipt={'state':'FROZEN_SOURCE_OUTPUT_PENDING_INDEPENDENT_REVIEW_NO_ACTIVATION','campaign':d['campaign'],'workload':d['workload'],'source_head':d['source_head'],'source_tree':d['source_tree'],'declaration_path':a.declaration,'declaration_sha256':a.declaration_sha256,'provisional_packet_sha256':PACKET_SHA,'roles':emitted,'transitive_sources':m['transitive_sources'],'source_path_resolver':resolver_emitted,'workload_source':workload_emitted,'final_source_pins':{k:d[k] for k in ('source_inventory','build','images','source_prereview')},'runtime_started':False,'admission_flags_granted':False,'root_remaining_gates':['Independent generated source review including final macro/path/hash joins','Fresh bootstrap/config/TLS/CIDs/stores/growth/post-input sealed inventory','Native declared-prefix Go preparation actual timeout/1MiB cap and independent actual oracle acceptance','Predeclared recall accounting policy, permission8raw proof, final manifest and exclusive root activation','Actual one-shot window, all initial/final populations, all declared witnesses, resource/closure and durable retention']}
+ if 'checkpoint_harness' in d:receipt['checkpoint_harness']=d['checkpoint_harness']
  with (out/'instantiation.json').open('x') as f:json.dump(receipt,f,indent=2);f.write('\n')
  print(json.dumps({'state':receipt['state'],'receipt':str(out/'instantiation.json'),'sha256':sha((out/'instantiation.json').read_bytes()),'runtime_started':False}))
 if __name__=='__main__':main()

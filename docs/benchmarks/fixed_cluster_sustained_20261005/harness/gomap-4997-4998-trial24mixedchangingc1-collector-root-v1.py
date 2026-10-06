@@ -260,9 +260,42 @@ def validate_mixed_report(planned, report):
     return c
 
 
-def call(label, args, timeout=30, host=HOST, input_bytes=None):
+def driver_final_probe(target):
+    assert target==NAME or digest_valid(target)
+    return "if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(target)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
+
+
+def closure_command(label,args,host,probe_target=None):
+    # Only the existing ownership/stop/evidence transports may outlive the
+    # phase. In particular docker exec and resource sampling never qualify.
+    if label=='gate-final-snapshot':
+        return host==HOST and args==['python3','-c',GATE_SNAPSHOT,GATE_DIR] and probe_target is None
+    if label=='driver-final-inspect':
+        return host==HOST and probe_target is not None and args==['python3','-c',driver_final_probe(probe_target)]
+    if probe_target is not None:return False
+    if host==HOST and len(args)>=3 and digest_valid(args[-1]):
+        expected={'driver-failstop':['docker','stop','--time','10',args[-1]],
+                  'driver-stopped':['docker','inspect',args[-1]],
+                  'driver-logs':['docker','logs',args[-1]]}
+        if label in expected:return args==expected[label]
+    for n in NODES:
+        if host!='mikers@'+n['host']:continue
+        if label in ('stop-inspect-'+n['node'],'final-'+n['node']):
+            return args==['docker','inspect',n['cid']]
+        if label=='stop-'+n['node']:
+            return args==['docker','stop','--time','30',n['cid']]
+    return False
+
+
+def call(label, args, timeout=30, host=HOST, input_bytes=None, *, closure=False, probe_target=None):
     global serial, last_record
     serial += 1
+    assert type(closure) is bool
+    if closure:
+        assert input_bytes is None and closure_command(label,args,host,probe_target), 'not a bounded ownership/stop/evidence command'
+    else:
+        assert probe_target is None
+        timeout=phase_timeout(phase_budget,timeout)
     if deadline is not None:
         remaining=deadline-time.monotonic()
         if remaining<=0:raise TimeoutError("collector deadline; no retry")
@@ -607,8 +640,8 @@ def prepare_local(a):
     return pinned,inv,nodes,vectors
 
 
-def inspect_voter(n,label):
-    x=json.loads(call(label,['docker','inspect',n['cid']],host='mikers@'+n['host']))
+def inspect_voter(n,label,*,closure=False):
+    x=json.loads(call(label,['docker','inspect',n['cid']],host='mikers@'+n['host'],closure=closure))
     assert isinstance(x,list) and len(x)==1
     return validate_voter(x[0],n)
 
@@ -834,6 +867,9 @@ def population_audits(phase, plan):
 def validate_finalization(a,pinned):
     # Fresh real bindings, not historical candidate attestation, before SSH.
     pre=strict_json(pinned[a['receipts']['predeclaration']])
+    if pre.get('PhaseID') == CHECKPOINT_PHASE:
+        validate_checkpoint_window(a,pinned,pre)
+        return
     assert a['receipts']['predeclaration']==PREDECLARATION
     assert pre['campaign']==RUN and pre['runtime_started'] is False
     assert pre['topology']['voters']==4 and pre['topology']['voters_per_host']==2
@@ -869,6 +905,181 @@ def validate_finalization(a,pinned):
     assert auth['collector_sha256']==a['collector_sha256']
     assert all(auth[k] is True for k in ('all_cleanup_io_stopped','no_other_campaign_or_writer','fresh_owned_stores_verified'))
     # Operator attestation, not an invented independent process detector.
+
+
+CHECKPOINT_PHASE = 'trial24-checkpoint-window-v1'
+CHECKPOINT_RUNTIME = ('484c6e131ba72357155d512ed06f2842c0a866a3','5a3ff182ebe4f86aca1fcf171f7d44b90643528a')
+CHECKPOINT_HARNESS = ('__ROOT_FROZEN_HARNESS_HEAD__','__ROOT_FROZEN_HARNESS_TREE__')
+CHECKPOINT_ALLOWED = "__ROOT_FROZEN_CHECKPOINT_ALLOWED__"
+CHECKPOINT_PINS = {
+    'decision':'274c9fabff5c94811bdb9d4812b6c38504787b9e73da9a2701a1dde153f653ef',
+    'original_budget':'6a6dc23438f5d1b281ac8d6f4a404eae395d8e178c0ad4977fea8ef66d7a180d',
+    'original_predeclaration':'08c6d7e855aaf7475008b724124ad7d5e7fb4f6be9698d9fad95c80a9dbe9987',
+    'original_inactive':'5e9a68c3c2d60f1d268d420d2bf3d157dfe6dadbcdb125992fc9036c37506ca8',
+    'refusal':'546c8c43f7d0fb3483c2e4d53c73585f149fe37330303c5621ba8fec47053b20',
+    'native':'69e27e59b4182fce1301913787c6d2791d9a5d107308f3eb5906eb83982aa9bb',
+    'retention':'f5a01024fc41cdf6b9efac4d568e435445b1a053697de620804644d6941e2ead'}
+
+
+def checkpoint_reference(a,pinned,row,expected=None):
+    assert isinstance(row,dict) and set(row)=={'path','sha256'}
+    assert row['path'] in pinned and a['local_pins'][row['path']]==row['sha256']
+    assert digest_valid(row['sha256']) and hashlib.sha256(pinned[row['path']]).hexdigest()==row['sha256']
+    if expected is not None:assert row['sha256']==expected
+    return strict_json(pinned[row['path']])
+
+
+CHECKPOINT_UNUSED_REMOTE = r'''
+if not __debug__: raise RuntimeError('ordinary Python required before unused-window observation')
+import json,pathlib,subprocess,sys
+a=json.loads(sys.argv[1])
+def inspect(value):
+ r=subprocess.run(['docker','inspect',value],capture_output=True,text=True,timeout=20)
+ assert r.returncode==0,(r.returncode,r.stderr)
+ rows=json.loads(r.stdout);assert isinstance(rows,list) and len(rows)==1
+ return rows[0]
+stopped={}
+for n in a['nodes']:
+ x=inspect(n['cid'])
+ assert x['Id']==n['cid'] and x['Image']==n['image']
+ assert x['State']['Running'] is False and x['State']['ExitCode']==0 and x['State']['OOMKilled'] is False
+ stopped[n['node']]=n['cid']
+o=dict(state='FRESH_ORIGINAL_WINDOW_UNUSED',PhaseID=a['phase_id'],host=a['host'],stopped_nodes=stopped,all_stopped_owned=True,runtime_started=False,snapshot_not_lock=True)
+if a['driver_host']:
+ r=subprocess.run(['docker','inspect',a['name']],capture_output=True,text=True,timeout=20)
+ assert r.returncode!=0 and 'no such' in r.stderr.lower()
+ p=pathlib.Path(a['gate']);assert not p.exists() and not p.is_symlink()
+ o.update(name=a['name'],gate=a['gate'],driver_absent=True,gate_absent=True)
+print(json.dumps(o,sort_keys=True))
+'''
+
+
+def checkpoint_unused_argv(a,host):
+    """Canonical bounded read-only proof transport; invoke only under root admission."""
+    assert host in {'mikers@'+v for v in HOSTS.values()}
+    nodes=[{k:n[k] for k in ('node','cid','image')} for n in a['nodes'] if 'mikers@'+n['host']==host]
+    assert len(nodes)==2 and {n['node'] for n in nodes}=={k for k,v in HOSTS.items() if 'mikers@'+v==host}
+    payload=dict(phase_id=CHECKPOINT_PHASE,host=host,nodes=nodes,driver_host=host==HOST,name=NAME,gate=GATE)
+    return ['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10',host,
+            shlex.join(['python3','-c',CHECKPOINT_UNUSED_REMOTE,json.dumps(payload,sort_keys=True,separators=(',',':'))])]
+
+
+def validate_checkpoint_unused(a,pinned,unused,latest_unix):
+    """Immutable raw joins; caller separately owns resource freshness and phase admission."""
+    assert type(latest_unix) in (int,float) and math.isfinite(latest_unix)
+    assert unused['state']=='FRESH_ORIGINAL_WINDOW_UNUSED' and unused['PhaseID']==CHECKPOINT_PHASE
+    assert unused['original_inactive_sha256']==CHECKPOINT_PINS['original_inactive']
+    assert unused['output']==str(OUTPUT) and unused['name']==NAME and unused['gate']==GATE
+    assert all(unused[k] is True for k in ('output_absent','driver_absent','gate_absent','no_issued_mutations','all_four_stopped_owned'))
+    assert type(unused['observed_unix']) in (int,float) and math.isfinite(unused['observed_unix'])
+    # Fresh proof is operator admission backed by retained raw checks; not a system-wide lock.
+    stopped={n['node']:n['cid'] for n in a['nodes']}
+    assert unused['stopped_nodes']==stopped
+    assert isinstance(unused['raw_evidence'],list) and len(unused['raw_evidence'])==2
+    seen_hosts=set();seen_nodes={}
+    for row in unused['raw_evidence']:
+        record=checkpoint_reference(a,pinned,row)
+        assert record['exit_code']==0 and not record.get('timed_out')
+        argv=record['argv'];assert isinstance(argv,list) and len(argv)==7
+        host=argv[5];assert host in {'mikers@'+v for v in HOSTS.values()} and host not in seen_hosts
+        assert argv==checkpoint_unused_argv(a,host)
+        assert type(record['timeout_seconds']) in (int,float) and math.isfinite(record['timeout_seconds']) and 0<record['timeout_seconds']<=90
+        assert isinstance(record['stdout'],str) and record['stderr']==''
+        assert record['stdout_sha256']==hashlib.sha256(record['stdout'].encode()).hexdigest()
+        assert record['stderr_sha256']==hashlib.sha256(record['stderr'].encode()).hexdigest()
+        seen_hosts.add(host)
+        assert all(type(record[k]) in (int,float) and math.isfinite(record[k]) for k in ('started_unix','finished_unix'))
+        assert record['started_unix']<=record['finished_unix']<=unused['observed_unix']<=latest_unix
+        observed=strict_json(record['stdout'])
+        assert observed['state']=='FRESH_ORIGINAL_WINDOW_UNUSED' and observed['PhaseID']==CHECKPOINT_PHASE
+        assert observed['host']==host and observed['all_stopped_owned'] is True
+        assert observed['runtime_started'] is False and observed['snapshot_not_lock'] is True
+        expected={n['node']:n['cid'] for n in a['nodes'] if 'mikers@'+n['host']==host}
+        assert observed['stopped_nodes']==expected
+        seen_nodes.update(expected)
+        if host==HOST:
+            assert observed['name']==NAME and observed['gate']==GATE
+            assert observed['driver_absent'] is True and observed['gate_absent'] is True
+    assert seen_nodes==stopped
+    return unused['raw_evidence']
+
+
+def validate_checkpoint_window(a,pinned,pre):
+    # A prospective first window, never a fresh-bootstrap claim or issued replay.
+    assert CHECKPOINT_ALLOWED is True and W.issue=='5021' and RUN=='rf4trial24mixedchangingc1'
+    assert pre['state']=='PROSPECTIVE_CHECKPOINT_WINDOW_PREDECLARED' and pre['runtime_started'] is False
+    assert pre['PhaseID']==CHECKPOINT_PHASE and pre['campaign']==RUN and pre['accepted_workload']==W.declaration()
+    assert (a['source_head'],a['source_tree'])==CHECKPOINT_RUNTIME
+    assert (pre['runtime_head'],pre['runtime_tree'])==CHECKPOINT_RUNTIME
+    assert (pre['harness_head'],pre['harness_tree'])==CHECKPOINT_HARNESS
+    assert a['receipts']['predeclaration']!=PREDECLARATION
+    refs=pre['checkpoint_refs'];assert set(refs)==set(CHECKPOINT_PINS)
+    historical={k:checkpoint_reference(a,pinned,refs[k],v) for k,v in CHECKPOINT_PINS.items()}
+    decision=historical['decision']
+    assert decision['original_campaign']['state']=='INCOMPLETE_RETIRED_AFTER_NO_RPC_PERMISSION_SETUP_REFUSAL'
+    assert decision['future_phase']['phase_id']==CHECKPOINT_PHASE
+    assert historical['original_budget']['predeclaration_sha256']==refs['original_predeclaration']['sha256']
+    original=historical['original_inactive']
+    assert all(original[k] is False for k in FLAGS)
+    # Only admission/source receipts change. Data, CIDs, images, hashes and oracle pins cannot be substituted.
+    unchanged={'Version','RunID','remote_root','source_head','source_tree','source_inventory_sha256','query_image','driver_sha256','driver_uid_gid','bootstrap_sha256','config_sha256','plan_sha256','input_inventory_sha256','baseline','nodes','population_limits','server_cli_path'}
+    assert all(a[k]==original[k] for k in unchanged)
+    for key in ('source_inventory','build','source_prereview','bootstrap','config','plan','baseline','initial_oracle','prefix_oracles'):
+        old=original['receipts'][key];new=a['receipts'][key]
+        assert a['local_pins'][new]==original['local_pins'][old]
+    refusal=historical['refusal']
+    assert refusal['state']=='ACTUAL_ISOLATED_PERMISSION_BOUNDS_REFUSAL_NO_WINDOW_DISPATCH'
+    assert refusal['reported_measured_attempts']==refusal['reported_warmup_attempts']==0
+    assert refusal['window_output_exists'] is False and refusal['all_nine_activation_flags_false'] is True
+    assert historical['native']['original_budget_sha256']==refs['original_budget']['sha256']
+    assert historical['native']['promoted_oracle_sha256']==a['local_pins'][a['receipts']['prefix_oracles']]
+    assert historical['retention']['state']=='THREE_HASH_VERIFIED_CHECKPOINT_COPIES_NOT_WINDOW_QUALIFICATION'
+    assert historical['retention']['copies_count']==3 and historical['retention']['qualification_accepted'] is False
+    auth=strict_json(pinned[a['receipts']['run_authorization']])
+    assert auth['state']=='AUTHORIZED_SINGLE_FIRST_CHECKPOINT_WINDOW' and auth['PhaseID']==CHECKPOINT_PHASE and auth['RunID']==RUN
+    assert auth['predeclaration_sha256']==a['local_pins'][a['receipts']['predeclaration']]
+    assert (auth['runtime_head'],auth['runtime_tree'])==CHECKPOINT_RUNTIME and (auth['harness_head'],auth['harness_tree'])==CHECKPOINT_HARNESS
+    assert auth['collector_sha256']==a['collector_sha256']
+    assert all(auth[k] is True for k in ('all_cleanup_io_stopped','no_other_campaign_or_writer','retained_owned_stores_verified'))
+    budget=checkpoint_reference(a,pinned,auth['phase_budget'])
+    assert budget['state']=='CHECKPOINT_WINDOW_PERMISSION_DISPATCH_STARTED' and budget['PhaseID']==CHECKPOINT_PHASE
+    assert type(budget['budget_seconds']) is int and budget['budget_seconds']==7200
+    assert budget['predeclaration_sha256']==auth['predeclaration_sha256'] and budget['graph_decision_sha256']==CHECKPOINT_PINS['decision']
+    start=budget['started_unix'];end=budget['deadline_unix']
+    assert type(start) in (int,float) and type(end) in (int,float) and math.isfinite(start) and math.isfinite(end) and end==start+7200
+    unused=checkpoint_reference(a,pinned,auth['unused_window_proof'])
+    validate_checkpoint_unused(a,pinned,unused,start)
+    landed=strict_json(pinned[a['receipts']['landed_source']])
+    assert landed['state']=='LANDED_CHECKPOINT_WINDOW_HARNESS_VERIFIED' and (landed['harness_head'],landed['harness_tree'])==CHECKPOINT_HARNESS
+    assert landed['runtime_head']==a['source_head'] and landed['runtime_tree']==a['source_tree'] and landed['collector_sha256']==a['collector_sha256']
+    assert landed['required_ci_passed'] is True and digest_valid(landed['merge_commit'],40)
+    review=strict_json(pinned[a['receipts']['collector_prereview']])
+    assert review['decision']=='ACCEPT' and review['findings']==[] and review['collector_sha256']==a['collector_sha256']
+    assert (review['harness_head'],review['harness_tree'])==CHECKPOINT_HARNESS
+    assert review['runtime_head']==a['source_head'] and review['runtime_tree']==a['source_tree']
+    assert review['predeclaration_sha256']==auth['predeclaration_sha256']
+
+
+def checkpoint_budget(a,pinned):
+    pre=strict_json(pinned[a['receipts']['predeclaration']])
+    if pre.get('PhaseID')!=CHECKPOINT_PHASE:return None
+    auth=strict_json(pinned[a['receipts']['run_authorization']])
+    budget=checkpoint_reference(a,pinned,auth['phase_budget'])
+    unused=checkpoint_reference(a,pinned,auth['unused_window_proof'])
+    assert budget['started_unix']<=time.time()<budget['deadline_unix']
+    assert unused['observed_unix']<=time.time(),'unused-window observation precedes activation'
+    return budget
+
+
+def phase_timeout(budget,timeout,first_permission=False):
+    if budget is None:return timeout
+    now=time.time();remaining=budget['deadline_unix']-now
+    assert remaining>0,'prospective checkpoint phase budget exhausted; no replay'
+    if first_permission:assert budget['started_unix']<=now,'phase starts before first permission command'
+    return min(timeout,remaining)
+
+
+phase_budget=None  # Fresh campaigns retain their original admission contract.
 
 
 def validate_bootstrap_prefix(bootstrap, highest):
@@ -1157,6 +1368,7 @@ def self_check():
 
 def main():
     global APPROVED,root,image,NODES,serial,last_record,deadline,paths
+    global phase_budget
     global gate_expected,gate_identity,gate_nonce,boundary_evidence,samples,launch_nonce,initial_vectors,prefix_oracles
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--approved')
@@ -1172,6 +1384,7 @@ def main():
     approved_bytes=read_bounded(cli.approved,1<<20)
     APPROVED=validate_manifest(strict_json(approved_bytes),hashlib.sha256(source).hexdigest())
     pinned,inv,NODES,initial_vectors=prepare_local(APPROVED)  # ALL local pins before any SSH/process
+    phase_budget=checkpoint_budget(APPROVED,pinned)
     prefix_oracles=strict_json(pinned[APPROVED['receipts']['prefix_oracles']])
     assert not OUTPUT.exists(), 'consumed campaign output must never be reused'
     isolate_paths([OUTPUT],[LOCAL_INPUT_ROOT,pathlib.Path(__file__).resolve().parent,cli.approved]+list(pinned))
@@ -1272,7 +1485,7 @@ def main():
     finally:
         deadline=None  # independent bounded cleanup, no workload retry
         try:
-            snapshot=json.loads(call('gate-final-snapshot',['python3','-c',GATE_SNAPSHOT,GATE_DIR]))
+            snapshot=json.loads(call('gate-final-snapshot',['python3','-c',GATE_SNAPSHOT,GATE_DIR],closure=True))
             json_file('gate-final-snapshot.json',snapshot)
             for name,value in snapshot.get('tokens',{}).items():
                 if 'raw_b64' in value:
@@ -1282,17 +1495,16 @@ def main():
         try:
             target=driver_probe_target(cid,launch_attempted)
             if target is not None:
-                probe="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(target)+"],capture_output=True,text=True); assert r.returncode==0 or 'no such' in r.stderr.lower(); print(r.stdout if r.returncode==0 else 'null')"
-                inspected=json.loads(call('driver-final-inspect',['python3','-c',probe]))
+                inspected=json.loads(call('driver-final-inspect',['python3','-c',driver_final_probe(target)],closure=True,probe_target=target))
                 if inspected is not None:
                     assert isinstance(inspected,list) and len(inspected)==1
                     final=inspected[0];owned(final,cid)
                     cid=final['Id']  # pin recovered exact CID only after full nonce/ownership proof
                     if final['State']['Running']:
-                        call('driver-failstop',['docker','stop','--time','10',final['Id']])
-                    final=json.loads(call('driver-stopped',['docker','inspect',final['Id']]))[0];owned(final,cid)
+                        call('driver-failstop',['docker','stop','--time','10',final['Id']],closure=True)
+                    final=json.loads(call('driver-stopped',['docker','inspect',final['Id']],closure=True))[0];owned(final,cid)
                     assert not final['State']['Running']
-                    stdout=call('driver-logs',['docker','logs',final['Id']])
+                    stdout=call('driver-logs',['docker','logs',final['Id']],closure=True)
                     (OUTPUT/'stdout.jsonl').write_bytes(stdout.encode('utf-8',errors='surrogateescape'))
                     (OUTPUT/'stderr.log').write_bytes(last_record['stderr'].encode('utf-8',errors='surrogateescape'))
                     batch=sample_all(final['Id']);samples.extend(batch)
@@ -1337,16 +1549,17 @@ def main():
         stop_receipts=[]
         for n in NODES:
             try:
-                x=inspect_voter(n,'stop-inspect-'+n['node'])
+                x=inspect_voter(n,'stop-inspect-'+n['node'],closure=True)
                 if x['State']['Running']:
-                    call('stop-'+n['node'],['docker','stop','--time','30',n['cid']],host='mikers@'+n['host'],timeout=45)
-                x=inspect_voter(n,'final-'+n['node'])
+                    call('stop-'+n['node'],['docker','stop','--time','30',n['cid']],host='mikers@'+n['host'],timeout=45,closure=True)
+                x=inspect_voter(n,'final-'+n['node'],closure=True)
                 assert not x['State']['Running'] and x['State']['ExitCode']==0
                 stop_receipts.append({'node':n['node'],'cid':n['cid'],'observed_unix':time.time(),'inspect':x})
             except BaseException as e:
                 errors.append(n['node']+' stop: '+repr(e))
         json_file('voter-stop-receipts.json',stop_receipts)
-    passed=workload_passed and resource_complete and audits_before_stop and initial_population_passed and final_population_passed and not errors
+    phase_expired=phase_budget is not None and time.time()>phase_budget['deadline_unix']
+    passed=workload_passed and resource_complete and audits_before_stop and initial_population_passed and final_population_passed and not errors and not phase_expired
     summary=dict(status='OBSERVATIONS_PENDING_ROOT_INDEPENDENT_VALIDATION' if passed else 'FAILED_OR_UNKNOWN_CONSUMED',
         native_window_passed_pending_root=workload_passed,resource_brackets_complete=resource_complete,
         all_four_audits_observed_before_voter_stop=audits_before_stop,
@@ -1356,6 +1569,9 @@ def main():
         network_scope='host network: per-container byte counters unsupported; no host totals substituted',
         peak_scope='memory.peak/VmHWM include setup/warmup/drain; no measured-only or whole-lifetime peak claim',
         root_action='independently verify canonical declared-prefix/causal/ledger/original-retry/initial-final-population/audit/resource/source/clean-stop evidence; never rerun failed/UNKNOWN window')
+    if phase_budget is not None:
+        summary.update(qualification_phase=CHECKPOINT_PHASE,phase_budget=phase_budget,phase_budget_exhausted_at_close=phase_expired,
+            original_campaign='INCOMPLETE_RETIRED_AFTER_NO_RPC_PERMISSION_SETUP_REFUSAL',harness_head=CHECKPOINT_HARNESS[0],harness_tree=CHECKPOINT_HARNESS[1])
     json_file('exit.json',summary)
     print(json.dumps(summary))
     return 0 if passed else 1
