@@ -130,10 +130,13 @@ func TestR1RebuiltCurrentRootDropsUnreachablePackedDependency(t *testing.T) {
 	for i := 0; i < 512; i++ {
 		expectLeafGenerationValue(t, database, leafGenerationKey("pack-concurrent", i), 'c')
 	}
+	newestSlot := database.metaPageID
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
 	database = nil
+	// Force selection of the converged older durable slot after actual unlink.
+	corruptIndexPageByte(t, dir, newestSlot)
 	reopened, err := Open(opts)
 	if err != nil {
 		t.Fatal(err)
