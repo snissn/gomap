@@ -69,3 +69,11 @@ Primary outputs:
   index vacuum, and SQLite VACUUM rows.
 - `<cell>/collections_report.md`: per-cell detailed benchmark report.
 - `<cell>/go_test.json`: raw `go test -json` benchmark output.
+
+The bounded R1 public full-row comparison extends
+[`collection_workload_bench`](../collection_workload_bench/README.md#r1-complete-local-row-comparison).
+Its separate capture reports ordinary public point acquisition, prepared view
+setup and complete fetch, indexed mutations, matched SQLite FULL durability, and
+unsupported capabilities. Existing matrix component timers and ID-only results
+retain their existing scope and cannot be substituted for that complete-row
+contract. See the [canonical R1 contract](../../TreeDB/docs/spec/r1-indexed-row-contract.md).
