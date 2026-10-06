@@ -628,9 +628,15 @@ def raw_results(text, config, pid):
 
 
 def validate(path, expected_runtime=None, expected_harness=None, expected_commit=None,
-             expected_landed_tooling_commit=None):
+             expected_landed_tooling_commit=None, expected_binary_sha256=None,
+             expected_packet_sha256=None):
     path = Path(path)
-    packet = decode(path.read_text())
+    packet_bytes = path.read_bytes()
+    # Bind the exact receipt bytes before trusting any packet-controlled claims.
+    require(expected_packet_sha256 is None or (hexadecimal(expected_packet_sha256, 64)
+            and hashlib.sha256(packet_bytes).hexdigest() == expected_packet_sha256),
+            'frozen packet hash mismatch')
+    packet = decode(packet_bytes.decode())
     require(packet['schema'] == 'gomap-r1-lifecycle-packet-v3', 'wrong packet schema')
     config = packet['config']
     require(config['qualification'] in ('rehearsal', 'retained'), 'wrong qualification')
@@ -658,6 +664,8 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
         require(config['landed_tooling_commit'] == expected_landed_tooling_commit, 'verified landing commit mismatch')
         require(hexadecimal(expected_runtime, 64) and hexadecimal(expected_harness, 64)
                 and hexadecimal(expected_commit, 40), 'retained validation requires independent source bindings')
+        require(hexadecimal(expected_binary_sha256, 64) and hexadecimal(expected_packet_sha256, 64),
+                'retained validation requires independent binary and packet bindings')
     toolchain = packet['toolchain']
     require(toolchain['go'] == 'go version go1.26.4 linux/amd64' and bool(toolchain['cc']) and bool(toolchain['uname']['system'])
             and bool(toolchain['binary_buildinfo']) and bool(toolchain['filesystem']), 'missing actual build/host identity')
@@ -678,7 +686,10 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
             and set(process_environment) <= set(required_environment) | {'PATH', 'HOME', 'GODEBUG'}
             and all(isinstance(value, str) for value in process_environment.values())
             and process_environment.get('GODEBUG', '') == '', 'effective benchmark environment mismatch')
-    require(hashlib.sha256((path.parent / 'collections.test').read_bytes()).hexdigest() == toolchain['binary_sha256'], 'binary hash mismatch')
+    binary_sha256 = hashlib.sha256((path.parent / 'collections.test').read_bytes()).hexdigest()
+    require(binary_sha256 == toolchain['binary_sha256'], 'binary hash mismatch')
+    require(expected_binary_sha256 is None or (hexadecimal(expected_binary_sha256, 64)
+            and binary_sha256 == expected_binary_sha256), 'frozen binary hash mismatch')
     require(hashlib.sha256((path.parent / 'build.log').read_bytes()).hexdigest() == packet['build_log_sha256'], 'build log hash mismatch')
     invocation = packet['invocation']
     require(invocation[1:] == ['-test.run=^$', '-test.bench=^BenchmarkR1Lifecycle5060$',
@@ -758,7 +769,12 @@ if __name__ == '__main__':
     parser.add_argument('--expected-commit')
     parser.add_argument('--expected-landed-tooling-commit',
                         help='independently verified landing SHA; required with source bindings for retained packets')
+    parser.add_argument('--expected-binary-sha256',
+                        help='binary SHA256 from the trusted clean-build receipt; required for retained packets')
+    parser.add_argument('--expected-packet-sha256',
+                        help='exact completed packet SHA256 from the trusted run receipt; required for retained packets')
     args = parser.parse_args()
     rows = validate(args.packet, args.expected_runtime, args.expected_harness, args.expected_commit,
-                    args.expected_landed_tooling_commit)
+                    args.expected_landed_tooling_commit, args.expected_binary_sha256,
+                    args.expected_packet_sha256)
     print(summarize(decode(Path(args.packet).read_text()), rows))
