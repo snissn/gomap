@@ -12,7 +12,8 @@ def git(*args):
 
 def source_identity():
     paths = ['cmd/collection_workload_bench/main.go',
-             *sorted(str(p) for p in pathlib.Path('cmd/collection_workload_bench').glob('r1*.go')),
+             *sorted(str(p) for p in pathlib.Path('cmd/collection_workload_bench').glob('r1*.go')
+                     if not p.name.endswith('_test.go')),
              'scripts/r1_collection_capture.sh', 'scripts/r1_collection_summary.py',
              'scripts/r1_collection_source.py']
     digest = hashlib.sha256()

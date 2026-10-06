@@ -18,6 +18,31 @@ func r1TestSource() r1Source {
 	sum := sha256.Sum256([]byte("go.mod\x00" + blob + "\x00"))
 	return r1Source{Commit: strings.Repeat("a", 40), RuntimeSHA256: hex.EncodeToString(sum[:]), RuntimeBlobs: map[string]string{"go.mod": blob}, HarnessSHA256: strings.Repeat("c", 64)}
 }
+
+func TestR1StorageSeparatesPersistentWALAndTransientFiles(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]int{
+		"maindb/value_vlog/segment.bin": 71,
+		"maindb/leaflog/segment.bin":    17,
+		"maindb/wal/journal.bin":        11,
+		"rows.db":                       19,
+		"rows.db-wal":                   23,
+		"rows.db-shm":                   29,
+	}
+	for name, size := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, make([]byte, size), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	persistent, wal, transient, err := r1Storage(dir)
+	if err != nil || persistent != 107 || wal != 34 || transient != 29 {
+		t.Fatalf("storage census: persistent=%d wal=%d transient=%d err=%v", persistent, wal, transient, err)
+	}
+}
 func TestR1PublicPathRehearsalAndRejectPackets(t *testing.T) {
 	c := r1Config{Documents: 16, Batch: 4, Operations: 3, Repetitions: 1, Durability: "durable", State: "buffered", Engines: r1Engines, Qualification: "rehearsal"}
 	p, e := runR1(c, r1TestSource())
@@ -104,6 +129,7 @@ func TestR1PublicPathRehearsalAndRejectPackets(t *testing.T) {
 		{"illegal public range skip", func(p *r1Packet) { p.Cells[0].Phases[5].Skipped = "ordinary typed range returns residual only" }},
 		{"runtime digest corruption", func(p *r1Packet) { p.Source.RuntimeBlobs["go.mod"] = strings.Repeat("d", 40) }},
 		{"wrong storage boundary", func(p *r1Packet) { p.Cells[0].StorageBoundary = "after_unsupported_upsert" }},
+		{"negative transient storage", func(p *r1Packet) { p.Cells[0].TransientBytes = -1 }},
 		{"source missing", func(p *r1Packet) { p.Source.RuntimeSHA256 = "" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

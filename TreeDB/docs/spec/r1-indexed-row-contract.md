@@ -149,7 +149,9 @@ in a serialized harness; they include background Go activity and exclude SQLite 
 allocator bytes. Heap is not RSS or retained-memory attribution. Persistent file
 bytes and WAL bytes are separate after checkpoint; persistent TreeDB value-log
 and typed asset files are included, WAL is never counted as durable payload size.
-Storage uses logical file lengths, not allocated disk blocks.
+SQLite's transient `-shm` WAL-index bytes are reported separately as
+`transient_bytes` and excluded from persistent payload and redo WAL. Storage
+uses logical file lengths, not allocated disk blocks.
 
 Before expensive retained collection, the harness/schema must receive independent
 review and land. Freeze the committed runtime source-blob manifest/digest, harness file hashes, source commit,
