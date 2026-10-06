@@ -41,6 +41,18 @@ type LeafPageStableLog interface {
 	AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error)
 }
 
+// LeafPageStableAppendLog is an optional mode selector for producers that
+// implement LeafPageStableLog alongside legacy append modes. False means the
+// configured mode cannot emit authoritative raw outer-leaf resources. It is
+// structural capability, not proof that registry/dictionary/template authority
+// is valid; selected stable appends must still fail closed on authority errors.
+// Ordinary publication checks this before Apply and never retries an errored
+// stable append through the legacy API. Producers without it retain the stable
+// interface contract. Strict maintenance capture does not consult this selector.
+type LeafPageStableAppendLog interface {
+	StableLeafPageAppends() bool
+}
+
 // LeafPageStableBatchLog has the same success/error ownership contract as
 // LeafPageStableLog, covering every unique segment in the returned batch.
 type LeafPageStableBatchLog interface {

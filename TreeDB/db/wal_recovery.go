@@ -1447,6 +1447,17 @@ func (l replayInlineLeafPageLog) bindStableDictionaryResourceProvider(provider f
 	return l.appender.writer.bindStableDictionaryResourceProvider(provider)
 }
 
+// Preserve the underlying producer's optional mode through replay forwarding.
+// Configured raw producers still enforce their authority during stable append.
+func (l replayInlineLeafPageLog) StableLeafPageAppends() bool {
+	if l.appender == nil {
+		return false
+	}
+	l.appender.mu.Lock()
+	defer l.appender.mu.Unlock()
+	return l.appender.writer.StableLeafPageAppends()
+}
+
 func (l replayInlineLeafPageLog) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	ptrs, resources, err := l.AppendLeafPagesWithStableResources([][]byte{leafPage})
 	if err != nil {

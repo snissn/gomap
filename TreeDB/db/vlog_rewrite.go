@@ -4080,6 +4080,13 @@ func (w *rewriteWriter) AppendLeafPage(leafPage []byte) (page.LeafLogPtr, error)
 	return w.appendLeafPageWithRID(rid, leafPage)
 }
 
+// StableLeafPageAppends selects the configured raw-leaf mode before ordinary
+// Apply. Missing or invalid authority is deliberately left to stable capture;
+// it must not silently downgrade a configured raw producer to legacy appends.
+func (w *rewriteWriter) StableLeafPageAppends() bool {
+	return w != nil && w.leafDir != "" && !w.leafStaging
+}
+
 func (w *rewriteWriter) AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if w == nil {
 		return page.LeafLogPtr{}, nil, errors.New("vlog-rewrite: nil writer")
