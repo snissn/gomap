@@ -119,6 +119,37 @@ type LeafPagePreparedChildRefStableBatchLog interface {
 	AppendPreparedLeafPageChildRefsWithStableResources(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error)
 }
 
+// LeafPageLogApplyTokenProvider is an explicit producer opt-in for one Apply
+// attempt. The returned regular appender hands flushed raw tokens to raw, which
+// consumes every token on success or failure. child consumes a full validated
+// dependency set only on success. Public stable append methods keep their owned
+// set contract. Unsupported forwarding wrappers return supported=false.
+// Callbacks run synchronously; pointer slices are borrowed for that call only.
+// The caller joins all appenders before freezing or abandoning the attempt.
+type LeafPageLogApplyTokenProvider interface {
+	LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error)
+}
+
+func (l *leafPageLogWithRecordLengthHints) LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error) {
+	if l == nil {
+		return nil, false, nil
+	}
+	factory, ok := l.inner.(LeafPageLogApplyTokenProvider)
+	if !ok {
+		return nil, false, nil
+	}
+	inner, supported, err := factory.LeafPageLogForApply(raw, child)
+	if err != nil || !supported {
+		return nil, supported, err
+	}
+	if inner == nil {
+		return nil, true, rootpublication.ErrResourceOwnership
+	}
+	view := *l
+	view.inner = inner
+	return &view, true, nil
+}
+
 func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet) error {
 	if len(ptrs) == 0 {
 		if resources != nil && resources.Len() != 0 {

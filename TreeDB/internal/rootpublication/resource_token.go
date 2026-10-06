@@ -664,6 +664,15 @@ func validateDiagnosticPath(path string) error {
 	return nil
 }
 
+// ValidateStableNamespace revalidates the retained exact parent/child binding
+// without materializing a resource set or changing ownership/content frontier.
+func (token *StableResourceToken) ValidateStableNamespace() error {
+	if token == nil || token.released.Load() {
+		return ErrResourceOwnership
+	}
+	return token.namespace.validateStable()
+}
+
 func (token *StableResourceToken) Kind() ResourceKind       { return token.kind }
 func (token *StableResourceToken) LogicalLane() string      { return token.logicalLane }
 func (token *StableResourceToken) ResourceID() string       { return token.resourceID }

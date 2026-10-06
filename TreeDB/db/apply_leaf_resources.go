@@ -22,6 +22,7 @@ type applyLeafResourceCapture struct {
 
 type applyLeafResourceLog struct {
 	inner   LeafPageLog
+	direct  LeafPageLog
 	capture *applyLeafResourceCapture
 }
 
@@ -33,7 +34,105 @@ func newApplyLeafResourceLog(appender bulk.LeafPageAppender) (*applyLeafResource
 	if _, ok := log.(LeafPageStableLog); !ok {
 		return nil, fmt.Errorf("%w: outer-leaf producer lacks stable append authority", rootpublication.ErrUnresolvedResource)
 	}
-	return &applyLeafResourceLog{inner: log, capture: &applyLeafResourceCapture{builder: rootpublication.NewStableResourceSetBuilder()}}, nil
+	capture := &applyLeafResourceCapture{builder: rootpublication.NewStableResourceSetBuilder()}
+	result, err := bindApplyLeafResourceLog(log, capture)
+	if err != nil {
+		capture.builder.Abandon()
+		return nil, err
+	}
+	return result, nil
+}
+
+func bindApplyLeafResourceLog(log LeafPageLog, capture *applyLeafResourceCapture) (*applyLeafResourceLog, error) {
+	result := &applyLeafResourceLog{inner: log, capture: capture}
+	if factory, ok := log.(LeafPageLogApplyTokenProvider); ok {
+		direct, supported, err := factory.LeafPageLogForApply(capture.acceptRaw, capture.acceptChild)
+		if err != nil {
+			return nil, err
+		}
+		if supported {
+			if direct == nil {
+				return nil, rootpublication.ErrResourceOwnership
+			}
+			result.direct = direct
+		}
+	}
+	return result, nil
+}
+
+// acceptRaw consumes the producer's complete token inventory. All pointer,
+// frontier and namespace checks precede ownership mutation. Add owns successes;
+// this callback releases failures and the remaining inventory exactly once.
+func (capture *applyLeafResourceCapture) acceptRaw(ptrs []page.ValuePtr, tokens []*rootpublication.StableResourceToken) error {
+	remaining := tokens
+	defer func() {
+		for _, token := range remaining {
+			token.Release()
+		}
+	}()
+	if capture == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	required := make(map[uint64]uint64, len(ptrs))
+	for i, ptr := range ptrs {
+		length := uint64(page.ValuePtrRecordLength(ptr))
+		if ptr.FileID == 0 || length == 0 || ptr.Offset > ^uint64(0)-length {
+			return fmt.Errorf("%w: direct leaf pointer frontier at %d", rootpublication.ErrUnresolvedResource, i)
+		}
+		end := ptr.Offset + length
+		if end > required[uint64(ptr.FileID)] {
+			required[uint64(ptr.FileID)] = end
+		}
+	}
+	for _, token := range tokens {
+		if token == nil || token.Kind() != rootpublication.ResourceOuterLeafLog || token.Reachability() != rootpublication.ReachabilityOuterLeafRawPointer {
+			return fmt.Errorf("%w: direct leaf token kind/reachability", rootpublication.ErrResourceConflict)
+		}
+		end, ok := required[token.Generation()]
+		if !ok {
+			return fmt.Errorf("%w: direct leaf unreferenced generation", rootpublication.ErrResourceConflict)
+		}
+		if err := token.ValidateStableNamespace(); err != nil {
+			return err
+		}
+		// A rotation can contribute an earlier active and a later closed token
+		// for the same physical segment. As with builder coalescing, the maximum
+		// immutable certificate must cover the append's last pointer, rather
+		// than every earlier certificate individually covering that frontier.
+		if token.Frontier().Bytes >= end {
+			required[token.Generation()] = 0
+		}
+	}
+	for generation, end := range required {
+		if end != 0 {
+			return fmt.Errorf("%w: direct leaf omitted/short generation %d", rootpublication.ErrUnresolvedResource, generation)
+		}
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.builder == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	for i, token := range tokens {
+		if err := capture.builder.Add(token); err != nil {
+			remaining = tokens[i:]
+			return err
+		}
+		remaining = tokens[i+1:]
+	}
+	return nil
+}
+
+func (capture *applyLeafResourceCapture) acceptChild(resources *rootpublication.StableResourceSet) error {
+	if capture == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.builder == nil || resources == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	return capture.builder.Merge(resources)
 }
 
 func (l *applyLeafResourceLog) accept(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet, err error) error {
@@ -49,6 +148,10 @@ func (l *applyLeafResourceLog) accept(ptrs []page.LeafLogPtr, resources *rootpub
 	}
 	l.capture.mu.Lock()
 	defer l.capture.mu.Unlock()
+	if l.capture.builder == nil {
+		resources.Release()
+		return rootpublication.ErrResourceOwnership
+	}
 	if err := l.capture.builder.Merge(resources); err != nil {
 		resources.Release()
 		return err
@@ -57,12 +160,18 @@ func (l *applyLeafResourceLog) accept(ptrs []page.LeafLogPtr, resources *rootpub
 }
 
 func (l *applyLeafResourceLog) AppendLeafPage(data []byte) (page.LeafLogPtr, error) {
+	if l.direct != nil {
+		return l.direct.AppendLeafPage(data)
+	}
 	ptr, resources, err := appendLeafPageWithDictionaryCapture(l.inner, &l.capture.dictionaries, data)
 	err = l.accept([]page.LeafLogPtr{ptr}, resources, err)
 	return ptr, err
 }
 
 func (l *applyLeafResourceLog) AppendLeafPages(data [][]byte) ([]page.LeafLogPtr, error) {
+	if direct, ok := l.direct.(LeafPageBatchLog); ok {
+		return direct.AppendLeafPages(data)
+	}
 	if _, ok := l.inner.(LeafPageStableBatchLog); ok {
 		ptrs, resources, err := appendLeafPagesWithDictionaryCapture(l.inner, &l.capture.dictionaries, data)
 		err = l.accept(ptrs, resources, err)
@@ -102,6 +211,9 @@ func (l *applyLeafResourceLog) PreparedLeafPageBatchAppends() bool {
 }
 
 func (l *applyLeafResourceLog) AppendPreparedLeafPage(data, payload []byte) (page.LeafLogPtr, error) {
+	if direct, ok := l.direct.(LeafPagePreparedLog); ok {
+		return direct.AppendPreparedLeafPage(data, payload)
+	}
 	if stable, ok := l.inner.(LeafPagePreparedStableLog); ok {
 		ptr, resources, err := stable.AppendPreparedLeafPageWithStableResources(data, payload)
 		err = l.accept([]page.LeafLogPtr{ptr}, resources, err)
@@ -111,6 +223,9 @@ func (l *applyLeafResourceLog) AppendPreparedLeafPage(data, payload []byte) (pag
 }
 
 func (l *applyLeafResourceLog) AppendPreparedLeafPages(data, payloads [][]byte) ([]page.LeafLogPtr, error) {
+	if direct, ok := l.direct.(LeafPagePreparedBatchLog); ok {
+		return direct.AppendPreparedLeafPages(data, payloads)
+	}
 	if stable, ok := l.inner.(LeafPagePreparedStableBatchLog); ok {
 		ptrs, resources, err := stable.AppendPreparedLeafPagesWithStableResources(data, payloads)
 		err = l.accept(ptrs, resources, err)
@@ -120,6 +235,9 @@ func (l *applyLeafResourceLog) AppendPreparedLeafPages(data, payloads [][]byte) 
 }
 
 func (l *applyLeafResourceLog) AppendPreparedLeafPageChildRefs(data, payloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, error) {
+	if direct, ok := l.direct.(LeafPagePreparedChildRefBatchLog); ok {
+		return direct.AppendPreparedLeafPageChildRefs(data, payloads, refs)
+	}
 	if stable, ok := l.inner.(LeafPagePreparedChildRefStableBatchLog); ok {
 		out, resources, err := stable.AppendPreparedLeafPageChildRefsWithStableResources(data, payloads, refs)
 		ptrs := make([]page.LeafLogPtr, len(out))
@@ -145,12 +263,20 @@ func (l *applyLeafResourceLog) AppendPreparedLeafPageChildRefs(data, payloads []
 }
 
 func (l *applyLeafResourceLog) ConcurrentLeafPageAppends() bool {
-	p, ok := l.inner.(LeafPageConcurrentAppendLog)
+	source := l.inner
+	if l.direct != nil {
+		source = l.direct
+	}
+	p, ok := source.(LeafPageConcurrentAppendLog)
 	return ok && p.ConcurrentLeafPageAppends()
 }
 
 func (l *applyLeafResourceLog) LeafPageLogLane(worker int) (LeafPageLog, bool) {
-	provider, ok := l.inner.(LeafPageLogLaneProvider)
+	source := l.inner
+	if l.direct != nil {
+		source = l.direct
+	}
+	provider, ok := source.(LeafPageLogLaneProvider)
 	if !ok {
 		return nil, false
 	}
@@ -161,7 +287,14 @@ func (l *applyLeafResourceLog) LeafPageLogLane(worker int) (LeafPageLog, bool) {
 	if _, stable := lane.(LeafPageStableLog); !stable {
 		return nil, false
 	}
-	return &applyLeafResourceLog{inner: lane, capture: l.capture}, true
+	if l.direct != nil {
+		return &applyLeafResourceLog{inner: lane, direct: lane, capture: l.capture}, true
+	}
+	result, err := bindApplyLeafResourceLog(lane, l.capture)
+	if err != nil {
+		return nil, false
+	}
+	return result, true
 }
 
 func (l *applyLeafResourceLog) LeafPageLogLaneAny(worker int) (any, bool) {
@@ -184,6 +317,9 @@ func (l *applyLeafResourceLog) abandon() {
 func (l *applyLeafResourceLog) freeze() (*rootpublication.StableResourceSet, error) {
 	if l == nil {
 		return nil, nil
+	}
+	if l.capture.builder == nil {
+		return nil, rootpublication.ErrResourceOwnership
 	}
 	defer l.capture.dictionaries.release()
 	resources, err := l.capture.builder.Freeze()

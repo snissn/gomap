@@ -17540,6 +17540,15 @@ func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []b
 	return ptrs, resources, err
 }
 
+func (db *DB) appendValueLogForApply(l *lane, records []valuelog.Record, handoff *applyLeafTokenHandoff) ([]page.ValuePtr, error) {
+	capture := &stableOuterLeafCapture{db: db, lane: l, handoff: handoff}
+	ptrs, _, err := db.appendValueLogInternal(l, 0, nil, records, journalDurabilityNone, capture)
+	if err != nil {
+		capture.abandon()
+	}
+	return ptrs, err
+}
+
 func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
 	if !db.splitValueLogEnabled() {
 		return nil, nil, errWALUnavailable
