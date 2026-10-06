@@ -2,6 +2,7 @@
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ import sys
 
 from prepare_config import draft
 from protocol import identity, sha, write
+from build import git_source_authority
 
 def main():
     parser = argparse.ArgumentParser()
@@ -21,24 +23,47 @@ def main():
     original.mkdir()
     config = draft()
     config.update(status="frozen-approved", coordinator_acceptance="synthetic refusal only, never executable collection")
-    config["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/mod")
-    config["host"].update(node="synthetic", machine="x86_64", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1)
+    config["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/mod", TMPDIR=str(root))
+    config["host"].update(node="synthetic", machine="x86_64", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(root), tmpdir_device=root.stat().st_dev)
     config["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
+    # Real tiny Git objects exercise offline provenance without pretending the
+    # deliberately incomplete packet is a product measurement.
+    repository, exported = root / "tiny-git-repository", root / "tiny-export"
+    repository.mkdir(); exported.mkdir()
+    git_env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                   GIT_AUTHOR_NAME="Protocol smoke", GIT_AUTHOR_EMAIL="protocol-smoke@example.invalid",
+                   GIT_COMMITTER_NAME="Protocol smoke", GIT_COMMITTER_EMAIL="protocol-smoke@example.invalid")
+    def git(*argv):
+        return subprocess.check_output(["git", "-C", str(repository), *argv], env=git_env, stderr=subprocess.PIPE).decode().strip()
+    git("init", "-q")
+    (repository / "fixture.go").write_text("synthetic protocol input\n")
+    (exported / "fixture.go").write_text("synthetic protocol input\n")
+    for tree in (repository, exported):
+        target = tree / "scripts" / "cow_c3_read"
+        target.mkdir(parents=True)
+        for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
+            shutil.copyfile(scripts / name, target / name)
+    git("add", "."); git("commit", "-qm", "Protocol refusal input")
+    head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+    git_manifest, git_receipt = git_source_authority(exported, repository, head, tree)
     for variant in ("baseline", "candidate"):
         declaration = config["variants"][variant]
-        declaration.update(production_commit="1" * 40, source="/synthetic/" + variant, binary="/synthetic/" + variant + ".test", binary_sha256="2" * 64)
+        declaration.update(production_commit=head, production_git_tree=tree, source="/synthetic/" + variant, binary="/synthetic/" + variant + ".test", binary_sha256="2" * 64)
         manifest = original / (variant + "-source-manifest.json")
-        write(manifest, {"git_head": "1" * 40, "files": [{"path": "fixture.go", "sha256": "3" * 64}]})
+        write(manifest, git_manifest)
         bound = identity(manifest)
         declaration.update(manifest=str(manifest), manifest_sha256=sha(manifest), source_tree_sha256=bound["tree_sha256"])
         write(original / (variant + "-identity.json"), bound)
         write(original / (variant + "-source-before.json"), {"drift": []})
         write(original / (variant + "-build-source-after.json"), {"drift": []})
-        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs"}
+        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source"}
         retained, artifacts = {}, {}
         for name in sorted(required):
             path = original / (variant + "-" + name + ".raw")
-            path.write_text("synthetic-refusal-input " + name + "\n")
+            if name == "git_source":
+                write(path, git_receipt)
+            else:
+                path.write_text("synthetic-refusal-input " + name + "\n")
             retained[name] = {"path": path.name, "sha256": sha(path)}
             artifacts[name] = {"path": "/synthetic/build/" + name, "sha256": sha(path)}
         write(original / (variant + "-build-artifacts.json"), retained)
@@ -49,7 +74,7 @@ def main():
     write(original / "config.json", config)
     write(original / "receipts.json", [])
     hashes = {}
-    for name in ("protocol.py", "collect.py", "analyze.py"):
+    for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
         shutil.copyfile(scripts / name, original / name)
         hashes[name] = sha(original / name)
     write(original / "script-identity.json", hashes)

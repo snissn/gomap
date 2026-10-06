@@ -12,6 +12,13 @@ PROFILES = {"no_wal_fast", "command_wal_relaxed", "command_wal_durable"}
 MODES = {"append_only", "btree", "cow_btree"}
 LAYOUTS = {"inline", "pointer"}
 WORKLOADS = {"point", "group_all_versions", "concurrent"}
+CONTROLS = {"GOROOT", "GOCACHE", "GOMODCACHE", "GOWORK", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GOFLAGS", "TMPDIR"}
+
+def case_names(case):
+    shape = "forced_pointer" if case["layout"] == "pointer" else "inline"
+    leaf = "group_versions" if case["workload"] == "group_all_versions" else case["workload"]
+    parts = (case["profile"], case["mode"], shape, leaf)
+    return "-".join(parts), "/".join(("BenchmarkC3PublicReadAdmission",) + parts)
 
 def need(value, message):
     if not value:
@@ -56,7 +63,8 @@ def drift(source, ident):
     wrong = []
     for item in ident["files"]:
         p = source / item["path"]
-        if p.is_symlink() or not p.is_file() or sha(p) != item["sha256"]:
+        wrong_mode = p.is_file() and "git_mode" in item and ("100755" if p.stat().st_mode & 0o111 else "100644") != item["git_mode"]
+        if p.is_symlink() or not p.is_file() or sha(p) != item["sha256"] or wrong_mode:
             wrong.append(item["path"])
     return wrong + ["EXTRA:" + p for p in sorted(actual - expected)]
 
@@ -66,11 +74,13 @@ def config(path):
     need(isinstance(c["coordinator_acceptance"], str) and c["coordinator_acceptance"], "missing coordinator freeze acceptance")
     need(c["cycles"] == 3 and c["order"] == ["baseline", "candidate", "candidate", "baseline"], "requires three ABBA cycles")
     need(c["environment"]["GOMAXPROCS"] == "4" and c["environment"]["GOWORK"] == "off", "runtime control mismatch")
-    for key in ("GOROOT", "GOGC", "GOMEMLIMIT", "GOFLAGS", "GOCACHE", "GOMODCACHE"):
-        need(key in c["environment"], "missing explicit environment " + key)
+    need(set(c["environment"]) == CONTROLS, "missing/extra explicit environment controls")
     need(all(isinstance(v, str) for v in c["environment"].values()), "unresolved environment controls")
     need(c["environment"]["GOFLAGS"] == "", "GOFLAGS must be empty")
     need(c["host"]["system"] == "Linux" and c["host"]["cpu_count"] >= 4, "Linux host contract")
+    tmpdir = Path(c["environment"]["TMPDIR"])
+    need(tmpdir.is_absolute() and str(tmpdir) == c["environment"]["TMPDIR"] and ".." not in tmpdir.parts, "unresolved TMPDIR")
+    need(c["host"]["tmpdir"] == str(tmpdir) and type(c["host"]["tmpdir_device"]) is int and c["host"]["tmpdir_device"] >= 0, "unbound temporary database filesystem")
     for key in ("max_load1", "max_load5", "min_free_bytes"):
         need(math.isfinite(c["host"][key]) and c["host"][key] > 0, "missing host admission bound")
     noise = c["noise_policy"]
@@ -79,14 +89,19 @@ def config(path):
     need(noise["exclusions"] == "none; retain and stop on contamination", "no post-hoc exclusions")
     need(c["fixtures"] and c["comparison_metrics"] and c["cases"], "missing frozen fixture/metric/cases")
     need(set(c["variants"]) == {"baseline", "candidate"}, "two exact variants required")
+    for variant in c["variants"].values():
+        need(re.fullmatch(r"[0-9a-f]{40}", variant["production_commit"]) and re.fullmatch(r"[0-9a-f]{40}", variant["production_git_tree"]), "missing exact Git revision/tree")
     cases = c["cases"]
     need(len({x["id"] for x in cases}) == len(cases), "duplicate case ids")
     coverage = {(x["profile"], x["layout"], x["workload"], x["mode"]) for x in cases}
     need(coverage == set(itertools.product(PROFILES, LAYOUTS, WORKLOADS, MODES)), "incomplete/extra matrix")
     need(len(cases) == len(coverage), "duplicate matrix cell")
+    need(len({x["benchmark"] for x in cases}) == len(cases), "duplicate benchmark leaves")
     for x in cases:
         need(re.fullmatch(r"[A-Za-z0-9_.-]+", x["id"]), "unsafe case id")
-        need(x["benchmark"].startswith("Benchmark") and not re.search(r"\s", x["benchmark"]), "invalid exact benchmark leaf")
+        expected_id, expected_benchmark = case_names(x)
+        need(x["id"] == expected_id and x["benchmark"] == expected_benchmark, "benchmark/id does not match case dimensions")
+        need(x["package"] == "github.com/snissn/gomap/TreeDB/mvcc", "unexpected benchmark package")
         need(type(x["iterations"]) is int and x["iterations"] > 0, "fixed iterations required")
         need(type(x["warmup_iterations"]) is int and x["warmup_iterations"] > 0, "separate warmup required")
         need(x["workload_contract"] and x["comparable_metrics"] and x["timed_scope"] and x["ack_contract"], "missing work/ACK comparability")

@@ -11,6 +11,7 @@ import subprocess
 import time
 
 from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, row, schedule, sha, write
+from build import verify_git_receipt
 
 def wait_child(child, timeout, grace=3.0):
     deadline, timed_out, quit_sent, killed = time.monotonic() + timeout, False, False, False
@@ -38,10 +39,13 @@ def wait_child(child, timeout, grace=3.0):
         child.returncode = os.waitstatus_to_exitcode(status)
         raise
 
-def host_snapshot(out, name, storage):
+def host_snapshot(out, name, storage, source):
     data = {"at": now(), "uname": platform.uname()._asdict(), "cpu_count": os.cpu_count(),
             "load": list(os.getloadavg()), "storage_path": str(storage),
-            "free_bytes": shutil.disk_usage(storage).free}
+            "storage_device": Path(storage).stat().st_dev,
+            "free_bytes": shutil.disk_usage(storage).free,
+            "source_path": str(source), "source_device": Path(source).stat().st_dev,
+            "source_free_bytes": shutil.disk_usage(source).free}
     for source in ("/proc/meminfo", "/proc/cpuinfo", "/proc/mounts"):
         target = out / (name + "-" + Path(source).name + ".txt")
         target.write_text(Path(source).read_text())
@@ -59,6 +63,7 @@ def host_gate(snapshot, policy):
         need(snapshot["uname"][key] == policy[key], "host " + key + " mismatch")
     need(snapshot["load"][0] <= policy["max_load1"] and snapshot["load"][1] <= policy["max_load5"], "host contention exceeds predeclared bound")
     need(snapshot["free_bytes"] >= policy["min_free_bytes"], "storage admission refused")
+    need(snapshot["storage_path"] == policy["tmpdir"] and snapshot["storage_device"] == policy["tmpdir_device"], "temporary database filesystem changed")
 
 def main():
     p = argparse.ArgumentParser()
@@ -71,7 +76,7 @@ def main():
     write(out / "config.json", c)
     script_dir = Path(__file__).resolve().parent
     scripts = {}
-    for name in ("protocol.py", "collect.py", "analyze.py"):
+    for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
         shutil.copyfile(script_dir / name, out / name)
         scripts[name] = sha(out / name)
     write(out / "script-identity.json", scripts)
@@ -81,10 +86,15 @@ def main():
     env.update(c["environment"])
     write(out / "environment.json", {"effective_controls": c["environment"], "original_controls": original})
     try:
+        storage = Path(c["environment"]["TMPDIR"])
+        need(storage.is_dir() and not storage.is_symlink() and storage.resolve() == storage and storage.stat().st_uid == os.getuid(), "TMPDIR must be an existing owned real directory")
+        need(storage.stat().st_dev == c["host"]["tmpdir_device"], "TMPDIR device drift")
         for variant, v in c["variants"].items():
             source, binary = Path(v["source"]).resolve(), Path(v["binary"]).resolve()
             ident = identity(v["manifest"])
             need(re.fullmatch(r"[0-9a-f]{40}", v["production_commit"]) and ident["original_manifest"]["git_head"] == v["production_commit"], "production commit manifest mismatch")
+            need(ident["original_manifest"]["git_tree"] == v["production_git_tree"], "production Git tree manifest mismatch")
+            need(not storage.is_relative_to(source) and not out.is_relative_to(storage) and not storage.is_relative_to(out), "TMPDIR/source/output must have separate directory custody")
             need(not binary.is_relative_to(source) and not out.is_relative_to(source), "binary/output must be outside immutable source")
             need(ident["manifest_sha256"] == v["manifest_sha256"] and ident["tree_sha256"] == v["source_tree_sha256"], "source manifest binding mismatch")
             need(not binary.is_symlink() and sha(binary) == v["binary_sha256"], "binary binding mismatch")
@@ -104,7 +114,7 @@ def main():
             # Root must retain actual build command/exit and go env/list module /
             # compiled dependency/buildinfo outputs, not just asserted labels.
             need(build["exit_code"] == 0 and build["command"] and build["artifacts"], "missing actual successful build receipt")
-            required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs"}
+            required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source"}
             need(set(build["artifacts"]) == required, "missing/extra build provenance artifacts")
             frozen_artifacts = {}
             for key, artifact in build["artifacts"].items():
@@ -115,6 +125,7 @@ def main():
                 shutil.copyfile(artifact["path"], destination)
                 frozen_artifacts[key] = {"path": destination.name, "sha256": sha(destination)}
             need(build["effective_module_identity"] == frozen_artifacts["effective_module_graph"]["sha256"], "unbound canonical effective module graph")
+            verify_git_receipt(source, ident["original_manifest"], json.loads((out / (variant + "-git_source.raw")).read_text()))
             go_env = json.loads((out / (variant + "-go_env.raw")).read_text())
             for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE"):
                 need(go_env[key] == c["environment"][key], "actual go env mismatch " + key)
@@ -124,6 +135,8 @@ def main():
             write(out / (variant + "-build-artifacts.json"), frozen_artifacts)
             for fixture in c["fixtures"]:
                 need(sha(source / fixture["path"]) == fixture["sha256"], "baseline/candidate fixture differs")
+            for name, value in scripts.items():
+                need(sha(source / "scripts" / "cow_c3_read" / name) == value, "running tooling differs from frozen source: " + name)
             state[variant] = {"source": source, "binary": binary, "identity": ident, "build": build}
         need(state["baseline"]["build"]["effective_module_identity"] == state["candidate"]["build"]["effective_module_identity"], "effective module graph differs")
         go = Path(c["go_binary"])
@@ -138,7 +151,7 @@ def main():
             for variant, other in state.items():
                 need(not drift(other["source"], other["identity"]), "source drift before " + name)
                 need(sha(other["binary"]) == c["variants"][variant]["binary_sha256"], "binary drift before " + name)
-            before = host_snapshot(out, name + "-before", s["source"])
+            before = host_snapshot(out, name + "-before", storage, s["source"])
             host_gate(before, c["host"])
             argv = command(s["binary"], case, item, c["timeout_seconds"])
             stdout, stderr = out / (name + ".stdout"), out / (name + ".stderr")
@@ -148,7 +161,7 @@ def main():
                 status, usage, timed_out = wait_child(child, c["timeout_seconds"])
             child_elapsed = time.monotonic() - start
             child_completed = now()
-            after = host_snapshot(out, name + "-after", s["source"])
+            after = host_snapshot(out, name + "-after", storage, s["source"])
             changes = {v: drift(t["source"], t["identity"]) for v, t in state.items()}
             r = dict(item, label=name, started_utc=started, completed_utc=child_completed, command=argv,
                      cwd=str(s["source"]), exit_code=child.returncode, wait_status=status,
