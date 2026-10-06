@@ -41,6 +41,25 @@ func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMo
 	return os.NewFile(uintptr(fd), parent.Name()+string(os.PathSeparator)+name), nil
 }
 
+// platformStableChildIdentity probes the current exact-parent binding without
+// constructing an os.File or diagnostic pathname for a transient descriptor.
+func platformStableChildIdentity(parent *os.File, name string) (StableIdentity, error) {
+	defer runtime.KeepAlive(parent)
+	fd, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return StableIdentity{}, stableChildIdentityOpenError(name, err)
+	}
+	defer unix.Close(fd) // Match the original probe: close once; ignore close errors.
+	identity, err := platformStableIdentityFromFD(fd)
+	if err != nil {
+		return StableIdentity{}, err
+	}
+	if overridden, ok := testingStableIdentityOverride(identity); ok {
+		return overridden, nil
+	}
+	return identity, nil
+}
+
 func openOrCreateStableChildDirectory(parent *os.File, name string, perm os.FileMode) (*os.File, error) {
 	if parent == nil {
 		return nil, os.ErrInvalid
@@ -115,9 +134,14 @@ func platformStableIdentityFromFile(file *os.File) (StableIdentity, error) {
 	if file == nil {
 		return StableIdentity{}, os.ErrInvalid
 	}
+	defer runtime.KeepAlive(file)
+	return platformStableIdentityFromFD(int(file.Fd()))
+}
+
+func platformStableIdentityFromFD(fd int) (StableIdentity, error) {
 	var stat unix.Stat_t
 	for {
-		err := unix.Fstat(int(file.Fd()), &stat)
+		err := unix.Fstat(fd, &stat)
 		if err == nil {
 			var objectID [16]byte
 			binary.LittleEndian.PutUint64(objectID[:8], uint64(stat.Dev))

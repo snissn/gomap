@@ -1638,16 +1638,19 @@ func ValidateStableChildLink(parent, resource *os.File, name string) error {
 	return validateStableChildLink(parent, resource, name)
 }
 
-func validateStableChildIdentity(parent *os.File, resourceIdentity StableIdentity, name string) error {
-	linked, err := OpenStableChildFile(parent, name, os.O_RDONLY, 0)
-	if err != nil {
-		if errors.Is(err, ErrNamespacePersistenceUnsupported) {
-			return err
-		}
-		return fmt.Errorf("%w: open %q relative to exact parent: %v", ErrResourceConflict, name, err)
+func stableChildIdentityOpenError(name string, err error) error {
+	if errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		return err
 	}
-	defer linked.Close()
-	linkedIdentity, err := stableIdentityFromFile(linked)
+	return fmt.Errorf("%w: open %q relative to exact parent: %v", ErrResourceConflict, name, err)
+}
+
+func validateStableChildIdentity(parent *os.File, resourceIdentity StableIdentity, name string) error {
+	// Preserve OpenStableChildFile's validation before the identity-only probe.
+	if parent == nil || name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return stableChildIdentityOpenError(name, fmt.Errorf("%w: stable child requires a base name and exact parent handle", ErrUnresolvedResource))
+	}
+	linkedIdentity, err := platformStableChildIdentity(parent, name)
 	if err != nil {
 		return err
 	}
