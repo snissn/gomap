@@ -224,6 +224,7 @@ func TestLeafManifestRevisionGCReboundChild5066(t *testing.T) {
 }
 
 func TestLeafManifestRevisionGCHeldAndRecovery5066(t *testing.T) {
+	requireLeafGenerationPackPromotionSupport(t)
 	dirRoot := t.TempDir()
 	if err := SaveFormatConfig(dirRoot, FormatConfig{RequiredFeatures: []string{RequiredFeatureCommandWALV1}, IndexOuterLeavesInValueLog: true, IndexPackedValuePtr: true}); err != nil {
 		t.Fatal(err)
