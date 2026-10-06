@@ -3,10 +3,8 @@ import sys
 sys.dont_write_bytecode=True
 from source_paths import source_path, isolate_paths
 """Validate the fresh raw bootstrap and freeze recall inputs; never starts voters."""
-import base64,hashlib,importlib.util,json,pathlib,shlex,shutil,struct,subprocess,tarfile,time
-P=pathlib.Path('/tmp');RUN='rf4trial24mixedchangingc1'
-B=pathlib.Path('/Volumes/FlashDrive/gomap-4997-4998-rf4trial24mixedchangingc1/bootstrap-root-v1');L=P/f'gomap-4997-4998-{RUN}-bootstrap-lifecycle-root-v1'
-O=pathlib.Path('/Volumes/FlashDrive/gomap-4997-4998-rf4trial24mixedchangingc1/pre-inputs-root-v1');R=P/f'gomap-4997-4998-{RUN}-pre-input-preparation-root-v1'
+import argparse,base64,hashlib,importlib.util,json,pathlib,shlex,shutil,struct,subprocess,tarfile,time
+RUN='rf4trial24mixedchangingc1'
 def sha(b):return hashlib.sha256(b).hexdigest()
 def load(p):return json.loads(p.read_bytes())
 def remote(host,label,args):
@@ -66,16 +64,46 @@ def bootstrap_provenance(planraw,frozenraw,manifestraw,proofraw,buildraw,imagesr
  assert isinstance(qualification,str) and len(qualification)==64 and qualification!='0'*64 and all(c in '0123456789abcdef' for c in qualification)
  return server,qualification
 
+def accepted_inputs(args,pm):
+ a,m,expected,admitted_dataset,configs=pm.context(args.pins)
+ planroot=pathlib.Path(args.plan);lifecycle=pathlib.Path(args.lifecycle)
+ volume=pathlib.Path(a['artifact_volume']);dataset=pathlib.Path(a['dataset'])
+ assert volume.is_absolute() and volume.name==pm.PREFIX
+ for path,prefix in ((planroot,pm.PREFIX+'-bootstrap-plan-root-v'),(lifecycle,pm.PREFIX+'-bootstrap-lifecycle-root-v')):
+  assert path.is_absolute() and path.is_dir() and not path.is_symlink() and path.name.startswith(prefix)
+ bootstrap=volume/'bootstrap-root-v1'
+ assert bootstrap.is_dir() and not bootstrap.is_symlink() and dataset.is_absolute() and dataset.is_dir() and not dataset.is_symlink()
+ frozenraw=pm.read(planroot/'plan-preparation.json');frozen=json.loads(frozenraw)
+ manifestraw=pm.read(planroot/'manifest.json')
+ finalraw=pm.read(lifecycle/'result.json',args.lifecycle_sha256);final=json.loads(finalraw)
+ for field in ('precollection_proof_sha256','bootstrap_plan_sha256','bootstrap_result_sha256'):
+  digest=final[field];assert isinstance(digest,str) and len(digest)==64 and digest!='0'*64 and all(c in '0123456789abcdef' for c in digest)
+ proofraw=pm.read(lifecycle/'precollection-proof.json',final['precollection_proof_sha256']);proof=json.loads(proofraw)
+ planraw=pm.read(bootstrap/'plan.json',final['bootstrap_plan_sha256'])
+ bootstrap_result_raw=pm.read(bootstrap/'result.json',final['bootstrap_result_sha256'])
+ assert json.loads(manifestraw)==expected and frozen['config_sha256']==configs
+ assert frozen['pins_sha256']==proof['pins_sha256']==sha(pm.read(args.pins))
+ pm.preparation_tuple(frozen,a)
+ assert pathlib.Path(proof['artifact_volume'])==volume
+ assert proof['dataset']==frozen['plan']['dataset']==admitted_dataset
+ assert proof['qualification_source_sha256']==a['qualification_source_sha256']
+ assert json.loads(planraw)==frozen['plan']
+ assert json.loads(bootstrap_result_raw)['status']=='PASS' and json.loads(bootstrap_result_raw)['scope']==frozen['plan']
+ server,qualification=bootstrap_provenance(planraw,frozenraw,manifestraw,proofraw,pm.read(frozen['build_receipt']),pm.read(frozen['image_receipt']),pm.read(frozen['source_acceptance']))
+ assert final['state']=='PASS_FRESH_BOOTSTRAP_CLOSED' and final['launcher_exit']==0 and final['all44receipts_verified'] is True
+ assert len(final['stopped'])==4 and {n['node'] for n in final['stopped']}=={'node-a','node-b','node-c','node-d'} and all(n['stopped_clean'] is True for n in final['stopped'])
+ assert not final['errors'] and final['stores_retained'] is True and final['no_workload_retry'] is True
+ return a,planroot,lifecycle,bootstrap,dataset,frozen,planraw,server,qualification
+
 def main():
- assert __debug__ and not O.exists() and not R.exists()
- pm=plan_module()
- planroot=P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1'
- frozenraw=(planroot/'plan-preparation.json').read_bytes();frozen=json.loads(frozenraw)
- proofraw=(L/'precollection-proof.json').read_bytes();planraw=(B/'plan.json').read_bytes()
- isolate_paths([O,R,O.with_suffix('.tar.gz')],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,B,L,planroot,P/'gomap-4956-corpus10k-dataset',frozen['build_receipt'],frozen['image_receipt'],frozen['source_acceptance']]+pm.product_review_paths(pm.preparation_paths(frozen)))
- server,qualification=bootstrap_provenance(planraw,frozenraw,(planroot/'manifest.json').read_bytes(),proofraw,pathlib.Path(frozen['build_receipt']).read_bytes(),pathlib.Path(frozen['image_receipt']).read_bytes(),pathlib.Path(frozen['source_acceptance']).read_bytes())
- final=load(L/'result.json');assert final['precollection_proof_sha256']==sha(proofraw)
- assert final['state']=='PASS_FRESH_BOOTSTRAP_CLOSED' and final['launcher_exit']==0 and len(final['stopped'])==4 and not final['errors']
+ global B,L,O,R
+ q=argparse.ArgumentParser()
+ for key in ('pins','plan','lifecycle','lifecycle-sha256','out'):q.add_argument('--'+key,required=True)
+ args=q.parse_args();pm=plan_module()
+ a,planroot,L,B,dataset,frozen,planraw,server,qualification=accepted_inputs(args,pm)
+ O=pathlib.Path(a['artifact_volume'])/'pre-inputs-root-v1';R=pathlib.Path(args.out)
+ assert R.is_absolute() and R.name.startswith(pm.PREFIX+'-pre-input-preparation-root-v') and not O.exists() and not R.exists() and not O.with_suffix('.tar.gz').exists()
+ isolate_paths([O,R,O.with_suffix('.tar.gz')],['__ROOT_FROZEN_SOURCE_ROOT__',pathlib.Path(__file__).resolve().parent,B,L,planroot,dataset]+pm.protected_inputs(a,args.pins)+list(pm.preparation_paths(frozen).values()))
  R.mkdir()
  assert load(B/'result.json')['status']=='PASS'
  receipts=sorted(B.glob('[0-9][0-9]-*.json'));assert len(receipts)==44
@@ -83,7 +111,7 @@ def main():
   j=load(p);assert j['exit_code']==0 and not j.get('timed_out'),p
  init=json.loads(load(B/'19-initialize.json')['stdout']);bootraw=load(B/'36-qualify.json')['stdout'].encode();boot=json.loads(bootraw)
  assert init['Stage']=='prepared-restart-required' and init['Prepare']==boot['Prepare'] and init['Dataset']==boot['Dataset']
- dataset=P/'gomap-4956-corpus10k-dataset';manifest=load(dataset/'manifest.json');corpus=(dataset/'documents.f32').read_bytes()
+ manifest=load(dataset/'manifest.json');corpus=(dataset/'documents.f32').read_bytes()
  for f,v in manifest['files'].items():
   raw=(dataset/f).read_bytes();assert len(raw)==v['bytes'] and sha(raw)==v['sha256']
  d=init['Dataset'];assert d['Rows']==10000 and d['SourceRows']==10003 and d['Dimensions']==128 and d['InputBytes']==5221566
@@ -109,7 +137,7 @@ def main():
  plan=json.loads(planraw)
  launcher=pathlib.Path(source_path('/tmp/gomap-4956-5fa-fixed-cluster.py'));assert sha(launcher.read_bytes())=='f5c92099cc94855f2bb5c0cd8ccd61902307386bebf4f15f2fd34581fabc0605'
  spec=importlib.util.spec_from_file_location('fixed_cluster',launcher);m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
- actual=m.plan(load(P/f'gomap-4997-4998-{RUN}-bootstrap-plan-root-v1/manifest.json'),RUN,m.admit_dataset(str(dataset)))
+ actual=m.plan(load(planroot/'manifest.json'),RUN,m.admit_dataset(str(dataset)))
  O.mkdir();shutil.copytree(dataset,O/'dataset');shutil.copytree(B,O/'historical-chain');shutil.copytree(L,O/'bootstrap-close')
  (O/'bootstrap.json').write_bytes(bootraw)
  c=next(n for n in actual if n['node']=='node-c');configraw=remote(c['host'],'actual-config',['cat',c['root']+'/config.json']).encode();assert configraw==json.dumps(c['config']).encode();(O/'config.json').write_bytes(configraw)

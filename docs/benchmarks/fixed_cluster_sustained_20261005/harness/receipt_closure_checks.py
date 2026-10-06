@@ -86,13 +86,13 @@ def controlled_read(original):
 bp.read=controlled_read(bp.read)
 def controlled_spec(name,path,*args,**kwargs):
  spec=original_spec(name,path,*args,**kwargs)
- if name not in ('fixed_cluster','fresh_credential_guard','trial24_plan'):return spec
+ if name not in ('fixed_cluster','fresh_credential_guard','trial24_plan','frozen_trial24_product'):return spec
  loader=spec.loader
  class ControlledLoader:
   def create_module(self,spec):return loader.create_module(spec)
   def exec_module(self,module):
    loader.exec_module(module)
-   if name=='trial24_plan':module.read=controlled_read(module.read)
+   if name in ('trial24_plan','frozen_trial24_product'):module.read=controlled_read(module.read)
    elif name=='fresh_credential_guard':module.validate_configs=lambda *a,**k:{'cluster_id':'synthetic-cluster','public_credentials':[]}
    else:
     module.admit_dataset=lambda path:copy.deepcopy(dataset)

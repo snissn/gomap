@@ -154,7 +154,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-lifecycle-prepare-root-v1.py",
-        "sha256": "68956d7fa14d76815318dab2f865ebcaa9674e5f091d79e654af1660a9f44244"
+        "sha256": "c27225d99f931392a758d3490624a06b19f1b9436734df832c1311b662372e06"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -167,7 +167,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-pre-input-freeze-root-v1.py",
-        "sha256": "6ed967a8ba918776b3be3d1dedc9d4c29913d9ad82b893b6280f759a12f20fdf"
+        "sha256": "81108209c86733dc13aef7ed684f5a18dd82005a80a8633e27c5270deaa989e4"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",

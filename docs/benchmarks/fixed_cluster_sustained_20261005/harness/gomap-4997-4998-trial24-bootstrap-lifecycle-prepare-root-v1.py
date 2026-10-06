@@ -86,7 +86,7 @@ def main():
     assert not x['State']['Running'] and not x['State']['OOMKilled'] and x['State']['ExitCode']==0
     stopped.append({'node':node,'host':host,'container_id':cid,'stopped_clean':True});print('STOPPED',node,flush=True)
    except Exception as e:errors.append({'node':node,'error':repr(e)})
-  result={'precollection_proof_sha256':hashlib.sha256(proofraw).hexdigest(),'state':'PASS_FRESH_BOOTSTRAP_CLOSED' if code==0 and qualification_valid and len(stopped)==4 and not errors else 'FAIL_RETAIN_NO_WORKLOAD_RETRY','launcher_exit':code,'all44receipts_verified':qualification_valid,'stopped':stopped,'errors':errors,'stores_retained':True,'no_workload_retry':True}
+  result={'bootstrap_plan_sha256':hashlib.sha256((OUTPUT/'plan.json').read_bytes()).hexdigest() if code==0 and qualification_valid else None,'bootstrap_result_sha256':hashlib.sha256((OUTPUT/'result.json').read_bytes()).hexdigest() if code==0 and qualification_valid else None,'precollection_proof_sha256':hashlib.sha256(proofraw).hexdigest(),'state':'PASS_FRESH_BOOTSTRAP_CLOSED' if code==0 and qualification_valid and len(stopped)==4 and not errors else 'FAIL_RETAIN_NO_WORKLOAD_RETRY','launcher_exit':code,'all44receipts_verified':qualification_valid,'stopped':stopped,'errors':errors,'stores_retained':True,'no_workload_retry':True}
   (ROOT/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(result['state'],flush=True)
  assert result['state']=='PASS_FRESH_BOOTSTRAP_CLOSED',result
 if __name__=='__main__':main()

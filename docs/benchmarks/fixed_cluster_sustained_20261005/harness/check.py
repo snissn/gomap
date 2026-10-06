@@ -460,7 +460,7 @@ for site,node in sites.items():
   # Native remote protects SOURCE and retained runner/template sources. Frozen
   # inputs are only created under its new root, so no external input root exists.
   if site=='native_remote' and kind in ('input_pollution','packet_descendant'):continue
-  ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path'],'image_receipt':pin_fixture['path'],'source_acceptance':d['source_prereview']['path']},'product_paths':{'build':pin_fixture['path'],'product':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
+  ns={'isolate_paths':isolate_paths,'protected_inputs':bootstrap.protected_inputs,'pathlib':__import__('pathlib'),'Path':Path,'__file__':str(out/'owned-writer.py'),'d':dict(d,output_root=str(target)),'root':target,'out':target,'ROOT':target,'p':target,'volume':artifact,'O':target,'R':fixtures/('trial24-receipts-'+site),'B':inputs,'L':inputs,'P':fixtures,'RUN':'synthetic','planroot':inputs,'dataset':inputs,'SOURCE':str(protected),'RUNNER':str(inputs/'runner.py'),'TEMPLATE':str(inputs/'templates'),'INPUT':str(inputs),'ARCHIVE':str(inputs/'archive.tar.gz'),'INVENTORY':pin_fixture['path'],'args':type('Args',(),{'pins':pin_fixture['path'],'plan':str(inputs),'preflight':str(inputs)})(),'opts':type('Opts',(),{'initial_oracle':pin_fixture['path']})(),'a':context,'pm':bootstrap,'inputs':inputs,'pin_path':pin_fixture['path'],'frozen':{'build_receipt':pin_fixture['path'],'image_receipt':pin_fixture['path'],'source_acceptance':d['source_prereview']['path']},'product_paths':{'build':pin_fixture['path'],'product':pin_fixture['path']},'pins':{'artifact_root':str(inputs),'reviewed_path_bindings':{}},'protected':[protected,inputs,out,pin_fixture['path']],'OUTPUT':fixtures/('trial24-bootstrap-'+site),'OUT':target,'MANIFEST':fixtures/('trial24-manifest-'+site),'PROMOTION_PROOF':fixtures/('trial24-promotion-'+site),'PRE':inputs,'PROBE':pin_fixture['path'],'PROOF':pin_fixture['path'],'LIFECYCLE':inputs,'BOOT_REVIEW':pin_fixture['path'],'LANDED':pin_fixture['path'],'BUILD':pin_fixture['path'],'SOURCE_REVIEW':pin_fixture['path'],'SOURCE_INV':pin_fixture['path'],'ARTIFACT_REVIEW_PATH':pin_fixture['path']}
   # Prefix accepts its intentional source symlink as a read root.
   if site=='oracle_helper':
    ns['root']=native_source_link;ns['a']=dict(context,source_inventory=pin_fixture['path'],initial_oracle=pin_fixture['path']);ns['COLLECTOR']=portable_sources['collector']
@@ -882,5 +882,92 @@ checks.append('ordinary_python_actual_emitted_post_sealer_collector_load_no_pack
 import_order_receipts.append({'path':'actual_emitted_post_sealer','kind':'actual_top_level_and_collector_loader_statements','ordinary_python_no_B':True,'actual_exit':proc.returncode,'packet_bytes_unchanged':True,'collector_locator_controlled':True,'external_commands':0})
 
 (fixtures/'adapter-import-order-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_ORDINARY_PYTHON_IMPORTS_AND_ADMISSION_PREFIXES_NOT_ACCEPTANCE','cases':import_order_receipts,'runtime_started':False,'Go_started':False,'network_calls':0,'limits':['Entrypoints execute through actual first local import; native/cluster workloads remain unexecuted.','Adapter valid admission controls stop after first mkdir using a fixture namespace assignment, with synthetic reviewed-shaped receipts.','Arbitrary external importlib loaders must suppress bytecode before loading an entrypoint itself; supported direct CLI and caller contracts are exercised here.']},indent=2)+'\n')
+
+
+# Relocated/versioned accepted bootstrap locators, using actual producer admission.
+assert len(checks)==555
+locator_cases=[]
+locroot=fixtures/'freezer-locator-cases';locroot.mkdir()
+original_argv=sys.argv;original_spec=importlib.util.spec_from_file_location;original_popen=subprocess.Popen;original_read_bytes=Path.read_bytes
+freezer_main=next(n for n in ast.parse(Path(portable_sources['pre_input_freezer']).read_bytes()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+freezer_boundary=next(i for i,n in enumerate(freezer_main.body) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='R' and n.value.func.attr=='mkdir')
+freezer_prefix=ast.Module(body=freezer_main.body[:freezer_boundary+1],type_ignores=[])
+assert any(isinstance(n,ast.Assign) and 'accepted_inputs' in ast.unparse(n) for n in freezer_prefix.body)
+def locator_case(label,change=None,overlap=None):
+ folder=locroot/label;folder.mkdir()
+ v=folder/bp.PREFIX;v.mkdir();ds=folder/'relocated-dataset';ds.mkdir()
+ pr=folder/(bp.PREFIX+'-bootstrap-plan-root-v72');pr.mkdir()
+ lr=folder/(bp.PREFIX+'-bootstrap-lifecycle-root-v83');lr.mkdir()
+ bootstrap_root=v/'bootstrap-root-v1';bootstrap_root.mkdir()
+ pp=copy.deepcopy(context_pins);pp.update(artifact_volume=str(v),dataset=str(ds))
+ pin=fixture('freezer-locator-pins-'+label,pp)
+ preparation=copy.deepcopy(prep);preparation['pins_sha256']=pin['sha256']
+ actual=copy.deepcopy(preparation['plan'])
+ proof_obj=copy.deepcopy(actual_proof);proof_obj.update(artifact_volume=str(v),pins_sha256=pin['sha256'])
+ if change:change(pp,preparation,proof_obj,actual)
+ # Apply mutations before rehashing all outer receipts; gates must reject a
+ # mutually repinned stale tuple, not merely an outer raw digest discrepancy.
+ (pr/'manifest.json').write_bytes((plan_root/'manifest.json').read_bytes())
+ (pr/'plan-preparation.json').write_bytes(encoded(preparation));proof_obj['plan_preparation_sha256']=sha((pr/'plan-preparation.json').read_bytes())
+ (bootstrap_root/'plan.json').write_bytes(encoded(actual));bootstrap_result={'status':'PASS','scope':actual}
+ (bootstrap_root/'result.json').write_bytes(encoded(bootstrap_result))
+ rawproof=encoded(proof_obj);(lr/'precollection-proof.json').write_bytes(rawproof)
+ closed={'state':'PASS_FRESH_BOOTSTRAP_CLOSED','precollection_proof_sha256':sha(rawproof),'bootstrap_plan_sha256':sha((bootstrap_root/'plan.json').read_bytes()),'bootstrap_result_sha256':sha((bootstrap_root/'result.json').read_bytes()),'launcher_exit':0,'all44receipts_verified':True,'stopped':[{'node':n,'stopped_clean':True} for n in hosts],'errors':[],'stores_retained':True,'no_workload_retry':True,'synthetic_only':True}
+ if label.startswith('null_final_'):closed[label[len('null_final_'):]]=None
+ result_raw=encoded(closed);(lr/'result.json').write_bytes(result_raw)
+ target=folder/(bp.PREFIX+'-pre-input-preparation-root-v94')
+ if overlap=='plan':target=pr/target.name
+ elif overlap=='lifecycle':target=lr/target.name
+ elif overlap=='dataset':target=ds/target.name
+ elif overlap=='packet':target=Path(portable_sources['pre_input_freezer']).parent/target.name
+ elif overlap=='alias':
+  alias=folder/'dataset-alias';alias.symlink_to(ds,target_is_directory=True);target=alias/target.name
+ lifecycle_sha=sha(result_raw)
+ if label=='stale_lifecycle_sha':lifecycle_sha='e'*64
+ if label=='stale_plan_bytes':(pr/'plan-preparation.json').write_bytes((pr/'plan-preparation.json').read_bytes()+b' ')
+ if label=='stale_bootstrap_plan_bytes':(bootstrap_root/'plan.json').write_bytes((bootstrap_root/'plan.json').read_bytes()+b' ')
+ if label=='stale_bootstrap_result_bytes':(bootstrap_root/'result.json').write_bytes((bootstrap_root/'result.json').read_bytes()+b' ')
+ if label=='stale_proof_bytes':(lr/'precollection-proof.json').write_bytes(rawproof+b' ')
+ args=['source-only-freezer','--pins',pin['path'],'--plan',str(pr),'--lifecycle',str(lr),'--lifecycle-sha256',lifecycle_sha,'--out',str(target)]
+ before={str(p):p.read_bytes() for root in (pr,lr,ds,bootstrap_root,Path(portable_sources['pre_input_freezer']).parent) for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
+ denied=False;sys.argv=args
+ try:exec(compile(freezer_prefix,'actual-freezer-accepted-locators-through-first-mkdir','exec'),freezer.__dict__)
+ except (AssertionError,ValueError,KeyError) as error:
+  denied=True
+  if label=='relocated_versioned_positive':raise
+ positive=label=='relocated_versioned_positive'
+ assert denied!=positive and target.exists()==positive and not (v/'pre-inputs-root-v1').exists(),(label,'actual freezer admission/output')
+ after={str(p):p.read_bytes() for root in (pr,lr,ds,bootstrap_root,Path(portable_sources['pre_input_freezer']).parent) for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
+ assert after==before,(label,'frozen input changed')
+ locator_cases.append({'case':label,'argv':args,'refused_before_first_mkdir':denied,'preparation_output_created':target.exists(),'input_root':str(v/'pre-inputs-root-v1'),'bootstrap_root':str(bootstrap_root),'plan_root':str(pr),'lifecycle_root':str(lr),'dataset':str(ds),'consumed_raw_sha256':{'pins':pin['sha256'],'lifecycle':sha(result_raw),'proof':sha(rawproof),'plan_preparation':sha((pr/'plan-preparation.json').read_bytes())},'protected_bytes_unchanged':True,'remote_calls':0})
+ checks.append('freezer_actual_accepted_locator_'+label)
+try:
+ Path.read_bytes=lambda path:virtual[str(path)] if str(path) in virtual else original_read_bytes(path)
+ importlib.util.spec_from_file_location=controlled_spec
+ subprocess.Popen=lambda *a,**k:(_ for _ in ()).throw(AssertionError('external calls prohibited by locator fixtures'))
+ freezer.remote=lambda *a,**k:(_ for _ in ()).throw(AssertionError('transport prohibited by locator fixtures'))
+ locator_case('relocated_versioned_positive')
+ for field in ('precollection_proof_sha256','bootstrap_plan_sha256','bootstrap_result_sha256'):locator_case('null_final_'+field)
+ for label in ('stale_lifecycle_sha','stale_plan_bytes','stale_bootstrap_plan_bytes','stale_bootstrap_result_bytes','stale_proof_bytes'):locator_case(label)
+ locator_case('repinned_proof_volume',lambda a,f,p,b:p.update(artifact_volume=str(fixtures/'other-volume')))
+ locator_case('repinned_plan_dataset',lambda a,f,p,b:b['dataset'].update(VectorsSHA256='e'*64))
+ locator_case('repinned_proof_dataset',lambda a,f,p,b:p['dataset'].update(VectorsSHA256='e'*64))
+ locator_case('repinned_qualification',lambda a,f,p,b:p.update(qualification_source_sha256='e'*64))
+ locator_case('repinned_pins_sha',lambda a,f,p,b:p.update(pins_sha256='e'*64))
+ for overlap in ('plan','lifecycle','dataset','packet','alias'):locator_case('overlap_'+overlap,overlap=overlap)
+finally:
+ importlib.util.spec_from_file_location=original_spec;subprocess.Popen=original_popen;sys.argv=original_argv;Path.read_bytes=original_read_bytes
+# Bind the close receipt's new bootstrap raw hashes from its actual producer AST.
+lm=next(n for n in ast.parse(Path(portable_sources['bootstrap_lifecycle']).read_bytes()).body if isinstance(n,ast.FunctionDef) and n.name=='main')
+result_assignment=next(n for n in ast.walk(lm) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='result' for t in n.targets))
+case=locroot/'relocated_versioned_positive';bootstrap_root=case/bp.PREFIX/'bootstrap-root-v1'
+expressions={k.value:v for k,v in zip(result_assignment.value.keys,result_assignment.value.values)}
+for field,filename in (('bootstrap_plan_sha256','plan.json'),('bootstrap_result_sha256','result.json')):
+ expression=expressions[field]
+ actual_hash=eval(compile(ast.Expression(body=expression),'actual-lifecycle-close-bootstrap-byte-hash','eval'),{'hashlib':hashlib,'OUTPUT':bootstrap_root,'code':0,'qualification_valid':True})
+ assert actual_hash==sha((bootstrap_root/filename).read_bytes())
+ assert eval(compile(ast.Expression(body=expression),'actual-lifecycle-failed-close-no-bootstrap-authority','eval'),{'code':1,'qualification_valid':False}) is None
+ checks.append('freezer_actual_lifecycle_close_binds_'+field)
+(fixtures/'freezer-locator-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_FREEZER_ADMISSION_ONLY_NOT_ACCEPTANCE','cases':locator_cases,'runtime_started':False,'Go_started':False,'network_calls':0,'limits':['Actual bootstrap context uses existing controlled dataset and TLS fixtures; no dataset/certificate qualification.','Actual freezer main executes through first owned preparation mkdir; complete bootstrap chain, input freeze and remote collection remain unexecuted.','All acceptance-shaped inputs are explicitly synthetic.']},indent=2)+'\n')
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))
