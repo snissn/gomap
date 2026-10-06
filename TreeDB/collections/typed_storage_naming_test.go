@@ -333,6 +333,9 @@ type typedStorageLegacyNameAllowlistEntry struct {
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Indexed mutation fixtures use the retained public schema and value types.
 	{path: "TreeDB/collections/r1_mutation_5059_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 10},
+	// R1 lifecycle construction uses the retained public configuration and
+	// scalar type names to append a valid unpublished maintenance candidate.
+	{path: "TreeDB/collections/r1_lifecycle_5060_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	// Prepared source capture, metadata codecs and their fixtures consume the
 	// retained public typed-column schema and normalization API.
 	{path: "TreeDB/collections/column_store_wire_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 15},
