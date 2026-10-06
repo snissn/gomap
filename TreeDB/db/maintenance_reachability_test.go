@@ -81,8 +81,8 @@ func TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsume
 	if got.valueLogRefCounts[grouped.FileID] != 3 {
 		t.Fatalf("grouped ref count=%d want 3", got.valueLogRefCounts[grouped.FileID])
 	}
-	if got.valueLogLiveBytesBySegment[grouped.FileID] != int64(recordLen) {
-		t.Fatalf("grouped live bytes=%d want one record=%d", got.valueLogLiveBytesBySegment[grouped.FileID], recordLen)
+	if got.valueLogLiveBytesBySegment[grouped.FileID] != (int64(recordLen) + 4) {
+		t.Fatalf("grouped live bytes=%d want physical record=%d", got.valueLogLiveBytesBySegment[grouped.FileID], int64(recordLen)+4)
 	}
 	if got.counters.SharedScans != 1 || got.counters.PagesVisited == 0 {
 		t.Fatalf("shared traversal counters=%+v", got.counters)
@@ -209,8 +209,8 @@ func TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndCaches(t *testi
 	if hookCalls != 1 {
 		t.Fatalf("uncached live-estimate hook calls=%d want 1", hookCalls)
 	}
-	if got[grouped.FileID] != int64(recordLen) {
-		t.Fatalf("grouped live bytes=%d want one record=%d", got[grouped.FileID], recordLen)
+	if got[grouped.FileID] != (int64(recordLen) + 4) {
+		t.Fatalf("grouped live bytes=%d want physical record=%d", got[grouped.FileID], int64(recordLen)+4)
 	}
 	if _, err := db.estimateValueLogLiveBytesBySegment(ctx); err != nil {
 		t.Fatalf("cached estimateValueLogLiveBytesBySegment: %v", err)
@@ -273,7 +273,7 @@ func TestEstimateValueLogLiveBytesBySegmentRefreshesOnceOnMissingSnapshotFile(t 
 	if hookCalls != 2 {
 		t.Fatalf("uncached live-estimate hook calls=%d want initial attempt plus retry", hookCalls)
 	}
-	if want := int64(page.ValuePtrRecordLength(ptr)); got[ptr.FileID] != want {
+	if want := int64(page.ValuePtrRecordLength(ptr)) + 4; got[ptr.FileID] != want {
 		t.Fatalf("live bytes for refreshed segment=%d want %d", got[ptr.FileID], want)
 	}
 }

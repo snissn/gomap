@@ -29,7 +29,9 @@ func TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt(t *testing.T)
 		ValueLogRewriteBudgetBytesPerSec:         16 << 10,
 		ValueLogRewriteMinSegmentAge:             time.Millisecond,
 		ForceValueLogPointers:                    true,
-		IndexOuterLeavesInValueLog:               false,
+		// Keep frame grouping independent of compression timing on each host.
+		ValueLogCompression:        uint8(vlogCompressionOff),
+		IndexOuterLeavesInValueLog: false,
 	})
 	if err != nil {
 		t.Fatalf("open cachingdb: %v", err)
@@ -39,6 +41,10 @@ func TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt(t *testing.T)
 	})
 	db.testSkipVlogCheckpointKick = true
 	skipRetainedPrune(db)
+	// Use two-record raw frames: each four-key cohort has one retained frame
+	// and one wholly overwritten frame. Larger adaptive groups can contain a
+	// surviving key in every frame, leaving no actual reclaimable bytes.
+	db.valueLogDictCurrentK.Store(2)
 
 	writeSubset := func(tag byte, keep func(int) bool) {
 		t.Helper()
@@ -105,6 +111,14 @@ func TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt(t *testing.T)
 	if chunkBytes == 0 {
 		t.Fatalf("expected non-zero chunk bytes after first maintenance pass")
 	}
+	initialLive, initialStale := int64(0), int64(0)
+	for _, chunk := range initialChunks {
+		initialLive += chunk.BytesLive
+		initialStale += chunk.BytesStale
+	}
+	if initialLive == 0 || initialStale == 0 {
+		t.Fatalf("expected staged chunks with live records and real stale bytes; live=%d stale=%d", initialLive, initialStale)
+	}
 
 	stats := db.Stats()
 	if got := stats["treedb.cache.vlog_generation.rewrite.stage_pending"]; got != "true" {
@@ -139,10 +153,6 @@ func TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt(t *testing.T)
 	remainingChunks, _, err := db.currentVlogGenerationRewriteChunkLedger()
 	if err != nil {
 		t.Fatalf("load chunk ledger after confirm: %v", err)
-	}
-	initialLive := int64(0)
-	for i := range initialChunks {
-		initialLive += initialChunks[i].BytesLive
 	}
 	if len(remainingChunks) > 0 {
 		remainingLive := int64(0)
