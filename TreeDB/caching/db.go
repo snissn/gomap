@@ -29309,6 +29309,14 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 			commandPublish = nil
 			passCommandPublish = nil
 		}
+		if passCommandPublish == nil {
+			if attempted, progress := db.tryFlushOwnedPointPrefix(syncFlag, reqSync, &frontier, false); attempted {
+				if !progress {
+					return
+				}
+				continue
+			}
+		}
 		var wg sync.WaitGroup
 		var progress atomic.Bool
 		wg.Add(activeCount)
@@ -29373,6 +29381,9 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 				return
 			}
 			db.observeCheckpointFlushAllWorkers(activeCount)
+			if attempted, _ := db.tryFlushOwnedPointPrefix(frontierSyncFlag, true, &activeFrontier, true); attempted {
+				return
+			}
 			var wg sync.WaitGroup
 			var progress atomic.Bool
 			wg.Add(activeCount)
@@ -29440,6 +29451,27 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 			// only piggybacked when a single lane owns the whole flush pass.
 			commandPublish = nil
 			passCommandPublish = nil
+		}
+		if passCommandPublish == nil && !db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+			if attempted, progress := db.tryFlushOwnedPointPrefix(syncFlag, reqSync, nil, false); attempted {
+				if !progress {
+					return
+				}
+				db.mu.RLock()
+				queueEmpty := len(db.queue) == 0
+				db.mu.RUnlock()
+				if queueEmpty {
+					if !db.checkpointing.Load() {
+						db.trimRetainedArenasAfterFlush(false)
+					}
+					return
+				}
+				if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+					db.observeCheckpointBackgroundFlushPreempted()
+					return
+				}
+				continue
+			}
 		}
 		var wg sync.WaitGroup
 		var progress atomic.Bool

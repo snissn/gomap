@@ -429,6 +429,51 @@ handoff rather than reapplying the accepted prefix. Existing Applied-LSN,
 dependency-prefix and sealed dual-meta boundaries govern durability and cleanup.
 See [COW publication and lock ordering](cow-cache-publication.md).
 
+
+### 3.5 Ordinary owned point-prefix flush
+
+The ordinary stable-iterator flush may claim a finite point-only global queue
+prefix spanning multiple source lanes. It uses the existing head-run collection
+budget, bounded by the existing base memtable/byte budget and operation limit.
+For a shared checkpoint background pass, the unit count is also bounded by the
+number of still-active frontier lanes, and that participant returns after one
+claim. Collection stops at a range barrier and at the captured checkpoint
+frontier; it never waits for later arrivals or extends its cut during apply.
+
+All lane drain mutexes are claimed with `TryLock` in ascending lane order before
+`db.mu` selection and before the backend publication group. A partial claim is
+released immediately. Legacy lane drains, foreground assists and shared
+checkpoint participants use these same mutexes, so none can dequeue the owned
+sources or compete inside the private group. Selection releases `db.mu` before
+backend acquisition. Existing value-log lane locks and barriers remain inside
+the stream. Checkpoint mode/frontier and background preemption are rechecked
+under the claim; active checkpoint work retains cooperative pass ownership.
+
+One existing stable heap merge selects the newest queued entry for each key,
+including its revision, pointer or tombstone and actual source lane. The sorted
+stream packs existing bounded backend chunks across lane boundaries using the
+most conservative original contiguous source-run chunk ceiling. All chunks
+share one existing publication group and only its final chunk publishes a root.
+Value-log flush/sync remains on every actual source lane; any deferred pointer
+materialization writes through the winning entry's source lane before backend
+apply. The currently disabled deferred-materialization mode stays disabled.
+
+Queue IDs, WAL files and memtable ownership remain intact until the group reports
+acceptance. Before acceptance, error/abort leaves the original queue and visible
+root intact. After irreversible acceptance, exact captured IDs are removed even
+if write/cleanup reports an error; this error path retains WAL files. The already
+activated candidate and coordinator own independent exact dependency pins, while
+retained cache views keep their existing source-memtable retirement leases. A
+retry cannot reapply those accepted IDs or remove newer point/range IDs. The
+reported error still reaches the existing checkpoint/error boundary.
+
+COW mode, single-lane work, unstable/custom iterator routes, target-span planning,
+close/stop/foreground routes, unavailable drain claims, and command-WAL piggyback
+work retain their existing paths. Backend factory presence is insufficient: the
+actual returned batch must support group attachment before storage mutation.
+No collector/chunk default, acknowledgement, Applied-LSN, resource authority or
+checkpoint durability boundary changes.
+
 ## 4. Backend Commit Model
 
 Backend applies flushed operations through copy-on-write zipper merge.
