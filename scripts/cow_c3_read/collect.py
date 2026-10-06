@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment
+from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest
 from build import verify_git_receipt
 import protocol as c3_protocol
 
@@ -104,13 +104,15 @@ def main():
         need(storage.is_dir() and not storage.is_symlink() and storage.resolve() == storage and storage.stat().st_uid == os.getuid(), "TMPDIR must be an existing owned real directory")
         need(storage.stat().st_dev == c["host"]["tmpdir_device"], "TMPDIR device drift")
         for variant, v in c["variants"].items():
-            source, binary = Path(v["source"]).resolve(), Path(v["binary"]).resolve()
+            paths = variant_paths(v, live=True)
+            source, binary = paths["source"], paths["binary"]
             ident = identity(v["manifest"])
-            need(re.fullmatch(r"[0-9a-f]{40}", v["production_commit"]) and ident["original_manifest"]["git_head"] == v["production_commit"], "production commit manifest mismatch")
+            need(ident["original_manifest"]["git_head"] == v["production_commit"], "production commit manifest mismatch")
             need(ident["original_manifest"]["git_tree"] == v["production_git_tree"], "production Git tree manifest mismatch")
             need(not storage.is_relative_to(source) and not out.is_relative_to(storage) and not storage.is_relative_to(out), "TMPDIR/source/output must have separate directory custody")
             need(not binary.is_relative_to(source) and not out.is_relative_to(source), "binary/output must be outside immutable source")
             need(ident["manifest_sha256"] == v["manifest_sha256"] and ident["tree_sha256"] == v["source_tree_sha256"], "source manifest binding mismatch")
+            fixture_manifest(c["fixtures"], ident)
             need(not binary.is_symlink() and sha(binary) == v["binary_sha256"], "binary binding mismatch")
             changes = drift(source, ident)
             write(out / (variant + "-source-before.json"), {"at": now(), "drift": changes})

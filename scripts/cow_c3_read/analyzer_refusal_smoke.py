@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from prepare_config import draft
-from protocol import identity, process_environment, sha, write
+from protocol import C3_FIXTURE, identity, process_environment, sha, write
 from build import git_source_authority
 
 def main():
@@ -39,6 +39,9 @@ def main():
     (repository / "fixture.go").write_text("synthetic protocol input\n")
     (exported / "fixture.go").write_text("synthetic protocol input\n")
     for tree in (repository, exported):
+        fixture = tree / C3_FIXTURE
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text("synthetic canonical workload input\n")
         target = tree / "scripts" / "cow_c3_read"
         target.mkdir(parents=True)
         for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
@@ -46,6 +49,7 @@ def main():
     git("add", "."); git("commit", "-qm", "Protocol refusal input")
     head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
     git_manifest, git_receipt = git_source_authority(exported, repository, head, tree)
+    config["fixtures"][0]["sha256"] = sha(exported / C3_FIXTURE)
     for variant in ("baseline", "candidate"):
         declaration = config["variants"][variant]
         declaration.update(production_commit=head, production_git_tree=tree, source="/synthetic/" + variant, binary="/synthetic/" + variant + ".test", binary_sha256="2" * 64)
@@ -113,6 +117,14 @@ def main():
         write(receipt, value)
         rebind_receipt(packet, receipt)
 
+    def damage_fixture(packet):
+        frozen = json.loads((packet / "config.json").read_text())
+        frozen["fixtures"][0]["sha256"] = "0" * 64
+        write(packet / "config.json", frozen)
+        completion = json.loads((packet / "completion.json").read_text())
+        completion["config_sha256"] = sha(packet / "config.json")
+        write(packet / "completion.json", completion)
+
     cases = [
         ("incomplete-runs", None, "missing/extra runs"),
         ("empty-map", lambda packet: write(packet / "baseline-build-artifacts.json", {}), "missing/extra build provenance map"),
@@ -125,6 +137,7 @@ def main():
         ("captured-process-environment", lambda packet: write(packet / "environment.json", {}), "captured process environment mismatch"),
         ("build-process-environment", damage_build_environment, "build process environment mismatch"),
         ("actual-go-environment", damage_go_environment, "actual go env mismatch GOENV"),
+        ("wrong-frozen-fixture", damage_fixture, "fixture differs from frozen source"),
     ]
     results = []
     for label, mutation, expected in cases:

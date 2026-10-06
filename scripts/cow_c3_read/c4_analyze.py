@@ -26,9 +26,6 @@ def analyze(packet,emit=True):
         module_hash=sha(packet/(variant+"-effective_module_graph.raw"))
         need(build["effective_module_identity"]==module_hash,"unbound effective compiled module identity")
         module_identities.append(module_hash)
-        manifest=load(packet/(variant+"-source-manifest.json"))
-        files={item["path"]:item["sha256"] for item in manifest["files"]}
-        for fixture in c["fixtures"]:need(files.get(fixture["path"])==fixture["sha256"],"unbound baseline/candidate fixture")
     need(len(set(module_identities))==1,"effective compiled module graphs differ")
     need(len({json.dumps(r["metadata"],sort_keys=True) for r in rows})==1,"benchmark metadata differs")
     cases={x["id"]:x for x in c["cases"]};raw_summary=[];work={}

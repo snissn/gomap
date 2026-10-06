@@ -75,6 +75,12 @@ and build/packet output. Freeze its absolute path and actual filesystem device
 in host.tmpdir/tmpdir_device; all Go builds and benchmark databases use it.
 Free-space admission checks this database-temp filesystem; source filesystem
 path/device/free-space are retained separately.
+All four variant custody paths (source, binary, manifest and build receipt) must
+be canonical absolute paths. Live collection refuses leaf or ancestor symlinks
+instead of silently resolving a different invocation. Offline analysis validates
+the spelling without requiring original paths to exist. The frozen fixture must
+name `TreeDB/mvcc/cow_c3_public_bench_test.go` with a SHA256 digest matching both
+retained source manifests and actual inputs; unrelated files cannot replace it.
 Build and benchmark processes inherit no ambient environment variables.
 One shared derivation passes exactly those nine controls plus PATH=os.defpath,
 GOENV=off, GOTOOLCHAIN=local, LC_ALL=C and GOPATH equal to GOMODCACHE's
@@ -88,6 +94,8 @@ checks that actual empty value while retaining `off` in the process environment.
 Each profile also requires exact ordinary WAL counts in both variant rules
 and comparable metrics: durable append/sync 1/1, relaxed 1/0, NoWAL 0/0.
 The builder requires a Git repository containing the declared commit/tree.
+Configuration accepts complete 40-character SHA1 or 64-character SHA256 Git
+object IDs of matching width; the object proof enforces repository format.
 It reads actual commit/tree objects with replacement objects disabled and verifies
 the complete exported source against every Git blob, path and Git executable mode.
 Wrong revisions, dirty exports, missing/extra paths, symlinks and mode changes
