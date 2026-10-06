@@ -1243,8 +1243,13 @@ public full-row and prepared-view boundaries with matched SQLite durability;
 these dedicated artifacts are not `-profile-dir` or benchprof inputs.
 
 The standalone `BenchmarkR1Lifecycle5060` uses `scripts/r1_lifecycle_capture.sh`
-with the `gomap-r1-lifecycle-packet-v1` format, raw calibration/final process logs
+with the `gomap-r1-lifecycle-packet-v2` format, raw calibration/final process logs
 and strict source/count validation. For a small nonqualifying rehearsal, use
-`--qualification rehearsal --out /tmp/r1-lifecycle --repetitions 2 --epochs 2
+`--qualification rehearsal --out /tmp/r1-lifecycle --repetitions 2 --epochs 3
 --documents 32 --calls-per-epoch 8`. See the [lifecycle capture contract](../../TreeDB/docs/spec/r1-row-lifecycle.md#source-bound-standalone-capture).
 These artifacts are separate from unified-bench profiles and benchprof inputs.
+
+Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
+live direct-backend online vacuum with before/after census; cached-wrapper
+overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings
+GOMAXPROCS=16, GOGC=100, GOMEMLIMIT=off, GOFLAGS empty.

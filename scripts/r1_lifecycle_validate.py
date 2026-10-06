@@ -13,6 +13,9 @@ OPERATIONS = {'ordinary_get', 'prepared_get', 'indexed_update', 'typed_replace',
 METRICS = {'ns/op', 'B/op', 'allocs/op', 'calls/op', 'loop-ns/call', 'mixed-calls/s',
            'mixed-p95-ns/call', 'mixed-p99-ns/call', 'loop-B/call', 'loop-allocs/call',
            'sampled-heap-high-B', 'process-retained-heap-B'}
+SCOPE = {'backend': 'direct', 'profile': 'command_wal_durable', 'cached_wrapper': False,
+         'command_wal': True, 'disable_background_prune': True}
+SCHEDULE = 'direct-backend-fold-rewrite-vacuum-v1'
 
 
 def require(condition, message):
@@ -56,7 +59,10 @@ def typed_gc_valid(stats):
     counters_valid({key: value for key, value in stats.items() if key not in ('DryRun', 'Plan')},
                    ('SegmentsEligible', 'SegmentsDeleted', 'SegmentsRetained', 'BytesEligible', 'BytesDeleted', 'BytesRetained'), 'typed GC')
     require(stats['SegmentsDeleted'] <= stats['SegmentsEligible'] and stats['BytesDeleted'] <= stats['BytesEligible'], 'typed deletion exceeds eligibility')
-    plan = stats['Plan']
+    reachability_valid(stats['Plan'])
+
+
+def reachability_valid(plan):
     require(plan['Complete'] is True and type(plan['ProtectOnly']) is bool, 'incomplete typed reachability plan')
     require(plan['Entries'] is None and plan['SegmentEntries'] is None, 'unbounded per-reference/segment packet detail')
     require(integer(plan['RewriteDebtBytes']), 'missing rewrite debt')
@@ -79,6 +85,70 @@ def vlog_gc_valid(stats):
     required = [prefix + suffix for prefix in ('Segments', 'Bytes') for suffix in classes]
     counters_valid(stats, required, 'value-log GC')
     require(stats['SegmentsDeleted'] <= stats['SegmentsEligible'] and stats['BytesDeleted'] <= stats['BytesEligible'], 'value-log deletion exceeds eligibility')
+
+
+def rewrite_valid(stats, dry_run):
+    require(stats['DryRun'] is dry_run, 'mislabeled rewrite probe/work')
+    reachability_valid(stats['Plan'])
+    require(stats['SupersededRefs'] is None and stats['RemappedRefs'] is None, 'unbounded rewrite ref detail')
+    counters_valid({key: value for key, value in stats.items() if key not in ('DryRun', 'Plan', 'SupersededRefs', 'RemappedRefs')},
+                   ('SegmentsEligible', 'SegmentsRewritten', 'RefsEligible', 'RefsRemapped', 'BytesCopied', 'BytesReclaimable', 'BytesRetained'), 'rewrite')
+    require(stats['SegmentsRewritten'] <= stats['SegmentsEligible'] and stats['RefsRemapped'] <= stats['RefsEligible'], 'rewrite work exceeds eligibility')
+    if dry_run:
+        require(stats['SegmentsRewritten'] == stats['RefsRemapped'] == 0, 'dry-run counted as remapped work')
+
+
+def reclaim_valid(row):
+    for key in ('plan_ns', 'gc_ns'):
+        require(integer(row[key], 1), f'missing reclaim {key}')
+    for key in ('probe_ns', 'rewrite_ns', 'checkpoint_ns', 'candidate_refs'):
+        require(integer(row[key]), f'invalid reclaim {key}')
+    typed_gc_valid(row['plan_gc'])
+    typed_gc_valid(row['typed_gc'])
+    debt = row['plan_gc']['Plan']['RewriteDebtBytes']
+    if debt == 0:
+        require(row['decision'] == 'no_debt' and row['probe'] is None and row['rewrite'] is None
+                and row['probe_ns'] == row['rewrite_ns'] == row['checkpoint_ns'] == 0, 'rewrite without selected debt')
+    else:
+        require(row['probe_ns'] > 0, 'missing debt eligibility probe')
+        rewrite_valid(row['probe'], True)
+        eligible = row['probe']['SegmentsEligible'] > 0 and row['probe']['RefsEligible'] > 0
+        if eligible:
+            require(row['decision'] == 'eligible' and row['rewrite_ns'] > 0 and row['checkpoint_ns'] > 0, 'eligible rewrite missing work/checkpoint')
+            rewrite_valid(row['rewrite'], False)
+        else:
+            require(row['decision'] == 'protected_or_ineligible' and row['rewrite'] is None
+                    and row['rewrite_ns'] == row['checkpoint_ns'] == 0, 'protected rewrite counted as work')
+
+
+def maintenance_valid(row, documents):
+    required_timers = ('flush_ns', 'checkpoint_ns', 'before_fold_gc_ns', 'fold_ns',
+                       'fold_checkpoint_ns', 'overlay_ns', 'overlay_checkpoint_ns', 'vlog_gc_ns', 'vacuum_ns')
+    require(all(integer(row[key], 1) for key in required_timers), 'missing actual maintenance API timer')
+    typed_gc_valid(row['before_fold_gc'])
+    fold = row['fold']
+    stats = fold['stats']
+    require(type(stats['Compacted']) is bool and stats['PublishedRefs'] is None
+            and stats['SupersededRefs'] is None, 'missing logical fold or unbounded refs')
+    counters_valid({key: value for key, value in stats.items() if key not in ('Compacted', 'PublishedRefs', 'SupersededRefs')},
+                   ('PreviousGeneration', 'NewGeneration', 'ManifestRecordsBefore', 'ManifestRecordsAfter',
+                    'MutationPartsBefore', 'MutationPartsAfter', 'RowsScanned', 'DeletedRows', 'RowsCompacted', 'PhysicalBytesRead', 'AssetsPublished'), 'logical fold')
+    require(integer(fold['published_refs']) and integer(fold['superseded_refs']), 'missing folded ref counts')
+    # The selected paired mutation workload creates history every epoch.
+    require(stats['Compacted'] and stats['RowsCompacted'] == documents and stats['MutationPartsBefore'] > 0
+            and stats['MutationPartsAfter'] == 0 and stats['NewGeneration'] > stats['PreviousGeneration']
+            and fold['published_refs'] > 0 and fold['superseded_refs'] > 0, 'logical history not folded for complete live population')
+    require(type(row['overlay']) is dict and bool(row['overlay']), 'missing actual overlay result')
+    reclaim_valid(row['reclaim'])
+    require(row['reclaim']['plan_gc']['Plan']['Sources']['ActiveManifestRefs'] < row['before_fold_gc']['Plan']['Sources']['ActiveManifestRefs'], 'fold did not reset active manifest lineage')
+    vlog_gc_valid(row['vlog_gc'])
+    vacuum = row['vacuum']
+    require(vacuum['WorkCompleted'] is True and vacuum['Canceled'] is False and bool(vacuum['Phase']), 'vacuum did not complete')
+    counters_valid({key: value for key, value in vacuum.items() if type(value) is not str and type(value) is not bool},
+                   ('AttemptID', 'TotalDuration', 'RecoverableRoots', 'ReplacementPagerPages'), 'vacuum')
+    elapsed = sum(row[key] for key in required_timers)
+    elapsed += sum(row['reclaim'][key] for key in ('plan_ns', 'probe_ns', 'rewrite_ns', 'checkpoint_ns', 'gc_ns'))
+    require(integer(row['maintenance_ns'], 1) and row['maintenance_ns'] == elapsed, 'maintenance API timer sum mismatch')
 
 
 def unique_object(pairs):
@@ -117,8 +187,10 @@ def source_valid(source):
 
 
 def result_valid(result, config):
-    require(result['schema'] == 'gomap-r1-lifecycle-result-v1', 'wrong result schema')
+    require(result['schema'] == 'gomap-r1-lifecycle-result-v2', 'wrong result schema')
     require(integer(result['pid'], 1) and integer(result['gomaxprocs'], 1), 'missing actual process/concurrency identity')
+    require(result['schedule'] == SCHEDULE and result['backend_profile'] == SCOPE['profile'], 'mislabeled execution scope/schedule')
+    require(result['gomaxprocs'] == int(config['runtime_environment']['GOMAXPROCS']), 'actual process concurrency differs')
     epochs = result['epochs']
     require(integer(epochs, 1) and epochs in (1, config['epochs']), 'unexpected calibration epochs')
     require(result['documents'] == config['documents'] and result['calls_per_epoch'] == config['calls_per_epoch'], 'fixture dimensions differ')
@@ -143,7 +215,7 @@ def result_valid(result, config):
                 'ids_sha256': selected['ids_sha256']}, 'epoch expands or changes bounded working set')
     phases = ['ingest']
     for epoch in range(epochs):
-        phases += [f'churn-{epoch}', f'checkpoint-{epoch}', f'maintenance-{epoch}']
+        phases += [f'churn-{epoch}', f'checkpoint-{epoch}', f'folded-{epoch}', f'before_vacuum-{epoch}', f'maintenance-{epoch}']
         if epoch == 0:
             phases.append('after_view_release')
     phases.append('reopen')
@@ -155,22 +227,9 @@ def result_valid(result, config):
             require(integer(row[key]), f'invalid sampled {key}')
     require(len(result['maintenance']) == epochs, 'missing maintenance metrics')
     for epoch, row in enumerate(result['maintenance']):
-        require(row['epoch'] == epoch and integer(row['checkpoint_ns'], 1) and integer(row['maintenance_ns'], 1), 'invalid maintenance timer')
-        require(type(row['overlay']) is dict and bool(row['overlay']), 'missing actual overlay result')
-        for key in ('typed_deleted_segments', 'typed_retained_bytes', 'typed_rewrite_debt_bytes',
-                    'vlog_deleted_segments', 'vlog_pending_segments', 'vlog_referenced_plus_protected_bytes'):
-            require(integer(row[key]), f'invalid maintenance {key}')
-        typed_gc_valid(row['typed_gc'])
-        vlog_gc_valid(row['vlog_gc'])
-        require(row['typed_deleted_segments'] == row['typed_gc']['SegmentsDeleted']
-                and row['typed_retained_bytes'] == row['typed_gc']['BytesRetained']
-                and row['typed_rewrite_debt_bytes'] == row['typed_gc']['Plan']['RewriteDebtBytes']
-                and row['vlog_deleted_segments'] == row['vlog_gc']['SegmentsDeleted']
-                and row['vlog_pending_segments'] == row['vlog_gc']['SegmentsPending']
-                and row['vlog_referenced_plus_protected_bytes'] == row['vlog_gc']['BytesReferenced'] + row['vlog_gc']['BytesProtected'], 'maintenance aggregates disagree')
-    release = result['after_view_release_gc']
-    require(integer(release['duration_ns'], 1), 'missing after-view-release GC timer')
-    typed_gc_valid(release['typed_gc'])
+        require(integer(row['epoch']) and row['epoch'] == epoch, 'wrong maintenance epoch')
+        maintenance_valid(row, config['documents'])
+    reclaim_valid(result['after_view_release_gc'])
 
 
 def raw_results(text, config, pid):
@@ -217,7 +276,7 @@ def raw_results(text, config, pid):
 def validate(path, expected_runtime=None, expected_harness=None, expected_commit=None):
     path = Path(path)
     packet = decode(path.read_text())
-    require(packet['schema'] == 'gomap-r1-lifecycle-packet-v1', 'wrong packet schema')
+    require(packet['schema'] == 'gomap-r1-lifecycle-packet-v2', 'wrong packet schema')
     config = packet['config']
     require(config['qualification'] in ('rehearsal', 'retained'), 'wrong qualification')
     require(integer(config['repetitions'], 1) and config['repetitions'] <= 100, 'invalid repetitions')
@@ -225,6 +284,8 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
     for key, multiple in (('documents', 32), ('calls_per_epoch', 8)):
         require(integer(config[key], multiple) and config[key] % multiple == 0 and config[key] <= 1 << 20, 'invalid fixture dimensions')
     require(config['working_set'] == working_set(config), 'mislabeled deterministic working set config')
+    require(config['execution_scope'] == SCOPE and config['schedule'] == SCHEDULE, 'mislabeled direct-backend schedule')
+    require(config['runtime_environment'] == {'GOMAXPROCS': '16', 'GOGC': '100', 'GOMEMLIMIT': 'off', 'GOFLAGS': ''}, 'unfrozen runtime environment')
     before = packet['source_before']
     source_valid(before)
     source_valid(packet['source_after'])
@@ -237,15 +298,17 @@ def validate(path, expected_runtime=None, expected_harness=None, expected_commit
         require(hexadecimal(config['landed_tooling_commit'], 40) and isinstance(config['review_url'], str)
                 and config['review_url'].startswith('https://github.com/'), 'missing review/landing declaration')
     toolchain = packet['toolchain']
-    require(toolchain['go'].startswith('go version go1.') and bool(toolchain['cc']) and bool(toolchain['uname']['system'])
+    require(toolchain['go'] == 'go version go1.26.4 linux/amd64' and bool(toolchain['cc']) and bool(toolchain['uname']['system'])
             and bool(toolchain['binary_buildinfo']) and bool(toolchain['filesystem']), 'missing actual build/host identity')
     require(toolchain['go_env']['GOWORK'] == 'off' and toolchain['go_env']['GOTOOLCHAIN'] == 'local', 'unfrozen toolchain/workspace')
+    require(toolchain['go_env']['GOVERSION'] == 'go1.26.4' and 'go1.26.4' in toolchain['binary_buildinfo'], 'build toolchain differs from frozen version')
+    require(all(toolchain['environment'][key] == value for key, value in config['runtime_environment'].items()), 'caller environment mismatch')
     capture_directory = Path(toolchain['capture_directory'])
     require(capture_directory.is_absolute() and toolchain['benchmark_tmpdir'] == str(capture_directory / 'benchmark-tmp'), 'benchmark temporary directory is not capture-owned')
     require(integer(toolchain['capture_filesystem_device']) and integer(toolchain['benchmark_filesystem_device'])
             and toolchain['benchmark_filesystem_device'] == toolchain['capture_filesystem_device']
             and bool(toolchain['benchmark_filesystem']), 'benchmark/capture filesystem mismatch or missing observation')
-    require(toolchain['process_environment'] == {'TMPDIR': toolchain['benchmark_tmpdir'], 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
+    require(toolchain['process_environment'] == {**config['runtime_environment'], 'TMPDIR': toolchain['benchmark_tmpdir'], 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
             'GOMAP_R1_LIFECYCLE_DOCUMENTS': str(config['documents']),
             'GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH': str(config['calls_per_epoch'])}, 'effective benchmark environment mismatch')
     require(hashlib.sha256((path.parent / 'collections.test').read_bytes()).hexdigest() == toolchain['binary_sha256'], 'binary hash mismatch')
@@ -295,28 +358,27 @@ def summarize(packet, results):
                   sum(row['result']['census'][0]['logical_bytes'].values()) for row in results]
         cells += [statistics.median(totals), statistics.median(files), statistics.median(growth)]
         text.append('| ' + phase['phase'] + ' | ' + ' | '.join(f'{n:.6g}' for n in cells) + ' |')
-    text += ['', 'Maintenance medians (zero deleted segments remain zero):', '',
-             '| Epoch | checkpoint ns | maintenance ns | typed deleted | typed retained bytes | typed rewrite debt | vlog deleted | vlog pending | vlog referenced+protected bytes |',
-             '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+    text += ['', 'Maintenance API medians (oracles and census excluded):', '',
+             '| Epoch | maintenance ns | fold ns | live rows folded | mutation parts before/after | active refs before/after | rewrite decision | typed deleted bytes | vacuum ns | vacuum completed |',
+             '| --- | ---: | ---: | ---: | --- | --- | --- | ---: | ---: | --- |']
     for epoch in range(packet['config']['epochs']):
-        keys = ['checkpoint_ns', 'maintenance_ns', 'typed_deleted_segments', 'typed_retained_bytes',
-                'typed_rewrite_debt_bytes', 'vlog_deleted_segments', 'vlog_pending_segments', 'vlog_referenced_plus_protected_bytes']
-        cells = [statistics.median(row['result']['maintenance'][epoch][key] for row in results) for key in keys]
-        text.append('| ' + str(epoch) + ' | ' + ' | '.join(f'{n:.6g}' for n in cells) + ' |')
-    text += ['', 'Post-view-release typed GC medians:', '',
-             '| ns | eligible segments | deleted segments | retained segments | eligible bytes | deleted bytes | retained bytes | rewrite debt bytes |',
-             '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
+        rows = [row['result']['maintenance'][epoch] for row in results]
+        med = lambda f: f'{statistics.median(f(row) for row in rows):.6g}'
+        cells = [str(epoch), med(lambda r: r['maintenance_ns']), med(lambda r: r['fold_ns']), med(lambda r: r['fold']['stats']['RowsCompacted']),
+                 med(lambda r: r['fold']['stats']['MutationPartsBefore'])+'/'+med(lambda r: r['fold']['stats']['MutationPartsAfter']),
+                 med(lambda r: r['before_fold_gc']['Plan']['Sources']['ActiveManifestRefs'])+'/'+med(lambda r: r['reclaim']['plan_gc']['Plan']['Sources']['ActiveManifestRefs']),
+                 ','.join(sorted({r['reclaim']['decision'] for r in rows})),
+                 med(lambda r: r['before_fold_gc']['BytesDeleted']+r['reclaim']['plan_gc']['BytesDeleted']+r['reclaim']['typed_gc']['BytesDeleted']),
+                 med(lambda r: r['vacuum_ns']), str(all(r['vacuum']['WorkCompleted'] for r in rows))]
+        text.append('| '+' | '.join(cells)+' |')
     released = [row['result']['after_view_release_gc'] for row in results]
-    cells = [statistics.median(row['duration_ns'] for row in released)]
-    cells += [statistics.median(row['typed_gc'][key] for row in released)
-              for key in ('SegmentsEligible', 'SegmentsDeleted', 'SegmentsRetained', 'BytesEligible', 'BytesDeleted', 'BytesRetained')]
-    cells += [statistics.median(row['typed_gc']['Plan']['RewriteDebtBytes'] for row in released)]
-    text.append('| ' + ' | '.join(f'{n:.6g}' for n in cells) + ' |')
+    text += ['', 'Post-view-release rewrite decisions: '+','.join(sorted({r['decision'] for r in released}))+'. Raw packets retain eligibility, completed remaps, deleted bytes and protected/recovery retention.',
+             'Direct-backend command_wal_durable fixture; vacuum runs on the same live backend. Cached-wrapper checkpoint/reconcile overhead is omitted. Logical fold resets lineage; it does not itself prove physical reclamation.']
     text += ['', 'Go calibration results remain in raw logs and are excluded from this table.',
              'Call timers include encoding, full-row decode/oracle and callback bookkeeping. Epoch metrics also include ID preparation and latency/count/visited-ID bookkeeping. Maintenance, coverage aggregation and phase oracles are excluded.',
              'Heap high is sampled at epoch boundaries; retained heap after GC includes live oracle maps and latency samples. RSS and unsampled peak are unavailable.',
              'Component census uses logical file lengths, including redo WAL separately; no-op maintenance is recorded without a reclamation claim.',
-             'Full aggregate typed reachability sources/ref/segment/mapped attribution and value-log active/pending/protected/referenced classifications remain separate in the packet. Source classes can overlap; referenced+protected is an explicit sum, not unique retained bytes. Release GC is recorded; no-op or protected work is not reclamation.',
+             'Full aggregate typed reachability sources/ref/segment/mapped attribution and value-log active/pending/protected/referenced classifications remain separate in the packet. Source classes can overlap; their byte counts are not unique retained bytes. Release GC is recorded; no-op or protected work is not reclamation.',
              'Raw logs and packet retain per-epoch checkpoint/maintenance/debt/component observations and actual host load. Spread is descriptive; this diagnostic supplies no automatic performance acceptance threshold.', '']
     return '\n'.join(text)
 

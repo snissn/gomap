@@ -11,7 +11,7 @@ import subprocess
 import time
 
 from r1_collection_source import source_identity as collection_source
-from r1_lifecycle_validate import hexadecimal, source_valid, validate, summarize, working_set
+from r1_lifecycle_validate import hexadecimal, source_valid, validate, summarize, working_set, SCOPE, SCHEDULE
 
 
 def run(args, **kwargs):
@@ -75,6 +75,11 @@ def main():
     parser.add_argument('--landed-tooling-commit')
     parser.add_argument('--review-url')
     args = parser.parse_args()
+    frozen_environment = {'GOMAXPROCS': '16', 'GOGC': '100', 'GOMEMLIMIT': 'off', 'GOFLAGS': ''}
+    for key, value in frozen_environment.items():
+        os.environ.setdefault(key, value)
+        if os.environ[key] != value:
+            parser.error(f'{key} must equal {value!r} for this frozen diagnostic')
     for value, multiple in ((args.documents, 32), (args.calls_per_epoch, 8)):
         if value < multiple or value % multiple or value > 1 << 20:
             parser.error(f'dimension must be a multiple of {multiple} in [{multiple},1048576]')
@@ -114,13 +119,13 @@ def main():
     cc = shlex.split(env['CC'])
     toolchain = {'go': run([go, 'version']), 'go_env': env,
                  'cc': run([*cc, '--version']), 'uname': platform.uname()._asdict(),
-                 'environment': {k: os.environ.get(k) for k in ('GOMAXPROCS', 'GOCACHE', 'GOMODCACHE', 'TMPDIR', 'GOFLAGS')},
+                 'environment': {k: os.environ.get(k) for k in ('GOMAXPROCS', 'GOGC', 'GOMEMLIMIT', 'GOCACHE', 'GOMODCACHE', 'TMPDIR', 'GOFLAGS')},
                  'cpu': Path('/proc/cpuinfo').read_text() if Path('/proc/cpuinfo').exists() else platform.processor(),
                  'capture_directory': str(out), 'benchmark_tmpdir': str(benchmark_tmpdir),
                  'capture_filesystem_device': out.stat().st_dev,
                  'benchmark_filesystem_device': benchmark_tmpdir.stat().st_dev,
                  'benchmark_filesystem': run(['df', '-Pk', str(benchmark_tmpdir)]),
-                 'process_environment': {'TMPDIR': str(benchmark_tmpdir), 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
+                 'process_environment': {**frozen_environment, 'TMPDIR': str(benchmark_tmpdir), 'GOWORK': 'off', 'GOTOOLCHAIN': 'local',
                                          'GOMAP_R1_LIFECYCLE_DOCUMENTS': str(args.documents),
                                          'GOMAP_R1_LIFECYCLE_CALLS_PER_EPOCH': str(args.calls_per_epoch)},
                  'filesystem': run(['df', '-Pk', str(out)])}
@@ -138,6 +143,7 @@ def main():
               'recipe': 'r1MutationRow5059; ascending IDs; load batches 32; deterministic stride 37; eight-call paired mix',
               'landed_tooling_commit': args.landed_tooling_commit, 'review_url': args.review_url}
     config['working_set'] = working_set(config)
+    config.update(execution_scope=SCOPE, schedule=SCHEDULE, runtime_environment=frozen_environment)
     invocation = [str(binary), '-test.run=^$', '-test.bench=^BenchmarkR1Lifecycle5060$',
                   f'-test.benchtime={args.epochs}x', '-test.count=1', '-test.benchmem', '-test.v']
     process_env = dict(os.environ, GOMAP_R1_LIFECYCLE_DOCUMENTS=str(args.documents),
@@ -159,7 +165,7 @@ def main():
     write(out / 'source-after.json', after)
     if before != after or sha(binary) != toolchain['binary_sha256']:
         raise ValueError('product, harness, source cleanliness or binary changed during capture')
-    packet = {'schema': 'gomap-r1-lifecycle-packet-v1', 'config': config,
+    packet = {'schema': 'gomap-r1-lifecycle-packet-v2', 'config': config,
               'source_before': before, 'source_after': after, 'toolchain': toolchain,
               'build_command': command, 'build_log_sha256': sha(out / 'build.log'),
               'invocation': invocation, 'runs': records}

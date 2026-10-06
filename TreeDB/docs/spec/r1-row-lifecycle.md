@@ -154,7 +154,7 @@ and sustained capacity acceptance remain pending that retained evidence.
 
 ## Source-bound standalone capture
 
-`scripts/r1_lifecycle_capture.sh` produces a `gomap-r1-lifecycle-packet-v1`
+`scripts/r1_lifecycle_capture.sh` produces a `gomap-r1-lifecycle-packet-v2`
 packet, raw build and process logs, the test binary, exact source manifests,
 actual Go/CGO/build/environment/host/load identities, and `summary.md`. Defaults
 are five fresh OS processes, each with five final epochs, 4,096 documents and
@@ -187,7 +187,7 @@ Environment dimensions `GOMAP_R1_LIFECYCLE_DOCUMENTS` (multiple of 32) and
 each must lie between its multiple and 1,048,576. Retained capture accepts only
 the default dimensions, exactly five epochs and at least five repetitions.
 
-The benchmark emits one `gomap-r1-lifecycle-result-v1` JSON marker per Go
+The benchmark emits one `gomap-r1-lifecycle-result-v2` JSON marker per Go
 benchmark invocation. Go's initial one-epoch calibration is preserved in raw
 logs, validated, and excluded from final process summaries. The final requested
 epoch result must exist exactly once and agree with Go's printed metrics.
@@ -201,13 +201,44 @@ counts and bytes, protected/retained bytes, and rewrite debt. Per-reference and
 per-segment entries are omitted. Full scalar value-log GC statistics preserve
 active, pending, eligible, deleted, referenced and protected classes separately,
 including overlap/protected-source breakdown; these classes may overlap and
-must not be added as unique retained storage. The convenience
-`vlog_referenced_plus_protected_bytes` field is an explicitly labeled sum. The
-post-view-release typed GC is timed and its complete aggregate result retained,
-so release, GC attempt, and actual reclaimed work remain distinct facts.
-The benchmark's ordinary value-log GC is measured here; the separate correctness
-tests exercise
-typed rewrite/remap and lawful reclaimed-segment proof.
+must not be added as unique retained storage. No per-reference arrays are
+serialized from compaction or rewrite stats.
+
+Every epoch preserves `churn-N` before maintenance, then measures collection
+flush and backend checkpoint, pre-fold reachability GC, `ColumnStoreCompact`
+and its following checkpoint. The logical fold materializes all current live
+rows (32 in the rehearsal, 4,096 by default), publishes one insert-only
+generation, supersedes history and rebuilds locators. Row/index and held-old-view
+oracles run after the fold. Aggregate stats record rows, generation, manifest
+and mutation-part counts, physical bytes read, and counts of published and
+superseded refs. Logical history folding is distinct from physical reclamation.
+
+Root overlays are compacted and checkpointed. Complete typed GC plans select
+rewrite only when `RewriteDebtBytes > 0`; a timed public dry-run rewrite probe
+then selects actual rewrite only for nonzero eligible segments and refs. Old
+mapped pins and recovery roots may correctly defer this work. Completed rewrite
+is checkpointed, and a following typed GC measures actual deletion/retention.
+Superseded refs are carried as public candidate inputs while needed. Candidates
+are retired only after a completed GC reports deletions and the corresponding
+observed segment paths are absent; protections are never bypassed. Full aggregate
+probe/work/GC plans remain in the packet, with explicit no-debt, ineligible and
+eligible decisions. Ordinary value-log GC follows.
+
+The same live direct backend then calls `VacuumIndexOnlineWithStats`, outside the
+mixed timer. The packet retains full scalar vacuum stats and `before_vacuum-N`
+and `maintenance-N` component censuses, including held-view parity across vacuum.
+This measures the direct backend command-WAL durable fixture, opened with
+background prune disabled, command WAL enabled and its explicit durable profile.
+It omits public cached-wrapper checkpoint/reconcile overhead and is no comparator
+claim. No close/open transition, storage layout change, unsafe fallback or new
+production API is used. Vacuum can retain old index files while snapshots live;
+its completed-work bit is distinct from observed file-size reduction.
+
+The original held view closes only after epoch zero maintenance. A separate
+timed complete-plan/rewrite-selection/GC pass records post-release work. Later
+ordinary generations/checkpoints allow GC to observe recovery-safe eligibility;
+zero deletion remains zero. Current rows and every historical index key are
+verified after each recorded maintenance phase and at reopen.
 
 Per-call latency starts after ordinal/ID/current-row preparation and includes
 caller encoding, callback work, full-row decoding/oracle and mutation-map
@@ -218,8 +249,8 @@ loop. Sample storage is preallocated before timing. Full phase row/posting
 oracles, storage walks, checkpoint and maintenance are outside both call and
 epoch timers. Prepared reads include opening/closing their own view, not warmed
 reuse. The post-GC heap snapshot deliberately keeps `want`, `known`, `captured`
-and latency samples alive; it also retains visited-ID accounting and includes
-these diagnostic objects. Heap high is
+and latency samples alive; it also retains visited-ID and candidate accounting.
+The heap measurement includes these diagnostic objects. Heap high is
 sampled only at epoch boundaries. RSS, allocated blocks and unsampled peaks
 remain unavailable.
 
@@ -282,6 +313,13 @@ Five final epochs on the repeated bounded set establish a finite hot-set
 diagnostic. Full row/posting oracles cover all live rows, but this timed churn
 does not qualify full-population stress or unlimited sustained capacity. Any
 further lifecycle action follows measured completed work, blockers and debt;
-this harness adds no unconditional rewrite or destructive shortcut. The active
+this harness selects rewrite from actual complete-plan debt and public eligibility,
+with no unconditional rewrite or destructive shortcut. The active
 #5037 rewrite-resource owner remains authoritative. Earlier packets with the
 rotating epoch offset stay nonqualifying under their original harness identity.
+
+The frozen capture uses Linux amd64 Go 1.26.4, GOMAXPROCS=16, GOGC=100,
+GOMEMLIMIT=off and empty GOFLAGS; unset runtime values receive those defaults,
+and conflicting caller values are rejected. Effective caller/subprocess values
+and actual benchmark concurrency are cross-checked. v1 packets retain their
+original raw/source identity and do not qualify this v2 maintenance schedule.

@@ -118,7 +118,7 @@ class RealPacketTests(unittest.TestCase):
         self.reject()
 
     def test_missing_typed_reachability_source_with_rebound_raw_hash(self):
-        self.edit_results(lambda result: result['maintenance'][0]['typed_gc']['Plan']['Sources'].pop('RecoveryManifestBytes'))
+        self.edit_results(lambda result: result['maintenance'][0]['reclaim']['typed_gc']['Plan']['Sources'].pop('RecoveryManifestBytes'))
         self.reject()
 
     def test_missing_vlog_active_attribution_with_rebound_raw_hash(self):
@@ -127,6 +127,38 @@ class RealPacketTests(unittest.TestCase):
 
     def test_missing_post_release_gc_with_rebound_raw_hash(self):
         self.edit_results(lambda result: result.pop('after_view_release_gc'))
+        self.reject()
+
+    def test_missing_fold_work_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['fold']['stats'].update(RowsCompacted=1))
+        self.reject()
+
+    def test_unfolded_history_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['fold']['stats'].update(MutationPartsAfter=1))
+        self.reject()
+
+    def test_missing_vacuum_completion_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['vacuum'].update(WorkCompleted=False))
+        self.reject()
+
+    def test_protected_rewrite_counted_as_work_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0]['reclaim'].update(decision='eligible'))
+        self.reject()
+
+    def test_missing_maintenance_timer_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result['maintenance'][0].update(fold_ns=0))
+        self.reject()
+
+    def test_mislabeled_cached_wrapper_scope(self):
+        self.packet['config']['execution_scope']['cached_wrapper'] = True
+        self.reject()
+
+    def test_unbound_actual_concurrency_with_rebound_raw_hash(self):
+        self.edit_results(lambda result: result.update(gomaxprocs=1))
+        self.reject()
+
+    def test_wrong_actual_runtime_environment(self):
+        self.packet['toolchain']['environment']['GOGC'] = 'off'
         self.reject()
 
     def test_failed_process_even_with_valid_output(self):

@@ -1,7 +1,6 @@
 package collections
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -27,11 +26,14 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 	requireStandaloneColumnProductionAuthorityTest(b)
 	documents := r1LifecycleDimension5060(b, "DOCUMENTS", 4096, 32)
 	callsPerEpoch := r1LifecycleDimension5060(b, "CALLS_PER_EPOCH", 1024, 8)
-	result := r1LifecycleResult5060{Schema: "gomap-r1-lifecycle-result-v1", Epochs: b.N, Documents: documents, CallsPerEpoch: callsPerEpoch}
+	result := r1LifecycleResult5060{Schema: "gomap-r1-lifecycle-result-v2", Epochs: b.N, Documents: documents, CallsPerEpoch: callsPerEpoch}
 	result.PID, result.GOMAXPROCS = os.Getpid(), runtime.GOMAXPROCS(0)
+	result.Schedule = r1LifecycleSchedule5060
 	operations := []string{"ordinary_get", "prepared_get", "indexed_update", "typed_replace", "delete", "typed_insert", "typed_upsert", "post_upsert_get"}
 	result.Operations = make(map[string]uint64, len(operations))
 	_, db, col := r1MutationOpen5059(b, true)
+	result.BackendProfile = string(db.ResolvedProfile())
+	var candidates []ColumnAssetRef
 	defer func() { _ = db.Close() }()
 	want, known := make(map[string]map[string]any, documents), r1MutationKnown5059()
 	fixture := sha256.New()
@@ -199,31 +201,14 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 			r1LifecycleAssert5060(b, held, captured, known)
 		}
 		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("churn-%d", epoch)))
-		started := time.Now()
-		if err := db.Checkpoint(); err != nil {
-			b.Fatal(err)
+		observe := func(phase string) {
+			r1LifecycleCurrent5060(b, col, want, known)
+			if epoch == 0 {
+				r1LifecycleAssert5060(b, held, captured, known)
+			}
+			result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("%s-%d", phase, epoch)))
 		}
-		checkpointNS := time.Since(started).Nanoseconds()
-		b.Logf("epoch=%d checkpoint_ns=%d", epoch, checkpointNS)
-		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("checkpoint-%d", epoch)))
-		started = time.Now()
-		compact, err := col.CompactRootOverlays(context.Background())
-		if err != nil {
-			b.Fatal(err)
-		}
-		gc, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{SegmentDetails: true})
-		if err != nil {
-			b.Fatal(err)
-		}
-		vlog, err := db.ValueLogGC(context.Background(), backenddb.ValueLogGCOptions{})
-		if err != nil {
-			b.Fatal(err)
-		}
-		maintenanceNS := time.Since(started).Nanoseconds()
-		b.Logf("epoch=%d maintenance_ns=%d overlay=%+v typed_deleted=%d typed_retained=%d typed_rewrite_debt=%d vlog_deleted=%d vlog_pending=%d vlog_referenced_plus_protected=%d", epoch, maintenanceNS, compact, gc.SegmentsDeleted, gc.BytesRetained, gc.Plan.RewriteDebtBytes, vlog.SegmentsDeleted, vlog.SegmentsPending, vlog.BytesReferenced+vlog.BytesProtected)
-		result.Maintenance = append(result.Maintenance, r1LifecycleMaintenanceRecord5060{Epoch: epoch, CheckpointNS: checkpointNS, MaintenanceNS: maintenanceNS, Overlay: compact, TypedDeleted: uint64(gc.SegmentsDeleted), TypedRetained: uint64(gc.BytesRetained), TypedRewriteDebt: uint64(gc.Plan.RewriteDebtBytes), VlogDeleted: uint64(vlog.SegmentsDeleted), VlogPending: uint64(vlog.SegmentsPending), VlogReferencedPlusProtected: uint64(vlog.BytesReferenced + vlog.BytesProtected), TypedGC: r1LifecycleAggregateGC5060(gc), ValueLogGC: vlog})
-		r1LifecycleCurrent5060(b, col, want, known)
-		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("maintenance-%d", epoch)))
+		result.Maintenance = append(result.Maintenance, r1LifecycleFold5060(b, db, col, epoch, &candidates, observe))
 		if epoch == 0 {
 			r1LifecycleAssert5060(b, held, captured, known)
 			if err := held.Close(); err != nil {
@@ -232,12 +217,9 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 			if stats := held.assetManager.Stats(); stats.ActiveHandles != 0 {
 				b.Fatalf("held view release leaked handles: %+v", stats)
 			}
-			started := time.Now()
-			releaseGC, err := col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{})
-			if err != nil {
-				b.Fatal(err)
-			}
-			result.AfterViewReleaseGC = &r1LifecycleReleaseGC5060{DurationNS: time.Since(started).Nanoseconds(), TypedGC: r1LifecycleAggregateGC5060(releaseGC)}
+			released := r1LifecycleReclaim5060(b, db, col, &candidates)
+			result.AfterViewReleaseGC = &released
+			r1LifecycleCurrent5060(b, col, want, known)
 			result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), "after_view_release"))
 		}
 		b.StartTimer()
@@ -271,6 +253,7 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 	runtime.KeepAlive(captured)
 	runtime.KeepAlive(samples)
 	runtime.KeepAlive(seenIDs)
+	runtime.KeepAlive(candidates)
 	b.ReportMetric(float64(retained.HeapAlloc), "process-retained-heap-B")
 	result.TotalCalls, result.CallNS, result.LoopBytes, result.LoopAllocs = totalCalls, apiElapsed, loopBytes, loopAllocs
 	result.P95NS, result.P99NS = uint64(samples[(len(samples)-1)*95/100]), uint64(samples[(len(samples)-1)*99/100])
@@ -323,7 +306,7 @@ func r1LifecycleCensus5060(b *testing.B, dir, phase string) r1LifecycleCensusRec
 			component = "persistent_leaf_log"
 		case strings.Contains(rel, "column-assets/") || strings.Contains(rel, "column_assets/"):
 			component = "typed_assets"
-		case strings.HasSuffix(rel, ".db"):
+		case strings.HasSuffix(rel, ".db"), rel == "index.db.bak", rel == "index.db.new":
 			component = "index"
 		}
 		bytes[component] += info.Size()
@@ -354,11 +337,13 @@ func r1LifecycleDimension5060(b *testing.B, suffix string, fallback, multiple in
 }
 
 type r1LifecycleResult5060 struct {
+	Schedule             string                             `json:"schedule"`
+	BackendProfile       string                             `json:"backend_profile"`
 	DistinctIDs          int                                `json:"distinct_ids"`
 	RevisitedIDs         int                                `json:"cross_epoch_revisited_ids"`
 	RevisitedDistinctIDs int                                `json:"revisited_distinct_ids"`
 	IDCoverage           []r1LifecycleIDCoverage5060        `json:"id_coverage"`
-	AfterViewReleaseGC   *r1LifecycleReleaseGC5060          `json:"after_view_release_gc"`
+	AfterViewReleaseGC   *r1LifecycleReclaimRecord5060      `json:"after_view_release_gc"`
 	PID                  int                                `json:"pid"`
 	GOMAXPROCS           int                                `json:"gomaxprocs"`
 	Schema               string                             `json:"schema"`
@@ -390,18 +375,23 @@ type r1LifecycleCensusRecord5060 struct {
 }
 
 type r1LifecycleMaintenanceRecord5060 struct {
-	Epoch                       int                       `json:"epoch"`
-	CheckpointNS                int64                     `json:"checkpoint_ns"`
-	MaintenanceNS               int64                     `json:"maintenance_ns"`
-	Overlay                     any                       `json:"overlay"`
-	TypedDeleted                uint64                    `json:"typed_deleted_segments"`
-	TypedRetained               uint64                    `json:"typed_retained_bytes"`
-	TypedRewriteDebt            uint64                    `json:"typed_rewrite_debt_bytes"`
-	VlogDeleted                 uint64                    `json:"vlog_deleted_segments"`
-	VlogPending                 uint64                    `json:"vlog_pending_segments"`
-	VlogReferencedPlusProtected uint64                    `json:"vlog_referenced_plus_protected_bytes"`
-	TypedGC                     ColumnAssetGCStats        `json:"typed_gc"`
-	ValueLogGC                  backenddb.ValueLogGCStats `json:"vlog_gc"`
+	Epoch               int                          `json:"epoch"`
+	FlushNS             int64                        `json:"flush_ns"`
+	CheckpointNS        int64                        `json:"checkpoint_ns"`
+	BeforeFoldGCNS      int64                        `json:"before_fold_gc_ns"`
+	BeforeFoldGC        ColumnAssetGCStats           `json:"before_fold_gc"`
+	FoldNS              int64                        `json:"fold_ns"`
+	Fold                r1LifecycleFoldRecord5060    `json:"fold"`
+	FoldCheckpointNS    int64                        `json:"fold_checkpoint_ns"`
+	OverlayNS           int64                        `json:"overlay_ns"`
+	Overlay             any                          `json:"overlay"`
+	OverlayCheckpointNS int64                        `json:"overlay_checkpoint_ns"`
+	Reclaim             r1LifecycleReclaimRecord5060 `json:"reclaim"`
+	VlogGCNS            int64                        `json:"vlog_gc_ns"`
+	ValueLogGC          backenddb.ValueLogGCStats    `json:"vlog_gc"`
+	VacuumNS            int64                        `json:"vacuum_ns"`
+	Vacuum              backenddb.VacuumOnlineStats  `json:"vacuum"`
+	MaintenanceNS       int64                        `json:"maintenance_ns"`
 }
 
 type r1LifecycleIDCoverage5060 struct {
@@ -411,11 +401,6 @@ type r1LifecycleIDCoverage5060 struct {
 	RevisitedIDs          int    `json:"revisited_ids"`
 	CumulativeDistinctIDs int    `json:"cumulative_distinct_ids"`
 	IDsSHA256             string `json:"ids_sha256"`
-}
-
-type r1LifecycleReleaseGC5060 struct {
-	DurationNS int64              `json:"duration_ns"`
-	TypedGC    ColumnAssetGCStats `json:"typed_gc"`
 }
 
 // Retain all aggregate attribution without per-reference/segment lists.

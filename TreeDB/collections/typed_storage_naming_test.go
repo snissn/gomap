@@ -331,6 +331,9 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// R1 logical folding measures the retained public compaction API.
+	{path: "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 3, occurrences: 4},
+	{path: "TreeDB/docs/spec/r1-row-lifecycle.md", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 1},
 	// Indexed mutation fixtures use the retained public schema and value types.
 	{path: "TreeDB/collections/r1_mutation_5059_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 10},
 	// R1 lifecycle construction uses the retained public configuration and
