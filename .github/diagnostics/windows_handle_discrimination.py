@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -14,8 +15,10 @@ PINS = [
     ("common-A", "dca8ab478bae64e47ca92aeddaf0b2fe4ddffa39"),
     ("R", "363d8593d6c8e9d23a49d59c33c97a85ba087f77"),
 ]
-TEST = "TestCOWPublicSelectedSourceRewriteKeepsOldCuts"
-COMMAND = ["go", "test", "-json", "-timeout", "30m", "-p", "1", ".", "-run", "^(" + TEST + ")$", "-count=1"]
+CONTEXT_PATH = Path(__file__).with_name("windows_handle_full_context.json")
+CONTEXT = json.loads(CONTEXT_PATH.read_text(encoding="utf-8"))
+TEST_NAMES = CONTEXT["test_order"]
+COMMAND = ["go", "test", "-json", "-timeout", "30m", "-p", "1", ".", "-run", "^(" + "|".join(TEST_NAMES) + ")$", "-count=1"]
 REPO = Path.cwd()
 OUT = Path(sys.argv[1]).resolve()
 SOURCES = Path(os.environ["RUNNER_TEMP"]) / "windows-handle-private-sources"
@@ -66,14 +69,21 @@ def source_manifest(source, sha, destination, allow_overlay=False):
 def run_test(label, sha, source, mode):
     folder = OUT / label / mode
     folder.mkdir(parents=True, exist_ok=True)
-    source_manifest(source, sha, folder / "source-manifest-before.json", mode != "original")
+    mismatches = source_manifest(source, sha, folder / "source-manifest-before.json", mode != "original")
+    if mode != "original":
+        assert set(mismatches) == {"TreeDB/internal/valuelog/manager.go", "TreeDB/internal/valuelog/stable_resource.go"}
     started = time.time()
-    metadata = {"label": label, "source_sha": sha, "mode": mode, "advisory_only": mode != "original", "command": COMMAND, "cwd": str(source / "TreeDB"), "started_unix": started, "environment": {key: os.environ.get(key) for key in ["GOMEMLIMIT", "GOMAXPROCS", "GOWORK", "GOFLAGS", "CGO_ENABLED", "GOTOOLCHAIN"]}}
+    declared_tests = set()
+    for test_source in (source / "TreeDB").glob("*_test.go"):
+        declared_tests.update(re.findall(r"^func (Test[A-Za-z0-9_]+)\(", test_source.read_text(encoding="utf-8"), re.MULTILINE))
+    absent_names = sorted(set(TEST_NAMES) - declared_tests)
+    metadata = {"expected_top_level_order": TEST_NAMES, "source_absent_names": absent_names, "label": label, "source_sha": sha, "mode": mode, "advisory_only": mode != "original", "command": COMMAND, "cwd": str(source / "TreeDB"), "started_unix": started, "environment": {key: os.environ.get(key) for key in ["GOMEMLIMIT", "GOMAXPROCS", "GOWORK", "GOFLAGS", "CGO_ENABLED", "GOTOOLCHAIN"]}}
     write_json(folder / "invocation.json", metadata)
     print("Starting " + label + "/" + mode + " " + sha, flush=True)
     with (folder / "go-test.jsonl").open("wb") as stdout, (folder / "go-test.stderr").open("wb") as stderr:
         result = subprocess.run(COMMAND, cwd=source / "TreeDB", stdout=stdout, stderr=stderr)
     events = []
+    top_level_order = []
     malformed = []
     for line in (folder / "go-test.jsonl").read_text(encoding="utf-8", errors="replace").splitlines():
         try:
@@ -81,11 +91,15 @@ def run_test(label, sha, source, mode):
         except json.JSONDecodeError:
             malformed.append(line)
             continue
+        if event.get("Action") == "run" and event.get("Test") and "/" not in event["Test"]:
+            top_level_order.append(event["Test"])
         if event.get("Action") in ["pass", "fail", "skip"]:
             events.append(event)
-    metadata.update({"exit_code": result.returncode, "elapsed_seconds": time.time() - started, "terminal_events": events, "malformed_json_lines": malformed})
+    metadata.update({"exit_code": result.returncode, "elapsed_seconds": time.time() - started, "terminal_events": events, "malformed_json_lines": malformed, "observed_top_level_order": top_level_order, "top_level_order_matches_full_original_context": top_level_order == TEST_NAMES})
     write_json(folder / "result.json", metadata)
-    source_manifest(source, sha, folder / "source-manifest-after.json", mode != "original")
+    mismatches = source_manifest(source, sha, folder / "source-manifest-after.json", mode != "original")
+    if mode != "original":
+        assert set(mismatches) == {"TreeDB/internal/valuelog/manager.go", "TreeDB/internal/valuelog/stable_resource.go"}
     (folder / "git-status-after.txt").write_text(capture(["git", "status", "--porcelain"], source), encoding="utf-8")
     print(label + "/" + mode + " exit=" + str(result.returncode), flush=True)
     return metadata
@@ -121,6 +135,7 @@ def main():
     write_json(OUT / "environment.json", {"platform": platform.platform(), "python": sys.version, "go_version": capture(["go", "version"]), "go_env": json.loads(capture(["go", "env", "-json"])), "diagnostic_branch_sha": capture(["git", "rev-parse", "HEAD"]), "pins": PINS, "environment": {key: value for key, value in os.environ.items() if key in ["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA", "GITHUB_REF", "GITHUB_WORKFLOW_REF", "RUNNER_OS", "RUNNER_ARCH", "ImageOS", "ImageVersion", "GOMEMLIMIT", "GOMAXPROCS", "GOWORK"]}})
     (OUT / "workflow.yml").write_bytes((REPO / ".github/workflows/treedb-tests.yml").read_bytes())
     (OUT / "diagnostic-helper.py").write_bytes(Path(__file__).read_bytes())
+    (OUT / "full-context.json").write_bytes(CONTEXT_PATH.read_bytes())
     for _, sha in PINS:
         subprocess.run(["git", "fetch", "--no-tags", "origin", sha], cwd=REPO, check=True)
     originals = []
@@ -128,7 +143,7 @@ def main():
         originals.append(run_test(label, sha, checkout(label + "-original", sha), "original"))
     instrumented = []
     for result in originals:
-        actual_test_failure = any(e.get("Action") == "fail" and e.get("Test", "").startswith(TEST) for e in result["terminal_events"])
+        actual_test_failure = any(e.get("Action") == "fail" and e.get("Test", "").split("/")[0] in TEST_NAMES for e in result["terminal_events"])
         if result["exit_code"] != 0 and actual_test_failure:
             label, sha = result["label"], result["source_sha"]
             source = checkout(label + "-instrumented", sha)
@@ -138,7 +153,7 @@ def main():
             instrumented.append(observed)
     write_json(OUT / "receipt.json", {"originals": originals, "instrumented_advisory": instrumented, "product_gate": False, "retries": 0})
     # Any original failure remains a failed diagnostic job even if advisory rerun passes.
-    return 1 if any(r["exit_code"] != 0 for r in originals) else 0
+    return 1 if any(r["exit_code"] != 0 or not r["top_level_order_matches_full_original_context"] or r["source_absent_names"] or r["malformed_json_lines"] for r in originals) else 0
 
 
 if __name__ == "__main__":

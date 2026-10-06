@@ -1,5 +1,5 @@
 name: "TreeDB: vet+test"
-run-name: "Windows handle discrimination: base/common-A/R (advisory)"
+run-name: "Windows full-process handle discrimination: base/common-A/R (advisory)"
 on:
   workflow_dispatch:
 permissions:
@@ -31,7 +31,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-handle-discrimination-${{ github.run_id }}-${{ github.run_attempt }}
+          name: windows-handle-full-context-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-handle-packet/
           if-no-files-found: error
           retention-days: 30
