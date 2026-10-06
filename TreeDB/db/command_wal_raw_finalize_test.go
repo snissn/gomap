@@ -119,6 +119,9 @@ func TestRawKVPreparedFinalizerWithoutWALUsesSameProducerIdentity(t *testing.T) 
 		func() error { entry.Revision = 50; return nil },
 		func(payload []byte, lookup func(page.ValuePtr) (uint64, bool)) error {
 			called = true
+			if got := d.valueLogIdentityPins.ActivePins(); got != baselinePins {
+				t.Fatalf("WAL-off finalizer acquired journal-custody pins: %d want %d", got, baselinePins)
+			}
 			ops, err := commitlog.DecodeRawKVBatchPayload(payload)
 			if err != nil {
 				return err

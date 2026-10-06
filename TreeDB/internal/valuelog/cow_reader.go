@@ -358,7 +358,34 @@ func COWDecoderRetentionSizes(definitionBytes, rawCap, inputCap, windowCap uint6
 type COWDecoder struct {
 	mu                           sync.Mutex
 	decoder                      *zstd.Decoder
+	blockCodec                   BlockCodec
+	blockOnly, closed            bool
 	producerID, rawCap, inputCap uint64
+}
+
+// COWBlockDecoderRetentionSizes describes allocation-free Snappy/LZ4 decode
+// into caller-owned scratch. These codecs retain no dictionary or zstd state.
+func COWBlockDecoderRetentionSizes(codec BlockCodec, rawCap, inputCap uint64) (COWDecoderAllocationSizes, error) {
+	if (codec != BlockCodecSnappy && codec != BlockCodecLZ4) || rawCap == 0 || rawCap > math.MaxUint32 || inputCap == 0 || inputCap > math.MaxUint32 {
+		return COWDecoderAllocationSizes{}, ErrCOWReadCapacity
+	}
+	return COWDecoderAllocationSizes{OwnerWrapper: uint64(unsafe.Sizeof(COWDecoder{})), RawBacking: rawCap, InputBacking: inputCap}, nil
+}
+
+// NewCOWBlockDecoder owns only finite native block scratch. The actual encoded
+// codec must match on every Decode; dictionary/zstd records cannot use it.
+func NewCOWBlockDecoder(codec BlockCodec, rawCap, inputCap uint64, admit func(COWDecoderAllocationSizes) error) (*COWDecoder, error) {
+	sizes, err := COWBlockDecoderRetentionSizes(codec, rawCap, inputCap)
+	if err != nil {
+		return nil, err
+	}
+	if admit == nil {
+		return nil, ErrCOWReadCapacity
+	}
+	if err := admit(sizes); err != nil {
+		return nil, err
+	}
+	return &COWDecoder{blockOnly: true, blockCodec: codec, rawCap: rawCap, inputCap: inputCap}, nil
 }
 
 // NewCOWDecoder validates exact owned-definition provenance before admission.
@@ -412,7 +439,7 @@ func (d *COWDecoder) Decode(frame FrameHeader, payload, dst []byte) ([]byte, err
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.decoder == nil {
+	if d.closed || d.decoder == nil && !d.blockOnly {
 		return nil, ErrCOWDecoderClosed
 	}
 	if frame.DictID != d.producerID {
@@ -425,6 +452,9 @@ func (d *COWDecoder) Decode(frame FrameHeader, payload, dst []byte) ([]byte, err
 		return nil, ErrCorrupt
 	}
 	if frame.DictID != 0 && frame.Reserved != 0 {
+		return nil, ErrCorrupt
+	}
+	if d.blockOnly && (frame.DictID != 0 || BlockCodec(frame.Reserved) != d.blockCodec) {
 		return nil, ErrCorrupt
 	}
 	need := len(dst)
@@ -474,5 +504,6 @@ func (d *COWDecoder) Close() {
 		d.decoder.Close()
 		d.decoder = nil
 	}
+	d.closed = true
 	d.producerID, d.rawCap, d.inputCap = 0, 0, 0
 }

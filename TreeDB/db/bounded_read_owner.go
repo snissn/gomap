@@ -137,3 +137,16 @@ func (s *Snapshot) GetEntryExactWithFixedScratch(key, keyScratch, leafScratch []
 	defer s.endRead()
 	return s.tree.GetEntryWithFixedScratch(key, keyScratch, leafScratch, readLeaf)
 }
+
+// OwnedUserRootEmpty checks the exact tree pinned by this snapshot. It does
+// not capture a current backend root or construct an iterator.
+func (s *Snapshot) OwnedUserRootEmpty() (bool, error) {
+	if s == nil {
+		return false, ErrClosed
+	}
+	if err := s.beginRead(); err != nil {
+		return false, err
+	}
+	defer s.endRead()
+	return s.tree.OwnedUserRootEmpty()
+}

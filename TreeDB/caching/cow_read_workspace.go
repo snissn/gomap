@@ -18,19 +18,24 @@ type cowReadAllocation struct {
 }
 type cowReadCodec struct {
 	id         uint64
+	codec      valuelog.BlockCodec
 	decoder    *valuelog.COWDecoder
 	definition *dictdb.DictionaryReadDefinition // nil when borrowed from the cut
 	input, raw []byte
 	lease      *memtable.COWExternalLease
 }
+type cowPointScratch struct {
+	lease     *memtable.COWExternalLease
+	key, leaf [page.PageSize]byte
+}
+
 type cowReadWorkspace struct {
 	snapshot      *Snapshot
 	lease         *memtable.COWExternalLease
 	allocations   *cowReadAllocation
 	codecs        []*cowReadCodec
 	input, output []byte
-	key           [page.PageSize]byte
-	leaf          [page.PageSize]byte
+	point         *cowPointScratch
 }
 
 // Read owners are private to one snapshot and serialized by cowReadMu. Each
@@ -48,16 +53,50 @@ func (s *Snapshot) cowWorkspaceLocked() (*cowReadWorkspace, error) {
 }
 
 func newCOWReadWorkspace(s *Snapshot) (*cowReadWorkspace, error) {
-	n := s.cowCache.budget.Limits().MaxResources
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadWorkspace{}))) +
-		memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowReadCodec)(nil)))) +
 		memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0))))
 	lease, err := s.cowCache.budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err
 	}
-	w := &cowReadWorkspace{snapshot: s, lease: lease, codecs: make([]*cowReadCodec, n)}
+	w := &cowReadWorkspace{snapshot: s, lease: lease}
 	return w, nil
+}
+
+// Point traversal needs page scratch; a winning cached pointer does not.
+func (w *cowReadWorkspace) pointScratch() (*cowPointScratch, error) {
+	if w.point == nil {
+		lease, err := w.snapshot.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowPointScratch{}))))
+		if err != nil {
+			return nil, err
+		}
+		w.point = &cowPointScratch{lease: lease}
+	}
+	return w.point, nil
+}
+
+// Codec arrays grow only for actual dependencies. All discarded arrays stay
+// charged through read-owner close, matching the existing buffer growth rule.
+func (w *cowReadWorkspace) addCodecSlot() (int, error) {
+	limit := w.snapshot.cowCache.budget.Limits().MaxResources
+	if len(w.codecs) >= limit {
+		return 0, memtable.ErrCOWCapacity
+	}
+	if len(w.codecs) == cap(w.codecs) {
+		capacity := min(max(1, 2*cap(w.codecs)), limit)
+		bytes := memtable.COWAllocationCharge(uint64(capacity)*uint64(unsafe.Sizeof((*cowReadCodec)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowReadAllocation{})))
+		lease, err := w.snapshot.cowCache.budget.AcquireExternal(bytes)
+		if err != nil {
+			return 0, err
+		}
+		codecs := make([]*cowReadCodec, len(w.codecs), capacity)
+		copy(codecs, w.codecs)
+		w.codecs = codecs
+		w.allocations = &cowReadAllocation{lease: lease, next: w.allocations}
+	}
+	slot := len(w.codecs)
+	w.codecs = append(w.codecs, nil)
+	return slot, nil
 }
 
 func cowReadCapacity(n uint64) uint64 {
@@ -156,7 +195,7 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 			}
 			continue
 		}
-		if c.id == shape.DictID {
+		if c.id == shape.DictID && c.codec == shape.Codec {
 			if uint64(cap(c.input)) >= shape.PayloadBytes() && uint64(cap(c.raw)) >= shape.RawBytes {
 				return c, nil
 			}
@@ -165,7 +204,11 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 		}
 	}
 	if slot < 0 {
-		return nil, memtable.ErrCOWCapacity
+		var err error
+		slot, err = w.addCodecSlot()
+		if err != nil {
+			return nil, err
+		}
 	}
 	var definition []byte
 	var owner *dictdb.DictionaryReadDefinition
@@ -177,7 +220,13 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 		}
 	}
 	input, raw := cowReadCapacity(shape.PayloadBytes()), cowReadCapacity(shape.RawBytes)
-	sizes, err := valuelog.COWDecoderRetentionSizes(uint64(len(definition)), raw, input, max(raw, 2048))
+	blockOnly := shape.DictID == 0 && (shape.Codec == valuelog.BlockCodecSnappy || shape.Codec == valuelog.BlockCodecLZ4)
+	var sizes valuelog.COWDecoderAllocationSizes
+	if blockOnly {
+		sizes, err = valuelog.COWBlockDecoderRetentionSizes(shape.Codec, raw, input)
+	} else {
+		sizes, err = valuelog.COWDecoderRetentionSizes(uint64(len(definition)), raw, input, max(raw, 2048))
+	}
 	if err != nil {
 		owner.Close()
 		return nil, err
@@ -192,13 +241,18 @@ func (w *cowReadWorkspace) codec(shape valuelog.COWRecordShape) (*cowReadCodec, 
 		owner.Close()
 		return nil, err
 	}
-	decoder, err := valuelog.NewCOWDecoder(shape.DictID, definition, raw, input, max(raw, 2048), func(valuelog.COWDecoderAllocationSizes) error { return nil })
+	var decoder *valuelog.COWDecoder
+	if blockOnly {
+		decoder, err = valuelog.NewCOWBlockDecoder(shape.Codec, raw, input, func(valuelog.COWDecoderAllocationSizes) error { return nil })
+	} else {
+		decoder, err = valuelog.NewCOWDecoder(shape.DictID, definition, raw, input, max(raw, 2048), func(valuelog.COWDecoderAllocationSizes) error { return nil })
+	}
 	if err != nil {
 		lease.Close()
 		owner.Close()
 		return nil, err
 	}
-	c := &cowReadCodec{id: shape.DictID, decoder: decoder, definition: owner, input: make([]byte, input), raw: make([]byte, raw), lease: lease}
+	c := &cowReadCodec{id: shape.DictID, codec: shape.Codec, decoder: decoder, definition: owner, input: make([]byte, input), raw: make([]byte, raw), lease: lease}
 	if old := w.codecs[slot]; old != nil {
 		old.close()
 	}
@@ -216,6 +270,13 @@ func (c *cowReadCodec) close() {
 	c.lease.Close()
 }
 func (w *cowReadWorkspace) close() {
+	if w == nil {
+		return
+	}
+	if w.point != nil {
+		w.point.lease.Close()
+		w.point = nil
+	}
 	for _, c := range w.codecs {
 		if c != nil {
 			c.close()
@@ -293,7 +354,11 @@ func (s *Snapshot) cowEntryLocked(key []byte) (node.LeafEntry, error) {
 	if err != nil {
 		return node.LeafEntry{}, err
 	}
-	return s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch(key, w.key[:], w.leaf[:], w.readLeaf)
+	point, err := w.pointScratch()
+	if err != nil {
+		return node.LeafEntry{}, err
+	}
+	return s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch(key, point.key[:], point.leaf[:], w.readLeaf)
 }
 
 func (s *Snapshot) cowGetVersionedAppendOpen(key, dst []byte) ([]byte, page.EntryRevision, error) {

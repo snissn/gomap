@@ -1479,8 +1479,15 @@ func (db *DB) finalizeRawKVEntryScanWithoutCommandWAL(prepare func() error, fina
 	if err != nil {
 		return err
 	}
-	if _, err := db.captureCommandWALExternalDependencies(intent); err != nil {
-		return err
+	// WAL-off cached publication has no journal dependency custody. Its exact
+	// producer RID planner and finalizer remain authoritative; the finalizer
+	// attaches independent live file/dictionary owners before cut visibility.
+	// Producer placement already establishes read visibility. Keep other
+	// recovery/helper profiles on their existing dependency capture path.
+	if db.durability != DurabilityWALOffRelaxed {
+		if _, err := db.captureCommandWALExternalDependencies(intent); err != nil {
+			return err
+		}
 	}
 	// This exact lookup includes registered producer pointers. It neither
 	// independently reads unflushed pointers nor allocates a second RID registry.

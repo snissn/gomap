@@ -5,6 +5,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -48,4 +49,16 @@ func (t *Tree) OwnedPointerProjectionIterator(start, end []byte, readLeaf func(p
 	it.resetStack()
 	it.Seek(start)
 	return it
+}
+
+// OwnedUserRootEmpty proves emptiness from this exact captured tree root. It
+// reads one validated index page without iterator or key scratch allocation.
+// An external root or any nonempty/internal root conservatively returns false.
+func (t *Tree) OwnedUserRootEmpty() (bool, error) {
+	var n node.Node
+	verify := t.pager != nil && t.pager.VerifyOnRead()
+	if err := t.loadNodeViewWithLoadKindInto(&n, t.rootPageID, verify, false); err != nil {
+		return false, err
+	}
+	return n.Type() == page.PageTypeLeaf && n.Count() == 0, nil
 }

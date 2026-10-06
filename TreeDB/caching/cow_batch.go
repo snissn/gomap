@@ -45,31 +45,46 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 	n := len(b.entries)
 	shards := len(c.writers)
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowBatchPreparation{}))) +
-		uint64(n)*memtable.COWAllocationCharge(uint64(unsafe.Sizeof(memtable.COWMutation{}))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]memtable.COWMutation{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWPrepareOptions{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint32{}))) +
-		uint64(n)*memtable.COWAllocationCharge(4) + memtable.COWAllocationCharge(uint64(shards)*8)
+		memtable.COWAllocationCharge(uint64(n)*4)
 	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof((*cowLiveResource)(nil))))
 	bytes += memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
-		uint64(n)*memtable.COWAllocationCharge(8)
+		memtable.COWAllocationCharge(uint64(n)*8)
+	reusePrediction := len(b.shardCnts) == shards && len(b.cowPredictionGroups) == shards && len(b.cowPredictionStorage) == n
+	if !reusePrediction {
+		bytes += memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(int(0)))) +
+			memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]memtable.COWMutation{}))) +
+			memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof(memtable.COWMutation{})))
+	}
 	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return err
 	}
 	p := &cowBatchPreparation{scratch: lease, files: make([][]uint32, shards), resources: make([]*cowLiveResource, 0, 2*n), dictionaries: make([][]uint64, shards)}
 	b.cowPrepared = p // caller drains all cancellation, including partial stage
-	counts := make([]int, shards)
+	// Prediction has finished. Reuse its admitted scalar/group/mutation backing,
+	// replacing predicted pointers/revisions with the final canonical entries.
+	counts, groups, mutations := b.shardCnts, b.cowPredictionGroups, b.cowPredictionStorage
+	if !reusePrediction {
+		counts = make([]int, shards)
+		groups = make([][]memtable.COWMutation, shards)
+		mutations = make([]memtable.COWMutation, n)
+	}
+	clear(counts)
 	for _, e := range b.entries {
 		counts[b.db.shardIndex(e.Key)]++
 	}
-	groups := make([][]memtable.COWMutation, shards)
 	opts := make([]memtable.COWPrepareOptions, shards)
+	files := make([]uint32, n)
+	dictionaries := make([]uint64, n)
+	start := 0
 	for i, count := range counts {
-		groups[i] = make([]memtable.COWMutation, 0, count)
-		p.files[i] = make([]uint32, 0, count)
-		p.dictionaries[i] = make([]uint64, 0, count)
+		groups[i] = mutations[start : start : start+count]
+		p.files[i] = files[start : start : start+count]
+		p.dictionaries[i] = dictionaries[start : start : start+count]
+		start += count
 	}
 	for _, e := range b.entries {
 		i := b.db.shardIndex(e.Key)
