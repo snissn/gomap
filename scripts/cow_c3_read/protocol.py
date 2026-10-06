@@ -380,6 +380,7 @@ def config(path):
         for group in x["latency_groups"]:
             need({group + "_p" + str(p) + "_ns" for p in (50, 95, 99)} <= units, "missing active latency group")
         need(set(x["comparable_metrics"]) <= units and set(c["comparison_metrics"]) <= units, "unavailable comparison metric")
+        need(set(c["comparison_metrics"]) <= set(x["comparison_metrics"]), "globally required comparison metric missing from case")
         need(set(x["comparison_metrics"]) <= units and all(v in ("lower", "higher") for v in x["comparison_metrics"].values()), "missing effect direction")
         for variant in ("baseline", "candidate"):
             for unit, rule in x["rules"][variant].items():
