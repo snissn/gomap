@@ -1046,10 +1046,19 @@ so the issue's compile-capability red exception applies; authored semantic
 regressions still require a runner-classified normal/race result. No unexecuted
 baseline is represented as an observed red.
 
-### Six-outcome mixed-window observation
+### Bounded mixed-window observation
 
-The mixed-window driver precomputes full-population canonical FP32 truth for all
-seven planned prefixes. Omitted profile rejects changing top10 ID/score bits;
+The mixed-window driver retains the six-original/60-second default. Explicit
+`-mixed-originals` admits 6..63 declared originals and a bounded mixed window of
+up to 300 seconds when the pacing, RPC and output budgets fit. Cumulative
+serial admission requires `(N-1)*max(interval,2*rpc-timeout)+2*rpc-timeout < window`;
+write and visibility are separate serial RPCs. The six/60s defaults require an
+explicit feasible RPC budget (3s fits, the shared10s default does not).
+Actual dispatch still requires both full budgets before cutoff; arithmetic
+headroom does not guarantee completion under scheduling/local-work delays. Before networking,
+it precomputes full-population canonical FP32 truth for all `count+1` planned
+prefixes (at most 64); its uint64 mask includes bit 63. Omitted profile rejects
+changing top10 ID/score bits;
 explicit `changing-top10` selects deterministic existing corpus IDs and requires
 a real top10 membership change. Exported corpus truth remains mandatory baseline
 admission; later prefix oracles derive actual changed corpus/population truth
@@ -1062,14 +1071,22 @@ Recall retains the existing threshold. Serial ACK token probes, original
 superseded-replace/delete retries and final acknowledged-ledger recall are
 separate untimed checks. No failed/UNKNOWN sample is retried or discarded.
 
-An explicit optional existing diagnostics attachment proves six retained original
-outcomes and final known-ID content/absence plus exact live membership, while all
-voters remain live. `VerifyVectorPartitionColocatedMutationLogicalStateV1` and
-six nonzero-digest exact lookups establish original outcomes; the prepared owner
-establishes source/live proof. Actual current-FSM DB, ACTIVE scope, root/applied
+An explicit optional existing diagnostics attachment proves every declared retained
+original outcome (6..63) and final known-ID content/absence plus exact live
+membership, while all voters remain live.
+`VerifyVectorPartitionColocatedMutationLogicalStateV1` and one nonzero-digest exact
+lookup per declared original establish the complete retained ledger; the prepared
+owner establishes source/live proof. One fresh routed leader/quorum visibility
+proof at the highest validated commit covers the strictly ascending same-scope
+original-token prefix. Every original witness is still reconstructed and checked
+against the current local FSM. Actual current-FSM DB, ACTIVE scope, root/applied
 state, physical command-WAL coverage, next LSN and summary are fenced/rechecked.
 Pending publication, stale matching handles and torn proofs refuse. Admission
 may flush, so unchanged physical state is mandatory; this is not an offline or
-intrinsically read-only proof. This does not establish the entire source population
-or cross-group semantics. See the mixed-window README for receipt/resource limits
-and `TestMixed*` / `TestFixedPeerColocatedAuditCurrentAuthorityV1` for new controls.
+intrinsically read-only proof. Witness and known-ID checks alone do not establish
+the entire source population; the optional population expectation adds a complete
+canonical source-vector scan, without proving equality of the live ANN graph.
+Cross-group semantics remain outside this observation. See the mixed-window README
+for receipt/resource limits and `TestMixed*`,
+`TestFixedPeerColocatedAuditCurrentAuthorityV1` and
+`TestFixedPeerColocatedAuditVariableLengthCurrentAuthorityV2` for controls.

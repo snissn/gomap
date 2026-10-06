@@ -1236,3 +1236,15 @@ GOWORK=off go test -tags treedb_safe ./TreeDB/internal/memtable -run '^$' \
 Repeat without the tag for the default comparator. Fixture setup is excluded;
 1 MiB keys prevent short-input conversion elision from hiding allocation costs.
 See [ownership and qualification scope](../../TreeDB/docs/spec/cow-memtable-ownership.md).
+
+The dedicated [R1 collection capture](../collection_workload_bench/README.md#r1-complete-local-row-comparison)
+uses `scripts/r1_collection_capture.sh` and the `gomap-r1-row-v1` packet. It reports
+public full-row and prepared-view boundaries with matched SQLite durability;
+these dedicated artifacts are not `-profile-dir` or benchprof inputs.
+
+The standalone `BenchmarkR1Lifecycle5060` uses `scripts/r1_lifecycle_capture.sh`
+with the `gomap-r1-lifecycle-packet-v1` format, raw calibration/final process logs
+and strict source/count validation. For a small nonqualifying rehearsal, use
+`--qualification rehearsal --out /tmp/r1-lifecycle --repetitions 2 --epochs 2
+--documents 32 --calls-per-epoch 8`. See the [lifecycle capture contract](../../TreeDB/docs/spec/r1-row-lifecycle.md#source-bound-standalone-capture).
+These artifacts are separate from unified-bench profiles and benchprof inputs.

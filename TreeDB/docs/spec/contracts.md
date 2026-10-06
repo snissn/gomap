@@ -18,6 +18,13 @@ Status:
   supported entry points; planned commands in `user-command-wal.md` are not
   supported merely because they appear in that design.
 
+The bounded R1 indexed-row capability and measurement contract is recorded in
+[r1-indexed-row-contract.md](r1-indexed-row-contract.md). The supported ordinary
+point and bounded index-range full-row behavior, caller-buffer ownership, and
+captured prepared-view lifetime are specified in
+[r1-row-reads.md](r1-row-reads.md). The benchmark contract retains the historical
+residual-only range rejection as starting-source evidence.
+
 ## 1. Key Model
 
 - Raw KV keys and values are byte strings.
@@ -779,8 +786,10 @@ indefinite write capacity. See [the split insert contract](vector-partition-spli
 ### Mixed colocated qualification diagnostics
 
 Optional version1 `ColocatedAudit` on existing fixed-peer diagnostics is bounded
-to six original outcomes and final known IDs, with an optional complete current
-source-vector `Population` expectation (524288 encoded plan bytes). A population-only
+to 6..63 declared original outcomes and their final known IDs, with an optional
+complete current source-vector `Population` expectation (524288 encoded plan
+bytes). An outcome attachment requires exactly the declared current retained
+outcome count and every original witness; a subset ledger cannot pass. A population-only
 initial attachment requires empty outcome/final ledgers, zero highest new commit
 and a positive applied floor; partial ledgers cannot downgrade. Its
 current-FSM/ACTIVE/root/applied/physical-WAL/summary fences and prepared-owner

@@ -73,6 +73,16 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 ### Canonical specs
 
+- [R1 local indexed row contract](r1-indexed-row-contract.md)
+  - selected native full-row fixture, capability gaps, matched SQLite durability,
+    public and prepared timer boundaries, and source-bound evidence rules.
+- [R1 indexed row mutations](r1-indexed-mutations.md)
+  - atomic typed insert/replace/upsert and indexed generic updates, admission,
+    input ownership, command ambiguity and process-recovery qualification.
+- [R1 complete-row reads](r1-row-reads.md)
+  - ordinary points and bounded index ranges reconstruct owned full rows from
+    one captured publication; prepared views preserve their open-time state.
+
 - `TreeDB/docs/spec/minima-native-execution.md`
   - #4614/#4615 typed Minima implementation contract, ownership/reuse decisions,
     mutable column-graph durability gates, and bounded-versus-full evidence.

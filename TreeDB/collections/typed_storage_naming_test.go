@@ -331,6 +331,11 @@ type typedStorageLegacyNameAllowlistEntry struct {
 }
 
 var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
+	// Indexed mutation fixtures use the retained public schema and value types.
+	{path: "TreeDB/collections/r1_mutation_5059_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 4, occurrences: 10},
+	// R1 lifecycle construction uses the retained public configuration and
+	// scalar type names to append a valid unpublished maintenance candidate.
+	{path: "TreeDB/collections/r1_lifecycle_5060_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 5},
 	// Prepared source capture, metadata codecs and their fixtures consume the
 	// retained public typed-column schema and normalization API.
 	{path: "TreeDB/collections/column_store_wire_v1.go", classification: typedStorageLegacyCompatibility, matchingLines: 13, occurrences: 15},
@@ -388,7 +393,9 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	// Raft snapshot M1 fixture names the public compatibility configuration and
 	// stable typed-column append API while proving ready-manifest transport.
 	{path: "TreeDB/internal/raftfsm/raft_snapshot_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 5},
-	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 72, occurrences: 78},
+	{path: "TreeDB/collections/api.go", classification: typedStorageLegacyCompatibility, matchingLines: 73, occurrences: 79},
+	// Complete-row read fixtures use the retained public schema configuration.
+	{path: "TreeDB/collections/r1_reads_5058_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 1, occurrences: 4},
 	// Buffered retained-document reconstruction tests exercise the public
 	// compatibility configuration and typed-column value vocabulary.
 	{path: "TreeDB/collections/api_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 5, occurrences: 6},
@@ -563,7 +570,7 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/collections/column_semantics.go", classification: typedStorageLegacyCompatibility, matchingLines: 34, occurrences: 34},
 	{path: "TreeDB/collections/dense_numeric_vector.go", classification: typedStorageLegacyCompatibility, matchingLines: 32, occurrences: 41},
 	{path: "TreeDB/collections/dense_numeric_vector_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 35, occurrences: 38},
-	{path: "TreeDB/collections/document_materializer.go", classification: typedStorageLegacyCompatibility, matchingLines: 15, occurrences: 15},
+	{path: "TreeDB/collections/document_materializer.go", classification: typedStorageLegacyCompatibility, matchingLines: 20, occurrences: 20},
 	{path: "TreeDB/collections/document_materializer_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 32, occurrences: 32},
 	{path: "TreeDB/collections/document_chunking_test.go", classification: typedStorageLegacyCompatibility, matchingLines: 16, occurrences: 17},
 	// #4619 typed service, materializer and work-proof controls reuse existing
@@ -727,6 +734,8 @@ var typedStorageLegacyNameAllowlist = []typedStorageLegacyNameAllowlistEntry{
 	{path: "TreeDB/docs/spec/column-graph-native-block-planner.md", classification: typedStorageLegacyDeferred, matchingLines: 1, occurrences: 1},
 	{path: "TreeDB/docs/spec/column-graph-native-reconstruction-inventory.md", classification: typedStorageLegacyDeferred, matchingLines: 14, occurrences: 14},
 	{path: "TreeDB/docs/spec/column-graph-native-vector-search.md", classification: typedStorageLegacyDeferred, matchingLines: 7, occurrences: 8},
+	// R1 names the existing public configuration and its legacy admission wording.
+	{path: "TreeDB/docs/spec/r1-indexed-row-contract.md", classification: typedStorageLegacyCompatibility, matchingLines: 2, occurrences: 2},
 	{path: "TreeDB/docs/spec/storage-format.md", classification: typedStorageLegacyDeferred, matchingLines: 4, occurrences: 4},
 	{path: "TreeDB/docs/spec/typed-column-adapter.md", classification: typedStorageLegacyCompatibility, matchingLines: 9, occurrences: 14},
 	{path: "TreeDB/docs/spec/typed-column-direct-view-alignment.md", classification: typedStorageLegacyCompatibility, matchingLines: 17, occurrences: 17},
