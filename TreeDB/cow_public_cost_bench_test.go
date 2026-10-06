@@ -72,6 +72,10 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 		b.Fatal(err)
 	}
 	cache := database.cached
+	resolved := database.Stats()
+	if database.ResolvedProfile() != profile || resolved["treedb.profile.resolved"] != string(profile) || resolved["treedb.cache.memtable_mode"] != mode {
+		b.Fatalf("resolved profile/mode: %s, %q, %q; want %s/%s", database.ResolvedProfile(), resolved["treedb.profile.resolved"], resolved["treedb.cache.memtable_mode"], profile, mode)
+	}
 	b.Cleanup(func() {
 		if err := database.Close(); err != nil {
 			b.Errorf("final Close: %v", err)
@@ -79,7 +83,7 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 		if mode == "cow_btree" {
 			s := cache.COWMemoryStats()
 			b.Logf("COW_FINAL_CLOSE total=%d history=%d reserved=%d retired=%d controls=%d external=%d generations=%d sources=%d views=%d leases=%d peak=%d", s.TotalBytes, s.HistoryBytes, s.ReservedBytes, s.RetiredBytes, s.ControlBytes, s.ExternalBytes, s.Generations, s.Sources, s.Views, s.ExternalLeases, s.PeakBytes)
-			if s.TotalBytes != 0 || s.Generations != 0 || s.Views != 0 || s.ExternalLeases != 0 || s.PeakBytes == 0 {
+			if s.TotalBytes != 0 || s.HistoryBytes != 0 || s.ReservedBytes != 0 || s.RetiredBytes != 0 || s.ControlBytes != 0 || s.ExternalBytes != 0 || s.Generations != 0 || s.Sources != 0 || s.Views != 0 || s.ExternalLeases != 0 || s.PeakBytes == 0 {
 				b.Error("COW final close did not drain")
 			}
 		}
