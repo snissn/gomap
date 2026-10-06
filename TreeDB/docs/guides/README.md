@@ -11,6 +11,9 @@ directories when moving between branches.
 
 ## Start here
 
+- [Native indexed typed rows](typed-row-store.md) — run the durable row example,
+  choose string/residual ownership, use complete current or captured reads, and
+  reconcile ambiguous ACKs and maintenance retention.
 - [Document chunking](document-chunking.md) — deterministic fixed-window and
   recursive chunkers, the `<parentID>#<ordinal>` child linkage convention, and
   re-chunk lifecycle semantics through `IngestChunkedDocument`.

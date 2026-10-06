@@ -59,6 +59,9 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 
 - `TreeDB/docs/guides/README.md`
   - index for typed-storage quickstarts, performance profiling, and vector typed-column guidance.
+- [Native indexed typed rows](../guides/typed-row-store.md)
+  - practical durable row example, complete/captured read ownership, indexed
+    mutations, ambiguity reconciliation, and lawful maintenance boundaries.
 - `TreeDB/docs/guides/collections-quickstart.md`
   - runnable hybrid collection smoke plus document-only, typed-row, typed-column, and hybrid layout examples.
 - `TreeDB/docs/guides/typed-storage-performance.md`
@@ -73,6 +76,15 @@ Given pre-alpha status, this is a living spec that tracks implementation.
 - [R1 local indexed row contract](r1-indexed-row-contract.md)
   - selected native full-row fixture, capability gaps, matched SQLite durability,
     public and prepared timer boundaries, and source-bound evidence rules.
+- [R1 indexed row mutations](r1-indexed-mutations.md)
+  - atomic typed insert/replace/upsert and indexed generic updates, admission,
+    input ownership, command ambiguity and process-recovery qualification.
+- [R1 complete-row reads](r1-row-reads.md)
+  - ordinary points and bounded index ranges reconstruct owned full rows from
+    one captured publication; prepared views preserve their open-time state.
+- [R1 row lifecycle](r1-row-lifecycle.md)
+  - captured-reader protection, recovery and lawful reclamation, with
+    source-bound repeating-churn costs and explicit retention attribution.
 
 - `TreeDB/docs/spec/minima-native-execution.md`
   - #4614/#4615 typed Minima implementation contract, ownership/reuse decisions,

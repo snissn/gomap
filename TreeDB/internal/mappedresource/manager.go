@@ -449,6 +449,16 @@ func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr erro
 	}
 }
 
+// ActiveHandles returns the current handle count without copying diagnostic maps.
+func (m *Manager) ActiveHandles() int64 {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stats.ActiveHandles
+}
+
 // Stats returns a stable snapshot.
 func (m *Manager) Stats() Stats {
 	if m == nil {

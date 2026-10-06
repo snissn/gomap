@@ -19,8 +19,11 @@ Status:
   supported merely because they appear in that design.
 
 The bounded R1 indexed-row capability and measurement contract is recorded in
-[r1-indexed-row-contract.md](r1-indexed-row-contract.md). It distinguishes current
-ordinary typed-range output gaps from complete prepared materialization.
+[r1-indexed-row-contract.md](r1-indexed-row-contract.md). The supported ordinary
+point and bounded index-range full-row behavior, caller-buffer ownership, and
+captured prepared-view lifetime are specified in
+[r1-row-reads.md](r1-row-reads.md). The benchmark contract retains the historical
+residual-only range rejection as starting-source evidence.
 
 ## 1. Key Model
 

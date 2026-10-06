@@ -440,6 +440,8 @@ go test -run '^$' \
 For the selected local indexed row workload, supported string carriers plus
 residual JSON, complete owned output, SQLite acknowledgement matching, and
 prepared-versus-public timing boundaries, see the
-[R1 indexed row contract](../spec/r1-indexed-row-contract.md). A typed-row name
-does not imply nullable/numeric typed batch carriers or complete ordinary indexed
-range materialization; use the capability matrix and measured public paths.
+[R1 indexed row contract](../spec/r1-indexed-row-contract.md). Ordinary points and
+bounded document ranges reconstruct complete rows on one captured publication;
+see [R1 complete-row reads](../spec/r1-row-reads.md) for output ownership and
+prepared-view lifetime. Nullable/numeric typed batch carriers remain outside
+this selected string-carrier contract.
