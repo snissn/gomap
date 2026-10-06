@@ -77,7 +77,12 @@ not emulated by two commands. Mixed churn here intentionally uses separate
 acknowledged delete/reinsert commands for every fourth call and a complete
 replacement for other calls. Its `rows` denominator records both mutations in a
 delete/reinsert call. Standalone delete removes distinct IDs and is checked for
-absence; later phases operate on the remaining live set.
+absence; later phases operate on the remaining live set. After every mutation
+phase, outside timers, the oracle checks all live unique email-to-ID mappings
+and absence of every historical email removed by updates, replacement, or
+deletes, including intermediate emails superseded within a phase. It uses
+public `FindByIndex("email", ...)` or an exact indexed SQL SELECT, alongside
+city range membership/order and complete-document verification.
 
 The benchmark has no concurrent writers. Its ID-range-plus-prepared-fetch route
 therefore measures complete rows safely in a quiescent application, but cannot
@@ -94,7 +99,10 @@ modes retain their original meanings. Its complete output is ordinary owned JSON
 for all engines. BSON conversion preserves ordinary JSON scalars and null/missing membership
 without Extended JSON numeric wrappers. Template lookup/conversion and native SQLite row
 reconstruction are inside fetch timers. Fixture-to-storage encoding and typed
-carrier/residual preparation are inside mutation timers in every cell.
+carrier/residual preparation are inside mutation timers in every cell. BSON
+encodes directly without an unused JSON pass. The preallocated oracle ledger
+records generated email references; all index lookups and assertions are outside
+mutation timers.
 
 - `load`: rows and transactions/batches reported separately.
 - `read_state_transition`: selected explicit flush/checkpoint, before ordinary

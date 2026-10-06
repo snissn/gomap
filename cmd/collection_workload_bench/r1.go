@@ -242,6 +242,7 @@ type r1Backend interface {
 	update([]r1Document) error
 	point([]byte) ([]byte, error)
 	rangeDocuments(string, int) ([][]byte, error)
+	emailIDs(string) ([][]byte, error)
 	capabilities([]r1Document) (map[string]string, error)
 	upsert([]r1Document) error
 	supportsUpsert() bool
@@ -508,6 +509,10 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 			}
 		}
 	}
+	emailHistory := make([]string, 0, len(fixture)+2*c.Operations)
+	for _, d := range fixture {
+		emailHistory = append(emailHistory, d.Email)
+	}
 	current := append([]r1Document(nil), fixture...)
 	for _, name := range []string{"update_nonindexed", "update_indexed", "replace", "delete", "mixed_churn", "upsert"} {
 		if name == "upsert" {
@@ -541,12 +546,14 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 			case "update_indexed":
 				d.City = fmt.Sprintf("city-%02d", (op+3)%8)
 				d.Email = fmt.Sprintf("rev%d-%s", d.Revision, fixture[i].Email)
+				emailHistory = append(emailHistory, d.Email)
 			case "replace":
 				d.Bio = strings.Repeat("y", 96)
 			case "upsert":
 				extra := d
 				extra.ID = fmt.Sprintf("extra-%012d", op)
 				extra.Email = "extra-" + extra.ID + "@example.test"
+				emailHistory = append(emailHistory, extra.Email)
 				if e := b.upsert([]r1Document{d, extra}); e != nil {
 					return 0, collections.DocumentMaterializationStats{}, e
 				}
@@ -599,7 +606,7 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 		}
 		err = r1VerifyAll(reader, current, c.Batch)
 		if err == nil {
-			err = r1VerifyIndexes(b, reader, current)
+			err = r1VerifyIndexes(b, reader, current, emailHistory)
 		}
 		if err == nil && len(deleted) > 0 {
 			docs, _, e := reader.fetch(r1IDs(deleted))
@@ -735,6 +742,14 @@ func r1TypedInput(rows []r1Document) ([][]byte, [][]byte, []collections.TypedCol
 func (t *r1Tree) encoded(rows []r1Document) ([][]byte, error) {
 	out := make([][]byte, len(rows))
 	for i, d := range rows {
+		if t.engine == "bson" {
+			raw, e := bson.Marshal(d)
+			if e != nil {
+				return nil, e
+			}
+			out[i] = raw
+			continue
+		}
 		raw, e := json.Marshal(d)
 		if e != nil {
 			return nil, e
@@ -742,10 +757,10 @@ func (t *r1Tree) encoded(rows []r1Document) ([][]byte, error) {
 		switch t.engine {
 		case "json", "typed-row":
 			out[i] = raw
-		case "bson":
-			out[i], e = bson.Marshal(d)
 		case "template-v1":
 			out[i], e = collections.EncodeTemplateV1DocumentJSON(raw)
+		default:
+			return nil, errors.New("unsupported document encoder")
 		}
 		if e != nil {
 			return nil, e
@@ -801,8 +816,9 @@ func (t *r1Tree) upsert(rows []r1Document) error {
 	_, e = t.col.UpsertTypedBatch(ids, retained, cols)
 	return e
 }
-func (t *r1Tree) supportsUpsert() bool      { return t.engine == "typed-row" }
-func (t *r1Tree) delete(ids [][]byte) error { _, e := t.col.DeleteBatch(ids); return e }
+func (t *r1Tree) supportsUpsert() bool                    { return t.engine == "typed-row" }
+func (t *r1Tree) delete(ids [][]byte) error               { _, e := t.col.DeleteBatch(ids); return e }
+func (t *r1Tree) emailIDs(email string) ([][]byte, error) { return t.col.FindByIndex("email", email) }
 func (t *r1Tree) rangeIDs(city string, limit int) ([][]byte, error) {
 	ids, _, e := t.col.FindByIndexRange("city", collections.IndexRangeOptions{Lower: collections.IndexRangeBound{Value: city, Inclusive: true}, Upper: collections.IndexRangeBound{Value: city, Inclusive: true}, Limit: limit})
 	return ids, e
@@ -1189,7 +1205,10 @@ func (t *r1Tree) capabilities(fixture []r1Document) (map[string]string, error) {
 	return caps, nil
 }
 
-func r1VerifyIndexes(b r1Backend, r r1Reader, current []r1Document) error {
+func r1VerifyIndexes(b r1Backend, r r1Reader, current []r1Document, emailHistory []string) error {
+	if e := r1VerifyEmailIndex(current, emailHistory, b.emailIDs); e != nil {
+		return e
+	}
 	for bucket := 0; bucket < 8; bucket++ {
 		city := fmt.Sprintf("city-%02d", bucket)
 		var expected []r1Document
@@ -1214,6 +1233,43 @@ func r1VerifyIndexes(b r1Backend, r r1Reader, current []r1Document) error {
 		}
 		if e = r1VerifyRows(r, expected); e != nil {
 			return e
+		}
+	}
+	return nil
+}
+
+func r1VerifyEmailIndex(current []r1Document, history []string, lookup func(string) ([][]byte, error)) error {
+	live := make(map[string]string, len(current))
+	for _, d := range current {
+		if _, exists := live[d.Email]; exists {
+			return errors.New("duplicate email in oracle model")
+		}
+		live[d.Email] = d.ID
+	}
+	seen := make(map[string]bool, len(history)+len(current))
+	for _, d := range current {
+		seen[d.Email] = true
+	}
+	for _, email := range history {
+		seen[email] = true
+	}
+	emails := make([]string, 0, len(seen))
+	for email := range seen {
+		emails = append(emails, email)
+	}
+	sort.Strings(emails)
+	for _, email := range emails {
+		ids, e := lookup(email)
+		if e != nil {
+			return e
+		}
+		id, present := live[email]
+		if present {
+			if len(ids) != 1 || string(ids[0]) != id {
+				return fmt.Errorf("email index mapping mismatch for %s", email)
+			}
+		} else if len(ids) != 0 {
+			return fmt.Errorf("historical email index entry remains for %s", email)
 		}
 	}
 	return nil

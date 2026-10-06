@@ -333,3 +333,20 @@ func (s *r1SQLite) rangeDocuments(city string, limit int) ([][]byte, error) {
 	}
 	return out, rows.Err()
 }
+
+func (s *r1SQLite) emailIDs(email string) ([][]byte, error) {
+	rows, e := s.db.Query("SELECT id FROM rows WHERE email=? ORDER BY id", email)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	var ids [][]byte
+	for rows.Next() {
+		var id string
+		if e = rows.Scan(&id); e != nil {
+			return nil, e
+		}
+		ids = append(ids, []byte(id))
+	}
+	return ids, rows.Err()
+}

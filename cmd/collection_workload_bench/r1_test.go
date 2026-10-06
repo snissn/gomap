@@ -191,3 +191,40 @@ func TestR1CompleteOracleAndGauge(t *testing.T) {
 		t.Fatal("gauge/counter attribution mismatch", counters)
 	}
 }
+
+func TestR1EmailIndexOracleRejectsStaleAndWrongMappings(t *testing.T) {
+	current := []r1Document{{ID: "live-id", Email: "current@example.test"}}
+	history := []string{"original@example.test", "intermediate@example.test", "deleted@example.test", "current@example.test"}
+	good := func(email string) ([][]byte, error) {
+		if email == current[0].Email {
+			return [][]byte{[]byte("live-id")}, nil
+		}
+		return nil, nil
+	}
+	if e := r1VerifyEmailIndex(current, history, good); e != nil {
+		t.Fatal(e)
+	}
+	for _, email := range history[:3] {
+		t.Run(email, func(t *testing.T) {
+			bad := func(value string) ([][]byte, error) {
+				if value == email {
+					return [][]byte{[]byte("stale-id")}, nil
+				}
+				return good(value)
+			}
+			if r1VerifyEmailIndex(current, history, bad) == nil {
+				t.Fatal("accepted stale historical email")
+			}
+		})
+	}
+	for _, ids := range [][][]byte{nil, {[]byte("wrong-id")}, {[]byte("live-id"), []byte("other-id")}} {
+		if r1VerifyEmailIndex(current, history, func(email string) ([][]byte, error) {
+			if email == current[0].Email {
+				return ids, nil
+			}
+			return nil, nil
+		}) == nil {
+			t.Fatal("accepted missing/wrong/nonunique current mapping")
+		}
+	}
+}
