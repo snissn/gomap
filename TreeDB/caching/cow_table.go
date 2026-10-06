@@ -17,11 +17,13 @@ var ErrCOWUnsupported = errors.New("operation unsupported by cow_btree cache")
 
 // cowTable adapts an already pinned immutable root to existing read/merge code.
 // Its containing cut owns the root reference; iterators acquire independent pins.
-// This adapter must never be installed as a legacy mutable shard.
+// The nil-root singleton is an immutable empty compatibility shard; populated
+// adapters are owned only by COW cuts.
 type cowTable struct {
 	shard     int
 	root      *memtable.COWRoot
 	size      int64
+	history   uint64 // conservative accepted C1 generation history; budget is authority
 	resources *cowGenerationResources
 }
 
@@ -62,7 +64,12 @@ func (*cowTable) DeleteSteal([]byte) { panic("mutation of immutable COW read ada
 func (*cowTable) Freeze()            {}
 
 func (t *cowTable) Size() int64 { return t.size }
-func (t *cowTable) Len() int    { return t.root.Len() }
+func (t *cowTable) Len() int {
+	if t.root == nil {
+		return 0
+	}
+	return t.root.Len()
+}
 func (t *cowTable) Get(key []byte) ([]byte, bool, bool) {
 	v, _, flags, found := t.GetEntry(key)
 	return v, flags&node.FlagTombstone != 0, found
@@ -72,14 +79,23 @@ func (t *cowTable) GetEntry(key []byte) ([]byte, page.ValuePtr, byte, bool) {
 	return v, ptr, flags, found
 }
 func (t *cowTable) GetEntryWithRevision(key []byte) ([]byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if t.root == nil {
+		return nil, page.ValuePtr{}, 0, 0, false
+	}
 	r, found := t.root.Get(key)
 	return cowBytes(r.Value), r.Ptr, r.Flags, r.Revision, found
 }
 func (t *cowTable) SeekGE(start, end []byte) ([]byte, []byte, page.ValuePtr, byte, page.EntryRevision, bool) {
+	if t.root == nil {
+		return nil, nil, page.ValuePtr{}, 0, 0, false
+	}
 	r, found := t.root.SeekGE(start, end)
 	return cowBytes(r.Key), cowBytes(r.Value), r.Ptr, r.Flags, r.Revision, found
 }
 func (t *cowTable) NewIterator(start, end []byte) iterator.UnsafeIterator {
+	if t.root == nil {
+		return &cowEmptyCompatibilityIterator
+	}
 	// Reserve the wrapper and owned domain bounds before allocating them. C1
 	// independently charges the cursor, tree traversal stack and cursor end bound.
 	extra := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowIterator{}))) +
@@ -208,9 +224,10 @@ func (it *cowIterator) Close() error {
 type cowErrorIterator struct{ err error }
 
 var (
-	cowCapacityIterator    = cowErrorIterator{memtable.ErrCOWCapacity}
-	cowClosedIterator      = cowErrorIterator{memtable.ErrCOWClosed}
-	cowUnsupportedIterator = cowErrorIterator{ErrCOWUnsupported}
+	cowCapacityIterator           = cowErrorIterator{memtable.ErrCOWCapacity}
+	cowClosedIterator             = cowErrorIterator{memtable.ErrCOWClosed}
+	cowUnsupportedIterator        = cowErrorIterator{ErrCOWUnsupported}
+	cowEmptyCompatibilityIterator = cowErrorIterator{}
 )
 
 func refusedCOWIterator(err error) iterator.UnsafeIterator {

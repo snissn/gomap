@@ -1113,8 +1113,10 @@ func (s *Snapshot) GetManyView(keys [][]byte, fn tree.GetManyViewFunc) error {
 			if err != nil {
 				return err
 			}
-			err = fn(i, normalizeRawKVPointKey(key), v, found)
-			lease.Close()
+			err = func() error {
+				defer lease.Close()
+				return fn(i, normalizeRawKVPointKey(key), v, found)
+			}()
 			if err != nil {
 				return err
 			}

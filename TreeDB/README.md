@@ -89,6 +89,30 @@ func main() {
 }
 ```
 
+## Explicit immutable COW cache
+
+For workloads that repeatedly acquire dirty cached snapshots, explicitly select
+the pre-alpha immutable cache before Open:
+
+```go
+opts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, "./cow-data")
+opts.MemtableMode = "cow_btree"
+database, err := treedb.Open(opts)
+```
+
+The selected durability profile still controls ordinary/sync acknowledgements.
+Point writes and point batches prepare one complete immutable cut; reads pin it
+without rotating mutable shards. `COWMemtableLimits` uses finite defaults when
+all fields are zero and otherwise requires a complete valid bundle. COW defaults
+to four fixed shards. Capacity can refuse while old readers are retained; close
+snapshots and iterators to release their ownership.
+
+Callback/conditional writes, range deletion, reverse traversal and manual backend
+bypass are unsupported in this explicit mode and refuse before effects. Existing
+adaptive/append_only/btree selection remains available. COW does not add MVCC
+conflict detection or remove Store fences, and selection makes no throughput
+promise. See [capabilities, limits and lifecycle](docs/spec/cow-cache-publication.md).
+
 ## Optional negative point lookups
 
 Set `opts.NegativeLookupFilterBytes` before `Open` to reserve a fixed in-memory

@@ -28,7 +28,11 @@ type cowFrameCapture struct {
 func newCOWFrameCapture(budget *memtable.COWBudget, points int) (*cowFrameCapture, error) {
 	bytes := memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowFrameCapture{}))) +
 		memtable.COWAllocationCharge(uint64(points)*uint64(unsafe.Sizeof(cowProducedFrame{}))) +
-		memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+		memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0)))) +
+		// The write attempt installs one unlock environment containing code,
+		// batch, previous unlock function and this capture. Its lifetime ends only
+		// after unlocked cleanup closes this same capture admission.
+		memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0))))
 	lease, err := budget.AcquireExternal(bytes)
 	if err != nil {
 		return nil, err

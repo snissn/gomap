@@ -7,6 +7,7 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -37,6 +38,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 	if b.cowProducer != nil && b.cowProducer.err != nil {
 		return b.cowProducer.err
 	}
+	if err := durabilitycut.EmitBasic(durabilitycut.BeforeCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir); err != nil {
+		return err
+	}
 	c := b.db.cow
 	n := len(b.entries)
 	shards := len(c.writers)
@@ -49,7 +53,7 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 	bytes += memtable.COWAllocationCharge(uint64(n) * uint64(unsafe.Sizeof((*cowLiveResource)(nil))))
 	bytes += memtable.COWAllocationCharge(uint64(n)*uint64(unsafe.Sizeof((*cowLiveResource)(nil)))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof([]uint64{}))) +
-		uint64(n)*memtable.COWAllocationCharge(8) + memtable.COWAllocationCharge(2*uint64(unsafe.Sizeof(uintptr(0))))
+		uint64(n)*memtable.COWAllocationCharge(8)
 	lease, err := c.budget.AcquireExternal(bytes)
 	if err != nil {
 		return err
@@ -142,6 +146,9 @@ func (b *Batch) PrepareExternalCommandWALPublication() error {
 		}
 	}
 	p.cut, err = c.prepare(groups, opts)
+	if err == nil {
+		err = durabilitycut.EmitBasic(durabilitycut.AfterCOWPreparation, durabilitycut.ResourceAuxiliary, b.db.dir)
+	}
 	return err
 }
 
@@ -205,7 +212,7 @@ func (b *Batch) finalizeCOWPublication(payload []byte, lookup func(page.ValuePtr
 			resource.attached = true
 		}
 	}
-	return nil
+	return durabilitycut.EmitBasic(durabilitycut.AfterCOWCanonicalPreparation, durabilitycut.ResourceAuxiliary, b.db.dir)
 }
 
 func (b *Batch) cancelCOWPublication() *cowBatchPreparation {
@@ -257,6 +264,9 @@ func (b *Batch) writeCOWPublication(syncWrite bool, unlock func()) error {
 	}
 	p := b.cowPrepared
 	b.cowPrepared = nil
+	// Accepted publication is nonfallible. This existing internal observation
+	// seam may pause tests, but an observer cannot revoke an accepted frame.
+	_ = durabilitycut.EmitBasic(durabilitycut.BeforeCOWCutSwap, durabilitycut.ResourceAuxiliary, b.db.dir)
 	old := p.cut.publish()
 	var mutableBytes int64
 	for _, shard := range p.cut.next.shards {

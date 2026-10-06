@@ -2,6 +2,9 @@ package caching
 
 import (
 	"context"
+	"errors"
+
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -11,6 +14,13 @@ import (
 // flags, command cutover hook, physical publication authority and durability
 // hooks keep their ordering; legacy mutable rotation/queue copies are absent.
 func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
+	start := time.Now()
+	defer func() {
+		dur := uint64(time.Since(start))
+		db.checkpointRuns.Add(1)
+		db.checkpointTotalNs.Add(dur)
+		updateAtomicMaxUint64(&db.checkpointMaxNs, dur)
+	}()
 	if db.closing.Load() {
 		return errDBClosing
 	}
@@ -115,7 +125,30 @@ func (db *DB) checkpointCOWContext(ctx context.Context, automatic bool) error {
 			return err
 		}
 	}
-	return nil
+	return db.vacuumCOWCheckpointBasis(automatic)
+}
+
+// Checkpoint already owns flushMu. Close post-frontier admission and drain any
+// admitted writer before semantic-preserving index maintenance. Storage IO and
+// retirement run outside writeMu; the existing cutover flags exclude new writes.
+func (db *DB) vacuumCOWCheckpointBasis(automatic bool) error {
+	db.checkpointMu.Lock()
+	db.checkpointPostFrontierAdmission.Store(false)
+	db.checkpointWriteCutoverActive.Store(true)
+	db.checkpointMu.Unlock()
+	db.writeMu.Lock()
+	db.writeMu.Unlock()
+	before := db.checkpointAutoVacuumRuns.Load()
+	db.cow.refreshRequired.Store(true)
+	err := db.maybeVacuumSparseIndexOnCheckpoint(automatic)
+	if err == nil && db.checkpointAutoVacuumRuns.Load() == before {
+		db.cow.refreshRequired.Store(false)
+		return nil
+	}
+	// An error may follow accepted maintenance. Keep old roots and pins until
+	// this explicit fenced refresh succeeds; pressure can be retried by the next
+	// checkpoint and never silently rebases an accepted command.
+	return errors.Join(err, db.refreshCOWBackendBasis())
 }
 
 func (db *DB) rolloverCOWForFlush() error {
@@ -140,7 +173,7 @@ func (db *DB) flushCOWBackground(syncFlush bool) bool {
 		return false
 	}
 	if err := db.flushCOWFrozen(syncFlush, nil); err != nil {
-		if err != backenddb.ErrSnapshotCapacity {
+		if !errors.Is(err, backenddb.ErrSnapshotCapacity) && !errors.Is(err, memtable.ErrCOWCapacity) {
 			if db.notifyError != nil {
 				db.notifyError(err)
 			}

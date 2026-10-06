@@ -35,6 +35,55 @@ ordering in both default and `treedb_safe` builds. `BenchmarkCOWLargeKeyLookup`
 reports the safe-build rank-search cost and zero key-conversion allocations;
 [build-tag commands and scope](cow-memtable-ownership.md) bind the comparator.
 
+## Immutable COW cache qualification
+
+The [COW publication contract](cow-cache-publication.md) requires evidence from
+actual public `MemtableMode="cow_btree"` dispatch in all three production
+profiles. Internal foundation/read-owner checks alone do not qualify the mode.
+`cow_cache_contract_test.go` keeps the cache dirty and checks capture rotation
+counters and pinned visibility. `cow_public_contract_test.go` exercises public
+owned reads/successors/iterators, early capability refusals, point batches,
+explicit sync and checkpoint/close/reopen. Acceptance must bind their results
+to the tested source; a gated Open is a failing route, not a passing skip.
+
+Additional integration gates are:
+
+- Deterministic preparation/preappend/preswap barriers across two shards, final
+  staged/live/frame/replayed RID/revision identity and concurrent accepted writers.
+- Reader progress during private preparation and durability pauses; no-WAL sync
+  and checkpoint/admitted-writer/flush lock progression.
+- Captured-prefix chunking, one final backend publication, late history/same-ts
+  writes and physical tombstones; accepted-plus-error and handoff-admission
+  refusal keep the exact receipt and retry only handoff.
+- Actual forced-pointer/dictionary producers, old read cuts across GC/rewrite,
+  partial preparation cancellation and deferred exact-once unlocked cleanup.
+- Snapshot/iterator Next/Seek/Close and DB-close races, finite pending batches,
+  read workspace/codec backing, retention plateau/refusal/drain/resume.
+- Direct COW process-crash cuts and separately labeled modeled stable-image
+  power-loss cuts around dependency sync, index/seal/meta publication and reopen.
+
+Construction tests in `caching/cow_*_test.go`,
+`internal/valuelog/cow_*_test.go`, `internal/dictdb/read_definition_test.go`,
+`db/bounded_read_owner_test.go` and `tree/owned_iterator*_test.go` provide focused
+mechanism witnesses. Reconcile their hashes with each candidate's changed
+inputs; earlier packets do not certify later checkpoint/public/recovery edits.
+
+```sh
+GOWORK=off go test ./TreeDB -run '^TestCOW' -count=1
+GOWORK=off go test -race ./TreeDB -run '^TestCOW' -count=1
+```
+
+Cost evidence compares identical N/2N dirty fixtures at fixed shard/source limits
+in append_only, btree and COW, with the same production profile and instrumentation.
+Include acquisition/read/release, changed-operation preparation, returned-record
+scans, B/op/allocs, tails, checkpoint/sync and pinned/retired/drained memory.
+Retain source/toolchain/module/binary/host/seed identities and anomalous runs.
+Report no RSS quota, whole-process zero-allocation or production speedup from
+internal reserve/lookup witnesses. C4 owns sustained public qualification and
+any recommendation to promote the mode.
+
+## Additional implementation witnesses
+
 `TestOuterLeafOrdinaryAdditiveProducerInventory` covers ordinary optimistic,
 forced serialized, and physical build-group publication with multiple real
 within-apply rotations and an empty current lane. It requires zero fresh-load

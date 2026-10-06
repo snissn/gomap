@@ -83,6 +83,23 @@ Additionally, cached mode’s background flusher/checkpoint path removes covered
 segments after it flushes the corresponding memtable and publishes the matching
 coverage boundary.
 
+## Explicit COW cache
+
+`cow_btree` adds process-local immutable cache cuts, not a WAL format or a
+different durable-root selection rule. Recovery still validates the selected
+profile's dependency-complete command prefix or sealed no-WAL root and consumes
+recorded point RID/revision metadata with WAL suppression. It cannot infer
+durability from visible COW roots or an in-memory flush receipt.
+
+After backend acceptance, a live COW checkpoint retains its exact covered-prefix
+receipt through handoff refusal or a reported later error. A permitted retry
+completes handoff; it does not replay that prefix against a stale basis. Existing
+ambiguous/poison/reopen policy determines whether retry is permitted. Reopen uses
+durable roots and Applied-LSN coverage. Actual public COW process-crash and
+separately labeled modeled power-loss evidence are required; clean close/reopen
+alone proves neither. See
+[the COW contract](../TreeDB/docs/spec/cow-cache-publication.md).
+
 ## Safety Notes
 
 - Two processes must not open the same directory concurrently. The lock enforces this.

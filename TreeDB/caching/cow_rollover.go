@@ -96,7 +96,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 			panic("lost COW rollover source")
 		}
 		next.frozen = append(next.frozen, table)
-		next.shards[i] = cowTable{shard: i, root: p.roots[i], resources: p.resources[i]}
+		next.shards[i] = cowTable{shard: i, root: p.roots[i], resources: p.resources[i], history: c.generationBase}
 	}
 	next.buildDomains()
 	p.next = next
@@ -105,6 +105,7 @@ func (c *cowCache) prepareRollover() (*cowRollover, error) {
 
 func (p *cowRollover) install() {
 	c := p.cache
+	c.rollovers.Add(1)
 	for i, w := range p.writers {
 		if w != nil {
 			p.retired[i] = c.writers[i].Close()

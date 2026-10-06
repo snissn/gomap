@@ -500,7 +500,6 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 	return cleanupErr
 }
 
-// Close aborts an unfinished logical build. It is idempotent.
 // Accepted reports the existing publication receipt independently of write or
 // cleanup errors. Acceptance is irreversible and remains observable after Close.
 // Coordinators must retain coverage of an accepted group when later work fails.
@@ -513,6 +512,7 @@ func (group *RootPublicationBuildGroup) Accepted() bool {
 	return group.accepted
 }
 
+// Close aborts an unfinished logical build. It is idempotent.
 func (group *RootPublicationBuildGroup) Close() error {
 	if group == nil {
 		return nil

@@ -30,6 +30,10 @@ import (
 // Options configures TreeDB. It is re-exported from TreeDB/db for convenience.
 type Options = db.Options
 
+type COWMemtableLimits = db.COWMemtableLimits
+
+func DefaultCOWMemtableLimits() COWMemtableLimits { return db.DefaultCOWMemtableLimits() }
+
 var errVacuumUnsupported = db.ErrVacuumUnsupported
 
 // EntryRevision is TreeDB's native per-entry revision metadata. Revision zero is
@@ -752,6 +756,20 @@ func Open(opts Options) (*DB, error) {
 }
 
 func openResolved(opts Options) (*DB, error) {
+	if opts.MemtableMode == "cow_btree" {
+		if opts.ReadOnly {
+			return nil, caching.ErrCOWUnsupported
+		}
+		limits, shards, err := caching.ValidateCOWOpenOptions(caching.Options{
+			COWMemtableLimits: opts.COWMemtableLimits, MemtableShards: opts.MemtableShards,
+			DomainIngressWorkers: opts.DomainIngressWorkers,
+			DisableWAL:           opts.Durability == db.DurabilityWALOffRelaxed, ExternalCommandWAL: opts.CommandWAL,
+		})
+		if err != nil {
+			return nil, err
+		}
+		opts.COWMemtableLimits, opts.MemtableShards = limits, shards
+	}
 	// Cached mode writes to the backend in large flush batches, so commit sequence
 	// advances much more slowly than "number of writes". A large KeepRecent value
 	// can therefore delay page reuse for a very long time (and cause index.db to
@@ -1086,6 +1104,7 @@ func openResolved(opts Options) (*DB, error) {
 	cached, err := caching.Open(opts.Dir, backend, caching.Options{
 		FlushThreshold:                             opts.FlushThreshold,
 		MemtableMode:                               opts.MemtableMode,
+		COWMemtableLimits:                          opts.COWMemtableLimits,
 		MemtableShards:                             opts.MemtableShards,
 		DomainIngressWorkers:                       opts.DomainIngressWorkers,
 		DomainIngressQueueSize:                     opts.DomainIngressQueueSize,

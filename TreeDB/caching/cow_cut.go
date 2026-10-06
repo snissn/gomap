@@ -82,7 +82,13 @@ type cowCache struct {
 	closed          bool
 	lease           *memtable.COWExternalLease
 	activeCuts      atomic.Int64
+	captureCalls    atomic.Uint64
+	prepareCalls    atomic.Uint64
+	publications    atomic.Uint64
+	rollovers       atomic.Uint64
+	handoffs        atomic.Uint64
 	closeRetired    []memtable.COWRetirement
+	generationBase  uint64           // exact identical empty-generation startup history charge
 	handoff         *cowFlushHandoff // serialized by the existing flush coordinator
 }
 
@@ -97,11 +103,13 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 	if err != nil {
 		return nil, err
 	}
-	// The temporary admission closure and captured lease pointer are admitted
-	// with the cache wrapper before constructing the callback.
-	cacheBytes := memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowCache{}))) +
+	// Admit the callback environment (code, budget, scalar limit and two
+	// captured cells) plus both cells before constructing it.
+	maxResources := limits.MaxResources
+	cacheBytes := memtable.COWAllocationCharge(5*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(cowCache{}))) +
 		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof((*memtable.COWWriter)(nil)))) +
-		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWRetirement{})))
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memtable.COWRetirement{}))) +
+		memtable.COWAllocationCharge(uint64(shards)*uint64(unsafe.Sizeof(memShard{})))
 	cacheLease, err := budget.AcquireExternal(cacheBytes)
 	if err != nil {
 		budget.Close()
@@ -124,7 +132,7 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 	var basisLease *memtable.COWExternalLease
 	var fileCount int
 	basis, err := bounded.AcquireSnapshotWithAllocationAdmission(func(sizes backenddb.SnapshotAllocationSizes) error {
-		if sizes.ValueLog.MapHint > limits.MaxResources || sizes.ValueLog.FileCount > limits.MaxResources {
+		if sizes.ValueLog.MapHint > maxResources || sizes.ValueLog.FileCount > maxResources {
 			return memtable.ErrCOWCapacity
 		}
 		fileCount = sizes.ValueLog.FileCount
@@ -155,6 +163,7 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 	c := &cowCache{budget: budget, writers: make([]*memtable.COWWriter, shards), lease: cacheLease, closeRetired: make([]memtable.COWRetirement, shards)}
 	cut := &cowReadCut{refs: 1, shards: make([]cowTable, shards), basis: newCOWBackendBasis(basis, basisLease, pins), lease: cutLease, cache: c}
 	for i := range c.writers {
+		beforeHistory := budget.Stats().HistoryBytes
 		w, e := memtable.NewCOWWriter(budget)
 		if e != nil {
 			err = e
@@ -166,7 +175,13 @@ func newCOWCache(provider backendSnapshotProvider, shards int, limits memtable.C
 			err = e
 			break
 		}
-		cut.shards[i] = cowTable{root: root, shard: i, resources: resources}
+		history := budget.Stats().HistoryBytes - beforeHistory
+		if c.generationBase == 0 {
+			c.generationBase = history
+		} else if history != c.generationBase {
+			panic("COW empty generation charge changed during startup")
+		}
+		cut.shards[i] = cowTable{root: root, shard: i, resources: resources, history: history}
 	}
 	if err != nil {
 		for i := range cut.shards {
@@ -246,6 +261,7 @@ func (db *DB) acquireCOWSnapshot() *Snapshot {
 }
 
 func (db *DB) acquireCOWSnapshotWithError() (*Snapshot, error) {
+	db.cow.captureCalls.Add(1)
 	if !db.cow.beginRead() {
 		return nil, backenddb.ErrClosed
 	}
@@ -308,6 +324,7 @@ type cowPreparedCut struct {
 }
 
 func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWPrepareOptions) (*cowPreparedCut, error) {
+	c.prepareCalls.Add(1)
 	// The caller owns writerMu continuously through prepare/cancel/publication.
 	old := c.cut
 	if len(groups) != len(c.writers) || len(opts) != len(groups) {
@@ -363,6 +380,11 @@ func (c *cowCache) prepare(groups [][]memtable.COWMutation, opts []memtable.COWP
 	for i := range groups {
 		next.shards[i] = old.shards[i]
 		if p.prepared[i] != nil {
+			charge := p.prepared[i].Charge().History()
+			if charge > ^uint64(0)-next.shards[i].history {
+				panic("COW accepted history accounting overflow")
+			}
+			next.shards[i].history += charge
 			next.shards[i].root = p.prepared[i].Root()
 			next.shards[i].size = cowChangedSize(old.shards[i], next.shards[i].root, groups[i])
 		} else if !next.shards[i].root.Retain() {
@@ -416,6 +438,7 @@ func (p *cowPreparedCut) publish() *cowReadCut {
 		}
 	}
 	c := p.cache
+	c.publications.Add(1)
 	c.cutMu.Lock()
 	old := c.cut
 	c.cut = p.next

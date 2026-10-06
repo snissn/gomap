@@ -28,8 +28,8 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 	if !ok {
 		return nil, ErrCOWUnsupported
 	}
-	// Admit the callback and captured reservation cell before closure creation.
-	scratch, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))))
+	// Admit the callback and both captured reservation/count cells before creation.
+	scratch, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))))
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +131,7 @@ func (db *DB) completeCOWHandoff() error {
 		return err
 	}
 	c.handoff = nil
+	c.handoffs.Add(1)
 	if old != nil {
 		old.drain()
 	}
