@@ -814,8 +814,10 @@ indefinite write capacity. See [the split insert contract](vector-partition-spli
 ### Mixed colocated qualification diagnostics
 
 Optional version1 `ColocatedAudit` on existing fixed-peer diagnostics is bounded
-to six original outcomes and final known IDs, with an optional complete current
-source-vector `Population` expectation (524288 encoded plan bytes). A population-only
+to 6..63 declared original outcomes and their final known IDs, with an optional
+complete current source-vector `Population` expectation (524288 encoded plan
+bytes). An outcome attachment requires exactly the declared current retained
+outcome count and every original witness; a subset ledger cannot pass. A population-only
 initial attachment requires empty outcome/final ledgers, zero highest new commit
 and a positive applied floor; partial ledgers cannot downgrade. Its
 current-FSM/ACTIVE/root/applied/physical-WAL/summary fences and prepared-owner

@@ -65,7 +65,7 @@
             "array",
             "null"
           ],
-          "maxItems": 7,
+          "maxItems": 64,
           "items": {
             "type": "object",
             "required": [
@@ -76,7 +76,7 @@
               "Truth",
               "Changed"
             ],
-            "description": "All seven full canonical population oracles computed before networking. Default invariant; explicit changing-top10 permits derived membership changes without rewriting exported baseline truth."
+            "description": "All count+1 full native canonical population oracles computed before mixed networking, at most64. Default invariant; explicit changing-top10 preserves the exported baseline admission."
           }
         },
         "Writes": {
@@ -84,7 +84,7 @@
             "array",
             "null"
           ],
-          "maxItems": 6
+          "maxItems": 63
         },
         "Retries": {
           "type": [
@@ -98,14 +98,14 @@
             "array",
             "null"
           ],
-          "maxItems": 6
+          "maxItems": 63
         },
         "VisibilityEvidence": {
           "type": [
             "array",
             "null"
           ],
-          "maxItems": 6
+          "maxItems": 63
         },
         "Attempts": {
           "type": [
@@ -140,24 +140,24 @@
               "Lower": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 6
+                "maximum": 63
               },
               "Upper": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 6
+                "maximum": 63
               },
               "Matched": {
                 "type": "integer",
                 "minimum": -1,
-                "maximum": 6,
+                "maximum": 63,
                 "description": "First compatible witness only; not an inferred exact publication time or favorable recall choice."
               },
               "CompatibleMask": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 127,
-                "description": "Bit p marks complete response compatibility with prefix p inside final actual call/ACK bounds; zero only on rejected proof."
+                "maximum": 18446744073709551615,
+                "description": "Bit p marks complete response compatibility with prefix p inside final actual call/ACK bounds; zero only on rejected proof. Preserve exact uint64 integer precision, including bit63."
               },
               "RecallAt10": {
                 "type": "number",
@@ -205,6 +205,13 @@
         "Profile": {
           "const": "changing-top10",
           "description": "Optional explicit profile. Absence preserves invariant baseline admission."
+        },
+        "Originals": {
+          "type": "integer",
+          "minimum": 6,
+          "maximum": 63,
+          "default": 6,
+          "description": "Optional total original count. Absence preserves six; success requires all declared writes, visibility checks and witnesses plus count+1 native prefixes."
         }
       }
     }
@@ -231,7 +238,7 @@
         },
         "HighestNewCommitIndex": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 0
         },
         "RequiredAppliedIndex": {
           "type": "integer",
@@ -239,20 +246,51 @@
         },
         "Writes": {
           "type": "array",
-          "minItems": 6,
-          "maxItems": 6
+          "minItems": 0,
+          "maxItems": 63
         },
         "Final": {
           "type": "array",
-          "minItems": 1,
-          "maxItems": 6
+          "minItems": 0,
+          "maxItems": 63
         },
         "Population": {
           "$ref": "#/$defs/populationExpectation"
         }
       },
       "$comment": "JSON encoded bytes <=524288. ValidateColocatedAuditPlanV1 additionally checks request/token/scope/ACK/ledger identity. Runtime proves current durable source/live authority. JSON Schema alone does not prove either.",
-      "x-maxEncodedBytes": 524288
+      "x-maxEncodedBytes": 524288,
+      "anyOf": [
+        {
+          "properties": {
+            "Writes": {
+              "minItems": 6
+            },
+            "Final": {
+              "minItems": 1
+            },
+            "HighestNewCommitIndex": {
+              "minimum": 1
+            }
+          }
+        },
+        {
+          "required": [
+            "Population"
+          ],
+          "properties": {
+            "Writes": {
+              "maxItems": 0
+            },
+            "Final": {
+              "maxItems": 0
+            },
+            "HighestNewCommitIndex": {
+              "const": 0
+            }
+          }
+        }
+      ]
     },
     "populationExpectation": {
       "type": "object",
@@ -310,7 +348,7 @@
           }
         }
       },
-      "description": "Optional external diagnostics attachment, encoding id-le32-fp32-le-v1. This harness emits only the six known-ID audit; schema compatibility alone is no population proof."
+      "description": "Optional external diagnostics attachment, encoding id-le32-fp32-le-v1. The driver emits only the declared original-outcome/known-ID audit; schema compatibility alone is no population proof."
     },
     "populationProof": {
       "type": "object",
