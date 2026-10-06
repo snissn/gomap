@@ -253,7 +253,8 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 					if hint == 0 {
 						result.counters.PhysicalBytesRead += valuelog.HeaderSize
 					}
-					tally.liveBytes += int64(recordLen)
+					// Pointer lengths begin after the CRC; file sizes include it.
+					tally.liveBytes += int64(recordLen) + 4
 				}
 				segmentTallies[ptr.FileID] = tally
 				continue
@@ -289,7 +290,9 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 						if hint == 0 {
 							result.counters.PhysicalBytesRead += valuelog.HeaderSize
 						}
-						recordLen = int64(length)
+						// Cache the physical span so projection counts the CRC once,
+						// together with the rest of each deduplicated grouped record.
+						recordLen = int64(length) + 4
 						lengths[start] = recordLen
 					} else if recordLen < 0 {
 						recordLen = -recordLen
@@ -310,7 +313,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 				if hint == 0 {
 					result.counters.PhysicalBytesRead += valuelog.HeaderSize
 				}
-				tally.liveBytes += int64(recordLen)
+				tally.liveBytes += int64(recordLen) + 4
 			}
 			entry.valueLogTallies[ptr.FileID] = tally
 		}
