@@ -1477,7 +1477,7 @@ exact landing, executing-binary and original-packet receipt pins, with physical
 file-sync coverage and positive written WAL bytes; the linked contract gives
 the acceptance command.
 
-Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
+The historical lifecycle v2 packet measured logical fold, conditionally eligible typed rewrite/GC and
 live direct-backend online vacuum with before/after census; cached-wrapper
 overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings
 GOMAXPROCS=16, GOGC=100, GOMEMLIMIT=off, GOFLAGS empty.

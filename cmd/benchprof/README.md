@@ -722,7 +722,7 @@ and strict source/count validation. For a small nonqualifying rehearsal, use
 --documents 32 --calls-per-epoch 8`. See the [lifecycle capture contract](../../TreeDB/docs/spec/r1-row-lifecycle.md#source-bound-standalone-capture).
 These artifacts are separate from unified-bench profiles and benchprof inputs.
 
-Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
+The historical lifecycle v2 packet measured logical fold, conditionally eligible typed rewrite/GC and
 live direct-backend online vacuum with before/after census; cached-wrapper
 overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings
 GOMAXPROCS=16, GOGC=100, GOMEMLIMIT=off, GOFLAGS empty.
