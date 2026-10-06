@@ -22646,7 +22646,8 @@ func (c *Collection) StoredDocumentJSON(document []byte) ([]byte, error) {
 
 // GetInto appends the document for documentID into dst[:0].
 //
-// The returned slice is owned by the caller. Missing documents return
+// Typed-row collections reconstruct declared columns together with the retained
+// JSON payload. The returned slice is owned by the caller. Missing documents return
 // (dst[:0], false, nil).
 func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error) {
 	if c == nil {
@@ -22680,7 +22681,17 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	if err != nil || !found || !columnStoreCanReconstructDocument(catalog.meta) {
 		return value, found, err
 	}
-	reconstructed, err := c.reconstructColumnDocumentAtSnapshot(snap, catalog, documentID, value)
+	var reconstructed []byte
+	if catalog.rootID(collectionColumnRowLocatorRootName(catalog.meta.Name)) != 0 && catalog.meta.Options.ColumnStore.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
+		view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+		view.orderedPointRowRefs = true
+		reconstructed, err = view.materializeRetainedTypedDocument(documentID, value)
+		err = errors.Join(err, view.Close())
+	} else {
+		// Source-directory V2 already has point routing. Keep that route and the
+		// legacy no-locator visibility fallback rather than rebuilding either.
+		reconstructed, err = c.reconstructColumnDocumentAtSnapshot(snap, catalog, documentID, value)
+	}
 	if err != nil {
 		return dst[:0], false, err
 	}
@@ -23276,9 +23287,10 @@ func (c *Collection) FindByCompoundIndexRange(indexName string, opts CompoundInd
 	return ids, truncated, nil
 }
 
-// FindDocumentsByIndexRange returns primary documents whose named secondary
-// index falls inside opts, preserving index order. Persisted index and primary
-// reads share one snapshot/catalog; same-manager buffered documents are still
+// FindDocumentsByIndexRange returns complete documents whose named secondary
+// index falls inside opts, preserving index order. Typed-row collections combine
+// declared columns with the retained JSON payload. Persisted index, primary and
+// typed-column reads share one snapshot/catalog; same-manager buffered documents are still
 // consulted before the persisted primary root so pending indexed writes remain
 // visible. Descending scans are not supported. Because this API holds a
 // write-domain read lock while pairing secondary IDs with buffered primary
@@ -23311,8 +23323,9 @@ func (c *Collection) FindDocumentsByIndexRange(indexName string, opts IndexRange
 	return out, truncated, nil
 }
 
-// ScanBorrowedDocumentsByIndexRange calls fn with primary documents whose named
-// secondary index falls inside opts, preserving index order. This is a borrowed
+// ScanBorrowedDocumentsByIndexRange calls fn with complete documents whose named
+// secondary index falls inside opts, preserving index order. Typed-row results
+// include declared columns and the retained JSON payload. This is a borrowed
 // performance API for gateway integrations: record slices are valid only during
 // the callback, and fn may run while the collection write-domain read lock is
 // held. The callback must not retain or modify slices, call back into Collection,
@@ -23360,10 +23373,14 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 		// too much work for the common small-limit range probe.
 	}
 	var snap *backenddb.Snapshot
+	var materializer *CollectionReadView
 	var bufferedTable memtable.Table
 	var bufferedIt iterator.UnsafeIterator
 	var persistedIt iterator.UnsafeIterator
 	defer func() {
+		if materializer != nil {
+			err = errors.Join(err, materializer.Close())
+		}
 		if domainLocked {
 			domain.mu.RUnlock()
 		}
@@ -23488,6 +23505,18 @@ func (c *Collection) scanDocumentsByIndexRange(indexName string, opts IndexRange
 			return false, nil
 		}
 		scratch = value
+		if !buffered && columnStoreCanReconstructDocument(catalog.meta) {
+			if materializer == nil {
+				// Bind reconstruction to the exact index/primary catalog. Opening
+				// a public read view here would flush and acquire a different cut.
+				materializer = newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
+				materializer.orderedPointRowRefs = opts.Limit > 0
+			}
+			value, err = materializer.materializeRetainedTypedDocument(id, value)
+			if err != nil {
+				return false, err
+			}
+		}
 		cont, err := fn(BorrowedDocumentRecord{
 			ID:       id,
 			Document: value,
