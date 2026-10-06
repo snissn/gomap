@@ -1,10 +1,10 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths
+from source_paths import source_path, isolate_paths, W
 """Validate the fresh raw bootstrap and freeze recall inputs; never starts voters."""
 import argparse,base64,hashlib,importlib.util,json,pathlib,shlex,shutil,struct,subprocess,tarfile,time
-RUN='rf4trial24mixedchangingc1'
+RUN=W.campaign
 def sha(b):return hashlib.sha256(b).hexdigest()
 def load(p):return json.loads(p.read_bytes())
 def remote(host,label,args):
@@ -33,7 +33,7 @@ def byte_list(raw):
  assert pos==len(raw);return out
 
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
+PLAN_SHA='60eafea5704321177d82f3aa4932971e7f36d6018c6159b16ab00669be93ae07'
 def plan_module():
  assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
  spec=importlib.util.spec_from_file_location('frozen_trial24_product',PLAN_MODULE)

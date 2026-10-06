@@ -1,13 +1,13 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths
+from source_paths import source_path, isolate_paths, W
 """Inert local-only derivation: seal fresh inputs, native Go oracle, finalize inactive manifest."""
 import argparse, ast, hashlib, importlib.util, json, pathlib, re
 TEMPLATE = source_path('/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py')
 TEMPLATE_SHA256 = '8586f38a885357a1e042d3507a57396c64ac88d08e626188e74a33c46f18e7b5'
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA256 = '901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
+COLLECTOR_SHA256 = '6273005bd62e74850426301bd1c61e6ad040ec6a94e5f383909477d7a4e67ae3'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 def collector():
     assert sha(pathlib.Path(COLLECTOR).read_bytes()) == COLLECTOR_SHA256
@@ -15,7 +15,7 @@ def collector():
     c = importlib.util.module_from_spec(spec); spec.loader.exec_module(c); return c
 
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
+PLAN_SHA='60eafea5704321177d82f3aa4932971e7f36d6018c6159b16ab00669be93ae07'
 def product_module():
  assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
  spec=importlib.util.spec_from_file_location('trial24_frozen_product',PLAN_MODULE)
@@ -57,7 +57,7 @@ def main():
         out.write_text(json.dumps(m, indent=2)+'\n')
         print(json.dumps(dict(state='FINALIZED_INACTIVE_MANIFEST_NOT_RUNTIME_ACCEPTANCE', path=str(out), sha256=sha(out.read_bytes())))); return
     raw = pathlib.Path(TEMPLATE).read_bytes(); assert sha(raw) == TEMPLATE_SHA256
-    text = raw.decode().replace('rf4trial14mixedc1', 'rf4trial24mixedchangingc1')
+    text = raw.decode().replace('rf4trial14mixedc1', W.campaign)
     constants = pins['constants']
     required = {'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ROOT_PROBE_PROOF_SHA256','ARTIFACT_REVIEW_PATH','ARTIFACT_REVIEW_SHA256','FINAL_INSPECT_WRAPPERS','HEAD','TREE','GO_SHA','DRIVER_SHA','SERVER_SHA','PRE_INV_SHA','BOOT_SHA','CONFIG_SHA','PLAN_SHA','BOOT_REVIEW','BOOT_REVIEW_SHA','LANDED','LANDED_SHA','BUILD','BUILD_SHA','SOURCE_REVIEW','SOURCE_REVIEW_SHA','SOURCE_INV','CIDS'}
     assert set(constants) == required, 'exact required sealer constants'
@@ -90,6 +90,7 @@ def main():
     text = text.replace(marker, '    '+helper.replace('\n','\n    ')+'\n    validate_sealing_source_bindings(manifest, ', 1)
     assert 'c.prepare_local(manifest)' in text
     text = text.replace('c.prepare_local(manifest)', "assert c.population_identity(c.build_initial_population(files, boot, baseline), 128)['SHA256'] == baseline['PopulationSHA256']")
+    text = text.replace("    spec = importlib.util.spec_from_file_location","    sys.path.insert(0,str(COLLECTOR.parent))\n    spec = importlib.util.spec_from_file_location",1)
     text = text.replace('PREPARED_LOCAL_INPUTS_INACTIVE_MANIFEST','SEALED_INPUTS_PENDING_NATIVE_PREFIX_ORACLE_AND_FINALIZATION')
     assert not re.search(r'/(?:tmp|home/mikers|Volumes/FlashDrive)/gomap-4994-',text), 'unreplaced historical artifact path'
     assert 'rf4trial14mixedc1' not in text

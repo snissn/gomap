@@ -19,6 +19,8 @@ need=c.need
 ZERO='0001-01-01T00:00:00Z'
 NODES=('node-a','node-b','node-c','node-d')
 RPC=3_000_000_000
+SPACING=5_000_000_000
+CONCURRENCY=1
 DURATION=300_000_000_000
 LIMIT=65536
 CAP=128<<20
@@ -131,7 +133,7 @@ def verifier(a,p,r,ptext,text,states,mean_recall_floor=None):
  need(c.strict(ptext)==p and c.strict(text)==r,'exact raw Report object bindings')
  count=original_count(r);need(original_count(p)==count,'planned/actual original count');need(len(states)==count+1 and all(isinstance(s,dict) and s for s in states),'seven caller-authenticated populations')
  minimum=threshold(mean_recall_floor)
- fixed={'Version':1,'Kind':'fixed_cluster_mixed_window_v1','Concurrency':1,'WarmupPlanned':64,'MaxAttempts':LIMIT,'OutputBytes':CAP,'RequestedDuration':DURATION,'PaceInterval':5_000_000_000}
+ fixed={'Version':1,'Kind':'fixed_cluster_mixed_window_v1','Concurrency':CONCURRENCY,'WarmupPlanned':64,'MaxAttempts':LIMIT,'OutputBytes':CAP,'RequestedDuration':DURATION,'PaceInterval':SPACING}
  for k,v in fixed.items():need(p[k]==r[k]==v,'fixed campaign '+k)
  need(r['Verdict']=='ACCEPT_MIXED_INVARIANT_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION' and r['Error']=='' and r['Truncated'] is False and r['StopReason']=='window_elapsed','complete observation required; no failure erased')
  duration=r['ActualDurationNS'];need(type(duration)is int and DURATION<=duration<=420_000_000_000,'actual window+drain bound')
@@ -151,7 +153,7 @@ def verifier(a,p,r,ptext,text,states,mean_recall_floor=None):
  for i,w in enumerate(p['Writes']):
   need(w['Ordinal']==i and w['Outcome']=='unissued' and w['Invoked'] is False and w['StartNS']==w['EndNS']==0 and w.get('Response') is None,'planned original mutation remains unissued')
  for i,w in enumerate(r['Writes']):
-  need(w['Ordinal']==i and w['StartNS']>=i*5_000_000_000 and w['EndNS']<=duration and (i==0 or w['StartNS']>=r['Writes'][i-1]['EndNS'] and w['StartNS']>=r['Writes'][i-1]['StartNS']+5_000_000_000),'actual serial original invocation boundaries')
+  need(w['Ordinal']==i and w['StartNS']>=i*SPACING and w['EndNS']<=duration and (i==0 or w['StartNS']>=r['Writes'][i-1]['EndNS'] and w['StartNS']>=r['Writes'][i-1]['StartNS']+SPACING),'actual serial original invocation boundaries')
  need([w['Ordinal'] for w in r['Retries']]==[0,2] and r['Retries'][1]['StartNS']>=r['Retries'][0]['EndNS'],'original slot0/slot2 serial retry accounting')
  for w in r['Writes']+r['Retries']:successful(w,'mutation ledger');interval(w,'mutation ledger')
  need(r['WriteCounts']==c.account(r['Writes'],count) and r['RetryCounts']==c.account(r['Retries'],2),'complete mutation attempt accounting')
@@ -170,14 +172,14 @@ def verifier(a,p,r,ptext,text,states,mean_recall_floor=None):
  need([v['Phase'] for v,_ in attempts]==['warmup']*64+['measured']*len(phases['measured']),'canonical final ledger phase order')
  coverage=[0]*16;latency=[];recalls=[];retained=0;hashchain=hashlib.sha256();overlap=completed=0;maxovershoot=0;claims=[]
  for phase,pairs in phases.items():
-  previous=0;deadline_previous=0
+  previous=[0]*CONCURRENCY;deadline_previous=[0]*CONCURRENCY
   for ordinal,(x,raw) in enumerate(pairs):
-   need(type(x['Ordinal'])is int and type(x['Worker'])is int and x['Ordinal']==ordinal and x['Worker']==0,'contiguous C1 issue ownership');successful(x,'window call')
+   need(type(x['Ordinal'])is int and type(x['Worker'])is int and x['Ordinal']==ordinal and 0<=x['Worker']<CONCURRENCY and (phase!='warmup' or x['Worker']==ordinal%CONCURRENCY),'contiguous ordinal and worker ownership');successful(x,'window call')
    start,end=interval(x,'window call',duration if phase=='measured' else 420_000_000_000)
-   need(start>=previous,'one outstanding C1 API call');previous=end
+   worker=x['Worker'];need(start>=previous[worker],'one outstanding API call per worker');previous[worker]=end
    q,qraw=queries[ordinal%16];need(x['QueryID']==q['QueryID'] and x['RequestSHA256']==q['RequestSHA256'],'cyclic exact logical query hash')
    request_raw=raw_field(qraw,'Request',q['Request']);wire=c.request_wire(request_raw,x['Deadline']);deadline=c.stamp(x['Deadline'])
-   need(deadline>=deadline_previous,'serial actual deadline order');deadline_previous=deadline
+   need(deadline>=deadline_previous[worker],'serial deadline order per worker');deadline_previous[worker]=deadline
    if phase=='measured':need(origin+end<=deadline<=origin+start+RPC,'actual measured deadline binds call/origin/RPC')
    else:need(deadline<=origin+RPC,'warmup deadline cannot follow measured origin by more than its RPC budget')
    response_raw=raw_field(raw,'Response',x['Response']);need(x['ResponseSHA256']=='' and x['ResponseBytes']==len(response_raw.encode())<=32768,'actual successful window response bytes; no producer hash field')
@@ -249,7 +251,7 @@ def self_check():
  configpath='/pure-self-check/config.json';a=dict(receipts={'config':configpath},local_pins={configpath:c.sha(cfg)},config_sha256=c.sha(cfg))
  p=dict(Version=1,Kind='fixed_cluster_mixed_window_v1',Concurrency=1,WarmupPlanned=64,MaxAttempts=LIMIT,OutputBytes=CAP,RequestedDuration=DURATION,PaceInterval=5_000_000_000,Admission=copy.deepcopy(base),Attempts=[],ReadPrefixes=[],Visibility=[],VisibilityEvidence=[],Retries=[],Counts=c.account([],LIMIT),WarmupCounts=c.account([],64),WriteCounts=c.account([],6),RetryCounts=c.account([],2),Prefixes=[dict(Truth=[truth]*16) for _ in range(7)])
  r=copy.deepcopy(p);r.update(Verdict='ACCEPT_MIXED_INVARIANT_RECALL_WINDOW_OBSERVATION_PENDING_ROOT_SHUTDOWN_VERIFICATION',Error='',Truncated=False,StopReason='window_elapsed',ActualDurationNS=DURATION,MeasuredOriginUTC=utc(0),HighestNewCommitIndex=16,RequiredAppliedIndex=16,RetryOriginUTC=utc(61_000_000_000))
- r['Writes']=[dict(Ordinal=i,Kind='replace',Invoked=True,Outcome='succeeded',Error='',ErrorCode='',StartNS=i*5_000_000_000,EndNS=i*5_000_000_000+20_000_000,Response=dict(AppliedIndex=11+i,CommitIndex=11+i,VisibilityToken='dG9rZW4=')) for i in range(6)]
+ r['Writes']=[dict(Ordinal=i,Kind='replace',Invoked=True,Outcome='succeeded',Error='',ErrorCode='',StartNS=i*SPACING,EndNS=i*SPACING+20_000_000,Response=dict(AppliedIndex=11+i,CommitIndex=11+i,VisibilityToken='dG9rZW4=')) for i in range(6)]
  r['Retries']=[dict(Ordinal=i,Kind='replace' if i==0 else 'delete',Invoked=True,Outcome='succeeded',Error='',ErrorCode='',StartNS=j*2_000_000,EndNS=j*2_000_000+1_000_000,Response=dict(AppliedIndex=16,CommitIndex=11+i)) for j,i in enumerate((0,2))]
  r.update(WriteCounts=c.account(r['Writes'],6),RetryCounts=c.account(r['Retries'],2),WriterLatencyNs=[20_000_000]*6)
  r['ResourceBoundaries']=[dict(Phase='ready',RunID=c.QUERY_RUN,Nonce='1'*32,MeasuredOriginUTC=ZERO,ActualDurationNS=0,StopReason='',PublishedUTC=utc(-2_000_000),AcknowledgedUTC=utc(-1_000_000),WaitNS=1),dict(Phase='done',RunID=c.QUERY_RUN,Nonce='1'*32,MeasuredOriginUTC=utc(0),ActualDurationNS=DURATION,StopReason='window_elapsed',PublishedUTC=utc(DURATION+1),AcknowledgedUTC=utc(DURATION+2),WaitNS=1)]

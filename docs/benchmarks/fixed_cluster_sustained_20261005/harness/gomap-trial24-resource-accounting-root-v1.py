@@ -1,7 +1,7 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path
+from source_paths import source_path, W
 """Pure bounded resource/gate/ownership accounting; never whole-campaign acceptance.
 No subprocess/network calls. Historical top-level is never imported/executed.
 verifier(..., permission_path=..., permission_sha256=..., collector_exit_path=..., collector_exit_sha256=...)
@@ -14,13 +14,13 @@ CORE_SHA='2af4fdcf0a78a1607ddaa199ef18e26d6fa69b04c4b10fa0917496cb1c2083f5'
 OLD=source_path('/tmp/gomap-4975-trial13c1-paced-window-artifact-verify-root-v1.py')
 OLD_SHA='60eaf880f98ab35a1886b01f9f2dd89738c927a2bdcc25dfd52444353fe7fcc9'
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9'
-RUN='rf4trial24mixedchangingc1'; QUERY_RUN=RUN+'mixedc1v1'
-C=Path('/tmp/gomap-4997-4998-trial24mixedchangingc1-window-root-v1')
+COLLECTOR_SHA='6273005bd62e74850426301bd1c61e6ad040ec6a94e5f383909477d7a4e67ae3'
+RUN=W.campaign; QUERY_RUN=W.query_run
+C=Path(W.output)
 ROOT='/home/mikers/gomap-4250-twohost-'+RUN
 INPUT_ROOT='/home/mikers/gomap-4997-4998-'+RUN+'-inputs-root-v1'
-GATE='/home/mikers/gomap-4997-4998-trial24mixedchangingc1-window-resource-root-v1';GATE_DIR=GATE+'/gate'
-NAME='treedb-4250-'+RUN+'-mixed-window-c1-v1';MOUNT_GATE='/run-resource-gate'
+GATE=W.gate;GATE_DIR=GATE+'/gate'
+NAME=W.name;MOUNT_GATE='/run-resource-gate'
 HOSTS={'node-a':'192.168.0.111','node-b':'192.168.0.111','node-c':'192.168.0.185','node-d':'192.168.0.185'}
 FIELDS=('memory.current','memory.peak','memory.max','memory.events','memory.swap.current','memory.swap.max','memory.swap.events','cpu.max','cpu.stat','io.stat','process.status')
 PROVENANCE={}
@@ -47,7 +47,7 @@ CF,CONSTANTS=source_parts(COLLECTOR,COLLECTOR_SHA)
 OF,_=source_parts(OLD,OLD_SHA)
 
 def pure_collector(a,nonce):
- ns=dict(re=re,json=json,datetime=datetime,TOKEN_BYTES=2048,ROOT=ROOT,RUN=RUN,QUERY_RUN=QUERY_RUN,NAME=NAME,
+ ns=dict(W=W,re=re,json=json,datetime=datetime,TOKEN_BYTES=2048,ROOT=ROOT,RUN=RUN,QUERY_RUN=QUERY_RUN,NAME=NAME,
    INPUT_ROOT=INPUT_ROOT,GATE_DIR=GATE_DIR,MOUNT_GATE=MOUNT_GATE,
    APPROVED=a,root=ROOT,image=a['query_image'],launch_nonce=nonce)
  allow=('digest_valid','expected_binds','validate_voter','owned','driver_arguments','validate_gate_receipt','validate_ack_binding')

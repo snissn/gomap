@@ -7,7 +7,7 @@ Import is inert. Root alone may execute --approved after exact-source prereview.
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import isolate_paths
+from source_paths import isolate_paths, W
 import argparse
 import base64
 import datetime
@@ -26,15 +26,15 @@ import subprocess
 import sys
 import time
 
-RUN = 'rf4trial24mixedchangingc1'
-QUERY_RUN = RUN + 'mixedc1v1'
-NAME = 'treedb-4250-' + RUN + '-mixed-window-c1-v1'
+RUN = W.campaign
+QUERY_RUN = W.query_run
+NAME = W.name
 HOST = 'mikers@192.168.0.185'
 ROOT = '/home/mikers/gomap-4250-twohost-' + RUN
 INPUT_ROOT = '/home/mikers/gomap-4997-4998-' + RUN + '-inputs-root-v1'
 LOCAL_INPUT_ROOT = '/tmp/gomap-4997-4998-' + RUN + '-inputs-root-v1'
-OUTPUT = pathlib.Path('/tmp/gomap-4997-4998-trial24mixedchangingc1-window-root-v1')
-GATE = '/home/mikers/gomap-4997-4998-trial24mixedchangingc1-window-resource-root-v1'
+OUTPUT = pathlib.Path(W.output)
+GATE = W.gate
 GATE_DIR = GATE + '/gate'
 MOUNT_GATE = '/run-resource-gate'
 OUTER_SECONDS = 480
@@ -221,11 +221,11 @@ def validate_mixed_report(planned, report):
         assert admission['PopulationRows']==b['PopulationRows'] and admission['PopulationSHA256']==b['PopulationSHA256']
         assert admission['HighestCommitIndex']==b['HighestCommitIndex']
     assert len(planned['Anchors'])==len(report['Anchors'])==b['AnchorRows'] and planned['Anchors']==report['Anchors']
-    assert len(report['Prefixes'])==49 and planned['Prefixes']==report['Prefixes']==prefix_oracles['Prefixes']
+    assert len(report['Prefixes'])==W.prefixes and planned['Prefixes']==report['Prefixes']==prefix_oracles['Prefixes']
     assert encode_go_json(original_requests(report['Writes']))==encode_go_json(prefix_oracles['OriginalRequests']), 'original request byte identity including signed zero'
-    assert report['Kind']=='fixed_cluster_mixed_window_v1' and report['PaceInterval']==6000000000
-    assert report['Concurrency']==1 and report['WarmupPlanned']==64 and report['MaxAttempts']==65536
-    assert report['OutputBytes']==134217728 and report['RequestedDuration']==300000000000
+    assert report['Kind']=='fixed_cluster_mixed_window_v1' and report['PaceInterval']==W.spacing_ns
+    assert report['Concurrency']==W.concurrency and report['WarmupPlanned']==64 and report['MaxAttempts']==65536
+    assert report['OutputBytes']==134217728 and report['RequestedDuration']==W.duration_ns
     assert report['ResourceGateDir']==MOUNT_GATE and len(report['ResourceBoundaries'])==len(boundary_evidence)==2
     for phase,boundary in zip(('ready','done'),report['ResourceBoundaries']):
         raw=validate_gate_receipt(gate_expected[phase+'.json'],phase,QUERY_RUN,gate_nonce)
@@ -233,16 +233,16 @@ def validate_mixed_report(planned, report):
         assert all(boundary[k]==raw[k] for k in raw if k not in ('AcknowledgedUTC','WaitNS'))
         assert boundary['AcknowledgedUTC']!='0001-01-01T00:00:00Z' and boundary['WaitNS']>=0
     assert report['MeasuredOriginUTC']==boundary_evidence[1]['receipt']['MeasuredOriginUTC']
-    assert report['ActualDurationNS']==boundary_evidence[1]['receipt']['ActualDurationNS']>=300000000000
+    assert report['ActualDurationNS']==boundary_evidence[1]['receipt']['ActualDurationNS']>=W.duration_ns
     c,w=report['Counts'],report['WarmupCounts']
     assert c['Planned']==c['Attempted']+c['Unissued'] and c['Attempted']==sum(c[k] for k in ('Succeeded','Failed','Canceled','Unknown'))
     assert report['Completions']==c['Attempted'] and report['WarmupCompletions']==w['Attempted']
     assert w['Attempted']==w['Succeeded']==64 and w['Failed']==w['Canceled']==w['Unknown']==0
     assert c['Attempted']==c['Succeeded'] and c['Failed']==c['Canceled']==c['Unknown']==0
     assert all(v>0 for v in report['MeasuredQuerySucceeded'])
-    assert len(report['Writes'])==48 and all(v['Invoked'] and v['Outcome']=='succeeded' for v in report['Writes'])
+    assert len(report['Writes'])==W.originals and all(v['Invoked'] and v['Outcome']=='succeeded' for v in report['Writes'])
     assert len(report['Retries'])==2 and all(v['Invoked'] and v['Outcome']=='succeeded' for v in report['Retries'])
-    assert len(report['Visibility'])==48 and len(report['VisibilityEvidence'])==48
+    assert len(report['Visibility'])==W.originals and len(report['VisibilityEvidence'])==W.originals
     assert report['HighestNewCommitIndex']>b['HighestCommitIndex'] and report['RequiredAppliedIndex']>=report['HighestNewCommitIndex']
     assert report['AuditPlan']['HighestNewCommitIndex']==report['HighestNewCommitIndex']
     assert report['AuditPlan']['RequiredAppliedIndex']==report['RequiredAppliedIndex']
@@ -251,7 +251,7 @@ def validate_mixed_report(planned, report):
     for v in audits:
         audit=v['ColocatedAudit']
         assert audit['RunID']==QUERY_RUN and audit['AppliedIndex']>=report['RequiredAppliedIndex']
-        assert audit['RetainedCount']==48 and len(audit['Witnesses'])==48 and len(audit['Final'])==4
+        assert audit['RetainedCount']==W.originals and len(audit['Witnesses'])==W.originals and len(audit['Final'])==4
     assert not report['Truncated'] and report['StopReason']=='window_elapsed'
     assert planned['Profile']==report['Profile']=='changing-top10'
     assert a['Verdict']=='ACCEPTED_INPUTS_CHANGING_TOP10_PENDING_RUNTIME'
@@ -624,11 +624,11 @@ def driver_arguments():
         '-v',root+'/bootstrap-qualify.json:/bootstrap.json:ro',
         '-v',INPUT_ROOT+':/recall:ro','-v',GATE_DIR+':'+MOUNT_GATE+':rw',image,
         '-config','/config.json','-bootstrap-receipt','/bootstrap.json',
-        '-mode','mixed-window','-mixed-profile','changing-top10','-mixed-originals','48','-mixed-interval','6s','-phase','post-only',
+        '-mode','mixed-window','-mixed-profile','changing-top10','-mixed-originals',str(W.originals),'-mixed-interval',str(W.spacing)+'s','-phase','post-only',
         '-probe-receipt','/recall/probe.jsonl','-dataset','/recall/dataset',
         '-provenance','/recall/provenance.json','-run-id',QUERY_RUN,
         '-read-resource-gate-dir',MOUNT_GATE,'-timeout','420s','-rpc-timeout','3s',
-        '-read-concurrency','1','-read-window','300s','-read-warmup','64',
+        '-read-concurrency',str(W.concurrency),'-read-window',str(W.duration)+'s','-read-warmup','64',
         '-read-max-attempts','65536','-read-output-bytes','134217728']
 
 
@@ -637,7 +637,7 @@ def json_file(name,value):
 
 
 
-PREDECLARATION = '/tmp/gomap-fixed-next-preflight-20261004/changing-result-trial24-campaign-predeclaration-root-v1.json'
+PREDECLARATION = ('/tmp/gomap-fixed-next-preflight-20261004/changing-result-trial24-campaign-predeclaration-root-v1.json' if W.issue=='5021' else W.local_input+'-campaign-predeclaration.json')
 POPULATION_ENCODING = 'id-le32-fp32-le-v1'
 POPULATION_LIMIT_KEYS = {'MaxRows','MaxIDBytes','MaxSourceRecordBytes','MaxTotalBytes','MaxInspected'}
 
@@ -719,7 +719,7 @@ def build_initial_population(files, bootstrap, baseline):
 
 
 def apply_originals(initial, writes):
-    assert len(writes)==48
+    assert len(writes)==W.originals
     out=dict(initial);previous=0;keys=set()
     for ordinal,w in enumerate(writes):
         assert w['Ordinal']==ordinal and w['Invoked'] is True and w['Outcome']=='succeeded'
@@ -752,7 +752,7 @@ def population_plan(vectors, floor, known_plan=None):
            'RequiredAppliedIndex':floor,'Writes':[],'Final':[]}
     else:
         p=copy.deepcopy(known_plan)
-        assert p['RunID']==QUERY_RUN and len(p['Writes'])==48 and len(p['Final'])==4
+        assert p['RunID']==QUERY_RUN and len(p['Writes'])==W.originals and len(p['Final'])==4
         assert p['RequiredAppliedIndex']==floor>=p['HighestNewCommitIndex']>0
         assert 'Population' not in p
     p['Population']=expectation
@@ -837,13 +837,14 @@ def validate_finalization(a,pinned):
     assert a['receipts']['predeclaration']==PREDECLARATION
     assert pre['campaign']==RUN and pre['runtime_started'] is False
     assert pre['topology']['voters']==4 and pre['topology']['voters_per_host']==2
-    assert pre['workload']['profile']=='changing-top10' and pre['workload']['duration_seconds']==300
+    assert pre['workload']['profile']=='changing-top10' and pre['workload']['duration_seconds']==W.duration
+    if W.issue=='5068':assert pre['accepted_workload']==W.declaration()
     assert pre['source_head'] in (None,a['source_head']) and pre['source_tree'] in (None,a['source_tree'])
     landed=strict_json(pinned[a['receipts']['landed_source']])
     assert landed['state']=='LANDED_SOURCE_TREE_VERIFIED'
     assert landed['runtime_head']==a['source_head'] and landed['runtime_tree']==a['source_tree']
     assert landed['source_inventory_sha256']==a['source_inventory_sha256']
-    assert set(landed['issues'])=={'5021'}
+    assert set(landed['issues'])=={W.issue}
     for issue in landed['issues'].values():
         assert issue['merged'] is True and digest_valid(issue['landed_commit'],40)
     assert isinstance(landed['runtime_blobs'],dict) and len(landed['runtime_blobs'])>=8
@@ -901,7 +902,7 @@ def compatible_prefixes(response, prefixes, query_index, lower, upper):
 
 
 def validate_causal_report(report, initial):
-    count=original_count(report);assert count==48
+    count=original_count(report);assert count==W.originals
     prefixes=report['Prefixes'];assert len(prefixes)==count+1
     states=[dict(initial)]
     for i in range(1,count+1):states.append(apply_prefix(initial,report['Writes'][:i]))
@@ -913,14 +914,20 @@ def validate_causal_report(report, initial):
                for p in prefixes[1:] for qi in range(16)), 'no top10 membership changed'
     for i,w in enumerate(report['Writes']):
         assert w['StartNS']>0 and w['EndNS']>=w['StartNS']
-        if i:assert w['StartNS']>=report['Writes'][i-1]['EndNS'] and w['StartNS']>=report['Writes'][i-1]['StartNS']+6000000000
+        if i:assert w['StartNS']>=report['Writes'][i-1]['EndNS'] and w['StartNS']>=report['Writes'][i-1]['StartNS']+W.spacing_ns
     reads=report['ReadPrefixes'];attempts=report['Attempts']
     measured=[a for a in attempts if a['Phase']=='measured'];assert len(reads)==len(measured)
     by_ordinal={p['Ordinal']:p for p in reads};assert len(by_ordinal)==len(reads)
     query_attempts=[0]*16;query_success=[0]*16;sum_recall=0.0
+    phase_ordinals={'warmup':0,'measured':0};worker_ends={phase:[0]*W.concurrency for phase in phase_ordinals}
     for a in attempts:
         assert a['Outcome']=='succeeded' and a['Response'] is not None
-        assert a['Ordinal']>=0 and a['Worker']==0 and a['StartNS']<=a['EndNS']
+        phase=a['Phase'];assert phase in phase_ordinals
+        ordinal=a['Ordinal'];worker=a['Worker']
+        assert type(ordinal) is int and ordinal==phase_ordinals[phase] and type(worker) is int and 0<=worker<W.concurrency
+        assert phase!='warmup' or worker==ordinal%W.concurrency
+        assert type(a['StartNS']) is int and type(a['EndNS']) is int and worker_ends[phase][worker]<=a['StartNS']<a['EndNS'] and a['EndNS']-a['StartNS']<=3000000000
+        worker_ends[phase][worker]=a['EndNS'];phase_ordinals[phase]+=1
         qi=a['Ordinal']%16;assert a['QueryID']==report['Admission']['Queries'][qi]['QueryID']
         assert a['Response']['Generation']==report['Admission']['Generation']
         if a['Phase']=='measured':
@@ -937,6 +944,7 @@ def validate_causal_report(report, initial):
             assert mask==1 and a['RecallAt10']==recall
     assert query_attempts==report['MeasuredQueryAttempts'] and query_success==report['MeasuredQuerySucceeded']
     assert report['MeanRecallAt10']==sum_recall/len(measured)
+    assert phase_ordinals['warmup']==64 and [a['Phase'] for a in attempts]==['warmup']*64+['measured']*phase_ordinals['measured']
     assert len({(a['Phase'],a['Ordinal']) for a in attempts})==len(attempts)
     assert [a['Ordinal'] for a in measured]==list(range(len(measured)))
     assert all(a['Phase'] in ('warmup','measured') for a in attempts)
@@ -1004,7 +1012,7 @@ def validate_prefix_oracles(oracle,a,initial):
     assert oracle['source_head']==a['source_head'] and oracle['source_tree']==a['source_tree']
     assert oracle['InitialPopulationSHA256']==population_identity(initial,128)['SHA256']
     writes=oracle['OriginalRequests'];prefixes=oracle['Prefixes']
-    assert len(writes)==48 and len(prefixes)==49
+    assert len(writes)==W.originals and len(prefixes)==W.prefixes
     assert writes==original_requests(writes), 'frozen OriginalRequests must use canonical omitted inactive fields'
     sustained_originals(writes)
     assert all(w['Ordinal']==i and w['Kind'] in ('replace','delete') for i,w in enumerate(writes))
@@ -1103,7 +1111,7 @@ def self_check():
     checks.append('ordinary_protocol_integer_tokens_preserved')
     # Actual mixedWrite/ColocatedAuditWriteV1 omitempty shapes: no inactive key.
     initial={'doc-%06d'%i:checked_vector(v+[0]*126,128) for i,v in enumerate(([0,1],[1,0],[-1,0],[0,-1]))}
-    pattern=[('replace',0,[1,-0.0]),('replace',0,[-1,-0.0]),('delete',1,None),('replace',2,[0,1]),('delete',2,None),('delete',3,None)]+[('replace',0,[1,-0.0] if i%2==0 else [-1,-0.0]) for i in range(6,48)]
+    pattern=[('replace',0,[1,-0.0]),('replace',0,[-1,-0.0]),('delete',1,None),('replace',2,[0,1]),('delete',2,None),('delete',3,None)]+[('replace',0,[1,-0.0] if i%2==0 else [-1,-0.0]) for i in range(6,W.originals)]
     writes=[]
     for i,(kind,index,xy) in enumerate(pattern):
         req={'Version':1,'Generation':{'Index':'synthetic','Generation':2},
@@ -1364,8 +1372,8 @@ def uint64_mask(n):
     assert type(n) is int and 0<n<1<<64
     return n
 def sustained_originals(writes):
-    assert len(writes)==48
-    assert [w['Ordinal'] for w in writes]==list(range(48)) and all(type(w['Ordinal']) is int for w in writes)
+    assert len(writes)==W.originals
+    assert [w['Ordinal'] for w in writes]==list(range(W.originals)) and all(type(w['Ordinal']) is int for w in writes)
     assert [w['Kind'] for w in writes[:6]]==['replace','replace','delete','replace','delete','delete']
     ids=[operation_request(w)[1]['ID'] for w in writes[:6]]
     assert ids[0]==ids[1] and ids[3]==ids[4] and len({ids[i] for i in (0,2,3,5)})==4
@@ -1382,16 +1390,16 @@ def sustained_originals(writes):
         assert [struct.pack('<f',x) for x in req['Vector']]==[struct.pack('<f',x) for x in v[i%2]]
 
 def sustained_shape(report,planned=False):
-    assert original_count(report)==48
+    assert original_count(report)==W.originals
     writes=report['Writes'];prefixes=report['Prefixes']
-    assert len(writes)==48 and len(prefixes)==49
+    assert len(writes)==W.originals and len(prefixes)==W.prefixes
     sustained_originals(writes)
-    assert [p['Prefix'] for p in prefixes]==list(range(49))
+    assert [p['Prefix'] for p in prefixes]==list(range(W.prefixes))
     assert all(type(p['Prefix']) is int and type(p['PopulationRows']) is int and len(p['Truth'])==len(p['Changed'])==16 for p in prefixes)
-    assert report['Concurrency']==1 and report['WarmupPlanned']==64 and report['MaxAttempts']==65536 and report['OutputBytes']==134217728
-    assert report['RequestedDuration']==300000000000 and report['PaceInterval']==6000000000 and report['Truncated'] is False
+    assert report['Concurrency']==W.concurrency and report['WarmupPlanned']==64 and report['MaxAttempts']==65536 and report['OutputBytes']==134217728
+    assert report['RequestedDuration']==W.duration_ns and report['PaceInterval']==W.spacing_ns and report['Truncated'] is False
     for i,w in enumerate(writes):
-        assert type(w['Ordinal']) is int and w['Ordinal']==i and w['IntendedOffsetNS']==i*6000000000
+        assert type(w['Ordinal']) is int and w['Ordinal']==i and w['IntendedOffsetNS']==i*W.spacing_ns
         assert w['Outcome']==('unissued' if planned else 'succeeded') and w['Invoked'] is (not planned)
     if planned:
         assert report['Retries'] in (None,[]) and report['Attempts'] in (None,[]) and report['ReadPrefixes'] in (None,[])

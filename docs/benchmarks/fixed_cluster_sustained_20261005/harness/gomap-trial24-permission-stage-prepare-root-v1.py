@@ -1,7 +1,7 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths
+from source_paths import source_path, isolate_paths, W
 """Unexecuted Trial24 inactive-input staging and isolated permission observation.
 Root must review this source and supply exact final manifest/archive pins.
 No campaign activation, voter start, DB mount, gate, mutations, or replay.
@@ -9,10 +9,10 @@ No campaign activation, voter start, DB mount, gate, mutations, or replay.
 import argparse, ast, copy, hashlib, importlib.util, inspect, io, json, math
 import pathlib, re, secrets, shlex, subprocess, sys, tarfile, time, types
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA = "901c07745bd245868a1c530794045a5cd3ef0a8174963b54216fb4a3009c57b9"
+COLLECTOR_SHA = "6273005bd62e74850426301bd1c61e6ad040ec6a94e5f383909477d7a4e67ae3"
 RESOURCE = source_path('/tmp/gomap-4994-mixed-window-resource-accounting-root-v5.py')
 RESOURCE_SHA = "fe917502c45aa2f4619bd6d5cb294243d343c5cd93f3c6974ccff71b01eb5f96"
-RUN = "rf4trial24mixedchangingc1"
+RUN = W.campaign
 HEAD = "__ROOT_FROZEN_HEAD__"
 TREE = "__ROOT_FROZEN_TREE__"
 HOST = "mikers@192.168.0.185"
