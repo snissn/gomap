@@ -1,13 +1,13 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import sys
 sys.dont_write_bytecode=True
-from source_paths import source_path, isolate_paths
+from source_paths import source_path, isolate_paths, W
 """Inert source-only derivation. Root reviews/pins generated sources before any run."""
 import argparse, ast, hashlib, importlib.util, inspect, json, pathlib, re
 TEMPLATES = {'admission': '/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py', 'query': '/tmp/gomap-4994-trial14mixedc1-growth-query-root-v2.py', 'lifecycle': '/tmp/gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py', 'exact-validate': '/tmp/gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py', 'artifact-verify': '/tmp/gomap-4994-trial14mixedc1-growth-artifact-verify-root-v2.py'}
 TEMPLATE_SHA256 = {'admission': 'd6d109b3125dc5075151b05276992502e85c512cb5710ee2b2b3549169e45032', 'query': 'fd6025b6a46f9cb64d150f4a239bd5ba6c101361a1bbce31c0464810c588d0ed', 'lifecycle': '51309dd305a2bf817215c7a83219f74d36d9ebbe150e7e06425c3b05aeda0286', 'exact-validate': 'f9df841baf352b2fdab599297f199db5cf5ece632748a4009ee546c3e1cb2bb0', 'artifact-verify': 'c11ca2ef5788ef40d7dfc400cad6ae3ba8922af81c8f5dc5724908a14aa27a56'}
-CAMPAIGN = 'rf4trial24mixedchangingc1'
-PREFIX = 'gomap-4997-4998-trial24-growth-'
+CAMPAIGN = W.campaign
+PREFIX = 'gomap-4997-4998-'+W.stage_short+'-growth-'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 ARTIFACT_TEMPLATE_ROOT = '/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1'
 REMOTE_TEMPLATE_ROOT = '/home/mikers/gomap-4250-twohost-rf4trial14mixedc1'
@@ -29,7 +29,7 @@ def validate_path_bindings(texts,bindings):
         assert isinstance(new,str) and pathlib.Path(new).is_absolute() and new!=old, 'fresh absolute reviewed path'
         no_historical_paths(new)
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='bd1e9dd47c6cd4851e8e6d0101adb76545d17fbaa32f2669fb963a12f6eec434'
+PLAN_SHA='60eafea5704321177d82f3aa4932971e7f36d6018c6159b16ab00669be93ae07'
 def product_module():
  assert sha(pathlib.Path(PLAN_MODULE).read_bytes())==PLAN_SHA
  spec=importlib.util.spec_from_file_location('trial24_frozen_product',PLAN_MODULE)
@@ -101,7 +101,7 @@ def main():
         for old,new in sorted(pins['reviewed_path_bindings'].items(),key=lambda x:-len(x[0])): text=text.replace(old,new)
         for oldrole,oldpath in TEMPLATES.items(): text=text.replace(oldpath,str(destinations[oldrole]))
         text=text.replace('/Volumes/FlashDrive/gomap-4994-rf4trial14mixedc1',pins['artifact_root'])
-        text=text.replace('rf4trial14mixedc1',CAMPAIGN).replace('gomap-4994-trial14mixedc1-growth-',PREFIX).replace('trial14mixedc1','trial24mixedchangingc1').replace('/growth-query-root-v2','/growth-query-root-v1').replace('/growth-lifecycle-root-v2','/growth-lifecycle-root-v1')
+        text=text.replace('rf4trial14mixedc1',CAMPAIGN).replace('gomap-4994-trial14mixedc1-growth-',PREFIX).replace('trial14mixedc1',W.short).replace('/growth-query-root-v2','/growth-query-root-v1').replace('/growth-lifecycle-root-v2','/growth-lifecycle-root-v1')
         for old,new in sorted(bindings.items(),key=lambda x:-len(x[0])): text=text.replace(old,new)
         for dependent in ('query','lifecycle','exact-validate'):
             if dependent in generated_hashes: text=text.replace(TEMPLATE_SHA256[dependent],generated_hashes[dependent])

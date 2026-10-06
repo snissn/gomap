@@ -1,13 +1,13 @@
-# RF4 sustained workload source packet
+# RF4 sustained and matched workload source packet
 
-This is source construction for issue #5021. It is provisional and grants no
+This is source construction for issues #5021 and #5068. It is provisional and grants no
 runtime, campaign, source, image, credential, or performance acceptance.
 Measured product and harness identities must be reviewed, landed, and frozen
 before expensive retained collection. Root owns final binding and admission.
 
 The packet contains 15 readable role templates, a source-only instantiator,
-a declaration template, pure checks, a small source-path resolver, and 14 shared
-source dependencies. Two root-owned inert build/image adapters are ancillary
+a declaration template, pure checks, a small source-path resolver, an immutable
+workload profile and shared source dependencies. Two root-owned inert build/image adapters are ancillary
 source under `root-adapters/`; they are not template roles, are not executed by
 checks, and are not copied into generated consumer output. Their exact source
 hashes are pinned in `packet.json` and the complete source hash manifest. Root
@@ -41,7 +41,7 @@ permission and native-oracle archive validators. The directory-prefixed form
 and mismatched payload digests are rejected; transport and campaign paths are
 not executed by this fixture.
 
-All 291 prior controls remain; negative checks cover each packaged host's
+All 590 prior controls remain; negative checks cover each packaged host's
 identity, source, ELF hash/positive bytes, packaging state, unchanged parent and
 unmounted stores, and all three native frozen-inventory count joins. No network,
 Go build, native oracle execution, Docker, campaign, or workload replay occurs.
@@ -222,3 +222,88 @@ The runtime-build adapter's `SOURCE` is a metadata-free export of the complete f
 The pre-input freezer consumes explicit accepted bootstrap locators: invoke with --pins PINFILE --plan PLAN_DIRECTORY --lifecycle CLOSED_LIFECYCLE_DIRECTORY --lifecycle-sha256 SHA256_OF_RESULT_JSON --out FRESH_PRE_INPUT_PREPARATION_DIRECTORY. Plan and lifecycle directories may use the admitted versioned basenames. The pins select the artifact volume and dataset; bootstrap-root-v1 and pre-inputs-root-v1 remain children of that volume. The close receipt binds the actual bootstrap plan/result bytes, and the freezer joins pins, preparation, precollection proof, dataset and the frozen product before creating outputs or using transport. Staged locators must contain the exact authenticated receipt bytes.
 
 The source checker validates complete coverage and SHA256 values in source-hashes.json before constructing fixtures. The manifest excludes itself. The copied mixed-window core is a derived current dependency: its local field and pieces implementations are unchanged, while their helper report now identifies the executing local source and retains the overridden historical import metadata. Read/audit accounting compares retained collector bytes with its originally authenticated source snapshot. Historical receipts and sources outside this packet remain original evidence.
+
+
+## Matched C1/C4 source construction (#5068)
+
+The default declaration remains exactly48 originals/49 prefixes/300 seconds,
+6-second spacing and C1. Matched declarations use exactly6 originals/7 prefixes,
+60 seconds,5-second spacing and RPC3 seconds. Both profiles retain driver420
+and collector480 seconds,64 warmup calls,65,536 attempts and128 MiB output.
+Native context120/test180/scope240/outer300 seconds and1 MiB output remain
+separate native termination bounds. Initial/final populations remain10005/10002.
+The first six changing mutations and retries are identical across profiles.
+
+The six immutable matched campaign namespaces, in collection order, are:
+
+| Window | Campaign | Arm |
+| --- | --- | --- |
+| 1 | rf4matched5068w01c1 | C1 |
+| 2 | rf4matched5068w02c4 | C4 |
+| 3 | rf4matched5068w03c4 | C4 |
+| 4 | rf4matched5068w04c1 | C1 |
+| 5 | rf4matched5068w05c1 | C1 |
+| 6 | rf4matched5068w06c4 | C4 |
+
+Use the existing declaration shape, replacing `campaign` and `workload` with
+one exact accepted profile from `workload_profile.accepted`; keep every actual
+source/build/images/independent acceptance reference. The fresh output directory
+must contain its campaign name. Instantiation authenticates the profile source,
+binds it once, then propagates the profile/resolver and role hashes. Every role
+imports that same frozen profile. The generated source packet includes the
+profile and descriptive reporter, with no per-arm collector copies. Matched
+predeclarations additionally require `accepted_workload` equal to the complete
+accepted declaration workload; `workload.profile` remains `changing-top10` and
+`workload.duration_seconds` must equal60. Their receipt locator is the campaign
+local input root plus `-campaign-predeclaration.json`. Config/TLS/node/container,
+input/output/growth/native namespaces derive from the campaign. Historical
+source filenames and native test identifiers remain provenance, not namespaces.
+
+Read ledger ordinals remain contiguous within each phase, with query ordinal
+modulo16. Warmup ownership is ordinal modulo concurrency. Measured assignment
+comes from the actual producer worker field. Starts and deadlines may be
+nonmonotonic in global ordinal order; each worker must serialize its own calls
+and deadlines. The verifier uses two arrays of at most4 entries per phase;
+configuration is authenticated once before reports are traversed. No product
+hot loop, algorithm, format or per-attempt copy was added. Native Go remains the
+canonical FP32 ranking authority for all7 prefixes; no numeric recall gate is
+introduced and the root external policy remains unchanged.
+
+`matched_report.py` accepts a hash-pinned `--windows` manifest (`Version:1`,
+`windows` containing the six exact campaign names in order). Each row has
+`campaign`, `status` (`complete`, `failed`, `incomplete`) and `pins`. Each pin is
+an exact absolute regular-file `path` plus `sha256`. Complete rows require
+`stdout` (the actual two JSONL events), `read_audit`, `resources`,
+`artifact_review`, `costs`, `manifest`, `native_oracle`, `promoted_oracle` and
+`sources`. The read/audit input is the complete outer
+`TRIAL24_READ_AUDIT_ACCOUNTING_ONLY` receipt, with nested read and audit proofs,
+population observations, source identity/pins, derivation and limitations.
+Its raw stdout/manifest/oracle hashes, nested raw planned/result report hashes
+and four audit attachment hashes must join the retained bytes. The manifest
+and oracle identities must agree with the campaign, source head/tree and raw
+admission. `sources` pins a JSON mapping from the accounting proofs' original
+absolute source identities to regular-file path/SHA256 references; checked
+byte-identical staged copies are allowed. Every named source is authenticated,
+and missing, conflicting or extra mappings are refused. Costs contain only campaign/setup_seconds/
+oracle_seconds/retained_bytes. Read/resource proof hashes must join actual raw
+stdout/report bytes. Artifact-review bytes are retained for separate independent
+acceptance; this descriptive command does not interpret them as authority.
+Failed/incomplete entries retain their raw references and are never replaced.
+Use a fresh `--out` file outside the packet and every consumed input.
+
+The report retains per-window throughput, recall histogram/minimum, nearest-rank
+latency, writer latency, duration, overlap, populations, memory and costs. It
+reports arm median/minimum/maximum across per-window values and quantiles
+without pooling attempt tails, adding significance intervals, or claiming
+capacity/speedup. It includes separate role summaries for the client and each
+of the four voters.
+Memory peak and process HWM remain the exact five-role maps emitted by resource
+accounting. These observations include setup/warmup/drain/history; peaks from
+different instants are never added into a purported cluster memory total.
+Source controls use explicitly synthetic receipts, full actual
+read-consumer fixtures, and generated C1/C4 source packets; they qualify neither
+ranking nor runtime artifacts. Collection still requires #5021 actual checkpoint,
+#5068 source landing/freeze, final generated-source review, separate admissions,
+all oracle/resource/lifecycle gates and independent artifact acceptance.
+
+The isolated permission observation switches to `read-window` with an exact `60s` duration, supported by the read-only driver. Its exact argv validator rejects a substituted duration. This does not change the original mixed checkpoint’s `300s` declaration or the matched `60s` C1/C4 workloads. Synthetic argv controls do not prove that credentials were read or that an actual permission observation passed.
