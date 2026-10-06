@@ -35,6 +35,14 @@ def process_environment(controls):
     return dict(controls, PATH=os.defpath, GOENV="off", GOTOOLCHAIN="local",
                 GOPATH=str(cache.parent.parent), LC_ALL="C")
 
+def validate_go_environment(observed, env):
+    # Go's cfg.EnvFile reports the disabled GOENV=off setting as an empty
+    # filename in `go env -json`; the actual process environment still is off.
+    for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH"):
+        expected = "" if key == "GOENV" else env[key]
+        need(observed[key] == expected, "actual go env mismatch " + key)
+    need(observed["GOOS"] == "linux" and observed["GOARCH"] == "amd64", "actual build platform mismatch")
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 

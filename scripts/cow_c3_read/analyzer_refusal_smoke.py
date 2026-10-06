@@ -64,7 +64,7 @@ def main():
                 write(path, git_receipt)
             elif name == "go_env":
                 effective = process_environment(config["environment"])
-                write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH")}, "GOOS": "linux", "GOARCH": "amd64"})
+                write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH")}, "GOENV": "", "GOOS": "linux", "GOARCH": "amd64"})
             else:
                 path.write_text("synthetic-refusal-input " + name + "\n")
             retained[name] = {"path": path.name, "sha256": sha(path)}

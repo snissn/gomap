@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
-from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write
+from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment
 from collect import host_gate
 from build import verify_git_receipt
 
@@ -45,9 +45,7 @@ def main():
             need(artifact["path"] == variant + "-" + name + ".raw" and artifact["sha256"] == build["artifacts"][name]["sha256"], "artifact receipt binding drift")
             need(sha(packet / artifact["path"]) == artifact["sha256"], "build provenance drift")
         go_env = json.loads((packet / (variant + "-go_env.raw")).read_text())
-        for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH"):
-            need(go_env[key] == env[key], "actual go env mismatch " + key)
-        need(go_env["GOOS"] == "linux" and go_env["GOARCH"] == "amd64", "actual build platform mismatch")
+        validate_go_environment(go_env, env)
         observed = identity(packet / (variant + "-source-manifest.json"))
         need(observed == json.loads((packet / (variant + "-identity.json")).read_text()), "source identity drift")
         need(observed["manifest_sha256"] == declaration["manifest_sha256"] and observed["tree_sha256"] == declaration["source_tree_sha256"], "unbound source manifest")

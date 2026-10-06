@@ -14,7 +14,7 @@ import stat
 import subprocess
 import time
 
-from protocol import drift, identity, need, now, process_environment, sha, write
+from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment
 
 GIT_SOURCE_SCHEMA = "gomap-git-export-authority-v1"
 
@@ -280,9 +280,7 @@ def main():
     try:
         version = run("go-version", [str(go), "version"]).strip()
         go_env = json.loads(run("go-env", [str(go), "env", "-json"]))
-        for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH"):
-            need(go_env[key] == env[key], "actual go env mismatch " + key)
-        need(go_env["GOOS"] == "linux" and go_env["GOARCH"] == "amd64", "unexpected actual build platform")
+        validate_go_environment(go_env, env)
         binary = out / "mvcc-normal.test"
         argv = [str(go), "test", "-c", "-o", str(binary), "./TreeDB/mvcc"]
         run("build", argv)

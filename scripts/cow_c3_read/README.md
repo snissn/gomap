@@ -83,6 +83,8 @@ runtime GODEBUG settings cannot enter either variant. The full effective
 process environment is retained in both build receipts and the collection
 packet and checked during collection and offline analysis. Actual full
 `go env -json` remains retained, including the toolchain's default settings.
+Go reports disabled `GOENV=off` as an empty configuration-file name; validation
+checks that actual empty value while retaining `off` in the process environment.
 Each profile also requires exact ordinary WAL counts in both variant rules
 and comparable metrics: durable append/sync 1/1, relaxed 1/0, NoWAL 0/0.
 The builder requires a Git repository containing the declared commit/tree.

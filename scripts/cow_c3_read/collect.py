@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write
+from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment
 from build import verify_git_receipt
 
 def wait_child(child, timeout, grace=3.0):
@@ -126,9 +126,7 @@ def main():
             need(build["effective_module_identity"] == frozen_artifacts["effective_module_graph"]["sha256"], "unbound canonical effective module graph")
             verify_git_receipt(source, ident["original_manifest"], json.loads((out / (variant + "-git_source.raw")).read_text()))
             go_env = json.loads((out / (variant + "-go_env.raw")).read_text())
-            for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH"):
-                need(go_env[key] == env[key], "actual go env mismatch " + key)
-            need(go_env["GOOS"] == "linux" and go_env["GOARCH"] == "amd64", "actual build platform mismatch")
+            validate_go_environment(go_env, env)
             shutil.copyfile(v["build_receipt"], out / (variant + "-build-receipt.json"))
             write(out / (variant + "-build-source-after.json"), build_post)
             write(out / (variant + "-build-artifacts.json"), frozen_artifacts)
