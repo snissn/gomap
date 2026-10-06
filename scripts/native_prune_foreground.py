@@ -103,6 +103,11 @@ def need(x, message):
 def uint(x):
     return type(x) is int and x >= 0
 
+
+def measurement_labels(retained=False):
+    labels = {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}
+    return labels
+
 def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
@@ -194,6 +199,7 @@ def packet(out, root=None, receipt=None):
     source = json.loads((out / 'source-bindings.json').read_text())
     need(type(source) is dict and all(type(k) is str and valid_sha(v) for k, v in source.items()), 'source hashes')
     need(r['contract'] == C and digest(source) == r['source_digest'] and r['source_stable'] is True and type(r['source_count']) is int and r['source_count'] == len(source), 'source receipt')
+    need(r.get('labels') == measurement_labels(), 'noncanonical foreground scope labels')
     need(r['errors'] == [] and type(r['race']) is bool, 'receipt errors/race')
     if root:
         need(source == bindings(root), 'source drift')
@@ -325,6 +331,30 @@ def self_test(out, root):
     print('seventeen in-memory negative checks PASS; retained measurements unchanged')
     contract_self_test(out, r)
 
+
+def artifact_sha(path):
+    try:
+        return sha(path)
+    except OSError:
+        return None
+
+def run_logged(cmd, root, env, log, timeout):
+    process_error = ''
+    try:
+        p = subprocess.run(cmd, cwd=root, env=env, capture_output=True, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        process_error = str(e)
+        p = subprocess.CompletedProcess(cmd, -1, getattr(e, 'stdout', None) or b'', getattr(e, 'stderr', None) or b'')
+    log.write_bytes((p.stdout or b'') + (p.stderr or b'') + (('\nDRIVER ERROR: ' + process_error + '\n').encode() if process_error else b''))
+    return p, process_error
+
+def final_bindings(root, errors):
+    try:
+        return bindings(root)
+    except OSError as e:
+        errors.append('source bindings unreadable: ' + str(e))
+        return None
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', type=pathlib.Path, default=pathlib.Path(__file__).resolve().parents[1]); p.add_argument('--out', type=pathlib.Path, required=True)
@@ -343,48 +373,63 @@ def main():
         env.pop(key, None)
     go_path = pathlib.Path(shutil.which(args.go, path=env.get('PATH')) or args.go).resolve(); need(go_path.is_file(), 'Go executable')
     env['PATH'] = str(go_path.parent) + os.pathsep + env.get('PATH', '')
-    version = subprocess.run([str(go_path), 'version'], env=env, cwd=root, capture_output=True, text=True, check=True).stdout.strip()
-    go = {'path': str(go_path), 'version': version, 'sha256': sha(go_path)}; build_env = {k: env.get(k) for k in BUILD_KEYS}
+    cases = []; errors = []; binary_sha = None; source_stable = True
+    version_cmd = [str(go_path), 'version']
+    (out / 'version-command.json').write_text(json.dumps({'cwd': str(root), 'argv': version_cmd}, indent=2) + '\n')
+    version, process_error = run_logged(version_cmd, root, env, out / 'version.log', 30)
+    if version.returncode != 0: errors.append('Go version failed: ' + (process_error or str(version.returncode)))
+    go = {'path': str(go_path), 'version': version.stdout.decode(errors='replace').strip() if version.returncode == 0 else None, 'sha256': artifact_sha(go_path)}; build_env = {k: env.get(k) for k in BUILD_KEYS}
+    if version.returncode == 0 and not go['version'].startswith('go version '): errors.append('invalid Go version output')
+    if go['sha256'] is None: errors.append('Go executable unreadable')
     binary = out / 'foreground.test'; cmd = [str(go_path), 'test', '-c', '-tags', 'treedb_test,mvcc_native_foreground'] + (['-race'] if args.race else []) + ['-o', str(binary), './TreeDB/mvcc']
     (out / 'build-command.json').write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'go': go, 'env': build_env}, indent=2) + '\n')
-    result = subprocess.run(cmd, cwd=root, env=env, capture_output=True, timeout=180); (out / 'build.log').write_bytes(result.stdout + result.stderr)
-    need(result.returncode == 0, 'build'); need(source == bindings(root), 'source drift'); binary_sha = sha(binary); cases = []; errors = []
-    for n, mode, algorithm in MATRIX:
+    if not errors:
+        result, process_error = run_logged(cmd, root, env, out / 'build.log', 180)
+        if result.returncode != 0: errors.append('build failed: ' + (process_error or str(result.returncode)))
+        else:
+            binary_sha = artifact_sha(binary)
+            after = final_bindings(root, errors)
+            if source != after or binary_sha is None or artifact_sha(go_path) != go['sha256']:
+                source_stable = False; errors.append('source/executable drift after build')
+    for n, mode, algorithm in (MATRIX if not errors else []):
         try:
             stable = source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
         except OSError:
             stable = False
         if not stable:
+            source_stable = False
             errors.append(f'source/executable drift before {algorithm}-{mode}-{n}')
             break
         name = f'{algorithm}-{mode}-{n}'; output = out / (name + '.json'); raw = out / (name + '.log'); command = out / (name + '-command.json')
         ee = dict(env); ee.update(MVCC_FOREGROUND_RESULT=str(output), MVCC_FOREGROUND_N=str(n), MVCC_FOREGROUND_MODE=mode, MVCC_FOREGROUND_ALGORITHM=algorithm)
         cmd = [str(binary), '-test.run', '^TestNativePruneForegroundPilot$', '-test.count=1', '-test.timeout=120s', '-test.v']
         (command).write_text(json.dumps({'cwd': str(root), 'argv': cmd, 'env': dict(build_env, **{k: v for k, v in ee.items() if k.startswith('MVCC_FOREGROUND_')})}, indent=2) + '\n')
-        start = time.monotonic(); process_error = ''
-        try:
-            result = subprocess.run(cmd, cwd=root, env=ee, capture_output=True, timeout=150)
-        except (subprocess.TimeoutExpired, OSError) as e:
-            process_error = str(e)
-            result = subprocess.CompletedProcess(cmd, -1, getattr(e, 'stdout', None) or b'', (getattr(e, 'stderr', None) or b'') + ('\nDRIVER ERROR: ' + process_error + '\n').encode())
-        raw.write_bytes(result.stdout + result.stderr)
+        start = time.monotonic()
+        result, process_error = run_logged(cmd, root, ee, raw, 150)
+        if result.returncode != 0: errors.append('process ' + name + ': ' + (process_error or str(result.returncode)))
         try:
             stable = source == bindings(root) and sha(binary) == binary_sha and sha(go_path) == go['sha256']
         except OSError:
             stable = False
-        c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'process_error': process_error, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': sha(binary) if binary.is_file() else None}
+        c = {'n': n, 'mode': mode, 'algorithm': algorithm, 'exit_code': result.returncode, 'process_error': process_error, 'elapsed_seconds': time.monotonic() - start, 'binary_before_sha256': binary_sha, 'binary_after_sha256': artifact_sha(binary)}
         for key, file in [('raw', raw), ('result', output), ('command', command)]:
-            c[key] = file.name; c[key + '_sha256'] = sha(file) if file.exists() else None
+            c[key] = file.name; c[key + '_sha256'] = artifact_sha(file)
         cases.append(c)
         if not stable:
+            source_stable = False
             errors.append('source/executable drift after ' + name)
             break
+        case_accepted = False
         try:
             need(result.returncode == 0, 'process ' + name); validate(json.loads(output.read_text()), n, mode, algorithm)
+            case_accepted = True
         except (ValueError, KeyError, TypeError, OSError) as e:
             errors.append(str(e))
-        print(name + (' PASS' if result.returncode == 0 else ' RED'), flush=True)
-    receipt = {'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source == bindings(root), 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': sha(out / 'build-command.json'), 'build_log_sha256': sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': {'latency': 'actual public operation intervals including lock wait; fixed buckets; causal pilot only', 'sustained': 'ACKWhileWriterActive sampled at public return; stop-drain completion is separate', 'growth': 'future timestamps grow surviving output; fixed timestamp churn fixes cardinality', 'counters': 'observed cursor transitions, not all internal invocations', 'reference': 'zero-work prune fences foreground; no partial-private-output start cut, not equivalent scheduler timing'}}
+        print(name + (' PASS' if case_accepted else ' RED'), flush=True)
+        if not case_accepted: break
+    final_source = final_bindings(root, errors)
+    if source != final_source: source_stable = False; errors.append('source drift after collection')
+    receipt = {'capture_out': str(out), 'contract': C, 'source_root': str(root), 'source_digest': digest(source), 'source_count': len(source), 'source_stable': source_stable, 'race': args.race, 'go': go, 'build_env': build_env, 'binary_sha256': binary_sha, 'build_command_sha256': artifact_sha(out / 'build-command.json'), 'build_log_sha256': artifact_sha(out / 'build.log'), 'cases': cases, 'errors': errors, 'labels': measurement_labels()}
     (out / 'receipt.json').write_text(json.dumps(receipt, indent=2) + '\n'); need(not errors, 'causal failures ' + repr(errors)); packet(out, root)
     print('causal packet PASS; retained latency qualification outstanding')
 

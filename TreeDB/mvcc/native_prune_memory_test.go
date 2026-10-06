@@ -229,6 +229,9 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 	for calls := 1; calls <= n*64+32768; calls++ {
 		previous := cursor
 		stats, e := eligibilityQuantum(t, store, cursor)
+		if e != nil {
+			t.Fatalf("call%d: %v %+v", calls, e, stats)
+		}
 		result.Calls++
 		result.Records += stats.WorkRecords
 		result.Bytes += stats.WorkBytes
@@ -314,9 +317,6 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 				t.Fatal("cancel ACK")
 			}
 			if !s.Native {
-				if e != nil {
-					t.Fatal(e)
-				}
 				if cancelRecords == 0 || cancelBytes == 0 {
 					t.Fatal("uncharged cancel")
 				}
@@ -324,9 +324,6 @@ func TestNativePruneMemoryLifecycle(t *testing.T) {
 				cut("cancel_drained")
 				break
 			}
-		}
-		if e != nil {
-			t.Fatalf("call%d: %v %+v", calls, e, stats)
 		}
 		if !accepted && stats.Pruned > 0 {
 			if !s.Native || !s.Accepted {

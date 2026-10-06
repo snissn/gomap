@@ -68,14 +68,16 @@ def validate_case(x, n, mode, pinned):
     for k in ('pinned','PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle','PartialOutput','RelaxedCustody','ChargedCancel'):
         require(type(x[k]) is bool, 'invalid boolean field '+k)
     require(x['pid'] > 0 and x['Calls'] > 0, 'missing process/work witness')
+    require(x['MaxRecords'] <= x['Records'] <= x['Calls']*x['MaxRecords'] and x['MaxBytes'] <= x['Bytes'] <= x['Calls']*x['MaxBytes'], 'work total/max/call accounting')
     require(x['MaxRecords'] <= 32 and x['MaxBytes'] <= 1<<20 and x['MaxWindow'] <= 32 and x['MaxFrames'] <= 64 and x['MaxFlatRetiredCap'] == 0, 'bounded-work/descriptor failure')
     require(all(x[k] for k in ('PointerOracle','ReaderOracle','ReopenOracle','CleanupOracle','CursorCloseOracle')), 'missing lifecycle oracle')
     require(x['PhysicalBefore'] == n+2 and x['FixedSurvivors'] == 3, 'fixture shape mismatch')
     require(x['PhysicalAfter'] == (3 if mode == 'prune' else n+2) and x['Pruned'] == (n-1 if mode == 'prune' else 0), 'physical/ACK mismatch')
     if mode != 'control':
         require(x['PartialOutput'] and x['MaxSourceRetirementCells'] > 0, 'missing actual physical-page/output witness')
-    require(mode != 'prune' or x['RelaxedCustody'], 'missing accepted RELAXED custody')
-    require(mode != 'cancel' or x['ChargedCancel'], 'missing charged public cancellation')
+    require(x['PartialOutput'] == (mode != 'control') and x['RelaxedCustody'] == (mode == 'prune') and x['ChargedCancel'] == (mode == 'cancel'), 'wrong-mode lifecycle witness')
+    if mode == 'control':
+        require(all(x[k] == 0 for k in ('MaxRetirementCells','MaxSourceRetirementCells','MaxWindow','MaxFrames')), 'control native descriptor ownership')
     cuts=x['cuts'];require(isinstance(cuts,list) and 8 <= len(cuts) <= 16,'invalid bounded samples')
     names=[s.get('name') for s in cuts if isinstance(s,dict)]; require(len(names)==len(cuts) and len(set(names))==len(names),'invalid/duplicate cuts')
     expected=['process_start','fixture_baseline']
@@ -94,6 +96,9 @@ def validate_case(x, n, mode, pinned):
         previous_alloc,previous_malloc=s['TotalAlloc'],s['Mallocs']
         a=s.get('State');require(isinstance(a,dict),'missing custody sample')
         p,z=validate_state_bounds(a,x)
+        if mode == 'control': require(not a['Native'], 'control native custody')
+        if s['name']=='prepared': require(a['Native'] and p['Build'], 'missing prepared private custody')
+        if s['name']=='cancel_requested': require(a['Native'] and p['Build'] and not a['Accepted'], 'missing requested cancel custody')
         require(s['OutputPages']==z['ObservedOutputPages'] and s['OutputBufferBytes']==z['ObservedOutputBufferBytes'],'contradictory output sample')
         require(z['ObservedOutputPages'] in (0,1) and (z['ObservedOutputPages']==0)==(z['ObservedOutputBufferBytes']==0),'invalid scalar output observation')
         require(z['DecodedLeafBytes'] in (0,4096),'invalid retained decoded leaf size')
@@ -141,6 +146,7 @@ def validate_packet(out, root=None):
     require(type(receipt.get('source_count')) is int and receipt['source_count']==len(source) and len(source)>0,'missing source manifest')
     require(type(receipt.get('smoke')) is bool and type(receipt.get('race')) is bool and type(receipt.get('n')) is int and receipt['n']>=64,'invalid run metadata')
     require(receipt.get('labels')==MEASUREMENT_LABELS,'noncanonical measurement scope labels')
+    require(receipt.get('errors') == [],'receipt errors')
     require(receipt['contract']==CONTRACT and receipt['source_digest']==digest(source) and receipt['source_stable'] is True,'invalid source receipt')
     if root is not None:same_source(source,bindings(root))
     capture=pathlib.Path(receipt['capture_out']);require(capture.is_absolute(),'capture directory')
@@ -150,7 +156,6 @@ def validate_packet(out, root=None):
     require(build['go']==go and type(go['path']) is str and pathlib.Path(go['path']).is_absolute() and type(go['version']) is str and go['version'].startswith('go version ') and type(go['sha256']) is str and len(go['sha256'])==64 and all(c in '0123456789abcdef' for c in go['sha256']),'Go identity')
     require(build['env']==env and all(k in env for k in BUILD_KEYS) and all(env[k]==v for k,v in {'CGO_ENABLED':'1','GOFLAGS':'-p=2','GOWORK':'off','GOTOOLCHAIN':'local','GOROOT':None,'GOGC':None,'GOMEMLIMIT':None,'GODEBUG':None}.items()),'controlled build environment')
     require(build['cwd']==receipt['source_root'] and build['argv']==[go['path'],'test','-c']+(['-race'] if receipt['race'] else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(capture/'native-memory.test'),'./TreeDB/mvcc'],'build invocation')
-    require(receipt.get('errors') == [],'receipt errors')
     cases=receipt['cases'];require(isinstance(cases,list) and cases,'missing cases')
     n=receipt['n']
     expected={(n,'prune',True),(2*n,'prune',True),(n,'cancel',True),(n,'control',True)} if receipt['smoke'] else {(size,mode,pin) for size in (n,2*n) for mode in ('prune','control','cancel') for pin in (False,True)}
@@ -396,6 +401,30 @@ def measurement_self_test(out, receipt, witness_case):
             else:raise ValueError('malformed scope labels accepted')
     print('measurement contract: '+str(len(fixtures))+' positive parser fixtures, '+str(len(negatives))+' coupled case refusals, 13 canonical-label refusals PASS')
 
+
+def artifact_sha(path):
+    try:
+        return sha(path)
+    except OSError:
+        return None
+
+def run_logged(cmd, root, env, log, timeout):
+    process_error = ''
+    try:
+        p = subprocess.run(cmd, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        process_error = str(e)
+        p = subprocess.CompletedProcess(cmd, -1, getattr(e, 'stdout', None) or b'', getattr(e, 'stderr', None) or b'')
+    log.write_bytes((p.stdout or b'') + (p.stderr or b'') + (('\nDRIVER ERROR: ' + process_error + '\n').encode() if process_error else b''))
+    return p, process_error
+
+def final_bindings(root, errors):
+    try:
+        return bindings(root)
+    except OSError as e:
+        errors.append('source bindings unreadable: ' + str(e))
+        return None
+
 def run(args):
     root=args.root.resolve();out=args.out.resolve();out.mkdir(parents=True,exist_ok=False)
     before=bindings(root);source_digest=digest(before)
@@ -404,42 +433,56 @@ def run(args):
     for key in ('GOGC','GOMEMLIMIT','GODEBUG'):env.pop(key,None)
     go_path=pathlib.Path(shutil.which(args.go,path=env.get('PATH')) or args.go).resolve();require(go_path.is_file(),'Go executable')
     env['PATH']=str(go_path.parent)+os.pathsep+env.get('PATH','')
-    version=subprocess.run([str(go_path),'version'],cwd=root,env=env,capture_output=True,text=True,check=True).stdout.strip()
-    go={'path':str(go_path),'version':version,'sha256':sha(go_path)};build_env={k:env.get(k) for k in BUILD_KEYS}
+    cases=[];errors=[];binary_sha=None;source_stable=True
+    version_cmd=[str(go_path),'version']
+    (out/'version-command.json').write_text(json.dumps({'cwd':str(root),'argv':version_cmd},indent=2)+'\n')
+    version,process_error=run_logged(version_cmd,root,env,out/'version.log',30)
+    if version.returncode != 0: errors.append('Go version failed: '+(process_error or str(version.returncode)))
+    go={'path':str(go_path),'version':version.stdout.decode(errors='replace').strip() if version.returncode==0 else None,'sha256':artifact_sha(go_path)};build_env={k:env.get(k) for k in BUILD_KEYS}
+    if version.returncode == 0 and not go['version'].startswith('go version '): errors.append('invalid Go version output')
+    if go['sha256'] is None: errors.append('Go executable unreadable')
     binary=out/'native-memory.test'
     build=[str(go_path),'test','-c']+(['-race'] if args.race else [])+['-tags','treedb_test,mvcc_native_memory','-o',str(binary),'./TreeDB/mvcc']
     (out/'build-command.json').write_text(json.dumps({'cwd':str(root),'argv':build,'go':go,'env':build_env},indent=2)+'\n')
-    p=subprocess.run(build,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=180)
-    (out/'build.log').write_bytes(p.stdout);require(p.returncode==0,'harness build failed');same_source(before,bindings(root));binary_sha=sha(binary)
-    cases=[];errors=[]
+    if not errors:
+        p,process_error=run_logged(build,root,env,out/'build.log',180)
+        if p.returncode != 0: errors.append('harness build failed: '+(process_error or str(p.returncode)))
+        else:
+            binary_sha=artifact_sha(binary)
+            after=final_bindings(root,errors)
+            if before!=after or binary_sha is None or artifact_sha(go_path)!=go['sha256']:
+                source_stable=False;errors.append('source/executable drift after build')
     matrix=[(args.n,'prune',True),(2*args.n,'prune',True),(args.n,'cancel',True),(args.n,'control',True)] if args.smoke else [(n,mode,pin) for n in (args.n,2*args.n) for mode in ('prune','control','cancel') for pin in (False,True)]
-    for n,mode,pin in matrix:
+    for n,mode,pin in (matrix if not errors else []):
         try:stable=before==bindings(root) and sha(binary)==binary_sha and sha(go_path)==go['sha256']
         except OSError:stable=False
         if not stable:
+            source_stable=False
             errors.append(f'source/executable drift before {mode}-{n}-pinned{int(pin)}');break
         name=f'{mode}-{n}-pinned{int(pin)}';result=out/(name+'.json');raw=out/(name+'.log')
         case_env=dict(env);case_env.update(MVCC_MEMORY_RESULT=str(result),MVCC_MEMORY_N=str(n),MVCC_MEMORY_MODE=mode,MVCC_MEMORY_PINNED=str(int(pin)))
         cmd=[str(binary),'-test.run','^TestNativePruneMemoryLifecycle$','-test.count=1','-test.timeout=120s','-test.v']
         command=out/(name+'-command.json');command.write_text(json.dumps({'cwd':str(root),'argv':cmd,'env':dict(build_env,**{k:v for k,v in case_env.items() if k.startswith('MVCC_MEMORY_')})},indent=2)+'\n')
-        start=time.monotonic();process_error=''
-        try:p=subprocess.run(cmd,cwd=root,env=case_env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=150)
-        except (subprocess.TimeoutExpired,OSError) as e:
-            process_error=str(e);p=subprocess.CompletedProcess(cmd,-1,(getattr(e,'output',None) or b'')+('\nDRIVER ERROR: '+process_error+'\n').encode())
-        raw.write_bytes(p.stdout)
-        after=bindings(root)
-        if before!=after:(out/'drifted-source-bindings.json').write_text(json.dumps(after,indent=2)+'\n')
+        start=time.monotonic()
+        p,process_error=run_logged(cmd,root,case_env,raw,150)
+        if p.returncode != 0: errors.append('case failed: '+name+': '+(process_error or str(p.returncode)))
+        after=final_bindings(root,errors)
+        if after is not None and before!=after:(out/'drifted-source-bindings.json').write_text(json.dumps(after,indent=2)+'\n')
         try:stable=before==after and sha(binary)==binary_sha and sha(go_path)==go['sha256']
         except OSError:stable=False
-        cases.append({'command':command.name,'command_sha256':sha(command),'binary_before_sha256':binary_sha,'binary_after_sha256':sha(binary) if binary.is_file() else None,'n':n,'mode':mode,'pinned':pin,'process_error':process_error,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':hashlib.sha256(result.read_bytes()).hexdigest() if result.is_file() else None,'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after)})
+        if not stable: source_stable=False
+        cases.append({'command':command.name,'command_sha256':sha(command),'binary_before_sha256':binary_sha,'binary_after_sha256':artifact_sha(binary),'n':n,'mode':mode,'pinned':pin,'process_error':process_error,'raw':raw.name,'raw_sha256':hashlib.sha256(raw.read_bytes()).hexdigest(),'result':result.name,'result_sha256':artifact_sha(result),'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'source_digest_before':source_digest,'source_digest_after':digest(after) if after is not None else None})
         try:
             require(stable,'source/executable drift after '+name);require(p.returncode==0,'case failed: '+name);require(result.is_file(),'case missing result: '+name)
             validate_case(json.loads(result.read_text()),n,mode,pin)
         except (ValueError,KeyError,TypeError,OSError) as e:
             errors.append(str(e));break
         print(name+' PASS',flush=True)
-    receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':sha(out/'build-command.json'),'build_log_sha256':sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':before==bindings(root),'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':dict(MEASUREMENT_LABELS)}
+    after=final_bindings(root,errors)
+    if before!=after: source_stable=False;errors.append('source drift after collection')
+    receipt={'contract':CONTRACT,'source_root':str(root),'capture_out':str(out),'go':go,'build_env':build_env,'binary_sha256':binary_sha,'build_command_sha256':artifact_sha(out/'build-command.json'),'build_log_sha256':artifact_sha(out/'build.log'),'source_digest':source_digest,'source_count':len(before),'source_stable':source_stable,'errors':errors,'n':args.n,'smoke':args.smoke,'race':args.race,'cases':cases,'labels':dict(MEASUREMENT_LABELS)}
     (out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
+    require(not errors,'capture failures '+repr(errors))
     results=[json.loads((out/c['result']).read_text()) for c in cases]
     (out/'summary.json').write_text(json.dumps(summarize(receipt,results),indent=2)+'\n')
     validate_packet(out,root);self_test(out)
