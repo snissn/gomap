@@ -169,9 +169,13 @@ runtime/harness identities. The lifecycle spec defines a separate sustained
 diagnostic, its bounded repeated working set, timer scope, and maintenance
 attribution. Its packets are not interchangeable with the comparator matrix.
 The example and comparator use `OpenBackendWithCachedLeafLog`; the lifecycle
-benchmark uses a direct durable command-WAL backend with background prune
-disabled. Its same-live-backend `VacuumIndexOnlineWithStats` observation excludes
-cached-wrapper checkpoint/reconciliation overhead. It establishes neither route
-equivalence nor the cost of the high-level storage orchestration above.
+benchmark uses `OptionsFor(ProfileCommandWALDurable)` plus `OpenBackend`, with
+background prune disabled and its supported persisted/effective format checked
+at creation and reopen. Its same-live-backend vacuum and exhaustive
+`CompactStorage` stages record actual owner admission, phase work and debt; a
+final fallback refresh precedes typed and leaf GC. These costs exclude
+cached-wrapper checkpoint/reconciliation overhead. Full-root file censuses
+include side stores and immutable manifest metadata. Route equivalence and
+physical-growth acceptance remain pending.
 Use reviewed, landed tooling and frozen sources for retained evidence. This
 example and guide establish usage, with no measured speedup or capacity claim.

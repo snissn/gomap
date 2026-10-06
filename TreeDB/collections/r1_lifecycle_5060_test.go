@@ -4,15 +4,18 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"sync/atomic"
 	"testing"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 )
 
 // The oracle uses one captured view for full rows and postings. It neither
@@ -175,8 +178,12 @@ func TestR1LifecycleMixedCycles5060(t *testing.T) {
 	requireStandaloneColumnProductionAuthorityTest(t)
 	for _, indexed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("indexed=%t", indexed), func(t *testing.T) {
-			dir, db, col := r1MutationOpen5059(t, indexed)
-			defer func() { _ = db.Close() }()
+			dir, db, col, cleanup := r1LifecycleNew5060(t, indexed)
+			defer func() {
+				if err := cleanup(); err != nil {
+					t.Error(err)
+				}
+			}()
 			want, known := r1LifecycleSeed5060(t, col)
 			var held []*CollectionReadView
 			var captured []map[string]map[string]any
@@ -235,10 +242,10 @@ func TestR1LifecycleMixedCycles5060(t *testing.T) {
 				r1LifecycleAssert5060(t, view, captured[i], known)
 			}
 			r1LifecycleMaintenance5060(t, db, col, want, known, held, captured)
-			if err := db.Close(); err != nil {
+			if err := cleanup(); err != nil {
 				t.Fatal(err)
 			}
-			db = openTypedMinimaDB(t, dir)
+			db, cleanup, _ = r1LifecycleOpen5060(t, dir)
 			col, err = NewCollectionManager(db).OpenCollection("r1")
 			if err != nil {
 				t.Fatal(err)
@@ -309,11 +316,8 @@ func r1LifecycleMaintenance5060(t *testing.T, db *backenddb.DB, col *Collection,
 	if gc.SegmentsDeleted != 0 {
 		t.Fatalf("selectable recovery generation reclaimed early: %+v", gc)
 	}
-	advanceColumnAssetDurableFallbackM15C(t, db)
-	gc, err = col.ColumnAssetGC(context.Background(), ColumnAssetGCOptions{Detailed: true, CandidateRefs: candidates})
-	if err != nil {
-		t.Fatal(err)
-	}
+	final := r1LifecycleFinal5060(t, db, col, &candidates)
+	gc = final.TypedGC
 	if gc.SegmentsDeleted != 1 || gc.BytesDeleted <= 0 {
 		t.Fatalf("released settled segment not reclaimed: %+v", gc)
 	}
@@ -335,7 +339,7 @@ func TestR1LifecycleRecoveryAfterMaintenance5060(t *testing.T) {
 	requireStandaloneColumnProductionAuthorityTest(t)
 	for _, cut := range []string{"before_append", "after_sync", "ack"} {
 		t.Run(cut, func(t *testing.T) {
-			dir, db, col := r1MutationOpen5059(t, true)
+			dir, db, col, cleanup := r1LifecycleNew5060(t, true)
 			want, known := r1LifecycleSeed5060(t, col)
 			// Keep rows 0/1 for the shared crash upsert; churn the later seed IDs.
 			for cycle := 1; cycle < 4; cycle++ {
@@ -356,11 +360,11 @@ func TestR1LifecycleRecoveryAfterMaintenance5060(t *testing.T) {
 			}
 			r1LifecycleAssert5060(t, view, want, known)
 			r1LifecycleMaintenance5060(t, db, col, want, known, []*CollectionReadView{view}, []map[string]map[string]any{want})
-			if err := db.Close(); err != nil {
+			if err := cleanup(); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(os.Args[0], "-test.run=^TestR1MutationCrashCuts5059$")
-			cmd.Env = append(os.Environ(), "GOMAP_R1_5059_CRASH_DIR="+dir, "GOMAP_R1_5059_OPERATION=upsert", "GOMAP_R1_5059_CUT="+cut)
+			cmd := exec.Command(os.Args[0], "-test.run=^TestR1LifecycleCrashChild5060$")
+			cmd.Env = append(os.Environ(), "GOMAP_R1_5060_CRASH_DIR="+dir, "GOMAP_R1_5059_OPERATION=upsert", "GOMAP_R1_5059_CUT="+cut)
 			if output, err := cmd.CombinedOutput(); err != nil {
 				t.Fatalf("helper: %v\n%s", err, output)
 			}
@@ -371,8 +375,8 @@ func TestR1LifecycleRecoveryAfterMaintenance5060(t *testing.T) {
 					want[row["id"].(string)] = row
 				}
 			}
-			db = openTypedMinimaDB(t, dir)
-			defer db.Close()
+			db, cleanup, _ = r1LifecycleOpen5060(t, dir)
+			defer cleanup()
 			col, err = NewCollectionManager(db).OpenCollection("r1")
 			if err != nil {
 				t.Fatal(err)
@@ -380,4 +384,43 @@ func TestR1LifecycleRecoveryAfterMaintenance5060(t *testing.T) {
 			r1LifecycleCurrent5060(t, col, want, known)
 		})
 	}
+}
+
+func TestR1LifecycleCrashChild5060(t *testing.T) {
+	dir := os.Getenv("GOMAP_R1_5060_CRASH_DIR")
+	if dir == "" {
+		return
+	}
+	db, _, _ := r1LifecycleOpen5060(t, dir)
+	col, err := NewCollectionManager(db).OpenCollection("r1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cut := os.Getenv("GOMAP_R1_5059_CUT")
+	injected := errors.New("R1 supported-profile command WAL cut")
+	var fired atomic.Bool
+	if cut != "ack" {
+		point := durabilitycut.BeforeDependencyAppend
+		if cut == "after_sync" {
+			point = durabilitycut.AfterDependencyFileSync
+		}
+		durabilitycut.Install(func(event durabilitycut.Event) error {
+			if event.Resource == durabilitycut.ResourceCommandWAL && event.Point == point && fired.CompareAndSwap(false, true) {
+				return injected
+			}
+			return nil
+		})
+	}
+	_, err = r1MutationCrashOperation5059(t, col, os.Getenv("GOMAP_R1_5059_OPERATION"))
+	if cut == "ack" {
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else if !fired.Load() || !errors.Is(err, injected) || errors.Is(err, ErrCommitAmbiguous) != (cut == "after_sync") {
+		t.Fatalf("cut=%s fired=%t err=%v", cut, fired.Load(), err)
+	}
+	if cut == "after_sync" && isRetriableCollectionMutationError(err) {
+		t.Fatal("accepted ambiguous command automatically retryable")
+	}
+	os.Exit(0)
 }

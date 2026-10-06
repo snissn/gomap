@@ -549,7 +549,7 @@ produces a `gomap-r1-row-v1` packet and summary through
 benchprof inputs and do not change the unified-bench profile filename contract.
 
 The standalone `BenchmarkR1Lifecycle5060` uses `scripts/r1_lifecycle_capture.sh`
-with the `gomap-r1-lifecycle-packet-v2` format, raw calibration/final process logs
+with the supported-profile `gomap-r1-lifecycle-packet-v3` format, raw calibration/final process logs
 and strict source/count validation. For a small nonqualifying rehearsal, use
 `--qualification rehearsal --out /tmp/r1-lifecycle --repetitions 2 --epochs 3
 --documents 32 --calls-per-epoch 8`. See the [lifecycle capture contract](../../TreeDB/docs/spec/r1-row-lifecycle.md#source-bound-standalone-capture).
@@ -559,3 +559,11 @@ Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
 live direct-backend online vacuum with before/after census; cached-wrapper
 overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings
 GOMAXPROCS=16, GOGC=100, GOMEMLIMIT=off, GOFLAGS empty.
+
+The lifecycle v3 scope uses `OptionsFor(ProfileCommandWALDurable)+OpenBackend`
+with background prune disabled. It checks effective/persisted settings at fresh
+open and reopen, inventories the full profile root (including side stores and
+immutable manifest metadata), and times exhaustive owned `CompactStorage`, final
+fallback convergence, typed GC and leaf GC separately. Older off-profile packets
+remain historical evidence and fail this schema; physical-growth acceptance is
+pending. See the [lifecycle spec](../../TreeDB/docs/spec/r1-row-lifecycle.md).

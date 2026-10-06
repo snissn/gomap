@@ -63,9 +63,10 @@ unchanged. Closing both views must release all of their active handles.
 
 After release, typed rewrite must copy/remap live manifest references and leave
 the old source segment on disk. An immediate GC must preserve it while a
-selectable durable generation still references it. The existing durable
-fallback-advance helper checkpoints and lawfully advances that generation.
-Only then must a fresh ordinary `ColumnAssetGC` delete the eligible old segment
+selectable durable generation still references it. The final `RefreshCommandWALCheckpointFallback` call lawfully converges both
+selectable durable slots after root-changing maintenance. Its before/after
+root identities, CommitSeq, AppliedLSN and NextLSN show unchanged logical
+coverage. Only then must an ordinary `ColumnAssetGC` delete the eligible old segment
 and report positive deleted bytes. Current full rows and postings must remain
 identical after remap, GC and final reopen. This phase reuses the production
 reachability scanner, identity fences, pins, remapper and GC; it adds no scanner,
@@ -154,7 +155,7 @@ and sustained capacity acceptance remain pending that retained evidence.
 
 ## Source-bound standalone capture
 
-`scripts/r1_lifecycle_capture.sh` produces a `gomap-r1-lifecycle-packet-v2`
+`scripts/r1_lifecycle_capture.sh` produces a `gomap-r1-lifecycle-packet-v3`
 packet, raw build and process logs, the test binary, exact source manifests,
 actual Go/CGO/build/environment/host/load identities, and `summary.md`. Defaults
 are five fresh OS processes, each with five final epochs, 4,096 documents and
@@ -187,7 +188,7 @@ Environment dimensions `GOMAP_R1_LIFECYCLE_DOCUMENTS` (multiple of 32) and
 each must lie between its multiple and 1,048,576. Retained capture accepts only
 the default dimensions, exactly five epochs and at least five repetitions.
 
-The benchmark emits one `gomap-r1-lifecycle-result-v2` JSON marker per Go
+The benchmark emits one `gomap-r1-lifecycle-result-v3` JSON marker per Go
 benchmark invocation. Go's initial one-epoch calibration is preserved in raw
 logs, validated, and excluded from final process summaries. The final requested
 epoch result must exist exactly once and agree with Go's printed metrics.
@@ -224,15 +225,42 @@ observed segment paths are absent; protections are never bypassed. Full aggregat
 probe/work/GC plans remain in the packet, with explicit no-debt, ineligible and
 eligible decisions. Ordinary value-log GC follows.
 
-The same live direct backend then calls `VacuumIndexOnlineWithStats`, outside the
-mixed timer. The packet retains full scalar vacuum stats and `before_vacuum-N`
-and `maintenance-N` component censuses, including held-view parity across vacuum.
-This measures the direct backend command-WAL durable fixture, opened with
-background prune disabled, command WAL enabled and its explicit durable profile.
-It omits public cached-wrapper checkpoint/reconcile overhead and is no comparator
-claim. No close/open transition, storage layout change, unsafe fallback or new
-production API is used. Vacuum can retain old index files while snapshots live;
-its completed-work bit is distinct from observed file-size reduction.
+The same live direct backend calls `VacuumIndexOnlineWithStats`, then an actual
+`CompactStoragePlan` and `CompactStorage` in exhaustive mode with phase sync,
+32-reference rewrite batches, and at most four 1 MiB leaf-pack passes. All run
+outside the mixed timer. The public opener's internal owner hidden by a wrapper
+must classify as a replaceable supported target for quiesced maintenance; the
+packet records that actual ownership classification and exact options. Full
+plan/work, completion flags, phase decisions and remaining debt remain visible.
+Successful no-op or deferred work does not establish physical reclamation.
+
+After the last root-changing maintenance, a separately timed
+`RefreshCommandWALCheckpointFallback` records both durable slots and recoverable
+root identities, CommitSeq, AppliedLSN and NextLSN before/after. User/system roots
+and command coverage must remain unchanged; both durable roots must converge.
+Actual typed GC and `LeafGenerationGC` follow, with deletion and retention stats.
+Separate immutable-manifest revision counts/bytes must report supported
+reclamation (`ManifestRevisionGCUnsupported=false`); compatibility-only platforms
+report unavailable reclamation and cannot qualify this supported-profile packet.
+The post-view-release pass repeats this final boundary after its rewrite work.
+Held-old-view and complete current row/index oracles run between phases.
+
+Fresh creation and final reopen use
+`OptionsFor(ProfileCommandWALDurable)` plus `OpenBackend`, with background prune
+disabled. Tests assert effective and persisted outer/packed/prefix/columnar
+settings enabled, internal-base disabled, durable command WAL, verified reads,
+and no current-writable mmap. Owner cleanup closes the backend before its side
+stores. This supported direct profile excludes the comparator/example's public
+cached-wrapper overhead and is no route-equivalence claim.
+
+The v3 full-profile-root census inventories every regular file exactly once:
+main index, persistent value/leaf logs, typed assets, redo WAL, dictionary/template
+stores, immutable durable-manifest metadata and other persistent files. File
+paths, sizes, component totals and grand totals are retained; redo WAL stays
+separate from durable storage. Censuses include `before_exhaustive-N` and
+`before_final_gc-N` as well as the preceding phases. Immutable metadata growth
+is visible and must be explained before physical-growth acceptance. The v3
+validator rejects older off-profile v2 packets without rewriting their fields.
 
 The original held view closes only after epoch zero maintenance. A separate
 timed complete-plan/rewrite-selection/GC pass records post-release work. Later
@@ -322,4 +350,4 @@ The frozen capture uses Linux amd64 Go 1.26.4, GOMAXPROCS=16, GOGC=100,
 GOMEMLIMIT=off and empty GOFLAGS; unset runtime values receive those defaults,
 and conflicting caller values are rejected. Effective caller/subprocess values
 and actual benchmark concurrency are cross-checked. v1 packets retain their
-original raw/source identity and do not qualify this v2 maintenance schedule.
+original raw/source identity and do not qualify this v3 supported-profile schedule.

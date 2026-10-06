@@ -196,6 +196,70 @@ class RealPacketTests(unittest.TestCase):
         self.packet['config']['execution_scope']['cached_wrapper'] = True
         self.reject()
 
+    def test_off_profile_legacy_packet_rejected(self):
+        self.packet['schema'] = 'gomap-r1-lifecycle-packet-v2'
+        self.reject()
+
+    def test_actual_supported_profile_required(self):
+        for stage in ('fresh_profile', 'reopen_profile'):
+            for field in ('outer', 'packed', 'prefix', 'columnar', 'command_wal',
+                          'verified_reads', 'disable_background_prune', 'internal_base', 'current_writable_mmap'):
+                with self.subTest(stage=stage, field=field):
+                    self.reset_raw_packet()
+                    self.edit_results(lambda result: result[stage]['effective'].update({field: not result[stage]['effective'][field]}))
+                    self.reject()
+
+    def test_persisted_configuration_required(self):
+        self.edit_results(lambda result: result['reopen_profile']['persisted'].update(index_outer_leaves_in_vlog=False))
+        self.reject()
+
+    def test_wrong_actual_exhaustive_owner(self):
+        self.edit_results(lambda result: result['maintenance'][0]['full']['owner'].update(Replaceable=False))
+        self.reject()
+
+    def test_wrong_actual_exhaustive_mode(self):
+        self.edit_results(lambda result: result['maintenance'][0]['full']['work'].update(mode='bounded'))
+        self.reject()
+
+    def test_missing_exhaustive_phase(self):
+        self.edit_results(lambda result: result['maintenance'][0]['full']['work']['phases'].pop(0))
+        self.reject()
+
+    def test_fallback_coverage_change(self):
+        self.edit_results(lambda result: result['maintenance'][0]['final']['after'].update(applied_lsn=result['maintenance'][0]['final']['after']['applied_lsn'] + 1))
+        self.reject()
+
+    def test_fallback_slot_root_mismatch(self):
+        self.edit_results(lambda result: result['maintenance'][0]['final']['after']['slots'].update({'treedb.durable_root.slot0.commit_seq': '0'}))
+        self.reject()
+
+    def test_missing_final_stage_or_actual_timer(self):
+        for field in ('refresh_ns', 'typed_gc_ns', 'leaf_gc_ns', 'before', 'after', 'typed_gc', 'leaf_gc'):
+            with self.subTest(field=field):
+                self.reset_raw_packet()
+                self.edit_results(lambda result: result['maintenance'][0]['final'].pop(field))
+                self.reject()
+
+    def test_unsupported_manifest_revision_gc(self):
+        self.edit_results(lambda result: result['maintenance'][0]['final']['leaf_gc'].update(ManifestRevisionGCUnsupported=True))
+        self.reject()
+
+    def test_missing_manifest_revision_counter(self):
+        self.edit_results(lambda result: result['maintenance'][0]['final']['leaf_gc'].pop('ManifestRevisionsDeleted'))
+        self.reject()
+
+    def test_component_file_census_complete(self):
+        self.edit_results(lambda result: result['census'][0]['files'].pop(next(iter(result['census'][0]['files']))))
+        self.reject()
+
+    def test_component_census_classification(self):
+        self.edit_results(lambda result: next(iter(result['census'][0]['files'].values())).update(component='omitted'))
+        self.reject()
+
+    def test_disjoint_maintenance_timer_sum(self):
+        self.edit_results(lambda result: result['maintenance'][0].update(maintenance_ns=result['maintenance'][0]['maintenance_ns'] + 1))
+        self.reject()
+
     def test_unbound_actual_concurrency_with_rebound_raw_hash(self):
         self.edit_results(lambda result: result.update(gomaxprocs=1))
         self.reject()

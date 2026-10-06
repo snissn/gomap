@@ -8,14 +8,17 @@ from pathlib import Path
 import re
 import statistics
 
-COMPONENTS = {'index', 'persistent_vlog', 'persistent_leaf_log', 'typed_assets', 'redo_wal', 'other'}
+COMPONENTS = {'index', 'persistent_vlog', 'persistent_leaf_log', 'typed_assets', 'redo_wal', 'dictionary_store', 'template_store', 'immutable_manifest_metadata', 'other'}
 OPERATIONS = {'ordinary_get', 'prepared_get', 'indexed_update', 'typed_replace', 'delete', 'typed_insert', 'typed_upsert', 'post_upsert_get'}
 METRICS = {'ns/op', 'B/op', 'allocs/op', 'calls/op', 'loop-ns/call', 'mixed-calls/s',
            'mixed-p95-ns/call', 'mixed-p99-ns/call', 'loop-B/call', 'loop-allocs/call',
            'sampled-heap-high-B', 'process-retained-heap-B'}
 SCOPE = {'backend': 'direct', 'profile': 'command_wal_durable', 'cached_wrapper': False,
-         'command_wal': True, 'disable_background_prune': True}
-SCHEDULE = 'direct-backend-fold-rewrite-vacuum-v1'
+         'command_wal': True, 'disable_background_prune': True,
+         'opener': 'OptionsFor(ProfileCommandWALDurable)+OpenBackend',
+         'outer': True, 'packed': True, 'prefix': True, 'columnar': True, 'internal_base': False,
+         'verified_reads': True, 'current_writable_mmap': False}
+SCHEDULE = 'supported-direct-fold-rewrite-vacuum-exhaustive-fallback-gc-v1'
 # Complete scalar field set of db.VacuumOnlineStats. A source change that adds
 # attribution must update this contract before its capture can qualify.
 VACUUM_NUMBERS = {
@@ -157,6 +160,126 @@ def reclaim_valid(row):
                     and row['rewrite_ns'] == row['checkpoint_ns'] == 0, 'protected rewrite counted as work')
 
 
+PROFILE = {'outer': True, 'packed': True, 'prefix': True, 'columnar': True,
+           'internal_base': False, 'command_wal': True, 'disable_background_prune': True,
+           'verified_reads': True, 'current_writable_mmap': False}
+
+
+def profile_valid(row):
+    require(row['opener'] == SCOPE['opener'] and row['profile'] == SCOPE['profile']
+            and row['durability'] == 'durable', 'unsupported actual opener/profile/durability')
+    require(row['effective'] == PROFILE and all(type(n) is bool for n in row['effective'].values()), 'unsupported actual effective configuration')
+    cfg = row['persisted']
+    for key, expected in {'index_outer_leaves_in_vlog': True, 'index_packed_valueptr': True,
+                          'leaf_prefix_compression': True, 'index_columnar_leaves': True,
+                          'index_internal_base_delta': False}.items():
+        require(type(cfg[key]) is bool and cfg[key] is expected, 'unsupported persisted format configuration')
+    require(cfg['durability_profile'] == SCOPE['profile'] and cfg['version'] == 4
+            and 'command_wal_v2' in cfg['required_features'], 'missing persisted durable command contract')
+
+
+def file_component(path):
+    if '/wal/' in path: return 'redo_wal'
+    if path.startswith('dictdb/'): return 'dictionary_store'
+    if path.startswith('templatedb/'): return 'template_store'
+    if path.rsplit('/', 1)[-1].startswith('manifest.durable.'): return 'immutable_manifest_metadata'
+    if '/value_vlog/' in path: return 'persistent_vlog'
+    if 'leaf_vlog/' in path: return 'persistent_leaf_log'
+    if 'column-assets/' in path or 'column_assets/' in path: return 'typed_assets'
+    if path.endswith(('.db', 'index.db.bak', 'index.db.new')): return 'index'
+    return 'other'
+
+
+def census_valid(row):
+    require(row['scope'] == 'full-profile-root' and type(row['files']) is dict and row['files'], 'missing full-root file census')
+    counts, sizes = dict.fromkeys(COMPONENTS, 0), dict.fromkeys(COMPONENTS, 0)
+    for path, entry in row['files'].items():
+        require(type(path) is str and path and not path.startswith('/') and '\\' not in path
+                and all(part not in ('', '.', '..') for part in path.split('/')), 'unsafe census path')
+        require(set(entry) == {'component', 'bytes'} and integer(entry['bytes'])
+                and entry['component'] == file_component(path), 'misclassified census file')
+        counts[entry['component']] += 1
+        sizes[entry['component']] += entry['bytes']
+    require(counts == row['regular_files'] and sizes == row['logical_bytes']
+            and integer(row['total_files']) and row['total_files'] == len(row['files'])
+            and integer(row['total_bytes']) and row['total_bytes'] == sum(sizes.values()), 'component census omits or double-counts files')
+    require(any(path.startswith('maindb/') for path in row['files']), 'census is not profile root')
+
+
+def fallback_state_valid(row):
+    for key in ('commit_seq', 'user_root', 'system_root', 'applied_lsn', 'next_lsn'):
+        require(integer(row[key]), 'malformed fallback state')
+    require(row['next_lsn'] > row['applied_lsn'], 'invalid fallback command coverage')
+    require(type(row['slots']) is dict and row['slots'], 'missing actual durable slot observation')
+    for key in ('selected_slot', 'slot0.commit_seq', 'slot1.commit_seq'):
+        value = row['slots']['treedb.durable_root.' + key]
+        require(type(value) is str and value.isdecimal(), 'missing durable slot identity')
+    require(row['slots']['treedb.durable_root.selected_slot'] in ('0', '1'), 'invalid selected durable slot')
+    require(type(row['roots']) is list and row['roots'], 'missing recoverable roots')
+    for root in row['roots']:
+        require(set(root) == {'CommitSeq', 'UserRootPageID', 'SystemRootPageID', 'AppliedCommandLSN', 'MaxEntryRevision', 'Durable', 'Visible'}, 'missing root identity')
+        require(all(integer(root[key]) for key in ('CommitSeq', 'UserRootPageID', 'SystemRootPageID', 'AppliedCommandLSN', 'MaxEntryRevision'))
+                and type(root['Durable']) is bool and type(root['Visible']) is bool, 'malformed recoverable root')
+    durable = [root for root in row['roots'] if root['Durable']]
+    require(len(durable) == 2 and sorted(root['CommitSeq'] for root in durable) == sorted(int(row['slots']['treedb.durable_root.' + key]) for key in ('slot0.commit_seq', 'slot1.commit_seq')), 'durable slot/root identities disagree')
+
+
+def final_valid(row):
+    require(all(integer(row[key], 1) for key in ('refresh_ns', 'typed_gc_ns', 'leaf_gc_ns')), 'missing final maintenance API timer')
+    before, after = row['before'], row['after']
+    fallback_state_valid(before)
+    fallback_state_valid(after)
+    require(all(before[key] == after[key] for key in ('user_root', 'system_root', 'applied_lsn', 'next_lsn'))
+            and after['commit_seq'] >= before['commit_seq'], 'fallback refresh changed logical roots/coverage')
+    require(all(root['UserRootPageID'] == after['user_root'] and root['SystemRootPageID'] == after['system_root']
+                and root['AppliedCommandLSN'] == after['applied_lsn'] for root in after['roots'] if root['Durable']), 'final durable fallback did not converge')
+    typed_gc_valid(row['typed_gc'])
+    leaf = row['leaf_gc']
+    require(leaf['ManifestRevisionGCUnsupported'] is False and type(leaf['ManifestRevisionGCUnsupported']) is bool,
+            'supported-profile manifest revision reclamation unavailable')
+    counters_valid({key: value for key, value in leaf.items() if key != 'ManifestRevisionGCUnsupported'},
+                   ('GenerationsTotal', 'GenerationsWritable', 'GenerationsLive', 'GenerationsRetiring',
+                    'GenerationsEligible', 'GenerationsDeleted', 'FilesDeleted', 'BytesEligible', 'BytesDeleted',
+                    'ManifestRevisionsTotal', 'ManifestRevisionsProtected', 'ManifestRevisionsEligible',
+                    'ManifestRevisionsDeleted', 'ManifestRevisionBytesEligible', 'ManifestRevisionBytesDeleted'), 'leaf GC')
+    require(leaf['GenerationsDeleted'] <= leaf['GenerationsEligible'] and leaf['BytesDeleted'] <= leaf['BytesEligible'], 'leaf deletion exceeds eligibility')
+    require(leaf['ManifestRevisionsDeleted'] <= leaf['ManifestRevisionsEligible']
+            and leaf['ManifestRevisionBytesDeleted'] <= leaf['ManifestRevisionBytesEligible'], 'revision deletion exceeds eligibility')
+
+
+def full_valid(row):
+    require(integer(row['plan_ns'], 1) and integer(row['work_ns'], 1), 'missing exhaustive compact timers')
+    owner = row['owner']
+    require(owner['OwnerClass'] == 'internal owner hidden by wrapper' and owner['Status'] == 'supported-target'
+            and owner['Lifecycle'] == 'quiesced maintenance' and owner['Replaceable'] is True
+            and type(owner['RequiresQuiescence']) is bool and type(owner['Detail']) is str, 'unsupported exhaustive owner')
+    require(row['options'] == {'mode': 'exhaustive', 'sync_each_phase': True, 'value_log_rewrite_batch_size': 32,
+            'leaf_pack_max_passes': 4, 'leaf_pack_max_bytes_to_copy_per_pass': 1048576,
+            'unsafe_value_log_reclaim_fenced_unreferenced': False}, 'unsupported exhaustive maintenance options')
+    for name, dry_run in (('plan', True), ('work', False)):
+        stats = row[name]
+        require(stats['mode'] == 'exhaustive' and stats['dry_run'] is dry_run, 'mislabeled exhaustive plan/work')
+        require(type(stats['remaining_debt']) is dict and type(stats['byte_minimized']) is bool
+                and type(stats['fully_compacted']) is bool and type(stats['policy_fully_compacted']) is bool, 'missing exhaustive debt/completion')
+        require(type(stats['before']) is list and type(stats['after']) is list, 'missing exhaustive component report')
+    phases = row['work']['phases']
+    require(type(phases) is list and phases, 'missing actual exhaustive phases')
+    names = [phase['name'] for phase in phases]
+    require(len(names) == len(set(names)) and {'checkpoint', 'value-log-rewrite', 'value-log-gc',
+            'seal-current-leaf-generation', 'leaf-generation-gc', 'index-vacuum'} <= set(names), 'missing/duplicate exhaustive stage')
+    for phase in phases:
+        # Generic runCompactStoragePhase records a timer with no status field;
+        # skipped packing records its reason. Preserve those actual API records.
+        require(type(phase['name']) is str and phase['name'] and integer(phase['wall_time_nanos'], 1)
+                and phase.get('status') in (None, 'succeeded', 'deferred', 'not_required'), 'failed/missing exhaustive phase attribution')
+        if 'skipped' in phase:
+            require(type(phase['skipped']) is bool, 'malformed exhaustive skip decision')
+            if phase['skipped']:
+                require(type(phase.get('skip_reason')) is str and phase['skip_reason'], 'missing actual skip reason')
+        if phase['name'].startswith('index-vacuum'):
+            require(phase.get('status') in ('succeeded', 'deferred', 'not_required'), 'missing vacuum decision')
+
+
 def maintenance_valid(row, documents):
     required_timers = ('flush_ns', 'checkpoint_ns', 'before_fold_gc_ns', 'fold_ns',
                        'fold_checkpoint_ns', 'overlay_ns', 'overlay_checkpoint_ns', 'vlog_gc_ns', 'vacuum_ns')
@@ -179,8 +302,11 @@ def maintenance_valid(row, documents):
     require(row['reclaim']['plan_gc']['Plan']['Sources']['ActiveManifestRefs'] < row['before_fold_gc']['Plan']['Sources']['ActiveManifestRefs'], 'fold did not reset active manifest lineage')
     vlog_gc_valid(row['vlog_gc'])
     vacuum_valid(row['vacuum'])
+    full_valid(row['full'])
+    final_valid(row['final'])
     elapsed = sum(row[key] for key in required_timers)
     elapsed += sum(row['reclaim'][key] for key in ('plan_ns', 'probe_ns', 'rewrite_ns', 'checkpoint_ns', 'gc_ns'))
+    elapsed += row['full']['plan_ns'] + row['full']['work_ns'] + sum(row['final'][key] for key in ('refresh_ns', 'typed_gc_ns', 'leaf_gc_ns'))
     require(integer(row['maintenance_ns'], 1) and row['maintenance_ns'] == elapsed, 'maintenance API timer sum mismatch')
 
 
@@ -213,17 +339,19 @@ def source_valid(source):
     require(isinstance(tests, list) and tests == sorted(set(tests)) and bool(tests), 'malformed compiled test inventory')
     require(all(path.startswith('TreeDB/collections/') and path.endswith('_test.go') for path in tests), 'wrong test package')
     require(set(tests) == {path for path in source['harness_files'] if path.endswith('_test.go')}, 'unbound compiled tests')
-    require('TreeDB/collections/r1_lifecycle_5060_bench_test.go' in tests, 'missing benchmark source')
+    require({'TreeDB/collections/r1_lifecycle_5060_bench_test.go', 'TreeDB/collections/r1_lifecycle_5060_profile_test.go', 'TreeDB/collections/r1_lifecycle_5060_maintenance_test.go', 'TreeDB/collections/r1_lifecycle_5060_test.go'} <= set(tests), 'missing compiled lifecycle helper source')
     require({'scripts/r1_lifecycle_capture.sh', 'scripts/r1_lifecycle_capture.py',
              'scripts/r1_lifecycle_validate.py', 'scripts/r1_lifecycle_validate_test.py',
              'scripts/r1_collection_source.py'} <= source['harness_files'].keys(), 'missing capture/helper source')
 
 
 def result_valid(result, config):
-    require(result['schema'] == 'gomap-r1-lifecycle-result-v2', 'wrong result schema')
+    require(result['schema'] == 'gomap-r1-lifecycle-result-v3', 'wrong result schema')
     require(integer(result['pid'], 1) and integer(result['gomaxprocs'], 1), 'missing actual process/concurrency identity')
     require(result['schedule'] == SCHEDULE and result['backend_profile'] == SCOPE['profile'], 'mislabeled execution scope/schedule')
     require(result['gomaxprocs'] == int(config['runtime_environment']['GOMAXPROCS']), 'actual process concurrency differs')
+    profile_valid(result['fresh_profile'])
+    profile_valid(result['reopen_profile'])
     epochs = result['epochs']
     require(integer(epochs, 1) and epochs in (1, config['epochs']), 'unexpected calibration epochs')
     require(result['documents'] == config['documents'] and result['calls_per_epoch'] == config['calls_per_epoch'], 'fixture dimensions differ')
@@ -248,12 +376,13 @@ def result_valid(result, config):
                 'ids_sha256': selected['ids_sha256']}, 'epoch expands or changes bounded working set')
     phases = ['ingest']
     for epoch in range(epochs):
-        phases += [f'churn-{epoch}', f'checkpoint-{epoch}', f'folded-{epoch}', f'before_vacuum-{epoch}', f'maintenance-{epoch}']
+        phases += [f'churn-{epoch}', f'checkpoint-{epoch}', f'folded-{epoch}', f'before_vacuum-{epoch}', f'before_exhaustive-{epoch}', f'before_final_gc-{epoch}', f'maintenance-{epoch}']
         if epoch == 0:
             phases.append('after_view_release')
     phases.append('reopen')
     require([row['phase'] for row in result['census']] == phases, 'missing/duplicate/out-of-order storage census')
     for row in result['census']:
+        census_valid(row)
         for key in ('logical_bytes', 'regular_files'):
             require(set(row[key]) == COMPONENTS and all(integer(n) for n in row[key].values()), f'invalid {key} components')
         for key in ('heap_alloc', 'heap_inuse', 'heap_objects', 'num_gc'):
@@ -263,6 +392,7 @@ def result_valid(result, config):
         require(integer(row['epoch']) and row['epoch'] == epoch, 'wrong maintenance epoch')
         maintenance_valid(row, config['documents'])
     reclaim_valid(result['after_view_release_gc'])
+    final_valid(result['after_view_release_final'])
 
 
 def raw_results(text, config, pid):
@@ -309,7 +439,7 @@ def raw_results(text, config, pid):
 def validate(path, expected_runtime=None, expected_harness=None, expected_commit=None):
     path = Path(path)
     packet = decode(path.read_text())
-    require(packet['schema'] == 'gomap-r1-lifecycle-packet-v2', 'wrong packet schema')
+    require(packet['schema'] == 'gomap-r1-lifecycle-packet-v3', 'wrong packet schema')
     config = packet['config']
     require(config['qualification'] in ('rehearsal', 'retained'), 'wrong qualification')
     require(integer(config['repetitions'], 1) and config['repetitions'] <= 100, 'invalid repetitions')
@@ -381,7 +511,7 @@ def summarize(packet, results):
     text += ['', 'Logical storage medians across final process results:', '',
              '| Phase | index | vlog | leaf log | typed assets | redo WAL | other | all bytes | regular files | growth from ingest |',
              '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |']
-    components = ['index', 'persistent_vlog', 'persistent_leaf_log', 'typed_assets', 'redo_wal', 'other']
+    components = ['index', 'persistent_vlog', 'persistent_leaf_log', 'typed_assets', 'redo_wal', 'dictionary_store', 'template_store', 'immutable_manifest_metadata', 'other']
     for index, phase in enumerate(results[0]['result']['census']):
         rows = [row['result']['census'][index] for row in results]
         cells = [statistics.median(row['logical_bytes'][key] for row in rows) for key in components]
