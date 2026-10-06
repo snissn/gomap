@@ -165,6 +165,16 @@ Backend compact/vacuum, GC/rewrite and leaf-generation maintenance serialize
 through the same flush fence and refresh an equivalent backend basis while
 preserving all cache sources. A failed refresh blocks fresh writes until a
 permitted refresh succeeds. Old cuts keep exact physical read/deletion pins.
+Selected-source rewrite uses the existing exclusive writer/rotation fence and
+revalidation before reclaim. `CompactStorage`'s specialized
+`UnsafeValueLogReclaimFencedUnreferenced` option is refused before checkpoint
+or writer rotation in this mode; its pre-held fence cannot be nested inside
+the COW maintenance fence. Ordinary `CompactStorage` remains supported.
+Its automatic unsafe reclamation policy stays disabled for COW. Successful
+concrete backend registration of a rotated leaf segment already transfers its
+registration and manifest identity to that backend; COW does not retain duplicate
+pending registration debt across an empty checkpoint. Unreferenced empty leaf
+segments can therefore be reclaimed without later trying to reopen them.
 Value-log segments remain persistent storage: deletion uses existing
 reachability/pin/scanner authorities, never segment age or a second COW GC
 tracker. Retired owner cleanup occurs outside writer/admission/cut locks.

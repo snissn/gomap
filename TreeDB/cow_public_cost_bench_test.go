@@ -21,16 +21,20 @@ import (
 //
 // FreshCapture checkpoints and reseeds N dirty entries outside the timer before
 // each capture. The other read cases warm one capture outside the timer and
-// measure a fixed published source set. IncrementalWrite replaces one existing
-// key per operation without a warm snapshot, preserving the populated mutable
-// tree in the existing btree comparator. Every latency sample includes the same
-// clock overhead. Fixture construction and final checkpoint/close are excluded.
+// measure a fixed published source set. IncrementalWrite and IncrementalWriteSync
+// replace one existing key per operation without a warm snapshot, preserving the
+// populated mutable tree in the existing btree comparator. The first explicit
+// sync includes the seeded dirty state; later syncs include that operation's
+// write. DirtyCheckpoint resets/reseeds N entries outside the timer and measures
+// the actual Checkpoint. Every latency sample includes the same clock overhead.
+// Fixture construction and final close are excluded. Sync/checkpoint diagnostics
+// use a fixed count separately from the read/write diagnostics.
 func BenchmarkCOWPublicDirtyCost(b *testing.B) {
 	for _, profile := range []Profile{ProfileCommandWALDurable, ProfileCommandWALRelaxed, ProfileNoWALFast} {
 		for _, mode := range []string{"append_only", "btree", "cow_btree"} {
 			for _, layout := range []string{"Inline64", "Pointer4096"} {
 				for _, records := range []int{1024, 2048} {
-					for _, operation := range []string{"FreshCapture", "CaptureReadRelease", "Forward16", "IncrementalWrite"} {
+					for _, operation := range []string{"FreshCapture", "CaptureReadRelease", "Forward16", "IncrementalWrite", "DirtyCheckpoint", "IncrementalWriteSync"} {
 						b.Run(fmt.Sprintf("%s/%s/%s/N=%d/%s", profile, mode, layout, records, operation), func(b *testing.B) {
 							cowPublicDirtyCost(b, profile, mode, layout, records, operation)
 						})
@@ -67,14 +71,15 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 	if err != nil {
 		b.Fatal(err)
 	}
+	cache := database.cached
 	b.Cleanup(func() {
 		if err := database.Close(); err != nil {
 			b.Errorf("final Close: %v", err)
 		}
 		if mode == "cow_btree" {
-			s := database.cached.COWMemoryStats()
+			s := cache.COWMemoryStats()
 			b.Logf("COW_FINAL_CLOSE total=%d history=%d reserved=%d retired=%d controls=%d external=%d generations=%d sources=%d views=%d leases=%d peak=%d", s.TotalBytes, s.HistoryBytes, s.ReservedBytes, s.RetiredBytes, s.ControlBytes, s.ExternalBytes, s.Generations, s.Sources, s.Views, s.ExternalLeases, s.PeakBytes)
-			if s.TotalBytes != 0 || s.Generations != 0 || s.Views != 0 || s.ExternalLeases != 0 {
+			if s.TotalBytes != 0 || s.Generations != 0 || s.Views != 0 || s.ExternalLeases != 0 || s.PeakBytes == 0 {
 				b.Error("COW final close did not drain")
 			}
 		}
@@ -99,7 +104,8 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 	}
 	seed()
 	seedRotations := cowPublicCostCounter(b, database, "treedb.cache.snapshot.rotations_total")
-	if operation != "IncrementalWrite" {
+	writeOperation := operation == "IncrementalWrite" || operation == "IncrementalWriteSync"
+	if !writeOperation {
 		warm := database.AcquireSnapshot()
 		if warm == nil {
 			b.Fatal("warm capture unavailable")
@@ -115,7 +121,7 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if operation == "FreshCapture" {
+		if operation == "FreshCapture" || operation == "DirtyCheckpoint" {
 			if err := database.Checkpoint(); err != nil {
 				b.Fatal(err)
 			}
@@ -127,9 +133,19 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 		}
 		b.StartTimer()
 		start := time.Now()
-		if operation == "IncrementalWrite" {
+		if operation == "DirtyCheckpoint" {
+			if err := database.Checkpoint(); err != nil {
+				b.Fatal(err)
+			}
+		} else if writeOperation {
 			binary.LittleEndian.PutUint64(value, uint64(i+1))
-			if err := database.Set(keys[i%records], value); err != nil {
+			var err error
+			if operation == "IncrementalWriteSync" {
+				err = database.SetSync(keys[i%records], value)
+			} else {
+				err = database.Set(keys[i%records], value)
+			}
+			if err != nil {
 				b.Fatal(err)
 			}
 		} else {
@@ -175,7 +191,7 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 	if mode == "cow_btree" && (rotations != 0 || initialRotations != seedRotations) {
 		b.Fatalf("COW capture rotated cache: warm=%d timed=%d", initialRotations-seedRotations, rotations)
 	}
-	if operation == "IncrementalWrite" {
+	if writeOperation {
 		got, err := database.Get(keys[(b.N-1)%records])
 		if err != nil || !bytes.Equal(got, value) {
 			b.Fatalf("final write value=%x err=%v", got, err)
@@ -196,11 +212,20 @@ func cowPublicDirtyCost(b *testing.B, profile Profile, mode, layout string, reco
 	}
 	b.ReportMetric(float64(rotations)/float64(b.N), "snapshot_rotations/op")
 	b.ReportMetric(float64(initialRotations-seedRotations), "warm_snapshot_rotations")
+	fixtureStats := database.Stats()
+	for _, metric := range []struct{ key, unit string }{
+		{"treedb.cache.checkpoint.runs", "fixture_checkpoint_runs"},
+		{"treedb.command_wal.sync.count_total", "fixture_command_wal_sync_count"},
+		{"treedb.command_wal.file_sync.calls_total", "fixture_command_wal_file_sync_calls"},
+		{"treedb.cache.value_log.sync.calls_total", "fixture_value_log_sync_calls"},
+	} {
+		b.ReportMetric(float64(cowPublicCostStat(b, fixtureStats, metric.key)), metric.unit)
+	}
 	if mode == "cow_btree" {
 		// These are fixture-total counters/charges outside the timer, including
 		// seeding and FreshCapture reseeds. They are not per-operation deltas.
 		for _, key := range []string{"total_bytes", "history_bytes", "reserved_bytes", "retired_bytes", "peak_bytes", "control_bytes", "deferred_bytes", "external_bytes", "views", "generations", "sources", "external_leases", "active_cuts", "capture_calls_total", "prepare_calls_total", "publications_total", "rollovers_total", "handoffs_total", "current_roots", "frozen_roots"} {
-			b.ReportMetric(float64(cowPublicCostCounter(b, database, "treedb.cache.cow."+key)), "fixture_cow_"+key)
+			b.ReportMetric(float64(cowPublicCostStat(b, fixtureStats, "treedb.cache.cow."+key)), "fixture_cow_"+key)
 		}
 	}
 }
@@ -218,7 +243,12 @@ func cowPublicCostCheckLayout(b *testing.B, snapshot Snapshot, key []byte, layou
 
 func cowPublicCostCounter(b *testing.B, database *DB, key string) uint64 {
 	b.Helper()
-	value, err := strconv.ParseUint(database.Stats()[key], 10, 64)
+	return cowPublicCostStat(b, database.Stats(), key)
+}
+
+func cowPublicCostStat(b *testing.B, stats map[string]string, key string) uint64 {
+	b.Helper()
+	value, err := strconv.ParseUint(stats[key], 10, 64)
 	if err != nil {
 		b.Fatalf("counter %s: %v", key, err)
 	}

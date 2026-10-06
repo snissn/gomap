@@ -5723,9 +5723,6 @@ func (db *DB) BeginValueLogMaintenanceFence(ctx context.Context) (func(), error)
 	if db == nil {
 		return func() {}, nil
 	}
-	if db.cow != nil {
-		return nil, ErrCOWUnsupported
-	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -28933,7 +28930,16 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 	l.vlogPath = path
 	l.vlogLiveBytes.Store(0)
 	if db.isLeafLogAppendLane(l) {
-		l.vlogCreatedSegments = append(l.vlogCreatedSegments, laneValueLogSegment{path: path, fileID: fileID})
+		// The concrete registrar already owns this file and queues its manifest
+		// identity. COW can checkpoint an empty cut without a backend commit, so
+		// retaining a redundant pending registration would later resurrect an
+		// unused segment that maintenance has legitimately reclaimed.
+		_, registered := db.backend.(interface {
+			RegisterValueLogSegmentReplacing(string, uint32, uint32) error
+		})
+		if db.cow == nil || !registered {
+			l.vlogCreatedSegments = append(l.vlogCreatedSegments, laneValueLogSegment{path: path, fileID: fileID})
+		}
 	}
 	return rotationErr
 }
@@ -37902,6 +37908,12 @@ func (b *Batch) writeRegular(syncWrite bool) error {
 
 func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	if b.db.cow != nil {
+		if len(b.entries) == 0 {
+			// Empty writes publish no cut. A WAL-off explicit sync still covers
+			// preceding writes; release admission before its checkpoint barrier.
+			unlockWriteMu()
+			return b.db.syncBarrierAfterWrite(syncWrite)
+		}
 		if err := b.cowPrepareWriteStorage(); err != nil {
 			unlockWriteMu()
 			return err

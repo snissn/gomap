@@ -782,6 +782,11 @@ func (s *Snapshot) ReverseIterate(start, end []byte, fn func(key, value []byte) 
 	return s.iterate(start, end, true, fn)
 }
 
+func invokeSnapshotIterateCallback(fn func(key, value []byte) error, key, value []byte, lease *memtable.COWExternalLease) error {
+	defer lease.Close()
+	return fn(key, value)
+}
+
 func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value []byte) error) (err error) {
 	if err := s.beginRead(); err != nil {
 		return err
@@ -806,16 +811,24 @@ func (s *Snapshot) iterate(start, end []byte, reverse bool, fn func(key, value [
 	for it.Valid() {
 		key := it.Key()
 		value := it.Value()
+		var callbackLease *memtable.COWExternalLease
 		if s.cowCache != nil {
+			callbackLease, err = s.cowCache.budget.AcquireExternal(memtable.COWAllocationCharge(uint64(len(key))) + memtable.COWAllocationCharge(uint64(len(value))))
+			if err != nil {
+				iterErr = err
+				break
+			}
 			key = it.KeyCopy(nil)
 			value = it.ValueCopy(nil)
 		}
 		if err := it.Error(); err != nil {
+			callbackLease.Close()
 			iterErr = err
 			break
 		}
-		if err := fn(key, value); err != nil {
-			iterErr = err
+		callbackErr := invokeSnapshotIterateCallback(fn, key, value, callbackLease)
+		if callbackErr != nil {
+			iterErr = callbackErr
 			break
 		}
 		it.Next()
@@ -1028,7 +1041,7 @@ func (s *Snapshot) Get(key []byte) ([]byte, error) {
 	if s == nil {
 		return nil, backenddb.ErrClosed
 	}
-	if s.cowCut != nil {
+	if s.cowCache != nil {
 		out, err := s.GetAppend(key, nil)
 		if err == nil && out == nil {
 			out = []byte{}
@@ -1317,11 +1330,13 @@ func (s *Snapshot) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 		s.endRead()
 		out := make([]bool, len(prefixes))
 		for i, prefix := range prefixes {
-			it, err := s.Iterator(prefix, rangeSpanPrefixEnd(prefix))
+			// The first key >= prefix decides existence. An unbounded forward
+			// iterator avoids allocating an internal copy of the query prefix.
+			it, err := s.Iterator(prefix, nil)
 			if err != nil {
 				return nil, err
 			}
-			out[i] = it.Valid()
+			out[i] = it.Valid() && bytes.HasPrefix(it.Key(), prefix)
 			err = it.Error()
 			closeErr := it.Close()
 			if err != nil {
@@ -1479,7 +1494,7 @@ func (s *Snapshot) GetEntry(key []byte) (node.LeafEntry, error) {
 }
 
 func (s *Snapshot) GetEntryExact(key []byte) (node.LeafEntry, error) {
-	if s != nil && s.cowCut != nil {
+	if s != nil && s.cowCache != nil {
 		return s.GetEntry(key)
 	}
 	if err := s.beginRead(); err != nil {

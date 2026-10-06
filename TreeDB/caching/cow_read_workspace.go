@@ -282,7 +282,12 @@ func (w *cowReadWorkspace) readLeaf(ptr page.LeafLogPtr, dst []byte) ([]byte, er
 func (s *Snapshot) cowEntryLocked(w *cowReadWorkspace, key []byte) (node.LeafEntry, error) {
 	val, ptr, flags, revision, found := s.lookupCachedRootDomainEntryWithRevision(key)
 	if found {
-		return snapshotRawKVLeafEntryWithRevision(key, val, ptr, flags, revision), nil
+		if flags&(node.FlagPointer|node.FlagTombstone) == 0 {
+			val = normalizeRawKVValue(val)
+		}
+		// Internal point reads borrow the normalized query key under beginRead.
+		// GetEntry alone copies it into the caller-owned returned entry.
+		return node.LeafEntry{Key: key, Value: val, ValuePtr: ptr, Flags: flags, Revision: revision}, nil
 	}
 	return s.cowCut.basis.snapshot.GetEntryExactWithFixedScratch(key, w.key[:], w.leaf[:], w.readLeaf)
 }

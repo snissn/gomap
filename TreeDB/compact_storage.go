@@ -3,6 +3,8 @@ package treedb
 import (
 	"context"
 
+	"github.com/snissn/gomap/TreeDB/caching"
+
 	treedbdb "github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -119,6 +121,11 @@ func (db *DB) CompactStorage(ctx context.Context, opts CompactStorageOptions) (C
 	}
 	if db.backend == nil {
 		return out, ErrClosed
+	}
+	if db.cached != nil && db.cached.COWMode() && opts.UnsafeValueLogReclaimFencedUnreferenced {
+		// The ordinary maintenance wrapper owns the COW writer fence. This
+		// specialized option holds another fence across that wrapper.
+		return out, caching.ErrCOWUnsupported
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -242,7 +249,7 @@ func (db *DB) applyCachedCompactStorageOptions(opts *CompactStorageOptions, chec
 	if opts.ReserveRIDs == nil {
 		opts.ReserveRIDs = db.cached.ReserveValueLogRIDs
 	}
-	if checkpoint && len(explicitProtectedPaths) == 0 && userProtectedPathsFunc == nil {
+	if checkpoint && !db.cached.COWMode() && len(explicitProtectedPaths) == 0 && userProtectedPathsFunc == nil {
 		opts.UnsafeValueLogReclaimFencedUnreferenced = true
 		if opts.ValueLogFencedProtectedPathsFunc == nil {
 			opts.ValueLogFencedProtectedPathsFunc = db.cached.ValueLogInUsePaths
