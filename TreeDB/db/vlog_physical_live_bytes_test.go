@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -231,7 +232,22 @@ func TestValueLogPhysicalLiveBytes_ExhaustiveRolloverReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !converged.PolicyFullyCompacted || !converged.ByteMinimized {
+	if converged.RemainingDebt.ValueLogRewriteSegments != 0 || converged.RemainingDebt.ValueLogRewriteBytes != 0 ||
+		converged.RemainingDebt.ValueLogGCSegments != 0 || converged.RemainingDebt.ValueLogGCBytes != 0 ||
+		converged.RemainingDebt.LeafPackGenerations != 0 || converged.RemainingDebt.LeafPackBytes != 0 ||
+		converged.RemainingDebt.LeafGCGenerations != 0 || converged.RemainingDebt.LeafGCBytes != 0 ||
+		converged.RemainingDebt.ZeroByteValueLogFiles != 0 {
+		t.Fatalf("value-log/leaf debt did not converge: %+v", converged.RemainingDebt)
+	}
+	if runtime.GOOS == "windows" {
+		phase := compactStorageIndexVacuumPhase(t, converged)
+		if !phase.Required || phase.Status != CompactStoragePhaseStatusUnsupported {
+			t.Fatalf("windows index-vacuum phase=%+v want required unsupported", phase)
+		}
+		if converged.FullyCompacted || converged.PolicyFullyCompacted || converged.ByteMinimized || !converged.RemainingDebt.IndexVacuumRequired {
+			t.Fatalf("windows unsupported vacuum overstated convergence: %+v", converged)
+		}
+	} else if !converged.PolicyFullyCompacted || !converged.ByteMinimized {
 		t.Fatalf("not converged: %+v", converged.RemainingDebt)
 	}
 	closeNoErr(t, db)
