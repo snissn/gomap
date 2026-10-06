@@ -3,13 +3,14 @@ package treedb
 import (
 	"bytes"
 	"context"
-
 	"errors"
 	"fmt"
-	"github.com/snissn/gomap/TreeDB/caching"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/snissn/gomap/TreeDB/caching"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 )
 
@@ -267,12 +268,39 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 				t.Fatal("missing old cut")
 			}
 			defer old.Close()
+			leafPattern := filepath.Join(opts.Dir, "maindb", "leaf_vlog", "value-l*.log")
+			initialFiles, err := filepath.Glob(leafPattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			initial := make(map[string]bool, len(initialFiles))
+			for _, path := range initialFiles {
+				initial[path] = true
+			}
+			var unusedLeaf string
 			for i := 0; i < 2; i++ {
 				finish, err := database.cached.BeginValueLogMaintenanceFence(context.Background())
 				if err != nil {
 					t.Fatal(err)
 				}
 				finish()
+				if i == 0 {
+					paths, err := filepath.Glob(leafPattern)
+					if err != nil {
+						t.Fatal(err)
+					}
+					for _, path := range paths {
+						if !initial[path] {
+							if unusedLeaf != "" {
+								t.Fatal("more than one rotated leaf segment")
+							}
+							unusedLeaf = path
+						}
+					}
+					if unusedLeaf == "" {
+						t.Fatal("no rotated leaf segment")
+					}
+				}
 				if err := database.cached.Checkpoint(); err != nil {
 					t.Fatal(err)
 				}
@@ -281,8 +309,8 @@ func TestCOWPublicEmptyCheckpointLeafRegistrationProgress(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if compaction.LeafGenerationGC.FilesDeleted == 0 {
-				t.Fatalf("unused rotated leaf segment was not reclaimed: %+v", compaction.LeafGenerationGC)
+			if _, err := os.Stat(unusedLeaf); !os.IsNotExist(err) {
+				t.Fatalf("unused rotated leaf segment %s was not reclaimed: stat=%v compaction=%+v", unusedLeaf, err, compaction)
 			}
 			cowPublicContractSnapshotValue(t, old, "a", value, true)
 			if err := database.Set([]byte("a"), []byte("after-empty-checkpoint")); err != nil {
