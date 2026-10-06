@@ -523,11 +523,12 @@ layout_product=fixtures/'trial24-remote-layout-product';layout_product.mkdir()
 (layout/'source').symlink_to(layout_product,target_is_directory=True)
 layout_inputs=layout/'inputs';layout_inputs.mkdir()
 (layout_inputs/'sentinel').write_bytes(b'accepted synthetic input bytes\n')
+stage_sources=layout/'preparation-sources';stage_sources.mkdir()
 staged={}
 for role in ('oracle_helper','collector'):
- target=layout/Path(portable_sources[role]).name
+ target=stage_sources/Path(portable_sources[role]).name
  target.write_bytes(Path(portable_sources[role]).read_bytes());staged[role]=target
-staged['resolver']=layout/'source_paths.py'
+staged['resolver']=stage_sources/'source_paths.py'
 staged['resolver'].write_bytes((R/'source_paths.py').read_bytes())
 for name in ('oracle-pins.json','git-source-inventory.json','initial-oracle.json'):
  (layout/name).write_bytes(b'{"synthetic_only":true}\n')
@@ -596,5 +597,223 @@ obj=identity_acceptance('real_identity_shape_synthetic_only','chatgpt-codex-conn
 x.product_acceptance(obj,head,tree,objects['source_inventory']);bp.review_paths(obj)
 checks.append('identity_two_actual_distinct_author_spellings_synthetic_receipts_positive')
 (fixtures/'reviewer-identity-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_VALIDATOR_CHECKS_ONLY','cases':identity_cases,'runtime_started':False,'acceptance_granted':False},indent=2)+'\n')
+
+
+# Actual permission main reaches a failing transport stub only for isolated output.
+# Receipt/population admission is controlled; real archive/member/hash checks run.
+assert len(checks)==480
+import io,types,contextlib
+output_receipts=[]
+class OutputTransportStopped(Exception):pass
+def protected_snapshot(root):
+ return {str(p):sha(p.read_bytes()) for p in root.rglob('*') if p.is_file() and not p.is_symlink()}
+permission_cases=('input_equal','input_descendant','input_reverse','input_symlink_parent','input_dotdot','packet_equal','packet_descendant','packet_symlink_parent','manifest_descendant','archive_descendant','consumed_pin_descendant','positive_sibling')
+for label in permission_cases:
+ folder=fixtures/('output-permission-'+label);folder.mkdir()
+ packet=folder/'generated-packet';packet.mkdir();inputs=folder/'sealed-inputs';inputs.mkdir()
+ pm=load(portable_sources['permission_stage'],'actual_permission_output_'+label)
+ pc=load(portable_sources['collector'],'controlled_permission_collector_'+label)
+ pm.__file__=str(packet/'permission.py')
+ payload=b'synthetic input bytes';inv={'sentinel':sha(payload)};ir=json.dumps(inv).encode()
+ (inputs/'sentinel').write_bytes(payload);(inputs/'input-inventory.json').write_bytes(ir)
+ mf=folder/'manifest.json';mf.write_text(json.dumps({'source_head':pm.HEAD,'source_tree':pm.TREE,'input_inventory_sha256':sha(ir)}))
+ ar=folder/'inputs.tar.gz'
+ with tarfile.open(ar,'x:gz') as t:
+  for name,raw in [('sentinel',payload),('input-inventory.json',ir)]:
+   item=tarfile.TarInfo(name);item.size=len(raw);t.addfile(item,io.BytesIO(raw))
+ pin=folder/'actual-consumed-pin.json';pin.write_bytes(b'{"synthetic_only":true}')
+ pc.LOCAL_INPUT_ROOT=str(inputs);pc.INPUT_ROOT='/synthetic/remote-inputs'
+ pc.prepare_local=lambda a:({str(pin):pin.read_bytes()},inv,[],[])
+ pm.load=lambda:(pc,lambda *a:None,None,[]);pm.isolated_arguments=lambda *a:['synthetic-no-transport']
+ pm.MANIFEST=str(mf);pm.ARCHIVE=str(ar)
+ calls=[]
+ def stop_transport(*a,**kw):calls.append(a);raise OutputTransportStopped('transport stub; no external command')
+ pm.subprocess=types.SimpleNamespace(run=stop_transport,TimeoutExpired=TimeoutError)
+ alias=folder/'input-alias';alias.symlink_to(inputs,target_is_directory=True)
+ packet_alias=folder/'packet-alias';packet_alias.symlink_to(packet,target_is_directory=True)
+ target={'input_equal':inputs,'input_descendant':inputs/'bad','input_reverse':folder,'input_symlink_parent':alias/'bad','input_dotdot':inputs/'new'/'..'/'bad','packet_equal':packet,'packet_descendant':packet/'bad','packet_symlink_parent':packet_alias/'bad','manifest_descendant':mf/'bad','archive_descendant':ar/'bad','consumed_pin_descendant':pin/'bad','positive_sibling':folder/'allowed'}[label]
+ before=protected_snapshot(folder);existed=target.exists();error=None
+ opts=types.SimpleNamespace(manifest=str(mf),manifest_sha256=sha(mf.read_bytes()),archive=str(ar),archive_sha256=sha(ar.read_bytes()),out=str(target))
+ try:pm.main(opts)
+ except (ValueError,OutputTransportStopped) as e:error=type(e).__name__+': '+str(e)
+ if label=='positive_sibling':assert target.is_dir() and len(calls)==1 and error.startswith('OutputTransportStopped:')
+ else:assert error.startswith('ValueError:') and not calls and target.exists()==existed and protected_snapshot(folder)==before,(label,error,calls)
+ output_receipts.append({'writer':'permission_main','case':label,'error':error,'stub_transport_calls':len(calls),'network_calls':0,'negative_protected_bytes_unchanged':label!='positive_sibling'})
+ checks.append('output_permission_actual_main_'+label+'_before_transport')
+# Actual collector main prefix includes admission, all pin reads and first mkdir.
+cm=load(portable_sources['collector'],'actual_collector_output_guard')
+ct=ast.parse(Path(portable_sources['collector']).read_bytes())
+cf=next(n for n in ct.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+ci=next(i for i,n in enumerate(cf.body) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='OUTPUT' and n.value.func.attr=='mkdir')
+cf=copy.deepcopy(cf);cf.name='actual_source_main_prefix';cf.body=cf.body[:ci+1]
+collector_prefix=ast.fix_missing_locations(ast.Module(body=[cf],type_ignores=[]))
+for label in ('input_descendant','packet_descendant','input_symlink_parent','positive_sibling'):
+ folder=fixtures/('output-collector-'+label);folder.mkdir();inputs=folder/'sealed';inputs.mkdir();packet=folder/'packet';packet.mkdir()
+ own=packet/'collector.py';own.write_bytes(Path(portable_sources['collector']).read_bytes());cm.__file__=str(own)
+ manifest=folder/'manifest.json';manifest.write_text('{}')
+ pin=folder/'oracle.json';pin.write_text('{}')
+ cm.LOCAL_INPUT_ROOT=str(inputs);cm.validate_manifest=lambda *a:{'receipts':{'prefix_oracles':str(pin)}}
+ cm.prepare_local=lambda a:({str(pin):b'{}',str(inputs/'input-inventory.json'):b'{}'},{},[],[])
+ alias=folder/'alias';alias.symlink_to(inputs,target_is_directory=True)
+ target={'input_descendant':inputs/'bad','packet_descendant':packet/'bad','input_symlink_parent':alias/'bad','positive_sibling':folder/'allowed'}[label]
+ cm.OUTPUT=target;argv_before=sys.argv;sys.argv=['synthetic-collector','--approved',str(manifest)];before=protected_snapshot(folder);denied=False
+ try:
+  try:
+   exec(compile(collector_prefix,'actual-collector-main-through-first-mkdir','exec'),cm.__dict__);cm.actual_source_main_prefix()
+  except ValueError:denied=True
+ finally:sys.argv=argv_before
+ assert denied==(label!='positive_sibling') and target.exists()==(label=='positive_sibling')
+ if denied:assert protected_snapshot(folder)==before
+ checks.append('output_collector_actual_main_prefix_'+label+'_no_transport')
+ output_receipts.append({'writer':'collector_main_prefix','case':label,'refused_before_mkdir':denied})
+# Non-finalize actual constructor now refuses sealed input/source-packet pollution.
+postmod=load(portable_sources['post_constructor'],'actual_nonfinalize_post_output')
+postc=load(portable_sources['collector'],'actual_post_output_controlled_collector')
+postinput=fixtures/'output-post-sealed-inputs';postinput.mkdir();(postinput/'sentinel').write_bytes(b'sealed synthetic bytes')
+postc.LOCAL_INPUT_ROOT=str(postinput);postmod.collector=lambda:postc
+pp=copy.deepcopy(post_pins);pp['constants']['OUT']=str(postinput)
+ppath=fixtures/'output-post-pins.json';ppath.write_text(json.dumps(pp))
+postalias=fixtures/'output-post-input-alias';postalias.symlink_to(postinput,target_is_directory=True)
+for label,target in [('input_equal',postinput),('input_descendant',postinput/'bad'),('input_reverse',fixtures),('input_alias',postalias/'bad'),('packet_descendant',Path(portable_sources['post_constructor']).parent/'bad-output.py'),('positive_sibling',fixtures/'output-post-admitted-sealer.py')]:
+ before=protected_snapshot(fixtures);existed=target.exists();argv_before=sys.argv;sys.argv=['synthetic-post','--pins',str(ppath),'--output',str(target)];denied=False
+ try:
+  try:
+   with contextlib.redirect_stdout(io.StringIO()):postmod.main()
+  except (AssertionError,ValueError):denied=True
+ finally:sys.argv=argv_before
+ assert denied==(label!='positive_sibling') and target.exists()==(existed or label=='positive_sibling'),label
+ if denied:assert protected_snapshot(fixtures)==before
+ else:ast.parse(target.read_bytes())
+ checks.append('output_post_actual_constructor_'+label+'_no_frozen_mutation')
+ output_receipts.append({'writer':'actual_post_constructor','case':label,'refused_before_write':denied})
+# Execute actual emitted growth writer guard + first output mutation.
+for role,target_name in [('query','OUTPUT'),('lifecycle','p'),('exact-validate','p'),('artifact-verify','O')]:
+ source_path_growth=growth_out/('gomap-4997-4998-trial24-growth-'+role+'-root-v1.py')
+ tree_growth=ast.parse(source_path_growth.read_bytes())
+ guard_growth=next(n for n in ast.walk(tree_growth) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Name) and n.value.func.id=='isolate_paths')
+ guard_fn=next(n for n in tree_growth.body if isinstance(n,ast.FunctionDef) and n.name=='isolate_paths')
+ if role in ('query','lifecycle'):writer=next(n for n in ast.walk(tree_growth) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='mkdir')
+ else:writer=next(n for n in ast.walk(tree_growth) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr=='write_text')
+ sealed=Path(growth_pins['artifact_root'])/'pre-inputs-root-v1';sealed.mkdir(parents=True,exist_ok=True)
+ for label,target in [('sealed_descendant',sealed/('bad-'+role)),('packet_descendant',growth_out/('bad-'+role)),('positive_mutable_volume',Path(growth_pins['artifact_root'])/('admitted-'+role))]:
+  if role=='exact-validate' and label=='positive_mutable_volume':target.mkdir()
+  existed=target.exists();before=protected_snapshot(fixtures);denied=False
+  ns={'__file__':str(source_path_growth),'isolate_paths':isolate_paths,'pathlib':__import__('pathlib'),'Path':Path,'OUTPUT':target,'p':target,'O':target,'json':json,'proof':{'synthetic_only':True},'receipt':{'synthetic_only':True},'_gate':{'ADMISSION_PATH':str(ppath),'SOURCE_PREREVIEW_PATH':str(ppath)}}
+  try:exec(compile(ast.Module(body=[guard_fn,guard_growth,writer],type_ignores=[]),'actual-generated-growth-'+role+'-guard-and-write','exec'),ns)
+  except ValueError:denied=True
+  assert denied==(label!='positive_mutable_volume'),(role,label)
+  if denied:assert protected_snapshot(fixtures)==before and target.exists()==existed
+  checks.append('output_growth_actual_'+role+'_'+label+'_prewrite')
+  output_receipts.append({'writer':'actual_generated_growth_'+role,'case':label,'refused_before_write':denied})
+# Actual private preparer emits both envelopes; shell and Go commands stay inert.
+runner=R/'sources/native-runner/gomap-1242-bounded-runner-prepare.py'
+for label,outer,command in [('build',1100,{'name':'fixed-peer-build','args':['build','-o','synthetic-output','./cmd/treedb-fixed-peer'],'timeout_seconds':480}),('native',300,{'name':'native-prefix-oracle','args':['test','-json','-count=1','-timeout=180s','./cmd/treedb-query-under-write'],'timeout_seconds':240})]:
+ folder=fixtures/('output-private-runner-'+label);folder.mkdir();source=folder/'source';source.mkdir();(source/'synthetic.go').write_bytes(b'package synthetic\n')
+ cfg={'unit_prefix':'gomap-synthetic-'+label+'-','outer_timeout_seconds':outer,'go_commands':[command]}
+ (folder/'config.json').write_text(json.dumps(cfg))
+ argv=[sys.executable,'-B',str(runner),str(folder)]
+ proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
+ for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('command.json',json.dumps(argv)+'\n')]: (fixtures/('private-runner-'+label+'.'+suffix)).write_text(value)
+ assert proc.returncode==0,proc.stderr
+ run=(folder/'run.sh').read_text();inner=(folder/'inner.sh').read_text()
+ assert '/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1' not in run+inner
+ assert str(folder) in run and str(folder) in inner and cfg['unit_prefix'] in run
+ assert str(outer)+'s systemd-run' in run and '--kill-after=20s' in run and 'MemoryMax=8G' in run and 'MemorySwapMax=0' in run
+ assert '61e7455a40a2fdfcdab99e881cd30ba10e216e3d0f32ab5f8e59d10cac4ecf57' in run
+ assert '--kill-after=15s '+str(command['timeout_seconds'])+'s go ' in inner
+ assert not (folder/'run.started').exists() and (folder/'source/synthetic.go').read_bytes()==b'package synthetic\n'
+ checks.append('actual_private_runner_'+label+'_sibling_templates_exact_fresh_bounded_envelope')
+ output_receipts.append({'writer':'actual_private_runner','case':label,'argv':argv,'actual_exit':proc.returncode,'run_sha256':sha(run.encode()),'inner_sha256':sha(inner.encode()),'shell_executed':False,'Go_started':False})
+# Source closure/capture must refer only to the isolated staged source directory.
+for name in ('HELPER','COLLECTOR'):
+ constants=ast.parse(nr.remote_program(nr.REMOTE_PREPARE,'a'*64))
+ value=ast.literal_eval(next(n.value for n in constants.body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==name for t in n.targets)))
+ assert '/preparation-sources/' in value
+ checks.append('native_private_staged_'+name.lower()+'_remote_binding')
+assert nr.TEMPLATE==nr.SOURCE+'/docs/benchmarks/fixed_cluster_sustained_20261005/harness/sources/native-runner'
+assert nr.RUNNER==nr.TEMPLATE+'/gomap-1242-bounded-runner-prepare.py'
+checks.append('native_private_immutable_source_runner_location')
+
+# The exact emitted permission staging program checks remote aliases before extraction.
+stage_receipts=[]
+stage_payload={'sentinel':b'synthetic remote staged bytes'};stage_inv={k:sha(v) for k,v in stage_payload.items()};stage_ir=json.dumps(stage_inv).encode()
+stage_buf=io.BytesIO()
+with tarfile.open(fileobj=stage_buf,mode='w:gz') as archive:
+ for name,raw in list(stage_payload.items())+[('input-inventory.json',stage_ir)]:
+  item=tarfile.TarInfo(name);item.size=len(raw);archive.addfile(item,io.BytesIO(raw))
+stage_raw=stage_buf.getvalue()
+stage_program=load(portable_sources['permission_stage'],'actual_permission_stage_emission').STAGE
+import os
+for label in ('source_descendant','cluster_descendant','source_symlink_parent','positive_sibling'):
+ folder=fixtures/('output-remote-stage-'+label);folder.mkdir();product=folder/'source';product.mkdir();cluster=folder/'cluster';cluster.mkdir()
+ (product/'sentinel').write_bytes(b'frozen synthetic source')
+ alias=folder/'alias';alias.symlink_to(product,target_is_directory=True)
+ target={'source_descendant':product/'bad','cluster_descendant':cluster/'bad','source_symlink_parent':alias/'bad','positive_sibling':folder/'admitted-inputs'}[label]
+ before=protected_snapshot(folder);argv_before,stdin_before=sys.argv,sys.stdin;uid_before,gid_before=os.getuid,os.getgid;denied=False
+ try:
+  sys.argv=['synthetic-remote-stage',str(target),sha(stage_raw),sha(stage_ir),str(product),str(cluster)]
+  sys.stdin=types.SimpleNamespace(buffer=io.BytesIO(stage_raw));os.getuid=lambda:1000;os.getgid=lambda:1000
+  try:
+   with contextlib.redirect_stdout(io.StringIO()):exec(compile(stage_program,'actual-emitted-permission-remote-stage','exec'),{})
+  except ValueError:denied=True
+ finally:sys.argv,sys.stdin=argv_before,stdin_before;os.getuid,os.getgid=uid_before,gid_before
+ assert denied==(label!='positive_sibling') and target.exists()==(label=='positive_sibling'),label
+ if denied:assert protected_snapshot(folder)==before
+ else:assert {p.name for p in target.iterdir()}=={'sentinel','input-inventory.json'} and (target/'sentinel').read_bytes()==stage_payload['sentinel']
+ checks.append('output_actual_remote_permission_stage_'+label+'_before_extraction')
+ stage_receipts.append({'case':label,'refused_before_mkdir':denied,'transport_used':False})
+# Actual local adapter admission prefixes run through first mkdir with controlled
+# namespace assignment only; no transport, packaging or source authority is activated.
+for adapter_kind in ('build','images'):
+ apath=R/'root-adapters'/('runtime-'+adapter_kind+'-prepare-root-v1.py')
+ amod=load(apath,'actual_output_adapter_'+adapter_kind)
+ at=ast.parse(apath.read_bytes());af=next(n for n in at.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+ boundary=next(i for i,n in enumerate(af.body) if isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and isinstance(n.value.func.value,ast.Name) and n.value.func.value.id=='LOCAL' and n.value.func.attr=='mkdir')
+ af=copy.deepcopy(af);af.name='actual_admission_prefix'
+ af.body=[n for n in af.body[:boundary+1] if not (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='LOCAL' for t in n.targets))]
+ adapter_prefix=ast.fix_missing_locations(ast.Module(body=[af],type_ignores=[]));exec(compile(adapter_prefix,'actual-'+adapter_kind+'-admission-through-mkdir','exec'),amod.__dict__)
+ for label in ('packet_descendant','packet_symlink_parent','consumed_receipt_descendant','positive_sibling'):
+  folder=fixtures/('output-adapter-'+adapter_kind+'-'+label);folder.mkdir();packet=folder/'packet';packet.mkdir();(packet/'root-adapters').mkdir()
+  amod.__file__=str(packet/'root-adapters'/apath.name)
+  inventory=folder/'git-source-inventory.json';inventory.write_bytes(Path(d['source_inventory']['path']).read_bytes())
+  invsha=sha(inventory.read_bytes());build_name='gomap-5021-sustained-runtime-build-root-v987654';image_name='gomap-5021-sustained-runtime-images-root-v987654'
+  receipt=folder/'receipt.json'
+  if adapter_kind=='build':
+   receipt.write_text(json.dumps({'synthetic_only':True,'state':'MERGED_SOURCE_ACCEPTED_FOR_BOUNDED_BUILD','head':head,'tree':tree,'current_head_ci_passed':True,'required_review_passed':True,'source_inventory_sha256':invsha,'issue':5021,'known_findings':[]}))
+   args_adapter=[head,tree,'/home/mikers/gomap-5021-sustained-final-source-root-v987654/source',str(inventory),str(receipt),build_name]
+  else:
+   obj=copy.deepcopy(objects['build']);obj.update(source='/home/mikers/'+build_name+'/source',tracked_files=len(objects['source_inventory']['rows']))
+   for name,item in obj['ELFs'].items():item['path']='/home/mikers/'+build_name+'/receipts/'+name
+   receipt.write_text(json.dumps(obj))
+   args_adapter=['--head',head,'--tree',tree,'--build-proof',str(receipt),'--build-proof-sha256',sha(receipt.read_bytes()),'--source-inventory-sha256',invsha,'--build-root-name',build_name,'--root-name',image_name,'--parent-111','sha256:'+'a'*64,'--parent-185','sha256:'+'b'*64,'--go-version','go1.26.0','--foreign-185-cid','c'*64,'--foreign-185-image','sha256:'+'d'*64]
+  alias=folder/'alias';alias.symlink_to(packet,target_is_directory=True)
+  target={'packet_descendant':packet/'bad','packet_symlink_parent':alias/'bad','consumed_receipt_descendant':receipt/'bad','positive_sibling':folder/'admitted'}[label]
+  amod.LOCAL=target;before=protected_snapshot(folder);denied=False
+  try:amod.actual_admission_prefix(args_adapter)
+  except ValueError:denied=True
+  assert denied==(label!='positive_sibling') and target.exists()==(label=='positive_sibling'),(adapter_kind,label)
+  if denied:assert protected_snapshot(folder)==before
+  checks.append('output_actual_'+adapter_kind+'_adapter_admission_'+label+'_before_transport')
+  output_receipts.append({'writer':'actual_'+adapter_kind+'_adapter_local_admission_prefix','case':label,'refused_before_mkdir':denied,'external_commands':0})
+output_receipts.extend({'writer':'actual_remote_permission_stage',**r} for r in stage_receipts)
+
+# Actual assembled common program suppresses cache writes before staged imports.
+cache_layout=fixtures/'output-native-import-cache';cache_layout.mkdir();cache_sources=cache_layout/'preparation-sources';cache_sources.mkdir()
+for role in ('oracle_helper','collector'):(cache_sources/Path(portable_sources[role]).name).write_bytes(Path(portable_sources[role]).read_bytes())
+(cache_sources/'source_paths.py').write_bytes((R/'source_paths.py').read_bytes())
+program=nr.remote_program('', 'a'*64)+"\nROOT=pathlib.Path("+repr(str(cache_layout))+")\nHELPER="+repr(str(cache_sources/Path(portable_sources['oracle_helper']).name))+"\n"
+remote_prepare_ast=ast.parse(nr.REMOTE_PREPARE)
+imports=[n for n in remote_prepare_ast.body if (isinstance(n,ast.Expr) and isinstance(n.value,ast.Call) and isinstance(n.value.func,ast.Attribute) and n.value.func.attr in ('insert','exec_module')) or (isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('spec','helper') for t in n.targets))]
+assert len(imports)==4
+program+=ast.unparse(ast.Module(body=imports,type_ignores=[]))+'\n'
+proc=subprocess.run([sys.executable,'-c',program],capture_output=True,text=True,timeout=15)
+for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('program.py',program)]: (fixtures/('actual-native-staged-import.'+suffix)).write_text(value)
+assert proc.returncode==0 and not (cache_sources/'__pycache__').exists(),proc.stderr
+checks.append('actual_native_remote_common_imports_no_staged_bytecode_without_cli_B')
+assert 'python3 -B -c ' in nr.transport_argv(nr.remote_program('', 'a'*64))[-1]
+checks.append('actual_native_transport_explicit_python_B')
+output_receipts.append({'writer':'native_staged_dynamic_import','actual_exit':proc.returncode,'CLI_B':False,'staged_packet_cache_created':False})
+
+(fixtures/'output-isolation-integration.json').write_text(json.dumps({'state':'SYNTHETIC_ACTUAL_WRITER_PREWRITE_AND_PRIVATE_RUNNER_EMISSION_ONLY','cases':output_receipts,'runtime_started':False,'Go_started':False,'network_calls':0,'limits':['Admission/population dependencies are controlled where marked; no actual campaign authorization.','Collector and generated growth checks execute actual prewrite code through first mutation; subsequent workloads remain inert.','Private runner preparation emits shell commands but executes neither shell nor Go.','Resolved path checks do not protect against concurrent symlink replacement.']},indent=2)+'\n')
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

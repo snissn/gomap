@@ -67,7 +67,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py",
-        "sha256": "359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c"
+        "sha256": "e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1"
       },
       "changes": [
         [
@@ -181,7 +181,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-growth-prepare-root-v1.py",
-        "sha256": "d1fcd52d9f6a4b488b3f105e23964fffacd9fee8242cee6af34a7ea1ba803c37"
+        "sha256": "0408dc56dafdcb78005f5accf015d8c31beb07b609cc89af7c3783d9581de46f"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -195,7 +195,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "52825c278b19651f4f725f9351fddb73ff767b549df1f379d39e09fffb568992"
+        "sha256": "9453f5ff3349d7d086cab67dbf49984214012f6a750f636ebad986da374ea243"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -209,7 +209,7 @@
       },
       "output": {
         "path": "gomap-trial24-prefix-oracle-prepare-root-v1.py",
-        "sha256": "74e151616159c41b566c8322490e9e02e9054dd2f0789dea66ae51c69603b940"
+        "sha256": "5adc332c8c84982e4561e43ebb135679dd05f2dd2ba965f351045cdf8651ec5c"
       },
       "changes": [
         [
@@ -241,7 +241,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "2615897065e1573208f471a26bfdfb2ffe5edf58a5492c7ad6fd3b5f3ef90b7e"
+        "sha256": "2fdf586548e6f365bb407acf573b37cc75bb44950a7316893a254b920444e467"
       },
       "changes": [
         [
@@ -269,7 +269,7 @@
       },
       "output": {
         "path": "gomap-trial24-permission-stage-prepare-root-v1.py",
-        "sha256": "99b1fb4ddf326f09630b1f9834e7c6ce9c54d9b99ff2865456952c5d9aa3b77f"
+        "sha256": "35ed429c9f4b9929721e32f5ef565660b4beeaa68ee4a6e40de2715435b9f08c"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -282,7 +282,7 @@
       },
       "output": {
         "path": "gomap-trial24-read-audit-accounting-root-v1.py",
-        "sha256": "43154710e19664b7663b1e5edef511366485f98c1e20e61b7dd4db61ae899fa3"
+        "sha256": "43ce98bee6504ec232bded81d8dc14c9356cb17adafd4dc19671b1581e93448e"
       },
       "changes": [
         [
@@ -315,7 +315,7 @@
       },
       "output": {
         "path": "gomap-trial24-resource-accounting-root-v1.py",
-        "sha256": "90423a7eb2a5e4e2517e01dbee898f53c8e95f7c2b8b584190080c963851ac44"
+        "sha256": "ca3c3c0ccacd1bcf3032f888bfc2486efd88a18d45a6fbdea6bb60d758ee3814"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -398,7 +398,7 @@
     "/tmp/gomap-trial17-native-runner-source-context-root-v1/gomap-1242-bounded-runner-prepare.py": {
       "path": "sources/native-runner/gomap-1242-bounded-runner-prepare.py",
       "original_sha256": "e09a70a724a98292398cc3333c0d20359afd5c195520710feba4ec8f76d428f5",
-      "sha256": "0e235dcceeea8d46cb1f041ae0c5ad59ff7f6506f30ee772bfe45b8fa1489ecf",
+      "sha256": "1993a5de4d50dece596e884afd7b3f9566765787f65e41c8ec7cc50dd1ee5229",
       "use": "pinned native runner template; retrieval/runtime evidence is separate and not copied"
     },
     "/tmp/gomap-trial17-native-runner-source-context-root-v1/run.sh": {
@@ -427,13 +427,13 @@
   "root_owned_adapters": {
     "runtime-build-prepare-root-v1.py": {
       "path": "root-adapters/runtime-build-prepare-root-v1.py",
-      "sha256": "5db680eda5e973bb007a33e7715ba724d6e2d4d3177743aa25c4783922e81e79",
+      "sha256": "00dfcf5b0cb69792a3877bf970fe96988320f133b895b1e81e4dc7ce74f25f93",
       "owner": "root",
       "state": "INERT_SOURCE_ADAPTER_NOT_A_TEMPLATE_ROLE_NOT_EXECUTED"
     },
     "runtime-images-prepare-root-v1.py": {
       "path": "root-adapters/runtime-images-prepare-root-v1.py",
-      "sha256": "b23ddfb657ca26db70615f871a58da327d260551ba3b33c87483b151ebbbb927",
+      "sha256": "608c09799787bbb795e276c06f6c3cc4e784ad5a4e9096f63bffc44665250e91",
       "owner": "root",
       "state": "INERT_SOURCE_ADAPTER_NOT_A_TEMPLATE_ROLE_NOT_EXECUTED"
     }

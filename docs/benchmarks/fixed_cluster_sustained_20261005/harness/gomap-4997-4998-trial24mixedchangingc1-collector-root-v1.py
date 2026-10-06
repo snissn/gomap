@@ -5,6 +5,7 @@ The manifest pins fresh receipts and exact owned CIDs; no prior population/image
 Import is inert. Root alone may execute --approved after exact-source prereview.
 """
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
+from source_paths import isolate_paths
 import argparse
 import base64
 import datetime
@@ -1163,6 +1164,7 @@ def main():
     pinned,inv,NODES,initial_vectors=prepare_local(APPROVED)  # ALL local pins before any SSH/process
     prefix_oracles=strict_json(pinned[APPROVED['receipts']['prefix_oracles']])
     assert not OUTPUT.exists(), 'consumed campaign output must never be reused'
+    isolate_paths([OUTPUT],[LOCAL_INPUT_ROOT,pathlib.Path(__file__).resolve().parent,cli.approved]+list(pinned))
     OUTPUT.mkdir()
     (OUTPUT/'approved-inputs.json').write_bytes(approved_bytes)
     (OUTPUT/'collector-source.py').write_bytes(source)

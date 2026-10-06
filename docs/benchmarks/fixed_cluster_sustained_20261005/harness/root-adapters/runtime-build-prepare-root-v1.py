@@ -2,7 +2,10 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import hashlib, json, pathlib, shlex, subprocess, time
 
-import sys,re
+import sys,re,inspect
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
+from source_paths import isolate_paths
+
 def main(argv=None):
     if not __debug__:
         raise RuntimeError('ordinary Python required; assertions are fail-closed guards')
@@ -23,6 +26,7 @@ def main(argv=None):
     assert review['source_inventory_sha256']==hashlib.sha256(INVENTORY.read_bytes()).hexdigest()
     assert review['issue']==5021 and review['known_findings']==[]
     assert re.fullmatch(r'/home/mikers/gomap-5021-sustained-final-source-root-v[1-9][0-9]*/source',SOURCE)
+    isolate_paths([LOCAL],[pathlib.Path(__file__).resolve().parents[1],INVENTORY,REVIEW])
     LOCAL.mkdir(exist_ok=False)
     (LOCAL/'git-source-inventory.json').write_bytes(INVENTORY.read_bytes())
     SSH = ['ssh','-o','BatchMode=yes','-o','ConnectTimeout=10','mikers@192.168.0.111']
@@ -55,11 +59,13 @@ def verify_source(source,inventory):
   assert blob==item['git_blob'],item['path']
   assert p.stat().st_mode&0o777==(0o755 if item['mode']=='100755' else 0o644),item['path']
 '''
-    prefix = 'if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,json,os,pathlib,subprocess,sys\nROOT='+repr(REMOTE)+'\nSOURCE='+repr(SOURCE)+'\nHEAD='+repr(HEAD)+'\nTREE='+repr(TREE)+'\nBINDING_SHA='+repr(hashlib.sha256(REVIEW.read_bytes()).hexdigest())+'\n'+verify
+    prefix = 'if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,json,os,pathlib,subprocess,sys\nROOT='+repr(REMOTE)+'\nSOURCE='+repr(SOURCE)+'\nHEAD='+repr(HEAD)+'\nTREE='+repr(TREE)+'\nBINDING_SHA='+repr(hashlib.sha256(REVIEW.read_bytes()).hexdigest())+'\n'+verify+inspect.getsource(isolate_paths)+'\n'
     prepare = prefix+'''
 root=pathlib.Path(ROOT);assert not root.exists()
-for name,pin in {'/home/mikers/gomap-1242-bounded-runner-prepare.py':'0e235dcceeea8d46cb1f041ae0c5ad59ff7f6506f30ee772bfe45b8fa1489ecf','/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1/run.sh':'e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a','/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1/inner.sh':'0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98'}.items():
- p=pathlib.Path(name);assert p.is_file() and not p.is_symlink() and p.stat().st_size<=256*1024
+isolate_paths([root],[SOURCE])
+template=pathlib.Path(SOURCE)/'docs/benchmarks/fixed_cluster_sustained_20261005/harness/sources/native-runner'
+for name,pin in {'gomap-1242-bounded-runner-prepare.py':'1993a5de4d50dece596e884afd7b3f9566765787f65e41c8ec7cc50dd1ee5229','run.sh':'e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a','inner.sh':'0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98'}.items():
+ p=template/name;assert p.is_file() and not p.is_symlink() and p.stat().st_size<=256*1024
  assert hashlib.sha256(p.read_bytes()).hexdigest()==pin,name
 disk=os.statvfs('/home/mikers');assert disk.f_bavail*disk.f_frsize>=50*1024**3
 mem={l.split(':')[0]:int(l.split()[1])*1024 for l in pathlib.Path('/proc/meminfo').read_text().splitlines() if ':' in l}
@@ -75,7 +81,7 @@ cfg={'unit_prefix':'gomap-5021-sustained-runtime-build-','outer_timeout_seconds'
  {'name':'fixed-peer-build','args':['build','-o',str(root/'receipts/treedb-fixed-peer'),'./cmd/treedb-fixed-peer'],'timeout_seconds':480},
  {'name':'query-driver-build','args':['build','-o',str(root/'receipts/treedb-query-under-write'),'./cmd/treedb-query-under-write'],'timeout_seconds':480}]}
 (root/'config.json').write_text(json.dumps(cfg,indent=2)+'\\n')
-subprocess.run(['python3','/home/mikers/gomap-1242-bounded-runner-prepare.py',str(root)],check=True)
+subprocess.run(['python3','-B',str(template/'gomap-1242-bounded-runner-prepare.py'),str(root)],check=True)
 print(json.dumps({'state':'PREPARED_NOT_RUN','head':HEAD,'tree':TREE,'git_inventory_sha256':hashlib.sha256(raw).hexdigest(),'tracked_files':len(inventory['rows'])}))
 '''
     print(call('prepare',prepare,INVENTORY.read_bytes(),120).decode().strip(),flush=True)

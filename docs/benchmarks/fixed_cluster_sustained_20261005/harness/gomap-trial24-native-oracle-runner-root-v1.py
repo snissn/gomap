@@ -7,15 +7,15 @@ from source_paths import source_path, isolate_paths
 import argparse, ast, inspect, base64, gzip, hashlib, importlib.util, io, json, pathlib, re, shlex, sys, tarfile
 sys.dont_write_bytecode=True
 HELPER=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-trial24-prefix-oracle-prepare-root-v1.py')
-HELPER_SHA="74e151616159c41b566c8322490e9e02e9054dd2f0789dea66ae51c69603b940"
+HELPER_SHA="5adc332c8c84982e4561e43ebb135679dd05f2dd2ba965f351045cdf8651ec5c"
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA="359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c"
+COLLECTOR_SHA="e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1"
 CONTEXT=source_path('/tmp/gomap-trial17-native-runner-source-context-root-v1')
-RUNNER="/home/mikers/gomap-1242-bounded-runner-prepare.py"
-TEMPLATE="/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1"
-RUNNER_PINS={"gomap-1242-bounded-runner-prepare.py":"0e235dcceeea8d46cb1f041ae0c5ad59ff7f6506f30ee772bfe45b8fa1489ecf","run.sh":"e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a","inner.sh":"0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98"}
+RUNNER_PINS={"gomap-1242-bounded-runner-prepare.py":"1993a5de4d50dece596e884afd7b3f9566765787f65e41c8ec7cc50dd1ee5229","run.sh":"e3e4570f7f66ff465dd57675a5f7b0d6aea61d58d6619836407e1383d79a4e5a","inner.sh":"0bd4c035dc654e4776c4c6a69ce6b29e4a339bc540576c181a9ab7690c144c98"}
 REMOTE="/home/mikers/gomap-4997-4998-trial24-oracle-root-v1"
 SOURCE="__ROOT_FROZEN_SOURCE_ROOT__"
+TEMPLATE=SOURCE+"/docs/benchmarks/fixed_cluster_sustained_20261005/harness/sources/native-runner"
+RUNNER=TEMPLATE+"/gomap-1242-bounded-runner-prepare.py"
 INVENTORY="__ROOT_FROZEN_INVENTORY_PATH__"
 INVENTORY_SHA="__ROOT_FROZEN_INVENTORY_SHA__"
 INVENTORY_ROWS="__ROOT_FROZEN_INVENTORY_ROWS__"
@@ -78,6 +78,7 @@ def parse_go_json(raw):
 # Executed only by root's separately retained SSH commands.
 REMOTE_COMMON=r'''if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import base64,gzip,hashlib,importlib.util,io,json,os,pathlib,re,subprocess,sys,tarfile
+sys.dont_write_bytecode=True
 def need(ok,why):
  if not ok:raise ValueError(why)
 def sha(b):return hashlib.sha256(b).hexdigest()
@@ -153,8 +154,9 @@ with tarfile.open(fileobj=io.BytesIO(expanded),mode="r:") as t:
  (ROOT/"inputs").mkdir(mode=0o700);t.extractall(ROOT/"inputs",filter="data")
 inv=json.loads(read(ROOT/"inputs/input-inventory.json"));need(set(names)==set(inv)|{"input-inventory.json"},"exact extracted inventory")
 input_before=inputs_verify()
-source_at_absolute(ROOT/"source_paths.py",base64.b64decode(x["resolver"],validate=True),RESOLVER_SHA)
-sys.path.insert(0,str(ROOT))
+(ROOT/"preparation-sources").mkdir(mode=0o700)
+source_at_absolute(ROOT/"preparation-sources/source_paths.py",base64.b64decode(x["resolver"],validate=True),RESOLVER_SHA)
+sys.path.insert(0,str(ROOT/"preparation-sources"))
 source_at_absolute(HELPER,base64.b64decode(x["helper"],validate=True),HELPER_SHA)
 source_at_absolute(COLLECTOR,base64.b64decode(x["collector"],validate=True),COLLECTOR_SHA)
 initial=base64.b64decode(x["initial_oracle"],validate=True);need(sha(initial)==x["initial_oracle_sha256"],"initial oracle pin");write_new(ROOT/"initial-oracle.json",initial)
@@ -171,7 +173,7 @@ export=("export GOMAP_TRIAL24_ORACLE_INPUT="+__import__("shlex").quote(str(ROOT/
 b=b.replace(marker,marker+export,1);inner.write_bytes(b)
 after=source_verify();input_after=inputs_verify()
 packet={"state":"PREPARED_NOT_EXECUTED_REQUIRES_ROOT_GENERATED_BYTES_REVIEW","before":before,"after":after,"inputs_before":input_before,"inputs_after":input_after,"files":{},"proposal":proposal}
-for n in ("source_paths.py",pathlib.Path(HELPER).name,pathlib.Path(COLLECTOR).name,"config.json","run.sh","inner.sh","oracle-preparation/prefix_oracle_prepare_test.go","oracle-preparation/overlay.json","oracle-preparation/oracle-input.json"):
+for n in ("preparation-sources/source_paths.py","preparation-sources/"+pathlib.Path(HELPER).name,"preparation-sources/"+pathlib.Path(COLLECTOR).name,"config.json","run.sh","inner.sh","oracle-preparation/prefix_oracle_prepare_test.go","oracle-preparation/overlay.json","oracle-preparation/oracle-input.json"):
  raw=read(ROOT/n);packet["files"][n]={"sha256":sha(raw),"base64":base64.b64encode(raw).decode()}
 write_new(ROOT/"prepared-packet.json",(json.dumps(packet)+"\n").encode())
 print(json.dumps(packet))
@@ -197,12 +199,12 @@ for prefix in ("receipts","oracle-preparation"):
  for p in sorted(directory.iterdir()):
   if not p.is_file() or p.is_symlink():continue
   raw=read(p,8<<20);out["files"][prefix+"/"+p.name]={"sha256":sha(raw),"base64":base64.b64encode(raw).decode()}
-for n in ("run-admission.json","prepared-packet.json","config.json","run.sh","inner.sh","initial-oracle.json","oracle-pins.json","git-source-inventory.json","source_paths.py",pathlib.Path(HELPER).name,pathlib.Path(COLLECTOR).name,"runner-prepare.stdout","runner-prepare.stderr","runner-prepare.exit"):
+for n in ("run-admission.json","prepared-packet.json","config.json","run.sh","inner.sh","initial-oracle.json","oracle-pins.json","git-source-inventory.json","preparation-sources/source_paths.py","preparation-sources/"+pathlib.Path(HELPER).name,"preparation-sources/"+pathlib.Path(COLLECTOR).name,"runner-prepare.stdout","runner-prepare.stderr","runner-prepare.exit"):
  raw=read(ROOT/n);out["files"][n]={"sha256":sha(raw),"base64":base64.b64encode(raw).decode()}
 print(json.dumps(out))
 '''
 def remote_program(body,input_sha):
-    constants=dict(ROOT=REMOTE,SOURCE=SOURCE,HEAD=HEAD,TREE=TREE,INV_SHA=INVENTORY_SHA,INV_ROWS=INVENTORY_ROWS,INPUT_SHA=input_sha,HELPER=REMOTE+"/"+pathlib.Path(HELPER).name,HELPER_SHA=HELPER_SHA,COLLECTOR=REMOTE+"/"+pathlib.Path(COLLECTOR).name,COLLECTOR_SHA=COLLECTOR_SHA,RESOLVER_SHA=RESOLVER_SHA,RUNNER=RUNNER,TEMPLATE=TEMPLATE,RUNNER_PINS=RUNNER_PINS)
+    constants=dict(ROOT=REMOTE,SOURCE=SOURCE,HEAD=HEAD,TREE=TREE,INV_SHA=INVENTORY_SHA,INV_ROWS=INVENTORY_ROWS,INPUT_SHA=input_sha,HELPER=REMOTE+"/preparation-sources/"+pathlib.Path(HELPER).name,HELPER_SHA=HELPER_SHA,COLLECTOR=REMOTE+"/preparation-sources/"+pathlib.Path(COLLECTOR).name,COLLECTOR_SHA=COLLECTOR_SHA,RESOLVER_SHA=RESOLVER_SHA,RUNNER=RUNNER,TEMPLATE=TEMPLATE,RUNNER_PINS=RUNNER_PINS)
     return "if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\n"+"\n".join(k+"="+repr(v) for k,v in constants.items())+"\nROOT=__import__('pathlib').Path(ROOT)\n"+REMOTE_COMMON+inspect.getsource(isolate_paths)+"\n"+body
 def inventory_identity(inv):
     need(type(INVENTORY_ROWS) is int and INVENTORY_ROWS>0 and inv["head"]==HEAD and inv["tree"]==TREE and isinstance(inv["rows"],list) and len(inv["rows"])==INVENTORY_ROWS and inv["overlays"]=={},"exact source inventory")
@@ -243,7 +245,7 @@ def capture_file(path):
     prefix="receipts/00-native-prefix-oracle"
     need(raw[prefix+".exit"].strip()==b"0" and raw["receipts/scope.exit"].strip()==b"0","actual test and scope exit0")
     count=parse_go_json(raw[prefix+".jsonl"])
-    need(sha(raw["source_paths.py"])==RESOLVER_SHA and sha(raw[pathlib.Path(HELPER).name])==HELPER_SHA and sha(raw[pathlib.Path(COLLECTOR).name])==COLLECTOR_SHA,"actual staged source closure pins")
+    need(sha(raw["preparation-sources/source_paths.py"])==RESOLVER_SHA and sha(raw["preparation-sources/"+pathlib.Path(HELPER).name])==HELPER_SHA and sha(raw["preparation-sources/"+pathlib.Path(COLLECTOR).name])==COLLECTOR_SHA,"actual staged source closure pins")
     for name in ("start","end"):
         need(raw["receipts/"+name+"-memory.max.txt"].strip()==b"8589934592" and raw["receipts/"+name+"-memory.swap.max.txt"].strip()==b"0","actual 8GiB/swap0")
         events=dict(line.split() for line in raw["receipts/"+name+"-memory.events.txt"].decode().splitlines())

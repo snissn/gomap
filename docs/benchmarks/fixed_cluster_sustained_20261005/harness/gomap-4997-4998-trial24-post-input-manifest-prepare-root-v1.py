@@ -5,7 +5,7 @@ import argparse, ast, hashlib, importlib.util, json, pathlib, re
 TEMPLATE = source_path('/tmp/gomap-4994-trial14mixedc1-post-input-manifest-prepare-root-v1.py')
 TEMPLATE_SHA256 = '8586f38a885357a1e042d3507a57396c64ac88d08e626188e74a33c46f18e7b5'
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA256 = '359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c'
+COLLECTOR_SHA256 = 'e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1'
 def sha(raw): return hashlib.sha256(raw).hexdigest()
 def collector():
     assert sha(pathlib.Path(COLLECTOR).read_bytes()) == COLLECTOR_SHA256
@@ -60,7 +60,7 @@ def main():
     required = {'V','PRE','OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF','PROBE','PROOF','LIFECYCLE','ROOT_PROBE_PROOF_SHA256','ARTIFACT_REVIEW_PATH','ARTIFACT_REVIEW_SHA256','FINAL_INSPECT_WRAPPERS','HEAD','TREE','GO_SHA','DRIVER_SHA','SERVER_SHA','PRE_INV_SHA','BOOT_SHA','CONFIG_SHA','PLAN_SHA','BOOT_REVIEW','BOOT_REVIEW_SHA','LANDED','LANDED_SHA','BUILD','BUILD_SHA','SOURCE_REVIEW','SOURCE_REVIEW_SHA','SOURCE_INV','CIDS'}
     assert set(constants) == required, 'exact required sealer constants'
     protected += [constants[k] for k in ('PRE','PROBE','PROOF','LIFECYCLE','BOOT_REVIEW','LANDED','BUILD','SOURCE_REVIEW','SOURCE_INV','ARTIFACT_REVIEW_PATH')]
-    isolate_paths([out],protected)
+    isolate_paths([out],protected+[constants[k] for k in ('OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF')])
     isolate_paths([constants[k] for k in ('OUT','ARCHIVE','MANIFEST','PROMOTION_PROOF')],protected)
     assert constants['OUT'] == c.LOCAL_INPUT_ROOT and constants['HEAD'] == pins['source_head'] and constants['TREE'] == pins['source_tree']
     assert type(pins['pre_input_count']) is int and pins['pre_input_count'] > 0

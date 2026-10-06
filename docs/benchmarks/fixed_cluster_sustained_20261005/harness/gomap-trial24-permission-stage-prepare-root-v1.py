@@ -1,14 +1,14 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
-from source_paths import source_path
+from source_paths import source_path, isolate_paths
 """Unexecuted Trial24 inactive-input staging and isolated permission observation.
 Root must review this source and supply exact final manifest/archive pins.
 No campaign activation, voter start, DB mount, gate, mutations, or replay.
 """
-import argparse, ast, copy, hashlib, importlib.util, io, json, math
+import argparse, ast, copy, hashlib, importlib.util, inspect, io, json, math
 import pathlib, re, secrets, shlex, subprocess, sys, tarfile, time, types
 sys.dont_write_bytecode = True
 COLLECTOR = source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA = "359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c"
+COLLECTOR_SHA = "e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1"
 RESOURCE = source_path('/tmp/gomap-4994-mixed-window-resource-accounting-root-v5.py')
 RESOURCE_SHA = "fe917502c45aa2f4619bd6d5cb294243d343c5cd93f3c6974ccff71b01eb5f96"
 RUN = "rf4trial24mixedchangingc1"
@@ -103,12 +103,15 @@ with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as t:
  m=t.getmembers();names=[x.name for x in m]
  assert len(m)<=513 and sum(x.size for x in m)<=256<<20
  assert len(names)==len(set(names)) and all(x.isfile() and 0<=x.size<=64<<20 and not pathlib.PurePosixPath(x.name).is_absolute() and pathlib.PurePosixPath(x.name).as_posix()==x.name and all(v not in ('.','..') for v in pathlib.PurePosixPath(x.name).parts) for x in m)
+ isolate_paths([p],[sys.argv[4],sys.argv[5]])
  p.mkdir(mode=0o700);t.extractall(p,filter='data')
 b=(p/'input-inventory.json').read_bytes();assert hashlib.sha256(b).hexdigest()==sys.argv[3]
 inv=json.loads(b);assert set(inv)|{'input-inventory.json'}==set(names)
 assert all(hashlib.sha256((p/n).read_bytes()).hexdigest()==h for n,h in inv.items())
 print(json.dumps(dict(state='PASS_EXCLUSIVE_POST_INPUT_STAGING',path=str(p),input_inventory_sha256=sys.argv[3],archive_sha256=sys.argv[2],files=len(names))))
 """
+
+STAGE=STAGE.replace("import os,sys,io,tarfile,pathlib,hashlib,json\n","import os,sys,io,tarfile,pathlib,hashlib,json\n"+inspect.getsource(isolate_paths)+"\n",1)
 
 def validate_permission(c,permission_proof,keys,pr,raw,a,nonce):
     need(set(raw)=={pr[k] for k in keys} and len(raw)==8,"exact eight raw permission paths")
@@ -141,6 +144,7 @@ def main(opts):
     nonce=secrets.token_hex(16);argv=isolated_arguments(c,a,nonce)
     # No activation flag is changed or written; this is permission observation only.
     out=pathlib.Path(opts.out);need(out.is_absolute() and not out.exists() and not out.is_symlink(),"fresh exclusive evidence root")
+    isolate_paths([out],[c.LOCAL_INPUT_ROOT,pathlib.Path(__file__).resolve().parent,opts.manifest,opts.archive,COLLECTOR,RESOURCE]+list(pinned_inputs))
     out.mkdir(mode=0o700)
     serial=0
     def call(label,args,stdin=None,timeout=45):
@@ -163,7 +167,7 @@ def main(opts):
             prefix.with_suffix(".stdout").write_bytes(stdout);prefix.with_suffix(".stderr").write_bytes(stderr)
         need(r.returncode==0,"failed retained command "+label)
         return stdout,prefix.with_suffix(".json"),rec
-    call("exclusive-stage",["python3","-c",STAGE,c.INPUT_ROOT,sha(archive),a["input_inventory_sha256"]],stdin=archive,timeout=60)
+    call("exclusive-stage",["python3","-c",STAGE,c.INPUT_ROOT,sha(archive),a["input_inventory_sha256"],"__ROOT_FROZEN_SOURCE_ROOT__",c.ROOT],stdin=archive,timeout=60)
     (out/"command.json").write_bytes(encode(argv))
     name=argv[argv.index("--name")+1]
     check="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\nimport subprocess; r=subprocess.run(['docker','inspect',"+repr(name)+"],capture_output=True,text=True); assert r.returncode!=0 and 'no such' in r.stderr.lower(); print('PASS_EXCLUSIVE_PERMISSION_NAME')"

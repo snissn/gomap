@@ -6,7 +6,7 @@ runs the proposed command separately. Native output is pending root acceptance.
 """
 import argparse, hashlib, importlib.util, json, os, pathlib, re, shlex
 COLLECTOR=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24mixedchangingc1-collector-root-v1.py')
-COLLECTOR_SHA='359ee8ecca8ca94ad629c19a0d9ad19fe921c95043696bc6078ef90ba12a4c9c'
+COLLECTOR_SHA='e4cc620c52f3b0e3904747c2a6a8f922a62dc56277e0741abd3c4a5d1b70fdf1'
 GO_SOURCE=r'''package main
 
 import (
@@ -89,7 +89,7 @@ def prepare(pin_path,out):
  root=pathlib.Path(a['source_root']);inputs=pathlib.Path(a['input_root']);out=pathlib.Path(out)
  assert all(p.is_absolute() for p in (root,inputs,out)) and root.is_dir() and inputs.is_dir()
  assert not out.exists() and not out.is_symlink()
- isolate_paths([out],[root.resolve(),inputs,pathlib.Path(__file__).resolve(),pathlib.Path(COLLECTOR).resolve(),pathlib.Path(__file__).with_name('source_paths.py').resolve(),pin_path,a['source_inventory'],a['initial_oracle']])
+ isolate_paths([out],[root.resolve(),inputs,pathlib.Path(__file__).resolve().parent,pathlib.Path(__file__).resolve(),pathlib.Path(COLLECTOR).resolve(),pathlib.Path(__file__).with_name('source_paths.py').resolve(),pin_path,a['source_inventory'],a['initial_oracle']])
  inventory_raw=read(a['source_inventory']);assert sha(inventory_raw)==a['source_inventory_sha256']
  source=c.strict_json(inventory_raw);assert set(source)=={'head','tree','rows','overlays'}
  assert source['head']==a['source_head'] and source['tree']==a['source_tree'] and source['overlays']=={}

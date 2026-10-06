@@ -1,7 +1,7 @@
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 from source_paths import source_path, isolate_paths
 """Inert source-only derivation. Root reviews/pins generated sources before any run."""
-import argparse, ast, hashlib, importlib.util, json, pathlib, re
+import argparse, ast, hashlib, importlib.util, inspect, json, pathlib, re
 TEMPLATES = {'admission': '/tmp/gomap-4994-trial14mixedc1-growth-admission-root-v2.py', 'query': '/tmp/gomap-4994-trial14mixedc1-growth-query-root-v2.py', 'lifecycle': '/tmp/gomap-4994-trial14mixedc1-growth-lifecycle-root-v2.py', 'exact-validate': '/tmp/gomap-4994-trial14mixedc1-growth-exact-validate-root-v2.py', 'artifact-verify': '/tmp/gomap-4994-trial14mixedc1-growth-artifact-verify-root-v2.py'}
 TEMPLATE_SHA256 = {'admission': 'd6d109b3125dc5075151b05276992502e85c512cb5710ee2b2b3549169e45032', 'query': 'fd6025b6a46f9cb64d150f4a239bd5ba6c101361a1bbce31c0464810c588d0ed', 'lifecycle': '51309dd305a2bf817215c7a83219f74d36d9ebbe150e7e06425c3b05aeda0286', 'exact-validate': 'f9df841baf352b2fdab599297f199db5cf5ece632748a4009ee546c3e1cb2bb0', 'artifact-verify': 'c11ca2ef5788ef40d7dfc400cad6ae3ba8922af81c8f5dc5724908a14aa27a56'}
 CAMPAIGN = 'rf4trial24mixedchangingc1'
@@ -133,6 +133,25 @@ def main():
                             checked[path]=compare.comparators[0].value
             assert all(count==2 for count in reads.values()), reads
             assert checked=={str(destinations[k]):generated_hashes[k] for k in ('exact-validate','query','lifecycle')}, 'source hashes must match emitted bytes'
+        # Carry frozen-input protection into actual generated artifact writers.
+        # The artifact volume itself remains mutable; its sealed input child does not.
+        if role in ('query','lifecycle','exact-validate','artifact-verify'):
+            frozen_paths=['__ROOT_FROZEN_SOURCE_ROOT__',pins['artifact_root']+'/pre-inputs-root-v1',a.pins]+list(pins['reviewed_path_bindings'].values())+list(pm.PRODUCT_PATHS.values())+pm.product_review_paths()+list(product_paths.values())
+            guard='isolate_paths([{target}],'+repr(frozen_paths)+"+[__import__('pathlib').Path(__file__).resolve().parent]"
+            if role in ('query','lifecycle'):guard+="+[_gate['ADMISSION_PATH'],_gate['SOURCE_PREREVIEW_PATH']]"
+            guard+=')'
+            if role=='query':
+                marker='OUTPUT.mkdir()';replacement=guard.format(target='OUTPUT')+'\n'+marker
+            elif role=='lifecycle':
+                marker='p.mkdir()';replacement=guard.format(target='p')+';'+marker
+            elif role=='exact-validate':
+                marker="(p/'root-exact-proof-v2.json').write_text";replacement=guard.format(target="p/'root-exact-proof-v2.json'")+'\n'+marker
+            else:
+                marker='O.write_text';replacement=guard.format(target='O')+';'+marker
+            assert text.count(marker)==1,('actual writer shape',role)
+            text=text.replace(marker,replacement,1)
+            ordinary="if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')\n"
+            text=ordinary+inspect.getsource(isolate_paths)+'\n'+text
         if role=='admission':
             lines=text.splitlines();index=next(i for i,line in enumerate(lines) if line.startswith(' build=pinned('));lines.insert(index+1,' assert build=='+repr(product));text='\n'.join(lines)+'\n'
             text=text.replace("landed['pr']==4995", "landed['pr']=="+str(pins['source_pr']))

@@ -17,6 +17,10 @@ Preserve failed roots/raw results; there is no automatic replay or cleanup.
 if not __debug__: raise RuntimeError('ordinary Python required; assertions must run')
 import argparse, hashlib, json, pathlib, re, shlex, subprocess, time
 
+import sys,inspect
+sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
+from source_paths import isolate_paths
+
 def main(argv=None):
     if not __debug__:
         raise RuntimeError('ordinary Python required; assertions are fail-closed guards')
@@ -65,6 +69,7 @@ def main(argv=None):
         assert m['ldd']['exit']==0 or (m['ldd']['exit']==1 and ('not a dynamic executable' in m['ldd']['stderr'] or 'statically linked' in m['ldd']['stdout']))
         ELFS[name]={'sha256':v['sha256'],'bytes':v['bytes']}
     assert not LOCAL.exists() and not LOCAL.is_symlink()
+    isolate_paths([LOCAL],[pathlib.Path(__file__).resolve().parents[1],proof_path,inv_path])
     LOCAL.mkdir(exist_ok=False)
     (LOCAL/'build-proof.json').write_bytes(proof_raw)
     (LOCAL/'git-source-inventory.json').write_bytes(inv_raw)
@@ -80,9 +85,10 @@ def main(argv=None):
         r.check_returncode();return r.stdout
 
     for host in ('111','185'):
-        p='if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,json,os,pathlib,shutil,subprocess,sys,tarfile,time\nROOT='+repr(REMOTE)+'\nELFS='+repr(ELFS)+'\nPARENT='+repr(PARENTS[host])+'\nHOST='+repr(host)+'\nFOREIGN='+repr(FOREIGN[host])+'\nTAG='+repr(TAG)+'\nPARENT_TAG='+repr(PARENT_TAG)+'\n'
+        p='if not __debug__: raise RuntimeError(\'ordinary Python required; assertions must run\')\nimport hashlib,json,os,pathlib,shutil,subprocess,sys,tarfile,time\nROOT='+repr(REMOTE)+'\nELFS='+repr(ELFS)+'\nPARENT='+repr(PARENTS[host])+'\nHOST='+repr(host)+'\nFOREIGN='+repr(FOREIGN[host])+'\nTAG='+repr(TAG)+'\nPARENT_TAG='+repr(PARENT_TAG)+'\nBUILD_ROOT='+repr('/home/mikers/'+args.build_root_name)+'\n'+inspect.getsource(isolate_paths)+'\n'
         call(host,'prepare',p+'''
 root=pathlib.Path(ROOT);assert not root.exists()
+isolate_paths([root],[BUILD_ROOT])
 disk=os.statvfs('/home/mikers');assert disk.f_bavail*disk.f_frsize>=50*1024**3
 assert os.getloadavg()[0]<4
 mem={l.split(':')[0]:int(l.split()[1])*1024 for l in pathlib.Path('/proc/meminfo').read_text().splitlines() if ':' in l}

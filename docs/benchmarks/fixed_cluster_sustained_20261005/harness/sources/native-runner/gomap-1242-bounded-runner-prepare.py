@@ -8,7 +8,8 @@ import sys
 # Reuse the already exercised runner envelope; only the frozen source and commands change.
 p = pathlib.Path(sys.argv[1])
 cfg = json.loads((p / 'config.json').read_text())
-template = pathlib.Path('/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1')
+template = pathlib.Path(__file__).resolve().parent
+original_base = '/home/mikers/gomap-1242-v4-assigned-owner-semantic-red-root-v1'
 assert p.is_absolute() and (p / 'source').is_dir()
 assert not (p / 'run.started').exists()
 for name in ('receipts', 'go-tmp'):
@@ -22,10 +23,10 @@ cfg['source_inventory_sha256'] = hashlib.sha256((p / 'source-inventory.json').re
 cfg['source_files'] = len(inventory)
 cfg['runner_host'] = '192.168.0.111'
 (p / 'config.json').write_text(json.dumps(cfg, indent=2) + '\n')
-run = (template / 'run.sh').read_text().replace(str(template), str(p))
+run = (template / 'run.sh').read_text().replace(original_base, str(p))
 run = run.replace('gomap-1242-v4-assigned-red-', cfg['unit_prefix'])
 run = run.replace('300s systemd-run', str(cfg['outer_timeout_seconds']) + 's systemd-run')
-inner = (template / 'inner.sh').read_text().replace(str(template), str(p))
+inner = (template / 'inner.sh').read_text().replace(original_base, str(p))
 prefix = inner.split('set +e\n', 1)[0]
 steps = ['result=0\n']
 for i, command in enumerate(cfg['go_commands']):
