@@ -5,6 +5,7 @@ from pathlib import Path
 import statistics
 from protocol import command, config, digest, identity, label, need, row, schedule, sha, write
 from collect import host_gate
+from build import verify_git_receipt
 
 def summary(values):
     low, high = min(values), max(values)
@@ -23,6 +24,7 @@ def main():
     for key, file in (("config_sha256", "config.json"), ("receipts_sha256", "receipts.json"), ("script_identity_sha256", "script-identity.json")):
         need(sha(packet / file) == completion[key], "packet identity mismatch " + file)
     script_hashes = json.loads((packet / "script-identity.json").read_text())
+    need(set(script_hashes) == {"protocol.py", "collect.py", "analyze.py", "build.py"}, "missing/extra retained tooling scripts")
     for name, value in script_hashes.items():
         need(sha(packet / name) == value, "collector/analyzer script drift")
     for variant in ("baseline", "candidate"):
@@ -33,7 +35,7 @@ def main():
         need(build["binary_sha256"] == declaration["binary_sha256"] and build["source_tree_sha256"] == declaration["source_tree_sha256"], "unbound build receipt")
         need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "build controls drift")
         artifacts = json.loads((packet / (variant + "-build-artifacts.json")).read_text())
-        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs"}
+        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source"}
         need(set(artifacts) == set(build["artifacts"]) == required, "missing/extra build provenance map")
         for name, artifact in artifacts.items():
             need(artifact["path"] == variant + "-" + name + ".raw" and artifact["sha256"] == build["artifacts"][name]["sha256"], "artifact receipt binding drift")
@@ -41,6 +43,11 @@ def main():
         observed = identity(packet / (variant + "-source-manifest.json"))
         need(observed == json.loads((packet / (variant + "-identity.json")).read_text()), "source identity drift")
         need(observed["manifest_sha256"] == declaration["manifest_sha256"] and observed["tree_sha256"] == declaration["source_tree_sha256"], "unbound source manifest")
+        need(observed["original_manifest"]["git_head"] == declaration["production_commit"] and observed["original_manifest"]["git_tree"] == declaration["production_git_tree"], "unbound production Git revision/tree")
+        verify_git_receipt(None, observed["original_manifest"], json.loads((packet / (variant + "-git_source.raw")).read_text()))
+        source_files = {item["path"]: item["sha256"] for item in observed["files"]}
+        for name, value in script_hashes.items():
+            need(source_files.get("scripts/cow_c3_read/" + name) == value, "retained tooling differs from frozen source: " + name)
         need(not json.loads((packet / (variant + "-source-before.json")).read_text())["drift"], "initial source drift")
         need(not json.loads((packet / (variant + "-build-source-after.json")).read_text())["drift"], "build source-after drift")
     receipts = json.loads((packet / "receipts.json").read_text())
@@ -65,6 +72,7 @@ def main():
             name_prefix = name + "-" + direction
             captured = json.loads((packet / (name_prefix + "-host.json")).read_text())
             need(captured == r[direction], "host receipt mismatch")
+            need(captured["source_path"] == c["variants"][r["variant"]]["source"], "host source path mismatch")
             host_gate(captured, c["host"])
             for source in ("meminfo", "cpuinfo", "mounts", "processes"):
                 need(sha(packet / (name_prefix + "-" + source + ".txt")) == captured[source + "_sha256"], "host snapshot drift")

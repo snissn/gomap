@@ -60,7 +60,7 @@ def draft():
                 "writer_records_per_call": 1 if workload == "point" else 4,
                 "concurrency": workload == "concurrent", "clock_calls_retained": True,
                 "read_overlap_is_internal_preparation_proof": False}})
-    variants = {v: {"production_commit": None, "source": None, "manifest": None, "manifest_sha256": None,
+    variants = {v: {"production_commit": None, "production_git_tree": None, "source": None, "manifest": None, "manifest_sha256": None,
         "source_tree_sha256": None, "binary": None, "binary_sha256": None,
         "build_receipt": None, "build_receipt_sha256": None} for v in ("baseline", "candidate")}
     return {"schema": SCHEMA, "status": "draft-unfrozen", "coordinator_acceptance": None,
@@ -68,9 +68,9 @@ def draft():
         "order": ["baseline", "candidate", "candidate", "baseline"], "timeout_seconds": 300,
         "go_binary": None, "go_binary_sha256": None, "go_version": None,
         "environment": {"GOMAXPROCS": "4", "GOWORK": "off", "GOROOT": None,
-            "GOGC": "100", "GOMEMLIMIT": "off", "GOFLAGS": "", "GOCACHE": None, "GOMODCACHE": None},
+            "GOGC": "100", "GOMEMLIMIT": "off", "GOFLAGS": "", "GOCACHE": None, "GOMODCACHE": None, "TMPDIR": None},
         "host": {"system": "Linux", "node": None, "machine": "x86_64", "release": None,
-            "cpu_count": None, "max_load1": None, "max_load5": None, "min_free_bytes": None},
+            "cpu_count": None, "max_load1": None, "max_load5": None, "min_free_bytes": None, "tmpdir": None, "tmpdir_device": None},
         "noise_policy": {"max_spread_fraction": None, "material_regression_fraction": None,
             "minimum_effect_fraction": None, "exclusions": "none; retain and stop on contamination"},
         "comparison_metrics": ["ns/op", "B/op", "allocs/op", "writer_ops/s", "reader_ops/s"],

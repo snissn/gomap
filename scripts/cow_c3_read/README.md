@@ -39,6 +39,8 @@ GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
   > /tmp/cow-c3-fixture.stdout 2> /tmp/cow-c3-fixture.stderr
 python3 scripts/cow_c3_read/parser_smoke.py \
   --stdout /tmp/cow-c3-fixture.stdout --out /tmp/cow-c3-parser-smoke
+python3 scripts/cow_c3_read/config_storage_smoke.py --out /tmp/cow-c3-config-storage-smoke
+python3 scripts/cow_c3_read/git_source_smoke.py --out /tmp/cow-c3-git-source-smoke
 python3 scripts/cow_c3_read/watchdog_smoke.py --out /tmp/cow-c3-watchdog-smoke
 python3 scripts/cow_c3_read/analyzer_refusal_smoke.py --out /tmp/cow-c3-analyzer-refusal
 python3 scripts/cow_c3_read/build_module_smoke.py \
@@ -53,7 +55,8 @@ rejects incomplete or changed provenance; it does not fabricate successful
 benchmark packets. Output directories must be new.
 
 `prepare_config.py --out <draft.json>` produces a deliberately non-runnable
-draft. Freeze exact leaf names, counters, workload, timeout, environment,
+draft. Each exact leaf and case ID is derived from its profile/mode/layout/workload;
+mislabeled, duplicate, missing or extra cells refuse. Freeze counters, workload, timeout, environment,
 toolchain, host admission and spread/regression/effect thresholds before
 seeing matched timings. Default scheduling is separate 128x warmups and three
 ABBA cycles at 1024x: 108 warmups and 648 measurements, 756 fresh processes.
@@ -62,7 +65,20 @@ source/workload-aware disposition; the analyzer cannot accept a change.
 
 Build ordinary test binaries from immutable source directories with the same
 fixture on both variants. `build.py` requires explicit GOROOT, GOCACHE,
-GOMODCACHE, GOWORK=off, GOMAXPROCS=4, GOGC, GOMEMLIMIT and empty GOFLAGS controls.
+GOMODCACHE, GOWORK=off, GOMAXPROCS=4, GOGC, GOMEMLIMIT, empty GOFLAGS and
+TMPDIR controls. TMPDIR must be an existing owned real directory outside source
+and build/packet output. Freeze its absolute path and actual filesystem device
+in host.tmpdir/tmpdir_device; all Go builds and benchmark databases use it.
+Free-space admission checks this database-temp filesystem; source filesystem
+path/device/free-space are retained separately.
+The builder requires a Git repository containing the declared commit/tree.
+It reads actual commit/tree objects with replacement objects disabled and verifies
+the complete exported source against every Git blob, path and Git executable mode.
+Wrong revisions, dirty exports, missing/extra paths, symlinks and mode changes
+refuse before Go. A retained object proof binds commit to tree to the complete
+manifest; collection rechecks actual source bytes, while offline analysis verifies
+that object proof without requiring the original repository. The proof does not
+replace the retained source-byte and compiled-input audit.
 Its output stays outside source and retains full source manifests, actual
 go env/module graph/compiled dependencies/build streams/buildinfo, complete
 compiled input hashes and explicitly missing transient generated inputs.
@@ -78,6 +94,7 @@ require separate frozen-source support and currently refuse.
 
 ```sh
 python3 scripts/cow_c3_read/build.py --source <immutable-source> \
+  --git-repository <repository-containing-objects> \
   --git-head <commit> --git-tree <tree> --controls <controls.json> --out <new-build-dir>
 python3 scripts/cow_c3_read/collect.py --config <frozen-approved.json> --out <new-packet>
 python3 <new-packet>/analyze.py <new-packet>
@@ -94,8 +111,9 @@ bounded grace; Go's benchmark timeout alone is insufficient. Child elapsed,
 CPU and maximum RSS exclude collector postchecks and hashing. RSS is Linux
 wait4 ru_maxrss in KiB and covers setup/Close, separately from Go timed B/op.
 
-The offline analyzer binds accepted build receipts, all nine provenance
-artifacts, source manifests, scripts, raw streams, exact schedule and equal
+The offline analyzer binds accepted build receipts, all ten provenance
+artifacts (including Git-object source authority), source manifests, scripts,
+raw streams, exact schedule and equal
 declared logical work. It retains all six measured samples per variant and
 three cycle means and makes a descriptive comparison, with no statistical
 significance claim. Observed source/host receipts remain observations, not an
