@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from prepare_config import draft
-from protocol import C3_FIXTURE, identity, process_environment, sha, write
+from protocol import C3_FIXTURE, identity, process_environment, sha, write, validate_toolchain
 from build import git_source_authority
 
 def main():
@@ -26,6 +26,11 @@ def main():
     config["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/gopath/pkg/mod", TMPDIR=str(root))
     config["host"].update(node="synthetic", machine="x86_64", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(root), tmpdir_device=root.stat().st_dev)
     config["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
+    toolchain = {"go_binary_sha256": "4" * 64, "executables": [
+        {"path": "pkg/tool/linux_amd64/" + name, "sha256": "5" * 64, "bytes": 1, "mode": 0o755}
+        for name in ("asm", "compile", "link")]}
+    config.update(go_binary="/synthetic/go/bin/go", go_binary_sha256=toolchain["go_binary_sha256"],
+                  go_version="synthetic Go version", toolchain_identity=validate_toolchain(toolchain))
     # Real tiny Git objects exercise offline provenance without pretending the
     # deliberately incomplete packet is a product measurement.
     repository, exported = root / "tiny-git-repository", root / "tiny-export"
@@ -47,28 +52,37 @@ def main():
         for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
             shutil.copyfile(scripts / name, target / name)
     git("add", "."); git("commit", "-qm", "Protocol refusal input")
-    head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
-    git_manifest, git_receipt = git_source_authority(exported, repository, head, tree)
     config["fixtures"][0]["sha256"] = sha(exported / C3_FIXTURE)
-    for variant in ("baseline", "candidate"):
+    for index, variant in enumerate(("baseline", "candidate"), 1):
+        if variant == "candidate":
+            for source in (repository, exported):
+                (source / "fixture.go").write_text("distinct synthetic candidate input\n")
+            git("add", "."); git("commit", "-qm", "Distinct refusal candidate")
+        head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+        git_manifest, git_receipt = git_source_authority(exported, repository, head, tree)
         declaration = config["variants"][variant]
-        declaration.update(production_commit=head, production_git_tree=tree, source="/synthetic/" + variant, binary="/synthetic/" + variant + ".test", binary_sha256="2" * 64)
+        declaration.update(production_commit=head, production_git_tree=tree, source="/synthetic/" + variant,
+                           binary="/synthetic/" + variant + "-build/mvcc.test", binary_sha256=str(index) * 64)
         manifest = original / (variant + "-source-manifest.json")
         write(manifest, git_manifest)
         bound = identity(manifest)
-        declaration.update(manifest=str(manifest), manifest_sha256=sha(manifest), source_tree_sha256=bound["tree_sha256"])
+        declaration.update(manifest="/synthetic/" + variant + "-build/source-manifest.json", manifest_sha256=sha(manifest), source_tree_sha256=bound["tree_sha256"])
         write(original / (variant + "-identity.json"), bound)
         write(original / (variant + "-source-before.json"), {"drift": []})
         write(original / (variant + "-build-source-after.json"), {"drift": []})
-        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source"}
+        required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "generated_nonpersistent_inputs", "git_source", "toolchain"}
         retained, artifacts = {}, {}
         for name in sorted(required):
             path = original / (variant + "-" + name + ".raw")
             if name == "git_source":
                 write(path, git_receipt)
+            elif name == "toolchain":
+                write(path, toolchain)
+            elif name == "compiled_dependencies":
+                write(path, {"ImportPath": "synthetic/no-cgo", "GoFiles": ["fixture.go"]})
             elif name == "go_env":
                 effective = process_environment(config["environment"])
-                write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH")}, "GOENV": "", "GOOS": "linux", "GOARCH": "amd64"})
+                write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH", "CGO_ENABLED")}, "GOENV": "", "GOOS": "linux", "GOARCH": "amd64"})
             else:
                 path.write_text("synthetic-refusal-input " + name + "\n")
             retained[name] = {"path": path.name, "sha256": sha(path)}
@@ -76,8 +90,10 @@ def main():
         write(original / (variant + "-build-artifacts.json"), retained)
         receipt = original / (variant + "-build-receipt.json")
         write(receipt, {"binary_sha256": declaration["binary_sha256"], "source_tree_sha256": declaration["source_tree_sha256"],
-                        "environment": config["environment"], "effective_process_environment": process_environment(config["environment"]), "race": False, "build_tags": [], "artifacts": artifacts})
-        declaration.update(build_receipt=str(receipt), build_receipt_sha256=sha(receipt))
+                        "environment": config["environment"], "effective_process_environment": process_environment(config["environment"]),
+                        "go_version": config["go_version"], "go_binary_sha256": config["go_binary_sha256"], "toolchain_identity": config["toolchain_identity"],
+                        "race": False, "build_tags": [], "artifacts": artifacts})
+        declaration.update(build_receipt="/synthetic/" + variant + "-build/build-receipt.json", build_receipt_sha256=sha(receipt))
     write(original / "config.json", config)
     write(original / "environment.json", {"effective_controls": config["environment"], "effective_process_environment": process_environment(config["environment"])})
     write(original / "receipts.json", [])
@@ -103,10 +119,10 @@ def main():
         completion["config_sha256"] = sha(packet / "config.json")
         write(packet / "completion.json", completion)
 
-    def damage_go_environment(packet):
+    def damage_go_environment(packet, key="GOENV", setting="/synthetic/persisted-goenv"):
         raw = packet / "baseline-go_env.raw"
         value = json.loads(raw.read_text())
-        value["GOENV"] = "/synthetic/persisted-goenv"
+        value[key] = setting
         write(raw, value)
         artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
         artifacts["go_env"]["sha256"] = sha(raw)
@@ -125,6 +141,45 @@ def main():
         completion["config_sha256"] = sha(packet / "config.json")
         write(packet / "completion.json", completion)
 
+    def damage_toolchain(packet):
+        raw = packet / "baseline-toolchain.raw"
+        value = json.loads(raw.read_text())
+        value["executables"][1]["sha256"] = "6" * 64
+        write(raw, value)
+        artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
+        artifacts["toolchain"]["sha256"] = sha(raw)
+        write(packet / "baseline-build-artifacts.json", artifacts)
+        receipt = packet / "baseline-build-receipt.json"
+        build = json.loads(receipt.read_text())
+        build["artifacts"]["toolchain"]["sha256"] = sha(raw)
+        build["toolchain_identity"] = validate_toolchain(value)
+        write(receipt, build)
+        rebind_receipt(packet, receipt)
+
+    def damage_build_toolchain(packet, key, value):
+        receipt = packet / "baseline-build-receipt.json"
+        build = json.loads(receipt.read_text()); build[key] = value
+        write(receipt, build); rebind_receipt(packet, receipt)
+
+    def damage_compiled_cgo(packet):
+        raw = packet / "baseline-compiled_dependencies.raw"
+        write(raw, {"ImportPath": "synthetic/cgo", "CgoFiles": ["fixture.go"]})
+        artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
+        artifacts["compiled_dependencies"]["sha256"] = sha(raw)
+        write(packet / "baseline-build-artifacts.json", artifacts)
+        receipt = packet / "baseline-build-receipt.json"
+        build = json.loads(receipt.read_text())
+        build["artifacts"]["compiled_dependencies"]["sha256"] = sha(raw)
+        write(receipt, build); rebind_receipt(packet, receipt)
+
+    def damage_same_product(packet):
+        frozen = json.loads((packet / "config.json").read_text())
+        frozen["variants"]["candidate"] = copy.deepcopy(frozen["variants"]["baseline"])
+        write(packet / "config.json", frozen)
+        completion = json.loads((packet / "completion.json").read_text())
+        completion["config_sha256"] = sha(packet / "config.json")
+        write(packet / "completion.json", completion)
+
     cases = [
         ("incomplete-runs", None, "missing/extra runs"),
         ("empty-map", lambda packet: write(packet / "baseline-build-artifacts.json", {}), "missing/extra build provenance map"),
@@ -137,7 +192,13 @@ def main():
         ("captured-process-environment", lambda packet: write(packet / "environment.json", {}), "captured process environment mismatch"),
         ("build-process-environment", damage_build_environment, "build process environment mismatch"),
         ("actual-go-environment", damage_go_environment, "actual go env mismatch GOENV"),
+        ("actual-go-cgo-enabled", lambda p: damage_go_environment(p, "CGO_ENABLED", "1"), "actual go env mismatch CGO_ENABLED"),
         ("wrong-frozen-fixture", damage_fixture, "fixture differs from frozen source"),
+        ("same-product", damage_same_product, "distinct production_commit"),
+        ("rehashed-toolchain", damage_toolchain, "Go toolchain inventory mismatch"),
+        ("rehashed-go-version", lambda p: damage_build_toolchain(p, "go_version", "different"), "toolchain mismatch"),
+        ("rehashed-go-launcher", lambda p: damage_build_toolchain(p, "go_binary_sha256", "7" * 64), "toolchain mismatch"),
+        ("rehashed-compiled-cgo", damage_compiled_cgo, "compiled Cgo inputs forbidden"),
     ]
     results = []
     for label, mutation, expected in cases:
