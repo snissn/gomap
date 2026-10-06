@@ -2,7 +2,7 @@ from source_paths import source_path, isolate_paths
 """Root-owned Trial24 read-only bootstrap preflight; inert on import."""
 import argparse,hashlib,importlib.util,json,pathlib,shlex,subprocess,time,os
 PLAN_MODULE=source_path('/tmp/gomap-5021-sustained-consumers-provisional-root-v1/gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py')
-PLAN_SHA='94e1506fc3f5648df9082fd44ddeebf69eb6550d109afa85a2ac22e25be6536b'
+PLAN_SHA='d6cc1986fab0d10e9ef8f9e9a474ad62f98b7c572c23540f5925e71ba2366403'
 def main():
  assert __debug__
  q=argparse.ArgumentParser()

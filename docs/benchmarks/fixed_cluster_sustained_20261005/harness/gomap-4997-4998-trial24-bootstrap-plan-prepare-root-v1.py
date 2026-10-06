@@ -12,6 +12,17 @@ def read(path,digest=None):
 
 PRODUCT_PATHS={'build':'__ROOT_FROZEN_BUILD_PATH__','images':'__ROOT_FROZEN_IMAGES_PATH__','source_acceptance':'__ROOT_FROZEN_ACCEPTANCE_PATH__'}
 PRODUCT_SHA={'build':'__ROOT_FROZEN_BUILD_SHA__','images':'__ROOT_FROZEN_IMAGES_SHA__','source_acceptance':'__ROOT_FROZEN_ACCEPTANCE_SHA__'}
+def elf_identity(records):
+ # Build-only locators/tool evidence remain authenticated by the raw proof SHA.
+ # Packaging retains the executable identity projection, not build metadata.
+ assert set(records)=={'treedb-fixed-peer','treedb-query-under-write'}
+ identity={}
+ for name,record in records.items():
+  digest=record['sha256'];size=record['bytes']
+  assert isinstance(digest,str) and re.fullmatch('[0-9a-f]{64}',digest) and digest!='0'*64
+  assert type(size) is int and size>0
+  identity[name]={'sha256':digest,'bytes':size}
+ return identity
 def product_tuple(buildraw,imagesraw,acceptanceraw):
  assert hashlib.sha256(buildraw).hexdigest()==PRODUCT_SHA['build']
  assert hashlib.sha256(imagesraw).hexdigest()==PRODUCT_SHA['images']
@@ -23,7 +34,8 @@ def product_tuple(buildraw,imagesraw,acceptanceraw):
  assert build['source_inventory_sha256']==images['source_inventory_sha256']==accept['source_inventory_sha256']=='__ROOT_FROZEN_INVENTORY_SHA__'
  assert images['state']=='BOTH_HOSTS_PACKAGED_NOT_RUNTIME' and images['build_proof_sha256']==PRODUCT_SHA['build']
  assert accept['outcome']=='ACCEPT' and accept['landed_source_verified'] is True and accept['required_ci_passed'] is True and len(accept['underlying_reviews'])>=2
- server=build['ELFs']['treedb-fixed-peer']['sha256'];driver=build['ELFs']['treedb-query-under-write']['sha256']
+ identity=elf_identity(build['ELFs'])
+ server=identity['treedb-fixed-peer']['sha256'];driver=identity['treedb-query-under-write']['sha256']
  assert server=='__ROOT_FROZEN_SERVER_SHA__' and driver=='__ROOT_FROZEN_DRIVER_SHA__'
  assert set(images['images'])=={'111','185'}
  hosts={}
@@ -31,7 +43,7 @@ def product_tuple(buildraw,imagesraw,acceptanceraw):
   row=images['images'][host]
   assert row['host']=='192.168.0.'+host and row['state']=='SOURCE_VERIFIED_ELFS_PACKAGED_NO_CLUSTER_QUALIFICATION'
   assert row['head']==build['head'] and row['tree']==build['tree'] and row['source_inventory_sha256']==build['source_inventory_sha256']
-  assert row['ELFs']==build['ELFs'] and row['parent_unchanged'] is True and row['stores_mounted'] is False
+  assert elf_identity(row['ELFs'])==identity and row['parent_unchanged'] is True and row['stores_mounted'] is False
   hosts[host]=row['image']
  assert hosts=={'111':'__ROOT_FROZEN_IMAGE111__','185':'__ROOT_FROZEN_IMAGE185__'}
  return {'state':'VERIFIED_BUILD_FROM_FROZEN_SOURCE','head':build['head'],'tree':build['tree'],'source_inventory_sha256':build['source_inventory_sha256'],'server_sha256':server,'driver_sha256':driver,'server_images':{'node-a':hosts['111'],'node-b':hosts['111'],'node-c':hosts['185'],'node-d':hosts['185']},'driver_image':hosts['185'],'source_verified_before_after':True}

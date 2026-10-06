@@ -90,7 +90,29 @@ bad('actual_external_exit_raw_hash_mismatch',lambda:exit_guard(b'0\n','0'*64))
 fixtures=args.fixtures_root or R/'synthetic-final-pin-fixtures'
 fixtures.mkdir(exist_ok=True)
 head,tree='1'*40,'2'*40
-objects={'source_inventory':{'head':head,'tree':tree,'rows':[{'path':'synthetic.go','mode':'100644','git_blob':'3'*40}],'overlays':{}},'build':{'head':head,'tree':tree,'source_inventory_sha256':None,'state':'VERIFIED_ELFS_NOT_IMAGES_OR_RUNTIME','source_verified_before_after':True,'ELFs':{'treedb-fixed-peer':{'sha256':'4'*64,'bytes':100},'treedb-query-under-write':{'sha256':'5'*64,'bytes':200}}},'images':{'head':head,'tree':tree,'source_inventory_sha256':None},'source_prereview':{'decision':'ACCEPT','candidate_head':head,'candidate_tree':tree}}
+# Produce distinct ELF receipt schemas from the actual inert adapter seams.
+build_adapter_ast=ast.parse((R/'root-adapters/runtime-build-prepare-root-v1.py').read_bytes())
+build_main=next(n for n in build_adapter_ast.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+finish_assignment=next(n for n in build_main.body if isinstance(n,ast.Assign) and isinstance(n.targets[0],ast.Name) and n.targets[0].id=='finish')
+finish_ast=ast.parse(ast.literal_eval(finish_assignment.value.right))
+build_elf_assignment=next(n for n in ast.walk(finish_ast) if isinstance(n,ast.Assign) and any(isinstance(t,ast.Subscript) and isinstance(t.value,ast.Name) and t.value.id=='out' for t in n.targets))
+image_adapter_ast=ast.parse((R/'root-adapters/runtime-images-prepare-root-v1.py').read_bytes())
+image_main=next(n for n in image_adapter_ast.body if isinstance(n,ast.FunctionDef) and n.name=='main')
+projection_loop=next(n for n in image_main.body if isinstance(n,ast.For) and isinstance(n.iter,ast.Call) and isinstance(n.iter.func,ast.Attribute) and isinstance(n.iter.func.value,ast.Subscript) and isinstance(n.iter.func.value.value,ast.Name) and n.iter.func.value.value.id=='proof')
+synthetic_build_root=fixtures/'synthetic-only-build-receipts';synthetic_build_root.mkdir()
+synthetic_build_elves={}
+for name,size in [('treedb-fixed-peer',128),('treedb-query-under-write',256)]:
+ path=synthetic_build_root/name;rawelf=(b'\x7fELF_SYNTHETIC_ONLY_'+name.encode()).ljust(size,b'0');path.write_bytes(rawelf)
+ metadata={'file':{'exit':0,'stdout':str(path)+': ELF 64-bit LSB executable, x86-64; SYNTHETIC TOOL OUTPUT','stderr':''},'ldd':{'exit':1,'stdout':'','stderr':'not a dynamic executable; SYNTHETIC TOOL OUTPUT'},'go-version-m':{'exit':0,'stdout':str(path)+': go1.26.0\n\tpath\tgithub.com/snissn/gomap/cmd/'+name+'\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n','stderr':''}}
+ ns={'out':synthetic_build_elves,'name':name,'p':path,'rawelf':rawelf,'meta':metadata,'hashlib':hashlib}
+ exec(compile(ast.Module(body=[build_elf_assignment],type_ignores=[]),'actual-build-ELF-receipt-emission','exec'),ns)
+def actual_image_projection(elves):
+ ns={'proof':{'ELFs':elves},'ELFS':{},'BUILD':str(synthetic_build_root),'args':type('SyntheticArgs',(),{'go_version':'go1.26.0'})(),'re':re}
+ exec(compile(ast.Module(body=[projection_loop],type_ignores=[]),'actual-image-ELF-validation-and-projection','exec'),ns)
+ return ns['ELFS']
+synthetic_image_elves=actual_image_projection(synthetic_build_elves)
+assert synthetic_image_elves!=synthetic_build_elves
+objects={'source_inventory':{'head':head,'tree':tree,'rows':[{'path':'synthetic.go','mode':'100644','git_blob':'3'*40}],'overlays':{}},'build':{'head':head,'tree':tree,'source_inventory_sha256':None,'state':'VERIFIED_ELFS_NOT_IMAGES_OR_RUNTIME','source_verified_before_after':True,'ELFs':synthetic_build_elves},'images':{'head':head,'tree':tree,'source_inventory_sha256':None},'source_prereview':{'decision':'ACCEPT','candidate_head':head,'candidate_tree':tree}}
 def fixture(name,obj):
  path=fixtures/(name+'.json');raw=json.dumps(obj).encode();path.write_bytes(raw);return {'path':str(path),'sha256':sha(raw)}
 d={'Version':1,'campaign':m['campaign'],'workload':m['workload'],'source_head':head,'source_tree':tree,'source_root':str(fixtures/'trial24-protected-product'),'RootAcceptedFinalSourcePins':True,'output_root':'/tmp/synthetic-trial24-output-not-created'}
@@ -99,7 +121,7 @@ for k in ('build','images'):objects[k]['source_inventory_sha256']=d['source_inve
 d['build']=fixture('build',objects['build'])
 objects['images'].update(state='BOTH_HOSTS_PACKAGED_NOT_RUNTIME',build_proof_sha256=d['build']['sha256'],images={})
 for host in ('111','185'):
- objects['images']['images'][host]={'state':'SOURCE_VERIFIED_ELFS_PACKAGED_NO_CLUSTER_QUALIFICATION','host':'192.168.0.'+host,'image':'sha256:'+'7'*64,'parent_unchanged':True,'stores_mounted':False,'ELFs':copy.deepcopy(objects['build']['ELFs']),'head':head,'tree':tree,'source_inventory_sha256':d['source_inventory']['sha256']}
+ objects['images']['images'][host]={'state':'SOURCE_VERIFIED_ELFS_PACKAGED_NO_CLUSTER_QUALIFICATION','host':'192.168.0.'+host,'image':'sha256:'+'7'*64,'parent_unchanged':True,'stores_mounted':False,'ELFs':copy.deepcopy(synthetic_image_elves),'head':head,'tree':tree,'source_inventory_sha256':d['source_inventory']['sha256']}
 reviews=[fixture('synthetic-independent-review-'+str(i),{'synthetic_only':True,'decision':'ACCEPT','candidate_head':head,'candidate_tree':tree,'findings':[],'reviewer':'synthetic-independent-'+str(i)}) for i in range(2)]
 landing=fixture('synthetic-landing',{'synthetic_only':True,'state':'LANDED_SOURCE_TREE_VERIFIED','runtime_head':head,'runtime_tree':tree,'merge_commit':'9'*40,'source_inventory_sha256':d['source_inventory']['sha256']})
 ci=fixture('synthetic-ci',{'synthetic_only':True,'head':head,'required_ci_passed':True,'checks':[{'name':'synthetic-required','conclusion':'SUCCESS','details_url':'https://github.com/synthetic-only/fixtures/actions/runs/1'}]})
@@ -535,5 +557,7 @@ for label,target in cases:
 exec(compile((R/'receipt_closure_checks.py').read_bytes(),'receipt_closure_checks.py','exec'))
 
 exec(compile((R/'cumulative_workload_checks.py').read_bytes(),str(R/'cumulative_workload_checks.py'),'exec'))
+
+exec(compile((R/'elf_schema_checks.py').read_bytes(),str(R/'elf_schema_checks.py'),'exec'))
 
 print(json.dumps({'state':'AUTHOR_SYNTHETIC_SOURCE_CHECKS_PASS_NOT_INDEPENDENT_REVIEW','checks':checks,'count':len(checks),'runtime_started':False,'network_calls':0,'Go_started':False,'source_head':None,'source_tree':None,'limitations':['No actual final source pins, full native49-prefix run, timing/cap qualification, audit acquisition or campaign exists.','Guard shape fixture is synthetic; native Go remains sole ranking authority.']},indent=2))

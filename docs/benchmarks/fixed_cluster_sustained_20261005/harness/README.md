@@ -192,3 +192,10 @@ and evidence retain their identities and cannot become 48-original evidence.
 The 48-original contract remains provisional until the generic product admission
 correction lands. All 49 native canonical prefixes and all 48 witnesses remain
 required. The even count preserves the final population of 10002.
+
+The bootstrap product tuple compares exact ELF names and validated SHA-256/positive
+integer byte pairs. Build paths and file/ldd/Go metadata remain in the original
+raw-pinned build proof; packaged image records retain their two-field identity
+projection. The pure fixtures execute the actual adapter emission and validated
+projection seams before exercising the bootstrap, freezer and growth/post joins.
+These controlled tool outputs and synthetic bytes grant no build or image authority.

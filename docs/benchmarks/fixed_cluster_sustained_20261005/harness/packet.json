@@ -127,10 +127,11 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-plan-prepare-root-v1.py",
-        "sha256": "94e1506fc3f5648df9082fd44ddeebf69eb6550d109afa85a2ac22e25be6536b"
+        "sha256": "d6cc1986fab0d10e9ef8f9e9a474ad62f98b7c572c23540f5925e71ba2366403"
       },
       "changes": [
-        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
+        "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
+        "Authenticate original receipts before comparing exact two ELF names and validated SHA/positive integer byte identity projections; build paths/tool metadata remain raw-pinned"
       ]
     },
     "bootstrap_preflight": {
@@ -140,7 +141,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-preflight-prepare-root-v1.py",
-        "sha256": "a25e448fd9a705ad555e647b23886569bb71b26d31288a6e9c3b0f5d37f62d04"
+        "sha256": "67d7f719fbe8ad9ab7f97a995b52795680bbde40de2f1af949e9fb1d37926679"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -153,7 +154,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-bootstrap-lifecycle-prepare-root-v1.py",
-        "sha256": "0bdc5f59753d325e05f1ec9a40a54853a360581712776db3eae0a57a207dcc8b"
+        "sha256": "6a9c4f996fb805494a4359b0e6d6fbc40ef8c588f92da839e74ccb799834dee7"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)"
@@ -166,7 +167,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-pre-input-freeze-root-v1.py",
-        "sha256": "48ba071878ecc91b20bd3bc84724214cda5d3f08d18c8761c2cdcefb9440d379"
+        "sha256": "4de4b8de24be1e995618fbb01d18b7bd3d35c01dd002ffea2c855b766e13a73e"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -180,7 +181,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-growth-prepare-root-v1.py",
-        "sha256": "dcbd2f86db98a307071ed17c3f3d43190f5040ce874b055dd190841e0290b1ab"
+        "sha256": "d2a7a95af94e719eb3f1d10c6d1ca457fae65be30b7261905fa02fe1d0138c19"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
@@ -194,7 +195,7 @@
       },
       "output": {
         "path": "gomap-4997-4998-trial24-post-input-manifest-prepare-root-v1.py",
-        "sha256": "6545cb65575352785897c80ccbbd73c89bed19bece02758a3dc8b482c66b1310"
+        "sha256": "6dd95a068e3434f4477d6a2c1a842c3bd9b1a26ab14a4a1c7dbc49718577017c"
       },
       "changes": [
         "Trial24 namespace; computed direct dependency path/hash pins; final source placeholders (where present)",
