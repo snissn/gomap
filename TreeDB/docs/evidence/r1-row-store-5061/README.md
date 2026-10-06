@@ -5,6 +5,9 @@ and [parent #5056](https://github.com/snissn/gomap/issues/5056). **No retained
 measurement, performance acceptance, or overall R1 qualification is recorded
 here.** The coordinator fills this report from validated source-bound packets
 after reviewed tooling has landed. Pending means missing evidence, never zero.
+The B/C/D product and tooling integration is packaged in
+[PR #5065](https://github.com/snissn/gomap/pull/5065); their acceptance obligations
+remain separate. Packaging does not complete the pending E evidence gate.
 
 The authoritative behavior and measurement scopes are the
 [selected comparator contract](../../spec/r1-indexed-row-contract.md),
@@ -154,7 +157,8 @@ separately measured and source-bound.
 | Index / persistent value-log / leaf-log / typed-asset / other logical bytes | Pending, per ingest/churn/checkpoint/maintenance/release/reopen phase |
 | Redo WAL and SQLite transient WAL-index bytes | Pending, separate from persistent payload |
 | Checkpoint / maintenance / post-release GC duration | Pending, separate from timed mixed calls |
-| Overlay work, typed rewrite debt, protected/retained/reclaimable bytes | Pending, actual aggregate attribution |
+| Logical history fold, overlay work, typed rewrite debt, protected/retained/reclaimable bytes | Pending, actual aggregate attribution |
+| Same-live direct-backend index vacuum work and before/after census | Pending; cached-wrapper overhead excluded |
 | Value-log active/pending/referenced/protected/deleted classes | Pending; overlapping classes cannot be summed as unique storage |
 | Old warmed views, release, command-WAL cuts, final reopen | Pending accepted correctness record and source binding |
 
@@ -164,13 +168,23 @@ Lawful retention is not automatic evidence of a leak; it also does not explain
 every increase. Any unexplained growth or failed maintenance gets an explicit
 finding, owner, and next causal check. Reader release, no-op maintenance, successful
 rewrite/remap, and actual deleted bytes are separate facts. The lifecycle
-benchmark's GC observations do not replace the correctness tests' typed rewrite
-and lawful reclamation proof. Existing resource-closure owners retain authority;
+benchmark's maintenance observations do not replace the correctness tests' typed
+rewrite and lawful reclamation proof. Logical latest-row folding and reset
+mutation parts do not establish physically bounded storage. A partially live
+value/leaf segment needs eligible rewrite/packing rather than whole-segment GC.
+The example/comparator use the public cached-leaf native opener; the lifecycle
+fixture is a direct durable command-WAL backend with background prune disabled.
+Its same-live backend index vacuum excludes cached-wrapper checkpoint/reconcile
+overhead and does not qualify high-level `CompactStorage` cost or route
+equivalence. Fill the actual eligibility/refusal, recovery/pin retention,
+completed work, and component census from the
+[canonical lifecycle scope](../../spec/r1-row-lifecycle.md).
+Existing resource-closure owners retain authority;
 do not add an unconditional destructive shortcut to make a graph close.
 
 ## Coordinator filling checklist
 
-- [ ] Record accepted A/B/C/D merge snapshots, current-head required CI/reviews,
+- [ ] Record accepted A/B/C/D source snapshots and integrated merge, current-head required CI/reviews,
   exact correctness commands/logs, and example/guide acceptance.
 - [ ] Verify reviewed tooling landed, freeze both measured sources/harnesses, and
   validate every retained packet against independently frozen identities.

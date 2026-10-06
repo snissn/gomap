@@ -138,6 +138,28 @@ no-op does not establish reclaimed space. The
 [lifecycle spec](../spec/r1-row-lifecycle.md) describes the tested release,
 recovery-retention, and lawful reclamation boundaries.
 
+For the selected scalar layout, manual `Collection.ColumnStoreCompact` folds
+latest-visible live rows into one insert-only generation and resets logical
+mutation parts. It requires an eligible recovery-authoritative manifest and
+maintenance readiness; unsupported vector-graph state is refused. Inspect its
+actual row/part/ref statistics. A logical fold does not establish a physical
+storage bound or delete superseded segments. `ColumnAssetRewrite` can remap live
+refs out of eligible mixed segments; `ColumnAssetGC` can then reclaim only
+recovery-safe, unpinned candidates. Complete plans, rewrite debt, dry-run
+eligibility, checkpoint state, and retained/protected bytes determine useful
+work. Old views and selectable recovery roots remain protected.
+
+Backend value-log, leaf-log, and index maintenance are separate responsibilities.
+Whole-segment GC cannot shrink a partially live value/leaf segment; rewrite or
+leaf-generation packing is needed where eligible. Backend `DB.CompactStorage`
+provides high-level orchestration of rewrite, GC, leaf packing, index vacuum,
+and a final audit; `CompactStoragePlan` reports debt without performing that
+work. Use the documented ownership/readiness checks and respect refusal or
+retention rather than forcing reclamation. This orchestration is not a substitute
+for logical typed history folding or proof that this row workload is bounded.
+See the [value/leaf-log lifecycle](../spec/value-log-lifecycle.md) and the
+[R1 maintenance scope](../spec/r1-row-lifecycle.md).
+
 ## Interpret measurements
 
 The [R1 source-bound benchmark methodology](../spec/r1-indexed-row-contract.md)
@@ -146,5 +168,10 @@ output, setup/flush and materialization costs, repetitions/noise, and exact
 runtime/harness identities. The lifecycle spec defines a separate sustained
 diagnostic, its bounded repeated working set, timer scope, and maintenance
 attribution. Its packets are not interchangeable with the comparator matrix.
+The example and comparator use `OpenBackendWithCachedLeafLog`; the lifecycle
+benchmark uses a direct durable command-WAL backend with background prune
+disabled. Its same-live-backend `VacuumIndexOnlineWithStats` observation excludes
+cached-wrapper checkpoint/reconciliation overhead. It establishes neither route
+equivalence nor the cost of the high-level storage orchestration above.
 Use reviewed, landed tooling and frozen sources for retained evidence. This
 example and guide establish usage, with no measured speedup or capacity claim.
