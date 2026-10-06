@@ -140,3 +140,61 @@ production source, correctness, allocation and current-head CI/review gates.
 
 These standalone artifacts are not benchprof inputs. They do not change the
 profile-dir filenames or existing native-prune validator contracts.
+
+## C4 sustained public lifecycle
+
+The closed `--suite c4-sustained` dispatch shares the C3 builder, immutable Git
+source authority, compiled module validation, fixed child environment, host and
+TMPDIR admission, and process-group watchdog. C3 remains the default suite.
+`build.py` is unchanged. The full maintained fixture contract and allocation
+scope are in [cow-c4-sustained-evidence.md](../../TreeDB/docs/benchmarks/cow-c4-sustained-evidence.md).
+
+`prepare_c4_config.py` creates a non-runnable draft covering all 36 leaves.
+Freeze source/binary/fixture identities, the same explicit environment and host
+controls as C3, finite epochs (1..8), noise policy and coordinator acceptance.
+Set `result_class` to `construction` for one fresh candidate process per leaf,
+or `matched-supported-evidence` for separate baseline/candidate warmups and
+three ABBA cycles (504 processes). Both classes require both frozen build
+closures. Native requirements are typed `PENDING`, with whole public maintenance
+caps of 32 records and 1 MiB. Every packet retains the literal
+`pending_native_observations`; no successful packet promotes a product/native
+qualification.
+
+```sh
+python3 -B scripts/cow_c3_read/prepare_c4_config.py --out <draft.json>
+python3 -B scripts/cow_c3_read/collect.py --suite c4-sustained \
+  --config <frozen-approved.json> --out <new-packet>
+python3 -B <new-packet>/c4_analyze.py <new-packet>
+python3 -B scripts/cow_c3_read/c4_packet_smoke.py \
+  --positive <actual-successful-packet> --out <new-refusal-smoke>
+```
+
+The collector creates one explicit raw directory per child and passes it via
+`-cow-c4-public-output-dir`. Each actual invocation emits an immutable JSON
+receipt, including Go's initial 1x calibration and the requested finite count.
+The raw schema binds exact leaf, b.N, options, resolved profile/ACK, call input
+and output counts, call boundaries, all required engine counters, overlap,
+per-epoch public checkpoint/Close/reopen and complete oracle receipts. COW
+requires unchanged backend sequence within each epoch and advancement at its
+checkpoint; legacy snapshot-driven progress is observed with nonregression.
+Both retain the original seed pins across all checkpoints. Failed or partial
+lifecycles, extra files, missing/duplicate work, nonfinite values, counter
+regression and changed native claims refuse. File hashes and recomputed raw
+validation are bound to the ordinary benchmark row and full process receipt.
+
+`c4_analyze.py` calls the shared provenance validator using an explicit closed
+protocol and dependency selection. Its raw summary retains foreground call
+quantiles and the complete calibration/requested receipt list. Raw duration
+sums may overlap and are not elapsed wall time. Matched ns/op, B/op and allocs/op
+comparisons retain all ABBA samples and frozen noise/effect flags. They do not
+establish a retained-history plateau or tail acceptance. Construction packets
+have no matched performance conclusion.
+
+`c4_packet_smoke.py` requires an actual complete successful packet, validates it,
+then copies and deliberately damages separate packets. It never synthesizes a
+successful producer packet. Mutations replace copied inodes, preserving the
+original even when copies use hard links. Copied stream, raw lifecycle,
+configuration, process, source/object/mode, module, binary, tooling and host
+corruption must all refuse. This refusal smoke and actual Linux normal/race
+fixture execution remain distinct gates. Standalone JSON/Go logs are not
+benchprof profile-dir inputs and introduce no benchprof filename changes.

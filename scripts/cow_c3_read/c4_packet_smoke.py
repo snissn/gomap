@@ -1,0 +1,108 @@
+"""Copied real positive packets must refuse tampering; never synthetic evidence."""
+import argparse
+import copy
+import json
+import os
+from pathlib import Path
+import shutil
+
+from c4_analyze import analyze
+from c4_protocol import load,need,sha
+
+
+def replace_json(path,value):
+    # Copies use hardlinks to keep a complete large positive packet cheap.
+    # Every mutation replaces its inode, never writes a shared source inode.
+    temp=path.with_name(path.name+".smoke-replacement")
+    temp.write_text(json.dumps(value,indent=2,allow_nan=False)+"\n")
+    os.replace(temp,path)
+
+def copy_packet(source,target):
+    def link(a,b):
+        try:os.link(a,b)
+        except OSError:shutil.copy2(a,b)
+        return b
+    shutil.copytree(source,target,copy_function=link)
+
+def reseal(packet,changed):
+    completion=load(packet/"completion.json")
+    for file,key in (("config.json","config_sha256"),("receipts.json","receipts_sha256"),("script-identity.json","script_identity_sha256")):
+        if file in changed:completion[key]=sha(packet/file)
+    replace_json(packet/"completion.json",completion)
+
+def config_mutation(key,value):
+    def run(packet):
+        c=load(packet/"config.json");c[key]=value;replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
+    return run
+
+def raw_mutation(change):
+    def run(packet):
+        receipts=load(packet/"receipts.json");r=receipts[0];entry=r["raw_lifecycles"][-1];path=packet/(r["label"]+"-lifecycle")/entry["path"]
+        raw=load(path);change(raw);replace_json(path,raw);entry["sha256"]=sha(path);replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
+    return run
+
+def receipt_mutation(change):
+    def run(packet):
+        receipts=load(packet/"receipts.json");change(receipts[0]);replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
+    return run
+
+def mutate_config(change):
+    def run(packet):
+        c=load(packet/"config.json");change(c);replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
+    return run
+
+def artifact_corruption(name):
+    def run(packet):
+        path=packet/name;temp=path.with_name(path.name+".smoke-replacement");temp.write_bytes(path.read_bytes()+b"\ncorrupted copied evidence\n");os.replace(temp,path)
+    return run
+
+def missing_close(raw):raw["calls"]=[call for call in raw["calls"] if call["phase"]!="final_close"]
+def partial_history(raw):
+    call=next(c for c in raw["calls"] if c["operation"]=="IterateVersions.full");call["output"]-=1
+
+def main():
+    p=argparse.ArgumentParser();p.add_argument("--positive",type=Path,required=True);p.add_argument("--out",type=Path,required=True);args=p.parse_args()
+    positive=args.positive.resolve();out=args.out.resolve();need(not out.exists() and not out.is_relative_to(positive),"smoke output needs distinct new directory")
+    validation=analyze(positive,emit=False);out.mkdir(parents=True)
+    cases={
+        "native-qualification":config_mutation("qualification","qualified"),
+        "product-result-class":config_mutation("result_class","product-qualified"),
+        "unknown-parameter":mutate_config(lambda c:c.update(unlimited=True)),
+        "unfrozen-config":config_mutation("status","draft-unfrozen"),
+        "wrong-resolved-mode":raw_mutation(lambda r:r.update(mode="append_only" if r["mode"]=="cow_btree" else "cow_btree")),
+        "wrong-resolved-ack":raw_mutation(lambda r:r.update(ordinary_ack="unsafe")),
+        "zero-finite-limit":raw_mutation(lambda r:r["limits"].update(MaxTotalBytes=0)),
+        "missing-close":raw_mutation(missing_close),
+        "unknown-phase":raw_mutation(lambda r:r["calls"][0].update(phase="invented_phase")),
+        "missing-epoch-phase":raw_mutation(lambda r:r.update(calls=[c for c in r["calls"] if c["phase"]!="epoch_1_replacement"])),
+        "counter-regression":raw_mutation(lambda r:r["boundaries"][1]["stats"].update({"treedb.cache.snapshot.rotations_total":"0"}) if int(r["boundaries"][0]["stats"]["treedb.cache.snapshot.rotations_total"])>0 else r["boundaries"][0]["stats"].update({"treedb.cache.snapshot.rotations_total":"999999999999999999"})),
+        "nonfinite-counter":raw_mutation(lambda r:r["boundaries"][0]["stats"].update({"treedb.commit_seq":"NaN"})),
+        "duplicate-public-call":raw_mutation(lambda r:r["calls"].append(copy.deepcopy(r["calls"][0]))),
+        "partial-history":raw_mutation(partial_history),
+        "partial-group":raw_mutation(lambda r:next(c for c in r["calls"] if c["operation"]=="CommitGroupAt").update(output=0)),
+        "missing-counter":raw_mutation(lambda r:r["boundaries"][0]["stats"].pop("treedb.commit_seq")),
+        "negative-counter":raw_mutation(lambda r:r["boundaries"][0]["stats"].update({"treedb.commit_seq":"-1"})),
+        "raw-duration-mismatch":raw_mutation(lambda r:r["calls"][0].update(duration_ns=r["calls"][0]["duration_ns"]+1)),
+        "native-observation-fake":raw_mutation(lambda r:r.update(native_eligibility="PASS")),
+        "raw-summary-mismatch":receipt_mutation(lambda r:r["row"]["metrics"].update({"public_calls/op":0})),
+        "binary-drift":receipt_mutation(lambda r:r.update(binary_sha256="0"*64)),
+        "source-drift":receipt_mutation(lambda r:r["source_drift_after"].update(candidate=["mode/input drift"])),
+        "process-timeout":receipt_mutation(lambda r:r.update(timed_out=True)),
+        "process-unreaped-exit":receipt_mutation(lambda r:r.update(exit_code=-9)),
+        "tmpdir-drift":mutate_config(lambda c:c["host"].update(tmpdir="/different-owned-tmp")),
+        "noise-posthoc-exclusions":mutate_config(lambda c:c["noise_policy"].update(exclusions="drop slow rows")),
+        "module-artifact-drift":artifact_corruption("candidate-effective_module_graph.raw"),
+        "source-object-drift":artifact_corruption("candidate-git_source.raw"),
+        "source-mode-manifest-drift":artifact_corruption("candidate-source-manifest.json"),
+        "tooling-drift":artifact_corruption("c4_protocol.py"),
+    }
+    results=[]
+    for name,change in cases.items():
+        packet=out/name;copy_packet(positive,packet);change(packet)
+        try:analyze(packet,emit=False)
+        except (ValueError,KeyError,TypeError,json.JSONDecodeError) as error:results.append({"case":name,"refused":True,"error":str(error)})
+        else:raise ValueError("tampered copied packet accepted: "+name)
+    replace_json(out/"smoke-results.json",{"positive_packet":str(positive),"positive_config_sha256":sha(positive/"config.json"),"positive_validation":validation,"results":results,"scope":"Actual positive packet copied and mutated; refusal checks, never producer/product qualification."})
+    print(json.dumps({"positive_runs":validation["runs"],"negative_cases":len(results),"all_refused":True}))
+
+if __name__=="__main__":main()

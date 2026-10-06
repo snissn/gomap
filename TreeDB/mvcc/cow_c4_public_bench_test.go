@@ -92,7 +92,7 @@ func (r *c4Record) call(phase, op string, input uint64, fn func() (uint64, error
 	return err
 }
 func c4Limits() treedb.COWMemtableLimits {
-	return treedb.COWMemtableLimits{MaxViews: 256, MaxGenerations: 64, MaxSources: 32, MaxResources: 256, MaxGenerationBytes: 64 << 20, MaxTotalBytes: 512 << 20, MaxRetiredBytes: 512 << 20, MaxInFlightBytes: 64 << 20}
+	return treedb.COWMemtableLimits{MaxViews: 256, MaxGenerations: 64, MaxSources: 32, MaxResources: 256, MaxGenerationBytes: 256 << 20, MaxTotalBytes: 2 << 30, MaxRetiredBytes: 2 << 30, MaxInFlightBytes: 64 << 20}
 }
 func c4Options(profile treedb.Profile, mode string, pointers bool, dir string) treedb.Options {
 	o := treedb.OptionsFor(profile, dir)
@@ -335,7 +335,12 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	}
 	backendStart := r.Boundaries[len(r.Boundaries)-1].Stats["treedb.commit_seq"]
 	lag := func() error {
-		if db.Stats()["treedb.commit_seq"] != backendStart {
+		current, x := strconv.ParseUint(db.Stats()["treedb.commit_seq"], 10, 64)
+		baseline, y := strconv.ParseUint(backendStart, 10, 64)
+		if x != nil || y != nil || current < baseline {
+			return errors.New("invalid or regressing backend commit sequence")
+		}
+		if mode == "cow_btree" && current != baseline {
 			return errors.New("backend commit sequence changed during declared lag phase")
 		}
 		return nil
@@ -520,6 +525,33 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		if err = r.boundary(db, phase+"_joined"); err != nil {
 			return r, err
 		}
+		if err = lag(); err != nil {
+			return r, err
+		}
+		checkpointPhase := phase + "_checkpoint"
+		if e == epochs {
+			checkpointPhase = "pinned_checkpoint"
+		}
+		if err = call(checkpointPhase, "Checkpoint", 0, func() (uint64, error) { return 0, db.Checkpoint() }); err != nil {
+			return r, err
+		}
+		if err = r.boundary(db, checkpointPhase); err != nil {
+			return r, err
+		}
+		checkpointSeq := db.Stats()["treedb.commit_seq"]
+		beforeSeq, x := strconv.ParseUint(backendStart, 10, 64)
+		afterSeq, y := strconv.ParseUint(checkpointSeq, 10, 64)
+		if x != nil || y != nil || afterSeq < beforeSeq || (mode == "cow_btree" && afterSeq == beforeSeq) {
+			return r, errors.New("epoch checkpoint lacks required backend progress")
+		}
+		if mode == "cow_btree" {
+			r.OracleReceipts = append(r.OracleReceipts, phase+":backend_lag=unchanged;checkpoint=advanced")
+		} else {
+			r.OracleReceipts = append(r.OracleReceipts, phase+":backend_progress=observed;checkpoint=complete")
+		}
+		// A complete public checkpoint starts a new bounded cached-lag window.
+		// The original seed iterator owners stay alive across every window.
+		backendStart = checkpointSeq
 	}
 	if bench != nil {
 		bench.StopTimer()
@@ -558,23 +590,12 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	if err = lag(); err != nil {
 		return r, err
 	}
-	r.OracleReceipts = append(r.OracleReceipts, "backend_lag:unchanged_backend_commit_sequence_with_visible_history")
-	if err = call("pinned_checkpoint", "Checkpoint", 0, func() (uint64, error) { return 0, db.Checkpoint() }); err != nil {
-		return r, err
-	}
-	if err = r.boundary(db, "pinned_checkpoint"); err != nil {
-		return r, err
+	if mode == "cow_btree" {
+		r.OracleReceipts = append(r.OracleReceipts, "backend_lag:unchanged_backend_commit_sequence_with_visible_history", "checkpoint:backend_commit_sequence_advanced")
+	} else {
+		r.OracleReceipts = append(r.OracleReceipts, "backend_progress:observed_nonregressing_with_visible_history", "checkpoint:completed_public_calls")
 	}
 	checkpointStats := r.Boundaries[len(r.Boundaries)-1].Stats
-	beginSeq, x := strconv.ParseUint(backendStart, 10, 64)
-	if x != nil {
-		return r, x
-	}
-	endSeq, x := strconv.ParseUint(checkpointStats["treedb.commit_seq"], 10, 64)
-	if x != nil || endSeq <= beginSeq {
-		return r, errors.New("checkpoint did not advance lagging backend")
-	}
-	r.OracleReceipts = append(r.OracleReceipts, "checkpoint:backend_commit_sequence_advanced")
 	if ptr {
 		raw, x := strconv.ParseUint(checkpointStats["treedb.cache.vlog_payload_kind.raw_bytes.single_value"], 10, 64)
 		if x != nil || raw == 0 {

@@ -809,3 +809,15 @@ GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
 
 The C3-read capability and allocation audit are documented in
 [the production source guide](../../TreeDB/docs/benchmarks/cow-c3-read-5076/README.md).
+
+### Standalone sustained public MVCC lifecycle
+
+`BenchmarkCOWSustainedPublicMVCC` is a bounded Go package fixture with explicit
+raw JSON lifecycle receipts and fixed 1..8 epoch counts. Its 36 leaves retain
+grouped growth/replacement, tombstones, old pins, joined overlap, checkpoint,
+Close and reopen oracles. Reproduction, allocation scope and qualification
+limits are in [the C4 fixture contract](../../TreeDB/docs/benchmarks/cow-c4-sustained-evidence.md).
+The standalone collector/analyzer shares C3 provenance machinery; these
+artifacts are not benchprof profile-dir inputs. Native eligibility and whole
+public maintenance charge remain PENDING, and qualification remains
+`pending_native_observations`.
