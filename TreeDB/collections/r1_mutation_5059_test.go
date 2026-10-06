@@ -181,6 +181,23 @@ func TestR1MutationMatrix5059(t *testing.T) {
 			columns[0].Strings[0] = "caller-reused"
 			retained[0][0] = ' '
 			ids[0][0] = 'X'
+			known["email"]["caller-reused"] = true
+			known["id"][string(ids[0])] = true
+			r1MutationAssert5059(t, col, want, known)
+			// An existing ID rejects a fresh sibling as part of one batch,
+			// even without secondary indexes or a unique-value conflict.
+			existing := r1MutationCopy5059(want["row-000"])
+			existing["email"], existing["bio"] = "existing-rejected@example.test", "must remain old"
+			freshSibling := r1MutationRow5059(20)
+			r1MutationRemember5059(known, existing, freshSibling)
+			insertIDs, insertRetained, insertColumns := r1MutationBatch5059(t, freshSibling, existing)
+			insertFrames := len(collectionCommandWALFrames(t, dir))
+			if _, _, err := col.InsertTypedBatchWithStats(insertIDs, insertRetained, insertColumns); !errors.Is(err, ErrDocumentExists) || errors.Is(err, ErrCommitAmbiguous) {
+				t.Fatalf("existing-ID batch rejection error=%v", err)
+			}
+			if len(collectionCommandWALFrames(t, dir)) != insertFrames {
+				t.Fatal("existing-ID rejection appended WAL")
+			}
 			r1MutationAssert5059(t, col, want, known)
 			changed := r1MutationCopy5059(want["row-001"])
 			changed["email"], changed["city"], changed["bio"], changed["revision"] = "changed@example.test", "city-7", "Changed 雪", float64(1)
