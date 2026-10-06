@@ -57,6 +57,10 @@ def main():
     refuse("duplicate-leaf", lambda c: c["cases"][1].update(benchmark=c["cases"][0]["benchmark"]), "duplicate benchmark leaves")
     refuse("wrong-id", lambda c: c["cases"][0].update(id="safe-but-wrong"), "does not match case dimensions")
     refuse("wrong-package", lambda c: c["cases"][0].update(package="other/pkg"), "unexpected benchmark package")
+    for metric in value["comparison_metrics"]:
+        refuse("missing-global-comparison-" + metric.replace("/", "-"),
+               lambda c, m=metric: c["cases"][0]["comparison_metrics"].pop(m),
+               "globally required comparison metric missing from case")
     refuse("missing-cell", lambda c: c["cases"].pop(), "incomplete/extra matrix")
     refuse("relative-tmpdir", lambda c: c["environment"].update(TMPDIR="relative"), "unresolved TMPDIR")
     refuse("unbound-tmpdir", lambda c: c["host"].update(tmpdir="/other"), "unbound temporary database filesystem")
