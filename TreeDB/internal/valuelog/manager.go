@@ -55,6 +55,9 @@ type File struct {
 	stableIdentity     rootpublication.StableIdentity
 	stableNamespace    string
 	stableObserved     bool
+	// Registered parent authority is immutable and independent of pin observation.
+	// Registration closes its short-lived handle; retirement retains its own.
+	registeredParentIdentity rootpublication.StableIdentity
 	// retirementIdentity is captured under manager.mu before retirement or
 	// destructive admission. It survives Close and is independent of pins.
 	retirementIdentity rootpublication.StableIdentity
@@ -166,11 +169,24 @@ func (f *File) appendMaybeDecodeLeafLogPayload(dst, payload []byte) ([]byte, err
 }
 
 func openFile(path string, id uint32, dictLookup DictLookup, templateLookup TemplateLookup, templateOpts templ.DecodeOptions, templateCache *templateDefCache) (*File, error) {
+	parent, parentIdentity, err := openRegisteredSegmentParent(path)
+	if err != nil && !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
+		return nil, err
+	}
+	if parent != nil {
+		defer parent.Close()
+	}
 	f, err := openSegmentReadHandle(path)
 	if err != nil {
 		return nil, err
 	}
+	if parent != nil {
+		if err := validateRegisteredSegmentParent(path, f, parent, parentIdentity); err != nil {
+			return nil, errors.Join(err, f.Close())
+		}
+	}
 	vf := &File{
+		registeredParentIdentity:     parentIdentity,
 		ID:                           id,
 		Path:                         path,
 		File:                         f,
@@ -2074,6 +2090,11 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 	f, err := currentOpenSegmentFile()(path, id, m.dictLookup, m.templateLookup, m.templateDecodeOpts, m.templateDefCache)
 	if err != nil {
 		return err
+	}
+	if err := validateRegisteredSegmentAuthority(f); err != nil {
+		if m.stableResourcePins != nil || !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
+			return errors.Join(err, f.Close())
+		}
 	}
 	f.manager = m
 	f.setGroupedFrameCacheBudget(m.groupedFrameCacheBudget)
