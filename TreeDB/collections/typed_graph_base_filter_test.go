@@ -457,14 +457,14 @@ func TestTypedGraphBaseFilterBindingThresholdAndReuse(t *testing.T) {
 		t.Fatalf("fixed D binding scaled with base eligibility: plan=%+v err=%v", allBound, err)
 	}
 	changedCurrent := *newCurrent
-	changedCatalog := *newCurrent.catalog
+	changedCatalog := cloneCatalogWithRootUpdates(newCurrent.catalog, newCurrent.catalog.meta, nil, nil)
 	changedCatalog.meta.Indexes = slices.Clone(changedCatalog.meta.Indexes)
 	for i := range changedCatalog.meta.Indexes {
 		if changedCatalog.meta.Indexes[i].Name == "user" {
 			changedCatalog.meta.Indexes[i].Field = "different"
 		}
 	}
-	changedCurrent.catalog = &changedCatalog
+	changedCurrent.catalog = changedCatalog
 	changedOverlay := *newOverlay
 	changedOverlay.current = &changedCurrent
 	if p, err := bindTypedGraphBaseFilter(cold, &changedOverlay, limits); !errors.Is(err, ErrVectorIndexSnapshotMismatch) || p != nil {

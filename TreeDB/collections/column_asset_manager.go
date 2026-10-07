@@ -3018,7 +3018,14 @@ func (c *columnPhysicalAssetReadCache) readBoundedRange(ref ColumnAssetRef, read
 		if storageErr != nil {
 			return nil, storageErr
 		}
-		h, err = c.resourceManager.AcquireOpenFileRangeInto(key, c.resourceScope, reader.file, dst, opts)
+		if reader.identity.valid {
+			// This identity and extent came from this exact retained descriptor
+			// at open. ReadAt still proves complete availability after truncation;
+			// CRC and decode below use only the resulting owned destination.
+			h, err = c.resourceManager.AcquireOpenFileRangeIntoAtCapturedSize(key, c.resourceScope, reader.file, dst, reader.identity.size, opts)
+		} else {
+			h, err = c.resourceManager.AcquireOpenFileRangeInto(key, c.resourceScope, reader.file, dst, opts)
+		}
 	} else {
 		h, err = c.resourceManager.AcquireOpenFileRange(key, c.resourceScope, reader.file, opts)
 	}

@@ -126,13 +126,13 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryFai
 		t.Fatalf("OpenCollectionReadView: %v", err)
 	}
 	defer func() { _ = view.Close() }()
-	catalogWithoutLocator := *view.catalog
+	catalogWithoutLocator := cloneCatalogWithRootUpdates(view.catalog, view.catalog.meta, nil, nil)
 	catalogWithoutLocator.roots = make(map[string]uint64, len(view.catalog.roots))
 	for name, rootID := range view.catalog.roots {
 		catalogWithoutLocator.roots[name] = rootID
 	}
 	delete(catalogWithoutLocator.roots, collectionColumnRowLocatorRootName(view.catalog.meta.Name))
-	view.catalog = &catalogWithoutLocator
+	view.catalog = catalogWithoutLocator
 
 	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
 		!strings.Contains(err.Error(), "primary row locator root is absent") {
@@ -168,7 +168,7 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryOve
 	if primaryRootID == 0 {
 		t.Fatal("test requires a populated primary root")
 	}
-	catalogWithPrimaryOverlay := *view.catalog
+	catalogWithPrimaryOverlay := cloneCatalogWithRootUpdates(view.catalog, view.catalog.meta, nil, nil)
 	catalogWithPrimaryOverlay.roots = make(map[string]uint64, len(view.catalog.roots))
 	for name, rootID := range view.catalog.roots {
 		catalogWithPrimaryOverlay.roots[name] = rootID
@@ -180,7 +180,7 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryOve
 		catalogWithPrimaryOverlay.rootOverlays[name] = append([]uint64(nil), rootIDs...)
 	}
 	catalogWithPrimaryOverlay.rootOverlays[primaryRootName] = []uint64{primaryRootID}
-	view.catalog = &catalogWithPrimaryOverlay
+	view.catalog = catalogWithPrimaryOverlay
 
 	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
 		!strings.Contains(err.Error(), "primary row locator root is absent") {
@@ -1641,4 +1641,24 @@ func reconstructDocumentMaterializerFixtureDoc(doc []byte) ([]byte, error) {
 		{Type: ColumnStoreValueString, String: "old", Present: true},
 		{Type: ColumnStoreValueDouble, Double: 1, Present: true},
 	})
+}
+
+func TestCollectionCatalogCloneDropsMaterializerAuthority(t *testing.T) {
+	base := newCollectionCatalog(CollectionMeta{Name: "events"}, map[string]uint64{"root": 7})
+	metadata := &columnPhysicalScanSnapshotView{}
+	base.materializerMetadata = metadata
+	base.materializerMu.Lock()
+	clone := cloneCatalogWithRootUpdates(base, base.meta, nil, nil)
+	base.materializerMu.Unlock()
+	if clone == base || clone.materializerMetadata != nil {
+		t.Fatal("replacement catalog retained lazy materializer authority")
+	}
+	if !clone.materializerMu.TryLock() {
+		t.Fatal("replacement catalog copied a held mutex")
+	}
+	clone.materializerMu.Unlock()
+	clone.roots["root"] = 9
+	if base.roots["root"] != 7 || base.materializerMetadata != metadata {
+		t.Fatal("catalog cloning changed the original authority")
+	}
 }

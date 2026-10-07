@@ -153,8 +153,8 @@ func TestTypedGraphReadOwnerRejectsStaleOrIncompleteLocalCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			copy := *catalog
-			col.rememberCatalog(snap, &copy)
+			copy := cloneCatalogWithRootUpdates(catalog, catalog.meta, nil, nil)
+			col.rememberCatalog(snap, copy)
 			col.catalogMu.Lock()
 			switch kind {
 			case "cold":

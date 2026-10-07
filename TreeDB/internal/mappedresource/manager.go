@@ -299,6 +299,24 @@ func (m *Manager) AcquireExclusiveBuffer(key Key, scope Scope, data []byte, opts
 // a partial read does not publish a handle. Contents, bounds and subsequent
 // integrity checks all use these same owned bytes; this is not an mmap shortcut.
 func (m *Manager) AcquireOpenFileRangeInto(key Key, scope Scope, file *os.File, dst []byte, opts AcquireOptions) (*Handle, error) {
+	return m.acquireOpenFileRangeInto(key, scope, file, dst, opts, -1)
+}
+
+// AcquireOpenFileRangeIntoAtCapturedSize uses the size captured from this same
+// caller-owned descriptor when its reader was opened. The caller must retain
+// that exact descriptor and its captured identity; a pathname or another file's
+// size is not authority. Ranges outside the captured extent fail before touching
+// dst. A complete ReadAt remains mandatory: later truncation or descriptor close
+// fails without publishing a handle, and the caller must quarantine partial dst.
+// Integrity checks and decoding consume the resulting exclusively owned bytes.
+func (m *Manager) AcquireOpenFileRangeIntoAtCapturedSize(key Key, scope Scope, file *os.File, dst []byte, capturedSize int64, opts AcquireOptions) (*Handle, error) {
+	if capturedSize < 0 {
+		return nil, errors.New("mappedresource: negative captured descriptor size")
+	}
+	return m.acquireOpenFileRangeInto(key, scope, file, dst, opts, capturedSize)
+}
+
+func (m *Manager) acquireOpenFileRangeInto(key Key, scope Scope, file *os.File, dst []byte, opts AcquireOptions, capturedSize int64) (*Handle, error) {
 	if m == nil {
 		return nil, errors.New("mappedresource: nil manager")
 	}
@@ -314,16 +332,19 @@ func (m *Manager) AcquireOpenFileRangeInto(key Key, scope Scope, file *os.File, 
 		m.recordDenied(DenyOutOfBounds)
 		return nil, errors.New("mappedresource: exclusive destination too small")
 	}
-	info, err := file.Stat()
-	if err != nil {
-		m.recordDenied(DenyReadFailed)
-		m.recordError()
-		return nil, err
+	if capturedSize < 0 {
+		info, err := file.Stat()
+		if err != nil {
+			m.recordDenied(DenyReadFailed)
+			m.recordError()
+			return nil, err
+		}
+		capturedSize = info.Size()
 	}
 	end := key.Offset + key.Length
-	if key.Offset < 0 || end < key.Offset || end > info.Size() {
+	if key.Offset < 0 || end < key.Offset || end > capturedSize {
 		m.recordDenied(DenyOutOfBounds)
-		return nil, fmt.Errorf("mappedresource: range offset=%d length=%d outside file bytes=%d", key.Offset, key.Length, info.Size())
+		return nil, fmt.Errorf("mappedresource: range offset=%d length=%d outside file bytes=%d", key.Offset, key.Length, capturedSize)
 	}
 	raw := dst[:int(key.Length)]
 	n, err := file.ReadAt(raw, key.Offset)

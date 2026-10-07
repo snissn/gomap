@@ -236,13 +236,13 @@ func TestTypedGraphLocatorVisitorGroupedBoundaries(t *testing.T) {
 	// As in the existing malformed-locator control, redirect only this held
 	// view to real primary values. Two bad rows arrive in storage group order;
 	// the earlier input error must follow exactly its preceding missing rows.
-	bad := *original
+	bad := cloneCatalogWithRootUpdates(original, original.meta, nil, nil)
 	bad.roots = make(map[string]uint64, len(original.roots))
 	for key, value := range original.roots {
 		bad.roots[key] = value
 	}
 	bad.roots[root] = original.rootID(collectionPrimaryRootName(original.meta.Name))
-	view.catalog = &bad
+	view.catalog = bad
 	badIDs := make([][]byte, 512)
 	for i := range badIDs {
 		badIDs[i] = []byte(fmt.Sprintf("missing-%04d", i))
@@ -302,10 +302,10 @@ func TestTypedGraphLocatorVisitorFallbacks(t *testing.T) {
 			if policy == RootStorageDefault {
 				// Exercise an immutable catalog overlay stack referencing the same
 				// real locator root; it must keep direct overlay-aware point reads.
-				catalog := *view.catalog
+				catalog := cloneCatalogWithRootUpdates(view.catalog, view.catalog.meta, nil, nil)
 				root := collectionColumnRowLocatorRootName(catalog.meta.Name)
 				catalog.rootOverlays = map[string][]uint64{root: {catalog.rootID(root)}}
-				view.catalog = &catalog
+				view.catalog = catalog
 			}
 			before := tree.GetManyReadStatsSnapshot()
 			got, err := view.LookupDocumentRowRefsByID(ids[:512], DocumentFetchOptions{})

@@ -472,10 +472,10 @@ func assertTypedGraphLifecycleRebuildSource(t *testing.T, col *Collection) {
 			badRoots = append(badRoots, catalog.rootID(collectionPrimaryRootName(catalog.meta.Name)))
 		}
 		for _, locatorRoot := range badRoots {
-			badCatalog := *catalog
+			badCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, nil, nil)
 			badCatalog.roots = maps.Clone(catalog.roots)
 			badCatalog.roots[collectionColumnRowLocatorRootName(catalog.meta.Name)] = locatorRoot
-			_, badSource, _, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(view.snapshot, &badCatalog, *catalog.meta.Options.ColumnStore, records, manifest, def)
+			_, badSource, _, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(view.snapshot, badCatalog, *catalog.meta.Options.ColumnStore, records, manifest, def)
 			if badSource != nil {
 				badSource.Close()
 			}
@@ -488,13 +488,13 @@ func assertTypedGraphLifecycleRebuildSource(t *testing.T, col *Collection) {
 		if err := validateColumnVectorGraphEmptyTypedSource(view.snapshot, catalog); err == nil {
 			t.Fatal("empty-source proof accepted a live primary")
 		}
-		badCatalog := *catalog
+		badCatalog := cloneCatalogWithRootUpdates(catalog, catalog.meta, nil, nil)
 		badCatalog.roots = maps.Clone(catalog.roots)
 		badCatalog.roots[collectionPrimaryRootName(catalog.meta.Name)] = 0
-		if err := validateColumnVectorGraphEmptyTypedSource(view.snapshot, &badCatalog); err == nil || !strings.Contains(err.Error(), collectionColumnRowLocatorRootName(catalog.meta.Name)) {
+		if err := validateColumnVectorGraphEmptyTypedSource(view.snapshot, badCatalog); err == nil || !strings.Contains(err.Error(), collectionColumnRowLocatorRootName(catalog.meta.Name)) {
 			t.Fatalf("empty-source proof accepted extra locator: %v", err)
 		}
-		_, badSource, _, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(view.snapshot, &badCatalog, *catalog.meta.Options.ColumnStore, records, manifest, def)
+		_, badSource, _, err := col.columnVectorGraphRowsFromTypedColumnCatalogSnapshot(view.snapshot, badCatalog, *catalog.meta.Options.ColumnStore, records, manifest, def)
 		if badSource != nil {
 			badSource.Close()
 		}

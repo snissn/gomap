@@ -648,7 +648,7 @@ func TestCompoundBSONIndexPersistedOverlayConstructorWorkCapReturnsTruncated(t *
 	_ = snap.Close()
 	// Constructor-time fanout rejects before opening roots, so synthetic IDs
 	// exercise the public truncation contract without unbounded storage setup.
-	injected := *catalog
+	injected := cloneCatalogWithRootUpdates(catalog, catalog.meta, nil, nil)
 	injected.rootOverlays = make(map[string][]uint64, len(catalog.rootOverlays)+1)
 	for name, ids := range catalog.rootOverlays {
 		injected.rootOverlays[name] = append([]uint64(nil), ids...)
@@ -663,7 +663,7 @@ func TestCompoundBSONIndexPersistedOverlayConstructorWorkCapReturnsTruncated(t *
 		t.Fatal("acquire current snapshot")
 	}
 	col.catalogMu.Lock()
-	col.catalog = &injected
+	col.catalog = injected
 	col.catalogSystemRoot = snapshotSystemRoot(current)
 	col.catalogCommitSeq = snapshotCommitSeq(current)
 	col.catalogMu.Unlock()

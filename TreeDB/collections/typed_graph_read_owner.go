@@ -201,8 +201,10 @@ func (c *Collection) finishTypedGraphReadOwnerOpen(open *typedGraphReadOwnerServ
 			prepared.Diagnostics.ManifestRootName = collectionColumnManifestRootName(open.catalog.meta.Name)
 		}
 		prepared.Diagnostics.ManifestRoot = open.catalog.rootID(prepared.Diagnostics.ManifestRootName)
+		prepareDocumentPointRowDimensions(&prepared)
 		view.current.columnSnapshotView = &prepared
 		view.current.preparedMaterializer = &state.servingMaterializer
+		view.current.preparedMaterializerView = view.current.columnSnapshotView
 	}
 	snap.DetachForegroundRead()
 	return nil

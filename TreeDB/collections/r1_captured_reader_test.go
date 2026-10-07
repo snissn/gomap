@@ -254,6 +254,43 @@ func TestR1CapturedReaderFailedLoadReleasesAdmission(t *testing.T) {
 		t.Fatal(err)
 	}
 	r1RequireCompleteRow(t, got.Results[0].Document, []byte(`{"content":"whole row","user":"u1","id":"a"}`))
+	// Retire image aliases/handles while retaining the exact opened file, as
+	// at a completed-emission boundary. Then invalidate its captured extent.
+	// This distinguishes old-descriptor truncation from the fresh-open refusal
+	// above, and forces the partial owned destination to be quarantined.
+	v.rowEmissionScratch.clearBorrowed()
+	for _, block := range v.pointRowBlocks {
+		*block = columnPhysicalRowReaderBlock{}
+	}
+	clear(v.pointRowBlocks)
+	if v.typedColumnReconstructionCache != nil {
+		*v.typedColumnReconstructionCache = typedColumnPartReconstructionCache{}
+		v.typedColumnReconstructionCache = nil
+	}
+	for _, cache := range []*columnPhysicalAssetReadCache{v.rowAssetReadCache, v.typedColumnAssetReadCache} {
+		if cache != nil {
+			if err := cache.releaseResourceHandles(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := os.Truncate(path, ref.Offset+ref.Length-1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.FetchDocumentsByID([][]byte{[]byte("a")}, DocumentFetchOptions{}); err == nil {
+		t.Fatal("truncated retained descriptor was accepted")
+	}
+	if v.pointRowOpenFiles() != 0 || v.assetManager.ActiveHandles() != 0 || v.pointRowCreditUsed != 0 || v.rowEmissionScratch != nil || v.pointRowBlocks != nil {
+		t.Fatal("partial retained-descriptor load retained aliases or admission")
+	}
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := v.FetchDocumentsByID([][]byte{[]byte("a")}, DocumentFetchOptions{})
+	if err != nil || !bytes.Equal(retry.Results[0].Document, got.Results[0].Document) {
+		t.Fatalf("quarantined retained-descriptor retry: %v", err)
+	}
+
 }
 
 func TestR1CapturedReaderOversizeOwnedFallback(t *testing.T) {

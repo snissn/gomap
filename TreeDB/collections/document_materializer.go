@@ -185,6 +185,8 @@ type CollectionReadView struct {
 	typedColumnReconstructionCache  *typedColumnPartReconstructionCache
 	columnSnapshotView              *columnPhysicalScanSnapshotView
 	preparedMaterializer            *columnPhysicalScanSnapshotView // immutable, fully validated publication metadata
+	preparedMaterializerView        *columnPhysicalScanSnapshotView // exact local binding of prepared metadata
+	materializerMetadataInvalidated bool                            // integrity/namespace changes use the independent loader
 	pointRowRefs                    map[documentRowPartKey]columnManifestAssetRefForScan
 	pointRowBlocks                  map[documentRowPartKey]*columnPhysicalRowReaderBlock
 	pointRowCreditLimit             int64
@@ -385,7 +387,6 @@ func (v *CollectionReadView) Close() error {
 		v.typedGraphOwner = nil
 		ownerErr = owner.Close()
 	}
-	v.snapshot = nil
 	v.catalog = nil
 	return errors.Join(cacheErr, snapErr, ownerErr)
 }
@@ -480,6 +481,9 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 		if v.rowAssetReadCache != nil {
 			// An integrity/namespace change invalidates both source owners.
 			// Do not reset slot backing while typed handles can still alias it.
+			// Invalidation survives teardown failure: cleanup clears the old
+			// caches and aliases even when a retained descriptor close fails.
+			v.materializerMetadataInvalidated = true
 			if err := v.closeAssetReadCaches(); err != nil {
 				return err
 			}
@@ -669,6 +673,7 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 	v.pointRowMaxBlockBytes = 0
 	v.columnSnapshotView = nil
 	v.preparedMaterializer = nil
+	v.preparedMaterializerView = nil
 	if v.typedColumnReconstructionCache != nil {
 		*v.typedColumnReconstructionCache = typedColumnPartReconstructionCache{}
 	}
@@ -879,7 +884,7 @@ func (v *CollectionReadView) materializerColumnSnapshotView(cfg ColumnStoreConfi
 		return columnPhysicalScanSnapshotView{}, err
 	}
 	if v.columnSnapshotView != nil {
-		if v.typedGraphOwner == nil && v.columnSnapshotView != v.preparedMaterializer {
+		if v.columnSnapshotView != v.preparedMaterializerView {
 			// An uncertified/test-rebound view must validate unrelated entries
 			// before even deriving dimensions for admission.
 			if err := validateOrderedDocumentPartRefs(v.columnSnapshotView.AssetRefs); err != nil {
@@ -889,6 +894,19 @@ func (v *CollectionReadView) materializerColumnSnapshotView(cfg ColumnStoreConfi
 		return v.bindMaterializerMetadata(*v.columnSnapshotView)
 	}
 	catalog := v.catalog
+	if v.materializerMetadataInvalidated {
+		// A mode change deliberately leaves the admitted publication cache.
+		// Revalidate the captured root through the existing independent loader.
+		view, err := v.collection.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(v.snapshot, catalog, catalog.meta.Name, catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)), cfg, true, columnManifestScanNoSidecars())
+		if err != nil {
+			return view, err
+		}
+		if err := validateOrderedDocumentPartRefs(view.AssetRefs); err != nil {
+			return view, err
+		}
+		v.columnSnapshotView = &view
+		return view, nil
+	}
 	catalog.materializerMu.Lock()
 	defer catalog.materializerMu.Unlock()
 	if catalog.materializerMetadata == nil {
@@ -906,6 +924,7 @@ func (v *CollectionReadView) materializerColumnSnapshotView(cfg ColumnStoreConfi
 	}
 	v.columnSnapshotView = catalog.materializerMetadata
 	v.preparedMaterializer = catalog.materializerMetadata
+	v.preparedMaterializerView = v.columnSnapshotView
 	v.validatedPointRowRefs = catalog.materializerMetadata
 	return v.bindMaterializerMetadata(*catalog.materializerMetadata)
 }
@@ -1030,7 +1049,7 @@ func (v *CollectionReadView) pointRowAssetRef(view columnPhysicalScanSnapshotVie
 	key := documentRowPartKey{Generation: ref.Generation, PartID: ref.PartID}
 	var assetRef columnManifestAssetRefForScan
 	var ok bool
-	if v.preparedMaterializer != nil && (v.typedGraphOwner != nil || v.columnSnapshotView == v.preparedMaterializer) {
+	if v.preparedMaterializer != nil && v.columnSnapshotView == v.preparedMaterializerView {
 		assetRef, ok = materializerPartRef(v.preparedMaterializer.AssetRefs, ref.Generation, ref.PartID)
 	} else if v.orderedPointRowRefs {
 		// Manifest keys are ordered by generation/part. Validate the entire
@@ -1264,7 +1283,7 @@ func (v *CollectionReadView) admitPointRowFile() error {
 // Idle capacities stay charged across handle release. No live slot can be
 // reused within a window; CRL2 current/preserved/typed inputs coexist.
 func (v *CollectionReadView) borrowPointRowStorage(ref ColumnAssetRef) ([]byte, error) {
-	prepared := v.preparedMaterializer
+	prepared := v.columnSnapshotView
 	if prepared == nil {
 		return nil, errors.New("collections: document row admission requires captured metadata")
 	}
@@ -1329,7 +1348,10 @@ func (v *CollectionReadView) borrowPointRowStorage(ref ColumnAssetRef) ([]byte, 
 // Retained idle buffers remain owned even with no maintenance handles. Each
 // slot is lazy: ordinary one-row readers allocate only their required inputs.
 func (v *CollectionReadView) pointRowBufferTableCredit() int64 {
-	return int64(unsafe.Sizeof(v.pointRowBuffers) + unsafe.Sizeof(v.pointRowBuffersUsed))
+	return int64(unsafe.Sizeof(v.pointRowBuffers) + unsafe.Sizeof(v.pointRowBuffersUsed) + unsafe.Sizeof(struct {
+		View        *columnPhysicalScanSnapshotView
+		Invalidated bool
+	}{}))
 }
 
 func (v *CollectionReadView) pointRowIdleCredit() int64 {
@@ -2167,7 +2189,10 @@ func (v *CollectionReadView) typedColumnReconstructionCacheForConfig(cfg ColumnS
 			ReadCache: v.typedColumnAssetReadCache,
 		}
 	}
-	v.typedColumnReconstructionCache.Prepared = v.preparedMaterializer
+	v.typedColumnReconstructionCache.Prepared = nil
+	if v.columnSnapshotView == v.preparedMaterializerView {
+		v.typedColumnReconstructionCache.Prepared = v.preparedMaterializer
+	}
 	return v.typedColumnReconstructionCache
 }
 

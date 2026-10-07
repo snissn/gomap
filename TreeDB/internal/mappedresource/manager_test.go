@@ -626,11 +626,15 @@ func TestAcquireOpenFileRangeDescriptorLease(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer file.Close()
-			if err := os.Rename(path, path+"-old"); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte("xxxxxxxxxxxxxxxx"), 0600); err != nil {
-				t.Fatal(err)
+			// Windows os.Open descriptors prevent pathname replacement here.
+			// Keep the descriptor lifetime/accounting checks below on every platform.
+			if runtime.GOOS != "windows" {
+				if err := os.Rename(path, path+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("xxxxxxxxxxxxxxxx"), 0600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			m := NewManager()
 			h, err := m.AcquireOpenFileRange(testKey(), testScope(), file, AcquireOptions{PreferMapped: mapped, AllowHeapCopy: true})

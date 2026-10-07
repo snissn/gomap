@@ -159,7 +159,8 @@ func relocateTypedGraphCatalog(old *collectionCatalog, nextPager *pager.Pager, r
 		}
 		return out, nil
 	}
-	next := *old
+	// Relocation creates exact catalog authority; never copy its mutex or lazy metadata.
+	next := cloneCatalogWithRootUpdates(old, old.meta, nil, nil)
 	var err error
 	next.roots, err = remap(old.roots)
 	if err != nil {
@@ -174,5 +175,5 @@ func relocateTypedGraphCatalog(old *collectionCatalog, nextPager *pager.Pager, r
 		}
 		next.typedGraphBase = &base
 	}
-	return &next, nil
+	return next, nil
 }
