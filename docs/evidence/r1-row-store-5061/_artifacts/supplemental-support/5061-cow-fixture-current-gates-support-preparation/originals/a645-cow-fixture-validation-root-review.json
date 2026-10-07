@@ -1,0 +1,73 @@
+{
+  "checks": [
+    {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/caching/cow_maintenance_lifetime_test.go"
+      ],
+      "end_utc": "2026-10-06T18:44:29.182366+00:00",
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "format",
+      "passed_test_rows": 0,
+      "start_utc": "2026-10-06T18:44:29.125784+00:00"
+    },
+    {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/caching",
+        "-run",
+        "^TestCOWMaintenanceAcceptedRefreshPressureLifetime$",
+        "-count=1",
+        "-timeout=5m"
+      ],
+      "end_utc": "2026-10-06T18:44:42.573269+00:00",
+      "exit": 0,
+      "log_sha256": "ce045d58e0cdec52995840b3b3f5983d3561005c6401fde604044060f2aaf74e",
+      "name": "normal",
+      "passed_test_rows": 7,
+      "start_utc": "2026-10-06T18:44:29.222374+00:00"
+    },
+    {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/caching",
+        "-run",
+        "^TestCOWMaintenanceAcceptedRefreshPressureLifetime$",
+        "-count=1",
+        "-timeout=5m"
+      ],
+      "end_utc": "2026-10-06T18:45:11.001769+00:00",
+      "exit": 0,
+      "log_sha256": "2faf5da2a4c7164de607af8ca50047117342bd9ee5e55c19f29717e31927f0df",
+      "name": "race",
+      "passed_test_rows": 7,
+      "start_utc": "2026-10-06T18:44:42.619846+00:00"
+    },
+    {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/caching"
+      ],
+      "end_utc": "2026-10-06T18:45:12.842956+00:00",
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "name": "vet",
+      "passed_test_rows": 0,
+      "start_utc": "2026-10-06T18:45:11.041044+00:00"
+    }
+  ],
+  "decision": "PASS focused isolated COW lifetime normal/race; no Windows equivalence or required-CI waiver",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "head": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+  "original_receipts": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original",
+  "reviewer": "/root",
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9"
+}

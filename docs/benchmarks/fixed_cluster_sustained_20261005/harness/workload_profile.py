@@ -6,6 +6,13 @@ import sys
 sys.dont_write_bytecode=True
 from dataclasses import dataclass
 MATCHED_ORDER=(1,4,4,1,1,4)
+MATCHED_CAMPAIGNS=tuple('rf4matched5068w%02dc%d'%(i,c) for i,c in enumerate(MATCHED_ORDER,1))
+CONTINUATION_ORDER=(1,1,4)
+CONTINUATION_CAMPAIGNS=('rf4matched5068r01c1','rf4matched5068r02c1','rf4matched5068r03c4')
+SELECTED_CAMPAIGNS=MATCHED_CAMPAIGNS[:3]+CONTINUATION_CAMPAIGNS
+SELECTED_ORDER=MATCHED_ORDER[:3]+CONTINUATION_ORDER
+CONTINUATION_REVISION='matched5068-prospective-continuation-v1'
+CONTINUATION_DECISION_SHA='c3e32e7dff816e0b04aea7dad61be253391221fe391644b08bd5c3cc6d981b12'
 PROFILE=('rf4trial24mixedchangingc1', 48, 300, 6, 1)
 @dataclass(frozen=True)
 class Workload:
@@ -45,7 +52,7 @@ class Workload:
 def accepted(campaign,workload):
  if campaign=='rf4trial24mixedchangingc1':values=(campaign,48,300,6,1)
  else:
-  allowed={'rf4matched5068w%02dc%d'%(i,c):(campaign,6,60,5,c) for i,c in enumerate(MATCHED_ORDER,1)}
+  allowed={name:(name,6,60,5,c) for name,c in zip(MATCHED_CAMPAIGNS+CONTINUATION_CAMPAIGNS,MATCHED_ORDER+CONTINUATION_ORDER)}
   if campaign not in allowed:raise ValueError('accepted campaign namespace and arm/order')
   values=allowed[campaign]
  w=Workload(*values)

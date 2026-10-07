@@ -126,8 +126,162 @@ A manager owns every deferred zombie-deletion worker it admits. Admission and
 worker registration occur under the same manager lock that closes admission.
 `Manager.Close` cancels retry backoff and joins those workers outside the lock
 before closing tracked resources. Concurrent and repeated closes observe the
-same completion and error. Stable identity pins still prohibit deletion;
+same completion and error. Synchronous direct and final-Release deletion
+admissions use the same manager-owned join, so Close cannot return while those
+operations still own physical removal or lease finalization. A per-file mutex
+serializes physical close/quarantine outside the manager lock and rechecks the
+canonical identity after waiting while removal remains incomplete. Physical
+success marks that File complete before releasing the deletion mutex; another
+admitted operation then returns success without accessing the canonical path,
+even if a successor reuses the retired inode. File.Close joins actual handle/cache/mapping
+cleanup rather than treating its early closed flag as completion. Stable identity
+pins still prohibit deletion;
 shutdown does not bypass the gate or reclaim a pinned segment.
+
+Directory refresh leaves a tracked zombie at its original path under that
+retirement owner's control. The handle may already be closed while unlink or
+an owned retry is pending; refresh neither inspects that closed handle nor
+reopens the segment. Current snapshots continue to exclude the zombie, while
+new live segments are still discovered. A conflicting path for the same file
+ID remains an error. Every manager validates the current pathname
+against the captured retired identity independently of live-segment discovery,
+including entries that discovery filters out, such as directories. A replacement
+regular-file inode is a resource conflict; non-regular entries are refused, and a
+disappeared pathname is a benign deletion race only when absence is proved
+through the physical parent retained at retirement admission. This
+check resolves only the parent directory's symlinks, preserving configured
+symlink segment directories, then opens a no-follow child of an exact parent
+handle and requires a regular file. It never resolves the segment child itself.
+A changed parent alias still has to yield the captured physical parent and file identities;
+a conflicting replacement is refused and preserved. The Unix child open is
+nonblocking, so a replacement FIFO cannot stall refresh or reclamation while the manager lock is held. Links are refused,
+including links back to the original inode. Quarantine recovery uses the same
+safe identity lookup. The check does not access the retired handle.
+The manager captures a separate immutable retirement identity from its owned
+open handle before publishing a zombie or admitting explicit removal. At that
+cold admission it also retains an exact physical-parent handle, independently
+of pin registration. Every real segment File already carries an immutable typed
+physical-parent identity captured before its initial child open. Constructor
+checks bind that parent to the opened regular child, and registration publication
+checks the same authority again. Registry namespace keys derive from that capture,
+not a later parent lookup. First retirement must match the original registered
+parent, even when a replacement directory contains a hard link to the same inode.
+Capture is shared by initial scanning, additional scan directories and explicit
+RegisterSegment; it adds no point-read or zero-zombie Refresh work. Registration
+closes its temporary parent handle, retaining only typed identity until retirement.
+The manager lazily shares one retirement parent handle per exact physical directory,
+keyed by platform, volume and object identity rather than path or child identity.
+Each File retains one owner membership; operation borrows have independent counts.
+An entry stays indexed while either count is nonzero, including borrower-only
+intervals, so a new sibling admission reuses that same handle. Every pool hit still
+opens and validates the configured parent and exact child against registration;
+sharing cannot authorize a rebound alias, even with a hardlinked original child.
+Final owner/borrow release removes the exact entry and closes once outside manager
+and pool locks. Other siblings and active operations retain their authority.
+The retained handle has a fixed diagnostic Name; exact opening still uses the
+resolved physical path, and all namespace operations use its handle and identities.
+Ordinary OpenStableParent behavior is unchanged. Empty pool maps are cleared, and
+maps are rebuilt when live entries fall below half their historical high-water
+count, bounding retained map capacity after disjoint populations retire.
+SetRetentionSizes uses unsafe.Sizeof(File{}) for the File wrapper and reserves an
+additional conservative 2 KiB per selected File in PathEnvelope for future shared
+pool/map/entry/os.File/internal state/fixed-name metadata. This reservation exists
+before snapshot and prepared-batch publication, even before a pool is allocated;
+sharing reduces actual metadata without reducing the frozen worst-case charge.
+It excludes kernel descriptor state and transient operation scratch, and does not
+claim a measured sizeof(os.File) accounts for the OS handle. On the admitted Go
+1.26 layout, eight-slot groups for the 48-byte identity plus pointer fit within
+512 bytes; geometric capacity, bounded high-water slack and shrink overlap plus
+pool/entry/file wrappers fit within that per-owner allocation envelope.
+Registered nil-registry files acquire no namespace string. An unsupported stable-identity
+platform can retain its existing nil-registry read-only opening behavior, but
+missing original authority never authorizes retirement or registry admission.
+A vanished alias or renamed physical directory cannot
+make the still-present target count as deleted. After actual File.Close completes,
+each physical attempt opens the configured parent again and verifies it against that retained physical identity. The checked
+operation root anchors quarantine creation and retains a checked nested quarantine
+root and directory handle through identity lookup, rollback, unlink and recovery.
+Private basename-only cross-parent rename/link operations use the retained parent
+handles; child removal uses the nested root rather than re-resolving its outer name.
+Recovery and rollback share one retained-parent no-replace restoration: link the
+quarantined child to the absent canonical name, unlink the exact quarantine child,
+then emit the compensation NamespaceCreate and check directory-only cleanup.
+A canonical successor makes the link fail with joined conflict and collision
+errors; both successor and quarantine remain intact. There is no replacing rename
+fallback. A crash between link and unlink leaves two names for the same inode.
+Recovery reconciles that same-inode partial restoration before consulting the
+quarantine encoded identity, preserving canonical bytes even for an unexpected
+quarantined inode. Expected quarantine plus a distinct canonical successor still
+completes deletion of the quarantine; unexpected distinct identities still refuse.
+The existing post-NamespaceUnlink cut retains its private quarantine and deletion
+completion behavior. Compensation events add no namespace-persistence claim.
+Ordinary Windows visibility is preserved without adding namespace-durability
+certification. Alias loss or a different parent since registration refuses
+while the target remains. Later alias changes cannot redirect the captured root
+operations; the check does not promise an atomic alias-and-rename predicate.
+Quarantine-directory rebinding cannot redirect child removal or rollback.
+Empty-directory cleanup refuses a detected replacement and removes directories
+only; Unix does not supply an atomic arbitrary directory-identity-and-unlink
+predicate, and this contract does not claim one. Physical target removal remains
+completed when only the final directory cleanup refuses.
+The saved parent is absence/comparison authority, never a fallback deletion path.
+Initial capture requires a linked child matching the open segment. A missing
+child or empty rebound parent at that first admission fails before retirement
+publication. After capture, genuine child absence is proved through the retained
+parent even when the configured parent name has disappeared. On Windows, a
+child open denied through that retained parent also proves absence only when a
+successful exact-handle `FileStandardInfo` query reports both `Directory` and
+`DeletePending`. Ordinary access denial, a live parent, a regular-file handle
+or a failed query remains a refusal. This cold proof grants no additional
+certified namespace-persistence support.
+The parent survives failed attempts until successful ownership release, eviction
+or manager Close. An admitted destructive attempt keeps the exact manager owner
+and parent: `EvictSegment` returns `ErrFilePinned` until that attempt completes,
+even with no live reader pins. Direct removal, final Release and each retry
+attempt share this guard. Retry backoff releases it, so an inactive zombie can
+still be evicted without deleting its persistent storage. Eviction keeps the
+parent borrowable until its actual File.Close
+joins; short operation borrows preserve it through that lifecycle transfer.
+The last owner or borrower closes it outside the manager mutex. It reuses
+the registered identity when available, without modifying the identity exposed
+to pinned readers. Refresh, deletion and retry use that retained identity even
+without an external pin registry. Capture failure leaves ownership and zombie
+state unchanged; unsupported platforms fail explicitly. Explicit removal checks
+the pathname before admitting retirement, then retains the exact zombie owner
+and registry observation until physical deletion succeeds. Explicit eviction
+transfers lifecycle ownership only outside an admitted destructive attempt. Incomplete
+physical deletion leaves that owner excluded from new snapshots; refresh
+and explicit retries validate its captured identity rather than adopt a
+replacement. Quarantine unlink checks again after close. A successful-absence
+result before rename must prove absence through the retained
+parent. A completed canonical-name rename retains its existing completion and
+deterministic-quarantine recovery semantics, including an injected post-unlink cut.
+Successful deletion checks the exact tracked File pointer before forgetting
+ownership, preserving a different owner if internal state has been replaced. External registry leases
+separately enforce pin exclusion. `RemoveSegmentIfUnpinned` retains its existing
+admitted-attempt boolean when the returned error reports a failed deletion;
+callers must check that error. Force remains limited to recovery cleanup and
+continues to bypass logical refcount checks. A
+manager-locked count skips the retirement scan when no tracked zombies exist;
+marking, ownership removal, eviction and Close balance that count.
+
+The additive public regressions `TestManagerRetirementQuarantinePartialRestore`,
+`TestManagerRegisteredParentReboundBeforeRetirement` and
+`TestManagerRegisteredParentCaptureRebound` compile against the previous source
+and distinguish behavioral refusal from compilation failure. Current helper and
+caller collision coverage is in `TestRetirementRestoreNoReplace` and
+`TestManagerRetirementRollbackPreservesSuccessor`.
+
+`BenchmarkManagerRetirementBoundaries` separately reports live Refresh, a pinned
+zombie Refresh, a closed retired owner retained after failed unlink, and cold
+single-segment manager registration plus Close, each with and without registry.
+Writer setup, zombie admission, failure injection and final reclamation are outside
+all timed Refresh loops. Cold registration intentionally includes complete open,
+scan, authority validation and manager Close; it is not a point-read measurement.
+Report matched `ns/op`, `B/op` and `allocs/op` for each boundary. The unchanged warm
+zero-retired route cannot establish the cost of either retired identity checks or
+new registration proof. These fixtures do not establish an improvement or waive
+public raw-path performance gates.
 
 ### 2.2 External-version logical pruning is not segment GC
 

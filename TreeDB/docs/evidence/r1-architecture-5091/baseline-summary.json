@@ -1,0 +1,782 @@
+{
+  "4096/typed-row/load": {
+    "median_ns": 17520921.59375,
+    "cv": 0.006796557357163915,
+    "median_bytes": 1592627.3125,
+    "samples_ns": [
+      17520921.59375,
+      17721786.34375,
+      17509156.859375
+    ]
+  },
+  "4096/typed-row/point_get_into_complete": {
+    "median_ns": 150340.46,
+    "cv": 0.10922709882748426,
+    "median_bytes": 124220,
+    "samples_ns": [
+      150340.46,
+      180450.3,
+      149933.14
+    ]
+  },
+  "4096/typed-row/point_complete": {
+    "median_ns": 11758.62,
+    "cv": 0.01433898145622465,
+    "median_bytes": 8158.72,
+    "samples_ns": [
+      12045.6,
+      11744.5,
+      11758.62
+    ]
+  },
+  "4096/typed-row/batch_complete": {
+    "median_ns": 246547.98,
+    "cv": 0.011542611649541751,
+    "median_bytes": 128675.52,
+    "samples_ns": [
+      246547.98,
+      241906.4,
+      247031.7
+    ]
+  },
+  "4096/typed-row/range_complete": {
+    "median_ns": 88639.68,
+    "cv": 0.023536188088778918,
+    "median_bytes": 43684.8,
+    "samples_ns": [
+      88639.68,
+      86357.02,
+      90516.54
+    ]
+  },
+  "4096/typed-row/range_public_complete": {
+    "median_ns": 221584.1,
+    "cv": 0.021623627900880425,
+    "median_bytes": 150388.16,
+    "samples_ns": [
+      221584.1,
+      217967.86,
+      227492.32
+    ]
+  },
+  "4096/typed-row/update_nonindexed": {
+    "median_ns": 13472797.42,
+    "cv": 0.0069436464316296395,
+    "median_bytes": 856293.6,
+    "samples_ns": [
+      13472797.42,
+      13325238.38,
+      13497840.06
+    ]
+  },
+  "4096/typed-row/update_indexed": {
+    "median_ns": 14441619.44,
+    "cv": 0.029531888075024097,
+    "median_bytes": 1017423.36,
+    "samples_ns": [
+      14441619.44,
+      13849779.2,
+      14668985.22
+    ]
+  },
+  "4096/typed-row/replace": {
+    "median_ns": 13131046.82,
+    "cv": 0.01525046842419801,
+    "median_bytes": 889125.76,
+    "samples_ns": [
+      13131046.82,
+      12835331.54,
+      13214329.96
+    ]
+  },
+  "4096/typed-row/delete": {
+    "median_ns": 12836877.8,
+    "cv": 0.0214457366400422,
+    "median_bytes": 978238.4,
+    "samples_ns": [
+      12836877.8,
+      13299069.26,
+      12799291.98
+    ]
+  },
+  "4096/typed-row/mixed_churn": {
+    "median_ns": 16499791.68,
+    "cv": 0.016824739787718174,
+    "median_bytes": 1357391.2,
+    "samples_ns": [
+      16499791.68,
+      16963603.46,
+      16459981.26
+    ]
+  },
+  "4096/typed-row/checkpoint": {
+    "median_ns": 32733629,
+    "cv": 0.030196415682713064,
+    "median_bytes": 576112,
+    "samples_ns": [
+      32031660,
+      33993501,
+      32733629
+    ]
+  },
+  "4096/typed-row/upsert": {
+    "median_ns": 20564216.88,
+    "cv": 0.04391029113592034,
+    "median_bytes": 1343357.92,
+    "samples_ns": [
+      20851576.4,
+      20564216.88,
+      19191686.38
+    ]
+  },
+  "4096/json/load": {
+    "median_ns": 5225178.703125,
+    "cv": 0.007019559638061496,
+    "median_bytes": 125562.5625,
+    "samples_ns": [
+      5212406.546875,
+      5225178.703125,
+      5281530.59375
+    ]
+  },
+  "4096/json/point_get_into_complete": {
+    "median_ns": 2151.56,
+    "cv": 0.12590890316734266,
+    "median_bytes": 1160,
+    "samples_ns": [
+      2151.56,
+      2093.5,
+      2618.96
+    ]
+  },
+  "4096/json/point_complete": {
+    "median_ns": 1795.46,
+    "cv": 0.0772030436572001,
+    "median_bytes": 832,
+    "samples_ns": [
+      1747,
+      1795.46,
+      2015.38
+    ]
+  },
+  "4096/json/batch_complete": {
+    "median_ns": 21748.16,
+    "cv": 0.0049997900113361035,
+    "median_bytes": 43328,
+    "samples_ns": [
+      21566.84,
+      21748.16,
+      21760.6
+    ]
+  },
+  "4096/json/range_complete": {
+    "median_ns": 12203.9,
+    "cv": 0.02387191242034792,
+    "median_bytes": 13088,
+    "samples_ns": [
+      12440.32,
+      11862.5,
+      12203.9
+    ]
+  },
+  "4096/json/range_public_complete": {
+    "median_ns": 11809.26,
+    "cv": 0.0028819560573642464,
+    "median_bytes": 5920,
+    "samples_ns": [
+      11802.3,
+      11864.5,
+      11809.26
+    ]
+  },
+  "4096/json/update_nonindexed": {
+    "median_ns": 11569938.3,
+    "cv": 0.015554328720377607,
+    "median_bytes": 240846.56,
+    "samples_ns": [
+      11499223.66,
+      11842054.58,
+      11569938.3
+    ]
+  },
+  "4096/json/update_indexed": {
+    "median_ns": 12651303.18,
+    "cv": 0.0024544188256654946,
+    "median_bytes": 779314.88,
+    "samples_ns": [
+      12700038.14,
+      12642244.12,
+      12651303.18
+    ]
+  },
+  "4096/json/replace": {
+    "median_ns": 11096383.76,
+    "cv": 0.018266281533846084,
+    "median_bytes": 265647.2,
+    "samples_ns": [
+      10890064.22,
+      11096383.76,
+      11295331.44
+    ]
+  },
+  "4096/json/delete": {
+    "median_ns": 11070900.36,
+    "cv": 0.02497570520369773,
+    "median_bytes": 343816.48,
+    "samples_ns": [
+      11067346.84,
+      11554960.82,
+      11070900.36
+    ]
+  },
+  "4096/json/mixed_churn": {
+    "median_ns": 14380817,
+    "cv": 0.016592785276912166,
+    "median_bytes": 418692,
+    "samples_ns": [
+      14380817,
+      14624119.74,
+      14146811.46
+    ]
+  },
+  "4096/json/checkpoint": {
+    "median_ns": 18765513,
+    "cv": 0.4979110728088218,
+    "median_bytes": 115464,
+    "samples_ns": [
+      6501933,
+      18765513,
+      20302760
+    ]
+  },
+  "4096/json/upsert": {
+    "median_ns": 0,
+    "cv": null,
+    "median_bytes": 0,
+    "samples_ns": [
+      0,
+      0,
+      0
+    ]
+  },
+  "4096/sqlite-row/load": {
+    "median_ns": 5329635.671875,
+    "cv": 0.038380219781352164,
+    "median_bytes": 107461.75,
+    "samples_ns": [
+      5291192.0703125,
+      5669857.828125,
+      5329635.671875
+    ]
+  },
+  "4096/sqlite-row/point_get_into_complete": {
+    "median_ns": 26005.18,
+    "cv": 0.008743744063845291,
+    "median_bytes": 8039.2,
+    "samples_ns": [
+      26005.18,
+      26172.08,
+      25722.9
+    ]
+  },
+  "4096/sqlite-row/point_complete": {
+    "median_ns": 16849.92,
+    "cv": 0.010848062350994048,
+    "median_bytes": 7100,
+    "samples_ns": [
+      16584,
+      16849.92,
+      16932.54
+    ]
+  },
+  "4096/sqlite-row/batch_complete": {
+    "median_ns": 367380.28,
+    "cv": 0.008792722322662976,
+    "median_bytes": 209224,
+    "samples_ns": [
+      367380.28,
+      362081.14,
+      367888.52
+    ]
+  },
+  "4096/sqlite-row/range_complete": {
+    "median_ns": 148577.4,
+    "cv": 0.008987360591937398,
+    "median_bytes": 66632.96,
+    "samples_ns": [
+      149373.92,
+      148577.4,
+      146773.56
+    ]
+  },
+  "4096/sqlite-row/range_public_complete": {
+    "median_ns": 127834.36,
+    "cv": 0.015994328287524034,
+    "median_bytes": 60576,
+    "samples_ns": [
+      130421.3,
+      127834.36,
+      126371.76
+    ]
+  },
+  "4096/sqlite-row/update_nonindexed": {
+    "median_ns": 5124767.26,
+    "cv": 0.010211505002583492,
+    "median_bytes": 4816.96,
+    "samples_ns": [
+      5124767.26,
+      5214439.52,
+      5121875.42
+    ]
+  },
+  "4096/sqlite-row/update_indexed": {
+    "median_ns": 5139860.26,
+    "cv": 0.010838651535292456,
+    "median_bytes": 5040,
+    "samples_ns": [
+      5092885.06,
+      5203986.88,
+      5139860.26
+    ]
+  },
+  "4096/sqlite-row/replace": {
+    "median_ns": 5132006.02,
+    "cv": 0.01592340039740302,
+    "median_bytes": 5077.76,
+    "samples_ns": [
+      5272096.7,
+      5132006.02,
+      5126769.08
+    ]
+  },
+  "4096/sqlite-row/delete": {
+    "median_ns": 5127066.48,
+    "cv": 0.007475000451545538,
+    "median_bytes": 761.92,
+    "samples_ns": [
+      5179283.4,
+      5127066.48,
+      5104406.38
+    ]
+  },
+  "4096/sqlite-row/mixed_churn": {
+    "median_ns": 6449019.76,
+    "cv": 0.007323881835361369,
+    "median_bytes": 5044.32,
+    "samples_ns": [
+      6437360.82,
+      6524645.34,
+      6449019.76
+    ]
+  },
+  "4096/sqlite-row/checkpoint": {
+    "median_ns": 9902288,
+    "cv": 0.04224003915946681,
+    "median_bytes": 624,
+    "samples_ns": [
+      9902288,
+      10611428,
+      9843425
+    ]
+  },
+  "4096/sqlite-row/upsert": {
+    "median_ns": 5220451.02,
+    "cv": 0.0075850170315081185,
+    "median_bytes": 21625.28,
+    "samples_ns": [
+      5261634.42,
+      5220451.02,
+      5182445.18
+    ]
+  },
+  "16384/typed-row/load": {
+    "median_ns": 17033089.478515625,
+    "cv": 0.03482950183945868,
+    "median_bytes": 1418616.71875,
+    "samples_ns": [
+      17033089.478515625,
+      17575059.373046875,
+      16392224.8984375
+    ]
+  },
+  "16384/typed-row/point_get_into_complete": {
+    "median_ns": 320285.44,
+    "cv": 0.024833559945115005,
+    "median_bytes": 305532.32,
+    "samples_ns": [
+      314272.8,
+      320285.44,
+      330092.32
+    ]
+  },
+  "16384/typed-row/point_complete": {
+    "median_ns": 12198.1,
+    "cv": 0.06662568061026143,
+    "median_bytes": 8158.72,
+    "samples_ns": [
+      12198.1,
+      13532.56,
+      11988.1
+    ]
+  },
+  "16384/typed-row/batch_complete": {
+    "median_ns": 243916.96,
+    "cv": 0.004907604097447048,
+    "median_bytes": 128675.52,
+    "samples_ns": [
+      244557.76,
+      243916.96,
+      242242.7
+    ]
+  },
+  "16384/typed-row/range_complete": {
+    "median_ns": 89394.74,
+    "cv": 0.03205891283899476,
+    "median_bytes": 44277.76,
+    "samples_ns": [
+      89394.74,
+      88924.78,
+      94187.2
+    ]
+  },
+  "16384/typed-row/range_public_complete": {
+    "median_ns": 402000.64,
+    "cv": 0.011404860371415547,
+    "median_bytes": 331707.84,
+    "samples_ns": [
+      402000.64,
+      400868.4,
+      409356.08
+    ]
+  },
+  "16384/typed-row/update_nonindexed": {
+    "median_ns": 16029678.72,
+    "cv": 0.016401389189500182,
+    "median_bytes": 1587939.36,
+    "samples_ns": [
+      16017767.18,
+      16029678.72,
+      16483160.28
+    ]
+  },
+  "16384/typed-row/update_indexed": {
+    "median_ns": 16340810.22,
+    "cv": 0.04510580015482276,
+    "median_bytes": 1736651.04,
+    "samples_ns": [
+      16340810.22,
+      16322662.78,
+      17641681.3
+    ]
+  },
+  "16384/typed-row/replace": {
+    "median_ns": 13679000.22,
+    "cv": 0.11075917609058683,
+    "median_bytes": 1424163.36,
+    "samples_ns": [
+      13679000.22,
+      13466268.98,
+      16347768.46
+    ]
+  },
+  "16384/typed-row/delete": {
+    "median_ns": 13574201,
+    "cv": 0.12385451999162507,
+    "median_bytes": 1571058.4,
+    "samples_ns": [
+      13574201,
+      13399163.76,
+      16598721.02
+    ]
+  },
+  "16384/typed-row/mixed_churn": {
+    "median_ns": 17703598,
+    "cv": 0.005209524835826784,
+    "median_bytes": 2093936.8,
+    "samples_ns": [
+      17833781.78,
+      17703598,
+      17655175.98
+    ]
+  },
+  "16384/typed-row/checkpoint": {
+    "median_ns": 9062126,
+    "cv": 0.8638918764804405,
+    "median_bytes": 64312,
+    "samples_ns": [
+      14904,
+      9062126,
+      9070029
+    ]
+  },
+  "16384/typed-row/upsert": {
+    "median_ns": 20613037.34,
+    "cv": 0.052438243647716015,
+    "median_bytes": 1960468.8,
+    "samples_ns": [
+      22377942.96,
+      20337964.7,
+      20613037.34
+    ]
+  },
+  "16384/json/load": {
+    "median_ns": 5184161.06640625,
+    "cv": 0.007025947381870227,
+    "median_bytes": 125207.734375,
+    "samples_ns": [
+      5184161.06640625,
+      5219542.849609375,
+      5146714.984375
+    ]
+  },
+  "16384/json/point_get_into_complete": {
+    "median_ns": 2287.78,
+    "cv": 0.10750026513634237,
+    "median_bytes": 1160,
+    "samples_ns": [
+      2252.96,
+      2720,
+      2287.78
+    ]
+  },
+  "16384/json/point_complete": {
+    "median_ns": 2151.08,
+    "cv": 0.0895400233173267,
+    "median_bytes": 832,
+    "samples_ns": [
+      1994.86,
+      2382.14,
+      2151.08
+    ]
+  },
+  "16384/json/batch_complete": {
+    "median_ns": 22374.9,
+    "cv": 0.12758633932276442,
+    "median_bytes": 43328,
+    "samples_ns": [
+      21835.44,
+      22374.9,
+      27356.16
+    ]
+  },
+  "16384/json/range_complete": {
+    "median_ns": 12851.04,
+    "cv": 0.03644568474745527,
+    "median_bytes": 13401.6,
+    "samples_ns": [
+      12851.04,
+      12086.26,
+      12910.9
+    ]
+  },
+  "16384/json/range_public_complete": {
+    "median_ns": 11784.76,
+    "cv": 0.12487017994352854,
+    "median_bytes": 5920,
+    "samples_ns": [
+      11784.76,
+      11719.92,
+      14491.02
+    ]
+  },
+  "16384/json/update_nonindexed": {
+    "median_ns": 30494495.78,
+    "cv": 0.010770522994173836,
+    "median_bytes": 274951.2,
+    "samples_ns": [
+      30750161.98,
+      30099250.38,
+      30494495.78
+    ]
+  },
+  "16384/json/update_indexed": {
+    "median_ns": 31707837.7,
+    "cv": 0.03652366898594341,
+    "median_bytes": 404063.84,
+    "samples_ns": [
+      33157072.26,
+      30851753.56,
+      31707837.7
+    ]
+  },
+  "16384/json/replace": {
+    "median_ns": 29599631.48,
+    "cv": 0.023630097484268853,
+    "median_bytes": 277645.6,
+    "samples_ns": [
+      30640844.66,
+      29296191.12,
+      29599631.48
+    ]
+  },
+  "16384/json/delete": {
+    "median_ns": 30245995.96,
+    "cv": 0.003997950131523284,
+    "median_bytes": 389040.8,
+    "samples_ns": [
+      30046076.86,
+      30263143.64,
+      30245995.96
+    ]
+  },
+  "16384/json/mixed_churn": {
+    "median_ns": 37616458.28,
+    "cv": 0.017969519324237026,
+    "median_bytes": 449803.04,
+    "samples_ns": [
+      37384879.14,
+      38662720.66,
+      37616458.28
+    ]
+  },
+  "16384/json/checkpoint": {
+    "median_ns": 8290660,
+    "cv": 0.08212193066083075,
+    "median_bytes": 63624,
+    "samples_ns": [
+      8290660,
+      9505875,
+      8251924
+    ]
+  },
+  "16384/json/upsert": {
+    "median_ns": 0,
+    "cv": null,
+    "median_bytes": 0,
+    "samples_ns": [
+      0,
+      0,
+      0
+    ]
+  },
+  "16384/sqlite-row/load": {
+    "median_ns": 5491279.1640625,
+    "cv": 0.011156719760611946,
+    "median_bytes": 107425.78125,
+    "samples_ns": [
+      5492322.91015625,
+      5386360.49609375,
+      5491279.1640625
+    ]
+  },
+  "16384/sqlite-row/point_get_into_complete": {
+    "median_ns": 26823.9,
+    "cv": 0.024377261197011415,
+    "median_bytes": 8039.2,
+    "samples_ns": [
+      26823.9,
+      25775,
+      26954.02
+    ]
+  },
+  "16384/sqlite-row/point_complete": {
+    "median_ns": 16891.54,
+    "cv": 0.027578544193089447,
+    "median_bytes": 7100,
+    "samples_ns": [
+      17538.74,
+      16626.3,
+      16891.54
+    ]
+  },
+  "16384/sqlite-row/batch_complete": {
+    "median_ns": 379681.78,
+    "cv": 0.02806718669570648,
+    "median_bytes": 209224,
+    "samples_ns": [
+      383920.3,
+      363902.8,
+      379681.78
+    ]
+  },
+  "16384/sqlite-row/range_complete": {
+    "median_ns": 152670.42,
+    "cv": 0.035110236123852605,
+    "median_bytes": 66632.96,
+    "samples_ns": [
+      153127.88,
+      143794.12,
+      152670.42
+    ]
+  },
+  "16384/sqlite-row/range_public_complete": {
+    "median_ns": 132937.78,
+    "cv": 0.03015674048290462,
+    "median_bytes": 60576,
+    "samples_ns": [
+      132937.78,
+      126144.92,
+      133004.84
+    ]
+  },
+  "16384/sqlite-row/update_nonindexed": {
+    "median_ns": 5181825.34,
+    "cv": 0.0036165539866293023,
+    "median_bytes": 4784.32,
+    "samples_ns": [
+      5181825.34,
+      5179024.56,
+      5212852.54
+    ]
+  },
+  "16384/sqlite-row/update_indexed": {
+    "median_ns": 5213483.46,
+    "cv": 0.012759618711539902,
+    "median_bytes": 4912,
+    "samples_ns": [
+      5213483.46,
+      5196690.7,
+      5320051.84
+    ]
+  },
+  "16384/sqlite-row/replace": {
+    "median_ns": 5108005.22,
+    "cv": 0.0027502588163481785,
+    "median_bytes": 4943.04,
+    "samples_ns": [
+      5108005.22,
+      5118492.98,
+      5090687.08
+    ]
+  },
+  "16384/sqlite-row/delete": {
+    "median_ns": 5117179.32,
+    "cv": 0.007005109830138678,
+    "median_bytes": 759.04,
+    "samples_ns": [
+      5059829.6,
+      5125430.5,
+      5117179.32
+    ]
+  },
+  "16384/sqlite-row/mixed_churn": {
+    "median_ns": 6456469.42,
+    "cv": 0.011446264909796814,
+    "median_bytes": 4880.48,
+    "samples_ns": [
+      6391486.98,
+      6539076.04,
+      6456469.42
+    ]
+  },
+  "16384/sqlite-row/checkpoint": {
+    "median_ns": 18221665,
+    "cv": 0.004268551617986503,
+    "median_bytes": 624,
+    "samples_ns": [
+      18200824,
+      18345004,
+      18221665
+    ]
+  },
+  "16384/sqlite-row/upsert": {
+    "median_ns": 5197035.38,
+    "cv": 0.004436716279495542,
+    "median_bytes": 60923.36,
+    "samples_ns": [
+      5232657.24,
+      5197035.38,
+      5189370.44
+    ]
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "at": "2026-10-07T08:35:07.173296+00:00",
+  "host": "185",
+  "path": "/mnt/fast4tb/gomap-r1-arch-5090-20261007/notes/fsverity-capability-probe.dat",
+  "purpose": "one bounded managed-immutable filesystem capability feasibility check; not a benchmark or product qualification",
+  "enable": "unsupported_or_denied",
+  "errno": 95,
+  "error": "[Errno 95] Operation not supported",
+  "cleanup": "exact disposable inode unlinked after all handles closed",
+  "path_absent": true
+}

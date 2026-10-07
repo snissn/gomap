@@ -1,0 +1,12 @@
+{
+  "utc": "2026-10-06T21:02:45.125090+00:00",
+  "source_root": "/private/tmp/gomap-r1-execution-20261005",
+  "destination_root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006",
+  "manifest_sha256": "bf2ddba79d6e13346b432649e06ea32d7b4b04648637257b85dbf692471b0292",
+  "entries_verified": 3518,
+  "regular_bytes_verified": 1477120482,
+  "rsync_exit": 0,
+  "all_entries_byte_and_mode_equal": true,
+  "originals_deleted": false,
+  "scope": "Preservation snapshot only; no measurement qualification or publication."
+}

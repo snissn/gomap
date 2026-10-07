@@ -1,0 +1,12 @@
+--- original/qualify.py
++++ locale-provenance-v2/qualify.py
+@@ -140,7 +140,8 @@
+              'GOMAXPROCS': '16', 'GOGC': '100', 'GOMEMLIMIT': 'off', 'PYTHONDONTWRITEBYTECODE': '1'}
+     require(all(environment.get(k) == v for k, v in fixed.items()) and set(environment) <= set(fixed) | {'HOME', 'PATH'}, 'observer environment not frozen')
+     effective = {**environment, 'R1_GO': str(receipts / 'go')}
+-    require(run_start['environment'] == build_start['environment'] == validation_start['environment'] == effective, 'original compiler/driver/validator environments disagree')
++    require(run_start['environment'] == validation_start['environment'] == effective, 'original driver/validator environments disagree')
++    require(build_start['environment'] == {**effective, 'LC_CTYPE': 'C.UTF-8'}, 'original compiler environment differs from exact observed Python startup locale')
+     binary = out / 'collections.test'
+     compiler = [cfg['real_go'], 'test', '-c', '-o', str(binary), './TreeDB/collections']
+     require(build_start['argv'] == build['argv'] == compiler and build_start['cwd'] == str(repo), 'original real compiler command differs')

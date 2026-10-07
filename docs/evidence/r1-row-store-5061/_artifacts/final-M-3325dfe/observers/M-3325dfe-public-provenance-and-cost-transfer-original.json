@@ -1,0 +1,92 @@
+{
+  "utc": "2026-10-07T00:52:19.548132+00:00",
+  "state": "ALL17_RELEASED_PRIVATE_FILES_EXCLUSIVELY_TRANSFERRED_SHA256_VERIFIED_NO_ACTUAL_PUBLIC_ACTIVATION",
+  "files": [
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/build-draft-inputs.py",
+      "sha256": "df71ce652147f3a55522e6c00f2a168f57266b66eb454060ce90eb792108c341",
+      "bytes": 22314
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/build-draft-inputs.py.diff",
+      "sha256": "8560cd3174dcb9bac0d68cf0ac590073566f02f37cfa23553dff364c76bb9bef",
+      "bytes": 1692
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/handoff.json",
+      "sha256": "f7fcf6b0e0254fa2b4c763c0c1e4a3ad7b2113efe1320aa229cce2bfb1887fdb",
+      "bytes": 5240
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/handoff.md",
+      "sha256": "3bed60ff03978b38915ab31ed0f3ec8124884cc2b721da2a358c8e70659d233a",
+      "bytes": 2073
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/original-read-only-observations.json",
+      "sha256": "f44d1ad9936d1fc0beea8c252bed11a61c394059a3d983f879257c024c2e9950",
+      "bytes": 75851
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/replay-public.py",
+      "sha256": "1bcdfa4ebc4489b2292caeb25a3f5ffd38a1adb347a0e455e8f4d736c4a07fcc",
+      "bytes": 34425
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/replay-public.py.diff",
+      "sha256": "a5fcb25b4b93006de6cae4c3f315aee1447ed39f8d4cf86fccddfdbdf6a510ca",
+      "bytes": 605
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/root-inputs.template.json",
+      "sha256": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4",
+      "bytes": 15652
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/root-inputs.template.json.diff",
+      "sha256": "bb2df5f3ae4b3a8dfb7071516c4128379eed7969b58c9608c87a9c4ff7e839c0",
+      "bytes": 590
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-preparation/static-checks.json",
+      "sha256": "7c92a2385d326c167e8e33fabf15751613eb50214fb54c543cf23cd95f64f4d2",
+      "bytes": 3242
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-review/handoff.json",
+      "sha256": "3cb25047ec5d9fc1f2b4b75e319b188f6874acc35fb0891a3ae8228aaff2b8fb",
+      "bytes": 1705
+    },
+    {
+      "path": "M-3325dfe-public-replay-provenance-v2-review/handoff.md",
+      "sha256": "d19d82677e27da8d947a80f15e0341b998b478d9b2f544d96756da66bd179fea",
+      "bytes": 1232
+    },
+    {
+      "path": "M-3325dfe-A-cost-interpretation-review/gate-advisory.json",
+      "sha256": "76ce3a67e4b68f40c2491547a7c082ab947767772977887f5d137a832ae64868",
+      "bytes": 4138
+    },
+    {
+      "path": "M-3325dfe-A-cost-interpretation-review/gate-advisory.md",
+      "sha256": "2a1b6468b7a34ca3deaa49b24afdfc4b1e4532f68b11f04e48a3cea4d2571f18",
+      "bytes": 1815
+    },
+    {
+      "path": "M-3325dfe-A-cost-interpretation-review/handoff.json",
+      "sha256": "b1c9cb693bc0b9968dfb157fcc52a04f04db72e6b646bb984bce7f9984a990d9",
+      "bytes": 5270
+    },
+    {
+      "path": "M-3325dfe-A-cost-interpretation-review/handoff.md",
+      "sha256": "914a00eedb8615b7fde7be66b010e3c0dee7245bb670ca3a25a23e42020f6d6c",
+      "bytes": 3596
+    },
+    {
+      "path": "M-3325dfe-A-cost-interpretation-review/original-read-only-extract.json",
+      "sha256": "5102c672a61441ac467d3838877dec0a9d21ceccc7b85b27a74de2f2ad2c9613",
+      "bytes": 72004
+    }
+  ],
+  "root_adoption_sha256": "84d4d6648fed02292204ea3659e75ce40d4a8e377ccd41f1731e344312bb03d2"
+}

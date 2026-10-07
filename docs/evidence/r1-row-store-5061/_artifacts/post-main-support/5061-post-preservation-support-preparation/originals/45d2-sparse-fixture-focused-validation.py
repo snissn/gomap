@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+import datetime, hashlib, json, os, pathlib, subprocess, sys
+
+repo = pathlib.Path('/home/mikers/gomap-r1-final-source-20261006')
+out = pathlib.Path('/home/mikers/gomap-r1-final-receipts-20261006/45d2-sparse-fixture-focused-validation')
+head = '45d2cf6828c50491f82ac00403f5d5328ba0c67e'
+runtime = 'cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9'
+goroot = '/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64'
+go = goroot + '/bin/go'
+env = {k: os.environ[k] for k in ('HOME', 'PATH') if k in os.environ}
+env.update(GOROOT=goroot, GOCACHE='/home/mikers/.cache/gomap-r1-retained-20261006-go1264',
+           GOMODCACHE='/home/mikers/go/pkg/mod', GOTOOLCHAIN='local', GOWORK='off',
+           GOENV='off', GOFLAGS='', GODEBUG='', GOMAXPROCS='16', GOGC='100',
+           GOMEMLIMIT='off', PYTHONDONTWRITEBYTECODE='1')
+os.environ.clear()
+os.environ.update(env)
+os.chdir(repo)
+sys.path.insert(0, str(repo / 'scripts'))
+import r1_collection_source
+
+def now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def source():
+    x = r1_collection_source.source_identity()
+    assert x['commit'] == head and x['runtime_sha256'] == runtime and x['clean']
+    return x
+
+def write(name, value):
+    with (out / name).open('x') as f:
+        json.dump(value, f, indent=2, sort_keys=True)
+        f.write('\n')
+
+assert subprocess.check_output([go, 'version'], text=True).strip() == 'go version go1.26.4 linux/amd64'
+before = source()
+out.mkdir(mode=0o700, exist_ok=False)
+write('source-before.json', before)
+packages = ['./TreeDB/nativewire']
+regex = '^TestFixedPeerColocatedExactIDMutationsRF4RealRaftV1$'
+commands = [('format', [goroot + '/bin/gofmt', '-l', 'TreeDB/nativewire/vector_partition_colocated_mutation_v1_test.go']),
+            ('normal', [go, 'test', '-json', *packages, '-run', regex, '-count=3', '-timeout=8m']),
+            ('race', [go, 'test', '-race', '-json', *packages, '-run', regex, '-count=1', '-timeout=10m']),
+            ('vet', [go, 'vet', './TreeDB/nativewire'])]
+for name, argv in commands:
+    start = {'utc': now(), 'argv': argv, 'cwd': str(repo), 'environment': env, 'source': source(),
+             'driver_sha256': sha(pathlib.Path(__file__)), 'go_sha256': sha(pathlib.Path(go))}
+    write(name + '-start.json', start)
+    log = out / (name + '.log')
+    with log.open('xb') as f:
+        result = subprocess.run(argv, cwd=repo, env=env, stdout=f, stderr=subprocess.STDOUT)
+    write(name + '-exit.json', {'utc': now(), 'exit': result.returncode, 'log_sha256': sha(log), 'source': source()})
+    print(name, 'exit', result.returncode, flush=True)
+    if name == 'format' and log.read_bytes():
+        raise RuntimeError('gofmt reported unformatted source')
+    if result.returncode:
+        sys.exit(result.returncode)
+write('source-after.json', source())
+print('FOCUSED_VALIDATION_PASS', head, flush=True)

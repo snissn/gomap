@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"math/bits"
 	"math/rand/v2"
 	"os"
@@ -1258,8 +1259,8 @@ func quicksilverBenchprofRuns(cfg BenchConfig, c quicksilverConfig, reports []qu
 	for _, report := range reports {
 		run.Instances = append(run.Instances, &DBInstance{Name: report.Engine, Wrapper: report.wrapper, Dir: report.DataDir})
 		run.TreeDBStats[report.DBName] = report.FinalStats
-		run.CheckpointDurations["quicksilver_initial"][report.DBName] = time.Duration(report.InitialCheckpointMS * float64(time.Millisecond))
-		run.CheckpointDurations["quicksilver_final"][report.DBName] = time.Duration(report.FinalCheckpointMS * float64(time.Millisecond))
+		run.CheckpointDurations["quicksilver_initial"][report.DBName] = time.Duration(math.Round(report.InitialCheckpointMS * float64(time.Millisecond)))
+		run.CheckpointDurations["quicksilver_final"][report.DBName] = time.Duration(math.Round(report.FinalCheckpointMS * float64(time.Millisecond)))
 		for _, p := range report.Phases {
 			if run.Results[p.Name] == nil {
 				run.Results[p.Name] = map[string]float64{}

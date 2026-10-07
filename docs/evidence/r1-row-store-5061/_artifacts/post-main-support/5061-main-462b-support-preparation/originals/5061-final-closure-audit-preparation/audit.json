@@ -1,0 +1,151 @@
+{
+  "kind": "r1-final-E-closure-audit-preparation",
+  "status": "PREPARATION_ONLY_NOT_ACCEPTANCE",
+  "captured_at_utc": "2026-10-06T19:29:24.705324+00:00",
+  "live_issue_read_command": [
+    "gh",
+    "issue",
+    "view",
+    "NUMBER",
+    "--repo",
+    "snissn/gomap",
+    "--json",
+    "number,title,body,state,url,updatedAt"
+  ],
+  "live_issue_read_exit_codes": {
+    "5056": 0,
+    "5059": 0,
+    "5060": 0,
+    "5061": 0,
+    "5066": 0
+  },
+  "counts": {
+    "criteria": 37,
+    "checked": 8,
+    "unchecked": 29
+  },
+  "live_issue_snapshots": [
+    {
+      "number": 5056,
+      "url": "https://github.com/snissn/gomap/issues/5056",
+      "state": "OPEN",
+      "updated_at": "2026-10-06T18:48:22Z",
+      "criteria": 7,
+      "checked": 2,
+      "body_snapshot": "/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/issue-5056.json",
+      "snapshot_sha256": "ac64eb84e2113bb0b061787c1c2e1948b055985ff4eadad3088c62fc8ecd23a6",
+      "bytes": 20908
+    },
+    {
+      "number": 5059,
+      "url": "https://github.com/snissn/gomap/issues/5059",
+      "state": "OPEN",
+      "updated_at": "2026-10-06T08:35:17Z",
+      "criteria": 7,
+      "checked": 6,
+      "body_snapshot": "/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/issue-5059.json",
+      "snapshot_sha256": "70b18c48f246d2c8f59b213a85dce6bf58ef8e254cf613effac62e8c5f032bf8",
+      "bytes": 8853
+    },
+    {
+      "number": 5060,
+      "url": "https://github.com/snissn/gomap/issues/5060",
+      "state": "OPEN",
+      "updated_at": "2026-10-06T05:05:22Z",
+      "criteria": 8,
+      "checked": 0,
+      "body_snapshot": "/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/issue-5060.json",
+      "snapshot_sha256": "7cf1f2c480843ae230ce72b74ea97ec8295e4f48e31adc24caa2f2998e219b87",
+      "bytes": 7747
+    },
+    {
+      "number": 5061,
+      "url": "https://github.com/snissn/gomap/issues/5061",
+      "state": "OPEN",
+      "updated_at": "2026-10-06T01:15:07Z",
+      "criteria": 8,
+      "checked": 0,
+      "body_snapshot": "/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/issue-5061.json",
+      "snapshot_sha256": "ec94d4c6a1fac60f63d2129ab25019f641598650dde602fb62f8dee9e4393aaa",
+      "bytes": 4536
+    },
+    {
+      "number": 5066,
+      "url": "https://github.com/snissn/gomap/issues/5066",
+      "state": "OPEN",
+      "updated_at": "2026-10-06T07:44:52Z",
+      "criteria": 7,
+      "checked": 0,
+      "body_snapshot": "/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/issue-5066.json",
+      "snapshot_sha256": "06ae49ca870750bacf3a83bee0d5198e1c6544c431c2d401312d2bfc9151cc7e",
+      "bytes": 10361
+    }
+  ],
+  "inputs": [
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/final-report-compact-template.md",
+      "sha256": "65411a079ca8fde95e79906fa9c442c1ff91a288fd29c1711300e8ab23f0ff6e",
+      "bytes": 12813
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/final-report-compact-template.json",
+      "sha256": "dcbc8bb4f33de7c0785f64ed1b46da202930aff4e581ea1fabadb10cd0779fee",
+      "bytes": 12404
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/consolidated-closeout-map.json",
+      "sha256": "97e96030143f50b19ad294d611213e959c1cc341e5fb84532d9fe4d2b979a55b",
+      "bytes": 37405
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/final-capture-readiness-review.md",
+      "sha256": "c6426f6ec9cdb0155fb88f94372725c06e5b375f2d64ce30adf649c6126c83ec",
+      "bytes": 9775
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/prepare-evidence-publication-final.py",
+      "sha256": "d03f6fe489ae7bd0296cd31dcff1785cbd25d855acb714afe1191ea73a0b426a",
+      "bytes": 13842
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/verify-publication-replay.py",
+      "sha256": "66f6c4096014322e3407b3efc5959751f534307ebe9a3e272b6148eba2f40ea6",
+      "bytes": 4299
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/compare_r1_packets.py",
+      "sha256": "1a54cac528e5c8acc2501ec67b13d9a185b011e1467856741ada320a8bfdcfc8",
+      "bytes": 5984
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/mutation-receipt-preparation/summarize.py",
+      "sha256": "cdede02aa3be5a0769649c539d497963f7f1db0214b2089b469fac5f423d5749",
+      "bytes": 3233
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/5061-final-publication-preparation/root-publication-sequence.md",
+      "sha256": "6298cb2085697df34227ea1984bd5f6a35f7f98c0a80439fc03521e297044d27",
+      "bytes": 1363
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/5061-final-publication-preparation/publication-plan.md",
+      "sha256": "7a089777cf82d69d487cea4d61ad3e36b86e37e502511213366ac1c9224ab098",
+      "bytes": 13729
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/final-public-replay-plan.md",
+      "sha256": "1f6d5b930a4a0c7dde86738ace2f1c2559efb0e4c50ec09e51b4120728c5b87a",
+      "bytes": 24310
+    }
+  ],
+  "note_sha256": "2e7fc374d878380ff072e3cea5d4cd5712420976aef8cf3225969d64e3dd8f62",
+  "actions_not_performed": [
+    "CI polling",
+    "Go",
+    "capture",
+    "publication",
+    "source/helper edits",
+    "GitHub writes"
+  ],
+  "owner": "root"
+}

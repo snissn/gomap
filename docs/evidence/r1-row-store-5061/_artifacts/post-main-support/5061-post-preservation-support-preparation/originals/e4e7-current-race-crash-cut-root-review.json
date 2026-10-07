@@ -1,0 +1,254 @@
+{
+  "utc": "2026-10-06T21:11:27.849568+00:00",
+  "status": "CURRENT_HEAD_RACE_CRASH_EXECUTION_VERIFIED; actual merged source and C/A/D acceptance pending",
+  "pr_head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+  "run_id": 37526268804,
+  "job_id": 112486076465,
+  "artifact_id": 11443822327,
+  "archive_bytes": 449878,
+  "archive_sha256": "e7c6674c7f15f4d0585c4555682be1593304761a76b7eface9204e75b9ab3472",
+  "original_artifact_metadata": "e4e7-ci-artifacts-2112-original.json",
+  "files": {
+    "treedb-race.jsonl": {
+      "bytes": 6194431,
+      "sha256": "fe4cbb555e9e88abdb6f94f2c9e2e093567354d9537612df451550a700c64443"
+    },
+    "treedb-race.jsonl.summary.md": {
+      "bytes": 3444,
+      "sha256": "f28fc2de09e1432320ccb19030d70cc561442085358a6d98ce5beb8066dc8743"
+    }
+  },
+  "families": {
+    "TestR1MutationCrashCuts5059": {
+      "expected_and_actual_pass_rows": 19,
+      "event_counts": {
+        "run": 19,
+        "output": 38,
+        "pass": 19
+      },
+      "pass_rows": [
+        {
+          "Time": "2026-10-06T20:39:44.199520407Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/insert/before_append",
+          "Elapsed": 1.07
+        },
+        {
+          "Time": "2026-10-06T20:39:45.290033524Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/insert/after_sync",
+          "Elapsed": 1.09
+        },
+        {
+          "Time": "2026-10-06T20:39:46.386727304Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/insert/ack",
+          "Elapsed": 1.1
+        },
+        {
+          "Time": "2026-10-06T20:39:47.463984016Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/replace/before_append",
+          "Elapsed": 1.08
+        },
+        {
+          "Time": "2026-10-06T20:39:48.563651318Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/replace/after_sync",
+          "Elapsed": 1.1
+        },
+        {
+          "Time": "2026-10-06T20:39:49.653570759Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/replace/ack",
+          "Elapsed": 1.09
+        },
+        {
+          "Time": "2026-10-06T20:39:50.726857318Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/upsert/before_append",
+          "Elapsed": 1.07
+        },
+        {
+          "Time": "2026-10-06T20:39:51.830457753Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/upsert/after_sync",
+          "Elapsed": 1.1
+        },
+        {
+          "Time": "2026-10-06T20:39:52.930142118Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/upsert/ack",
+          "Elapsed": 1.1
+        },
+        {
+          "Time": "2026-10-06T20:39:54.010914678Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/update/before_append",
+          "Elapsed": 1.08
+        },
+        {
+          "Time": "2026-10-06T20:39:55.104106282Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/update/after_sync",
+          "Elapsed": 1.09
+        },
+        {
+          "Time": "2026-10-06T20:39:56.19582997Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/update/ack",
+          "Elapsed": 1.09
+        },
+        {
+          "Time": "2026-10-06T20:39:57.269213942Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/source/before_append",
+          "Elapsed": 1.07
+        },
+        {
+          "Time": "2026-10-06T20:39:58.3586206Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/source/after_sync",
+          "Elapsed": 1.09
+        },
+        {
+          "Time": "2026-10-06T20:39:59.450411313Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/source/ack",
+          "Elapsed": 1.09
+        },
+        {
+          "Time": "2026-10-06T20:40:00.523358791Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/delete/before_append",
+          "Elapsed": 1.07
+        },
+        {
+          "Time": "2026-10-06T20:40:01.611124218Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/delete/after_sync",
+          "Elapsed": 1.09
+        },
+        {
+          "Time": "2026-10-06T20:40:02.694211674Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059/delete/ack",
+          "Elapsed": 1.08
+        },
+        {
+          "Time": "2026-10-06T20:40:02.69426816Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1MutationCrashCuts5059",
+          "Elapsed": 19.57
+        }
+      ]
+    },
+    "TestR1LifecycleRecoveryAfterMaintenance5060": {
+      "expected_and_actual_pass_rows": 4,
+      "event_counts": {
+        "run": 4,
+        "output": 17,
+        "pass": 4
+      },
+      "pass_rows": [
+        {
+          "Time": "2026-10-06T20:39:39.476104135Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/before_append",
+          "Elapsed": 1.52
+        },
+        {
+          "Time": "2026-10-06T20:39:41.011398836Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync",
+          "Elapsed": 1.54
+        },
+        {
+          "Time": "2026-10-06T20:39:42.517841274Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/ack",
+          "Elapsed": 1.51
+        },
+        {
+          "Time": "2026-10-06T20:39:42.517883984Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleRecoveryAfterMaintenance5060",
+          "Elapsed": 4.56
+        }
+      ]
+    },
+    "TestR1LifecycleMixedCycles5060": {
+      "expected_and_actual_pass_rows": 3,
+      "event_counts": {
+        "run": 3,
+        "output": 30,
+        "pass": 3
+      },
+      "pass_rows": [
+        {
+          "Time": "2026-10-06T20:39:36.029911798Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleMixedCycles5060/indexed=false",
+          "Elapsed": 1.64
+        },
+        {
+          "Time": "2026-10-06T20:39:37.956670685Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleMixedCycles5060/indexed=true",
+          "Elapsed": 1.93
+        },
+        {
+          "Time": "2026-10-06T20:39:37.956686414Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleMixedCycles5060",
+          "Elapsed": 3.57
+        }
+      ]
+    },
+    "TestR1LifecycleLogicalFoldAndVacuum5060": {
+      "expected_and_actual_pass_rows": 1,
+      "event_counts": {
+        "run": 1,
+        "output": 6,
+        "pass": 1
+      },
+      "pass_rows": [
+        {
+          "Time": "2026-10-06T20:39:34.390459293Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/collections",
+          "Test": "TestR1LifecycleLogicalFoldAndVacuum5060",
+          "Elapsed": 0.8
+        }
+      ]
+    }
+  },
+  "all_original_fail_rows": 0,
+  "scope": "18 selected mutation process cuts, 3 maintenance recovery process cuts, indexed/unindexed mixed cycles and fold/vacuum. No power-loss or retained performance/capacity assertion; no additional tests run."
+}

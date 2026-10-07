@@ -1,0 +1,130 @@
+{
+  "utc": "2026-10-06T20:19:44.585176+00:00",
+  "reviewer": "/root",
+  "status": "Actual isolated source-bound normal/race/vet/format PASS; diagnostic only; original CI failure not waived",
+  "files": {
+    "format-exit.json": {
+      "sha256": "1882c0a204a35de1757ca469db7edabfe6e6c1f13acdd2e16a7285a0af2605fa",
+      "bytes": 108295
+    },
+    "format-start.json": {
+      "sha256": "d67f3922fe07d3f22d423f6d99f8239d47cf5d7b2d5b65319eedd4deb63a93a0",
+      "bytes": 109325
+    },
+    "format.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "normal-exit.json": {
+      "sha256": "1e1345bab8a5f878be9b427958b27e9f8682692c4cffb3cc545e5f01230a6415",
+      "bytes": 108295
+    },
+    "normal-start.json": {
+      "sha256": "ff330ed17613ea6fa1985fdab8dcbcd4377580d08726b9d338ea084570bdefd0",
+      "bytes": 109427
+    },
+    "normal.log": {
+      "sha256": "6d4dd3fa26c99e28a1eb98549e2e344be08268be902b22ef54cc1a0991a6afb3",
+      "bytes": 8172
+    },
+    "race-exit.json": {
+      "sha256": "900e12a57bc3fbb787a07c345dd50a7bac3efaa2e4f57650b5ffa1d094c1bba3",
+      "bytes": 108295
+    },
+    "race-start.json": {
+      "sha256": "18e1e21eef3462c9f42fa43ce359a9eeb2642749945b6deb41ba92fe587f84bc",
+      "bytes": 109440
+    },
+    "race.log": {
+      "sha256": "8cf5af21d8728b65319324afed31a19682343c1096ddd422fc872336785f385e",
+      "bytes": 8176
+    },
+    "source-after.json": {
+      "sha256": "8d9b3bcca22d77dfa18832226b2c224ac53bb49f5eb7ae1b329473025dc2e6b2",
+      "bytes": 105879
+    },
+    "source-before.json": {
+      "sha256": "8d9b3bcca22d77dfa18832226b2c224ac53bb49f5eb7ae1b329473025dc2e6b2",
+      "bytes": 105879
+    },
+    "vet-exit.json": {
+      "sha256": "19e5bf8360495707af4af8ff80e963e85d27a822d63294a934094c17268de43b",
+      "bytes": 108295
+    },
+    "vet-start.json": {
+      "sha256": "90eca0bfe8f763913eb2b4cd74f32f529b810c7854447a10fdc66b8fd7c48126",
+      "bytes": 109288
+    },
+    "vet.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "commands": {
+    "normal": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "exit": 0,
+      "log_sha256": "6d4dd3fa26c99e28a1eb98549e2e344be08268be902b22ef54cc1a0991a6afb3",
+      "actual_test_PASS_rows": 7,
+      "package_elapsed": [
+        [
+          "github.com/snissn/gomap/TreeDB/nativewire",
+          5.933
+        ]
+      ]
+    },
+    "race": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "exit": 0,
+      "log_sha256": "8cf5af21d8728b65319324afed31a19682343c1096ddd422fc872336785f385e",
+      "actual_test_PASS_rows": 7,
+      "package_elapsed": [
+        [
+          "github.com/snissn/gomap/TreeDB/nativewire",
+          8.492
+        ]
+      ]
+    },
+    "vet": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/nativewire"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "actual_test_PASS_rows": 0,
+      "package_elapsed": []
+    },
+    "format": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "actual_test_PASS_rows": 0,
+      "package_elapsed": []
+    }
+  }
+}

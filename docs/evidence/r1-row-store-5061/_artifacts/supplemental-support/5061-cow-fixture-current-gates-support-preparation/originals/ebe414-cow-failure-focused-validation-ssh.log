@@ -1,0 +1,6 @@
+Traceback (most recent call last):
+  File "/home/mikers/gomap-r1-ebe414-cow-failure-focused-validation.py", line 39, in <module>
+    out.mkdir(mode=0o700, exist_ok=False)
+  File "/usr/lib/python3.10/pathlib.py", line 1175, in mkdir
+    self._accessor.mkdir(self, mode)
+FileExistsError: [Errno 17] File exists: '/home/mikers/gomap-r1-evidence-20261005/ebe414-additive-validation'

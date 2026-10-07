@@ -1,0 +1,16 @@
+{
+  "utc": "2026-10-06T22:15:18.825874+00:00",
+  "argv": [
+    "gh",
+    "pr",
+    "comment",
+    "5071",
+    "--repo",
+    "snissn/gomap",
+    "--body-file",
+    "/private/tmp/gomap-r1-execution-20261005/898a-hosted-request-body.md"
+  ],
+  "exit": 0,
+  "stdout": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026439545\n",
+  "stderr": ""
+}

@@ -1,0 +1,2154 @@
+{
+  "schema": "gomap-r1-e-support-selection-v1",
+  "status": "prepared-for-root-review-not-published",
+  "immutable_original_copies": true,
+  "existing_capture_selection_unchanged": true,
+  "no_actual_D_or_sweep_proof": true,
+  "claim_limits": [
+    "No retained lifecycle or sweep acceptance",
+    "No source/log/binary rebinding",
+    "No archives, binaries, DB/profile trees, Go files, builds, runs, captures or publication",
+    "Original command/exit evidence unavailable is explicit; PASS text not promoted to process receipt",
+    "Support copies are byte-bound originals; preparing a selection does not make receipt authority independent"
+  ],
+  "groups": [
+    {
+      "id": "pack-hardened39",
+      "source_sha": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+      "source_authority": "pack-projection-evidence/handoff.json and final-source.json",
+      "classification": "focused-runtime-regression-support",
+      "rationale": "Exact current packed projection; older/held/prepared protection, real unlink and corrupt newest-meta recovery. Meaningful runtime red and overstrict-oracle failure preserved.",
+      "recorded_command": null,
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only",
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "pack-prehardening-d078",
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "source_authority": "original packet, source manifests, runs and pack handoff",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "recorded_command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "recorded_process_exit": 0,
+      "unavailable": []
+    },
+    {
+      "id": "scaled-primary-context",
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "source_authority": "original rotation handoff; runner copied without execution",
+      "classification": "test-only-scaled-boundary-support",
+      "rationale": "Private 16KiB natural rotation proves sealed primary evacuation/held-release unlink and fallback integrity; subsequent dead1344B output remains active. No actual4GiB crossing or wholeDB bound.",
+      "recorded_command": null,
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only",
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "scaled-primary-final",
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "source_authority": "original source.txt and exit-status; original handoff classifications",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "recorded_command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "recorded_process_exit": 0,
+      "unavailable": []
+    },
+    {
+      "id": "scaled-primary-seed-route-failure",
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "source_authority": "original source.txt and exit-status; original handoff classifications",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "recorded_command": null,
+      "recorded_process_exit": 1,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only"
+      ]
+    },
+    {
+      "id": "scaled-primary-deferred-unlink-assertion-failure",
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "source_authority": "original source.txt and exit-status; original handoff classifications",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "recorded_command": null,
+      "recorded_process_exit": 1,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only"
+      ]
+    },
+    {
+      "id": "native-context",
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "source_authority": "original native handoff and runners",
+      "classification": "focused-native-metadata-ownership-support",
+      "rationale": "Successful exact manager handoff retires18 native creation metadata records to0 across6primary+12leaf natural files; failure/ambiguous evidence and standalone histories retained. No resource pins released or physical-GC claim.",
+      "recorded_command": null,
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only",
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "native-red",
+      "source_sha": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+      "source_authority": "original source.txt, exit-status and selected exact runner",
+      "classification": "meaningful-native-metadata-red",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "recorded_command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh"
+      },
+      "recorded_process_exit": 1,
+      "unavailable": []
+    },
+    {
+      "id": "native-green",
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "source_authority": "original source.txt, exit-status and selected exact runner",
+      "classification": "native-metadata-normal-race-vet-green",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "recorded_command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh"
+      },
+      "recorded_process_exit": 0,
+      "unavailable": []
+    },
+    {
+      "id": "integrated4b-checks",
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "source_authority": "original before/after source manifests and original runner files",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "recorded_command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "integrated4b-runners",
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "source_authority": "original source sidecar or handoff",
+      "classification": "original-command-and-interpretation-support",
+      "rationale": "Existing runners provide exact intended argv/lock/env; source-only retention inquiry remains nonacceptance.",
+      "recorded_command": null,
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only",
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "receipt-v2-original",
+      "source_sha": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+      "source_authority": "original handoff exact source and commands; original raw Python log",
+      "classification": "original-v2-provenance-corruption-support",
+      "rationale": "Earlier49-test original receipt boundary support, not later83 suite and not independently observed retained D proof.",
+      "recorded_command": [
+        "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+      ],
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "integrated-v3-83",
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "source_authority": "root durable state.json maintenance_integration/head and v3_tests association; raw log itself lacks source identity",
+      "classification": "text-observed-provenance-guard-suite-support",
+      "rationale": "Raw log observes83 tests163.502s OK. Durable state source association separate from actual run receipts; original argv/process-exit receipt unavailable. Not D proof.",
+      "recorded_command": null,
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only",
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "future-receipt-preparation",
+      "source_sha": null,
+      "source_authority": "private preparation has no Git source SHA; intended source is original config/source-f796 manifest",
+      "classification": "future-prelanding-receipt-preparation-only",
+      "rationale": "Reviewed root-owned observer/config preparation; never executed in this support task and no actual D build/run/receipt proof. Intended f796 source manifest is preparatory.",
+      "recorded_command": null,
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original exact command/argv unavailable for this group; any selected runner is command evidence only",
+        "original process-exit receipt unavailable; log text/status is not substituted"
+      ]
+    },
+    {
+      "id": "metadata-eight-epoch-prelanding",
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "source_authority": "original source manifests and root-observed-exit.json",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "recorded_command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "recorded_process_exit": 0,
+      "unavailable": [
+        "original executable is remote-only and excluded from text support; no independent semantic replay performed here"
+      ]
+    },
+    {
+      "id": "fd-command-context",
+      "source_sha": "fd320cd5540301c533cfc5200a961dab09f31611",
+      "source_authority": "coordinator durable integration association, not raw run receipt",
+      "classification": "original-v2-command-context-red-green-support",
+      "rationale": "62-test green and original10 failedsubcases; source identity unavailable for RED fixture",
+      "recorded_command": null,
+      "recorded_process_exit": null,
+      "unavailable": [
+        "original exact argv/process-exit receipts unavailable",
+        "RED fixture working source SHA unavailable; not rebound"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "originals/pack-hardened39/handoff.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/handoff.json",
+      "sha256": "2fc5b2bbbe41b9b3680931871ffb2810b8d0e56d5c2fcc7b86e5d58b5f6663ff",
+      "size": 5386,
+      "source_sha": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+      "classification": "focused-runtime-regression-support",
+      "rationale": "Exact current packed projection; older/held/prepared protection, real unlink and corrupt newest-meta recovery. Meaningful runtime red and overstrict-oracle failure preserved.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "pack-projection-evidence/handoff.json and final-source.json"
+    },
+    {
+      "path": "originals/pack-hardened39/handoff.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/handoff.md",
+      "sha256": "621e2e3b8f4f889ddebb4303c409aadf915e63f3d12b2b5bb99b5ad5d79b1dea",
+      "size": 3112,
+      "source_sha": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+      "classification": "focused-runtime-regression-support",
+      "rationale": "Exact current packed projection; older/held/prepared protection, real unlink and corrupt newest-meta recovery. Meaningful runtime red and overstrict-oracle failure preserved.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "pack-projection-evidence/handoff.json and final-source.json"
+    },
+    {
+      "path": "originals/pack-hardened39/final-source.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/final-source.json",
+      "sha256": "b31913cb3db44cf7beb5f51f9f41a557d58570a56b5016edc3b73187fcea5720",
+      "size": 294392,
+      "source_sha": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+      "classification": "focused-runtime-regression-support",
+      "rationale": "Exact current packed projection; older/held/prepared protection, real unlink and corrupt newest-meta recovery. Meaningful runtime red and overstrict-oracle failure preserved.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "pack-projection-evidence/handoff.json and final-source.json"
+    },
+    {
+      "path": "originals/pack-hardened39/raw/final39-checks.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/raw/final39-checks.log",
+      "sha256": "2c82af8f1bec98f5cd955d6c95ac0c8b5acfba22de84e0b2c091f59e01e03c71",
+      "size": 347,
+      "source_sha": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+      "classification": "focused-runtime-regression-support",
+      "rationale": "Exact current packed projection; older/held/prepared protection, real unlink and corrupt newest-meta recovery. Meaningful runtime red and overstrict-oracle failure preserved.",
+      "command": {
+        "normal": {
+          "command": [
+            "go",
+            "test",
+            "./TreeDB/db",
+            "./TreeDB/internal/rootpublication",
+            "-run",
+            "^(TestR1Rebuilt|TestStablePhysicalKindSelection|TestProjectRebuilt|TestVacuumIndexOnline(Binds|Recaptures|FallsBack)|TestCloneStableResourceForSelector|TestImmutableAliases).*",
+            "-count=3",
+            "-timeout=5m"
+          ],
+          "exit": 0,
+          "package_seconds": [
+            8.354,
+            0.062
+          ]
+        },
+        "race": {
+          "command": [
+            "go",
+            "test",
+            "-race",
+            "./TreeDB/db",
+            "./TreeDB/internal/rootpublication",
+            "-run",
+            "^(TestR1Rebuilt|TestStablePhysicalKindSelection|TestProjectRebuilt|TestVacuumIndexOnline(Binds|Recaptures|FallsBack)|TestCloneStableResourceForSelector|TestImmutableAliases).*",
+            "-count=1",
+            "-timeout=5m"
+          ],
+          "exit": 0,
+          "package_seconds": [
+            4.045,
+            1.037
+          ]
+        },
+        "vet": {
+          "command": [
+            "go",
+            "vet",
+            "./TreeDB/db",
+            "./TreeDB/internal/rootpublication"
+          ],
+          "exit": 0
+        },
+        "diff_check": {
+          "command": [
+            "git",
+            "diff",
+            "--check",
+            "2d2e7db51b572b271bbd0fef5ed796d6b9287c2e",
+            "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a"
+          ],
+          "exit": 0
+        }
+      },
+      "process_exit": {
+        "normal": 0,
+        "race": 0,
+        "vet": 0
+      },
+      "source_authority": "pack-projection-evidence/handoff.json and final-source.json",
+      "exit_authority": "original explicit NORMAL_EXIT/RACE_EXIT/VET_EXIT log lines"
+    },
+    {
+      "path": "originals/pack-hardened39/raw/red3.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/raw/red3.log",
+      "sha256": "268bd85349527ddacc32275f4798911b68b5a01ccf107e14529d312af5604cff",
+      "size": 1962,
+      "source_sha": "d591390b0ca258272dc809daa98f6b628acc49dd",
+      "classification": "meaningful-original-runtime-red",
+      "rationale": "Exact current packed projection; older/held/prepared protection, real unlink and corrupt newest-meta recovery. Meaningful runtime red and overstrict-oracle failure preserved.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "pack-projection-evidence/handoff.json and final-source.json",
+      "exit_authority": "original handoff failure inventory"
+    },
+    {
+      "path": "originals/pack-hardened39/raw/hardened-checks.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/raw/hardened-checks.log",
+      "sha256": "e6aee0ac44526af11c5f260781156d01a94075376e37109a7bd7166981ffdae8",
+      "size": 2867,
+      "source_sha": "e6c05004b8514f24ce4d980d9f241522b2db3967",
+      "classification": "original-overstrict-logical-state-oracle-failure",
+      "rationale": "Exact current packed projection; older/held/prepared protection, real unlink and corrupt newest-meta recovery. Meaningful runtime red and overstrict-oracle failure preserved.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "pack-projection-evidence/handoff.json and final-source.json"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/physical-summary.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/physical-summary.json",
+      "sha256": "21595c9430a78b314dcc3dda1ee6e5e4636ad255211243c54129b48b8857ee01",
+      "size": 163433,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/rehearsal-d078/packet.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/rehearsal-d078/packet.json",
+      "sha256": "943fd2a121f0f3f56879d7012be0ef25496877269ca6c8dc0aa41a16804cae0d",
+      "size": 683302,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/rehearsal-d078/source-before.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/rehearsal-d078/source-before.json",
+      "sha256": "dad490dd61ab7ac53b51db42fc8d07558ed005efcbba2a0ba6ea8d4e1e8cd6ae",
+      "size": 320942,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/rehearsal-d078/source-after.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/rehearsal-d078/source-after.json",
+      "sha256": "dad490dd61ab7ac53b51db42fc8d07558ed005efcbba2a0ba6ea8d4e1e8cd6ae",
+      "size": 320942,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/rehearsal-d078/toolchain.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/rehearsal-d078/toolchain.json",
+      "sha256": "9e89cc8dcbace68dc61add818bb0cc5b972bfe7109d34f8f09cc9f1f89982e51",
+      "size": 25720,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/rehearsal-d078/runs.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/rehearsal-d078/runs.json",
+      "sha256": "f78110aa43f443d6112defde9d8d47afe77cb33a556062aceab83fc2e7240115",
+      "size": 936,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/rehearsal-d078/build.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/rehearsal-d078/build.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/pack-prehardening-d078/rehearsal-d078/run-001.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pack-projection-evidence/rehearsal-d078/run-001.log",
+      "sha256": "7e9ab03d64f8a0e1aeaa5fa2d2e1b5696dc2ed3e4a9bb1e98c598f407bab0322",
+      "size": 233743,
+      "source_sha": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+      "classification": "nonqualifying-prehardening-diagnostic",
+      "rationale": "Original actual-size two-epoch discriminator only; no final39 rebinding, retained qualification or physical-bound acceptance.",
+      "command": {
+        "build": [
+          "go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=2x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original packet, source manifests, runs and pack handoff"
+    },
+    {
+      "path": "originals/scaled-primary-context/handoff.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/handoff.json",
+      "sha256": "327f07f49ce51c08e55974e770fed91217525aeb7a77801305936e3910c501af",
+      "size": 6464,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "test-only-scaled-boundary-support",
+      "rationale": "Private 16KiB natural rotation proves sealed primary evacuation/held-release unlink and fallback integrity; subsequent dead1344B output remains active. No actual4GiB crossing or wholeDB bound.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original rotation handoff; runner copied without execution"
+    },
+    {
+      "path": "originals/scaled-primary-context/handoff.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/handoff.md",
+      "sha256": "f5bbd42030e1c7e6d29c1087943c1fb71f9c6ae9ecc4d9e37608f1447b665f89",
+      "size": 2497,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "test-only-scaled-boundary-support",
+      "rationale": "Private 16KiB natural rotation proves sealed primary evacuation/held-release unlink and fallback integrity; subsequent dead1344B output remains active. No actual4GiB crossing or wholeDB bound.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original rotation handoff; runner copied without execution"
+    },
+    {
+      "path": "originals/scaled-primary-context/run.sh",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+      "sha256": "1cb5c2092fae4c4418625e45822b0e986fb6ce7f9bcd0df8128b8d280371dda5",
+      "size": 1244,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "test-only-scaled-boundary-support",
+      "rationale": "Private 16KiB natural rotation proves sealed primary evacuation/held-release unlink and fallback integrity; subsequent dead1344B output remains active. No actual4GiB crossing or wholeDB bound.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original rotation handoff; runner copied without execution"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/validation.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/validation.log",
+      "sha256": "822688ce2a79ac96e43b972f430c966f520a781771113333dfba23580bc6a7ff",
+      "size": 9586,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/source.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/source.txt",
+      "sha256": "21a744ee68dfdc8532a7da6376cfee737bfcb18faea33d5ebfd51d723ab1ab18",
+      "size": 41,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/source-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/source-after.txt",
+      "sha256": "21a744ee68dfdc8532a7da6376cfee737bfcb18faea33d5ebfd51d723ab1ab18",
+      "size": 41,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/tree.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/tree.txt",
+      "sha256": "b334d9bab573a5eaba540a88597df0cc4b4474e36c06333f15c9f52800b32216",
+      "size": 41,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/environment.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/environment.txt",
+      "sha256": "bad8e135d6bac1b4247a6ae01f909878cd1e2fbbb3e7839df5b6e893a35af27a",
+      "size": 310,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/buildinfo.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/buildinfo.txt",
+      "sha256": "ed852d752c49a5130290fe79852864869a96e498ab23788fff14cf202ddcf651",
+      "size": 372,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/binary.sha256",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/binary.sha256",
+      "sha256": "b78b41a26cba62d8836eebd40421b4145eec8e91114fb5776180b4ce298b50e7",
+      "size": 145,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/exit-status",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/exit-status",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "size": 2,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/status-before.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/status-before.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-final/final/status-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/final/status-after.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+      "classification": "positive-scaled-mechanism-with-unmet-physical-guard",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/run.sh",
+        "scope": "Final runner is exact final command evidence; earlier failed phases have no independently retained original argv sidecar."
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/validation.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/validation.log",
+      "sha256": "aca92c213a8ed486601595859a2396f6eb2569db7a10862f6b551e3eea08ee61",
+      "size": 268,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/source.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/source.txt",
+      "sha256": "e820c0bddb674eb71f7baaa579c02e80956758e7cfe24477c5a0e200017ca346",
+      "size": 41,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/source-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/source-after.txt",
+      "sha256": "e820c0bddb674eb71f7baaa579c02e80956758e7cfe24477c5a0e200017ca346",
+      "size": 41,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/tree.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/tree.txt",
+      "sha256": "bae666ea67d03de7ccf58ab7164b83d6c7ed7f2f43f588796ff29d3859338afe",
+      "size": 41,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/environment.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/environment.txt",
+      "sha256": "bad8e135d6bac1b4247a6ae01f909878cd1e2fbbb3e7839df5b6e893a35af27a",
+      "size": 310,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/buildinfo.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/buildinfo.txt",
+      "sha256": "34542a5d67c2ad40850d2db249d993c3f6db1476523890f3eabca38b6e64faac",
+      "size": 364,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/binary.sha256",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/binary.sha256",
+      "sha256": "07228acd963c9a946d988b35348b8161d9d5bdf918c4ea0e79127642c68552d7",
+      "size": 137,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/exit-status",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/exit-status",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "size": 2,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/status-before.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/status-before.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-seed-route-failure/seed-route-failure/status-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/seed-route-failure/status-after.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "6b13fdc6e73a49f2c801fdd13c7cec08b39b320a",
+      "classification": "original-fixture-route-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/validation.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/validation.log",
+      "sha256": "e8b57990269be1c39bef1df5f9320b6136c08a871f2b2d0404cded64ed95d0af",
+      "size": 5701,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/source.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/source.txt",
+      "sha256": "d6e4fa527297789d2cf6bbbb80d4c529810ce52da2dd1e4ad64c44f2597cf605",
+      "size": 41,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/source-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/source-after.txt",
+      "sha256": "d6e4fa527297789d2cf6bbbb80d4c529810ce52da2dd1e4ad64c44f2597cf605",
+      "size": 41,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/tree.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/tree.txt",
+      "sha256": "a01996b210be1e0ff01ae78e618ecb08fa5c804df94399c952321835a68083c2",
+      "size": 41,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/environment.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/environment.txt",
+      "sha256": "bad8e135d6bac1b4247a6ae01f909878cd1e2fbbb3e7839df5b6e893a35af27a",
+      "size": 310,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/buildinfo.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/buildinfo.txt",
+      "sha256": "71eeb4007e469d50d9697e6adad9294dd6297000ed9d882ec4a8761ee50f2c64",
+      "size": 371,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/binary.sha256",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/binary.sha256",
+      "sha256": "56675b2b8e96f15e9f490ca4f8300627fdc6292cba304940e205d8c4d35c6dea",
+      "size": 144,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/exit-status",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/exit-status",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "size": 2,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/status-before.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/status-before.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/scaled-primary-deferred-unlink-assertion-failure/deferred-unlink-assertion-failure/status-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-rotation-boundary-evidence/deferred-unlink-assertion-failure/status-after.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "c7ee35afb557e32b54a22c7c66262fba2c8b0d04",
+      "classification": "original-test-attribution-failure",
+      "rationale": "Preserve actual gauges, cold/held/recovery oracles or original failure; no physical guard waiver.",
+      "command": null,
+      "process_exit": 1,
+      "source_authority": "original source.txt and exit-status; original handoff classifications"
+    },
+    {
+      "path": "originals/native-context/handoff.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/handoff.json",
+      "sha256": "af97cd01425045ba0bdca64c097f081d70ac55ab1b0c9c7db514c816cb575836",
+      "size": 3393,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "focused-native-metadata-ownership-support",
+      "rationale": "Successful exact manager handoff retires18 native creation metadata records to0 across6primary+12leaf natural files; failure/ambiguous evidence and standalone histories retained. No resource pins released or physical-GC claim.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original native handoff and runners"
+    },
+    {
+      "path": "originals/native-context/handoff.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/handoff.md",
+      "sha256": "10f09a4aa55de70cffad9fe9f1bd4363c3f8e78304683ad1776833e7be84055e",
+      "size": 2500,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "focused-native-metadata-ownership-support",
+      "rationale": "Successful exact manager handoff retires18 native creation metadata records to0 across6primary+12leaf natural files; failure/ambiguous evidence and standalone histories retained. No resource pins released or physical-GC claim.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original native handoff and runners"
+    },
+    {
+      "path": "originals/native-context/red.sh",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh",
+      "sha256": "bac0c3df6c427153e58e64bdd96ac32568225277fffc10ba256f63d000c2c661",
+      "size": 667,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "focused-native-metadata-ownership-support",
+      "rationale": "Successful exact manager handoff retires18 native creation metadata records to0 across6primary+12leaf natural files; failure/ambiguous evidence and standalone histories retained. No resource pins released or physical-GC claim.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original native handoff and runners"
+    },
+    {
+      "path": "originals/native-context/green.sh",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh",
+      "sha256": "69527de179ba3a6ea252857ea80e0a597d16882bf1774627333650c92258de3a",
+      "size": 1275,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "focused-native-metadata-ownership-support",
+      "rationale": "Successful exact manager handoff retires18 native creation metadata records to0 across6primary+12leaf natural files; failure/ambiguous evidence and standalone histories retained. No resource pins released or physical-GC claim.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original native handoff and runners"
+    },
+    {
+      "path": "originals/native-red/red/validation.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red/validation.log",
+      "sha256": "3ffb9cd5d39e9c7d6c9ed21c32d620a93d04b67f2210b0399f4c646845d01bdc",
+      "size": 529,
+      "source_sha": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+      "classification": "meaningful-native-metadata-red",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh"
+      },
+      "process_exit": 1,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-red/red/source.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red/source.txt",
+      "sha256": "25bb264dda98edfbadc06d5ff4c7d140abf7201ff8416e1c54ad188f67c530eb",
+      "size": 41,
+      "source_sha": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+      "classification": "meaningful-native-metadata-red",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh"
+      },
+      "process_exit": 1,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-red/red/binary.sha256",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red/binary.sha256",
+      "sha256": "eed6c83d52d8b6d0e5b08e0624e856a57aefed68e276cc9edf9283b987760d1e",
+      "size": 130,
+      "source_sha": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+      "classification": "meaningful-native-metadata-red",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh"
+      },
+      "process_exit": 1,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-red/red/exit-status",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red/exit-status",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865",
+      "size": 2,
+      "source_sha": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+      "classification": "meaningful-native-metadata-red",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh"
+      },
+      "process_exit": 1,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-red/red/status.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red/status.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+      "classification": "meaningful-native-metadata-red",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh"
+      },
+      "process_exit": 1,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-red/red/status-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red/status-after.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+      "classification": "meaningful-native-metadata-red",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh"
+      },
+      "process_exit": 1,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-green/green/validation.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green/validation.log",
+      "sha256": "6cbdc774a464224f1eb6c86aeda518efcbc41acb74f755565e77c2df7b9cece3",
+      "size": 4934,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "native-metadata-normal-race-vet-green",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh"
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-green/green/source.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green/source.txt",
+      "sha256": "68a80ca2312b00227e779e1e6caa0053b54684bf8a3dea857ca5e5e64e9c5296",
+      "size": 41,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "native-metadata-normal-race-vet-green",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh"
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-green/green/binary.sha256",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green/binary.sha256",
+      "sha256": "b37fe39916316d24fffa5e51fe5192b26355b050d9bf0fd3ee320c44b56584c3",
+      "size": 132,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "native-metadata-normal-race-vet-green",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh"
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-green/green/exit-status",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green/exit-status",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "size": 2,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "native-metadata-normal-race-vet-green",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh"
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-green/green/status.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green/status.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "native-metadata-normal-race-vet-green",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh"
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/native-green/green/status-after.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green/status-after.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "classification": "native-metadata-normal-race-vet-green",
+      "rationale": "Original raw natural rotations, failed/ambiguous authority and standalone history tests; same-source binary digest recorded, binary excluded from text-only support.",
+      "command": {
+        "runner_original_path": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh"
+      },
+      "process_exit": 0,
+      "source_authority": "original source.txt, exit-status and selected exact runner"
+    },
+    {
+      "path": "originals/integrated4b-checks/source-before.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/source-before.json",
+      "sha256": "157edca39ae99ea2611a747f2188317f153adb279190f938a91e16491b540e77",
+      "size": 103847,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files"
+    },
+    {
+      "path": "originals/integrated4b-checks/source-after.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/source-after.json",
+      "sha256": "157edca39ae99ea2611a747f2188317f153adb279190f938a91e16491b540e77",
+      "size": 103847,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files"
+    },
+    {
+      "path": "originals/integrated4b-checks/r1-normal.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/r1-normal.log",
+      "sha256": "66ecb2bb09fb6dad331822f278b4b8f4f6169ecb2b7647142a55ce5436d40ec3",
+      "size": 56,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files"
+    },
+    {
+      "path": "originals/integrated4b-checks/r1-race.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/r1-race.log",
+      "sha256": "087f0d29783e219b019c8d3ca6272a619719a1328ebf99b0f7c8b4db0c96dab8",
+      "size": 57,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files"
+    },
+    {
+      "path": "originals/integrated4b-checks/vet.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files"
+    },
+    {
+      "path": "originals/integrated4b-checks/collections-normal.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/collections-normal.log",
+      "sha256": "3e0b726d4796227647c022d7c5000ad3e28da16c22e4cf8f100a5999fa702fd6",
+      "size": 20197,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "original-broad-suite-eight-minute-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files",
+      "text_observation": "panic test timed out after8m; package FAIL480.025s; no original exit sidecar"
+    },
+    {
+      "path": "originals/integrated4b-checks/interrupted-vector-test.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/interrupted-vector-test.log",
+      "sha256": "8f912eda8426c642b39299704bef2e4f9fd66aeef34e30756ca28cc806774bc0",
+      "size": 56,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files"
+    },
+    {
+      "path": "originals/integrated4b-checks/real-packet-tests.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/maintenance-4b78-verification/real-packet-tests.log",
+      "sha256": "70c481d906d0a59f5ebce56e969fee055e82aff0b46b59aa800163a9c3e61ef6",
+      "size": 162,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "focused-integration-green-plus-preserved-broad-timeout",
+      "rationale": "Affected normal/race/vet support; full suite actually timed out at8m, isolated interrupted vector test passed. No whole-suite PASS or unrelated-flake claim.",
+      "command": {
+        "original_runners": [
+          "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+          "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh"
+        ]
+      },
+      "process_exit": null,
+      "source_authority": "original before/after source manifests and original runner files",
+      "text_observation": "Ran61 tests162.070s OK; not final83 suite"
+    },
+    {
+      "path": "originals/integrated4b-runners/run-maintenance-4b78-185.sh",
+      "original_path": "/tmp/gomap-r1-execution-20261005/run-maintenance-4b78-185.sh",
+      "sha256": "e9ea48fd350f3871ad49eb5dead5a32f622951270833ef9303dbe39f7bb41f37",
+      "size": 2119,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "original-command-and-interpretation-support",
+      "rationale": "Existing runners provide exact intended argv/lock/env; source-only retention inquiry remains nonacceptance.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original source sidecar or handoff"
+    },
+    {
+      "path": "originals/integrated4b-runners/resume-maintenance-4b78-185.sh",
+      "original_path": "/tmp/gomap-r1-execution-20261005/resume-maintenance-4b78-185.sh",
+      "sha256": "32ebd7dc561bfc192fc547f8d887ab45cc2dbdefb3f9985ca63718066bdfda0b",
+      "size": 2158,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "original-command-and-interpretation-support",
+      "rationale": "Existing runners provide exact intended argv/lock/env; source-only retention inquiry remains nonacceptance.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original source sidecar or handoff"
+    },
+    {
+      "path": "originals/integrated4b-runners/vlog-retention-inquiry-4b78.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-retention-inquiry-4b78.json",
+      "sha256": "1643ddf6cb1c7e318616374fac02565536023295f73a485462e93880c59fe72b",
+      "size": 5977,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "original-command-and-interpretation-support",
+      "rationale": "Existing runners provide exact intended argv/lock/env; source-only retention inquiry remains nonacceptance.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original source sidecar or handoff"
+    },
+    {
+      "path": "originals/integrated4b-runners/vlog-retention-docparagraph-4b78.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/vlog-retention-docparagraph-4b78.md",
+      "sha256": "e342aaab344d9360b049b6857cf50aedb7d7a71d4add85ba05fa07f03886441a",
+      "size": 4567,
+      "source_sha": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+      "classification": "original-command-and-interpretation-support",
+      "rationale": "Existing runners provide exact intended argv/lock/env; source-only retention inquiry remains nonacceptance.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "original source sidecar or handoff"
+    },
+    {
+      "path": "originals/receipt-v2-original/handoff.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-retained-receipt-evidence/handoff.json",
+      "sha256": "1c18b41045ec44a64dd65a1c7a125463ac5fa25ae31a9edc62ee681dc540da19",
+      "size": 4372,
+      "source_sha": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+      "classification": "original-v2-provenance-corruption-support",
+      "rationale": "Earlier49-test original receipt boundary support, not later83 suite and not independently observed retained D proof.",
+      "command": [
+        "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+      ],
+      "process_exit": null,
+      "source_authority": "original handoff exact source and commands; original raw Python log"
+    },
+    {
+      "path": "originals/receipt-v2-original/handoff.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-retained-receipt-evidence/handoff.md",
+      "sha256": "4b3f3c840dbed4b93685f0b57871762be1452043b5d6ac4356f610f36c8a1230",
+      "size": 2206,
+      "source_sha": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+      "classification": "original-v2-provenance-corruption-support",
+      "rationale": "Earlier49-test original receipt boundary support, not later83 suite and not independently observed retained D proof.",
+      "command": [
+        "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+      ],
+      "process_exit": null,
+      "source_authority": "original handoff exact source and commands; original raw Python log"
+    },
+    {
+      "path": "originals/receipt-v2-original/python-tests.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-retained-receipt-evidence/python-tests.log",
+      "sha256": "fc7f163f2702f4caec7df7f22b656cbe4f5e1aaa51903620ee8ea4acad4540e2",
+      "size": 5166,
+      "source_sha": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+      "classification": "original-v2-provenance-corruption-support",
+      "rationale": "Earlier49-test original receipt boundary support, not later83 suite and not independently observed retained D proof.",
+      "command": [
+        "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+      ],
+      "process_exit": null,
+      "source_authority": "original handoff exact source and commands; original raw Python log"
+    },
+    {
+      "path": "originals/receipt-v2-original/source-final.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-retained-receipt-evidence/source-final.json",
+      "sha256": "116b1e58bb0c41f58e4c8f2fd1f980f4fb52f1506c27da826ca0fe9cea0dbeb9",
+      "size": 107296,
+      "source_sha": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+      "classification": "original-v2-provenance-corruption-support",
+      "rationale": "Earlier49-test original receipt boundary support, not later83 suite and not independently observed retained D proof.",
+      "command": [
+        "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+      ],
+      "process_exit": null,
+      "source_authority": "original handoff exact source and commands; original raw Python log"
+    },
+    {
+      "path": "originals/receipt-v2-original/cli-offline-rehearsal.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-retained-receipt-evidence/cli-offline-rehearsal.md",
+      "sha256": "9cd64f3d24ab8c9336ab783ee58d1006c13d41babd13fd501d06a062bce6f15d",
+      "size": 5280,
+      "source_sha": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+      "classification": "original-v2-provenance-corruption-support",
+      "rationale": "Earlier49-test original receipt boundary support, not later83 suite and not independently observed retained D proof.",
+      "command": [
+        "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+      ],
+      "process_exit": null,
+      "source_authority": "original handoff exact source and commands; original raw Python log"
+    },
+    {
+      "path": "originals/receipt-v2-original/cli-receipt-replay.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-retained-receipt-evidence/cli-receipt-replay.md",
+      "sha256": "9cd64f3d24ab8c9336ab783ee58d1006c13d41babd13fd501d06a062bce6f15d",
+      "size": 5280,
+      "source_sha": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+      "classification": "original-v2-provenance-corruption-support",
+      "rationale": "Earlier49-test original receipt boundary support, not later83 suite and not independently observed retained D proof.",
+      "command": [
+        "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+        "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+      ],
+      "process_exit": null,
+      "source_authority": "original handoff exact source and commands; original raw Python log"
+    },
+    {
+      "path": "originals/integrated-v3-83/integrated-v3-command-native-tests.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/integrated-v3-command-native-tests.log",
+      "sha256": "24f4a7aba9aa5ba761221896c8d6ce6e9bedd44a1b6a675f332dc0fdddb8109d",
+      "size": 184,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "text-observed-provenance-guard-suite-support",
+      "rationale": "Raw log observes83 tests163.502s OK. Durable state source association separate from actual run receipts; original argv/process-exit receipt unavailable. Not D proof.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "root durable state.json maintenance_integration/head and v3_tests association; raw log itself lacks source identity"
+    },
+    {
+      "path": "originals/integrated-v3-83/pr-5067-maintenance-body.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/pr-5067-maintenance-body.md",
+      "sha256": "84524bbdeb32d2a8cc68ea514eb7248c60d99a9451acb8618aea1c7c8e65607f",
+      "size": 5594,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "text-observed-provenance-guard-suite-support",
+      "rationale": "Raw log observes83 tests163.502s OK. Durable state source association separate from actual run receipts; original argv/process-exit receipt unavailable. Not D proof.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "root durable state.json maintenance_integration/head and v3_tests association; raw log itself lacks source identity"
+    },
+    {
+      "path": "originals/future-receipt-preparation/observe.py",
+      "original_path": "/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/observe.py",
+      "sha256": "45088025019c4f2c81cc6dbd816541c2ce8998d6062abe9d7d9e9d0610ed8210",
+      "size": 8728,
+      "source_sha": null,
+      "classification": "future-prelanding-receipt-preparation-only",
+      "rationale": "Reviewed root-owned observer/config preparation; never executed in this support task and no actual D build/run/receipt proof. Intended f796 source manifest is preparatory.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "private preparation has no Git source SHA; intended source is original config/source-f796 manifest"
+    },
+    {
+      "path": "originals/future-receipt-preparation/config.template.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/config.template.json",
+      "sha256": "f519c79218a8f02eaf774ffd57ba989401870b4aea39c5bbc9e8f374d0db71a4",
+      "size": 710,
+      "source_sha": null,
+      "classification": "future-prelanding-receipt-preparation-only",
+      "rationale": "Reviewed root-owned observer/config preparation; never executed in this support task and no actual D build/run/receipt proof. Intended f796 source manifest is preparatory.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "private preparation has no Git source SHA; intended source is original config/source-f796 manifest"
+    },
+    {
+      "path": "originals/future-receipt-preparation/config.prelanding.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/config.prelanding.json",
+      "sha256": "3d27a439b8d7eef3ef509f7a7c9f823c6c8fd3c62c6183a6620edf9c63efd484",
+      "size": 903,
+      "source_sha": null,
+      "classification": "future-prelanding-receipt-preparation-only",
+      "rationale": "Reviewed root-owned observer/config preparation; never executed in this support task and no actual D build/run/receipt proof. Intended f796 source manifest is preparatory.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "private preparation has no Git source SHA; intended source is original config/source-f796 manifest"
+    },
+    {
+      "path": "originals/future-receipt-preparation/source-f796.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/source-f796.json",
+      "sha256": "9a5a2836f8eaf4f878de6c981c950e877b5bb0619dfc84ad62a7ee125448a3c3",
+      "size": 321054,
+      "source_sha": null,
+      "classification": "future-prelanding-receipt-preparation-only",
+      "rationale": "Reviewed root-owned observer/config preparation; never executed in this support task and no actual D build/run/receipt proof. Intended f796 source manifest is preparatory.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "private preparation has no Git source SHA; intended source is original config/source-f796 manifest"
+    },
+    {
+      "path": "originals/future-receipt-preparation/handoff.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/handoff.md",
+      "sha256": "a23502026c3bf7da25a90cabb6bf63d081091ee56681dac29534544de3feddfc",
+      "size": 4551,
+      "source_sha": null,
+      "classification": "future-prelanding-receipt-preparation-only",
+      "rationale": "Reviewed root-owned observer/config preparation; never executed in this support task and no actual D build/run/receipt proof. Intended f796 source manifest is preparatory.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "private preparation has no Git source SHA; intended source is original config/source-f796 manifest"
+    },
+    {
+      "path": "originals/future-receipt-preparation/root-review.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/root-review.md",
+      "sha256": "b477d7047c1eec880edb76053ddd21972816e3c380464222e937e356aa15f336",
+      "size": 541,
+      "source_sha": null,
+      "classification": "future-prelanding-receipt-preparation-only",
+      "rationale": "Reviewed root-owned observer/config preparation; never executed in this support task and no actual D build/run/receipt proof. Intended f796 source manifest is preparatory.",
+      "command": null,
+      "process_exit": null,
+      "source_authority": "private preparation has no Git source SHA; intended source is original config/source-f796 manifest"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/binary-sha256.txt",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/binary-sha256.txt",
+      "sha256": "b6a2afd1d4bb2b251e54734085c5e54d215f040c825547c193c9dc19fc74cfea",
+      "size": 160,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/build.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/build.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/driver.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/driver.log",
+      "sha256": "cf0663e9988353efb7173726749301686eaa98eebafd7e20bc8125038ad88da6",
+      "size": 139,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/inquiry-result.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/inquiry-result.json",
+      "sha256": "7ecdf3ce773608f5c430633caad8d1a209f2c6a170b1d280bb4ef82b6e975ef9",
+      "size": 27454,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/packet.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/packet.json",
+      "sha256": "70b6e757051ffeb5932450f5a2371c07c8717746cdc7bf947ac604e29d38760c",
+      "size": 693625,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/purpose.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/purpose.md",
+      "sha256": "4c3715c3712fffa3340d9b4b15aa74827257c78b166f644f029961e9a3355ed0",
+      "size": 221,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/root-observed-exit.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/root-observed-exit.json",
+      "sha256": "78bb87cf510acd4cd34aeb2885f5019516c050b96b40d1cdf9250be35b7e6052",
+      "size": 389,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/run-001.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/run-001.log",
+      "sha256": "21f7fb67a03f09348bfcea22441b37790c2e6f44005ed2920d05f0195a3b6959",
+      "size": 631177,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/run.sh",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/run.sh",
+      "sha256": "849bcc2adfe74aa11d021991361a175245a3cf88d8a9a52626bbb0d15aaf2edb",
+      "size": 743,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/runs.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/runs.json",
+      "sha256": "dee6bf77e2e7eed29ee04701fb8b31f6657edda18a2cbd0aa639737a284dd5c8",
+      "size": 1029,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/source-after.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/source-after.json",
+      "sha256": "ce2611bb4bd759a7a6e6ea01d8770ea6cbf3d4d8139ddb6e589c1f2fc7a72eb3",
+      "size": 321054,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/source-before.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/source-before.json",
+      "sha256": "ce2611bb4bd759a7a6e6ea01d8770ea6cbf3d4d8139ddb6e589c1f2fc7a72eb3",
+      "size": 321054,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/summary.md",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/summary.md",
+      "sha256": "b8aee863c0a2b7eb0bd10bb16916dbeb170704c4c1dff627bdb655965d8e9076",
+      "size": 10603,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/metadata-eight-epoch-prelanding/toolchain.json",
+      "original_path": "/tmp/gomap-r1-execution-20261005/metadata-eight-epoch-prelanding/toolchain.json",
+      "sha256": "126ee024a7c7237002191ba0a1a50563a1c90781710842e43fc8b8bd97051497",
+      "size": 35631,
+      "source_sha": "f79616f2aeb99b43af81877f26d646cca51177b9",
+      "classification": "prelanding-tiny-eight-epoch-nonqualifying-diagnostic",
+      "rationale": "32rows8calls1process8epochs repeated4ID hotset; bounded metadata discriminator only. No actual D capacity acceptance or semantic replay without original binary. Primary vlog active writer growth remains unwaived.",
+      "command": {
+        "root_wrapper": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+        "build": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-c",
+          "-o",
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "./TreeDB/collections"
+        ],
+        "invocation": [
+          "/home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-f796/collections.test",
+          "-test.run=^$",
+          "-test.bench=^BenchmarkR1Lifecycle5060$",
+          "-test.benchtime=8x",
+          "-test.count=1",
+          "-test.benchmem",
+          "-test.v"
+        ]
+      },
+      "process_exit": 0,
+      "source_authority": "original source manifests and root-observed-exit.json"
+    },
+    {
+      "path": "originals/fd-command-context/green-v2-tests.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-capture-contract-evidence/green-v2-tests.log",
+      "sha256": "38a29c6ef0ed0229b1ab1a7150bd30e5144c191cdac55248470cd83c99310880",
+      "size": 162,
+      "source_sha": "fd320cd5540301c533cfc5200a961dab09f31611",
+      "source_authority": "fd320 source association from coordinator durable integration state; raw green log lacks source header",
+      "classification": "original-v2-complete-command-context-green",
+      "rationale": "Complete executable/build argv/header/original capture-context guards: green raw62tests23.079s OK and original RED2tests10failedsubcases. Neither is retained D proof.",
+      "command": null,
+      "process_exit": null
+    },
+    {
+      "path": "originals/fd-command-context/red-command-tests.log",
+      "original_path": "/tmp/gomap-r1-execution-20261005/5065-capture-contract-evidence/red-command-tests.log",
+      "sha256": "3e20094f45cdfbbc48c2b96cf7fedbfa01cc74e60cc79f01b5b23f7346cffc32",
+      "size": 7309,
+      "source_sha": null,
+      "source_authority": "Original RED working source SHA unavailable; not rebound to green fd320",
+      "classification": "original-command-context-negative-fixture-red",
+      "rationale": "Complete executable/build argv/header/original capture-context guards: green raw62tests23.079s OK and original RED2tests10failedsubcases. Neither is retained D proof.",
+      "command": null,
+      "process_exit": null
+    }
+  ],
+  "omissions": [
+    {
+      "evidence": "actual retained D receipt/packet",
+      "reason": "pending; excluded"
+    },
+    {
+      "evidence": "new width/batch mutation sweep",
+      "reason": "pending; excluded"
+    },
+    {
+      "evidence": "pack final39 executable and d078 collections.test",
+      "reason": "binary overlay authority later; no binary copy in compact text support"
+    },
+    {
+      "evidence": "native and scaled primary executables",
+      "reason": "recorded binary digest preserved; executables retained privately"
+    },
+    {
+      "evidence": "pack initial fixture red.log",
+      "reason": "remote-only noted in original handoff; red3 meaningful runtime discriminator selected locally"
+    },
+    {
+      "evidence": "previous provisional b53 physical negative",
+      "reason": "already selected in unchanged publication-selection-with-final-typed-scope.json; no duplicate packet"
+    },
+    {
+      "evidence": "all unrelated compile attempts",
+      "reason": "privately retained; nondiscriminating for final support"
+    },
+    {
+      "evidence": "full durable state.json",
+      "reason": "Unrelated actual D/sweep state excluded; only scoped derived83-test source association retained."
+    }
+  ],
+  "derived_metadata": [
+    {
+      "path": "83-source-association.json",
+      "classification": "derived-durable-state-association-not-original-run-receipt",
+      "not_original_bytes": true
+    }
+  ]
+}

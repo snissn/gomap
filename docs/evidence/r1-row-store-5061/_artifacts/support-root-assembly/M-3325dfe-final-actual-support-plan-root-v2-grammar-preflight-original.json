@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-07T01:11:38.648875+00:00",
+  "status": "ROOT_COMPLETE_ACTUAL_BINDINGS_AND_STRICT_GRAMMAR_PASS_BEFORE_COPY",
+  "plan_sha256": "74c00f9300e5f86ba91d96f35dafd06db2a6e1496c701acc4114fa542a5bb289",
+  "original_author_plan_sha256": "beae5ae44c750b533530626e3241456940cbc361fa62a1a396dfb9647cf88ea0",
+  "original_rows": 231,
+  "final_rows": 249,
+  "actual_sizes_hashes_text_and_destinations_verified": true,
+  "source_originals_unchanged": true,
+  "numeric_acceptance_separate": true
+}

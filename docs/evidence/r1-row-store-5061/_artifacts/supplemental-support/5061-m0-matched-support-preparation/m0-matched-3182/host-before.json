@@ -1,0 +1,35 @@
+{
+  "utc": "2026-10-06T11:16:20.991367+00:00",
+  "hostname": "mikers-MS-7E71",
+  "load": [
+    0.10986328125,
+    0.05078125,
+    0.0361328125
+  ],
+  "cpu_count": 16,
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64"
+  ],
+  "processes": [
+    "    PID COMMAND         %CPU %MEM COMMAND",
+    "1973657 python3         33.3  0.0 python3 /home/mikers/gomap-r1-evidence-20261005/m0-matched-control-head-observe.py",
+    "1972895 sshd-session     2.1  0.0 sshd-session: mikers@notty",
+    "1972897 rsync            0.5  0.0 rsync --server -logDtpre.iLsfxCIvu . /home/mikers/quicksilver-maintenance-5028-20261006/R.tar",
+    " 635514 codex            0.5  0.3 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b",
+    "   2499 gnome-shell      0.4  1.0 /usr/bin/gnome-shell --mode=ubuntu",
+    "2971628 codex            0.3  0.8 /home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex app-server --listen unix:// --managed-daemon",
+    "   4644 tmux: server     0.3  5.2 tmux",
+    " 641714 codex            0.2  0.3 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox",
+    " 702994 codex            0.2  0.4 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox",
+    "    967 napi/phy0-0      0.1  0.0 [napi/phy0-0]",
+    "1199661 containerd       0.0  0.1 /usr/bin/containerd",
+    "    965 napi/phy0-0      0.0  0.0 [napi/phy0-0]",
+    "   1744 dbus-daemon      0.0  0.0 @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
+    "    122 kcompactd0       0.0  0.0 [kcompactd0]",
+    "   1680 mt76-tx phy0     0.0  0.0 [mt76-tx phy0]"
+  ]
+}

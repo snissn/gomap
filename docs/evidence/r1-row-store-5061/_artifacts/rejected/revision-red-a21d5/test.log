@@ -1,0 +1,6 @@
+=== RUN   TestLeafGenerationGCReclaimsReleasedManifestRevisions5066
+    leaf_manifest_revision_gc_5066_test.go:61: released immutable revisions were not reclaimed: before=11 after=11
+--- FAIL: TestLeafGenerationGCReclaimsReleasedManifestRevisions5066 (0.36s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.361s
+FAIL

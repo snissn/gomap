@@ -1,0 +1,18 @@
+{
+  "selected_merge_sha": "",
+  "landing_verified_by_root": false,
+  "review_url": "",
+  "landing_observation_file": "/home/mikers/ROOT_PRIVATE_ACTUAL_LANDING_OBSERVATION.txt",
+  "repo": "/home/mikers/gomap-r1-final-source-20261006",
+  "gocache": "/home/mikers/.cache/ROOT_SELECTED_GO1264_CACHE",
+  "captures": {
+    "A": "/home/mikers/gomap-r1-evidence-20261005/ROOT_NEW_FINAL_A",
+    "C": "/home/mikers/gomap-r1-evidence-20261005/ROOT_NEW_FINAL_C",
+    "D": "/home/mikers/gomap-r1-evidence-20261005/ROOT_NEW_FINAL_D"
+  },
+  "receipts": {
+    "A": "/home/mikers/gomap-r1-final-receipts-20261006/ROOT_NEW_FINAL_A",
+    "C": "/home/mikers/gomap-r1-final-receipts-20261006/ROOT_NEW_FINAL_C",
+    "D": "/home/mikers/gomap-r1-final-receipts-20261006/ROOT_NEW_FINAL_D"
+  }
+}

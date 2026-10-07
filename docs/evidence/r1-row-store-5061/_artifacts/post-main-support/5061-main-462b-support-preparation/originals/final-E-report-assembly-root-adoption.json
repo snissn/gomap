@@ -1,0 +1,12 @@
+{
+  "utc": "2026-10-06T22:21:00.115975+00:00",
+  "status": "ROOT_ADOPTED_PRIVATE_PRESENTATION_HELPER_ONLY_NO_CAPTURE_ACCEPTANCE_OR_PUBLICATION",
+  "inputs_sha256": {
+    "assemble.py": "ab1a24e399b34490293b54c2511dd9ccdbccae2b908f0106647c60804b105925",
+    "report-template.md": "ab4a4802c80b6c433736dba7ab9871b93ab04e978893c6ea17a8607f76d259bc",
+    "handoff.json": "3e8ef4b824664aa6a1c8ec082f126ebfb77f803fdfb2321a0a1b0636ff66aee6"
+  },
+  "historical_report_sha256": "e636404bed9bb61be7543428dbc97504bc8511228467cdfab07c21701acfde8b",
+  "historical_lines": 218,
+  "future": "Root supplies actualM, validatedoriginalreceipts, formatterfragments, certifiedAcomparison/interpretation andpublicreplayproof; semantic/issueacceptance remainrootowned"
+}

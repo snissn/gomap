@@ -1,0 +1,54 @@
+{
+  "before_D_manifest_sha256": "96a3f3feb2ed3d770e082fe5eda63c2faed1804b29e6e8a9c0f3d8740a595e04",
+  "config_sha256": "b9998acfae072641810e625bb6e6ce1e7698e78a87e5d7f2f6b73c061f2b31df",
+  "files": {
+    "handoff.md": {
+      "bytes": 4063,
+      "sha256": "a8e4f68f7586eb5f271fed297e3259ac6916cda644aad1d066f800763fc2863f"
+    },
+    "qualify.py": {
+      "bytes": 17332,
+      "sha256": "82f2cbbc8288898a481edcdc099c6d5009cdf1bc77af0560ac31fa44818e81c5"
+    },
+    "static-checks.json": {
+      "bytes": 1465,
+      "sha256": "b00d41673aaf31281ef3e6f15c9b3ec0f7c132a78f412948fa473e9f2be413b4"
+    }
+  },
+  "formatter_invocation_included": false,
+  "harness_sha256": "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+  "numeric_acceptance_pending": true,
+  "observer_sha256": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68",
+  "preparation_checks": {
+    "actual_D_results_observed": false,
+    "actual_config_and_manifest_observed": false,
+    "all_subprocess_commands_git_only": true,
+    "ast_parse": "PASS",
+    "frozen_original_inputs": {
+      "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/format.py": {
+        "bytes": 18047,
+        "sha256": "022c45de44e96014de9ef343b639be4abd92189152efd411314b829b54c4da58"
+      },
+      "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/frozen-r1_lifecycle_validate.py": {
+        "bytes": 61009,
+        "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968"
+      },
+      "/private/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/observe.py": {
+        "bytes": 8856,
+        "sha256": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68"
+      }
+    },
+    "method": "static AST parsing and subprocess-call surface only; helper never executed",
+    "preparation_check_correction": "Initial checking script expected four subprocess call sites, but actual AST has three, all Git. Corrected the checker count; helper unchanged.",
+    "subprocess_calls": [
+      "subprocess.check_output(['git', '-C', str(repo), *args])",
+      "subprocess.check_output(['git', '-C', str(repo), 'cat-file', '--batch'], input=('\\n'.join(ids) + '\\n').encode())",
+      "subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor', cfg['landed_tooling_commit'], M], check=True)"
+    ],
+    "validator_not_imported_or_executed": true
+  },
+  "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+  "source_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "state": "PRIVATE_PREPARATION_ONLY_ROOT_REVIEW_ADOPTION_AND_ACTUAL_EXECUTION_PENDING",
+  "validator_sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968"
+}

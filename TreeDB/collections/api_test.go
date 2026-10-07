@@ -593,6 +593,12 @@ func TestCollectionValueLogGC_RoundTripWithCompressedSecondaryIndexes(t *testing
 	}
 	requireCollectionMaintenanceReads(t, col)
 
+	// Reads establish visibility; settle queued recoverable-root publication
+	// before asserting that GC physically reclaims an unreferenced segment.
+	if err := d.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint before value-log GC: %v", err)
+	}
+
 	valueLogDir := backenddb.ValueLogDirPath(d.Dir())
 	syntheticLane, staleSeq := chooseStandaloneValueLogSegmentStart(t, valueLogDir)
 	stalePath := writeStandaloneValueLogSegment(t, valueLogDir, syntheticLane, staleSeq, []byte("unreferenced collection-api gc segment"))

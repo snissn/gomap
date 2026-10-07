@@ -1,0 +1,47 @@
+{
+  "head": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+  "role": "independent read-only source inquiry",
+  "source_blobs": {
+    "TreeDB/db/wal_recovery.go": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+    "TreeDB/db/vlog_rewrite.go": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+    "TreeDB/db/vlog_gc.go": "35ea5228db716396785dc16a3c2c331d4b41affe",
+    "TreeDB/db/compact_storage.go": "e3b6328291b63e026d9bf68449cb067ce7b0b69e",
+    "TreeDB/internal/limits/record.go": "51f965e9503150fe31b04cb8e8e4d06fe6529fd1",
+    "TreeDB/internal/valuelog/segment_id.go": "302d54d95caca7b35f000519bdce84d8159f5544",
+    "TreeDB/internal/valuelog/manager.go": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5",
+    "TreeDB/collections/r1_lifecycle_5060_test.go": "14c2dbb1ba6a35f614fef528196a2304221ab818",
+    "scripts/r1_lifecycle_validate_test.py": "3ade38e52997945695fb5057e6e1aa238a04228a",
+    ".github/ci/ci_impact.json": "10a9808ad3ae5345a2f43af97cfc5ac95170d8aa"
+  },
+  "prior_static_source_blobs_still_identical": {
+    "TreeDB/db/wal_recovery.go": true,
+    "TreeDB/db/vlog_rewrite.go": true,
+    "TreeDB/db/compact_storage.go": true,
+    "TreeDB/db/wal_recovery_test.go": true,
+    "TreeDB/db/vlog_rewrite_test.go": true
+  },
+  "merge_resolution_verdict": "CLEAN: deep-copied captured rows combined with supported owner cleanup and profile crash child; both summarize+working_set imported and used; CI refresh only discovery digest, independently recomputed, every other policy value matches both parents.",
+  "persistent_vlog_verdict": "Observed below-cap lane0 growth fits intentional current-segment retention. No new unbounded physical retaining-owner bug established. Total database or live-plus-budget boundedness remains unproven.",
+  "finite_policy": {
+    "primary_appender_rotation_estimate_bytes": 4294967291,
+    "rewrite_output_default_segment_bytes": 134217728,
+    "default_max_encoded_record_bytes": 67108864,
+    "rotation_is_soft_estimate_not_exact_file_byte_guarantee": true,
+    "new_empty_writer_allows_single_oversized_vs_segment_target_record": true,
+    "active_selection": "newest per ordinary value lane plus every current-writable file; protected mode may retain two recent IDs per protected lane; pending append IDs independently retained",
+    "inactive_progress": "exhaustive rewrite selects positive-live stale inactive files with1B threshold; fully dead goes to GC; recovery roots/pending/reader/identity pins lawfully defer deletion",
+    "multiple_lanes": "chooseRewriteLane prefers unused nonzero value lane, excluding reserved leaf lane255; a single4GiB cap is not the whole kept-file budget"
+  },
+  "required_next_discriminator": "When source-bound workload naturally crosses ordinary writer rotation, census per-ID lane/seq/bytes/writable/newest, live/stale estimates, exact current/fallback/pending descriptor membership and file/identity pins; show prior lane0 file becomes eligible and is physically unlinked after rewrite, final root convergence and reader release. Keep held-view and corrupted-newest-meta reopen oracles. Existing512B rotation unit test proves writer seam, not4096/1024 full maintenance post-rotation progress. No experiment run in this inquiry.",
+  "residual_memory_observation": "rewriteWriter.createdIDs and createdSegments append per created file; publication acknowledgement advances an index without trimming histories. These are metadata, not retained file authority, so they do not explain observed physical vlog growth. Do not infer duration-independent retained heap bounds across many rotations from the segment cap. Broader lifetime ownership remains with existing owners.",
+  "acceptance": "No numerical capacity threshold introduced, no sustained-capacity waiver or product readiness claim.",
+  "sealed_segment_addendum": {
+    "head": "4b78a03d7ffea4e34a8d78f78c53c89bb9b8e064",
+    "verdict": "No source evidence that ordinary ResourceValueLog IDs are cloned forever after they become unreachable; integrated rotation and actual retirement remain unmeasured.",
+    "publication": "durable_root_runtime.go:873 excludes ResourceValueLog from inherited closure; :643 captures current references by exact projection or scan; under outer-leaf profile :286 refuses logical-only projection. Rebuilt exact scan :1344-1356 excludes ResourceValueLog and recaptures references. Unchanged-root projection :1174-1189 deliberately retains its exact logical closure; it does not add historical IDs.",
+    "rewrite": "vlog_rewrite.go:3027-3036 subtracts old pointer references and adds new pointer references on successful matched swaps. :2164 delegates retirement to fresh recoverable-root GC. Cold live pointers require evacuation; they are not eligible for deletion merely because their segment is sealed.",
+    "fallback": "command_wal_publish.go:261 waits for visible publication and republishes same root/LSN when slots differ, verifying convergence. durable_root_runtime.go:1908-1914 replaces destination slot resources and releases previousResources only after durable publication.",
+    "multiplicity": "vlog_gc.go:669 keeps highest sequence per lane plus current writable IDs. chooseRewriteLane at vlog_rewrite.go:5821 uses successive unused non-leaf lanes before lane 0 fallback. Thus sealed lane-0 files may progress after rotation, but retained latest outputs across lanes preclude treating one segment target as total retention budget.",
+    "next_discriminator": "Naturally cross replay-writer rotation; inspect former lane-0 file live references, successful rewrite swaps, selected current and fallback closure membership, file/identity pins and actual unlink after existing final convergence plus GC. If live references are zero but CURRENT ResourceValueLog descriptor persists after exact capture, investigate closure bug with external5037 owner; if closure clears but deletion stalls, discriminate newest-lane retention versus owned pins. No such failure established by below-cap five-epoch data."
+  }
+}

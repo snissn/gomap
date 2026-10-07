@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"golang.org/x/sys/windows"
 )
 
 func TestStableValueLogRotationUsesCreateOnlyWindowsEvidence(t *testing.T) {
@@ -221,5 +222,78 @@ func TestUnsupportedStableRotationDoesNotLeakRegistryOwnership(t *testing.T) {
 	}
 	if err := writer.Close(); err != nil {
 		t.Fatalf("second close: %v", err)
+	}
+}
+
+func TestRetirementParentDeletedWindows(t *testing.T) {
+	for _, mode := range []string{"live-directory", "nonempty-directory", "regular-file", "closed-parent", "deleted-directory", "unrelated-error", "nil-parent"} {
+		t.Run(mode, func(t *testing.T) {
+			if mode == "nil-parent" {
+				if deleted, err := retirementParentDeleted(nil, windows.ERROR_ACCESS_DENIED); deleted || !errors.Is(err, os.ErrInvalid) {
+					t.Fatalf("nil-parent proof=%t %v", deleted, err)
+				}
+				return
+			}
+			dir := filepath.Join(t.TempDir(), "parent")
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := dir
+			if mode == "regular-file" {
+				path = filepath.Join(dir, "file")
+				if err := os.WriteFile(path, []byte("regular file is not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var parent *os.File
+			var err error
+			if mode == "regular-file" {
+				parent, err = os.Open(path)
+			} else {
+				parent, err = rootpublication.OpenStableParent(path)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = parent.Close() })
+			childErr := error(windows.ERROR_ACCESS_DENIED)
+			switch mode {
+			case "closed-parent", "unrelated-error":
+				if err := parent.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "unrelated-error" {
+					childErr = windows.ERROR_INVALID_NAME
+				}
+			case "deleted-directory":
+				if err := os.Remove(dir); err != nil {
+					t.Fatal(err)
+				}
+			case "nonempty-directory":
+				id := writeTestSegment(t, dir, 0, 1, 1, []byte("physical child must remain"))
+				if err := os.Remove(dir); err == nil {
+					t.Fatal("nonempty directory deletion unexpectedly succeeded")
+				}
+				name := filepath.Base(segmentPath(dir, id))
+				if absent, err := requireRetirementChildAbsent(parent, name); absent || !errors.Is(err, rootpublication.ErrResourceConflict) {
+					t.Fatalf("nonempty parent proved child absence: %t %v", absent, err)
+				}
+			}
+			deleted, proofErr := retirementParentDeleted(parent, childErr)
+			if mode == "closed-parent" {
+				if deleted || proofErr == nil {
+					t.Fatalf("closed-parent proof=%t %v", deleted, proofErr)
+				}
+				return
+			}
+			if proofErr != nil || deleted != (mode == "deleted-directory") {
+				t.Fatalf("%s proof=%t %v", mode, deleted, proofErr)
+			}
+			if mode == "deleted-directory" {
+				if absent, err := requireRetirementChildAbsent(parent, "missing.vlog"); !absent || err != nil {
+					t.Fatalf("exact deleted-parent absence=%t %v", absent, err)
+				}
+			}
+		})
 	}
 }

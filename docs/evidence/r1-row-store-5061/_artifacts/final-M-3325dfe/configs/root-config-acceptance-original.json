@@ -1,0 +1,60 @@
+{
+  "utc": "2026-10-06T23:49:45.190694+00:00",
+  "state": "ROOT_ACCEPTED_ACTUAL_M_CONFIGS_ONLY_NOT_CAPTURE_ACCEPTANCE",
+  "configs": {
+    "A": {
+      "gocache": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+      "gomodcache": "/home/mikers/go/pkg/mod",
+      "goroot": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "landed_tooling_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "lock": "/home/mikers/gomap-r1-evidence-20261005/timed-capture.lock",
+      "out": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe",
+      "real_go": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "receipt_dir": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe",
+      "repo": "/home/mikers/gomap-r1-final-source-20261006",
+      "review_url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976",
+      "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "source_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca"
+    },
+    "C": {
+      "gocache": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+      "gomodcache": "/home/mikers/go/pkg/mod",
+      "goroot": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "landed_tooling_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "lock": "/home/mikers/gomap-r1-evidence-20261005/timed-capture.lock",
+      "out": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe",
+      "real_go": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "receipt_dir": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe",
+      "repo": "/home/mikers/gomap-r1-final-source-20261006",
+      "review_url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976",
+      "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "source_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca"
+    },
+    "D": {
+      "gocache": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+      "gomodcache": "/home/mikers/go/pkg/mod",
+      "goroot": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+      "harness_sha256": "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+      "landed_tooling_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "lock": "/home/mikers/gomap-r1-evidence-20261005/timed-capture.lock",
+      "out": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe",
+      "real_go": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "receipt_dir": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe",
+      "repo": "/home/mikers/gomap-r1-final-source-20261006",
+      "review_url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976",
+      "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "source_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca"
+    }
+  },
+  "file_pins": {
+    "derived-D-source.json": "96a3f3feb2ed3d770e082fe5eda63c2faed1804b29e6e8a9c0f3d8740a595e04",
+    "C-config.json": "c82fa7bc36130589be0e27858afa3df7daaec1422f4766cf9be850dde03ebc39",
+    "A-config.json": "f2b95b22d5e1c12a00c5cc77dc5846b199535aa3e30e2cc77ed8b8f8b03257b4",
+    "D-config.json": "b9998acfae072641810e625bb6e6ce1e7698e78a87e5d7f2f6b73c061f2b31df",
+    "source-derivation-receipt.json": "2030e61d95bd2e415cf9a2fce02eae94bd998eb72c205c81bc68db6ef54d5c3e",
+    "derived-A-C-source.json": "d01cabb0159552b9d326977758278b9fd8f5df4f9f1f04b7587e79d95481998f",
+    "root-inputs.json": "2ff9feee21926ecdaf3eb45360666152bf0846f3d5b56762d921a3e1d56d4058"
+  }
+}

@@ -94,6 +94,30 @@ their exported Go names. Errors preserve partial reports/counters/statuses and
 an `error`; failed receipts remain diagnostic. Envelope `completed` means the
 fixed operations and cleanup succeeded, not that final maintenance debt vanished.
 
+The settle receipt is bound to the current `LeafGenerationGCStats` serializer:
+`leaf_gc.stats` must have exactly 16 fields. The original nine generation/segment
+counters (`GenerationsTotal`, `GenerationsWritable`, `GenerationsLive`,
+`GenerationsRetiring`, `GenerationsEligible`, `GenerationsDeleted`, `FilesDeleted`,
+`BytesEligible`, `BytesDeleted`) retain their checks. The six separate manifest
+counters are `ManifestRevisionsTotal`, `ManifestRevisionsProtected`,
+`ManifestRevisionsEligible`, `ManifestRevisionsDeleted`,
+`ManifestRevisionBytesEligible`, and `ManifestRevisionBytesDeleted`. Every counter
+must be a nonnegative integer, never a boolean. `ManifestRevisionGCUnsupported`
+must be a boolean. Missing or unknown fields and historical nine-field settle
+receipts fail validation; there is no schema negotiation or adapter.
+
+For supported revision GC, total revisions equal protected plus eligible
+revisions; deleted revisions and bytes cannot exceed their respective eligible
+counters. Fresh protection can lawfully retain initially eligible revisions, so
+successful deletion need not exhaust eligibility. Unsupported revision GC must
+report zero in all six manifest counters; its typed receipt remains diagnostic
+and cannot supply calibration or a material-improvement result, even when final
+audit debt is zero. Failed or cancelled operations and partial error receipts
+remain nonpassing. Manifest revision counts/bytes are separate from segment
+counts/bytes and `remaining_debt`; the collector does not add or equate these
+units. Capture and replay use the same strict validator and completion predicate,
+preserving raw stdout and the original leaf-GC receipt.
+
 The analyzer derives endpoint identity from raw stdout and the bound command,
 validates token/root/WAL authority and every executed operation, and uses final
 audit debt/completion flags for policy eligibility. It retains all initial

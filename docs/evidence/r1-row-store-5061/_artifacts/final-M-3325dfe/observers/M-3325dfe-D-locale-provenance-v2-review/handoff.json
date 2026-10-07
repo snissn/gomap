@@ -1,0 +1,30 @@
+{
+  "verdict": "CLEAN",
+  "scope": "Exact compiler-only original LC_CTYPE provenance compatibility; static review only",
+  "qualifier_sha256": "648f07a3135cbd2d35ac713e944d681dd2de7b7111c76a4e0ca3b10e50717953",
+  "original_qualifier_sha256": "82f2cbbc8288898a481edcdc099c6d5009cdf1bc77af0560ac31fa44818e81c5",
+  "preparation_handoff_sha256": "9e6e3817bbde4b285fa04463c9978016110f001e44a415c5990c0f6f55eaa0aa",
+  "frozen_observer_sha256": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68",
+  "checks": {
+    "inverse_bytes_equal": true,
+    "inverse_AST_equal": true,
+    "frozen_original_receipt_text_hashes_checked": true,
+    "driver_validator_environment_exact_effective": true,
+    "compiler_environment_exact_effective_plus_LC_CTYPE_C_UTF_8": true,
+    "arbitrary_locale_extra_key_missing_key_changed_flag_rejected": true,
+    "all_other_source_tool_ELF_packet_six_pin_validator_and_repetition_checks_unchanged": true
+  },
+  "original_environment_record_sha256": {
+    "build-start.json": "5ff71eeb33a7db73c22b44eb8429ee54938fd3ffef7b1455aecac1c9818377a1",
+    "observer-before.json": "ec031431f93d5d65d9b94ebf51ee4a0307f3fc3200c92710a8cc68da164e2cd9",
+    "run-start.json": "3a160b9bd71eb287081ca1a49910c14c390dff144fd6926f2f5fef33281dca34",
+    "validation-start.json": "fa3077bae3655f8dac035104a386f2d8e07b83a786788c64a68a11746ee7fbea"
+  },
+  "findings": [],
+  "limits": [
+    "Python startup source/observer seam explains the observed record difference; this is not traced proof of each historical startup or compiler-code equivalence.",
+    "No normalization of driver/validator environment, compiler flags, dependencies, source, binary or packet.",
+    "Original failure retained; root must execute qualifier and separately decide finite numeric/cost acceptance.",
+    "No helper execution, Go, tests, capture, approval, remote action or original mutation."
+  ]
+}

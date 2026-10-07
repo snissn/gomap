@@ -19,11 +19,15 @@ func stableRelativeNamespaceSupported() bool { return true }
 func stableNamespaceCreationPersistsThroughChild() bool { return false }
 
 func openStableParent(path string) (*os.File, error) {
+	return openStableParentNamed(path, path)
+}
+
+func openStableParentNamed(path, diagnosticName string) (*os.File, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
-	return os.NewFile(uintptr(fd), path), nil
+	return os.NewFile(uintptr(fd), diagnosticName), nil
 }
 
 func openStableChildFile(parent *os.File, name string, flags int, perm os.FileMode) (*os.File, error) {

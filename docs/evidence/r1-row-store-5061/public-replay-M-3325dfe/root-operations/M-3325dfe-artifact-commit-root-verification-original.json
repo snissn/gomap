@@ -1,0 +1,12 @@
+{
+  "utc": "2026-10-07T01:17:26.632296+00:00",
+  "artifact_commit": "24ac6866992dd89ab222b8bf03d60e6c0c49a2d5",
+  "actual_M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "changed_files": 1432,
+  "runtime_and_harness_unchanged": true,
+  "authored_whitespace_check_exit": 0,
+  "frozen_original_whitespace_check_exit": 2,
+  "frozen_original_whitespace_log_sha256": "a9b9e352d0094017153dacded9abef5c6876ae85334fba1ef5bb1df30754f43f",
+  "original_evidence_bytes_preserved": true,
+  "no_policy_exemption": true
+}

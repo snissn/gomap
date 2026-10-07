@@ -1,0 +1,13 @@
+{
+  "accepted": true,
+  "actual_main_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "all_34_original_commands_exit_zero": true,
+  "historical_statuses_preserved": true,
+  "limits": "Public byte/source/original-validator qualification only. Original finite A/C/D cost decisions retain sole numeric authority. Final E review, CI, merge and parent closure remain pending.",
+  "owner": "/root",
+  "public_artifact_git_sha": "24ac6866992dd89ab222b8bf03d60e6c0c49a2d5",
+  "public_replay_result_sha256": "920ed1596949e90df3acf34ff069f4852cd172d6164fa4eba2db02e6cbbc4398",
+  "schema": "gomap-r1-root-public-replay-acceptance-v1",
+  "unchanged_original_inputs_before_after": true,
+  "utc": "2026-10-07T01:28:15.800632+00:00"
+}

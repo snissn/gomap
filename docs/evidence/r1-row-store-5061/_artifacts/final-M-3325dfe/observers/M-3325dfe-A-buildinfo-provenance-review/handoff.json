@@ -1,0 +1,53 @@
+{
+  "status": "PROVENANCE_ONLY_ADAPTATION_JUSTIFIED_IN_PRINCIPLE_PENDING_ROOT_SCOPE_DECISION_AND_HELPER_REVIEW",
+  "source_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "normalization_or_acceptance_executed": false,
+  "go_build_test_capture_or_network_executed": false,
+  "observations_sha256": "41c93251589fa9e3d47c7533c707ae0d61edb228c87b1d5195bde96397e6bebd",
+  "baseline_raw_buildinfo_sha256": "08f685dcd28426e51a2b3fac6af304a6adb472f5fa3b082f3ea0a9dab6f03bb2",
+  "M_raw_buildinfo_sha256": "1d1e68b983f212119bb070311de3744a40e594195054f373355d5212826d63b2",
+  "original_environment_diagnosis_sha256": "e769683d0a55544898190d12a30827fdc89e1603ea503cdc5f93f7a2eedbe169",
+  "all_non_buildinfo_environment_fields_equal": true,
+  "installed_Go1.26.4_source_sha256": {
+    "src/cmd/go/internal/load/pkg.go": "8ab6cf53b1674ef93d500b1ab07df3dc650fe003374ce14c31d992f899f4d339",
+    "src/cmd/go/internal/modload/build.go": "9c5d040ed7cc2dd6987a498549de22ee0c5414cae7fd36e2c8049fcef01efb13",
+    "src/runtime/debug/mod.go": "2ed3d813e6d666049ff4320a361b2639ae6f6f185545da31cd56c7cc85f298aa"
+  },
+  "inspected_repository_blobs": {
+    "cmd/collection_workload_bench/r1.go": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+    "TreeDB/caching/db.go": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+    "TreeDB/internal/compression/trainer.go": "168c6dca066c5eda9c531dee77ab11ca022e43c8",
+    "TreeDB/nativewire/peer_diagnostics_v1.go": "97d201177e4a738dc919a72b93fada97bf7bd706"
+  },
+  "permitted_proposal_only": {
+    "main_module_path": "github.com/snissn/gomap",
+    "baseline_version": "(devel)",
+    "M_version": "v0.6.2-0.20261006234446-3325dfe77940",
+    "baseline_vcs": "absent",
+    "M_vcs": {
+      "vcs": "git",
+      "vcs.revision": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "vcs.time": "2026-10-06T23:44:46Z",
+      "vcs.modified": "false"
+    }
+  },
+  "must_preserve": [
+    "original ELF/packet/buildinfo/failed-comparison bytes and their independent source/build/run/landing receipt chain",
+    "exact non-provenance buildinfo fields including compiler/toolchain/build flags/tags/CGO/architecture/dependency versions+sums+replacements",
+    "all other environment/configuration/fixture/repetition/denominator guards",
+    "original comparison arithmetic and >15% noise/inconclusive guard"
+  ],
+  "required_fail_closed_cases": [
+    "wrong own-module path/version/sum/replacement",
+    "dirty candidate or incorrect revision/time/VCS value",
+    "unknown, duplicate, or malformed metadata records",
+    "changed toolchain/flags/dependencies/CGO/architecture or any other non-provenance identity"
+  ],
+  "limits": [
+    "No author helper implementation reviewed or executed",
+    "No binary instruction/layout or timing equivalence asserted; metadata changes original ELF bytes",
+    "Repository consumer search covered A workload and TreeDB source; not a separate exhaustive audit of every external dependency",
+    "Separate explicit root decision/certificate extension and exact original byte pinning required; historical CI exception provides no authority here",
+    "No numeric or final R1 acceptance"
+  ]
+}

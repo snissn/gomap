@@ -45,7 +45,9 @@ def settle_report(mode='exhaustive'):
                 reports=[initial, audit], initial_status='succeeded', audit_status='succeeded', cleanup_status='succeeded',
                 leaf_gc=dict(status='succeeded', stats=dict(GenerationsTotal=9, GenerationsWritable=0, GenerationsLive=0,
                     GenerationsRetiring=0, GenerationsEligible=9, GenerationsDeleted=9, FilesDeleted=9,
-                    BytesEligible=9774643, BytesDeleted=9774643)), refresh=dict(basis=basis, result=result, status='succeeded',
+                    BytesEligible=9774643, BytesDeleted=9774643, ManifestRevisionGCUnsupported=False,
+                    ManifestRevisionsTotal=5, ManifestRevisionsProtected=2, ManifestRevisionsEligible=3,
+                    ManifestRevisionsDeleted=3, ManifestRevisionBytesEligible=5554, ManifestRevisionBytesDeleted=5554)), refresh=dict(basis=basis, result=result, status='succeeded',
                     checkpoint_status='succeeded', summary_before_status='succeeded', summary_after_status='succeeded',
                     next_lsn_before=37, next_lsn_after=37, roots_before=[root(basis, True, True)],
                     roots_after=[root(basis, True, False), root(result, True, True)]))
@@ -260,6 +262,158 @@ class MaintenanceTests(unittest.TestCase):
                 self.assertEqual(result['material'], material)
                 self.assertAlmostEqual(result['E'], .02)
                 self.assertEqual(len(result['pair_effects']), 3)
+
+    def test_settle_current_manifest_revision_serializer_schema(self):
+        # Current LeafGenerationGCStats serializes all 16 exported fields,
+        # including a separate manifest census even when segment GC succeeds.
+        raw = settle_report()
+        stats = raw['leaf_gc']['stats']
+        stats.update(GenerationsTotal=3, GenerationsWritable=1, GenerationsLive=1,
+                     GenerationsEligible=1, GenerationsDeleted=1, FilesDeleted=1,
+                     BytesEligible=473915, BytesDeleted=473915)
+        original = copy.deepcopy(raw)
+        cell = dict(mode='exhaustive', batch_size=8192, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+        measurement = m.validate_measurement(raw, cell)
+        self.assertEqual(len(stats), 16)
+        self.assertEqual(raw, original)
+        self.assertTrue(m.policy_complete(measurement))
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            paths = self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            run, loaded = m.load_run(paths['B1'])
+            self.assertEqual(run['endpoint'], m.COMMAND_WAL_SETTLE_ENDPOINT)
+            self.assertTrue(m.policy_complete(loaded))
+            self.assertTrue(m.analyze(root/'bundle.json')['material'])
+
+    def test_settle_capture_and_replay_preserve_current_stats(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp).resolve(); self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            campaign = root/'out'; fixture = root/'fixture'; fixture.mkdir()
+            (fixture/'index.db').write_bytes(b'closed fixture')
+            (fixture/'value').write_bytes(b'persistent payload')
+            m.save(root/'fixture.json', dict(closed=True, verified=True, fixture_sha256=m.fingerprint(fixture)['sha256']))
+            (campaign/'bin').mkdir(); binary = campaign/'bin'/'A'; binary.write_bytes(b'fake native binary')
+            manifest = json.loads((campaign/'manifest.json').read_bytes())
+            manifest['libraries'] = {}
+            manifest['sources']['A']['binary_sha256'] = m.unified.sha256(binary)
+            for role, receipt in manifest['receipts'].items():
+                receipt['path'] = str(campaign/(role+'-receipt.json'))
+            m.save(campaign/'manifest.json', manifest)
+            cell = dict(label='current', source='A', fixture=str(fixture), mode='exhaustive', batch_size=8192,
+                        endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT,
+                        fixture_receipt=dict(path=str(root/'fixture.json'), sha256=m.unified.sha256(root/'fixture.json')))
+            m.save(campaign/'capture-plan.json', dict(output='capture', cells=[cell]))
+            raw = settle_report()
+
+            def restore(root, manifest, database, directory, env, metadata):
+                metadata['snapshot_restore'] = dict(source=manifest['sources']['restore'], rc=0, native={},
+                    command=[str(root/'bin'/'restore'), str(database)])
+                m.save(directory/'restore.stdout.json', dict(rebound=True, operation='RebindDurableRootSnapshotLayoutWithContextV1'))
+                for name in ('restore.stderr.log', 'restore.ldd.stdout.txt', 'restore.ldd.stderr.txt'):
+                    (directory/name).touch()
+
+            def native(binary, source, libraries, env, root, directory, metadata):
+                metadata['native_resolution'] = dict(libraries={})
+                for name in ('ldd.stdout.txt', 'ldd.stderr.txt'):
+                    (directory/name).touch()
+
+            def execute(command, executable, sample_path, **kwargs):
+                kwargs['stdout'].write(json.dumps(raw))
+                kwargs['stderr'].write('Maximum resident set size (kbytes): 12\n')
+                stamp = m.time.time_ns()
+                sample_path.write_text(json.dumps(dict(pid=5, process_start_ticks=1,
+                    started_unix_nano=stamp, finished_unix_nano=stamp, rss_bytes=10000,
+                    anonymous_bytes=6000, file_bytes=4000, shared_memory_bytes=0))+'\n')
+                summary = dict(complete=True, cancelled=False, errors=[], interval_ms=200, samples=1)
+                m.save(str(sample_path)+'.summary.json', summary)
+                return types.SimpleNamespace(returncode=0), summary
+
+            # No native binary is executed: only filesystem capture and replay
+            # run here, with loader, restore, and process operations replaced.
+            with mock.patch.object(m, 'restore_snapshot', side_effect=restore), \
+                 mock.patch.object(m.unified, 'validate_native', side_effect=native), \
+                 mock.patch.object(m.owned_process_rss, 'run_with_rss', side_effect=execute), \
+                 mock.patch('builtins.print'):
+                m.capture(campaign/'manifest.json', campaign/'capture-plan.json')
+            directory = campaign/'capture'/'current'
+            self.assertEqual(json.loads((directory/'stdout.json').read_bytes()), raw)
+            run, loaded = m.load_run(directory/'run.json')
+            self.assertTrue(run['validated']); self.assertTrue(m.policy_complete(loaded))
+            self.assertEqual(loaded['leaf_gc'], raw['leaf_gc'])
+            self.assertEqual(m.unified.sha256(directory/'stdout.json'), run['artifacts']['stdout.json'])
+
+    def test_settle_manifest_revision_counters_fail_closed(self):
+        cell = dict(mode='exhaustive', batch_size=8192, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+        revision_fields = ('ManifestRevisionsTotal', 'ManifestRevisionsProtected', 'ManifestRevisionsEligible',
+                           'ManifestRevisionsDeleted', 'ManifestRevisionBytesEligible', 'ManifestRevisionBytesDeleted')
+        for name in revision_fields:
+            for value in (-1, True, 1.5, '1', None):
+                with self.subTest(name=name, value=value):
+                    raw = settle_report(); raw['leaf_gc']['stats'][name] = value
+                    with self.assertRaises(ValueError):
+                        m.validate_measurement(raw, cell)
+        for name in settle_report()['leaf_gc']['stats']:
+            with self.subTest(missing=name):
+                raw = settle_report(); del raw['leaf_gc']['stats'][name]
+                with self.assertRaisesRegex(ValueError, 'invalid leaf GC counters'):
+                    m.validate_measurement(raw, cell)
+        for changes in [dict(UnexpectedCounter=0), dict(ManifestRevisionGCUnsupported=0),
+                        dict(ManifestRevisionGCUnsupported=1), dict(ManifestRevisionGCUnsupported=None),
+                        dict(ManifestRevisionGCUnsupported='false'), dict(ManifestRevisionsTotal=6),
+                        dict(ManifestRevisionsProtected=6), dict(ManifestRevisionsDeleted=4),
+                        dict(ManifestRevisionBytesDeleted=5555), dict(ManifestRevisionGCUnsupported=True)]:
+            with self.subTest(changes=changes):
+                raw = settle_report(); raw['leaf_gc']['stats'].update(changes)
+                with self.assertRaises(ValueError):
+                    m.validate_measurement(raw, cell)
+        # A later protection check can retain initially eligible revisions.
+        # Deleted counts and bytes are bounded, not required to equal eligibility.
+        for changes in [dict(ManifestRevisionsDeleted=1, ManifestRevisionBytesDeleted=100),
+                        {name: 0 for name in revision_fields}]:
+            raw = settle_report(); raw['leaf_gc']['stats'].update(changes)
+            measurement = m.validate_measurement(raw, cell)
+            self.assertEqual(measurement['leaf_gc'], raw['leaf_gc'])
+            self.assertTrue(m.policy_complete(measurement))
+        for status in ('failed', 'not_started', 'cancelled'):
+            raw = settle_report(); raw['leaf_gc']['status'] = status
+            raw['leaf_gc']['stats'].update(ManifestRevisionsDeleted=1, ManifestRevisionBytesDeleted=100)
+            with self.assertRaisesRegex(ValueError, 'incomplete leaf GC'):
+                m.validate_measurement(raw, cell)
+
+    def test_settle_unsupported_manifest_gc_is_diagnostic_and_nonqualifying(self):
+        raw = settle_report()
+        stats = raw['leaf_gc']['stats']
+        for name in list(stats):
+            if name.startswith('Manifest'):
+                stats[name] = True if name == 'ManifestRevisionGCUnsupported' else 0
+        cell = dict(mode='exhaustive', batch_size=8192, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+        for name in stats.keys()-{'ManifestRevisionGCUnsupported'}:
+            if name.startswith('Manifest'):
+                malformed = copy.deepcopy(raw); malformed['leaf_gc']['stats'][name] = 1
+                with self.subTest(unsupported_census=name), self.assertRaisesRegex(ValueError, 'unsupported manifest GC census'):
+                    m.validate_measurement(malformed, cell)
+        original = copy.deepcopy(raw)
+        measurement = m.validate_measurement(raw, cell)
+        self.assertEqual(raw, original)
+        self.assertTrue(measurement['policy_fully_compacted'])
+        self.assertFalse(m.policy_complete(measurement))
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); paths = self.make_campaign(root, endpoint=m.COMMAND_WAL_SETTLE_ENDPOINT)
+            for label in ('C2', 'B1'):
+                path = paths[label]; m.save(path.parent/'stdout.json', raw)
+                self.change(path, lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(path.parent/'stdout.json')}))
+                _, loaded = m.load_run(path)
+                self.assertEqual(loaded['leaf_gc']['stats'], stats)
+                self.assertFalse(m.policy_complete(loaded))
+            output = root/'rejected-noise.json'
+            with self.assertRaisesRegex(ValueError, 'incomplete calibration run'):
+                m.calibrate([paths[k] for k in ('C1', 'C2', 'C3')], 'elapsed_seconds', output)
+            self.assertFalse(output.exists())
+            m.save(paths['C2'].parent/'stdout.json', settle_report())
+            self.change(paths['C2'], lambda r: r['artifacts'].update({'stdout.json': m.unified.sha256(paths['C2'].parent/'stdout.json')}))
+            self.seal_pairs(root)
+            result = m.analyze(root/'bundle.json')
+            self.assertFalse(result['complete_runs']); self.assertFalse(result['material'])
 
     def test_settle_qualifies_final_completion_and_preserves_initial_report(self):
         raw = settle_report()

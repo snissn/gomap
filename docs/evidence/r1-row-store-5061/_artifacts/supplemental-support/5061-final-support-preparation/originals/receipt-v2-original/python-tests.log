@@ -1,0 +1,54 @@
+test_unreported_caller_settings_do_not_reach_actual_child (r1_lifecycle_capture_test.BenchmarkEnvironmentTests) ... ok
+test_actual_packet_accepts_independent_binary_and_packet_receipt (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_actual_vacuum_counters_nonnegative_integer_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_benchmark_filesystem_metadata_mismatch (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_benchmark_tmpdir_metadata_mismatch (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_binary_binding_rejects_substitution_even_with_matching_packet_fixture (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_binary_identity_mismatch (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_binary_substitution_with_rebound_self_hash_rejects_original_receipt (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_build_log_substitution_with_rebound_self_hash_rejects_original_receipt (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_changed_id_set_with_same_counts_and_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_effective_godebug_rejected (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_every_actual_vacuum_field_required_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_every_actual_vacuum_scalar_type_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_exact_packet_bytes_bound_even_with_identical_decoded_metadata (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_failed_process_even_with_valid_output (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_forged_valid_hex_landing_rejected_against_independent_binding (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_frozen_harness_mismatch (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_impossible_epoch_timer_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_metadata_substitution_rejects_original_receipt (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_mislabeled_cached_wrapper_scope (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_mislabeled_working_set_config (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_effective_benchmark_environment (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_fold_work_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_landing_declaration (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_maintenance_timer_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_post_release_gc_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_storage_phase_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_typed_reachability_source_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_vacuum_completion_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_missing_vlog_active_attribution_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_new_ids_in_later_epoch_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_nonfinite_vacuum_counter_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_protected_rewrite_counted_as_work_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_raw_substitution_with_rebound_self_hash_rejects_original_receipt (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_real_packet_acceptance_and_exact_freeze (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_rehearsal_cannot_be_relabeled_retained (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_relabel_valid_landing_shape_requires_independent_binding (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_removed_metric_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_retained_requires_all_independent_source_bindings (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_retained_requires_independent_binary_and_packet_bindings (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_runtime_manifest_tampering (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_source_relabel_rejects_original_receipt (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_unbound_actual_concurrency_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_unbound_compiled_test (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_unclassified_vacuum_field_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_unfolded_history_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_unknown_effective_child_environment_rejected (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_wrong_actual_denominator_with_rebound_raw_hash (r1_lifecycle_validate_test.RealPacketTests) ... ok
+test_wrong_actual_runtime_environment (r1_lifecycle_validate_test.RealPacketTests) ... ok
+
+----------------------------------------------------------------------
+Ran 49 tests in 22.335s
+
+OK

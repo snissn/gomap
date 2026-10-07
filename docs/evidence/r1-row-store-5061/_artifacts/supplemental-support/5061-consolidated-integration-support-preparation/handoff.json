@@ -1,0 +1,17 @@
+{
+  "inventory_sha256": "74c5eb413337663955a2e58536409d09521c4448f142aac974ecbf98f1317bbc",
+  "original_bytes": 2917277,
+  "original_text_count": 60,
+  "packet_root": "/tmp/gomap-r1-execution-20261005/5061-consolidated-integration-support-preparation",
+  "readiness_json_sha256": "7276fb7b7c32b5beb9de8bab61d8d1355c121761980ffe49387d47c2b7e53958",
+  "remaining_gates": [
+    "current-head required CI",
+    "current-head hosted review and threads",
+    "normal protected merge",
+    "actual-landed A/C/D capture and independent validation",
+    "artifact-first E public replay and acceptance"
+  ],
+  "root_action": "Review and adopt or reject this eighth group separately; no automatic inclusion in existing assembler or qualification.",
+  "selection_before_copy_sha256": "9cdfa0a7f1797065d5317ff71f7af1f148c6214ef04490659f0456e6d2222e25",
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION"
+}

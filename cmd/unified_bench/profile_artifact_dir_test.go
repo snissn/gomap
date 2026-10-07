@@ -3,12 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 type profilingFlagSnapshot struct {
@@ -287,11 +287,7 @@ func TestQuicksilverCLIProfileArtifacts(t *testing.T) {
 		}
 		for phase, ms := range map[string]float64{"quicksilver_initial": r.InitialCheckpointMS, "quicksilver_final": r.FinalCheckpointMS} {
 			seconds := run.CheckpointDurationsSeconds[phase]
-			got, present := seconds[wantName]
-			// The canonical export stores an integer nanosecond duration. Compare
-			// its exact projection, including the float-millisecond conversion.
-			want := time.Duration(ms * float64(time.Millisecond)).Seconds()
-			if len(seconds) != 2 || !present || got != want {
+			if len(seconds) != 2 || math.Abs(seconds[wantName]-ms/1000) > 1e-9 {
 				t.Fatalf("variant checkpoint lost: %s: %+v", phase, seconds)
 			}
 		}

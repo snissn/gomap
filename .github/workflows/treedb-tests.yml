@@ -228,6 +228,8 @@ jobs:
           python3 .github/scripts/test_treedb_ci_contract.py
           python3 .github/scripts/test_treedb_windows_core_headroom.py
           python3 .github/scripts/test_ci_impact.py
+          python3 scripts/r1_collection_source_test.py
+          python3 scripts/r1_collection_summary_test.py
 
       - name: Vet
         working-directory: TreeDB
