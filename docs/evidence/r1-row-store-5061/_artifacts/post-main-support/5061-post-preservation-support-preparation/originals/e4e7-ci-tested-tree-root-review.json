@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-06T21:12:20.506678+00:00",
+  "observed_job": 112486076465,
+  "run": 37526268804,
+  "job_original": "e4e7-race4-success-job-original.json",
+  "checkout_log_original": "e4e7-race4-success-log-original.log",
+  "checkout_log_sha256": "0eadc50a5b1e51ed960ae3059159dd3c641471430e6e18e3bb3cef4df27dcbe7",
+  "actual_tested_checkout": "6cea7500d944674361428b99f4df0d8bfff5a8fb",
+  "actual_pr_head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+  "actual_event_base": "7649857532521db69ff4cdcf236a11377c85ab3d",
+  "tested_tree_and_pr_tree": "ecb6d1ff66ad826e36364298b8bc08b864fd3fda",
+  "external_merge_api_sha256": "350002c12c4ea1193e0ad501d19363f55a76cb5c21fd7f0dae77159c50b453e8",
+  "scope": "Actual CI synthetic merge tree is byte-equal to reviewed PR head; does not assert actual mainline merge or retained capture acceptance."
+}

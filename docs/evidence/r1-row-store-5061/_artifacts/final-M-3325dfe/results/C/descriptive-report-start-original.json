@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-C-report-preparation/format.py",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/summary.json",
+    "--summary-link",
+    "../../../../docs/evidence/r1-row-store-5061/_artifacts/final-M-3325dfe/results/C/summary.json",
+    "--packet-link",
+    "../../../../docs/evidence/r1-row-store-5061/_artifacts/mutation-sweep/final-actual-M/3325dfe/packet.json"
+  ],
+  "input_sha256_before": {
+    "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/packet.json": "e5b83232a75ecb0a30b2859dd64e0ee2e1cba2a31cb922c05d1b9384e048a17b",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/summary.json": "17f2ae7f7fbda5c12a6e249090ca3f1a5a083b75598fd6f5d41995184247dbe0",
+    "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-A-report-preparation/report-a.py": "b2e386b4ec939978b9de1759ff6a2b564abf2afc0ecd136171823302b1fdefa4",
+    "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-C-report-preparation/format.py": "52d94e91dcfd696c1d8aaa29f3a39ff0da010e5d238bf10818d802832a66323d"
+  },
+  "scope": "FORMATTING_ONLY_NO_ACCEPTANCE",
+  "utc": "2026-10-07T00:37:59.716343+00:00"
+}

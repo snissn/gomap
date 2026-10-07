@@ -1,0 +1,18 @@
+{
+  "utc": "2026-10-06T21:49:03.665611+00:00",
+  "owner": "root",
+  "head": "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+  "run": 37535082008,
+  "job": 112513847823,
+  "actual_job_conclusion": "success",
+  "whole_original_fail_marker_or_race_warning": false,
+  "RF4_parent_three_normal_PASS_elapsed": [
+    "4.33s)",
+    "4.44s)",
+    "4.10s)"
+  ],
+  "log_bytes": 529700,
+  "log_sha256": "eb1ea1326398d9662c8b844b6697dd5bbf2c91ddfb34f01050f8b61424966840",
+  "job_metadata_sha256": "647b0bfdf17abb23a2b1835d5496f1de58fdd1566bc732df00af6b5d96644c0c",
+  "scope": "Actual corrected-head Sparse/FIXEDpeer normalcount3 plus Sparse race; originale4eFAIL retained separately; no retained R1 performance/capacity acceptance"
+}

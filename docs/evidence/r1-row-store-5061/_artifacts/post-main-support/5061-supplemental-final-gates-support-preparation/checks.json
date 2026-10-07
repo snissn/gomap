@@ -1,0 +1,9 @@
+{
+  "ci_completion_or_landing_observed": false,
+  "hosted_original_classifier_exact_head_clean": true,
+  "pairs_verified": 13,
+  "prior_pins_unchanged": 875,
+  "request_count": 1,
+  "source_bound_sparse_original_job_and_review_and_log_match": true,
+  "status": "PASS_BYTE_MODE_COPY_AND_ORIGINAL_BINDING_CHECKS_ONLY"
+}

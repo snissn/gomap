@@ -1,0 +1,41 @@
+# #5066 writer handoff
+
+Released sole writer. No push, PR, merge or tracker writes. Parent owns exact-head independent review and integration. No Go work performed on111.
+
+Runtime branch `codex/5066-maintenance-lifetimes`, local `/tmp/gomap-r1-5066`, Linux185 `/home/mikers/gomap-r1-5066`. Both clean HEAD `604df52aee0a4ab7b3c9a2b85905ab492be0ce46`, base `b5663870a110dd9a84a873934815d5b0bcb649cb`, tree `4f8c15468785d5740b1164a8d36ba897d6f6134f`. Bundle `/tmp/gomap-r1-execution-20261005/5066-corrected.bundle` and185 `/home/mikers/5066-corrected.bundle`. Append-only history retains red tests and initial fixture mistakes.
+
+Changes: Manager retry admission, closing/cancel/join in all3launch sites; no new ordinary read/write routing. Lazy stop channel only after first retry, close completion channel at Close. Revision GC appended to existing segment phase; fresh post-publication recoverable capture/revalidation, current compatibility view/exact current revision, both slot and prepared/publication registry pins, held old snapshot generation pins. Exact retained parent scan/open/validate, namespace lease, same-parent quarantine identity validation, unlink+directory sync. Complete inventory validated before deletion. Existing maintenance limits/cancellation; ambiguous identity/sync evidence poisons owner. Strict capability loss errors. Compatibility-only store returns Unsupported=true before acquiring revision authority, preserves segment phase and zero revision deletes. DryRun uses existing bounded stale-authority retry; actual apply fails closed. No age deletion/new registry/format/WAL mode. Existing #5037 line70 creation capability untouched; no broad #1954 redesign.
+
+New stats: ManifestRevisionGCUnsupported bool; ManifestRevisionsTotal/Protected/Eligible/Deleted int; ManifestRevisionBytesEligible/Deleted int64. Segment stats remain separate. D source/schema lane has exact field list; supported-profile packets require Unsupported=false.
+
+Files: TreeDB/internal/valuelog/{manager.go,stable_resource.go,retry_close_5066_test.go}; TreeDB/db/{leaf_generation_gc.go,leaf_manifest_revision_gc.go,leaf_manifest_revision_gc_5066_test.go,leaf_manifest_revision_gc_compatibility_5066_test.go,leaf_manifest_revision_gc_5066_bench_test.go}; TreeDB/docs/spec/{storage-format.md,value-log-lifecycle.md,recovery.md}; docs/contracts/CONCURRENCY.md.
+
+## Exact clean validation
+
+Evidence185 `/home/mikers/gomap-r1-5066-evidence-20261005/clean-604df52ae` includes source before/after, full committed blob inventory, runtime identity, toolchain/effective env, logs. Full source-blob inventory SHA256 `523488521feac63f12ba3ee2afc031459e9e7f4c2672ff4f304a5433f1814033`. Committed runtime identity `eb862e11f1b2146e589480b9068a56d4b810437adc012dd821a3dfb89826268b`; unchanged A harness `8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb`. Runtime identity differs from prior frozen comparator and needs honest applicability/integration refresh.
+
+Pinned Go1.26.4 at `/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go`; matching GOROOT, GOCACHE `/home/mikers/.cache/gomap-r1-5066-go1264`, GOMODCACHE `/home/mikers/go/pkg/mod`, GOWORK=off,GOTOOLCHAIN=local,GOMAXPROCS=16,GOGC=100,GOMEMLIMIT=off,GOFLAGS empty. All Go jobs serialized by `/home/mikers/gomap-r1-correctness-185.lock`.
+
+- `go test ./TreeDB/db ./TreeDB/internal/valuelog -run 'Test.*5066|TestLeafGenerationGC|TestStableLeafGenerationManifest|TestRefreshCommandWALCheckpointFallback|TestManager.*Zombie' -count=1 -timeout=5m`: PASS db10.293s/valuelog0.511s, focused.log.
+- `go test -race ./TreeDB/db ./TreeDB/internal/valuelog -run 'Test.*5066|TestLeafGenerationGC_LifetimeGateLockOrderStress|TestRefreshCommandWALCheckpointFallback' -count=1 -timeout=5m`: PASS db5.448s/valuelog1.526s, race.log.
+- `go vet ./TreeDB/db ./TreeDB/internal/valuelog`: PASS, vet.log.
+- `go test ./TreeDB/collections -run '^TestTypedStorageLegacyNameAllowlistIsComplete$' -count=1 -timeout=2m`: PASS9.829s full mirror, naming.log. No new legacy ColumnStore docs references, no allowlist edits.
+- `go test ./TreeDB/internal/valuelog -count=1 -timeout=5m`: PASS3.980s full normal package, valuelog-full.log.
+- `go test ./TreeDB/db -run '^$' -bench '^BenchmarkLeafManifestRevisionGC5066$' -benchtime=1x -count=3 -benchmem -timeout=2m`: PASS. Public GC reclaims32released immutable revisions/op, setup+close excluded.339541316/361443919/354861667ns/op;172456/157744/172600B/op;1975/1975/1976allocs/op. Bounded diagnostic, not retained comparison/capacity qualification. Synchronous revision namespace IO is inside exclusive maintenance locks and can pause foreground publication; cost is explicit rather than hidden.
+- local git diff --check and precommit gofmt PASS. Root will perform combined intended-source CI discovery refresh after integration; shared inventory untouched here.
+
+Meaningful tests include held retry close barrier+32round concurrent admission/close, actual prepared revision red/green, current/prepared/held and both recovery manifests retained, then old revision actual deletion after release, current rows, newest-meta corruption fallback reopen, complete invalid inventory before deletion, rebound canonical identity preserves both physical files, retained-parent diagnostic path replacement, canceled/budgets/dryrun/read-only, strict unsupported, compatibility no-capture, deletion directory-sync failure poison/zero successful-delete counter. Existing GC concurrency, stable manifest/power-loss and fallback tests retained.
+
+## Original supported-profile diagnostic, fixed runtime
+
+Separate clean185 `/home/mikers/gomap-r1-5066-profile-verify`, branch `codex/5066-profile-exit-proof`, HEAD `d155d9015644f9686f076d702ee4c231b3264a16` atop604. Only adds exact original3growth probe test files from immutable7adf81c2. No D fixture/tooling edits. Profile source inventory hash `95938d6f2b9955e328e1dabfdae565eb8003849752899424bcbd92e64cd23e59`; identical runtime/harness hashes above. Raw `/home/mikers/gomap-r1-5066-evidence-20261005/profile-d155d90156/{test.log,exit.txt,source.txt,source-blobs.txt,runtime-identity.json,toolchain.txt}`.
+
+`go test ./TreeDB/collections -run '^TestR1SupportedProfileGrowthProbe$' -count=1 -timeout=3m -v`: PASS4.136s, exit0, no leak suppression or added sleep. Five32row/8call epochs, repeated4IDs; held/current/historical/city/email/reopen oracles pass. Five actual fixed-file1 deletions/four safe recreations. Persisted command_wal_durable+outer/packedtrue; existing fold/full CompactStorage/fallback refresh/typedGC plus final LeafGenerationGC, protections unchanged.
+
+Actual census: ingest typed5490/leaf5140/vlog1014. Reclaimed epochs typed5514 fixed; leaf17233,44623,50153,55689,61170; vlog1485,1957,2428,2900,3373. Final leafGC61170→37419B; reopen typed5514/leaf37419/vlog3373/index4194304/total4242441. Final2immutable revisions vs original pre-fix54. Leaf logs/partial vlog remaining are not proof of a finite capacity bound; parent sustained gate remains open for integrated D evidence. No default5x5 expensive capture performed.
+
+## Retained negative evidence
+
+185 evidence root preserves initial red-c566 compile failure (overbroad hook insertion), corrected meaningful retry red-c4d49 (`Close returned ... pending=true`), manager-becb green, revision-red a21d (`before=11 after=11`), revision-green, held-green failed setup variants (empty manifest slot authority and fixture RID ownership), mature-5ab42 original GC DryRun stale-error regression and corrected focused pass. `final-focused` first race/cost run began with source guard5ab+2dirty files during FF; retained as nonqualifying source identity, superseded by clean604 evidence. Original `/home/mikers/gomap-r1-growth-evidence-20261005/profile-{2cde6c8c,postgc-7adf81c2}` remain failed process exit1 with real goleak evidence, never relabeled.
+
+Next decision: independent exact604 runtime review, integrate only after acceptance with landed/final B predecessor product and D12f3 successor+validator repairs, refresh combined CI discovery/runtime identities once, run integrated D source-bound mini+corruption cases before expensive sustained qualification. No merge/review/CI authority delegated to this worker. Writer and185lock released; no more edits/captures scheduled.

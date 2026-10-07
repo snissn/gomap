@@ -1,0 +1,15 @@
+{
+  "utc": "2026-10-06T22:23:33.764345+00:00",
+  "argv": [
+    "gh",
+    "run",
+    "cancel",
+    "37535081909",
+    "--repo",
+    "snissn/gomap"
+  ],
+  "exit": 0,
+  "stdout": "\u2713 Request to cancel workflow 37535081909 submitted.\n",
+  "stderr": "",
+  "reason": "Superseded old45dworkflow remainsqueued inalwaysaggregate, current898aworkflowpending; originals retained andnewcurrentheadCI mandatory"
+}

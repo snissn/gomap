@@ -1,0 +1,34 @@
+{
+  "argv": [
+    "git",
+    "-C",
+    "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+    "-c",
+    "credential.helper=",
+    "fetch",
+    "--no-tags",
+    "https://github.com/snissn/gomap.git",
+    "24ac6866992dd89ab222b8bf03d60e6c0c49a2d5"
+  ],
+  "cwd": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+  "environment": {
+    "GIT_CONFIG_GLOBAL": "/dev/null",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GODEBUG": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "16",
+    "GOMEMLIMIT": "off",
+    "HOME": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "input_before_sha256": {
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-host-original.json": "cf0cce6e46a7f4ce830329897217582b03af42d47d36b635d8710a4a4de22edd",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-root-approved-inputs-original.json": "a4166c3fe81dff988f689e69ebb44bece9cdd1047e0d69a95be7b2f3f854631c"
+  },
+  "monotonic_ns": 2838844162728437,
+  "utc": "2026-10-07T01:23:35.552607+00:00"
+}

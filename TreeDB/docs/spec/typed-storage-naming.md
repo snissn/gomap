@@ -212,9 +212,18 @@ that touches a specific legacy occurrence must include the exact touched
 occurrence in its PR inventory.
 
 `TestTypedStorageLegacyNameAllowlistIsComplete` is the executable inventory for
-this contract: every match from the audit command must map to one of the
-classifications below, and line/occurrence count drift must update the
-classification explanation in the PR.
+this contract over tracked source text in `TreeDB`, `docs`, and `experiments`
+(with a filesystem-walk fallback when the Git inventory is unavailable). Every
+current-source match must map to one of the classifications below, and
+line/occurrence count drift must update the classification explanation in the PR.
+
+The exact frozen-original namespaces
+`docs/evidence/r1-row-store-5061/_artifacts/` and
+`docs/evidence/r1-row-store-5061/public-replay-M-3325dfe/` are excluded: their
+original source/log bytes retain historical naming as evidence. This exception
+covers neither the current report nor neighboring evidence, specs, guides, or
+examples within the audited roots. Transient `TreeDB/treedb-*.jsonl` CI output is
+also excluded.
 
 | Path | Symbol/text | Current meaning | Classification | Action | Deferral reason |
 | --- | --- | --- | --- | --- | --- |

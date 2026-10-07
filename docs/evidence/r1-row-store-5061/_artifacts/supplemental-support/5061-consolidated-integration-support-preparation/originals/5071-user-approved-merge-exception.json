@@ -1,0 +1,8 @@
+{
+  "utc_observed": "2026-10-06T18:09:26.414844+00:00",
+  "actual_user_message": "approved",
+  "scope": "Requested5071auxiliaryM0timingexception; originalFAILsunchanged; allotherrequiredCI/review/threadsandactualA/C/D/Eacceptanceremainrequired",
+  "selected_head_at_request": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+  "merge_status": "Notmerged; mainadvanced3cfe2ad causingconflict, freshintegrationandgatesrequired",
+  "main_actual": "3cfe2ad896cad1818f72d3d14c74e548fecc1657"
+}

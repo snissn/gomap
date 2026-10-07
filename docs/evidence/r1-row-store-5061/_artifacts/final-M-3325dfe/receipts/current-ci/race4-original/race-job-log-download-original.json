@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-06T23:26:20.687300+00:00",
+  "argv": [
+    "gh",
+    "api",
+    "repos/snissn/gomap/actions/jobs/112531854587/logs"
+  ],
+  "exit": 0,
+  "stdout_file": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/race-job-complete-log-original.txt",
+  "stdout_bytes": 6980630,
+  "stdout_sha256": "5c2f575f1ec93cd2fac7b5ce5ed068180335353b8f5081379073eeec03845e01",
+  "stderr_file": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/race-job-complete-log-stderr-original.txt",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

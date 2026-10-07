@@ -1,0 +1,20 @@
+--- v1/copy-support.py
++++ v2/copy-support.py
+@@ -147,7 +147,7 @@
+         copied.append({'source': str(source), 'destination': str(output), 'stage_relative': NAMESPACE + '/' + row['destination'],
+                        'sha256': actual['sha256'], 'bytes': actual['bytes'], 'mode': '0644', 'source_preflight': row['preflight'], 'source_immediately_before_copy': before})
+     # Hash every copied physical file, exactly once. The ledger excludes itself.
+-    ledger_data = ''.join(row['sha256'] + '  ' + row['stage_relative'] + '\n' for row in sorted(copied, key=lambda v: v['stage_relative'])).encode('utf-8')
++    ledger_data = ''.join(row['sha256'] + '  ' + str(Path(row['destination']).relative_to(target)) + '\n' for row in sorted(copied, key=lambda v: v['stage_relative'])).encode('utf-8')
+     ledger = target / LEDGER
+     write_new(ledger, ledger_data)
+     for row in copied:
+@@ -167,7 +167,7 @@
+               'helper': {'path': str(program_path), 'before': program_identity_before, 'after': program_identity_after, 'bytes_unchanged': True},
+               'plan': {'path': str(plan_path), 'independent_cli_sha256': args.expected_plan_sha256, 'before': plan_identity, 'after': plan_after},
+               'core_ledger': {'path': str(core), 'independent_cli_sha256': args.expected_core_sha256, 'before': core_identity, 'after': core_after, 'bytes_unchanged': True},
+-              'actual_copies': copied, 'support_ledger': {'path': str(ledger), 'sha256': digest(ledger_data), 'bytes': len(ledger_data), 'entries': len(copied), 'excludes_itself': True, 'paths_relative_to_stage': True},
++              'actual_copies': copied, 'support_ledger': {'path': str(ledger), 'sha256': digest(ledger_data), 'bytes': len(ledger_data), 'entries': len(copied), 'excludes_itself': True, 'paths_relative_to_namespace': True},
+               'limits': ['Explicit file plan only; no directory traversal or recursive copying.', 'UTF8/noNUL regular nonsymlink files only; outputs have mode0644.', 'No acceptance records required or inferred; requested acceptance records may only be copied as bytes.', 'Core ledger byte hash is checked; physical core evidence and the complete final stage require separate root inventory.', 'No validation helpers outside namespace or FULL PUBLICATION ledger are changed.', 'Failures preserve partial namespace/files; no retry, cleanup, replacement or automatic acceptance.']}
+     data = (json.dumps(result, indent=2, sort_keys=True, allow_nan=False) + '\n').encode('utf-8')
+     write_new(receipt, data)

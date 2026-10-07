@@ -1,0 +1,107 @@
+{
+  "utc": "2026-10-06T23:50:16.959733+00:00",
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "4c9f21a51d304534619e8f70155a5dea51c5989b\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "fetch",
+        "/home/mikers/gomap-r1-final-observers-20261006/5071-actual-M.bundle",
+        "refs/r1/root-actual-M-3325dfe:refs/r1/root-actual-M-3325dfe"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "merge",
+        "--no-edit",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca"
+      ],
+      "exit_code": 0,
+      "stdout": "Merge made by the 'ort' strategy.\n .github/ci/ci_impact.json                          |   2 +-\n .../caching/vlog_generation_chunk_harness_test.go  |  20 +-\n TreeDB/db/compact_storage_audit_test.go            |  12 +-\n TreeDB/db/maintenance_reachability.go              |   9 +-\n TreeDB/db/maintenance_reachability_test.go         |  10 +-\n TreeDB/db/maintenance_roots_test.go                |   4 +-\n TreeDB/db/vlog_physical_live_bytes_bench_test.go   |  36 +++\n TreeDB/db/vlog_physical_live_bytes_test.go         | 265 +++++++++++++++++++++\n TreeDB/db/vlog_rewrite_chunk_plan.go               |   3 +-\n TreeDB/db/vlog_rewrite_chunk_plan_test.go          |   6 +-\n TreeDB/docs/spec/storage-format.md                 |   6 +\n TreeDB/docs/spec/value-log-lifecycle.md            |   9 +-\n TreeDB/docs/spec/verification.md                   |  12 +\n 13 files changed, 367 insertions(+), 27 deletions(-)\n create mode 100644 TreeDB/db/vlog_physical_live_bytes_bench_test.go\n create mode 100644 TreeDB/db/vlog_physical_live_bytes_test.go\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "57a599b3daf5434ff3eeba8136e148ff4d995144\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD^{tree}"
+      ],
+      "exit_code": 0,
+      "stdout": "51f0dee7661604f366f8c052361de036cb562e29\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--name-status",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "M\tTreeDB/docs/evidence/r1-row-store-5061/README.md\nM\tcmd/benchprof/README.md\nM\tcmd/unified_bench/README.md\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    }
+  ],
+  "head": "57a599b3daf5434ff3eeba8136e148ff4d995144",
+  "tree": "51f0dee7661604f366f8c052361de036cb562e29",
+  "changes_vs_M": "M\tTreeDB/docs/evidence/r1-row-store-5061/README.md\nM\tcmd/benchprof/README.md\nM\tcmd/unified_bench/README.md",
+  "state": "E_SOURCE_M_INTEGRATED_ONLY_NO_STAGE_PUBLICATION_CAPTURE_ACCEPTANCE"
+}

@@ -1,0 +1,53 @@
+{
+  "utc": "2026-10-06T21:37:41.433121+00:00",
+  "owner": "root",
+  "head": "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+  "tree": "3d2db3625ab3ac03330445e39823ff19dfbf93ee",
+  "source_review": "CLEAN actual exact head independent45d2",
+  "focused_validation": "format/normal3/race1/vet actualexit0",
+  "hosted_request": "https://github.com/snissn/gomap/pull/5071#issuecomment-6025915571",
+  "request_count_current_head": 1,
+  "fresh_ci": "37535081909 requiredTreeDB +37535082008Sparse +all other current checks pending",
+  "original_failure": "e4e7 SparseFAIL preserved; no correctness waiver",
+  "bindings": {
+    "45d2-sparse-fixture-independent-review/review.json": {
+      "bytes": 22420,
+      "sha256": "7c60ad887819cc16987bec8c1bab216f16b0edbd84c87e7d75b885915e3aa3ac"
+    },
+    "45d2-sparse-fixture-independent-review/review.md": {
+      "bytes": 3191,
+      "sha256": "ef9ed369749acbdb65aba6ca9b6ccce1cd88f8460ebc472473d479bc9bc9b2f4"
+    },
+    "45d2-sparse-fixture-focused-validation-root-review.json": {
+      "bytes": 5049,
+      "sha256": "50e7d6844753fbfc364fb660b8e1e51065e4b5759b5d3b222b9c9704a991f6ed"
+    },
+    "45d2-postpush-and-body-original.json": {
+      "bytes": 26147,
+      "sha256": "d8b71ad26eb77159f03521277bf164ce41abbb1c791c2abd6cd6f650e23ac720"
+    },
+    "45d2-pre-request-hosted-review-gate-original.json": {
+      "bytes": 853,
+      "sha256": "0be95149fc50f323c3657045d3ac7275fc6c03e0915a381cee6a5f7cd2a2a103"
+    },
+    "45d2-hosted-review-request-actual.json": {
+      "bytes": 1888,
+      "sha256": "6abdcc077b786a8b2b17d159b0539290518f0e8b60b511afc5e2492c6c89b000"
+    },
+    "45d2-ci-runs-start-original.json": {
+      "bytes": 129717,
+      "sha256": "b83dbea139e3bb97bec7764ae9559fb31958a730a3e2aefbbc381049df4cb75c"
+    },
+    "5071-voter-rejoin-repaired-pr-body.md": {
+      "bytes": 10584,
+      "sha256": "0329d13d202b5ccd86d143327a32c5672ec1bf360a18804e1b5bbb07e61f7ff3"
+    },
+    "45d2-sparse-fixture-focused-validation.py": {
+      "bytes": 2982,
+      "sha256": "25e60a0987685c63cc03cc1df395c369e0c4288d7b56c5ea13bdbe1583d9c463"
+    }
+  },
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "acceptance": "Fresh current-head CI/hosted/thread gates and actualM/C/A/D/E required"
+}

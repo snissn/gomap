@@ -1,0 +1,19 @@
+{
+  "authenticated_base13_sha256": "ddfa77702e3e19974c03deab5b01d40b273b05634e9d7a330b664241dbbfecd6",
+  "authenticated_core_SHA256SUMS_sha256": "0c378823a405dc4af75fe33228ccc29d94d3172ac8c8a63d58226b2e677616dc",
+  "command_timeout_seconds": 600,
+  "fresh_linux111": {
+    "actual_host_identity_record": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-host-original.json",
+    "actual_host_identity_record_sha256": "cf0cce6e46a7f4ce830329897217582b03af42d47d36b635d8710a4a4de22edd",
+    "checkout_absolute": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+    "no_private_capture_source": true,
+    "proof_absolute": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006",
+    "restored_absolute": "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006",
+    "timed_lock": "/home/mikers/gomap-r1-evidence-20261005/timed-capture.lock"
+  },
+  "public_artifact_git_sha": "24ac6866992dd89ab222b8bf03d60e6c0c49a2d5",
+  "public_repository_https": "https://github.com/snissn/gomap.git",
+  "release_https_url": "https://github.com/snissn/gomap/releases/download/r1-5056-evidence-M3325dfe-20261006-v1/binary-overlay.tar.gz",
+  "release_tag": "r1-5056-evidence-M3325dfe-20261006-v1",
+  "schema": "gomap-r1-public-replay-builder-bootstrap-v1"
+}

@@ -1,0 +1,5 @@
+go version go1.26.4 linux/amd64
+=== RUN   TestR1PrimaryValueLogScaledRotationEvacuatesSealedSource
+    r1_vlog_rotation_boundary_test.go:53: value exceeds inline threshold; use SetPointer
+--- FAIL: TestR1PrimaryValueLogScaledRotationEvacuatesSealedSource (0.13s)
+FAIL

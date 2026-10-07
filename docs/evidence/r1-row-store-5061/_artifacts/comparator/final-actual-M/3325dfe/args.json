@@ -1,0 +1,18 @@
+[
+  "-qualification",
+  "retained",
+  "-documents",
+  "4096",
+  "-batch-size",
+  "32",
+  "-operations",
+  "1000",
+  "-repetitions",
+  "5",
+  "-durability",
+  "durable",
+  "-read-state",
+  "flushed",
+  "-engines",
+  "json,template-v1,bson,typed-row,sqlite-json,sqlite-row"
+]

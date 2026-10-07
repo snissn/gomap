@@ -1,0 +1,55 @@
+{
+  "task": "R1 native-appender creation metadata ownership only",
+  "base": "ebce1e0b0521bade8cc0fcce874b0367255e4123",
+  "head": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+  "tree": "c689cf63e101d8be581162d412e6413dd0994613",
+  "branch": "codex/5066-native-appender-metadata",
+  "local_worktree": "/tmp/gomap-r1-native-appender-metadata",
+  "remote_worktree": "mikers@192.168.0.185:/home/mikers/gomap-r1-native-appender-metadata",
+  "owned_files": {
+    "TreeDB/db/wal_recovery.go": "6bb969fd95fa17294d53ba49530d9e3fa30a79256ec6267d6b560d3611457e41",
+    "TreeDB/db/r1_native_appender_metadata_test.go": "9b7f9a52a8c9db449af7c334db5ccb825ad3e690dbbbc75b46f6bb155c146191",
+    "TreeDB/docs/spec/value-log-lifecycle.md": "d5da6e15f1618ae842d464ea50e34290a3374f18fc9af4e616c2ba711dea81bf"
+  },
+  "bundle": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.bundle",
+  "bundle_sha256": "255486f52e7864071266667673c85391a5232f06b8075ac096cf20149295bcb0",
+  "red": {
+    "source": "f84e2b87c9a29c480554df5350074bf8d9957f1f",
+    "raw": "/home/mikers/gomap-r1-native-appender-metadata-red-f84e",
+    "exit": 1,
+    "result": "6 primary +12 leaf natural files,18 IDs/segments retained; metadata/backing assertion failure; held/current/cold/fallback reopen oracle completes"
+  },
+  "green": {
+    "source": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+    "raw": "/home/mikers/gomap-r1-native-appender-metadata-green-62e7",
+    "exit": 0,
+    "result": "same6primary+12leaf files;0 IDs/segments and zero backing capacities; failed/ambiguous handoff retention; exact retry retirement; current/held/fallback recovery; affected normal/recovery/pending/standalone tests; race9.038s; vetPASS"
+  },
+  "commands": {
+    "red_runner": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/red.sh",
+    "green_runner": "/tmp/gomap-r1-execution-20261005/native-appender-metadata-evidence/green.sh",
+    "wrapper": "ssh mikers@192.168.0.185 flock /home/mikers/gomap-r1-correctness-185.lock env [environment below] bash /home/mikers/native-appender-metadata-green.sh"
+  },
+  "environment": {
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-5066-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "16",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off",
+    "GOFLAGS": "",
+    "GODEBUG": ""
+  },
+  "lock": "released; nonblocking flock verified after exit0",
+  "clean": "local and remote status empty before/after",
+  "limits": [
+    "Correctness diagnostic only; timings are not retained performance qualification,185 may have external activity",
+    "No change standalone rewriteWriter histories/format/caps/public APIs/registry/GC or5037",
+    "Native helper skips empty metadata; no new cache/map; creation bookkeeping backing arrays are released at successful rotations, so amortized allocation differs from cumulative history; no allocation performance claim",
+    "Failure/ambiguous records may accumulate intentionally until exact handoff; only successfully transferred native records are bounded",
+    "Does not prove wholeDB bound or reclaim dead latest1344B rewrite output;702ef2 original failures/negative history preserved",
+    "Root owns independent review/acceptance/integration; no push/PR/review/merge"
+  ]
+}

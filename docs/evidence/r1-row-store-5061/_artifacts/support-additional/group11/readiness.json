@@ -1,0 +1,17 @@
+{
+  "UTF8_regular_nonsymlink_nonexec": true,
+  "actual_final_cancellation_observed": false,
+  "actual_landing_observed": false,
+  "all_original_copy_bytes_equal": true,
+  "current_required_CI_observed": false,
+  "hosted_review_accepted": false,
+  "missing": [],
+  "original_bytes": 16121291,
+  "original_files": 83,
+  "preserved_original_FAILURE": true,
+  "prior_files_verified_unchanged": 1296,
+  "publication": false,
+  "ready_for_root_byte_review": true,
+  "root_group_adoption": false,
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION"
+}

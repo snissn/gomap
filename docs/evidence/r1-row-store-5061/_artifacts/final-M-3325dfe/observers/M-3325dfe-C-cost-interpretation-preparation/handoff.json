@@ -1,0 +1,1304 @@
+{
+  "status": "INTERPRETATION_ONLY_ROOT_OWNS_C_PLUS_A_ACCEPTANCE",
+  "route": "gpt-6.1-sol",
+  "conclusion": "Actual C supplies the selected criterion6 width/request-row/index/change cost and actual-WAL/sync/publication measurement coverage, with all80 Flush/reopen oracles. It supports root disposition of that residual measured scope while preserving accepted larger-population/concurrency deferrals. It is not a native-partial/metadata-reference cost proof, before-after regression decision, or performance acceptance. Existing metadata-reference preservation proof remains separately source-qualified; comparable A and root cost acceptance remain separate.",
+  "actual_main": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "source": {
+    "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+    "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+    "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "clean": true
+  },
+  "config": {
+    "documents": 4096,
+    "operations": 100,
+    "repetitions": 5,
+    "qualification": "retained"
+  },
+  "inputs": {
+    "summary": {
+      "host": "mikers@192.168.0.111",
+      "path": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/summary.json",
+      "sha256": "17f2ae7f7fbda5c12a6e249090ca3f1a5a083b75598fd6f5d41995184247dbe0",
+      "bytes": 595866
+    },
+    "root_provenance": {
+      "host": "mikers@192.168.0.111",
+      "path": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/root-provenance-verification-original.json",
+      "sha256": "bb1ec7409e6f5833ff9b7a9ec52deb5e267027c788508013e3c0de8c0ab61a7f",
+      "bytes": 112400
+    },
+    "packet_sha256": "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+    "binary_sha256": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+    "issue_primary": {
+      "path": "/private/tmp/gomap-r1-execution-20261005/5059-actual-M-live-original.json",
+      "sha256": "cb6f21424fa675c89afda89b63f98a1cac607ed719013a8f10e8751c53531483",
+      "bytes": 9088
+    },
+    "unchanged_summary_helper": {
+      "path": "/private/tmp/gomap-r1-execution-20261005/mutation-receipt-preparation/summarize.py",
+      "sha256": "cdede02aa3be5a0769649c539d497963f7f1db0214b2089b469fac5f423d5749",
+      "bytes": 3233
+    }
+  },
+  "root_provenance_original_projection": {
+    "utc": "2026-10-06T23:56:57.356639+00:00",
+    "state": "ROOT_VERIFIED_C_ORIGINAL_SOURCE_BUILD_RUN_AND_INDEPENDENT_VALIDATION_ONLY_COST_ACCEPTANCE_PENDING_FULL_A",
+    "config": {
+      "documents": 4096,
+      "operations": 100,
+      "repetitions": 5,
+      "qualification": "retained"
+    },
+    "binary_sha256": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+    "packet_sha256": "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+    "independent_validation_argv": [
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/collection_workload_bench",
+      "r1-mutation-sweep-validate",
+      "-source-manifest",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-expected-source.json",
+      "-expected-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "-expected-runtime",
+      "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "-expected-harness",
+      "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "-expected-landed-tooling-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "-expected-binary-sha256",
+      "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+      "-expected-packet-sha256",
+      "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/packet.json"
+    ],
+    "independent_validation_log": "R1 mutation sweep retained receipt and semantics verified: retained 80 cells\n",
+    "input_pins": {
+      "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/C-config.json": "c82fa7bc36130589be0e27858afa3df7daaec1422f4766cf9be850dde03ebc39",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/build-completed.json": "530903b2a07bea002ef768e33d20dd03ceafb405f36e225f8d941e1902ec16ed",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/build-start.json": "5179f0d0dd512c99c8a0a71c545614e72f115770d8221d4fde6542b4baea4034",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/driver.log": "9fb2984cb99d9aad0f1c81084f7bff7693d9c95c92e288df4071344d773cc337",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-expected-source.json": "d01cabb0159552b9d326977758278b9fd8f5df4f9f1f04b7587e79d95481998f",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-validation.log": "96af1845dcf43e609d648637f07b3f1df90ef5c4a505604741249e010b7884d8",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/observer-before.json": "0f17465da71a24d19d247d3d6ebdb88f506fea28fbf2752ce5277ebd56464ab8",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/root-frozen-inputs.json": "c82fa7bc36130589be0e27858afa3df7daaec1422f4766cf9be850dde03ebc39",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/run-exit.json": "cb05cb3403a4c3ad7e1e39de09d60d4f8bee3b560280b36569f46c7d42a38029",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/run-start.json": "8e14944358b9c248d7a499b5ddd935e4313651f304f1edcee08804c01cfd4df6",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/trusted-completed-receipt.json": "3a4dd944c4311caa46c600d90a4d008e1ee6c399dcc2ad0a59ffeaeedc4286b7",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/validation-exit.json": "11446442c0d3b489226d7e9e32ce220a3902303b41bfc61d9d891b1abc4e642b",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/validation-start.json": "0c38a35e8f77f29ee9872d3a08625057eac015d8243f89fb767b4d4bf26f66be",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/packet.json": "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/collection_workload_bench": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/source.json": "f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/source-after.json": "f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b"
+    },
+    "source": {
+      "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "clean": true
+    }
+  },
+  "source_pins": [
+    {
+      "path": "TreeDB/collections/api.go",
+      "blob": "30f227a1e8121037e934d4ec6bc8955c8414f6b0",
+      "sha256": "9abfcc36d347ab54d0cde49b8c9719be139ca8b6e5549659c79e21d040c7047f"
+    },
+    {
+      "path": "TreeDB/db/command_wal_stats.go",
+      "blob": "bd76d9a21e13e887a2d3563518bc38cf6982e5b9",
+      "sha256": "c45393353d81cd09bf47c60212dc84e9dd8085c94f8ce993c3ae2abfe87b985f"
+    },
+    {
+      "path": "TreeDB/internal/commitlog/writer.go",
+      "blob": "9bfdcda5ca821946739d53a4feaab7b67ea13b7f",
+      "sha256": "050fb3479b21966bf25959b1634a38943705dc75b1f5afe56a5689f8be722e02"
+    },
+    {
+      "path": "TreeDB/collections/column_publish_plan.go",
+      "blob": "e9931ba27482cf639a0932c848e6bc19f10af987",
+      "sha256": "4a52f614e5ae21e11f8e9f12048bd2236683d0cee3d1d31cd40ad10284f4a362"
+    },
+    {
+      "path": "TreeDB/collections/column_publish_write.go",
+      "blob": "dd182ca187eb0e8cb8c072aceddb41c7ef3712ad",
+      "sha256": "d7d5f7093c9d6bd8c992fb6fe1e03976ce7c94532a214d41265c1fc100ecb807"
+    },
+    {
+      "path": "cmd/collection_workload_bench/r1.go",
+      "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+      "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e"
+    },
+    {
+      "path": "cmd/collection_workload_bench/r1_mutation_sweep.go",
+      "blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+      "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c"
+    }
+  ],
+  "source_boundary_map": [
+    {
+      "path": "cmd/collection_workload_bench/r1_mutation_sweep.go",
+      "lines": [
+        148,
+        156,
+        158,
+        163
+      ],
+      "meaning": "Cached-leaf command_wal_durable opener, four required typed string columns, absent or unique email plus city indexes, detailed UpdateBatch stats enabled; default background maintenance."
+    },
+    {
+      "path": "cmd/collection_workload_bench/r1_mutation_sweep.go",
+      "lines": [
+        202,
+        209,
+        217,
+        240,
+        243,
+        250,
+        253,
+        259,
+        268,
+        278,
+        282,
+        336
+      ],
+      "meaning": "Fresh DB population and initial Flush, caller fixtures/history outside timing, counter snapshots before/after ACK and after separately timed Flush, full-row/current+historical posting/reopen checks outside timer; Stats snapshots are outside timed/allocated ACK loop."
+    },
+    {
+      "path": "cmd/collection_workload_bench/r1.go",
+      "lines": [
+        259,
+        262,
+        265,
+        276,
+        279,
+        280,
+        281,
+        1065,
+        1070,
+        1073,
+        1080
+      ],
+      "meaning": "Per-request elapsed time sum, process TotalAlloc/Mallocs delta per100 requests, HeapAlloc sampled after loop; JSON encode/full replacement callback/result checks within measured public UpdateBatch call. Samples allocated before baseline MemStats; process background/harness bookkeeping included."
+    },
+    {
+      "path": "TreeDB/collections/api.go",
+      "lines": [
+        14798,
+        14956,
+        15036,
+        18727,
+        19391,
+        19415,
+        19417,
+        19564,
+        19573,
+        19601,
+        20115,
+        20122,
+        20127
+      ],
+      "meaning": "Generic any-mode API, owned IDs/admission/current planning snapshot and reused plan scratch, current-read timer, narrow prepareInsertDocuments timer, separate retained transformation outside that timer, immediate column/root publication admission timer; any-mode does not select buffered-write planning. Observed indexed Flush counters0 do not mean secondary maintenance cost0."
+    },
+    {
+      "path": "TreeDB/db/command_wal_stats.go",
+      "lines": [
+        312,
+        316,
+        321,
+        322,
+        378,
+        384
+      ],
+      "meaning": "Durability statistics expose original writer FileSyncCalls/FileSyncNs and logical sync calls/durations; distinct overlapping scopes."
+    },
+    {
+      "path": "TreeDB/internal/commitlog/writer.go",
+      "lines": [
+        307,
+        309,
+        312,
+        314,
+        315
+      ],
+      "meaning": "Physical file sync counter/timer surrounds actual configured syncFn or os.File.Sync; these are measured writer counters, not reconstructed constants."
+    }
+  ],
+  "groups": [
+    {
+      "bio_bytes": 96,
+      "request_rows": 1,
+      "indexed": false,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 10141260.65,
+        "p50_ns": 9198559,
+        "p95_ns": 15084915,
+        "p99_ns": 16085285,
+        "bytes_per_op": 835386,
+        "allocs_per_op": 5116.92,
+        "heap_after_bytes": 170322424
+      },
+      "requests_per_sec_median": 98.60707011805282,
+      "rows_per_sec_median": 98.60707011805282,
+      "throughput_spread": 0.029580145319710947,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 3680,
+      "explicit_flush_spread": 0.07608695652173914,
+      "explicit_flush_noise_status": "within_15pct",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 876499,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 12190,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 953088289,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 425778019,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 426171532,
+          "treedb.command_wal.write.bytes_total": 38030
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 96,
+      "request_rows": 1,
+      "indexed": false,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 10202785.5,
+        "p50_ns": 9294980,
+        "p95_ns": 15193396,
+        "p99_ns": 15679521,
+        "bytes_per_op": 845000.64,
+        "allocs_per_op": 5120.83,
+        "heap_after_bytes": 150091424
+      },
+      "requests_per_sec_median": 98.01244963936564,
+      "rows_per_sec_median": 98.01244963936564,
+      "throughput_spread": 0.04309094191547804,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 3720,
+      "explicit_flush_spread": 0.22580645161290322,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 957250,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 12580,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 964419264,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 427781096,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 428174729,
+          "treedb.command_wal.write.bytes_total": 38920
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 96,
+      "request_rows": 1,
+      "indexed": true,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 10376470.46,
+        "p50_ns": 9351400,
+        "p95_ns": 15109186,
+        "p99_ns": 15856333,
+        "bytes_per_op": 895423.92,
+        "allocs_per_op": 5463.65,
+        "heap_after_bytes": 187174456
+      },
+      "requests_per_sec_median": 96.37188327715819,
+      "rows_per_sec_median": 96.37188327715819,
+      "throughput_spread": 0.04434826517702781,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 3770,
+      "explicit_flush_spread": 0.4907161803713528,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 919597,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 12820,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 981785417,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 428036746,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 428403808,
+          "treedb.command_wal.write.bytes_total": 38030
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 96,
+      "request_rows": 1,
+      "indexed": true,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 10483537.61,
+        "p50_ns": 9527692,
+        "p95_ns": 15204786,
+        "p99_ns": 17106905,
+        "bytes_per_op": 983002.24,
+        "allocs_per_op": 5667.48,
+        "heap_after_bytes": 221853632
+      },
+      "requests_per_sec_median": 95.38764844475051,
+      "rows_per_sec_median": 95.38764844475051,
+      "throughput_spread": 0.03960899026304307,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 3840,
+      "explicit_flush_spread": 0.52890625,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 926137,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 12610,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 986890345,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 430261513,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 430654827,
+          "treedb.command_wal.write.bytes_total": 38920
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 96,
+      "request_rows": 32,
+      "indexed": false,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 25281799.99,
+        "p50_ns": 25113942,
+        "p95_ns": 31421142,
+        "p99_ns": 33677065,
+        "bytes_per_op": 4773989.2,
+        "allocs_per_op": 11696.8,
+        "heap_after_bytes": 251916608
+      },
+      "requests_per_sec_median": 39.55414568565298,
+      "rows_per_sec_median": 1265.7326619408955,
+      "throughput_spread": 0.0510243710194916,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 5050,
+      "explicit_flush_spread": 0.4693069306930693,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 7815378,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 16750,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1013117510,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 430742540,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 432316608,
+          "treedb.command_wal.write.bytes_total": 934560
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 96,
+      "request_rows": 32,
+      "indexed": false,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 25646985.92,
+        "p50_ns": 25509486,
+        "p95_ns": 32069319,
+        "p99_ns": 34239320,
+        "bytes_per_op": 4839369.76,
+        "allocs_per_op": 11714.15,
+        "heap_after_bytes": 187475496
+      },
+      "requests_per_sec_median": 38.99093652249332,
+      "rows_per_sec_median": 1247.7099687197863,
+      "throughput_spread": 0.04003270181187283,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 4580,
+      "explicit_flush_spread": 1.0960698689956332,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 7961685,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 21960,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1029182175,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 436524697,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 438310146,
+          "treedb.command_wal.write.bytes_total": 963040
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 96,
+      "request_rows": 32,
+      "indexed": true,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 25678731.62,
+        "p50_ns": 25508956,
+        "p95_ns": 31887038,
+        "p99_ns": 35527452,
+        "bytes_per_op": 5105572.56,
+        "allocs_per_op": 12504.24,
+        "heap_after_bytes": 199771464
+      },
+      "requests_per_sec_median": 38.942733418388364,
+      "rows_per_sec_median": 1246.1674693884277,
+      "throughput_spread": 0.07070797914846957,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 3940,
+      "explicit_flush_spread": 0.8550761421319797,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 7271205,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 17540,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1034038598,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 433715347,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 435462442,
+          "treedb.command_wal.write.bytes_total": 934560
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 96,
+      "request_rows": 32,
+      "indexed": true,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 26878709.02,
+        "p50_ns": 26643796,
+        "p95_ns": 33377452,
+        "p99_ns": 34034478,
+        "bytes_per_op": 5381344.32,
+        "allocs_per_op": 13209.27,
+        "heap_after_bytes": 220896736
+      },
+      "requests_per_sec_median": 37.204167776656114,
+      "rows_per_sec_median": 1190.5333688529956,
+      "throughput_spread": 0.04679548043622618,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 3690,
+      "explicit_flush_spread": 0.33062330623306235,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 7472177,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 21610,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1129365141,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 464516965,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 466358710,
+          "treedb.command_wal.write.bytes_total": 963040
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 1,
+      "indexed": false,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 10966771.73,
+        "p50_ns": 10074487,
+        "p95_ns": 15423879,
+        "p99_ns": 16830182,
+        "bytes_per_op": 889238.72,
+        "allocs_per_op": 5133.4,
+        "heap_after_bytes": 234630496
+      },
+      "requests_per_sec_median": 91.18453676431177,
+      "rows_per_sec_median": 91.18453676431177,
+      "throughput_spread": 0.09395744719830326,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 4040,
+      "explicit_flush_spread": 0.48267326732673266,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 1141006,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 15090,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 969020833,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 423913262,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 424624952,
+          "treedb.command_wal.write.bytes_total": 438030
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 1,
+      "indexed": false,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 11043074.86,
+        "p50_ns": 10045257,
+        "p95_ns": 15221987,
+        "p99_ns": 16122105,
+        "bytes_per_op": 885456,
+        "allocs_per_op": 5122.45,
+        "heap_after_bytes": 193207632
+      },
+      "requests_per_sec_median": 90.55448891523679,
+      "rows_per_sec_median": 90.55448891523679,
+      "throughput_spread": 0.07404395379329501,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 4160,
+      "explicit_flush_spread": 0.46153846153846156,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 1053053,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 18231,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 978762675,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 418930563,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 419786053,
+          "treedb.command_wal.write.bytes_total": 438920
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 1,
+      "indexed": true,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 11324430.51,
+        "p50_ns": 10197928,
+        "p95_ns": 15597510,
+        "p99_ns": 18450698,
+        "bytes_per_op": 947808.96,
+        "allocs_per_op": 5473.77,
+        "heap_after_bytes": 225079392
+      },
+      "requests_per_sec_median": 88.30466124693453,
+      "rows_per_sec_median": 88.30466124693453,
+      "throughput_spread": 0.07030517507354724,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 3820,
+      "explicit_flush_spread": 0.6151832460732984,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 1054048,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 14690,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1001476441,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 426629699,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 427513325,
+          "treedb.command_wal.write.bytes_total": 438030
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 1,
+      "indexed": true,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 11779010.17,
+        "p50_ns": 10340119,
+        "p95_ns": 15695721,
+        "p99_ns": 19636459,
+        "bytes_per_op": 1030563.36,
+        "allocs_per_op": 5671.13,
+        "heap_after_bytes": 244198072
+      },
+      "requests_per_sec_median": 84.89677702689342,
+      "rows_per_sec_median": 84.89677702689342,
+      "throughput_spread": 0.08453381298302841,
+      "noise_status": "within_15pct",
+      "explicit_flush_ns_median": 4210,
+      "explicit_flush_spread": 0.42992874109263657,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 995672,
+          "treedb.collections.write_domain.update_batch.items_total": 100,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 16280,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1037490520,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 427094392,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 427777218,
+          "treedb.command_wal.write.bytes_total": 438920
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 32,
+      "indexed": false,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 54852316.55,
+        "p50_ns": 53597556,
+        "p95_ns": 72167395,
+        "p99_ns": 73636300,
+        "bytes_per_op": 6279206.72,
+        "allocs_per_op": 11755.27,
+        "heap_after_bytes": 296795312
+      },
+      "requests_per_sec_median": 18.2307706017933,
+      "rows_per_sec_median": 583.3846592573856,
+      "throughput_spread": 0.16474412420758053,
+      "noise_status": "inconclusive",
+      "explicit_flush_ns_median": 5920,
+      "explicit_flush_spread": 1.2567567567567568,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 15507385,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 37270,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1197244901,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 559949884,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 560039285,
+          "treedb.command_wal.write.bytes_total": 13734560
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 32,
+      "indexed": false,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 54562754.95,
+        "p50_ns": 55457013,
+        "p95_ns": 71219476,
+        "p99_ns": 73120554,
+        "bytes_per_op": 7344309.36,
+        "allocs_per_op": 11783.1,
+        "heap_after_bytes": 313658888
+      },
+      "requests_per_sec_median": 18.32752031887642,
+      "rows_per_sec_median": 586.4806502040454,
+      "throughput_spread": 0.16558098494889165,
+      "noise_status": "inconclusive",
+      "explicit_flush_ns_median": 5250,
+      "explicit_flush_spread": 0.30666666666666664,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 16639802,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 37481,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1199282715,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 567034632,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 567148142,
+          "treedb.command_wal.write.bytes_total": 13763040
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 32,
+      "indexed": true,
+      "change": "bio",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 55065341.46,
+        "p50_ns": 54211222,
+        "p95_ns": 70091555,
+        "p99_ns": 75206215,
+        "bytes_per_op": 6612430,
+        "allocs_per_op": 12580.05,
+        "heap_after_bytes": 327025888
+      },
+      "requests_per_sec_median": 18.16024333066943,
+      "rows_per_sec_median": 581.1277865814218,
+      "throughput_spread": 0.1613707156580085,
+      "noise_status": "inconclusive",
+      "explicit_flush_ns_median": 5490,
+      "explicit_flush_spread": 0.15318761384335156,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 15594390,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 33660,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1193373828,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 564376555,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 564496116,
+          "treedb.command_wal.write.bytes_total": 13734560
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    },
+    {
+      "bio_bytes": 4096,
+      "request_rows": 32,
+      "indexed": true,
+      "change": "email_city",
+      "repetitions": 5,
+      "acknowledgement_medians": {
+        "ns_per_op": 56183889.39,
+        "p50_ns": 56154741,
+        "p95_ns": 72104684,
+        "p99_ns": 76511157,
+        "bytes_per_op": 7685435.2,
+        "allocs_per_op": 13268.98,
+        "heap_after_bytes": 320606112
+      },
+      "requests_per_sec_median": 17.798696581123252,
+      "rows_per_sec_median": 569.5582905959441,
+      "throughput_spread": 0.16839587496671563,
+      "noise_status": "inconclusive",
+      "explicit_flush_ns_median": 5130,
+      "explicit_flush_spread": 0.631578947368421,
+      "explicit_flush_noise_status": "inconclusive",
+      "aggregate_counter_delta_medians": {
+        "ack_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 100,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 14847143,
+          "treedb.collections.write_domain.update_batch.items_total": 3200,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 32990,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 1273989532,
+          "treedb.command_wal.append.count_total": 100,
+          "treedb.command_wal.file_sync.calls_total": 100,
+          "treedb.command_wal.file_sync.ns_total": 552827898,
+          "treedb.command_wal.sync.count_total": 100,
+          "treedb.command_wal.sync.ns_total": 552953609,
+          "treedb.command_wal.write.bytes_total": 13763040
+        },
+        "flush_counter_delta": {
+          "treedb.collections.write_domain.indexed_flush.calls_total": 0,
+          "treedb.collections.write_domain.indexed_flush.publish_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.calls_total": 0,
+          "treedb.collections.write_domain.update_batch.current_read_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.items_total": 0,
+          "treedb.collections.write_domain.update_batch.prepare_ns_total": 0,
+          "treedb.collections.write_domain.update_batch.publish_ns_total": 0,
+          "treedb.command_wal.append.count_total": 0,
+          "treedb.command_wal.file_sync.calls_total": 0,
+          "treedb.command_wal.file_sync.ns_total": 0,
+          "treedb.command_wal.sync.count_total": 0,
+          "treedb.command_wal.sync.ns_total": 0,
+          "treedb.command_wal.write.bytes_total": 0
+        }
+      },
+      "observed_repetition_ids": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "all_flush_reopen_oracles_pass": true,
+      "all_ack_file_sync_100": true,
+      "all_flush_counters_zero": true
+    }
+  ],
+  "noise": {
+    "ack_within_15pct": 12,
+    "ack_inconclusive": 4,
+    "ack_inconclusive_groups": "all4096bio/32request-row groups;16.1371/16.4744/16.5581/16.8396%",
+    "flush_within_15pct": 1,
+    "flush_inconclusive": 15,
+    "no_filter_repeat_or_ratio_promotion": true
+  },
+  "interpretation_limits": [
+    "One-source enabled generic UpdateBatch costs only; no before-after speedup/regression verdict and no narrow-index latency claim from small within-noise differences.",
+    "0.835\u20131.031MB per one-row request and4.774\u20137.685MB per32-row request are substantial observed Go allocation; not proven required owned output and not precisely attributed to production stages without profiles.",
+    "Width is an entire row bio width even when changing only email+city: caller still sends whole JSON replacement and commandWAL bytes track full row, not changed fields only.",
+    "Counter medians are aggregate100-request deltas; phase timers have different/overlapping scope. Do not sum median stages, subtract overlapping WAL timers, or manufacture normalized per-stage request attribution.",
+    "All80 cell Flush counters are actual zero for13 selected keys; tiny3.68\u20135.92us measured Flush still noisy15of16 groups. This route publishes withinACK; zero indexed_flush counter does not prove zero index work or universal Flush/checkpoint cost.",
+    "Whole-process allocations include default background/harness work; counter intervals additionally bracket Stats snapshots outsideACK measurement. No per-object allocation/liveness ownership attribution, RSS/unsampled peak, fullpopulation/concurrency/capacity claim.",
+    "Current-read and narrow prepare counters are not full-row/materialization/copy counters; large allocations cannot be assigned to those tiny timers.",
+    "Eligible meta.* typed reference-preservation qualification is a separate correctness/source-applicability record; C four-string full replacement does not measure it.",
+    "No new thresholds/gates, repeated runs, outlier removal or causal infrastructure claims. Root owns fullA comparator/noise and finalC cost decision; parent/E/D remain separate."
+  ],
+  "actions_performed": "Read-only SSH of retained JSON and selected actualM Git/source text; local private two-file handoff only. No Go/tests/captures/GH/CI polling/delegation or existing-file changes.",
+  "final_original_summary_checks": {
+    "summary_sha256_unchanged": "17f2ae7f7fbda5c12a6e249090ca3f1a5a083b75598fd6f5d41995184247dbe0",
+    "root_provenance_sha256_unchanged": "bb1ec7409e6f5833ff9b7a9ec52deb5e267027c788508013e3c0de8c0ab61a7f",
+    "cells": 80,
+    "all_ACK_calls_append_logical_sync_physical_sync_counts": [
+      100
+    ],
+    "all_ACK_indexed_flush_counts": [
+      0
+    ],
+    "all_13_Flush_deltas": [
+      0
+    ],
+    "all_items_match_100_times_actual_request_rows": true
+  }
+}

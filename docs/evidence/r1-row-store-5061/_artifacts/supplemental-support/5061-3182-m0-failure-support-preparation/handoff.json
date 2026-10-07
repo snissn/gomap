@@ -1,0 +1,18 @@
+{
+  "all_original_copy_size_SHA256_nonsymlink_checks_pass": true,
+  "all_originals_and_four_prior_groups_unchanged": true,
+  "copied_bytes": 945206,
+  "copied_file_count": 33,
+  "diagnosis_source_and_copy_sha256": "ad177de8e88d4ccb29b74f9e38577d68ca50104d01d6e6681568e94558c70a9d",
+  "inventory_path": "/tmp/gomap-r1-execution-20261005/5061-3182-m0-failure-support-preparation/inventory.json",
+  "inventory_sha256": "1e1767018cc167c95f8169e48724ae5471680918fcd550048c18d3cf176b64b8",
+  "limitations": [
+    "Original hosted failure remains failed. No acceptance/capacity/flakiness promotion or threshold waiver.",
+    "Matched control and candidate both retain exit 1; this group does not copy their 61 originals. Their retained original paths and SHA/size inventories are in diagnosis JSON; preserve/stage those separately for eventual public replay.",
+    "Auxiliary timing nonblocking recommendation is conditional on root accepting separate source applicability review and exact-head required gate plus other applicable review/merge gates.",
+    "Source-bound medians are raw diagnostics, not accepted regression/improvement comparisons.",
+    "Final fullA/C/D and E qualification remain required."
+  ],
+  "schema_version": 1,
+  "state": "UNPROMOTED"
+}

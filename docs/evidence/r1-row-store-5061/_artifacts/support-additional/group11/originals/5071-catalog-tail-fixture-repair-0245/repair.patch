@@ -1,0 +1,35 @@
+diff --git a/.github/ci/ci_impact.json b/.github/ci/ci_impact.json
+index 546951042..b7f50c8ca 100644
+--- a/.github/ci/ci_impact.json
++++ b/.github/ci/ci_impact.json
+@@ -9,7 +9,7 @@
+     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
+     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate."
+   ],
+-  "discovery_source_sha256": "a6113bbf2d313340b58e11b2094b7274de555402ffa5e19ba232baf7dfef994b",
++  "discovery_source_sha256": "7b7289c82c874ab7c3aafeafc255d6fce00f1d326e58b4d6bef28543785e7c65",
+   "dynamic_consumers": [
+     {
+       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
+diff --git a/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go b/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go
+index bc3a9030a..7b43cf502 100644
+--- a/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go
++++ b/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go
+@@ -1108,6 +1108,17 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical,
+ 	// local follower FSM has caught up. Keep the real retry prefix required.
+ 	waitInsertPrefix(replay.CommitIndex)
+ 	checkDurableCompletions("snapshot-plus-tail reopen")
++	// DATA replay and durable preparation do not prove that the independent
++	// CATALOG Raft tail has replayed the ACTIVE lifecycle record on every voter.
++	// Wait for serving activation under the existing test context before asserting it.
++	fixedPeerWaitV1(t, ctx, func() bool {
++		for _, node := range nodes {
++			if node.preparedVector == nil || node.vector == nil || node.vectorInitializationPhaseV1() != "active" {
++				return false
++			}
++		}
++		return true
++	})
+ 	for _, node := range nodes {
+ 		if node.preparedVector == nil || node.vector == nil || node.vectorInitializationPhaseV1() != "active" {
+ 			t.Fatalf("voter %s did not recover prepared serving state", node.config.NodeID)

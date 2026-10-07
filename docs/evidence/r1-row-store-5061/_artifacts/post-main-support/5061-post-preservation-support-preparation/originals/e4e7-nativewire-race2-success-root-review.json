@@ -1,0 +1,21 @@
+{
+  "utc": "2026-10-06T20:51:38.434630+00:00",
+  "exact_head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+  "run_id": 37526268804,
+  "job_id": 112486076356,
+  "pins": {
+    "e4e7-linux-race2-success-job-original.json": {
+      "bytes": 2289,
+      "sha256": "baeefb7ee40c3d2e67b11653f0ff947ef4f77582ac379728b95926603d83c8b5"
+    },
+    "e4e7-linux-race2-success-log-original.log": {
+      "bytes": 4592305,
+      "sha256": "3adc5a41e43822eea7ca19bc15ac544cd8265030b9ec589fa53d4899679f9c99"
+    }
+  },
+  "case": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+  "pass_rows": 7,
+  "fail_rows": 0,
+  "parent_output": "2026-10-06T20:46:05.3262023Z {\"Time\":\"2026-10-06T20:46:05.325862325Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/nativewire\",\"Test\":\"TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1\",\"Output\":\"--- PASS: TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1 (4.51s)\\n\"}",
+  "scope": "actualcurrentheadLinuxrace parent plus six bounded-poll subcases; original0245FAIL retained; no inference of originalcausality/performance/capacity"
+}

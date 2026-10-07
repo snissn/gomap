@@ -1,0 +1,88 @@
+{
+  "source_commit": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "source_clean_before": true,
+  "hostname": "mikers-B560-DS3H-AC-Y1",
+  "toolchain_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+  "toolchain_version": "go version go1.26.4 linux/amd64",
+  "environment": {
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "steps": [
+    {
+      "name": "fresh-protection-normal",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "^TestLeafManifestRevisionGCFreshHeldProtection$",
+        "-count=1",
+        "-timeout=3m",
+        "-v"
+      ],
+      "exit_code": 0,
+      "started_unix": 1791280660.6334534,
+      "finished_unix": 1791280677.3644218,
+      "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/fresh-protection-normal.log",
+      "log_sha256": "c3c9e452562b4615523703326fe1f5d6c6051aed7b7c17f501084f7597787ced"
+    },
+    {
+      "name": "fresh-protection-race",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "./TreeDB/db",
+        "-run",
+        "^TestLeafManifestRevisionGCFreshHeldProtection$",
+        "-count=1",
+        "-timeout=3m",
+        "-v"
+      ],
+      "exit_code": 0,
+      "started_unix": 1791280677.3645196,
+      "finished_unix": 1791280716.1507988,
+      "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/fresh-protection-race.log",
+      "log_sha256": "c826fb35d9fe7509bba686a08ccf0e241c49c488019ffd3f17fb908caca32ebc"
+    },
+    {
+      "name": "vet-final",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/db"
+      ],
+      "exit_code": 0,
+      "started_unix": 1791280716.1508808,
+      "finished_unix": 1791280718.9544427,
+      "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/vet-final.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "benchmark-final",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "^$",
+        "-bench",
+        "^BenchmarkLeafManifestRevisionGC5066$",
+        "-benchtime=1x",
+        "-count=1",
+        "-timeout=3m"
+      ],
+      "exit_code": 0,
+      "started_unix": 1791280718.954525,
+      "finished_unix": 1791280720.5727754,
+      "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/benchmark-final.log",
+      "log_sha256": "155ad566dbcaa123b78006852fd418d2074f69b280cfdd88fdb3891a5839f59d"
+    }
+  ],
+  "source_commit_after": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "source_clean_after": true
+}

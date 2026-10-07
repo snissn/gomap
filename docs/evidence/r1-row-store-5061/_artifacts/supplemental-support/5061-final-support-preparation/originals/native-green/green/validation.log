@@ -1,0 +1,66 @@
+go version go1.26.4 linux/amd64
+=== RUN   TestCommandWALInlineReplayDoesNotScanValueLogRIDMap
+--- PASS: TestCommandWALInlineReplayDoesNotScanValueLogRIDMap (0.17s)
+=== RUN   TestCommandWALSetRIDReplayDoesNotNeedInlineAppenderWithoutOuterLeafLog
+--- PASS: TestCommandWALSetRIDReplayDoesNotNeedInlineAppenderWithoutOuterLeafLog (0.00s)
+=== RUN   TestCommandWALRawSetReplayRePointersWhenThresholdDrops
+--- PASS: TestCommandWALRawSetReplayRePointersWhenThresholdDrops (0.20s)
+=== RUN   TestCommandWALReplayAllocatesAbovePendingMaterializedRIDs
+--- PASS: TestCommandWALReplayAllocatesAbovePendingMaterializedRIDs (0.29s)
+=== RUN   TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts
+--- PASS: TestCommandWALRawSetReplayLazilyCreatesAppenderIfPlacementDrifts (0.16s)
+=== RUN   TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender
+--- PASS: TestCommandWALRegisteredReplayHandlerInstallsValueLogAppender (0.10s)
+=== RUN   TestCommandWALInstalledAppendersUseSplitValueAndLeafDirs
+--- PASS: TestCommandWALInstalledAppendersUseSplitValueAndLeafDirs (0.12s)
+=== RUN   TestReplayInlineLeafPageLogCurrentSegmentNilAppenderM12A
+--- PASS: TestReplayInlineLeafPageLogCurrentSegmentNilAppenderM12A (0.00s)
+=== RUN   TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport
+--- PASS: TestCommandWALRegisteredReplayHandlerCanOptOutOfReplayLogSupport (0.09s)
+=== RUN   TestCommandWALRegisteredReplayFrameRestoresStateOnSuccessM10C
+--- PASS: TestCommandWALRegisteredReplayFrameRestoresStateOnSuccessM10C (0.07s)
+=== RUN   TestCommandWALRegisteredReplayFrameRestoresStateOnPanicM10C
+--- PASS: TestCommandWALRegisteredReplayFrameRestoresStateOnPanicM10C (0.07s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryCreatesExactRIDAndSurvivesCheckpointReopen
+--- PASS: TestCommandWALMaterializedRIDRecoveryCreatesExactRIDAndSurvivesCheckpointReopen (0.32s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryReusesMatchingRID
+--- PASS: TestCommandWALMaterializedRIDRecoveryReusesMatchingRID (0.21s)
+=== RUN   TestCommandWALMaterializedRIDRecoverySyncsReusedRIDBeforeDurableRootPublication
+--- PASS: TestCommandWALMaterializedRIDRecoverySyncsReusedRIDBeforeDurableRootPublication (0.20s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryReusedRIDSyncFailureFailsClosed
+--- PASS: TestCommandWALMaterializedRIDRecoveryReusedRIDSyncFailureFailsClosed (0.28s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryPreservesExistingRIDHighWaterAcrossReopen
+--- PASS: TestCommandWALMaterializedRIDRecoveryPreservesExistingRIDHighWaterAcrossReopen (0.24s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame
+=== RUN   TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame/matching
+=== RUN   TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame/conflicting
+--- PASS: TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame (0.33s)
+    --- PASS: TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame/matching (0.21s)
+    --- PASS: TestCommandWALMaterializedRIDRecoveryDuplicateRIDWithinFrame/conflicting (0.12s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryRejectsConflictingRID
+--- PASS: TestCommandWALMaterializedRIDRecoveryRejectsConflictingRID (0.12s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryReplacesTruncatedTail
+--- PASS: TestCommandWALMaterializedRIDRecoveryReplacesTruncatedTail (0.21s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryRejectsChecksumMismatch
+--- PASS: TestCommandWALMaterializedRIDRecoveryRejectsChecksumMismatch (0.12s)
+=== RUN   TestCommandWALMaterializedRIDRecoveryMixedV1V2AndDelete
+--- PASS: TestCommandWALMaterializedRIDRecoveryMixedV1V2AndDelete (0.25s)
+=== RUN   TestCommandWALPointerBatchReplaysThroughRIDFence
+--- PASS: TestCommandWALPointerBatchReplaysThroughRIDFence (0.23s)
+=== RUN   TestOuterLeafCommitPublishesCreatedSegmentBeforeCurrentWithoutRefresh
+--- PASS: TestOuterLeafCommitPublishesCreatedSegmentBeforeCurrentWithoutRefresh (0.21s)
+=== RUN   TestR1NativeAppenderCreationMetadataBoundedAcrossRotations
+    r1_native_appender_metadata_test.go:113: natural rotations primary files=6 leaf files=12 metadata peaks IDs=0 segments=0
+--- PASS: TestR1NativeAppenderCreationMetadataBoundedAcrossRotations (7.99s)
+=== RUN   TestR1NativeAppenderCreationMetadataRetainsFailedAndAmbiguousHandoffs
+--- PASS: TestR1NativeAppenderCreationMetadataRetainsFailedAndAmbiguousHandoffs (0.05s)
+=== RUN   TestAppendValueLogValuesEmitsExactDependencyPath
+--- PASS: TestAppendValueLogValuesEmitsExactDependencyPath (0.04s)
+=== RUN   TestAppendValueLogValuesUnavailableReturnsSentinel
+--- PASS: TestAppendValueLogValuesUnavailableReturnsSentinel (0.03s)
+=== RUN   TestAppendValueLogValuesPublishSystemRootReleasesPendingPin
+--- PASS: TestAppendValueLogValuesPublishSystemRootReleasesPendingPin (0.07s)
+=== RUN   TestRewriteWriter_CreatedFileIDs_StableAcrossCalls
+--- PASS: TestRewriteWriter_CreatedFileIDs_StableAcrossCalls (0.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	9.038s

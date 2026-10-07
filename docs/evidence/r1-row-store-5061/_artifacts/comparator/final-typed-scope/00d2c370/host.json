@@ -1,0 +1,24 @@
+{
+  "capture_class": "nonqualifying_rehearsal_unless_reviewed_landed_frozen",
+  "started_unix": 1791267484.5905712,
+  "hostname": "mikers-MS-7E71",
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64"
+  ],
+  "cpu_count": 16,
+  "loadavg": [
+    0.44189453125,
+    0.5849609375,
+    1.0458984375
+  ],
+  "finished_unix": 1791268197.2018485,
+  "loadavg_after": [
+    3.04931640625,
+    3.021484375,
+    2.21484375
+  ]
+}

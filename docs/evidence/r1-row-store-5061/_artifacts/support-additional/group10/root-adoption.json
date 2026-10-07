@@ -1,0 +1,12 @@
+{
+  "utc": "2026-10-06T19:58:15.834670+00:00",
+  "root_adopted": "byte-exact additional support only; no capture/gate/landing acceptance",
+  "original_count": 113,
+  "original_bytes": 9575389,
+  "ledger_members": 120,
+  "inventory_sha256": "6db7571f656592864e1b8f97f9f8991f6a3b0e6eeb85fcf248bb05a435d30182",
+  "handoff_sha256": "08804703bc7770637a6d294cb54b4564b0c1c3bb76d7e2152479d5436cb3aef8",
+  "support_ledger_sha256": "e01285700bebfeafc9fca8b3e153aad1ebf91343ba6950d39c8f68e2ca55e1a0",
+  "existing_nine_group_assembler": "unchanged; group10 may be directly appended in eventual actualPUBLICATIONstage",
+  "scope": "OriginalFAILs preserved; LinuxfocusedPASS not Windowscausality or retainedA/C/Dqualification; no actualcurrentCI/landing."
+}
