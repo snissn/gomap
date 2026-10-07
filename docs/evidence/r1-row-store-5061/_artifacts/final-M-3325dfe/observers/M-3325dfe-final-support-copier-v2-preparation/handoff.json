@@ -1,0 +1,69 @@
+{
+  "actual_copies_stage_relative_preserved": true,
+  "checks": {
+    "actual_copies_stage_relative_unchanged": true,
+    "all_other_helper_bytes_preserved": true,
+    "ast_parse": "PASS",
+    "command_or_network_execution": false,
+    "helper_changed_lines": 2,
+    "helper_changes": [
+      "ledger entry path is relative to target namespace (ledger parent)",
+      "record scope field paths_relative_to_namespace true"
+    ],
+    "imports": [
+      "argparse",
+      "datetime",
+      "hashlib",
+      "json",
+      "os",
+      "pathlib",
+      "re",
+      "stat",
+      "sys"
+    ],
+    "method": "STATIC AST and exact two-line helper diff only; neither helper executed",
+    "original_preparation_preserved": {
+      "copy-support.py": {
+        "bytes": 11170,
+        "sha256": "7798ed30d264241922429230c660a3f472d1066a0ea5947666cfdd4080cf9356"
+      },
+      "handoff.json": {
+        "bytes": 3164,
+        "sha256": "686e80b1c5ad38cdb1719c7ac49bbaf6d94964c9edc733a4800512269961501e"
+      },
+      "handoff.md": {
+        "bytes": 4461,
+        "sha256": "0123660e97e0ffe0c84a7ab0102da3048a181a0908af612e4fe2c117cfcbd297"
+      },
+      "static-checks.json": {
+        "bytes": 2021,
+        "sha256": "2259dfebb2373d1e653f68c3b695f1832f59fdc84b140a109fc5da09456cac22"
+      }
+    }
+  },
+  "files": {
+    "copy-support.py": {
+      "bytes": 11202,
+      "sha256": "dff812a25f9cbd82fde6044b724addc6b49f63a71e3e9949312a548ec7133b42"
+    },
+    "handoff.md": {
+      "bytes": 5056,
+      "sha256": "3c03a67ed94d046bba61acd83492c3ed0c1edb038c101d7972bb0f49d3c7c421"
+    },
+    "static-checks.json": {
+      "bytes": 1153,
+      "sha256": "a3622f59b78efa71df1d4c6ca7fb1911457336ce4e6155e369e8e1e2ab860abf"
+    },
+    "v1-v2.diff": {
+      "bytes": 2531,
+      "sha256": "cee49086b2edf1f6d685a0f6ee3c75878684ad86f1922d9984fbe93249660830"
+    }
+  },
+  "ledger_paths_relative_to_namespace": true,
+  "namespace": "final-M-3325dfe",
+  "scope": "Only ledger emission and corresponding receipt scope flag corrected; all other helper bytes unchanged.",
+  "stage": "/home/mikers/gomap-r1-publication-stage-M-3325dfe-20261006",
+  "state": "PRIVATE_V2_PREPARATION_ONLY_ROOT_REVIEW_AND_ACTUAL_EXECUTION_PENDING",
+  "v1_helper_sha256": "7798ed30d264241922429230c660a3f472d1066a0ea5947666cfdd4080cf9356",
+  "v2_helper_sha256": "dff812a25f9cbd82fde6044b724addc6b49f63a71e3e9949312a548ec7133b42"
+}

@@ -1,0 +1,27 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "vet",
+    "./examples/typed_rows"
+  ],
+  "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+  "environment": {
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "16",
+    "GOMEMLIMIT": "off",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "HOME": "/home/mikers",
+    "LEFTHOOK": "0",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "TMPDIR": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/go-tmp"
+  },
+  "utc": "2026-10-07T01:02:29.301177+00:00"
+}

@@ -1,0 +1,124 @@
+{
+  "schema": "r1-cost-advisory-amendment-v1",
+  "role": "independent source/evidence advisory; no acceptance authority",
+  "original_comparison_sha256": "a7c55ffc991c8630b31dcf7fcfb08e9c63c867f635615325978dfad62f343fde",
+  "original_packets": {
+    "baseline": {
+      "packet_sha256": "d3bcec0a4924267afeee67a13ec1e5f83c8ef930a12d1b46538c3cd71746013f",
+      "bson_setup": [
+        {
+          "repetition": 0,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 10960,
+          "bytes_per_op": 960,
+          "allocs_per_op": 8
+        },
+        {
+          "repetition": 1,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 11310,
+          "bytes_per_op": 3568,
+          "allocs_per_op": 13
+        },
+        {
+          "repetition": 2,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 15010,
+          "bytes_per_op": 1264,
+          "allocs_per_op": 12
+        },
+        {
+          "repetition": 3,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 11340,
+          "bytes_per_op": 1056,
+          "allocs_per_op": 11
+        },
+        {
+          "repetition": 4,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 12740,
+          "bytes_per_op": 3568,
+          "allocs_per_op": 13
+        }
+      ]
+    },
+    "M": {
+      "packet_sha256": "e5b83232a75ecb0a30b2859dd64e0ee2e1cba2a31cb922c05d1b9384e048a17b",
+      "bson_setup": [
+        {
+          "repetition": 0,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 12590,
+          "bytes_per_op": 3512,
+          "allocs_per_op": 11
+        },
+        {
+          "repetition": 1,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 10691,
+          "bytes_per_op": 1000,
+          "allocs_per_op": 9
+        },
+        {
+          "repetition": 2,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 12890,
+          "bytes_per_op": 3584,
+          "allocs_per_op": 13
+        },
+        {
+          "repetition": 3,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 12161,
+          "bytes_per_op": 3336,
+          "allocs_per_op": 11
+        },
+        {
+          "repetition": 4,
+          "name": "read_view_open_flush_setup",
+          "operations": 1,
+          "ns_per_op": 14260,
+          "bytes_per_op": 3584,
+          "allocs_per_op": 13
+        }
+      ]
+    }
+  },
+  "typed_checkpoint": {
+    "baseline_median_bytes": 1110120,
+    "candidate_median_bytes": 3829760,
+    "delta_bytes": 2719640,
+    "baseline_median_allocations": 5849,
+    "candidate_median_allocations": 6534,
+    "delta_allocations": 685,
+    "baseline_max_bytes": 3935272,
+    "candidate_max_bytes": 3886368,
+    "timing": "INCONCLUSIVE in both captures",
+    "causal_attribution": "UNRESOLVED"
+  },
+  "bson_setup": {
+    "baseline_median_bytes": 1264,
+    "candidate_median_bytes": 3512,
+    "delta_bytes": 2248,
+    "baseline_median_allocations": 12,
+    "candidate_median_allocations": 11,
+    "timing": "INCONCLUSIVE"
+  },
+  "independent_conclusion": "Observed median allocation increases are real. Existing sample overlap, unchanged checkpoint entry bodies, matching final manifest sizes, and cumulative counters do not establish causal attribution or harmlessness. No stable candidate-related regression is demonstrated; no finding of zero maintenance cost is justified.",
+  "coordinator_disposition": "Root explicitly accepts observed maintenance cost within this finite profile; preserves causal UNRESOLVED and all original inconclusive labels. This advisory does not independently grant acceptance or waive a stable material regression.",
+  "scope_limits": [
+    "No universal maintenance/capacity win",
+    "D retained lifecycle qualification remains mandatory",
+    "No remeasurement, original packet mutation, rebuild, or Go execution"
+  ]
+}

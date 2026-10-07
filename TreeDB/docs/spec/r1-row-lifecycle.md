@@ -1,6 +1,6 @@
 # R1 sustained row lifecycle
 
-Status: provisional correctness qualification for [#5060](https://github.com/snissn/gomap/issues/5060), under [#5056](https://github.com/snissn/gomap/issues/5056). Final qualification requires the accepted [#5057](https://github.com/snissn/gomap/issues/5057) baseline and retained harness, plus the accepted read and mutation predecessors. These tests establish bounded correctness and resource lifetime, not sustained capacity or a performance result.
+Status: accepted selected correctness, resource-lifetime, and finite supported-profile qualification for [#5060](https://github.com/snissn/gomap/issues/5060), under [#5056](https://github.com/snissn/gomap/issues/5056). The [integrated evidence](../evidence/r1-row-store-5061/README.md) records the landed predecessors, independently frozen five-process/five-epoch packet, and accepted finite costs and component trajectories. The correctness tests below establish bounded correctness and resource lifetime; the separate retained capture does not qualify duration-unbounded sustained capacity.
 
 The fixture and public operation boundaries are shared with
 [R1 indexed row mutations](r1-indexed-mutations.md): external IDs; non-null
@@ -113,8 +113,8 @@ These correctness tests log actual maintenance counts and bytes as diagnostic
 facts. They are not a retained benchmark harness and set no throughput, tail
 latency, allocation, memory or storage-growth acceptance threshold.
 
-`BenchmarkR1Lifecycle5060` in `r1_lifecycle_5060_bench_test.go` is provisional
-standalone diagnostic tooling. It seeds 4,096 live rows and performs 1,024 mixed
+`BenchmarkR1Lifecycle5060` in `r1_lifecycle_5060_bench_test.go` is reviewed,
+landed standalone diagnostic tooling. It seeds 4,096 live rows and performs 1,024 mixed
 public calls per epoch: ordinary/prepared complete reads, indexed generic
 updates, nonindexed typed replacement, delete/reinsert and typed upsert.
 Independent full-row/posting checks run outside timed epochs. One warmed old
@@ -139,10 +139,10 @@ GOWORK=off go test ./TreeDB/collections -run '^$' \
   -bench '^BenchmarkR1Lifecycle5060$' -benchtime=5x -count=1 -benchmem -v
 ```
 
-The standalone output is not an accepted #5057 comparator packet. Align the
-eventual retained lifecycle extension with that harness's fixture, public
-backend interfaces and source/schema validator after ownership handoff; do not
-combine separate fixtures or timer scopes into a speedup claim.
+The standalone output is not an accepted #5057 comparator packet. The retained
+lifecycle capture follows the source/schema validator below with its separately
+frozen fixture recipe and supported backend profile. Do not combine separate
+fixtures or timer scopes into a speedup claim.
 
 Retained lifecycle measurement must use the reviewed, landed harness/schema and
 freeze exact product and harness identities before collection. Its phases must
@@ -153,8 +153,10 @@ persistent value log/leaf logs, typed assets and redo WAL. Record checkpoint and
 maintenance duration, completed work, protected/retained bytes and remaining
 debt. A successful no-op, blocked remap or reader release must not be counted as
 reclaimed storage. Preserve failed and partial runs, unsupported comparison
-cells, fixture equality, cache/durability settings and provenance. Final cost
-and sustained capacity acceptance remain pending that retained evidence.
+cells, fixture equality, cache/durability settings and provenance. The
+[integrated evidence](../evidence/r1-row-store-5061/README.md) records the accepted
+finite retained capture, including remaining component growth, debt, and costs.
+Duration-unbounded sustained capacity remains unqualified.
 
 ## Source-bound standalone capture
 
@@ -255,9 +257,10 @@ and can complete multiple batches in one public call. It holds the writer and sn
 admission locks (`writeMu` and `rootReuseMu`) throughout that explicit call.
 Repeated full scans cost O(N²/16) in the worst case for N revisions. Per-phase
 footprint limits admit each inventory; they are not cumulative work or pause
-budgets. Finite sustained-workload maintenance cost and component capacity
-qualification remain pending; bounded descriptor demand does not establish an
-unlimited storage or latency bound. Failed quarantine cleanup preserves both
+budgets. The [integrated evidence](../evidence/r1-row-store-5061/README.md) records
+accepted finite five-process/five-epoch maintenance costs and component
+trajectories. Bounded descriptor demand does not establish an unlimited storage
+or latency bound. Failed quarantine cleanup preserves both
 causes and poisons further revision maintenance rather than claiming clean
 reclamation or removing rebound evidence.
 Held-old-view and complete current row/index oracles run between phases.

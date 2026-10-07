@@ -1,0 +1,480 @@
+{
+  "utc": "2026-10-07T01:05:51.599747+00:00",
+  "scope": "immutable explicit top-level original-byte mirror for packaging; no acceptance or revalidation",
+  "records": [
+    {
+      "lane": "A",
+      "root": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe",
+      "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A",
+      "files": [
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/args.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/args.json",
+          "sha256": "4259f2d0e9df2a3916af6ca69cec64e3c06a7b3aae19d549818fa6935cc9079d",
+          "bytes": 274
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/binary.sha256",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/binary.sha256",
+          "sha256": "3f30922a7880828c9232790e8d16d23f3354204ca27edb9c5e615e9959494c3f",
+          "bytes": 91
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/build.stderr",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/build.stderr",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/buildinfo.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/buildinfo.txt",
+          "sha256": "1d1e68b983f212119bb070311de3744a40e594195054f373355d5212826d63b2",
+          "bytes": 2018
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/cc-version.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/cc-version.txt",
+          "sha256": "6e876a25bb7fdb71ab2914e8f1eeaa00cc61d20a36a6c2981ab7d4d7ceab42f8",
+          "bytes": 239
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/collection_workload_bench",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/collection_workload_bench",
+          "sha256": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+          "bytes": 42822640
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/go-env.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/go-env.txt",
+          "sha256": "2464b0b09960a186ece14034091a71c529140be43b2abcada9da68479a54d813",
+          "bytes": 205
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/go-version.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/go-version.txt",
+          "sha256": "7ae85ca579b70c29982baf7def7120e7be497122076f66e3b30a0db90ca7f93a",
+          "bytes": 32
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/host.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/host.json",
+          "sha256": "252ab291c6cd75813c27cfca0b61df8bb7f32552e99482aa75a65822a822167d",
+          "bytes": 518
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/mode.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/mode.txt",
+          "sha256": "fa347eb70a4d91f765ee8d48e892e3a7e07df3d4d76d1feb2a0feea19d9c83f6",
+          "bytes": 3
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/packet.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/packet.json",
+          "sha256": "e5b83232a75ecb0a30b2859dd64e0ee2e1cba2a31cb922c05d1b9384e048a17b",
+          "bytes": 5394778
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/run.stderr",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/run.stderr",
+          "sha256": "4c9f1f5e09ada348627a0161cbc04b76d6f0f7910903b6d4730dd5c3e96b99af",
+          "bytes": 5424
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/source-after.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/source-after.json",
+          "sha256": "f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b",
+          "bytes": 105879
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/source.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/source.json",
+          "sha256": "f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b",
+          "bytes": 105879
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/summary.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/summary.json",
+          "sha256": "db1c245ee5b61a5d4546d833e463e36427ad07dae1e44e4a13f5a772ca423095",
+          "bytes": 148718
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/validation.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/validation.txt",
+          "sha256": "dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102",
+          "bytes": 91
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-validation.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/original-independent-validation.log",
+          "sha256": "dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102",
+          "bytes": 91
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-start.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/original-validation-start.json",
+          "sha256": "66fd060aa0643a226f28c8cbd289d16e861716dc9e0e90c56757315e71e007fd",
+          "bytes": 1303
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-exit.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A/original-validation-exit.json",
+          "sha256": "6d2b2cedf89d8c3773cf840313860f1300dd532b82f0359f9962b7933cd86cbd",
+          "bytes": 318
+        }
+      ],
+      "excluded_directories": [],
+      "original_validation": {
+        "argv": [
+          "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/collection_workload_bench",
+          "r1-validate",
+          "-source-manifest",
+          "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-expected-source.json",
+          "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/packet.json"
+        ],
+        "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+        "environment": {
+          "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOGC": "100",
+          "GOMAXPROCS": "16",
+          "GOMEMLIMIT": "off",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "HOME": "/home/mikers",
+          "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "R1_GO": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/go",
+          "R1_MODE": "r1",
+          "R1_OUT": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe",
+          "TMPDIR": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/temporary-db-roots"
+        },
+        "utc": "2026-10-07T00:30:47Z"
+      },
+      "original_validation_exit": {
+        "binary_sha256": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+        "exit": 0,
+        "packet_sha256": "e5b83232a75ecb0a30b2859dd64e0ee2e1cba2a31cb922c05d1b9384e048a17b",
+        "utc": "2026-10-07T00:30:47Z",
+        "validation_log_sha256": "dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102"
+      }
+    },
+    {
+      "lane": "C",
+      "root": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe",
+      "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C",
+      "files": [
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/args.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/args.json",
+          "sha256": "83db7a7469e1a4777acaa1fedb00158f1db734432db6d693f7b1f23f2ff0ac8b",
+          "bytes": 114
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/binary.sha256",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/binary.sha256",
+          "sha256": "3f30922a7880828c9232790e8d16d23f3354204ca27edb9c5e615e9959494c3f",
+          "bytes": 91
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/build.stderr",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/build.stderr",
+          "sha256": "d5f3083f8890f6342ea7ccb3c43364507ce399fc3ab555de96ea4ee3bd8ef568",
+          "bytes": 537
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/buildinfo.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/buildinfo.txt",
+          "sha256": "a09ce768e581a90f1c6cee97018e47eff99d9c8497d19566881d8e9c0061986d",
+          "bytes": 2018
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/cc-version.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/cc-version.txt",
+          "sha256": "6e876a25bb7fdb71ab2914e8f1eeaa00cc61d20a36a6c2981ab7d4d7ceab42f8",
+          "bytes": 239
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/collection_workload_bench",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/collection_workload_bench",
+          "sha256": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+          "bytes": 42822640
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/go-env.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/go-env.txt",
+          "sha256": "2464b0b09960a186ece14034091a71c529140be43b2abcada9da68479a54d813",
+          "bytes": 205
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/go-version.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/go-version.txt",
+          "sha256": "7ae85ca579b70c29982baf7def7120e7be497122076f66e3b30a0db90ca7f93a",
+          "bytes": 32
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/host.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/host.json",
+          "sha256": "ffe1742821744383d65a21c466c397f384354b195a6910e6589d8688875a0ae1",
+          "bytes": 511
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/mode.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/mode.txt",
+          "sha256": "c906657d2d61a6ea80f760286de1c17f7f709bf409c5ed744978c216b55a4500",
+          "bytes": 18
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/packet.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/packet.json",
+          "sha256": "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+          "bytes": 521999
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/run.stderr",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/run.stderr",
+          "sha256": "c3dee07a1b7e07c3c802c7adcd04fc5eca3410d733cd8cb2177adc7cd38b1695",
+          "bytes": 21633
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/source-after.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/source-after.json",
+          "sha256": "f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b",
+          "bytes": 105879
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/source.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/source.json",
+          "sha256": "f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b",
+          "bytes": 105879
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/validation.txt",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/validation.txt",
+          "sha256": "9858f0733d6bd6351fc8a4abca3ed3952f6b53c8054ea617b1c137b5cc4f01b4",
+          "bytes": 64
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-validation.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/original-independent-validation.log",
+          "sha256": "96af1845dcf43e609d648637f07b3f1df90ef5c4a505604741249e010b7884d8",
+          "bytes": 77
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/validation-start.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/original-validation-start.json",
+          "sha256": "0c38a35e8f77f29ee9872d3a08625057eac015d8243f89fb767b4d4bf26f66be",
+          "bytes": 1892
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/validation-exit.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C/original-validation-exit.json",
+          "sha256": "11446442c0d3b489226d7e9e32ce220a3902303b41bfc61d9d891b1abc4e642b",
+          "bytes": 49
+        }
+      ],
+      "excluded_directories": [],
+      "original_validation": {
+        "argv": [
+          "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/collection_workload_bench",
+          "r1-mutation-sweep-validate",
+          "-source-manifest",
+          "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-expected-source.json",
+          "-expected-commit",
+          "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+          "-expected-runtime",
+          "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+          "-expected-harness",
+          "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+          "-expected-landed-tooling-commit",
+          "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+          "-expected-binary-sha256",
+          "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+          "-expected-packet-sha256",
+          "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+          "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/packet.json"
+        ],
+        "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+        "environment": {
+          "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOGC": "100",
+          "GOMAXPROCS": "16",
+          "GOMEMLIMIT": "off",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "HOME": "/home/mikers",
+          "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "R1_GO": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/go",
+          "R1_MODE": "r1-mutation-sweep",
+          "R1_OUT": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe",
+          "TMPDIR": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/temporary-db-roots"
+        },
+        "utc": "2026-10-06T23:56:23Z"
+      },
+      "original_validation_exit": {
+        "exit": 0,
+        "utc": "2026-10-06T23:56:24Z"
+      }
+    },
+    {
+      "lane": "D",
+      "root": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe",
+      "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D",
+      "files": [
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/build.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/build.log",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "bytes": 0
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/collections.test",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/collections.test",
+          "sha256": "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+          "bytes": 88480296
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/packet.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/packet.json",
+          "sha256": "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc",
+          "bytes": 707790
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/run-001.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/run-001.log",
+          "sha256": "5d8c9ac60b5900e6b50874d4f979cf8441d354b88e4210f0798890cfe0c61a17",
+          "bytes": 439997
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/run-002.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/run-002.log",
+          "sha256": "17c80449d8fc9f86e93ffb9a6440f6499345608a5fd46d61a7a8d7aeb2dc3088",
+          "bytes": 439868
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/run-003.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/run-003.log",
+          "sha256": "7e1b4645fc456c04cc1d7aa860dd50c9cc2aab2b51bc8106131e2ec2fa047861",
+          "bytes": 439871
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/run-004.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/run-004.log",
+          "sha256": "ff3fc42db33654434b015c90df631f4c55ff96108450523d7bca99e2b30426c6",
+          "bytes": 439972
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/run-005.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/run-005.log",
+          "sha256": "0d93d1a697b890302b189afb60300d369f85ba3a1aaa9e1ea892d716ad39b115",
+          "bytes": 439875
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/runs.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/runs.json",
+          "sha256": "ac902019c292f3262fd3b6f07dd6995562710f1008d36690a32043955459dd71",
+          "bytes": 5167
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/source-after.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/source-after.json",
+          "sha256": "96a3f3feb2ed3d770e082fe5eda63c2faed1804b29e6e8a9c0f3d8740a595e04",
+          "bytes": 325694
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/source-before.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/source-before.json",
+          "sha256": "96a3f3feb2ed3d770e082fe5eda63c2faed1804b29e6e8a9c0f3d8740a595e04",
+          "bytes": 325694
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/summary.md",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/summary.md",
+          "sha256": "be97fb100fbb32cb204460ed51fa60006ae3bc6dae5534d1f8795c24abcc5b9c",
+          "bytes": 8941
+        },
+        {
+          "source": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/toolchain.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/toolchain.json",
+          "sha256": "0b8f729fc435317e12fdcfc6b17f01a8ef5de3117c8e99ca280c3d78c8f5d97e",
+          "bytes": 35609
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/independent-validation.log",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/original-independent-validation.log",
+          "sha256": "da097926f9aa8a2f778de4ec89222c7a26fc7e6a91073a6138cdccd8c6acad05",
+          "bytes": 8942
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/validation-start.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/original-validation-start.json",
+          "sha256": "fa3077bae3655f8dac035104a386f2d8e07b83a786788c64a68a11746ee7fbea",
+          "bytes": 1530
+        },
+        {
+          "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/validation-exit.json",
+          "mirror": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D/original-validation-exit.json",
+          "sha256": "1cc4368b374faa33b38f0d8a23ec03ee007edf58fb6d90564057147cd61611c1",
+          "bytes": 49
+        }
+      ],
+      "excluded_directories": [
+        {
+          "name": "benchmark-tmp",
+          "scope": "empty mirror directory preserves excluded namespace only; original DB/profile never traversed"
+        }
+      ],
+      "original_validation": {
+        "argv": [
+          "/usr/bin/python3",
+          "/home/mikers/gomap-r1-final-source-20261006/scripts/r1_lifecycle_validate.py",
+          "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/packet.json",
+          "--expected-commit",
+          "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+          "--expected-runtime",
+          "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+          "--expected-harness",
+          "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+          "--expected-landed-tooling-commit",
+          "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+          "--expected-binary-sha256",
+          "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+          "--expected-packet-sha256",
+          "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc"
+        ],
+        "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+        "environment": {
+          "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+          "GODEBUG": "",
+          "GOENV": "off",
+          "GOFLAGS": "",
+          "GOGC": "100",
+          "GOMAXPROCS": "16",
+          "GOMEMLIMIT": "off",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off",
+          "HOME": "/home/mikers",
+          "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "R1_GO": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/go"
+        },
+        "utc": "2026-10-07T00:57:42Z"
+      },
+      "original_validation_exit": {
+        "exit": 0,
+        "utc": "2026-10-07T00:57:42Z"
+      }
+    }
+  ]
+}

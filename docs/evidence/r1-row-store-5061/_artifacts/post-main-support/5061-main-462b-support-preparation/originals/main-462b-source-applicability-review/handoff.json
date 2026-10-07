@@ -1,0 +1,1052 @@
+{
+  "verdict": "CLEAN scoped source integration; actual focused validation, current CI and fresh retained captures remain root-owned gates",
+  "created_utc": "2026-10-06T22:09:27.285381+00:00",
+  "read_only_review": true,
+  "sources": {
+    "old_main": {
+      "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+      "parents": [
+        "3cfe2ad896cad1818f72d3d14c74e548fecc1657"
+      ],
+      "tree": "cc5a4c9dcc09fd8a9183888cf0882d7a4307fc28",
+      "subject": "fix(bench): match Go recall aggregation order (#5074)"
+    },
+    "new_main": {
+      "commit": "462b3a98b90e1317fd16ce68dc78f03cd46ebbe9",
+      "parents": [
+        "7649857532521db69ff4cdcf236a11377c85ab3d"
+      ],
+      "tree": "973b5e9c3000a132d68f2a7f35c50be0769dadef",
+      "subject": "fix(treedb): include CRC prefixes in physical vlog live bytes (#5077)"
+    },
+    "previous_candidate": {
+      "commit": "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+      "parents": [
+        "e4e7a3032405bef141010b1c80eb0f0db1cd6f74"
+      ],
+      "tree": "3d2db3625ab3ac03330445e39823ff19dfbf93ee",
+      "subject": "test(nativewire): await catalog serving readiness after voter rejoin"
+    },
+    "integrated_candidate": {
+      "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+      "parents": [
+        "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+        "462b3a98b90e1317fd16ce68dc78f03cd46ebbe9"
+      ],
+      "tree": "0600b47bf0a3a609917d224d7fd06c40737bcd8e",
+      "subject": "merge main physical value-log byte accounting into R1 qualification"
+    }
+  },
+  "upstream_delta_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/caching/vlog_generation_chunk_harness_test.go",
+    "TreeDB/db/compact_storage_audit_test.go",
+    "TreeDB/db/maintenance_reachability.go",
+    "TreeDB/db/maintenance_reachability_test.go",
+    "TreeDB/db/maintenance_roots_test.go",
+    "TreeDB/db/vlog_physical_live_bytes_bench_test.go",
+    "TreeDB/db/vlog_physical_live_bytes_test.go",
+    "TreeDB/db/vlog_rewrite_chunk_plan.go",
+    "TreeDB/db/vlog_rewrite_chunk_plan_test.go",
+    "TreeDB/docs/spec/storage-format.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md",
+    "TreeDB/docs/spec/verification.md"
+  ],
+  "actual_integrated_delta_vs_45d": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/caching/vlog_generation_chunk_harness_test.go",
+    "TreeDB/db/compact_storage_audit_test.go",
+    "TreeDB/db/maintenance_reachability.go",
+    "TreeDB/db/maintenance_reachability_test.go",
+    "TreeDB/db/maintenance_roots_test.go",
+    "TreeDB/db/vlog_physical_live_bytes_bench_test.go",
+    "TreeDB/db/vlog_physical_live_bytes_test.go",
+    "TreeDB/db/vlog_rewrite_chunk_plan.go",
+    "TreeDB/db/vlog_rewrite_chunk_plan_test.go",
+    "TreeDB/docs/spec/storage-format.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md",
+    "TreeDB/docs/spec/verification.md"
+  ],
+  "all_other_previous_candidate_tree_entries_preserved": true,
+  "production_runtime_delta_exact_paths": [
+    "TreeDB/db/maintenance_reachability.go",
+    "TreeDB/db/vlog_rewrite_chunk_plan.go"
+  ],
+  "incoming_non_ci_exact_full_blob_count": 10,
+  "incoming_non_ci_auto_merged_doc_paths": [
+    "TreeDB/docs/spec/storage-format.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md"
+  ],
+  "all_12_incoming_non_ci_added_deleted_line_sequences_equal_to_actual_integration": [
+    {
+      "path": "TreeDB/caching/vlog_generation_chunk_harness_test.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "430c9c842302e9d9d534677ae055c7b19df816a732057b8da4f25de1c2aa3914",
+      "size_bytes": 924,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/compact_storage_audit_test.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "33f7b2bddedb78f2ef3d48c8140adb9fdfae79e6878f1d27948806d0d03c5ad5",
+      "size_bytes": 1487,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/maintenance_reachability.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "d35b38b25421a7fe5d6092eac474dc901b4c11bb4acb91eef05ff95281ec9827",
+      "size_bytes": 452,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/maintenance_reachability_test.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "e8346aa518c64b8e059dfda1ad165025dabc366ec959e375a7df2e1ed34e7d04",
+      "size_bytes": 848,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/maintenance_roots_test.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "dc855261b096fdf66f5b517da5821d9d422586a940392e9065c9c2f9d91e7ad6",
+      "size_bytes": 308,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/vlog_physical_live_bytes_bench_test.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "415d95cd6203ade50320f57c385bec19104b1b6f65d4eef22ee35ee0d729ed95",
+      "size_bytes": 933,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/vlog_physical_live_bytes_test.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "89b1eac5b80231c2b698b556270e45f83c5af54bbd76528d05ee5083dc5b1e63",
+      "size_bytes": 9691,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite_chunk_plan.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "94e531885601a60378bcaec1e52acee603ab4910945b60414df2bae68996d4dc",
+      "size_bytes": 273,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite_chunk_plan_test.go",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "24096eb62233eef4135a45ad7cbd14a1f269279d3dfae971177238dc2e4e57e3",
+      "size_bytes": 782,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/docs/spec/storage-format.md",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "880c253bca6a70d44bcb590ff0995deb1ee94d67426500042592c826d6cb1564",
+      "size_bytes": 393,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/docs/spec/value-log-lifecycle.md",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "028b6e01b8074d827cd5b4df4a1e7c5d3e5e0937ef26010396fd715640136f1b",
+      "size_bytes": 674,
+      "byte_equal": true
+    },
+    {
+      "path": "TreeDB/docs/spec/verification.md",
+      "incoming_and_integrated_added_deleted_line_sequence_sha256": "d1850b293e78c35dfceac09079c8dd05cccde85da9110b49c61c779515784ebb",
+      "size_bytes": 861,
+      "byte_equal": true
+    }
+  ],
+  "doc_merge_limit": "Storage-format and value-log-lifecycle retain prior R1-owned content; they intentionally differ in complete blob from 462b. The exact incoming CRC additions/deletions are preserved, and no other textual edits appear against 45d.",
+  "changed_path_bindings": [
+    {
+      "path": ".github/ci/ci_impact.json",
+      "versions": {
+        "old_main": {
+          "git_blob": "edfb8131ab1ed4fa468b4d9de78b01d715f73206",
+          "sha256": "04b54bfd79f235dff3ca57580e159b71e60d1a3141f4f7ca025110cfdfaf466e",
+          "size_bytes": 100563
+        },
+        "new_main": {
+          "git_blob": "6b4d21d6be62c31d5d418999567e1e6eb55c572b",
+          "sha256": "f191d02a7ab167b380bcaea1c47e9e41cda904d085a6b6b33318fe9978c0c780",
+          "size_bytes": 100563
+        },
+        "previous_candidate": {
+          "git_blob": "b7f50c8ca6bd99c677040865bb77b9cec309a435",
+          "sha256": "28e0ffca6160a65173abb05c1b2d6f31668547d5c8070f9eae77da2ded0480fb",
+          "size_bytes": 100563
+        },
+        "integrated_candidate": {
+          "git_blob": "b6d83a0011d5ee353cd2ab2bf96e70b22b003895",
+          "sha256": "86f2cafbba0050cd9598812da43d50d991dd668c304b95eed69ac5e5affddedb",
+          "size_bytes": 100563
+        }
+      }
+    },
+    {
+      "path": "TreeDB/caching/vlog_generation_chunk_harness_test.go",
+      "versions": {
+        "old_main": {
+          "git_blob": "18d1c07a3f5af4111e085b5f141bababb0bac920",
+          "sha256": "f3f15bf57945bd83e26f66d88ffef537d51dafc197af1f1dffe9b8ce1d030fac",
+          "size_bytes": 6164
+        },
+        "new_main": {
+          "git_blob": "ceb1e1512c4c160f51cb1286941e655f5cd730b9",
+          "sha256": "4acf6d802c23fe8219ea062c7065844f63c219fb94760282ca8c22ebef11058e",
+          "size_bytes": 6758
+        },
+        "previous_candidate": {
+          "git_blob": "18d1c07a3f5af4111e085b5f141bababb0bac920",
+          "sha256": "f3f15bf57945bd83e26f66d88ffef537d51dafc197af1f1dffe9b8ce1d030fac",
+          "size_bytes": 6164
+        },
+        "integrated_candidate": {
+          "git_blob": "ceb1e1512c4c160f51cb1286941e655f5cd730b9",
+          "sha256": "4acf6d802c23fe8219ea062c7065844f63c219fb94760282ca8c22ebef11058e",
+          "size_bytes": 6758
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/compact_storage_audit_test.go",
+      "versions": {
+        "old_main": {
+          "git_blob": "ffba1537a83802c67bee598afd489c4cb5df986c",
+          "sha256": "7264b7201a33afd4ef1288e539920a4cdfab33fc2b8f65441ed312e2d2a63324",
+          "size_bytes": 47482
+        },
+        "new_main": {
+          "git_blob": "faed8e87cfb55879a78b2d14c95a416cc529a3fd",
+          "sha256": "8e540e6355cae816d0d358b08f5564b784b58602b640f8eb0edce8f89297df60",
+          "size_bytes": 47535
+        },
+        "previous_candidate": {
+          "git_blob": "ffba1537a83802c67bee598afd489c4cb5df986c",
+          "sha256": "7264b7201a33afd4ef1288e539920a4cdfab33fc2b8f65441ed312e2d2a63324",
+          "size_bytes": 47482
+        },
+        "integrated_candidate": {
+          "git_blob": "faed8e87cfb55879a78b2d14c95a416cc529a3fd",
+          "sha256": "8e540e6355cae816d0d358b08f5564b784b58602b640f8eb0edce8f89297df60",
+          "size_bytes": 47535
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/maintenance_reachability.go",
+      "versions": {
+        "old_main": {
+          "git_blob": "3c775ef4e707c456072761270a7c4c0667eec463",
+          "sha256": "b16ad78689082140793052a0826dfcdaa8bbaaa25cb78326a62b596bf9f87c84",
+          "size_bytes": 17883
+        },
+        "new_main": {
+          "git_blob": "408cb2215fb23c74a3440d81213a7f6dc1b73361",
+          "sha256": "ab6324c38a28d07ade66f6a9edb0cd70c99d6b61f1a3fe62abb8cfa355d01944",
+          "size_bytes": 18100
+        },
+        "previous_candidate": {
+          "git_blob": "3c775ef4e707c456072761270a7c4c0667eec463",
+          "sha256": "b16ad78689082140793052a0826dfcdaa8bbaaa25cb78326a62b596bf9f87c84",
+          "size_bytes": 17883
+        },
+        "integrated_candidate": {
+          "git_blob": "408cb2215fb23c74a3440d81213a7f6dc1b73361",
+          "sha256": "ab6324c38a28d07ade66f6a9edb0cd70c99d6b61f1a3fe62abb8cfa355d01944",
+          "size_bytes": 18100
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/maintenance_reachability_test.go",
+      "versions": {
+        "old_main": {
+          "git_blob": "3046e22ec0817f59ae5b8c9efb18dd36b7a3cbe7",
+          "sha256": "a3d2a774a1f0805d0812ce8a96710689035fe02ea17c04f9ff38c97884352d0a",
+          "size_bytes": 16739
+        },
+        "new_main": {
+          "git_blob": "cd2c7e9091f8cc26a99e19e817822cfd79ac7db5",
+          "sha256": "7913b78f47ba0f8ba7805515642b099e8cc4d8cc400fd50f4ed4a41ab9e78266",
+          "size_bytes": 16783
+        },
+        "previous_candidate": {
+          "git_blob": "3046e22ec0817f59ae5b8c9efb18dd36b7a3cbe7",
+          "sha256": "a3d2a774a1f0805d0812ce8a96710689035fe02ea17c04f9ff38c97884352d0a",
+          "size_bytes": 16739
+        },
+        "integrated_candidate": {
+          "git_blob": "cd2c7e9091f8cc26a99e19e817822cfd79ac7db5",
+          "sha256": "7913b78f47ba0f8ba7805515642b099e8cc4d8cc400fd50f4ed4a41ab9e78266",
+          "size_bytes": 16783
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/maintenance_roots_test.go",
+      "versions": {
+        "old_main": {
+          "git_blob": "6abf1c35e3b1997e20550c14d92105b1ee707aee",
+          "sha256": "270ae686329f8e8528c2779ae5ea63bec86fe13ccbe373d235e67330f265253e",
+          "size_bytes": 31315
+        },
+        "new_main": {
+          "git_blob": "56c863d5b70c6b5a71ebc64129708a4ff77eee81",
+          "sha256": "7125361cc3ac0cda5db41dadbb46c9fa456ea4d0af01682809597f87baabd9fa",
+          "size_bytes": 31319
+        },
+        "previous_candidate": {
+          "git_blob": "6abf1c35e3b1997e20550c14d92105b1ee707aee",
+          "sha256": "270ae686329f8e8528c2779ae5ea63bec86fe13ccbe373d235e67330f265253e",
+          "size_bytes": 31315
+        },
+        "integrated_candidate": {
+          "git_blob": "56c863d5b70c6b5a71ebc64129708a4ff77eee81",
+          "sha256": "7125361cc3ac0cda5db41dadbb46c9fa456ea4d0af01682809597f87baabd9fa",
+          "size_bytes": 31319
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/vlog_physical_live_bytes_bench_test.go",
+      "versions": {
+        "old_main": {
+          "absent": true
+        },
+        "new_main": {
+          "git_blob": "a6ffd4e93d83efd307cfb47aefc59200d347d543",
+          "sha256": "f0b6a57aa85496f7987c6d7cdd9f5b92dee16000102a798a556088843d74bd20",
+          "size_bytes": 897
+        },
+        "previous_candidate": {
+          "absent": true
+        },
+        "integrated_candidate": {
+          "git_blob": "a6ffd4e93d83efd307cfb47aefc59200d347d543",
+          "sha256": "f0b6a57aa85496f7987c6d7cdd9f5b92dee16000102a798a556088843d74bd20",
+          "size_bytes": 897
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/vlog_physical_live_bytes_test.go",
+      "versions": {
+        "old_main": {
+          "absent": true
+        },
+        "new_main": {
+          "git_blob": "ff5221c1bf41fb22ba2a288b9c203e7d0f309953",
+          "sha256": "220f3601c5c01d77bfa10a9bf8433158453158bfb0d7afd20d86ef1df80d3da4",
+          "size_bytes": 9426
+        },
+        "previous_candidate": {
+          "absent": true
+        },
+        "integrated_candidate": {
+          "git_blob": "ff5221c1bf41fb22ba2a288b9c203e7d0f309953",
+          "sha256": "220f3601c5c01d77bfa10a9bf8433158453158bfb0d7afd20d86ef1df80d3da4",
+          "size_bytes": 9426
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite_chunk_plan.go",
+      "versions": {
+        "old_main": {
+          "git_blob": "624baeb5e957ea04427e83d6653679164062b83d",
+          "sha256": "6d013175470cac4dc203cd029d87bd9cfbad053a1369060bffdb6dcdf9b6790c",
+          "size_bytes": 15998
+        },
+        "new_main": {
+          "git_blob": "2181792e89cd18f9d2b319371fae75ec2c938710",
+          "sha256": "6505e45c0a1b627508e9858459fa67f31fc816998ee2f97b77505cefbbfe4251",
+          "size_bytes": 16070
+        },
+        "previous_candidate": {
+          "git_blob": "624baeb5e957ea04427e83d6653679164062b83d",
+          "sha256": "6d013175470cac4dc203cd029d87bd9cfbad053a1369060bffdb6dcdf9b6790c",
+          "size_bytes": 15998
+        },
+        "integrated_candidate": {
+          "git_blob": "2181792e89cd18f9d2b319371fae75ec2c938710",
+          "sha256": "6505e45c0a1b627508e9858459fa67f31fc816998ee2f97b77505cefbbfe4251",
+          "size_bytes": 16070
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite_chunk_plan_test.go",
+      "versions": {
+        "old_main": {
+          "git_blob": "f0117a392c21c443e14b419bae2ce2a7e89b7a67",
+          "sha256": "5f109806559695daa6ec221ab5efd401c48b9b0b22eee1ab064f22e013fbc4af",
+          "size_bytes": 9060
+        },
+        "new_main": {
+          "git_blob": "c47d64b8750eca601d40a7bce2e353cc0456107d",
+          "sha256": "556b7eb7aedb5f626ec0ec84f2334ec815437f169e35b859a05f7f36d6b50adf",
+          "size_bytes": 9078
+        },
+        "previous_candidate": {
+          "git_blob": "f0117a392c21c443e14b419bae2ce2a7e89b7a67",
+          "sha256": "5f109806559695daa6ec221ab5efd401c48b9b0b22eee1ab064f22e013fbc4af",
+          "size_bytes": 9060
+        },
+        "integrated_candidate": {
+          "git_blob": "c47d64b8750eca601d40a7bce2e353cc0456107d",
+          "sha256": "556b7eb7aedb5f626ec0ec84f2334ec815437f169e35b859a05f7f36d6b50adf",
+          "size_bytes": 9078
+        }
+      }
+    },
+    {
+      "path": "TreeDB/docs/spec/storage-format.md",
+      "versions": {
+        "old_main": {
+          "git_blob": "33f4a4a026208f7bdc028c1b3fef9823815010ad",
+          "sha256": "b9b1eceda45099fbd236a69c455248a636c7cf97ca5ebc1552e61fee15c97cbd",
+          "size_bytes": 215639
+        },
+        "new_main": {
+          "git_blob": "2defe60f5b13adad3a14bbb3413912ba0b54aa23",
+          "sha256": "e2e4ca4c71ca5294d70ad2e114e37cb86a12279b1b2a6ca8043a1f3b769973f1",
+          "size_bytes": 216026
+        },
+        "previous_candidate": {
+          "git_blob": "bda2f0958f147ef7b438bbdb4dc75dc517004de7",
+          "sha256": "59b3d543ee53d13fa4d1dd390d8592182d54a4be2a6e42076161e9bfdf1f6cfa",
+          "size_bytes": 217361
+        },
+        "integrated_candidate": {
+          "git_blob": "740415fe28b5b1529688c6d7ef2d9222e473348e",
+          "sha256": "d674f5d009f80456dd15eb96555a0a10c160d13274b600ad46ffd880e8c81beb",
+          "size_bytes": 217748
+        }
+      }
+    },
+    {
+      "path": "TreeDB/docs/spec/value-log-lifecycle.md",
+      "versions": {
+        "old_main": {
+          "git_blob": "0807646e642cb799a16bf10958e070bdbeefa712",
+          "sha256": "840b964b7bcf2226bbffc290cc912c3b086e6405c7fd281871096c9b1e25ed55",
+          "size_bytes": 35680
+        },
+        "new_main": {
+          "git_blob": "386be1dac739b6e1ca2aa0022540008db0f545e1",
+          "sha256": "30d7d038d1348af831743d453f18cc6057bdae9a6b9d6d25fd41f82e0b0904db",
+          "size_bytes": 36191
+        },
+        "previous_candidate": {
+          "git_blob": "2ce57d6d81d37591920b21c625e34cb20cd1162d",
+          "sha256": "3e14fddcca108ebfb3269733e0f83a278af7adc9882addf60c534e3c3ca3a7d9",
+          "size_bytes": 39529
+        },
+        "integrated_candidate": {
+          "git_blob": "af2c9499be8f83aa4d07bd3e10d7af6765f17919",
+          "sha256": "a2795884ff686c4039c146860fc093de6882934c2d4eb43a542d0626460f5817",
+          "size_bytes": 40040
+        }
+      }
+    },
+    {
+      "path": "TreeDB/docs/spec/verification.md",
+      "versions": {
+        "old_main": {
+          "git_blob": "7a3f59f7706b80004f84f77e01a6858354345cc7",
+          "sha256": "31d0e474cf8fcbae4eefa347771fb5159e5180a6b2ddbd6bbec00e2fca1643d1",
+          "size_bytes": 251681
+        },
+        "new_main": {
+          "git_blob": "695ddcd1b00b9fe4f654e779bf6b88b42a6837dc",
+          "sha256": "a3ad7268bed8d0a021a22a739d11e4f7f64a4e4a247635bd94062d9361e34395",
+          "size_bytes": 252530
+        },
+        "previous_candidate": {
+          "git_blob": "7a3f59f7706b80004f84f77e01a6858354345cc7",
+          "sha256": "31d0e474cf8fcbae4eefa347771fb5159e5180a6b2ddbd6bbec00e2fca1643d1",
+          "size_bytes": 251681
+        },
+        "integrated_candidate": {
+          "git_blob": "695ddcd1b00b9fe4f654e779bf6b88b42a6837dc",
+          "sha256": "a3ad7268bed8d0a021a22a739d11e4f7f64a4e4a247635bd94062d9361e34395",
+          "size_bytes": 252530
+        }
+      }
+    }
+  ],
+  "45d_fixture_only_repair": {
+    "parent": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+    "delta_paths": [
+      "TreeDB/nativewire/vector_partition_colocated_mutation_v1_test.go"
+    ],
+    "preserved_exactly_in_integrated_head": true,
+    "scope": "Existing all-voter readiness predicate adds active VectorPhase; no production change."
+  },
+  "canonical_runtime_inventory": {
+    "scope": "go.mod/go.sum OR prefixes TreeDB/ and cmd/internal/treedbstats/ with suffix .go/.s/.S/.c/.h/.syso excluding *_test.go",
+    "per_source": {
+      "old_main": {
+        "count": 1121,
+        "sha256": "699a64cd9b21da1e0c4f97b4c7bbc05f1eaea8b8ecc00d1097d59a98e1089108"
+      },
+      "new_main": {
+        "count": 1121,
+        "sha256": "c5d4a22720bf871ad83b2991aa46f3fff9be1a56fd39e55eed6f84102f442ce0"
+      },
+      "previous_candidate": {
+        "count": 1122,
+        "sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9"
+      },
+      "integrated_candidate": {
+        "count": 1122,
+        "sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff"
+      }
+    },
+    "exact_delta_only_two_upstream_production_blobs": true,
+    "old_two_production_blobs_equal_764_and_45d": true,
+    "new_two_production_blobs_equal_462b_and_898": true
+  },
+  "canonical_ci_inventory": {
+    "binding": {
+      "git_blob": "b6d83a0011d5ee353cd2ab2bf96e70b22b003895",
+      "sha256": "86f2cafbba0050cd9598812da43d50d991dd668c304b95eed69ac5e5affddedb",
+      "size_bytes": 100563
+    },
+    "discovery_source_sha256": "1a2245d6883e2895a2591b655ca7b7d36a85b7cbe2206cea7604e5ecfe0eac67",
+    "root_reported_sha256_matches_observed": true,
+    "inventory_regeneration_and_14_56_checks_observed_by_this_reviewer": false,
+    "limit": "Source JSON/byte binding inspected only; root owns actual regeneration/check receipts."
+  },
+  "A_C_harness": {
+    "ordered_paths": [
+      "cmd/collection_workload_bench/main.go",
+      "cmd/collection_workload_bench/r1.go",
+      "cmd/collection_workload_bench/r1_mutation_sweep.go",
+      "cmd/collection_workload_bench/r1_sqlite.go",
+      "scripts/r1_collection_capture.sh",
+      "scripts/r1_collection_summary.py",
+      "scripts/r1_collection_source.py"
+    ],
+    "previous_digest": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "integrated_digest": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "exact_bytes_and_order_equal": true,
+    "bindings": [
+      {
+        "path": "cmd/collection_workload_bench/main.go",
+        "git_blob": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+        "sha256": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+        "size_bytes": 41537
+      },
+      {
+        "path": "cmd/collection_workload_bench/r1.go",
+        "git_blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+        "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+        "size_bytes": 43896
+      },
+      {
+        "path": "cmd/collection_workload_bench/r1_mutation_sweep.go",
+        "git_blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+        "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+        "size_bytes": 19159
+      },
+      {
+        "path": "cmd/collection_workload_bench/r1_sqlite.go",
+        "git_blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+        "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+        "size_bytes": 10041
+      },
+      {
+        "path": "scripts/r1_collection_capture.sh",
+        "git_blob": "abc2008715641c2133fe8958295913782f42c5a3",
+        "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+        "size_bytes": 3171
+      },
+      {
+        "path": "scripts/r1_collection_summary.py",
+        "git_blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+        "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+        "size_bytes": 2159
+      },
+      {
+        "path": "scripts/r1_collection_source.py",
+        "git_blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+        "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+        "size_bytes": 1994
+      }
+    ]
+  },
+  "D_static_harness": {
+    "collection_package_root_test_blob_count": 458,
+    "previous_and_integrated_map_sha256": "66d9ee801ab8634213ec045aa6b4891c264531a7c175cbc1943469b5d02909f8",
+    "exact_package_test_map_equal": true,
+    "lifecycle_tooling_blobs_equal": true,
+    "tooling_bindings": [
+      {
+        "path": "scripts/r1_lifecycle_capture.py",
+        "git_blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+        "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+        "size_bytes": 10594
+      },
+      {
+        "path": "scripts/r1_lifecycle_capture.sh",
+        "git_blob": "c4e9315d462a69f03ec99cfaa65bd2100e35874a",
+        "sha256": "eaf69422dd054f596c70875b4af22fec742c8560cad640a69030192f9346ea04",
+        "size_bytes": 112
+      },
+      {
+        "path": "scripts/r1_lifecycle_capture_test.py",
+        "git_blob": "150c0d4a4c50777cf393e82b6ed71fe074f80595",
+        "sha256": "7408cf768eaba61ade4f9e49db1db91438d1e98c3ff7da8cb6549ed5fb043f80",
+        "size_bytes": 1450
+      },
+      {
+        "path": "scripts/r1_lifecycle_validate.py",
+        "git_blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+        "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+        "size_bytes": 61009
+      },
+      {
+        "path": "scripts/r1_lifecycle_validate_test.py",
+        "git_blob": "76847815659cc5f9d5652898ed0c744e145f69aa",
+        "sha256": "488259f09a588d2b019063eec111f75141fabf8913b0c6647f4e282b9a46fe05",
+        "size_bytes": 31272
+      },
+      {
+        "path": "scripts/r1_collection_source.py",
+        "git_blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+        "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+        "size_bytes": 1994
+      }
+    ],
+    "actual_target_go_list_or_binary_observed": false
+  },
+  "source_evidence": [
+    {
+      "path": "TreeDB/db/maintenance_reachability.go",
+      "meaning": "Direct/memoized ordinary accounting adds CRC; grouped memo projection caches and deduplicates the entire physical span.",
+      "exact_source_lines": [
+        {
+          "line": 255,
+          "text": "\t\t\t\t\t// Pointer lengths begin after the CRC; file sizes include it."
+        },
+        {
+          "line": 292,
+          "text": "\t\t\t\t\t\t// Cache the physical span so projection counts the CRC once,"
+        },
+        {
+          "line": 256,
+          "text": "\t\t\t\t\ttally.liveBytes += int64(recordLen) + 4"
+        },
+        {
+          "line": 315,
+          "text": "\t\t\t\ttally.liveBytes += int64(recordLen) + 4"
+        },
+        {
+          "line": 510,
+          "text": "\t\t\t\t\tlengths[start] = -recordLen"
+        },
+        {
+          "line": 512,
+          "text": "\t\t\t\t\ttally.liveBytes += recordLen"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/db/maintenance_reachability.go#L255"
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite_chunk_plan.go",
+      "meaning": "Chunk accounting adds CRC after the existing grouped-record dedupe/length resolver.",
+      "exact_source_lines": [
+        {
+          "line": 119,
+          "text": "func (db *DB) collectValueLogPtrLiveBytes(ptr page.ValuePtr, seenGroupedRecords *map[groupedRecordKey]struct{}, set *valuelog.Set, observe func(page.ValuePtr, uint32) error) error {"
+        },
+        {
+          "line": 200,
+          "text": "\t\t\t// Chunk/file byte budgets include the CRC preceding ptr.Offset."
+        },
+        {
+          "line": 201,
+          "text": "\t\t\tliveByChunk[valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}] += int64(recordLen) + 4"
+        },
+        {
+          "line": 282,
+          "text": "\t\t\t\tlive := liveByChunk[valueLogChunkKey{fileID: id, chunkOffset: chunkOffset}]"
+        },
+        {
+          "line": 412,
+          "text": "\t\t\t\tlive = liveByChunk[valueLogChunkKey{fileID: id, chunkOffset: chunkOffset}]"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/db/vlog_rewrite_chunk_plan.go#L119"
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "meaning": "Unchanged length resolver returns the pointer-relative span excluding leading CRC.",
+      "exact_source_lines": [
+        {
+          "line": 1252,
+          "text": "func readValueLogRecordLengthFromHeader(r io.ReaderAt, start int64) (uint32, error) {"
+        },
+        {
+          "line": 1262,
+          "text": "\treturn uint32(valuelog.HeaderSize-4) + valueLen, nil"
+        },
+        {
+          "line": 1269,
+          "text": "func (db *DB) valueLogRecordLengthForRewriteInSet(ptr page.ValuePtr, set *valuelog.Set) (uint32, error) {"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/db/vlog_rewrite.go#L1252"
+    },
+    {
+      "path": "TreeDB/db/compact_storage_audit.go",
+      "meaning": "Unchanged consumers convert physical live totals to admission and live/stale/debt bytes.",
+      "exact_source_lines": [
+        {
+          "line": 588,
+          "text": "func (db *DB) compactStorageRewritePlanFromAudit(opts ValueLogRewriteOnlineOptions, set *valuelog.Set, liveByID map[uint32]int64) ValueLogRewritePlan {"
+        },
+        {
+          "line": 632,
+          "text": "\t\t\tplan.BytesLive += live"
+        },
+        {
+          "line": 671,
+          "text": "\t\tplan.SelectedBytesStale += stale"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/db/compact_storage_audit.go#L588"
+    },
+    {
+      "path": "TreeDB/db/compact_storage.go",
+      "meaning": "Exhaustive debt directly consumes changed shared-audit totals.",
+      "exact_source_lines": [
+        {
+          "line": 1403,
+          "text": "func (db *DB) populateCompactStorageAudit(ctx context.Context, opts CompactStorageOptions, stats *CompactStorageStats, lockMaintenance bool, fencedIDsOut *[]uint32, ignoredLeafPackRawFileIDs map[uint32]struct{}, session *compactStorageAuditSession) (CompactStorageDebt, error) {"
+        },
+        {
+          "line": 1417,
+          "text": "\t\traw.valueLogLiveBytesBySegment,"
+        },
+        {
+          "line": 1421,
+          "text": "\tdebt.ValueLogRewriteBytes = rewritePlan.SelectedBytesStale"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/db/compact_storage.go#L1403"
+    },
+    {
+      "path": "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+      "meaning": "Unchanged D schedule runs direct GC/vacuum then exhaustive plan/work, making that phase directly affected.",
+      "exact_source_lines": [
+        {
+          "line": 172,
+          "text": "\t\tresult.ValueLogGC, err = db.ValueLogGC(ctx, backenddb.ValueLogGCOptions{})"
+        },
+        {
+          "line": 177,
+          "text": "\t\tresult.Vacuum, err = db.VacuumIndexOnlineWithStats(ctx)"
+        },
+        {
+          "line": 181,
+          "text": "\tresult.Full = r1LifecycleFull5060(t, db)"
+        },
+        {
+          "line": 288,
+          "text": "\tresult.PlanNS = r1LifecycleTime5060(t, func() (err error) { result.Plan, err = db.CompactStoragePlan(context.Background(), opts); return err })"
+        },
+        {
+          "line": 289,
+          "text": "\tresult.WorkNS = r1LifecycleTime5060(t, func() (err error) { result.Work, err = db.CompactStorage(context.Background(), opts); return err })"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/collections/r1_lifecycle_5060_maintenance_test.go#L172"
+    },
+    {
+      "path": "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+      "meaning": "D maintenance/census/reopen remains measured and asserted; actual file-size census is unchanged.",
+      "exact_source_lines": [
+        {
+          "line": 216,
+          "text": "\t\tresult.Maintenance = append(result.Maintenance, r1LifecycleFold5060(b, db, col, epoch, &candidates, observe))"
+        },
+        {
+          "line": 253,
+          "text": "\tresult.Census = append(result.Census, r1LifecycleCensus5060(b, dir, \"reopen\"))"
+        },
+        {
+          "line": 311,
+          "text": "\t\tbytes[component] += info.Size()"
+        },
+        {
+          "line": 314,
+          "text": "\t\ttotalBytes += info.Size()"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/collections/r1_lifecycle_5060_bench_test.go#L216"
+    },
+    {
+      "path": "cmd/collection_workload_bench/r1.go",
+      "meaning": "A fixture profile/backend open unchanged.",
+      "exact_source_lines": [
+        {
+          "line": 679,
+          "text": "func openR1Tree(c r1Config, engine string) (*r1Tree, error) {"
+        },
+        {
+          "line": 685,
+          "text": "\tprofile := treedb.ProfileCommandWALDurable"
+        },
+        {
+          "line": 690,
+          "text": "\tt.db, t.cleanup, err = treedb.OpenBackendWithCachedLeafLog(opts)"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/cmd/collection_workload_bench/r1.go#L679"
+    },
+    {
+      "path": "cmd/collection_workload_bench/r1_mutation_sweep.go",
+      "meaning": "C durable fixture and detailed counters unchanged.",
+      "exact_source_lines": [
+        {
+          "line": 148,
+          "text": "func openR1SweepTree(dir string, indexed, create bool) (*r1Tree, error) {"
+        },
+        {
+          "line": 151,
+          "text": "\tt.db, t.cleanup, err = treedb.OpenBackendWithCachedLeafLog(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))"
+        },
+        {
+          "line": 156,
+          "text": "\tt.manager.SetUpdateBatchDetailedStatsEnabled(true)"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/cmd/collection_workload_bench/r1_mutation_sweep.go#L148"
+    },
+    {
+      "path": "TreeDB/caching/vlog_generation_chunk_harness_test.go",
+      "meaning": "Upstream fixture makes genuinely dead physical frames deterministic without changing product defaults.",
+      "exact_source_lines": [
+        {
+          "line": 24,
+          "text": "\t\tValueLogGenerationPolicy:                 uint8(backenddb.ValueLogGenerationHotWarmCold),"
+        },
+        {
+          "line": 33,
+          "text": "\t\tValueLogCompression:        uint8(vlogCompressionOff),"
+        },
+        {
+          "line": 47,
+          "text": "\tdb.valueLogDictCurrentK.Store(2)"
+        },
+        {
+          "line": 119,
+          "text": "\tif initialLive == 0 || initialStale == 0 {"
+        }
+      ],
+      "source_url": "https://github.com/snissn/gomap/blob/898a7bae48f02e7067318f5165501d16ce7d47ad/TreeDB/caching/vlog_generation_chunk_harness_test.go#L24"
+    }
+  ],
+  "effects": {
+    "accounting": "Physical live spans increase by four CRC bytes for every counted ordinary record and every deduplicated grouped frame. Pointer encoding/header resolver units are unchanged.",
+    "admission": "BytesLive/BytesStale, stale ratios, rewrite budgets, admission and exhaustive remaining-debt/convergence can change. All-live sealed frames no longer create CRC-only rewrite debt; referenced grouped members retain the entire frame.",
+    "shared_counters": "Root selection, logical reference projection, grouped dedupe rules and explicit PhysicalBytesRead increment code are unchanged. Downstream phase work, I/O, timings and files can change through different rewrite admission.",
+    "collections_and_authority": "No changed collection production, ACK/WAL append/sync/recovery, ValuePtr writer/reader, held/prepared/current root authority or bounded manifest cleanup code in the incoming delta; these paths are preserved from 45d.",
+    "D": "Unchanged D CompactStoragePlan/CompactStorage exhaustive phase directly consumes the changed totals; fresh debt/cost/census/reopen observations are needed. Typed ColumnAssetRewrite/GC code and formats are unchanged.",
+    "A_C": "Seven workload/capture/summary/source bytes and operation/count/timer fixtures are unchanged. Runtime digest changes, so no broad performance reuse/global source-equivalence acceptance; fresh final A/C source-bound measurements remain necessary.",
+    "options": "No new production option/default/profile/platform gate or on-disk format change. Upstream chunk fixture forces uncompressed two-record frames to create deterministic actual dead physical spans."
+  },
+  "focused_root_validation": {
+    "environment": "GOWORK=off; actual 898 integrated source and actual runner/compiler/source/argv/start-exit receipts retained by root",
+    "selections": [
+      {
+        "package": "./TreeDB/db",
+        "regex": "^(TestValueLogPhysicalLiveBytes_.*|TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers|TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork|TestEstimateValueLogLiveBytesBySegment(UsesSharedCollectorAndCaches|RefreshesOnceOnMissingSnapshotFile)|TestCompactStorageAudit_(ValueLogCollectorsMatchStandaloneGroupedAliases|ProtectedRootsOnlyExtendLeafProjection|ProtectedPagerRootsMatchStandalonePlansWithMemoReuse)|TestMaintenanceRootScansDeduplicateRoleAliasesByRootID|TestEstimateValueLogLiveBytesByChunk_(SplitsPointerRecordsAcrossChunks|DedupsGroupedPointers)|TestValueLogRewriteChunkPlan_SelectsStaleChunk)$",
+        "expected_named_parent_count": 14,
+        "actual_source_selected_parents": [
+          {
+            "name": "TestCompactStorageAudit_ValueLogCollectorsMatchStandaloneGroupedAliases",
+            "path": "TreeDB/db/compact_storage_audit_test.go",
+            "line": 178
+          },
+          {
+            "name": "TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection",
+            "path": "TreeDB/db/compact_storage_audit_test.go",
+            "line": 247
+          },
+          {
+            "name": "TestCompactStorageAudit_ProtectedPagerRootsMatchStandalonePlansWithMemoReuse",
+            "path": "TreeDB/db/compact_storage_audit_test.go",
+            "line": 406
+          },
+          {
+            "name": "TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers",
+            "path": "TreeDB/db/maintenance_reachability_test.go",
+            "line": 14
+          },
+          {
+            "name": "TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork",
+            "path": "TreeDB/db/maintenance_reachability_test.go",
+            "line": 92
+          },
+          {
+            "name": "TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndCaches",
+            "path": "TreeDB/db/maintenance_reachability_test.go",
+            "line": 178
+          },
+          {
+            "name": "TestEstimateValueLogLiveBytesBySegmentRefreshesOnceOnMissingSnapshotFile",
+            "path": "TreeDB/db/maintenance_reachability_test.go",
+            "line": 223
+          },
+          {
+            "name": "TestMaintenanceRootScansDeduplicateRoleAliasesByRootID",
+            "path": "TreeDB/db/maintenance_roots_test.go",
+            "line": 640
+          },
+          {
+            "name": "TestValueLogPhysicalLiveBytes_FileSpanOracle",
+            "path": "TreeDB/db/vlog_physical_live_bytes_test.go",
+            "line": 98
+          },
+          {
+            "name": "TestValueLogPhysicalLiveBytes_MemoizedProtectedRoots",
+            "path": "TreeDB/db/vlog_physical_live_bytes_test.go",
+            "line": 157
+          },
+          {
+            "name": "TestValueLogPhysicalLiveBytes_ExhaustiveRolloverReopen",
+            "path": "TreeDB/db/vlog_physical_live_bytes_test.go",
+            "line": 206
+          },
+          {
+            "name": "TestEstimateValueLogLiveBytesByChunk_SplitsPointerRecordsAcrossChunks",
+            "path": "TreeDB/db/vlog_rewrite_chunk_plan_test.go",
+            "line": 15
+          },
+          {
+            "name": "TestEstimateValueLogLiveBytesByChunk_DedupsGroupedPointers",
+            "path": "TreeDB/db/vlog_rewrite_chunk_plan_test.go",
+            "line": 76
+          },
+          {
+            "name": "TestValueLogRewriteChunkPlan_SelectsStaleChunk",
+            "path": "TreeDB/db/vlog_rewrite_chunk_plan_test.go",
+            "line": 128
+          }
+        ],
+        "suggested_argv_normal": [
+          "go",
+          "test",
+          "./TreeDB/db",
+          "-run",
+          "^(TestValueLogPhysicalLiveBytes_.*|TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers|TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork|TestEstimateValueLogLiveBytesBySegment(UsesSharedCollectorAndCaches|RefreshesOnceOnMissingSnapshotFile)|TestCompactStorageAudit_(ValueLogCollectorsMatchStandaloneGroupedAliases|ProtectedRootsOnlyExtendLeafProjection|ProtectedPagerRootsMatchStandalonePlansWithMemoReuse)|TestMaintenanceRootScansDeduplicateRoleAliasesByRootID|TestEstimateValueLogLiveBytesByChunk_(SplitsPointerRecordsAcrossChunks|DedupsGroupedPointers)|TestValueLogRewriteChunkPlan_SelectsStaleChunk)$",
+          "-count=1"
+        ],
+        "suggested_argv_race": [
+          "go",
+          "test",
+          "-race",
+          "./TreeDB/db",
+          "-run",
+          "^(TestValueLogPhysicalLiveBytes_.*|TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers|TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork|TestEstimateValueLogLiveBytesBySegment(UsesSharedCollectorAndCaches|RefreshesOnceOnMissingSnapshotFile)|TestCompactStorageAudit_(ValueLogCollectorsMatchStandaloneGroupedAliases|ProtectedRootsOnlyExtendLeafProjection|ProtectedPagerRootsMatchStandalonePlansWithMemoReuse)|TestMaintenanceRootScansDeduplicateRoleAliasesByRootID|TestEstimateValueLogLiveBytesByChunk_(SplitsPointerRecordsAcrossChunks|DedupsGroupedPointers)|TestValueLogRewriteChunkPlan_SelectsStaleChunk)$",
+          "-count=1"
+        ]
+      },
+      {
+        "package": "./TreeDB/caching",
+        "regex": "^TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt$",
+        "expected_named_parent_count": 1,
+        "actual_source_selected_parents": [
+          {
+            "name": "TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt",
+            "path": "TreeDB/caching/vlog_generation_chunk_harness_test.go",
+            "line": 11
+          }
+        ],
+        "suggested_argv_normal": [
+          "go",
+          "test",
+          "./TreeDB/caching",
+          "-run",
+          "^TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt$",
+          "-count=1"
+        ],
+        "suggested_argv_race": [
+          "go",
+          "test",
+          "-race",
+          "./TreeDB/caching",
+          "-run",
+          "^TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt$",
+          "-count=1"
+        ]
+      },
+      {
+        "package": "./TreeDB/collections",
+        "regex": "^TestR1Lifecycle(LogicalFoldAndVacuum|MixedCycles|RecoveryAfterMaintenance)5060$",
+        "expected_named_parent_count": 3,
+        "actual_source_selected_parents": [
+          {
+            "name": "TestR1LifecycleLogicalFoldAndVacuum5060",
+            "path": "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+            "line": 190
+          },
+          {
+            "name": "TestR1LifecycleMixedCycles5060",
+            "path": "TreeDB/collections/r1_lifecycle_5060_test.go",
+            "line": 177
+          },
+          {
+            "name": "TestR1LifecycleRecoveryAfterMaintenance5060",
+            "path": "TreeDB/collections/r1_lifecycle_5060_test.go",
+            "line": 343
+          }
+        ],
+        "suggested_argv_normal": [
+          "go",
+          "test",
+          "./TreeDB/collections",
+          "-run",
+          "^TestR1Lifecycle(LogicalFoldAndVacuum|MixedCycles|RecoveryAfterMaintenance)5060$",
+          "-count=1"
+        ],
+        "suggested_argv_race": [
+          "go",
+          "test",
+          "-race",
+          "./TreeDB/collections",
+          "-run",
+          "^TestR1Lifecycle(LogicalFoldAndVacuum|MixedCycles|RecoveryAfterMaintenance)5060$",
+          "-count=1"
+        ]
+      }
+    ],
+    "normal_and_race_recommended": true,
+    "total_named_parent_count": 18,
+    "suggested_vet_argv": [
+      "go",
+      "vet",
+      "./TreeDB/db",
+      "./TreeDB/caching",
+      "./TreeDB/collections"
+    ],
+    "extra_local_benchmark_needed": false,
+    "limit": "Source-verified proposed selections only. Reviewer executes no Go and observes no result."
+  },
+  "findings": [],
+  "evidence_disposition": "Preserve earlier raw packets, sources, failures and diagnoses unchanged. Earlier exact-source receipts remain historical. Refresh affected maintenance/lifecycle validation, required current CI and already planned final A/C/D measurements; avoid duplicating unrelated local suites solely for a new SHA. Root must bind actual landed M.",
+  "upstream_production_patch": {
+    "path": "upstream-production-delta.patch",
+    "sha256": "030fddf581303265b7b0e0b1fe122e6545a8defa02d4a5f89d3cf4f7b4f10fe5",
+    "size_bytes": 2260,
+    "identical_to_actual_45d_to_898_production_patch": true
+  },
+  "not_claimed": [
+    "current CI PASS",
+    "Go/build/test execution by reviewer",
+    "898 landed",
+    "performance/capacity equivalence or no regression",
+    "fresh capture/noise acceptance",
+    "existing failure waiver",
+    "physical power-loss guarantee"
+  ]
+}

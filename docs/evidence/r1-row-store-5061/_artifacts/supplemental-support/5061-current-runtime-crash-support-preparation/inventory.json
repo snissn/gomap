@@ -1,0 +1,409 @@
+{
+  "schema": "r1-seventh-current-runtime-crash-support-inventory-v1",
+  "utc": "2026-10-06T12:17:24.080824+00:00",
+  "status": "UNPROMOTED_PRIVATE_PREPARATION_ONLY",
+  "standalone_group": 7,
+  "display_root": "/tmp/gomap-r1-execution-20261005/5061-current-runtime-crash-support-preparation",
+  "canonical_root": "/private/tmp/gomap-r1-execution-20261005/5061-current-runtime-crash-support-preparation",
+  "files": [
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-normal-ubuntu2-original/treedb-test.jsonl",
+      "original_relative": "3182-ci-normal-ubuntu2-original/treedb-test.jsonl",
+      "copy": "3182-ci-normal-ubuntu2-original/treedb-test.jsonl",
+      "original_bytes": 10031983,
+      "copy_bytes": 10031983,
+      "original_sha256": "2e61abede641b4ddfa4e8211d196824f26f688bba62a49cbe4805cb8452813cc",
+      "copy_sha256": "2e61abede641b4ddfa4e8211d196824f26f688bba62a49cbe4805cb8452813cc",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "bytes": 10031983,
+        "sha256": "2e61abede641b4ddfa4e8211d196824f26f688bba62a49cbe4805cb8452813cc"
+      },
+      "classification": "raw-current-runtime-CI-JSONL",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-normal-ubuntu2-original/treedb-test.jsonl.summary.md",
+      "original_relative": "3182-ci-normal-ubuntu2-original/treedb-test.jsonl.summary.md",
+      "copy": "3182-ci-normal-ubuntu2-original/treedb-test.jsonl.summary.md",
+      "original_bytes": 5855,
+      "copy_bytes": 5855,
+      "original_sha256": "14616050c4419c145ad17a85f4bc842f27cc976abe1e5072391a19e69d35f839",
+      "copy_sha256": "14616050c4419c145ad17a85f4bc842f27cc976abe1e5072391a19e69d35f839",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "bytes": 5855,
+        "sha256": "14616050c4419c145ad17a85f4bc842f27cc976abe1e5072391a19e69d35f839"
+      },
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-race-linux4-original/treedb-race.jsonl",
+      "original_relative": "3182-ci-race-linux4-original/treedb-race.jsonl",
+      "copy": "3182-ci-race-linux4-original/treedb-race.jsonl",
+      "original_bytes": 6194410,
+      "copy_bytes": 6194410,
+      "original_sha256": "c2bccc3b9a328e83228dd9bca2222208e7f7c3e20ef95c7be3324c3c40b911fc",
+      "copy_sha256": "c2bccc3b9a328e83228dd9bca2222208e7f7c3e20ef95c7be3324c3c40b911fc",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "bytes": 6194410,
+        "sha256": "c2bccc3b9a328e83228dd9bca2222208e7f7c3e20ef95c7be3324c3c40b911fc"
+      },
+      "classification": "raw-current-runtime-CI-JSONL",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-race-linux4-original/treedb-race.jsonl.summary.md",
+      "original_relative": "3182-ci-race-linux4-original/treedb-race.jsonl.summary.md",
+      "copy": "3182-ci-race-linux4-original/treedb-race.jsonl.summary.md",
+      "original_bytes": 3446,
+      "copy_bytes": 3446,
+      "original_sha256": "74d297cbf5eab5791fd60fcb7f47f7280970fb3f71457d3f6338c2379435b7c3",
+      "copy_sha256": "74d297cbf5eab5791fd60fcb7f47f7280970fb3f71457d3f6338c2379435b7c3",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "bytes": 3446,
+        "sha256": "74d297cbf5eab5791fd60fcb7f47f7280970fb3f71457d3f6338c2379435b7c3"
+      },
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-run-source-original.json",
+      "original_relative": "3182-ci-run-source-original.json",
+      "copy": "3182-ci-run-source-original.json",
+      "original_bytes": 11775,
+      "copy_bytes": 11775,
+      "original_sha256": "7ba6c864503c4137e309115c4c0eb2cbf08aed6fa426fb1d3defe773cd334d13",
+      "copy_sha256": "7ba6c864503c4137e309115c4c0eb2cbf08aed6fa426fb1d3defe773cd334d13",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "bytes": 11775,
+        "sha256": "7ba6c864503c4137e309115c4c0eb2cbf08aed6fa426fb1d3defe773cd334d13"
+      },
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-pr-head-source-original.json",
+      "original_relative": "3182-ci-pr-head-source-original.json",
+      "copy": "3182-ci-pr-head-source-original.json",
+      "original_bytes": 1096,
+      "copy_bytes": 1096,
+      "original_sha256": "710cebf50066a34428c89ec49aa2076ad8fd6ed72f764ede1fe69af404e113c3",
+      "copy_sha256": "710cebf50066a34428c89ec49aa2076ad8fd6ed72f764ede1fe69af404e113c3",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "bytes": 1096,
+        "sha256": "710cebf50066a34428c89ec49aa2076ad8fd6ed72f764ede1fe69af404e113c3"
+      },
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-test-merge-source-original.json",
+      "original_relative": "3182-ci-test-merge-source-original.json",
+      "copy": "3182-ci-test-merge-source-original.json",
+      "original_bytes": 2551,
+      "copy_bytes": 2551,
+      "original_sha256": "d63c40fde80095ec0e36cc27cba51c460d7b92fd5726db51af39848d083c3f11",
+      "copy_sha256": "d63c40fde80095ec0e36cc27cba51c460d7b92fd5726db51af39848d083c3f11",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "bytes": 2551,
+        "sha256": "d63c40fde80095ec0e36cc27cba51c460d7b92fd5726db51af39848d083c3f11"
+      },
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-crash-proof-jobs-original.json",
+      "original_relative": "3182-ci-crash-proof-jobs-original.json",
+      "copy": "3182-ci-crash-proof-jobs-original.json",
+      "original_bytes": 71706,
+      "copy_bytes": 71706,
+      "original_sha256": "fcb8b224de573ee552354d7ee4cdeaa578ab7bcc51945026eec591770762cf4d",
+      "copy_sha256": "fcb8b224de573ee552354d7ee4cdeaa578ab7bcc51945026eec591770762cf4d",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": null,
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-crash-proof-artifacts-original.json",
+      "original_relative": "3182-ci-crash-proof-artifacts-original.json",
+      "copy": "3182-ci-crash-proof-artifacts-original.json",
+      "original_bytes": 17148,
+      "copy_bytes": 17148,
+      "original_sha256": "3181924daf3274e79c6875330e5c0f90f1982425b214816e4b63f91e8f65bcd6",
+      "copy_sha256": "3181924daf3274e79c6875330e5c0f90f1982425b214816e4b63f91e8f65bcd6",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": {
+        "sha256": "3181924daf3274e79c6875330e5c0f90f1982425b214816e4b63f91e8f65bcd6"
+      },
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/3182-ci-crash-cut-root-review.json",
+      "original_relative": "3182-ci-crash-cut-root-review.json",
+      "copy": "3182-ci-crash-cut-root-review.json",
+      "original_bytes": 18950,
+      "copy_bytes": 18950,
+      "original_sha256": "4b1e67ce4ee67fd0bd0cbbdbe1fcc117914fd25639a33d1d28bb863d6ebef70f",
+      "copy_sha256": "4b1e67ce4ee67fd0bd0cbbdbe1fcc117914fd25639a33d1d28bb863d6ebef70f",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": null,
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/ack-process-cut-applicability-review.md",
+      "original_relative": "ack-process-cut-applicability-review.md",
+      "copy": "ack-process-cut-applicability-review.md",
+      "original_bytes": 14887,
+      "copy_bytes": 14887,
+      "original_sha256": "d4443ea94ea5e933de7666fa3f898ee62865497d482ae509a47cf2037c68bcda",
+      "copy_sha256": "d4443ea94ea5e933de7666fa3f898ee62865497d482ae509a47cf2037c68bcda",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": null,
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/ack-process-cut-applicability-review.json",
+      "original_relative": "ack-process-cut-applicability-review.json",
+      "copy": "ack-process-cut-applicability-review.json",
+      "original_bytes": 163225,
+      "copy_bytes": 163225,
+      "original_sha256": "08e1c198948c0f9232373fc1dc72db60d818b7f0f2d096f49f7353854a00ff17",
+      "copy_sha256": "08e1c198948c0f9232373fc1dc72db60d818b7f0f2d096f49f7353854a00ff17",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": null,
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    },
+    {
+      "original": "/tmp/gomap-r1-execution-20261005/ack-process-cut-root-adoption.json",
+      "original_relative": "ack-process-cut-root-adoption.json",
+      "copy": "ack-process-cut-root-adoption.json",
+      "original_bytes": 678,
+      "copy_bytes": 678,
+      "original_sha256": "3a4721d45b84be39d1c0ca8572d6c76eb0fa23ae326dbb680f8a983e5a5bf7b0",
+      "copy_sha256": "3a4721d45b84be39d1c0ca8572d6c76eb0fa23ae326dbb680f8a983e5a5bf7b0",
+      "byte_exact_equal": true,
+      "original_nonsymlink": true,
+      "copy_nonsymlink": true,
+      "original_mode": "0o644",
+      "copy_mode": "0o644",
+      "declared_pin": null,
+      "classification": "original-support-review-or-metadata",
+      "original_rechecked_after_copy": true
+    }
+  ],
+  "copy_count": 13,
+  "copy_bytes": 16537710,
+  "scope": "Original current-runtime normal/race process-exit proof only; no power-loss, performance, capacity, future landing or retained acceptance claim.",
+  "source": {
+    "pr_head": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "test_merge": "17c859b3b792a954880826e502bfb105282d4cf4",
+    "tree_equal": "96bd466b509cefe22b2623acc7b03374d7668be5",
+    "runtime_sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873"
+  },
+  "observed": [
+    {
+      "job": {
+        "id": 112235964466,
+        "name": "ubuntu-latest-2",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+        "started_at": "2026-10-06T11:32:39Z",
+        "completed_at": "2026-10-06T11:43:08Z",
+        "html_url": "https://github.com/snissn/gomap/actions/runs/37453671475/job/112235964466"
+      },
+      "artifact": {
+        "id": 11411170426,
+        "name": "treedb-test-json-ubuntu-latest-2",
+        "size_in_bytes": 697987,
+        "digest": "sha256:62109c41713fd926ebd70b00e485a7805aece77301a6730fb53b9d668bd97510",
+        "expired": false,
+        "workflow_run": {
+          "id": 37453671475,
+          "repository_id": 567933707,
+          "head_repository_id": 567933707,
+          "head_branch": "codex/5066-lifecycle-maintenance",
+          "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6"
+        }
+      },
+      "original_raw": {
+        "path": "/tmp/gomap-r1-execution-20261005/3182-ci-normal-ubuntu2-original/treedb-test.jsonl",
+        "sha256": "2e61abede641b4ddfa4e8211d196824f26f688bba62a49cbe4805cb8452813cc",
+        "bytes": 10031983
+      },
+      "families": {
+        "TestR1MutationCrashCuts5059": {
+          "run": 19,
+          "output": 38,
+          "pass": 19
+        },
+        "TestR1LifecycleRecoveryAfterMaintenance5060": {
+          "run": 4,
+          "output": 17,
+          "pass": 4
+        },
+        "TestR1LifecycleMixedCycles5060": {
+          "run": 3,
+          "output": 30,
+          "pass": 3
+        },
+        "TestR1LifecycleLogicalFoldAndVacuum5060": {
+          "run": 1,
+          "output": 6,
+          "pass": 1
+        }
+      },
+      "unique_parent_and_subcase_pass_count": 27,
+      "selected_original_job_fields_equal_review": true,
+      "collections_package_pass": true,
+      "original_all_fail_rows": 0
+    },
+    {
+      "job": {
+        "id": 112235964274,
+        "name": "race-check (linux)-4",
+        "status": "completed",
+        "conclusion": "success",
+        "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+        "started_at": "2026-10-06T11:30:06Z",
+        "completed_at": "2026-10-06T11:50:25Z",
+        "html_url": "https://github.com/snissn/gomap/actions/runs/37453671475/job/112235964274"
+      },
+      "artifact": {
+        "id": 11411425298,
+        "name": "treedb-race-json-linux-4",
+        "size_in_bytes": 449412,
+        "digest": "sha256:457a05b1b08a788860796c2d45151c8db87814760f20c12ee4525c139989d063",
+        "expired": false,
+        "workflow_run": {
+          "id": 37453671475,
+          "repository_id": 567933707,
+          "head_repository_id": 567933707,
+          "head_branch": "codex/5066-lifecycle-maintenance",
+          "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6"
+        }
+      },
+      "original_raw": {
+        "path": "/tmp/gomap-r1-execution-20261005/3182-ci-race-linux4-original/treedb-race.jsonl",
+        "sha256": "c2bccc3b9a328e83228dd9bca2222208e7f7c3e20ef95c7be3324c3c40b911fc",
+        "bytes": 6194410
+      },
+      "families": {
+        "TestR1MutationCrashCuts5059": {
+          "run": 19,
+          "output": 38,
+          "pass": 19
+        },
+        "TestR1LifecycleRecoveryAfterMaintenance5060": {
+          "run": 4,
+          "output": 17,
+          "pass": 4
+        },
+        "TestR1LifecycleMixedCycles5060": {
+          "run": 3,
+          "output": 30,
+          "pass": 3
+        },
+        "TestR1LifecycleLogicalFoldAndVacuum5060": {
+          "run": 1,
+          "output": 6,
+          "pass": 1
+        }
+      },
+      "unique_parent_and_subcase_pass_count": 27,
+      "selected_original_job_fields_equal_review": true,
+      "collections_package_pass": true,
+      "original_all_fail_rows": 0
+    }
+  ],
+  "snapshot": {
+    "run_original_status": "queued",
+    "run_original_conclusion": null,
+    "original_job_status_counts": {
+      "completed": 27,
+      "in_progress": 4,
+      "queued": 2
+    },
+    "whole_workflow_not_complete_in_preserved_snapshot": true,
+    "original_jobs_sha256": "fcb8b224de573ee552354d7ee4cdeaa578ab7bcc51945026eec591770762cf4d",
+    "review_later_current_jobs_sha256": "28fef413978194f6f952eeaf4c509cf8b0f26ebd5e596fa29c4d9bc3bd92f82d",
+    "jobs_digest_distinction": "Original jobs snapshot is earlier/different from later-current snapshot referenced in applicability review. Original bytes are preserved; all selected completed normal/race job fields exactly match reviewed copies. No digest rebinding.",
+    "now_required_gate_passed_context": "Coordinator assignment states required gate now passed; no new gate polling or independent whole-gate verification by this preparation. Original queued/ongoing snapshot and reviews remain unchanged."
+  },
+  "excluded": [
+    "ZIP archives",
+    "binaries",
+    "DB directories",
+    "new tests/captures/replays",
+    "whole-gate acceptance",
+    "power-loss claim"
+  ],
+  "frozen_six_group_files_unchanged": {
+    "5061-support-assembly-preparation/assemble-support.py": "608e16a1c4070211ad5c765a5bdc138ed82fef4f3ff95562b4f783e7315652c0",
+    "5061-support-assembly-preparation/assembly-plan.json": "92ce1e34a36df398f00b3959b41dd070f04dd3f5a9d83d04210c8b1cf287a9e9",
+    "5061-support-assembly-preparation/handoff.json": "159068bf9e99cecde493627c8ed15c463625e0a73d04c5bd1b9090b14362bc5c",
+    "5061-support-assembly-preparation/handoff.md": "3f36247a8f165de75f0b89637c4abf9b89f3ec94727bd443e59bdd2f23b200de",
+    "5061-support-assembly-root-adoption.json": "28bba7cd3bbc148b4a027ea2bcd4d4be8f167c30b352766a51417344fd23fff5"
+  },
+  "safe_copy": "Explicit regular UTF8/no-NUL nonsymlink allowlist, canonical /private/tmp base, new destination, no overwrites; originals rechecked. First partial attempt failed closed at jobs digest mismatch; existing correct partial copies were verified rather than overwritten."
+}

@@ -1,0 +1,18 @@
+{
+  "captures": {
+    "A": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe",
+    "C": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe",
+    "D": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe"
+  },
+  "gocache": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+  "landing_observation_file": "/home/mikers/gomap-r1-final-observers-20261006/5071-actual-M-landing-original.json",
+  "landing_verified_by_root": true,
+  "receipts": {
+    "A": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe",
+    "C": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe",
+    "D": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe"
+  },
+  "repo": "/home/mikers/gomap-r1-final-source-20261006",
+  "review_url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976",
+  "selected_merge_sha": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca"
+}

@@ -1,0 +1,24 @@
+{
+  "utc": "2026-10-06T22:10:29.896900+00:00",
+  "status": "ROOT_ADOPTED_MATURE_LOCAL_898A_CANDIDATE_ONLY_NO_PUSH_CURRENT_CI_OR_LANDING",
+  "head": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+  "tree": "0600b47bf0a3a609917d224d7fd06c40737bcd8e",
+  "parents": [
+    "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+    "462b3a98b90e1317fd16ce68dc78f03cd46ebbe9"
+  ],
+  "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "independent_source_review": "CLEAN",
+  "focused": "18parents normal+racedistinct3packagesPASS; vet+formatPASS",
+  "canonical_tests": 36,
+  "originals_sha256": {
+    "462b-main-integration-local-candidate-original.json": "933b0ff9e2ca4de37cd42e91a192e150a0659721f916dc9ba5581b4b7dae2f82",
+    "462b-main-integration-regeneration-original.json": "61d0c99bb21a1a8d2b61226feaf281a459d99f4d45d7c42de3b8b0bd44f9e953",
+    "898a-main-462b-focused-validation-root-review.json": "1ae60be8e89cdceb92d0661aa9ab6e1f80d2c0df1a92583772955e76276d981c",
+    "898a-canonical-ci-impact-contract-tests-original.json": "0d20114e7b65bbb6a5c061edccec10f616a718b42fb1a496dc392a5a3ec158cf",
+    "main-462b-source-applicability-review/handoff.md": "ca7b0533da6b1b5553d885607fedbbebbf5b088aebb8cf25b66aa32b68a4060b",
+    "main-462b-source-applicability-review/handoff.json": "1885ea4e85fd44c02698999d97da273f19b4d94a5feef22ff78bdef1bf168bc4"
+  },
+  "remaining": "Exactpostpushhostedreview/requiredCI/allthreads/currentmainnormalprotectedmerge; actualM and freshC/A/D/E"
+}

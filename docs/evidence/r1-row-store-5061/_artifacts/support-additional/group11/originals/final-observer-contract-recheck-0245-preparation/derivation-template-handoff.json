@@ -1,0 +1,31 @@
+{
+  "status": "PREPARATION_ONLY_NOT_EXECUTED_PENDING_ROOT_REVIEW",
+  "files": {
+    "derive-configs.py": {
+      "sha256": "eda94146836c9a91f8e9f25a7148a1387e79a151c8b8a6aca547b21158711a7e",
+      "bytes": 7795
+    },
+    "derive-configs.md": {
+      "sha256": "1029f2c778fdeeb108ad51646bdc553e105a134a02e43f194e63c5fecddb9562",
+      "bytes": 2157
+    },
+    "root-inputs.template.json": {
+      "sha256": "9d4141886330bd5a6cd06e9ce200a64fb47bb664fa296b72e6de2a3e744be903",
+      "bytes": 770
+    }
+  },
+  "checks": [
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/final-observer-contract-recheck-0245-preparation/derive-configs.py",
+      "check": "AST syntax only",
+      "result": "PASS",
+      "executed": false
+    },
+    {
+      "check": "unfilled future merge/authority template",
+      "result": "PASS"
+    }
+  ],
+  "captures_started": false,
+  "root_controls": "actual merge/landing authority, helper review, derivation/run invocation, separate capture acceptance"
+}

@@ -1,0 +1,71 @@
+{
+  "utc": "2026-10-06T18:13:57.723075+00:00",
+  "head": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+  "parents": [
+    "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "3cfe2ad896cad1818f72d3d14c74e548fecc1657"
+  ],
+  "own_delta_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+    "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+    "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+    "TreeDB/collections/r1_lifecycle_5060_test.go",
+    "TreeDB/db/durable_root_runtime.go",
+    "TreeDB/db/leaf_generation_gc.go",
+    "TreeDB/db/leaf_manifest_revision_gc.go",
+    "TreeDB/db/leaf_manifest_revision_gc_5066_bench_test.go",
+    "TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+    "TreeDB/db/leaf_manifest_revision_gc_compatibility_5066_test.go",
+    "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go",
+    "TreeDB/db/r1_native_appender_metadata_test.go",
+    "TreeDB/db/r1_rebuilt_pack_projection_test.go",
+    "TreeDB/db/vacuum_online.go",
+    "TreeDB/db/wal_recovery.go",
+    "TreeDB/docs/guides/typed-row-store.md",
+    "TreeDB/docs/spec/r1-row-lifecycle.md",
+    "TreeDB/docs/spec/recovery.md",
+    "TreeDB/docs/spec/storage-format.md",
+    "TreeDB/docs/spec/value-log-lifecycle.md",
+    "TreeDB/internal/rootpublication/resource_physical_selection_test.go",
+    "TreeDB/internal/rootpublication/resource_selector.go",
+    "TreeDB/internal/valuelog/manager.go",
+    "TreeDB/internal/valuelog/retry_close_5066_test.go",
+    "TreeDB/internal/valuelog/stable_resource.go",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md",
+    "docs/contracts/CONCURRENCY.md",
+    "scripts/r1_lifecycle_capture.py",
+    "scripts/r1_lifecycle_validate.py",
+    "scripts/r1_lifecycle_validate_test.py"
+  ],
+  "resolved": [
+    ".github/ci/ci_impact.json",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md"
+  ],
+  "docs": {
+    "cmd/benchprof/README.md": {
+      "integrated_blob": "a97ab21103ef3a12c65194c5a71574d58a4d6e50",
+      "old_sha256": "bdb288ee2c102cfe837521359f2006f5a9288292e902d1667cf8bd62928e949c",
+      "main_sha256": "023af03c9f34fabf0dc0f909eab8d06c37568b71575eedd2acb795c9c540bdf9",
+      "selected_sha256": "5745b284a5035a9ad8336e858353d45526dc8f717b1a1fc288d8a724f2aa4edf",
+      "both_appended_sections_preserved": true
+    },
+    "cmd/unified_bench/README.md": {
+      "integrated_blob": "704b8b953ed2ce3b1b31caea6a547e8ae7f69a9c",
+      "old_sha256": "807506d10f60f52dacc3ae472efe5cb300018b1e4c2a36d5fe0630d7d2acf14f",
+      "main_sha256": "d24df607f4ea0c4dbcabab22ba1180cdacdbead5e4941de16c4d1ad6fcab36d6",
+      "selected_sha256": "8fe9233506c6237d1f29129c4184317a0ab720f11001bc077554c84cfa7564a6",
+      "both_appended_sections_preserved": true
+    }
+  },
+  "canonical": "Regenerated14workflows56members;15+21+6+16testsPASS; scopedown diff-check vsactualmainPASS; importedrawupstreamwhitespaceunchanged",
+  "runtime": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "policy_blobs": {
+    "AGENTS.md": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+    "TreeDB/AGENTS.md": "13811b724a980dddad76b3e4c12b6403214b8069"
+  },
+  "focus_state": "185normal/race/vet currentlyrunning; firstdriver refusedmainmodule absent in noncone sparsecheckout, correctedcheckoutwithoutsourcechange; originalfailurepreserved",
+  "independent": "r1_code_audit pending; no push yet"
+}

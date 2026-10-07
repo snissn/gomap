@@ -1,0 +1,130 @@
+{
+  "utc": "2026-10-06T19:31:16.253807+00:00",
+  "source": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b",
+  "runtime": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "status": "ROOT_ACCEPTED_FOCUSED_TEST_PROOF_ONLY",
+  "checks": {
+    "format": {
+      "exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/cow_power_loss_test.go"
+      ],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "normal": {
+      "exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB",
+        "-run",
+        "^TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "log_sha256": "b3cf16236d944013ec03fe243830a4cfead51777d5abac6537b45780104ef858",
+      "test_PASS_rows": 37,
+      "package_elapsed_seconds": [
+        10.635
+      ]
+    },
+    "race": {
+      "exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB",
+        "-run",
+        "^TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "log_sha256": "3656802ffa80b6be86808a45b4890e842a9280595c0e0941612b01da77d22068",
+      "test_PASS_rows": 37,
+      "package_elapsed_seconds": [
+        36.11
+      ]
+    },
+    "vet": {
+      "exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB"
+      ],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "aa8614-test_refresh_ci_impact_inventory-uv-original.log": {
+      "PASS": 15,
+      "sha256": "29ad105efb2e103e8105240f8a1aa4a795ff6238b382b3b53dfae9c1529e9d58"
+    },
+    "aa8614-test_ci_impact-uv-original.log": {
+      "PASS": 21,
+      "sha256": "2bf92e90cefdbcabd8d79d76f1793669a5bce187e0e2fbbb6dac6a7bbca0c62e"
+    }
+  },
+  "files": {
+    "format-start.json": {
+      "sha256": "89ab429d59dc3dbc67c5c466b7ae45a5cb2b46bb524a3441b51e0f3ef9d3ac19",
+      "bytes": 109300
+    },
+    "vet.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "format.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "vet-exit.json": {
+      "sha256": "244ecda8261998b66e2bf5bfb22cc99b60e0cc2d5eddfb10d443b9cc19cc6d6e",
+      "bytes": 108295
+    },
+    "source-before.json": {
+      "sha256": "ab8e97b4b57822830a5fc6762626e8e0330ea78f44c1000f279e15710d46a16c",
+      "bytes": 105879
+    },
+    "source-after.json": {
+      "sha256": "ab8e97b4b57822830a5fc6762626e8e0330ea78f44c1000f279e15710d46a16c",
+      "bytes": 105879
+    },
+    "race-exit.json": {
+      "sha256": "38fe2992ea0bb72e74bb395f3a0771dc9292d800ef7d070c0f2a092beae69499",
+      "bytes": 108295
+    },
+    "normal.log": {
+      "sha256": "b3cf16236d944013ec03fe243830a4cfead51777d5abac6537b45780104ef858",
+      "bytes": 57377
+    },
+    "vet-start.json": {
+      "sha256": "12de70846b32e2c38be60e993d7873dd8b0720024bd1b794415dfe61e28e5aa7",
+      "bytes": 109277
+    },
+    "race.log": {
+      "sha256": "3656802ffa80b6be86808a45b4890e842a9280595c0e0941612b01da77d22068",
+      "bytes": 57376
+    },
+    "race-start.json": {
+      "sha256": "f5a55368ff068aea2f7ab91333a3b7cad8b60ecf782fa84bc7e5aad7b6a417db",
+      "bytes": 109425
+    },
+    "normal-exit.json": {
+      "sha256": "aaba529ade7defb25cad09b33b91e380448168d0e2083334dc6a68e6488c0f93",
+      "bytes": 108295
+    },
+    "normal-start.json": {
+      "sha256": "0244602c6af9dd0618d255239bff5c693a0393996954181f0a8ae22d655a43d7",
+      "bytes": 109412
+    },
+    "format-exit.json": {
+      "sha256": "6e4708b6c72af8d2cb50925f2eb33dfad89d8f920afa16b87382fa4f518b3805",
+      "bytes": 108295
+    }
+  },
+  "excluded_coverage": "first plain-python inventory attempt skipped15 because PyYAML absent; preserved aa8614-test_refresh_ci_impact_inventory.py.log; qualified uv rerun supplies dependency"
+}

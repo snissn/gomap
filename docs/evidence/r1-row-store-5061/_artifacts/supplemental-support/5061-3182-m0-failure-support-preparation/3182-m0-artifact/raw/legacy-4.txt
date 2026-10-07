@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x-2         	       1	35664694146 ns/op	   2413644 collection-basis-ns/op	         0 concurrent-aborts/op	         0 cutover-clone-pages/op	  50439968 cutover-ns/op	         0 deferred-cutovers/op	         0 dirty-descriptors/op	  40730070 final-pager-sync-ns/op	         0 foreground-exposure-misses/op	      4096 foreground-overlap-samples/op	  20022470 foreground-p95-ns/op	  82248608 foreground-p99-ns/op	      2048 foreground-points/op	      2048 foreground-ranges/op	  91171792 max-writer-pause-ns	       345.0 preclone-pages/op	      5208 preflush-ns/op	         0 reclone-pages/op	    429305 swap-publish-ns/op	    175349 system-reserve-ns/op	  39491046 system-tree-ns/op	      2176 tail-mutations/op	       128.0 tail-points/op	      2048 tail-ranges/op	    148660 user-tree-ns/op	         0 vacuum-errors/op	35664640588 vacuum-total-ns/op	702995336 B/op	 1192190 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	35.921s

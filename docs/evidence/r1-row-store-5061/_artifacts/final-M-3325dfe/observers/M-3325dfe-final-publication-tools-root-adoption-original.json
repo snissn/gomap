@@ -1,0 +1,16 @@
+{
+  "M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "builder_review": "Root independently reviewed complete original builder and v2 exact diff; source-bound exact original A/C/D argv and cwd now mechanically checked; all draft approval flags remain false. Preparation author second-pass review is not claimed as independent. Root remains sole actual input approval and external input SHA owner.",
+  "external_gates": "Actual A guard/cost acceptance, D capture and acceptance, example, root stage/input inventory, actual public artifact/release and fresh public replay all pending.",
+  "original_local_pins": {
+    "M-3325dfe-E-final-report-public-proof-layout-preparation/assemble.py": "fe81e26e777e49c78fd2e7b81e2a556e0fd4b8be2facfb8be64f945278372a5f",
+    "M-3325dfe-final-support-and-report-layout-review/handoff.json": "e07dd0213c36e6d545f9df5502c25dabc92eafc2cc38eb58191b713c3a33118e",
+    "M-3325dfe-final-support-and-report-layout-review/handoff.md": "fed36bf701f9c828bb1a85b4a52d4ceec1a024d56f03a711e8acde9c2fc2b9e2",
+    "M-3325dfe-final-support-copier-v2-preparation/copy-support.py": "dff812a25f9cbd82fde6044b724addc6b49f63a71e3e9949312a548ec7133b42",
+    "final-public-input-builder-v2-preparation/build-draft-inputs.py": "070488cb9c969d0c561ba0c310172e62f89087999d24ea14dae9e4ea010e57af"
+  },
+  "report_review": "New report helper differs from frozen original only in separate fixed sibling public proof link; all other source, value, actual fragment and historical byte-preservation guards unchanged. No proof is appended to immutable original artifact tree or ledgers.",
+  "state": "ROOT_ADOPTED_PRIVATE_PUBLICATION_PREPARATION_ONLY_NO_ACTUAL_STAGE_INPUTS_EXECUTION_PROOF_OR_ACCEPTANCE",
+  "support_copier_adoption_condition": "Before invocation root must independently preflight every actual plan destination against executor component regex [A-Za-z0-9_.-]+; forbid dot/dotdot/absolute paths, namespace prefix repetition, and SUPPORT_SHA256SUMS first-component or subtree. Record complete actual preflight PASS. V2 source guards alone permit broader names; actual-plan precondition is mandatory. Root independently checks full staged byte inventory/ledgers after assembly.",
+  "utc": "2026-10-07T00:25:10.843370+00:00"
+}

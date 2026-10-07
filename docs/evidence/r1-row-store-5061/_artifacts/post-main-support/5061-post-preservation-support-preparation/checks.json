@@ -1,0 +1,65 @@
+{
+  "focused_original_receipts_verified": [
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/nativewire/vector_partition_colocated_mutation_v1_test.go"
+      ],
+      "actual_exit": 0,
+      "original_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "phase": "format",
+      "sourceSHA": "45d2cf6828c50491f82ac00403f5d5328ba0c67e"
+    },
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerColocatedExactIDMutationsRF4RealRaftV1$",
+        "-count=3",
+        "-timeout=8m"
+      ],
+      "actual_exit": 0,
+      "original_log_sha256": "4bd89928ef2decfb64340f514d3fb90c0e1de2e985f2e0444ffb6a382769cdf9",
+      "phase": "normal",
+      "sourceSHA": "45d2cf6828c50491f82ac00403f5d5328ba0c67e"
+    },
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerColocatedExactIDMutationsRF4RealRaftV1$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "actual_exit": 0,
+      "original_log_sha256": "351c0172f657297ae4b1fb49d4dbaa328e3e653ddce81a6d5baca86a3d63286c",
+      "phase": "race",
+      "sourceSHA": "45d2cf6828c50491f82ac00403f5d5328ba0c67e"
+    },
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/nativewire"
+      ],
+      "actual_exit": 0,
+      "original_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "phase": "vet",
+      "sourceSHA": "45d2cf6828c50491f82ac00403f5d5328ba0c67e"
+    }
+  ],
+  "frozen_prior_pins_verified": 790,
+  "no_new_tests_or_remote_activity": true,
+  "original_copy_pairs_verified": 79,
+  "original_patch_matches_independent_review": true,
+  "source_before_after_identical": true,
+  "status": "PASS_SUPPORT_COPY_VERIFICATION_ONLY"
+}

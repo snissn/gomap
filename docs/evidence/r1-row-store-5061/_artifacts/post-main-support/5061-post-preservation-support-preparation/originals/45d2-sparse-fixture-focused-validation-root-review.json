@@ -1,0 +1,136 @@
+{
+  "utc": "2026-10-06T21:36:15.964622+00:00",
+  "owner": "root",
+  "head": "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "status": "Actual focused correctness PASS; no retained timing/performance qualification",
+  "checks": {
+    "format": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/nativewire/vector_partition_colocated_mutation_v1_test.go"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_pass_rows": 0,
+      "package_pass_rows": []
+    },
+    "normal": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerColocatedExactIDMutationsRF4RealRaftV1$",
+        "-count=3",
+        "-timeout=8m"
+      ],
+      "exit": 0,
+      "log_sha256": "4bd89928ef2decfb64340f514d3fb90c0e1de2e985f2e0444ffb6a382769cdf9",
+      "test_pass_rows": 9,
+      "package_pass_rows": [
+        {
+          "Time": "2026-10-06T11:34:41.1367657-10:00",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Elapsed": 10.629
+        }
+      ]
+    },
+    "race": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerColocatedExactIDMutationsRF4RealRaftV1$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "exit": 0,
+      "log_sha256": "351c0172f657297ae4b1fb49d4dbaa328e3e653ddce81a6d5baca86a3d63286c",
+      "test_pass_rows": 3,
+      "package_pass_rows": [
+        {
+          "Time": "2026-10-06T11:35:20.29709133-10:00",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Elapsed": 5.656
+        }
+      ]
+    },
+    "vet": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/nativewire"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "test_pass_rows": 0,
+      "package_pass_rows": []
+    }
+  },
+  "originals": {
+    "45d2-sparse-fixture-focused-validation-original/format-exit.json": {
+      "bytes": 108295,
+      "sha256": "ad4a4f664c80c5d5f69945e678f0e6ed8010eba93897eb0be388a3b4463a3081"
+    },
+    "45d2-sparse-fixture-focused-validation-original/format-start.json": {
+      "bytes": 109195,
+      "sha256": "22c531a2bbe0a3318be81ef83ef1ac80368ff9a4bd14f3c4af1144204d82f6af"
+    },
+    "45d2-sparse-fixture-focused-validation-original/format.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "45d2-sparse-fixture-focused-validation-original/normal-exit.json": {
+      "bytes": 108295,
+      "sha256": "c76742c13fbf16d7f344a24b23405d1b123509e775794aec34e4ef41b9854db6"
+    },
+    "45d2-sparse-fixture-focused-validation-original/normal-start.json": {
+      "bytes": 109270,
+      "sha256": "945b086fa00a625d68fff5674b85ebf81f50ed7dfcd42c3fde50d1ff8056ffac"
+    },
+    "45d2-sparse-fixture-focused-validation-original/normal.log": {
+      "bytes": 9696,
+      "sha256": "4bd89928ef2decfb64340f514d3fb90c0e1de2e985f2e0444ffb6a382769cdf9"
+    },
+    "45d2-sparse-fixture-focused-validation-original/race-exit.json": {
+      "bytes": 108295,
+      "sha256": "66e252ccb9a15995ac2c63c15c715038e20c0e2d3c54d42e9c3249ee847b08de"
+    },
+    "45d2-sparse-fixture-focused-validation-original/race-start.json": {
+      "bytes": 109284,
+      "sha256": "090372249693f8406a0bbec0ca95f4ce2ee79b69cb30d265a6d16c08e85aa270"
+    },
+    "45d2-sparse-fixture-focused-validation-original/race.log": {
+      "bytes": 3616,
+      "sha256": "351c0172f657297ae4b1fb49d4dbaa328e3e653ddce81a6d5baca86a3d63286c"
+    },
+    "45d2-sparse-fixture-focused-validation-original/source-after.json": {
+      "bytes": 105879,
+      "sha256": "8b321f1d993f79ab0ab8a23b21801ee90a04f46a299b28c17968a8f8e643dc0a"
+    },
+    "45d2-sparse-fixture-focused-validation-original/source-before.json": {
+      "bytes": 105879,
+      "sha256": "8b321f1d993f79ab0ab8a23b21801ee90a04f46a299b28c17968a8f8e643dc0a"
+    },
+    "45d2-sparse-fixture-focused-validation-original/vet-exit.json": {
+      "bytes": 108295,
+      "sha256": "f60b92d3b8af8fc6d81f04c597b9590607b6a68c3faa7fe26e27f1a751822a8b"
+    },
+    "45d2-sparse-fixture-focused-validation-original/vet-start.json": {
+      "bytes": 109148,
+      "sha256": "dcfeead35813f84a35475d89e3b172bdfcf61fd3328059f36d066d05fe192332"
+    },
+    "45d2-sparse-fixture-focused-validation-original/vet.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

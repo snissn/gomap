@@ -1,0 +1,59 @@
+=== RUN   TestLeafGenerationGCReclaimsReleasedManifestRevisions5066
+--- PASS: TestLeafGenerationGCReclaimsReleasedManifestRevisions5066 (0.38s)
+=== RUN   TestLeafManifestRevisionGCGates5066
+=== RUN   TestLeafManifestRevisionGCGates5066/pins
+=== RUN   TestLeafManifestRevisionGCGates5066/dry
+=== RUN   TestLeafManifestRevisionGCGates5066/canceled
+=== RUN   TestLeafManifestRevisionGCGates5066/limits
+=== RUN   TestLeafManifestRevisionGCGates5066/malformed
+=== RUN   TestLeafManifestRevisionGCGates5066/unsupported
+=== RUN   TestLeafManifestRevisionGCGates5066/syncfailure
+=== RUN   TestLeafManifestRevisionGCGates5066/retainedparent
+--- PASS: TestLeafManifestRevisionGCGates5066 (0.38s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/pins (0.07s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/dry (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/canceled (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/limits (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/malformed (0.05s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/unsupported (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/syncfailure (0.05s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/retainedparent (0.05s)
+=== RUN   TestLeafManifestRevisionGCReboundChild5066
+--- PASS: TestLeafManifestRevisionGCReboundChild5066 (0.05s)
+=== RUN   TestLeafManifestRevisionGCHeldAndRecovery5066
+--- PASS: TestLeafManifestRevisionGCHeldAndRecovery5066 (0.78s)
+=== RUN   TestLeafManifestRevisionGCReadOnly5066
+--- PASS: TestLeafManifestRevisionGCReadOnly5066 (0.21s)
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/hook-clean
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/rename-clean
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/hook-cleanup-fails
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/rename-cleanup-fails
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/hook-directory-rebound
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/rename-directory-rebound
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/hook-file-rebound
+--- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066 (0.40s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/hook-clean (0.05s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/rename-clean (0.05s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/hook-cleanup-fails (0.07s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/rename-cleanup-fails (0.08s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/hook-directory-rebound (0.07s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/rename-directory-rebound (0.05s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/hook-file-rebound (0.04s)
+=== RUN   TestLeafManifestRevisionGCCompatibility5066
+--- PASS: TestLeafManifestRevisionGCCompatibility5066 (0.07s)
+=== RUN   TestLeafManifestRevisionGCBoundedDescriptors
+    leaf_manifest_revision_gc_fd_linux_test.go:24: isolated child:
+        === RUN   TestLeafManifestRevisionGCBoundedDescriptors
+            leaf_manifest_revision_gc_fd_linux_test.go:117: RLIMIT_NOFILE=64 revisions=257 deleted=255 protected=2 descriptor_baseline=11 peak=28 remaining=1
+        --- PASS: TestLeafManifestRevisionGCBoundedDescriptors (7.24s)
+        PASS
+--- PASS: TestLeafManifestRevisionGCBoundedDescriptors (7.27s)
+=== RUN   TestLeafManifestRevisionGCPartialCancellation
+--- PASS: TestLeafManifestRevisionGCPartialCancellation (1.16s)
+=== RUN   TestLeafManifestRevisionGCLaterInventoryFailure
+--- PASS: TestLeafManifestRevisionGCLaterInventoryFailure (1.15s)
+=== RUN   TestLeafManifestRevisionGCFreshHeldProtection
+--- PASS: TestLeafManifestRevisionGCFreshHeldProtection (1.22s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	13.130s

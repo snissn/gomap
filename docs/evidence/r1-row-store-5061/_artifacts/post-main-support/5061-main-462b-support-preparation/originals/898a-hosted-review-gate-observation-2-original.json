@@ -1,0 +1,15 @@
+{
+  "utc": "2026-10-06T22:22:20.530631+00:00",
+  "argv": [
+    "python3",
+    "/Users/michaelseiler/.codex/skills/github-pr-mergeable/scripts/codex_review_gate.py",
+    "--repo",
+    "snissn/gomap",
+    "--pr",
+    "5071",
+    "--check"
+  ],
+  "exit": 0,
+  "stdout": "{\n  \"action\": \"stop requesting Codex reviews for this head\",\n  \"clean\": true,\n  \"exact_head_artifact_count\": 1,\n  \"finding_head_count\": 1,\n  \"head\": \"898a7bae48f02e7067318f5165501d16ce7d47ad\",\n  \"latest_artifact\": {\n    \"kind\": \"clean_comment\",\n    \"state\": \"\",\n    \"summary\": \"Codex Review: Didn't find any major issues. Already looking forward to the next diff.\",\n    \"timestamp\": \"2026-10-06T22:20:46Z\",\n    \"url\": \"https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976\"\n  },\n  \"latest_clean_artifact\": {\n    \"kind\": \"clean_comment\",\n    \"state\": \"\",\n    \"summary\": \"Codex Review: Didn't find any major issues. Already looking forward to the next diff.\",\n    \"timestamp\": \"2026-10-06T22:20:46Z\",\n    \"url\": \"https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976\"\n  },\n  \"latest_request\": {\n    \"timestamp\": \"2026-10-06T22:15:18Z\",\n    \"url\": \"https://github.com/snissn/gomap/pull/5071#issuecomment-6026439545\"\n  },\n  \"request_count_for_head\": 1,\n  \"review_churn_exhausted\": false,\n  \"review_churn_limits\": {\n    \"max_finding_heads\": 0,\n    \"max_total_requests\": 0,\n    \"warn_finding_heads\": 3,\n    \"warn_total_requests\": 6\n  },\n  \"review_churn_override_applied\": false,\n  \"review_churn_reasons\": [],\n  \"review_churn_warning\": true,\n  \"review_churn_warning_reasons\": [\n    \"total review requests 13 reached warning 6\"\n  ],\n  \"should_request\": false,\n  \"state\": \"clean\",\n  \"total_codex_thread_count\": 1,\n  \"total_request_count\": 13,\n  \"unresolved_codex_threads\": []\n}\n",
+  "stderr": ""
+}

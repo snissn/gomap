@@ -1,0 +1,31 @@
+{
+  "state": "PRIVATE_TRANSFER_ALL_FILES_SHA256_VERIFIED_NO_ACTIVATION",
+  "utc": "2026-10-07T00:55:03.693374+00:00",
+  "files": [
+    {
+      "path": "M-3325dfe-public-input-cost-identity-v3-preparation/build-draft-inputs.py",
+      "sha256": "a79091f4ee3d7f265f8c330c60b2eb01139d658001f46de80cbc096a13d8a79f",
+      "bytes": 22335
+    },
+    {
+      "path": "M-3325dfe-public-input-cost-identity-v3-preparation/handoff.json",
+      "sha256": "d0993b6b7cf64da03f894145a5c6b150b4c7a79ab0a9afbdbc34e1c685818134",
+      "bytes": 686
+    },
+    {
+      "path": "M-3325dfe-public-input-cost-identity-v3-preparation/v2-v3.diff",
+      "sha256": "febedb74068b35971cbc77bc4607007191efba52df81cec9c75aa07df1b3800b",
+      "bytes": 584
+    },
+    {
+      "path": "M-3325dfe-public-input-cost-identity-v3-review/handoff.json",
+      "sha256": "96d5ceddef0a78302122cde74904a8dc7c955231adf4acb9fb429823dada610a",
+      "bytes": 971
+    },
+    {
+      "path": "M-3325dfe-public-input-cost-identity-v3-review/handoff.md",
+      "sha256": "89c0acd287138b1512be12d312e4113f1f28699741571b5fc92ca4bfdc3c6937",
+      "bytes": 1177
+    }
+  ]
+}

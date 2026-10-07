@@ -1,0 +1,409 @@
+{
+  "schema_version": 1,
+  "utc": "2026-10-06T10:49:25.803004+00:00",
+  "directory": "/tmp/gomap-r1-execution-20261005/5061-852-retry-support-preparation",
+  "state": "UNPROMOTED_PRIVATE_SUPPORT_PREPARATION",
+  "inventory": "inventory.json",
+  "inventory_sha256": "af5870bb15766ab27bc651b4f96415042b896927bf5483369403ddb160e71c95",
+  "copy_count": 36,
+  "copy_bytes": 711299,
+  "retry": {
+    "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "run_id": 37449625940,
+    "run_url": "https://github.com/snissn/gomap/actions/runs/37449625940",
+    "job_id": 112222760575,
+    "job_url": "https://github.com/snissn/gomap/actions/runs/37449625940/job/112222760575",
+    "job_conclusion": "success",
+    "job_started_at": "2026-10-06T10:29:59Z",
+    "job_completed_at": "2026-10-06T10:35:45Z",
+    "artifact_id": 11405557900,
+    "artifact_url": "https://github.com/snissn/gomap/actions/runs/37449625940/artifacts/11405557900",
+    "local_archive_bytes": 18140,
+    "local_archive_sha256": "3445c96741fee33607458c649c289786d51611da6e6144b8753d04e1bddaea06",
+    "archive_digest_matches_metadata_and_success_log": true,
+    "archive_copied": false,
+    "extracted_members": 25,
+    "raw_samples": {
+      "legacy": 10,
+      "public": 10
+    },
+    "observed_gate_result": "PASS",
+    "public_status": "production-index-vacuum-available",
+    "original_CPU_model_and_retry_match_only": "AMD EPYC 9V74 80-Core Processor",
+    "physical_host_match_established": false,
+    "staging_raw_arithmetic_crosscheck": {
+      "vacuum-total-ns/op": {
+        "sample_count": 10,
+        "mean": 16465131785.1,
+        "median": 16444069630.0,
+        "sample_cv": 0.003914204521337084,
+        "sample_cv_percent": 0.3914204521337084,
+        "gate_at_most": 0.1,
+        "passes": true
+      },
+      "max-writer-pause-ns": {
+        "sample_count": 10,
+        "mean": 70452628.4,
+        "median": 69782127.0,
+        "sample_cv": 0.025843847618495272,
+        "sample_cv_percent": 2.584384761849527,
+        "gate_at_most": 0.1,
+        "passes": true
+      },
+      "foreground-p99-ns/op": {
+        "sample_count": 10,
+        "mean": 42073039.2,
+        "median": 42248700.0,
+        "sample_cv": 0.012040679744253789,
+        "sample_cv_percent": 1.2040679744253788,
+        "gate_at_most": 0.1,
+        "passes": true
+      }
+    },
+    "root_independent_math_receipt": "852-m0-retry-independent-arithmetic.json",
+    "root_math_manifest_matches_all25_copies": true,
+    "archive_all25_members_match_extracted_copy_bytes": true,
+    "archive_all_member_paths_safe_and_nonsymlink": true
+  },
+  "original_failure": {
+    "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "run_id": 37447383111,
+    "job_id": 112215377747,
+    "artifact_id": 11404352211,
+    "run_url": "https://github.com/snissn/gomap/actions/runs/37447383111",
+    "verdict": "FAIL",
+    "original_cv_percent": {
+      "vacuum_total": 12.729458807664798,
+      "max_writer_pause": 9.90837207310864,
+      "foreground_p99": 78.05810471896164
+    },
+    "preserved_packet_and_failed_log_members": 26,
+    "preserved_diagnosis_and_arithmetic_members": 3,
+    "prior_group": "../5061-fd-ci-support-preparation",
+    "prior_inventory_sha256": "bd3e0e84b3d826b5f04edb7d1c4f30bd03921ce2b9f1e29439d4dbef5b38e1d3",
+    "original_and_prior_copy_sizes_and_sha256_verified": true,
+    "preserved_members": [
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/commands.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/commands.txt",
+        "original_bytes": 383,
+        "prior_copy_bytes": 383,
+        "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/fixture.json",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/fixture.json",
+        "original_bytes": 1215,
+        "prior_copy_bytes": 1215,
+        "sha256": "92b1f6469730d68e43f3ce0d059c466a3d73ecb3df677418317f3076cfa50fc3",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/legacy-benchstat-input.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/legacy-benchstat-input.txt",
+        "original_bytes": 11130,
+        "prior_copy_bytes": 11130,
+        "sha256": "bddafef2824f4bb79c947f6045d97d237c4adc3a238546cbe7ed2d59a57365cc",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-1.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-1.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "6912117d1cc38d198a3e8455c12f7dd489cb43db746a090a4548a9f4a4cb42d2",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-10.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-10.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "d60b32942a20004089bdfe17dcc36567a0abfb5d144041854bf04d696fbae586",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-2.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-2.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "ed2001c425bb9116f341d980373ea4787ee27a6eb7f3f59f94b22ff94f46f5e6",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-3.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-3.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "e55c7aa84d743a43dc15ba8cb10e385d66bf9364943718c0f9b2e4732aeb7ddb",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-4.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-4.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "80347637a223b2e62fc108dc993e8686a1253de4eb9c1fe2e2532f3f2fa0e30e",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-5.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-5.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "aa56a0fbb3724002d322c52d892791223bd4512f47a8c8f3d3b17a94b480927b",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-6.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-6.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "37baa2f6e044c5f107fc84a712c7ea516ae56cc6bd98c2fa38874d402eeb215a",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-7.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-7.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "c5a51300d9eda5c648ea1caf8ab2576863c2fc8868545ce26f8b152a7e687b74",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-8.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-8.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "a1ca0e9f33714f7ca175e8b59aeebe6041a1f39558adf14f413e56a92e1500f9",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/legacy-9.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/legacy-9.txt",
+        "original_bytes": 1113,
+        "prior_copy_bytes": 1113,
+        "sha256": "721c7e4c3170b77876fea5e8b231cb497fddaa6b991afc7f1b99892922380c6f",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-1.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-1.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "10a00afc7f0568551c775c6e337b6804aba22751ea1cbafeaff20a55337ae447",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-10.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-10.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "342e1b52724a5deabf01e468a31a70b07d5b65f5f55a8b0199394cde0bfd9c76",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-2.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-2.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "11bdf06cd42ecbc15026d68f65e52fd9de1736524f8bb3f4b6740e0d0303b0ed",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-3.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-3.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "4580f0b4fd2b8c02e2e280f7a66db1e5d2a4557c32e8dc44e89cd4c9a662d28a",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-4.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-4.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "119a4df7a4a28e6e94b311d9489663daf7d1ab06c640af2cdd5a3422af09779e",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-5.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-5.txt",
+        "original_bytes": 666,
+        "prior_copy_bytes": 666,
+        "sha256": "754585e566b166e4f6d613945da00e068eaec27e52a9d1e644a5c889aefcbc27",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-6.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-6.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "476eaa8a7c3fd61b55818a6c6cd956f10795124dc6fdb14c8300450ea764a25d",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-7.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-7.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "e5dc9f10450563c74d5f7fbe7038c8c46df9e54680af15bbf65069f5c86e2f88",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-8.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-8.txt",
+        "original_bytes": 661,
+        "prior_copy_bytes": 661,
+        "sha256": "52b3f0309be47d0728f05e0bf76b46682e7270ac86675fc506396235c3191f25",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/raw/public-9.txt",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/raw/public-9.txt",
+        "original_bytes": 665,
+        "prior_copy_bytes": 665,
+        "sha256": "6d62e469730ba194ce458ade963f7afa8ccd343fe52308a4d349e2392b7f088a",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/results.json",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/results.json",
+        "original_bytes": 16750,
+        "prior_copy_bytes": 16750,
+        "sha256": "42ef9b74b27dceff3ed2508468337f2f4aef16873d8046b05ddbf6a3a5160804",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact/summary.md",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-artifact/summary.md",
+        "original_bytes": 2024,
+        "prior_copy_bytes": 2024,
+        "sha256": "6a0ed135bbd3dce32893a3c2b587dc5b7ef850e2e041d220b0dcee13c9195e9b",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-current-original-FAIL",
+        "original": "/tmp/gomap-r1-execution-20261005/852-stable-legacy-failed.log",
+        "prior_copy": "5061-fd-ci-support-preparation/852-stable-legacy-failed.log",
+        "original_bytes": 608318,
+        "prior_copy_bytes": 608318,
+        "sha256": "9c56e319ce0bd78d1a3bd6775f93b233aceb0e4f095ea12fa6af0102811d242f",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-read-only-diagnosis",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-diagnosis.md",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-diagnosis.md",
+        "original_bytes": 4592,
+        "prior_copy_bytes": 4592,
+        "sha256": "4293b51b8d0da02daea1fb4127439605a19af93881deb546d4b011e2a6d68db7",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-read-only-diagnosis",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-diagnosis.json",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-diagnosis.json",
+        "original_bytes": 37018,
+        "prior_copy_bytes": 37018,
+        "sha256": "bafc091af010f2f8c42e1a36815576cbe5196ac72e2f36b4fcab71be1dbc9177",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      },
+      {
+        "classification": "m0-read-only-raw-arithmetic",
+        "original": "/tmp/gomap-r1-execution-20261005/852-vacuum-independent-arithmetic.json",
+        "prior_copy": "5061-fd-ci-support-preparation/852-vacuum-independent-arithmetic.json",
+        "original_bytes": 150033,
+        "prior_copy_bytes": 150033,
+        "sha256": "aa5c8970718b2875d09cee85a838b98c213b8990a8772d2f5e76e53cd11e4919",
+        "original_and_prior_copy_equal": true,
+        "original_and_prior_copy_nonsymlink": true
+      }
+    ]
+  },
+  "prior_groups_preserved": {
+    "5061-fd-ci-support-preparation": {
+      "all_regular_files_unchanged_before_after": true,
+      "regular_file_count": 108,
+      "regular_file_bytes": 2240783,
+      "before_after_snapshot_sha256": "214b415d0044b75806eefc7547e1929a59fa7adab0d9ee624c8f143d6845d479"
+    },
+    "5061-final-support-preparation": {
+      "all_regular_files_unchanged_before_after": true,
+      "regular_file_count": 110,
+      "regular_file_bytes": 5006762,
+      "before_after_snapshot_sha256": "0b663f520be7b8ba8c4c3e3b131bc9a90c7f48048f8e5a586c0f58cd6d0ce08c"
+    }
+  },
+  "prior_fd_all105_original_copy_ledger_entries_reverified": true,
+  "limitations": [
+    "UNPROMOTED private support only; no issue acceptance, final evidence acceptance, merge authorization, capacity claim, or causal flakiness/infrastructure classification.",
+    "Retry PASS applies to exact852aa29e1eed3511f93aba244aef917c89d033e8 and this actual workflow_dispatch run under its retained unchanged M0 gates. It does not replace or reinterpret original run37447383111 FAIL.",
+    "Same AMD EPYC9V74 CPU model in original and retry does not prove same physical host, storage, host load, or matched environment. No cross-head performance or regression equivalence is inferred.",
+    "Legacy total/pause/p99 sample CVs are gated; public status is classified available from raw public receipts. Public timing CV is not an M0 gate.",
+    "fixture.json retains historical production-index-vacuum-unavailable text for its offline-ceiling fixture. This text is preserved exactly; actual public availability is separately classified by results.json and the ten raw/public receipts.",
+    "Historical root disposition and previous handoff pending-retry text were written before completion and remain unchanged. Actual job metadata and retry raw evidence supersede only that temporal pending observation.",
+    "No standalone full workflow-run API JSON was present among the inspected852-m0-retry-* /852-m0-bounded-retry-* filenames. Actual run identity/head are bound by job metadata, artifact workflow_run metadata, request stdout, and success log; no run object was invented.",
+    "The cleanup successor head must satisfy its own required exact-head gates; this packet does not certify future source changes. Fresh fullA,C,D and final public E replay/qualification remain required.",
+    "This new group references the retained originalFAIL packet and failed job log in the existing prior group. Publication must retain those original failure members and context alongside the retry; the retry group alone is not a self-contained original+retry history."
+  ],
+  "future_cleanup_head": {
+    "sha": null,
+    "required_exact_head_checks": "Pending root-selected cleanup source and own gates; no acceptance carried forward."
+  },
+  "future_actual_fullA_C_D_and_publication": "Pending; no actual result/certificate/publication URL invented."
+}

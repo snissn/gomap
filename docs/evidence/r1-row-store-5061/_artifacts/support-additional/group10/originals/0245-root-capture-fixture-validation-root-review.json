@@ -1,0 +1,68 @@
+{
+  "accepted": "focused correctness observation only",
+  "source": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "tests": {
+    "format": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "pass_rows": [],
+      "seconds": null,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/db/ordered_root_span_native_correctness_test.go"
+      ]
+    },
+    "normal": {
+      "exit": 0,
+      "log_sha256": "242b291a127e42e028ba4e1ecfb469308ce65e038e6932a96c0e1c834062b8b4",
+      "pass_rows": [
+        "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment"
+      ],
+      "seconds": 0.496,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/db",
+        "-run",
+        "^(TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC|TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment)$",
+        "-count=1",
+        "-timeout=10m"
+      ]
+    },
+    "race": {
+      "exit": 0,
+      "log_sha256": "412dcc5f4e7021cfc33fd33989bfc277dfeae62ce4d138a2648342e333ac18a3",
+      "pass_rows": [
+        "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment"
+      ],
+      "seconds": 1.5859999999999999,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/db",
+        "-run",
+        "^(TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC|TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment)$",
+        "-count=1",
+        "-timeout=10m"
+      ]
+    },
+    "vet": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "pass_rows": [],
+      "seconds": null,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/db"
+      ]
+    }
+  },
+  "scope": "Repaired native root GC fixture and controlled pending publisher GC coverage normal/race on Linux185; original Windows FAIL remains, exact current Windows/CI required."
+}

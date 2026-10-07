@@ -1,0 +1,221 @@
+{
+  "utc": "2026-10-06T11:18:12.371997+00:00",
+  "head": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+  "run_id": 37453671543,
+  "artifact_id": 11409646126,
+  "original_zip_sha256": "77d9cba4f65b3d891f1c35470dc91dffa7752699a5bcb47daef6d6b62110854d",
+  "raw_samples": {
+    "legacy": 10,
+    "public": 10,
+    "N": 1,
+    "all_correctness_PASS": true,
+    "public_status": "available"
+  },
+  "independently_recomputed_metrics": {
+    "vacuum-total-ns/op": {
+      "samples_lexicographic_filename_order": [
+        41484211206.0,
+        28059771003.0,
+        40348044990.0,
+        40483117065.0,
+        35664640588.0,
+        45434503435.0,
+        38732304555.0,
+        31584029000.0,
+        32473709596.0,
+        30522358268.0
+      ],
+      "median": 37198472571.5,
+      "sample_cv_percent": 15.517098058717608,
+      "ten_percent_gate": false
+    },
+    "max-writer-pause-ns": {
+      "samples_lexicographic_filename_order": [
+        78495073.0,
+        82805088.0,
+        88812957.0,
+        75281781.0,
+        91171792.0,
+        88961151.0,
+        78143852.0,
+        230795503.0,
+        88847975.0,
+        86490940.0
+      ],
+      "median": 87651948.5,
+      "sample_cv_percent": 47.11802864872662,
+      "ten_percent_gate": false
+    },
+    "foreground-p99-ns/op": {
+      "samples_lexicographic_filename_order": [
+        106089842.0,
+        27619055.0,
+        111017662.0,
+        112061157.0,
+        82248608.0,
+        121834685.0,
+        129856520.0,
+        61210080.0,
+        73812817.0,
+        51306741.0
+      ],
+      "median": 94169225.0,
+      "sample_cv_percent": 38.527153551169135,
+      "ten_percent_gate": false
+    },
+    "final-pager-sync-ns/op": {
+      "samples_lexicographic_filename_order": [
+        29586346.0,
+        33431769.0,
+        39476320.0,
+        25880095.0,
+        40730070.0,
+        40687907.0,
+        29367832.0,
+        180714795.0,
+        40590066.0,
+        40020901.0
+      ],
+      "median": 39748610.5,
+      "sample_cv_percent": 92.42209827407704,
+      "ten_percent_gate": false
+    },
+    "user-tree-ns/op": {
+      "samples_lexicographic_filename_order": [
+        179836.0,
+        200096.0,
+        195719.0,
+        171093.0,
+        148660.0,
+        156421.0,
+        191202.0,
+        181399.0,
+        179255.0,
+        171524.0
+      ],
+      "median": 179545.5,
+      "sample_cv_percent": 9.211965574605186,
+      "ten_percent_gate": true
+    },
+    "system-tree-ns/op": {
+      "samples_lexicographic_filename_order": [
+        38825197.0,
+        37082934.0,
+        39335962.0,
+        39225402.0,
+        39491046.0,
+        38302746.0,
+        38775887.0,
+        39667252.0,
+        38443089.0,
+        36621661.0
+      ],
+      "median": 38800542.0,
+      "sample_cv_percent": 2.6308723300116696,
+      "ten_percent_gate": true
+    }
+  },
+  "all_25_raw_file_hashes": {
+    "commands.txt": {
+      "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+      "bytes": 383
+    },
+    "fixture.json": {
+      "sha256": "481493fa9fa4cd642471245ccbfda9111eda3a68fb6f7b9465471762dbf23d1e",
+      "bytes": 1215
+    },
+    "legacy-benchstat-input.txt": {
+      "sha256": "ea7816375cd8aeeecfadd7816889a9c6863a47cf8923f2a6404700180b27188c",
+      "bytes": 11130
+    },
+    "raw/legacy-1.txt": {
+      "sha256": "4869f0c5a949da32af3632d200eb61a4f037c553ccc5cc1483dcc84eac0edb09",
+      "bytes": 1113
+    },
+    "raw/legacy-10.txt": {
+      "sha256": "a8897ed8b7f38e2600796406e02586aedbb02dff67853737dc5223b390c272bc",
+      "bytes": 1113
+    },
+    "raw/legacy-2.txt": {
+      "sha256": "c1669356b474c383ba5df7547481e3e11cb6f48987e53ba2034cad76e55bac4f",
+      "bytes": 1113
+    },
+    "raw/legacy-3.txt": {
+      "sha256": "b58f4d968fe998c83f1d5a8025cedfc43fb48593fb4fe131f0f885cee2229696",
+      "bytes": 1113
+    },
+    "raw/legacy-4.txt": {
+      "sha256": "82711038b60fa8449d71993e09f8a87fb08d3faf4f55b73be03698b8543ff8a3",
+      "bytes": 1113
+    },
+    "raw/legacy-5.txt": {
+      "sha256": "a00000b08c55f75db5b0a49dbdb850bc50a662d632039c8583408259bc69b84c",
+      "bytes": 1113
+    },
+    "raw/legacy-6.txt": {
+      "sha256": "099f87923c8c4cff4adb5417a6ee2b6f845724bcb8c40b719144ca09edce8437",
+      "bytes": 1113
+    },
+    "raw/legacy-7.txt": {
+      "sha256": "5b97158492b4d79c4b2169dff4b31efdefeb88de71e3c17050d4ec5959f391b0",
+      "bytes": 1113
+    },
+    "raw/legacy-8.txt": {
+      "sha256": "fb69c9910ad8ab307586229cc30422bbfa8cb0d7eb2005a530ab899f502e618a",
+      "bytes": 1113
+    },
+    "raw/legacy-9.txt": {
+      "sha256": "432d034dd7426b278f0293e2a0f862a7605e8dd5ab9cbd41790f5b7785da619a",
+      "bytes": 1113
+    },
+    "raw/public-1.txt": {
+      "sha256": "3a0fa32f01e98c44dcc0ab7bd771f0e9d989be7b300d293b61de15b75ca1d7c5",
+      "bytes": 661
+    },
+    "raw/public-10.txt": {
+      "sha256": "db52fc4430293eaa3b3a06bf648b38f924b39191702e74e6fcbaa6b7bac53204",
+      "bytes": 665
+    },
+    "raw/public-2.txt": {
+      "sha256": "25df202171747cfce626644613c0a77132b1d3b55f768c2dc826dcdd1494630d",
+      "bytes": 661
+    },
+    "raw/public-3.txt": {
+      "sha256": "c1a3afae7956b7c221761347a51579c1574b68365a47cdf90aba4f20e1d10dc3",
+      "bytes": 661
+    },
+    "raw/public-4.txt": {
+      "sha256": "7df428e4283a0aef08563cd1f24e2a3a3437c260066fc0c5592f109ba31fed8f",
+      "bytes": 661
+    },
+    "raw/public-5.txt": {
+      "sha256": "f7bbe50c38274d1de1b3b69aa78848b577dc2e9d855f2a580696151d15daefb8",
+      "bytes": 666
+    },
+    "raw/public-6.txt": {
+      "sha256": "f65ec841e57ba05b9aa8a2630e00868b8a448b3a26d530d615db31bf09bfc166",
+      "bytes": 661
+    },
+    "raw/public-7.txt": {
+      "sha256": "af1293608d864fe68d75682316b7264061d3fa16ad78b1cb7cb5d1c1659cd951",
+      "bytes": 661
+    },
+    "raw/public-8.txt": {
+      "sha256": "d9d40739d9bcf7c5de6cf187dd5a257a21d900953467cf41e506b40681c8f1b8",
+      "bytes": 661
+    },
+    "raw/public-9.txt": {
+      "sha256": "f9e54c30fa673cde8880e2be37472ece7858fe0eaf07d5f4e34555889a312179",
+      "bytes": 661
+    },
+    "results.json": {
+      "sha256": "d1cda6cf2e021d9549d8c0fd4e0eb68e6a1ff308cd5a6f419191321a1542e252",
+      "bytes": 16750
+    },
+    "summary.md": {
+      "sha256": "9160efd0ce162b8ec52db5de4e70840a9fcba43956e6be7c0d67ad02ea2c57b6",
+      "bytes": 2024
+    }
+  },
+  "disposition": "NoisegateFAIL remainsFAIL. One matched samehost control/head experiment inprogress, no causal infrastructure/regression/equivalence claim, thresholds/count/workload unchanged."
+}

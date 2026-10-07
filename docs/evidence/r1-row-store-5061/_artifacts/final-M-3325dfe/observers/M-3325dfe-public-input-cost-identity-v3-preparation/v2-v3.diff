@@ -1,0 +1,11 @@
+--- reviewed-v2
++++ root-cost-field-v3
+@@ -70,7 +70,7 @@
+ 
+ def identity(record,label):
+     # Only explicitly selected source fields; comparison baseline identities remain separate.
+-    keys=('M','commit','source_commit','actual_M','selected_actual_M_commit')
++    keys=('M','commit','source_commit','actual_M','selected_actual_M_commit','actual_main_commit')
+     observed=[record[k] for k in keys if k in record]
+     for k in ('source','source_identity','external_pins'):
+         if isinstance(record.get(k),dict) and 'commit' in record[k]: observed.append(record[k]['commit'])

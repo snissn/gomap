@@ -1,0 +1,234 @@
+2026/10/05 20:57:14 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=1880 ratio=0.014
+2026/10/05 20:57:14 treedb: value-log dict published class=single_value dict_id=11831869128238857199 k=32 payload_ratio=0.009 total_ratio=0.012
+2026/10/05 20:57:15 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=264281 stored=808 ratio=0.003
+2026/10/05 20:57:15 treedb: value-log dict published class=single_value dict_id=14711132840874692606 k=32 payload_ratio=0.001 total_ratio=0.002
+2026/10/05 20:57:15 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=264278 stored=927 ratio=0.004
+2026/10/05 20:57:16 treedb: value-log dict published class=single_value dict_id=11080375124592904067 k=32 payload_ratio=0.001 total_ratio=0.003
+2026/10/05 20:57:16 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=264278 stored=951 ratio=0.004
+2026/10/05 20:57:16 treedb: value-log dict published class=single_value dict_id=14694570372909511421 k=32 payload_ratio=0.001 total_ratio=0.002
+2026/10/05 20:57:16 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=1920 ratio=0.015
+2026/10/05 20:57:16 treedb: value-log dict published class=single_value dict_id=8095317966457362219 k=32 payload_ratio=0.007 total_ratio=0.010
+2026/10/05 21:02:45 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=981 raw=33970 stored=27434 ratio=0.808
+2026/10/05 21:02:45 treedb: value-log dict published class=single_value dict_id=3782320176474797571 k=32 payload_ratio=0.042 total_ratio=0.771
+VPM_SCHEMA6_COMPAT=f3b67883af576b50837c5ac680d2d266ba965f9b69ac9d16a3933786a8c1608a/cc8cc2d9b86c584045915f7bbe01ca0da8313e16cf4d6abbac1a27cda5019cd6/c6da9c7f7ac5e4854323b4b26f7bdfc6fe7a49f9e97ce96b4a32144955134c44/df7cd62ee4d6a12947994f6eaa75ba1c45715fe97332ec1598bc3197a6ff7604
+panic: test timed out after 8m0s
+	running tests:
+		TestVectorPartitionSourceImportDependencyEncodingContinuousV2 (12s)
+
+goroutine 399959 [running]:
+testing.(*M).startAlarm.func1()
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2802 +0x354
+created by time.goFunc
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x2cd20f322488, {0x2bc1933?, 0x5f?}, 0x2c8d6c0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2109 +0x4e5
+testing.runTests.func1(0x2cd20f322488)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2585 +0x3e
+testing.tRunner(0x2cd20f322488, 0x2cd20f1adbd0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+testing.runTests({0x2a8fd66, 0x17}, {0x2b0fdc2, 0x2a}, 0x2cd20f2ba150, {0x42e6940, 0xe27, 0xe27}, {0xc2a9454a5833c092, 0x6fc247cf0c, ...})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2583 +0x505
+testing.(*M).Run(0x2cd20f3560a0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2443 +0x6ac
+github.com/snissn/gomap/TreeDB/collections.TestMain(0x42d3860?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_physical_query_1890_bench_test.go:26 +0x17
+main.main()
+	_testmain.go:8046 +0xa5
+
+goroutine 399316 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x2cd212477030?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+
+goroutine 399319 [select]:
+github.com/snissn/gomap/TreeDB/db.(*indexGhostManager).loop(0x2cd212bd0800)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/db/pools.go:138 +0xf0
+created by github.com/snissn/gomap/TreeDB/db.(*indexGhostManager).start in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/db/pools.go:129 +0xbf
+
+goroutine 8010 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x2cd20f196980?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 8013 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x2cd20f2d4708?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 399317 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x0?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+
+goroutine 8011 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x4?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 399314 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x2cd21b2befc0?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+
+goroutine 399321 [select]:
+github.com/snissn/gomap/TreeDB/db.(*DB).commitCombinerLoop(0x2cd210494008, 0x2cd21229b650, 0x2cd212364d20, 0x0?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/db/commit_combiner.go:203 +0xe5
+created by github.com/snissn/gomap/TreeDB/db.(*DB).startCommitCombiner in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/db/commit_combiner.go:39 +0x1d1
+
+goroutine 399266 [syscall]:
+syscall.Syscall(0x4b, 0x3f, 0x0, 0x0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/syscall/syscall_linux.go:74 +0x25
+golang.org/x/sys/unix.Fdatasync(0x107fa561caf7dd00?)
+	/home/mikers/go/pkg/mod/golang.org/x/sys@v0.41.0/unix/zsyscall_linux.go:757 +0x2a
+github.com/snissn/gomap/TreeDB/collections.syncColumnAssetSegmentFile(0x2cd21df9cc78)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_asset_file_sync_linux.go:18 +0x45
+github.com/snissn/gomap/TreeDB/collections.syncColumnAssetSegmentFileObserved(0x2cd21df9cc78, {0x2cd212351830, 0x82})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_asset_manager.go:3543 +0x87
+github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetSegmentAppender).closeWithStableValidation(0x2cd214611408, 0x0)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_asset_manager.go:2315 +0x147
+github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetAppendSession).closeActiveWithStableValidation(0x2cd20fa1ff38, 0x725021d9?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_asset_manager.go:1389 +0x8b
+github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetAppendSession).closeWithStableResourcesValidated(_, _)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_asset_manager.go:1341 +0x5b
+github.com/snissn/gomap/TreeDB/collections.(*columnPhysicalAssetAppendSession).closeWithStableResources(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_asset_manager.go:1334
+github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetRowsAtIdentityFromSources.func6()
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:1797 +0x1ebb
+github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetRowsAtIdentityFromSources(_, {{0x2cd21461a8c0, 0x2, 0x2}, 0x2, 0xa0, 0x0, 0x2b8, {0x1a32, 0x2b8, ...}, ...}, ...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:2129 +0x1ae2
+github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetRowsAtIdentity(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:1506
+github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetRowsForCommand(_, {{0x0, 0x0, 0x0}, 0x2, 0x0, 0x0, 0x0, {0x0, 0x0, ...}, ...}, ...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:1498 +0x365
+github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPhysicalAssetsForCommand(_, {0x0, 0x0, 0x0, 0x2cd214741188, 0x0, 0x0, 0x0, 0x0, 0x2cd2147223c0, ...}, ...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:1428 +0x74f
+github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPublishPlanLease.func2({{0x2cd211fd37d0, 0x6}, {0x1, {0x2cd214d35908, 0x4, 0x4}, {0x0, 0x0, 0x0}, {0x0, ...}, ...}, ...})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:1292 +0x150
+github.com/snissn/gomap/TreeDB/collections.prepareColumnPublishAssets({0x2cd2145c6d08, {0x2cd211fd37d0, 0x6}, 0x2cd212ec5c00, 0x1, {0x2cd21461de60, 0x1, 0x1}, 0x1, {0x2a66c39, ...}, ...}, ...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_plan.go:825 +0x332
+github.com/snissn/gomap/TreeDB/collections.BuildColumnPublishPlan({0x2cd2145c6d08, {0x2cd211fd37d0, 0x6}, 0x2cd212ec5c00, 0x1, {0x2cd21461de60, 0x1, 0x1}, 0x1, {0x2a66c39, ...}, ...})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_plan.go:428 +0x6e9
+github.com/snissn/gomap/TreeDB/collections.(*Collection).prepareColumnPublishPlanLease(_, {0x0, 0x0, 0x0, 0x2cd214741188, 0x0, 0x0, 0x0, 0x0, 0x2cd2147223c0, ...}, ...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:1278 +0x92b
+github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaBatchGroupMaybeColumn.func3({0x2b1, 0x2cd211b4c4c0, 0x2cd2147222d0, 0x2cd214722320, 0x2cd214722370, 0x2cd213bfc640, 0x2cd21df9cc00, 0x2cd210d3afc0})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:565 +0x2c9
+github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized.func7(0x30?, 0x2cd20fa2b040, 0x2cd20fa2b058, 0x0?, {0x2b1, 0x2cd211b4c4c0, 0x2cd2147222d0, 0x2cd214722320, 0x2cd214722370, 0x2cd213bfc640, ...})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/db/ordered_root_publish.go:4172 +0x78
+github.com/snissn/gomap/TreeDB/db.(*DB).publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(0x2cd210494008, {0x2cd21380adc8, 0xa, 0xa}, 0x2cd20fa2ca08, 0x2cd2145f4a50, 0x2cd20fa2c8d0, 0x2cd20fa2c878, {0x1, 0x0, ...})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/db/ordered_root_publish.go:4173 +0xfe8
+github.com/snissn/gomap/TreeDB/db.(*DB).PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(0x2cd20fbcebb0?, {0x2cd21380adc8?, 0xb?, 0x2cd210d3ad80?}, 0x2cd2145ff500?, 0x19?, 0x4ab?, 0x0?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/db/ordered_root_publish.go:2797 +0x71
+github.com/snissn/gomap/TreeDB/collections.(*Collection).publishRootDeltaBatchGroupMaybeColumn(_, {_, _, _}, _, {0x0, 0x0, 0x0, 0x2cd214741188, 0x0, ...})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/column_publish_write.go:699 +0x19c5
+github.com/snissn/gomap/TreeDB/collections.(*Collection).publishSourceReplacementPlan.func2()
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/source_atomic.go:696 +0x196
+github.com/snissn/gomap/TreeDB/collections.(*Collection).withCommandWALPublishCoordinatorAdmission(0x2cd213065608, 0x2cd2145f4a50, 0x2cd20fa30dc8, 0x2cd20fa2deb8, 0x2cd20fa2de38)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/command_wal_admission.go:153 +0x2e9
+github.com/snissn/gomap/TreeDB/collections.(*Collection).publishSourceReplacementPlan(0x2cd213065608, 0x2cd2145e3c00, 0x0, 0x0, {0x2cd20fa2fcf8, 0x1, 0x2cd213065608?})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/source_atomic.go:707 +0x84e
+github.com/snissn/gomap/TreeDB/collections.(*Collection).importSourceChunkSchemaLockedWithAdmissionV2(_, {0x2, {0x2cd210d3a270, 0x2, 0x2}, {{0x2, {0x2cd212292b28, 0x16}, {0x2a68fa4, 0x8}, ...}, ...}, ...}, ...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/vector_partition_source_import_v2.go:480 +0x23e5
+github.com/snissn/gomap/TreeDB/collections.(*Collection).importVectorPartitionSourceChunkV2(_, {{{0x2ab559f, 0x1d}, {{0x2a6779e, 0x7}, {0x2a6779e, 0x7}, {0x2cd211fd37d0, 0x6}}, 0x7, ...}}, ...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/vector_partition_source_import_v2.go:198 +0x17c8
+github.com/snissn/gomap/TreeDB/collections.(*Collection).ImportVectorPartitionSourceChunkV2(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/vector_partition_source_import_v2.go:133
+github.com/snissn/gomap/TreeDB/collections.testVectorPartitionSourceImportDependencyEncodingV2.func1.2(0x2ab559f?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/vector_partition_source_import_v2_test.go:586 +0x352
+github.com/snissn/gomap/TreeDB/collections.testVectorPartitionSourceImportDependencyEncodingV2.func1(0x400)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/vector_partition_source_import_v2_test.go:591 +0x526
+github.com/snissn/gomap/TreeDB/collections.testVectorPartitionSourceImportDependencyEncodingV2(0x2cd2115a1208, {0x2a6ba2a, 0xa})
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/vector_partition_source_import_v2_test.go:634 +0xab
+github.com/snissn/gomap/TreeDB/collections.TestVectorPartitionSourceImportDependencyEncodingContinuousV2(0x2cd2115a1208?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/collections/vector_partition_source_import_v2_test.go:560 +0x1f
+testing.tRunner(0x2cd2115a1208, 0x2c8d6c0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2101 +0x4c5
+
+goroutine 399008 [select]:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x2cd2105788c0)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/pager/grow.go:55 +0x96
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/pager/grow.go:13 +0x116
+
+goroutine 8016 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x2cd20f2d4708?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 8015 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x2?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 8014 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x2cd20f2d4708?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 8012 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x2cd20fad2800?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 399315 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x2cd2147cb2c0?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+
+goroutine 8009 [chan receive, 7 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x2cd210490d80?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 8057
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 399009 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x2cd21229a2a0?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+
+goroutine 399320 [select]:
+github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run(0x2cd212330388)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/rootpublication/coordinator.go:765 +0x208
+created by github.com/snissn/gomap/TreeDB/internal/rootpublication.New in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/internal/rootpublication/coordinator.go:176 +0x505
+
+goroutine 399318 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x0?)
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 399266
+	/home/mikers/gomap-r1-5067-final-4b78/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+FAIL	github.com/snissn/gomap/TreeDB/collections	480.025s
+FAIL

@@ -1,0 +1,508 @@
+diff --git a/cmd/collection_workload_bench/r1_mutation_sweep.go b/cmd/collection_workload_bench/r1_mutation_sweep.go
+new file mode 100644
+index 000000000..5fecc4b52
+--- /dev/null
++++ b/cmd/collection_workload_bench/r1_mutation_sweep.go
+@@ -0,0 +1,502 @@
++package main
++
++// This sibling mode leaves the frozen A operation schedule and packet unchanged.
++// It measures actual UpdateBatch request sizes, not the A load/read batch flag.
++import (
++	"bytes"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"flag"
++	"fmt"
++	"io"
++	"math"
++	"os"
++	"reflect"
++	"runtime"
++	"sort"
++	"strconv"
++	"strings"
++	"time"
++
++	treedb "github.com/snissn/gomap/TreeDB"
++	"github.com/snissn/gomap/TreeDB/collections"
++)
++
++const r1SweepSchema = "gomap-r1-mutation-sweep-v1"
++
++type r1SweepConfig struct {
++	Documents     int    `json:"documents"`
++	Operations    int    `json:"operations"`
++	Repetitions   int    `json:"repetitions"`
++	Qualification string `json:"qualification"`
++}
++type r1SweepMeasurement struct {
++	Operations     int     `json:"operations"`
++	Rows           int     `json:"rows"`
++	NSPerOp        float64 `json:"ns_per_op"`
++	P50NS          int64   `json:"p50_ns"`
++	P95NS          int64   `json:"p95_ns"`
++	P99NS          int64   `json:"p99_ns"`
++	BytesPerOp     float64 `json:"bytes_per_op"`
++	AllocsPerOp    float64 `json:"allocs_per_op"`
++	HeapAfterBytes uint64  `json:"heap_after_bytes"`
++}
++type r1SweepCell struct {
++	Repetition         int                `json:"repetition"`
++	BioBytes           int                `json:"bio_bytes"`
++	RequestRows        int                `json:"request_rows"`
++	Indexed            bool               `json:"indexed"`
++	Change             string             `json:"change"`
++	FixtureSHA256      string             `json:"fixture_sha256"`
++	Acknowledgement    r1SweepMeasurement `json:"acknowledgement"`
++	FlushNS            int64              `json:"flush_ns"`
++	CountersBefore     map[string]uint64  `json:"counters_before"`
++	CountersAfterACK   map[string]uint64  `json:"counters_after_ack"`
++	CountersAfterFlush map[string]uint64  `json:"counters_after_flush"`
++	ACKCounterDelta    map[string]uint64  `json:"ack_counter_delta"`
++	FlushCounterDelta  map[string]uint64  `json:"flush_counter_delta"`
++	FlushOracle        bool               `json:"flush_oracle_verified"`
++	ReopenOracle       bool               `json:"reopen_oracle_verified"`
++}
++type r1SweepPacket struct {
++	Schema         string        `json:"schema"`
++	Source         r1Source      `json:"source"`
++	Config         r1SweepConfig `json:"config"`
++	GoVersion      string        `json:"go_version"`
++	Hostname       string        `json:"hostname"`
++	StartedAt      string        `json:"started_at"`
++	ExecutionScope string        `json:"execution_scope"`
++	Cells          []r1SweepCell `json:"cells"`
++}
++
++const r1SweepScope = "typed-row; command_wal_durable; public cached-leaf opener; serial; default background maintenance; detailed UpdateBatch stats enabled; request encoding through ACK; aggregate counters; separate explicit Flush; Go allocations include background activity; heap is not RSS or peak; no metadata-reference or native-partial-setter claim"
++
++var r1SweepCounterKeys = []string{
++	"treedb.command_wal.append.count_total", "treedb.command_wal.write.bytes_total",
++	"treedb.command_wal.sync.count_total", "treedb.command_wal.sync.ns_total",
++	"treedb.command_wal.file_sync.calls_total", "treedb.command_wal.file_sync.ns_total",
++	"treedb.collections.write_domain.indexed_flush.calls_total",
++	"treedb.collections.write_domain.indexed_flush.publish_ns_total",
++	"treedb.collections.write_domain.update_batch.calls_total",
++	"treedb.collections.write_domain.update_batch.items_total",
++	"treedb.collections.write_domain.update_batch.current_read_ns_total",
++	"treedb.collections.write_domain.update_batch.prepare_ns_total",
++	"treedb.collections.write_domain.update_batch.publish_ns_total",
++}
++
++func runR1SweepCommand(w io.Writer, args []string) error {
++	c := r1SweepConfig{Documents: 4096, Operations: 100, Repetitions: 5, Qualification: "rehearsal"}
++	f := flag.NewFlagSet("r1-mutation-sweep", flag.ContinueOnError)
++	f.IntVar(&c.Documents, "documents", c.Documents, "population; retained requires 4096")
++	f.IntVar(&c.Operations, "operations", c.Operations, "actual mutation requests per cell; retained requires 100")
++	f.IntVar(&c.Repetitions, "repetitions", c.Repetitions, "fresh database repetitions; retained requires 5")
++	f.StringVar(&c.Qualification, "qualification", c.Qualification, "rehearsal or retained")
++	sourcePath := f.String("source-manifest", "", "frozen source identity")
++	if err := f.Parse(args); err != nil {
++		return err
++	}
++	if f.NArg() != 0 {
++		return errors.New("unexpected positional arguments")
++	}
++	var source r1Source
++	if err := readR1JSON(*sourcePath, &source); err != nil {
++		return err
++	}
++	p, err := runR1Sweep(c, source)
++	if err != nil {
++		return err
++	}
++	if err = validateR1Sweep(p); err != nil {
++		return err
++	}
++	enc := json.NewEncoder(w)
++	enc.SetIndent("", "  ")
++	return enc.Encode(p)
++}
++
++func validR1SweepConfig(c r1SweepConfig) bool {
++	return c.Documents >= 32 && c.Operations > 0 && c.Repetitions > 0 &&
++		(c.Qualification == "rehearsal" || (c.Qualification == "retained" && c.Documents == 4096 && c.Operations == 100 && c.Repetitions == 5))
++}
++
++func runR1Sweep(c r1SweepConfig, source r1Source) (r1SweepPacket, error) {
++	p := r1SweepPacket{Schema: r1SweepSchema, Source: source, Config: c, GoVersion: runtime.Version(), StartedAt: time.Now().UTC().Format(time.RFC3339Nano), ExecutionScope: r1SweepScope}
++	p.Hostname, _ = os.Hostname()
++	if !validR1SweepConfig(c) || validateR1Source(source) != nil || (c.Qualification == "retained" && !source.Clean) {
++		return p, errors.New("invalid sweep dimensions/source")
++	}
++	for rep := 0; rep < c.Repetitions; rep++ {
++		for _, width := range []int{96, 4096} {
++			for _, batch := range []int{1, 32} {
++				for _, indexed := range []bool{false, true} {
++					for _, change := range []string{"bio", "email_city"} {
++						cell, err := runR1SweepCell(c, rep, width, batch, indexed, change)
++						if err != nil {
++							return p, err
++						}
++						p.Cells = append(p.Cells, cell)
++					}
++				}
++			}
++		}
++	}
++	return p, nil
++}
++
++func openR1SweepTree(dir string, indexed, create bool) (*r1Tree, error) {
++	t := &r1Tree{dir: dir, engine: "typed-row"}
++	var err error
++	t.db, t.cleanup, err = treedb.OpenBackendWithCachedLeafLog(treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir))
++	if err != nil {
++		return nil, err
++	}
++	t.manager = collections.NewCollectionManager(t.db)
++	t.manager.SetUpdateBatchDetailedStatsEnabled(true)
++	if create {
++		meta := collections.CollectionMeta{Name: "r1", Options: collections.CollectionOptions{DocumentFormat: collections.DocumentFormatJSON, ColumnStore: &collections.ColumnStoreConfig{Enabled: true, RetainedPayload: collections.ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: collections.ColumnRetainedPayloadEncodingJSON}}}
++		for _, name := range []string{"email", "city", "name", "bio"} {
++			meta.Options.ColumnStore.Columns = append(meta.Options.ColumnStore.Columns, collections.ColumnStoreColumn{Name: name, Path: name, ValueType: collections.ColumnStoreValueString})
++		}
++		if indexed {
++			meta.Indexes = []collections.IndexDefinition{{Name: "email", Field: "email", ValueType: collections.IndexValueString, Unique: true}, {Name: "city", Field: "city", ValueType: collections.IndexValueString}}
++		}
++		_, err = t.manager.CreateCollection(&meta)
++	}
++	if err == nil {
++		t.col, err = t.manager.OpenCollection("r1")
++	}
++	if err != nil {
++		return nil, errors.Join(err, t.cleanup())
++	}
++	return t, nil
++}
++
++func r1SweepFixture(rows, width int) []r1Document {
++	docs := r1Fixture(rows)
++	for i := range docs {
++		docs[i].Bio = strings.Repeat("x", width)
++	}
++	return docs
++}
++
++func runR1SweepCell(c r1SweepConfig, rep, width, batch int, indexed bool, change string) (cell r1SweepCell, err error) {
++	cell = r1SweepCell{Repetition: rep, BioBytes: width, RequestRows: batch, Indexed: indexed, Change: change}
++	dir, err := os.MkdirTemp("", "gomap-r1-mutation-sweep-")
++	if err != nil {
++		return cell, err
++	}
++	t, err := openR1SweepTree(dir, indexed, true)
++	if err != nil {
++		_ = os.RemoveAll(dir)
++		return cell, err
++	}
++	defer func() {
++		if t != nil {
++			err = errors.Join(err, t.close())
++		} else {
++			err = errors.Join(err, os.RemoveAll(dir))
++		}
++	}()
++	fixture := r1SweepFixture(c.Documents, width)
++	cell.FixtureSHA256 = r1FixtureHash(fixture)
++	for start := 0; start < len(fixture); start += 32 {
++		if err = t.insert(fixture[start:min(start+32, len(fixture))]); err != nil {
++			return cell, err
++		}
++	}
++	if err = t.manager.FlushAll(); err != nil {
++		return cell, err
++	}
++	current := append([]r1Document(nil), fixture...)
++	emails := make([]string, 0, len(fixture)+c.Operations*batch)
++	for _, d := range fixture {
++		emails = append(emails, d.Email)
++	}
++	// Prepare immutable caller values and the independent expected history outside
++	// timing. The reused public update helper encodes each request inside timing.
++	requests := make([][]r1Document, c.Operations)
++	for op := range requests {
++		requests[op] = make([]r1Document, batch)
++		for j := range batch {
++			i := (op*batch + j) % len(current)
++			d := current[i]
++			if change == "bio" {
++				letter := "y"
++				if d.Bio[0] == 'y' {
++					letter = "z"
++				}
++				d.Bio = strings.Repeat(letter, width)
++			} else {
++				d.Email = fmt.Sprintf("sweep-%d-%s", op, fixture[i].Email)
++				d.City = fmt.Sprintf("city-%02d", (i+op+1)%8)
++				emails = append(emails, d.Email)
++			}
++			requests[op][j] = d
++			current[i] = d
++		}
++	}
++	if cell.CountersBefore, err = r1SweepCounters(t); err != nil {
++		return cell, err
++	}
++	m, err := r1Measure("acknowledgement", c.Operations, func(op int) (int, collections.DocumentMaterializationStats, error) {
++		return batch, collections.DocumentMaterializationStats{}, t.update(requests[op])
++	})
++	if err != nil {
++		return cell, err
++	}
++	cell.Acknowledgement = r1SweepMeasurement{m.Operations, m.Rows, m.NSPerOp, m.P50NS, m.P95NS, m.P99NS, m.BytesPerOp, m.AllocsPerOp, m.HeapAfterBytes}
++	if cell.CountersAfterACK, err = r1SweepCounters(t); err != nil {
++		return cell, err
++	}
++	start := time.Now()
++	err = t.manager.FlushAll()
++	cell.FlushNS = time.Since(start).Nanoseconds()
++	if err != nil {
++		return cell, err
++	}
++	if cell.CountersAfterFlush, err = r1SweepCounters(t); err != nil {
++		return cell, err
++	}
++	if cell.ACKCounterDelta, err = r1SweepDelta(cell.CountersBefore, cell.CountersAfterACK); err != nil {
++		return cell, err
++	}
++	if cell.FlushCounterDelta, err = r1SweepDelta(cell.CountersAfterACK, cell.CountersAfterFlush); err != nil {
++		return cell, err
++	}
++	if err = r1SweepVerify(t, current, emails, indexed); err != nil {
++		return cell, err
++	}
++	cell.FlushOracle = true
++	err = t.cleanup()
++	t.cleanup = nil
++	if err != nil {
++		return cell, err
++	}
++	t = nil
++	t, err = openR1SweepTree(dir, indexed, false)
++	if err != nil {
++		return cell, err
++	}
++	if err = r1SweepVerify(t, current, emails, indexed); err != nil {
++		return cell, err
++	}
++	cell.ReopenOracle = true
++	return cell, nil
++}
++
++func r1SweepVerify(t *r1Tree, rows []r1Document, emails []string, indexed bool) error {
++	r, err := t.openReader()
++	if err != nil {
++		return err
++	}
++	err = r1VerifyAll(r, rows, 32)
++	err = errors.Join(err, r.close())
++	if err != nil {
++		return err
++	}
++	if indexed {
++		if err = r1VerifyEmailIndex(rows, emails, t.emailIDs); err != nil {
++			return err
++		}
++		// A's range oracle deliberately bounds ten rows. This sweep checks the
++		// complete city posting, including empty historical buckets.
++		for bucket := 0; bucket < 8; bucket++ {
++			city := fmt.Sprintf("city-%02d", bucket)
++			var want []string
++			for _, row := range rows {
++				if row.City == city {
++					want = append(want, row.ID)
++				}
++			}
++			ids, e := t.col.FindByIndex("city", city)
++			if e != nil {
++				return e
++			}
++			got := make([]string, 0, len(ids))
++			for _, id := range ids {
++				got = append(got, string(id))
++			}
++			sort.Strings(want)
++			sort.Strings(got)
++			if len(got) != len(want) {
++				return errors.New("complete city posting count mismatch")
++			}
++			for i := range want {
++				if got[i] != want[i] {
++					return errors.New("complete city posting membership mismatch")
++				}
++			}
++		}
++	}
++	return nil
++}
++
++func r1SweepCounters(t *r1Tree) (map[string]uint64, error) {
++	stats := t.db.Stats()
++	for k, v := range t.manager.Stats() {
++		stats[k] = v
++	}
++	out := make(map[string]uint64, len(r1SweepCounterKeys))
++	for _, k := range r1SweepCounterKeys {
++		v, ok := stats[k]
++		if !ok {
++			return nil, fmt.Errorf("required measured counter missing: %s", k)
++		}
++		n, err := strconv.ParseUint(v, 10, 64)
++		if err != nil {
++			return nil, fmt.Errorf("counter %s: %w", k, err)
++		}
++		out[k] = n
++	}
++	return out, nil
++}
++func r1SweepDelta(before, after map[string]uint64) (map[string]uint64, error) {
++	out := make(map[string]uint64, len(r1SweepCounterKeys))
++	if len(before) != len(r1SweepCounterKeys) || len(after) != len(r1SweepCounterKeys) {
++		return nil, errors.New("counter inventory mismatch")
++	}
++	for _, k := range r1SweepCounterKeys {
++		a, okA := before[k]
++		b, okB := after[k]
++		if !okA || !okB || b < a {
++			return nil, fmt.Errorf("counter missing or decreased: %s", k)
++		}
++		out[k] = b - a
++	}
++	return out, nil
++}
++
++func validateR1Sweep(p r1SweepPacket) error {
++	if p.Schema != r1SweepSchema || p.ExecutionScope != r1SweepScope || !validR1SweepConfig(p.Config) || validateR1Source(p.Source) != nil || (p.Config.Qualification == "retained" && !p.Source.Clean) {
++		return errors.New("invalid sweep schema/scope/config/source")
++	}
++	if _, err := time.Parse(time.RFC3339Nano, p.StartedAt); err != nil || p.GoVersion == "" || p.Hostname == "" {
++		return errors.New("missing sweep execution identity")
++	}
++	if len(p.Cells) != 16*p.Config.Repetitions {
++		return errors.New("incomplete sweep matrix")
++	}
++	seen := make(map[string]bool)
++	for _, c := range p.Cells {
++		key := fmt.Sprintf("%d/%d/%d/%t/%s", c.Repetition, c.BioBytes, c.RequestRows, c.Indexed, c.Change)
++		if seen[key] || c.Repetition < 0 || c.Repetition >= p.Config.Repetitions || (c.BioBytes != 96 && c.BioBytes != 4096) || (c.RequestRows != 1 && c.RequestRows != 32) || (c.Change != "bio" && c.Change != "email_city") || c.FixtureSHA256 != r1FixtureHash(r1SweepFixture(p.Config.Documents, c.BioBytes)) || !c.FlushOracle || !c.ReopenOracle || c.FlushNS <= 0 {
++			return errors.New("invalid sweep cell identity/oracle")
++		}
++		seen[key] = true
++		m := c.Acknowledgement
++		if m.Operations != p.Config.Operations || m.Rows != m.Operations*c.RequestRows || m.P50NS <= 0 || m.P95NS < m.P50NS || m.P99NS < m.P95NS {
++			return errors.New("invalid sweep measured counts/latencies")
++		}
++		for _, v := range []float64{m.NSPerOp, m.BytesPerOp, m.AllocsPerOp} {
++			if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
++				return errors.New("invalid sweep numeric measurement")
++			}
++		}
++		if m.NSPerOp <= 0 {
++			return errors.New("zero acknowledgement duration")
++		}
++		a, err := r1SweepDelta(c.CountersBefore, c.CountersAfterACK)
++		if err != nil || !reflect.DeepEqual(a, c.ACKCounterDelta) {
++			return errors.New("invalid ACK counter delta")
++		}
++		if a["treedb.command_wal.append.count_total"] < uint64(m.Operations) || a["treedb.command_wal.sync.count_total"] < uint64(m.Operations) || a["treedb.collections.write_domain.update_batch.calls_total"] != uint64(m.Operations) || a["treedb.collections.write_domain.update_batch.items_total"] != uint64(m.Rows) {
++			return errors.New("mutation request/WAL counter coverage mismatch")
++		}
++		// Every serial request changes at least one field and appends new command
++		// bytes before its durable ACK. An already-durable prefix reuse is not a
++		// substitute for syncing the newly appended request.
++		if a["treedb.command_wal.file_sync.calls_total"] < uint64(m.Operations) || a["treedb.command_wal.write.bytes_total"] == 0 {
++			return errors.New("mutation physical WAL write/sync coverage mismatch")
++		}
++		f, err := r1SweepDelta(c.CountersAfterACK, c.CountersAfterFlush)
++		if err != nil || !reflect.DeepEqual(f, c.FlushCounterDelta) {
++			return errors.New("invalid Flush counter delta")
++		}
++	}
++	return nil
++}
++
++func validateR1SweepCommand(w io.Writer, args []string) error {
++	f := flag.NewFlagSet("r1-mutation-sweep-validate", flag.ContinueOnError)
++	sourcePath := f.String("source-manifest", "", "independent expected source manifest")
++	semanticOnly := f.Bool("semantic-only", false, "UNQUALIFIED producer check; never accepts retained evidence")
++	commit := f.String("expected-commit", "", "source commit independently frozen by acceptance owner")
++	runtimeHash := f.String("expected-runtime", "", "independently frozen runtime SHA256")
++	harnessHash := f.String("expected-harness", "", "independently frozen harness SHA256")
++	landed := f.String("expected-landed-tooling-commit", "", "independently verified landing SHA; selected source must equal it")
++	binaryHash := f.String("expected-binary-sha256", "", "executing binary SHA256 from separate observed build receipt")
++	packetHash := f.String("expected-packet-sha256", "", "original packet byte SHA256 from separate observed completed-run receipt")
++	if err := f.Parse(args); err != nil {
++		return err
++	}
++	if f.NArg() != 1 || *sourcePath == "" {
++		return errors.New("expected source manifest and packet")
++	}
++	var p r1SweepPacket
++	var source r1Source
++	raw, err := os.ReadFile(f.Arg(0))
++	if err != nil {
++		return err
++	}
++	// Validate the same original bytes that are bound by the external receipt.
++	dec := json.NewDecoder(bytes.NewReader(raw))
++	dec.DisallowUnknownFields()
++	if err = dec.Decode(&p); err != nil {
++		return err
++	}
++	var extra any
++	if err = dec.Decode(&extra); err != io.EOF {
++		return errors.New("trailing JSON input")
++	}
++	if err := readR1JSON(*sourcePath, &source); err != nil {
++		return err
++	}
++	if !reflect.DeepEqual(p.Source, source) {
++		return errors.New("packet differs from frozen source")
++	}
++	if *semanticOnly {
++		if *commit != "" || *runtimeHash != "" || *harnessHash != "" || *landed != "" || *binaryHash != "" || *packetHash != "" {
++			return errors.New("semantic-only cannot be combined with acceptance pins")
++		}
++	} else {
++		if !r1SHA(*commit, 20) || !r1SHA(*landed, 20) || !r1SHA(*runtimeHash, 32) || !r1SHA(*harnessHash, 32) || !r1SHA(*binaryHash, 32) || !r1SHA(*packetHash, 32) {
++			return errors.New("all six independent source/landing/binary/packet receipt pins are required")
++		}
++		if p.Source.Commit != *commit || *commit != *landed || p.Source.RuntimeSHA256 != *runtimeHash || p.Source.HarnessSHA256 != *harnessHash {
++			return errors.New("independent source or exact landed-tooling pin mismatch")
++		}
++		executable, e := os.Executable()
++		if e != nil {
++			return e
++		}
++		binary, e := os.ReadFile(executable)
++		if e != nil {
++			return e
++		}
++		if r1SweepSHA256(binary) != *binaryHash {
++			return errors.New("executing binary differs from independent build receipt")
++		}
++		if r1SweepSHA256(raw) != *packetHash {
++			return errors.New("original packet bytes differ from independent completed-run receipt")
++		}
++	}
++	if err := validateR1Sweep(p); err != nil {
++		return err
++	}
++	label := "UNQUALIFIED R1 mutation sweep semantic check:"
++	if !*semanticOnly {
++		label = "UNQUALIFIED R1 mutation sweep rehearsal receipt verified:"
++		if p.Config.Qualification == "retained" {
++			label = "R1 mutation sweep retained receipt and semantics verified:"
++		}
++	}
++	_, err = fmt.Fprintln(w, label, p.Config.Qualification, len(p.Cells), "cells")
++	return err
++}
++
++func r1SweepSHA256(raw []byte) string {
++	sum := sha256.Sum256(raw)
++	return hex.EncodeToString(sum[:])
++}

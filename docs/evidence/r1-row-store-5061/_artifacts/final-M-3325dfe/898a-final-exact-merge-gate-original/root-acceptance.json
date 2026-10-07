@@ -1,0 +1,12 @@
+{
+  "utc": "2026-10-06T23:44:44.344520+00:00",
+  "state": "ALL55_GREEN_CURRENT_HEAD_REVIEW_BODY_THREADS_MAIN_AND_POLICY_PASS_NORMAL_MERGE_AUTHORIZED",
+  "head": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+  "main": "462b3a98b90e1317fd16ce68dc78f03cd46ebbe9",
+  "source_tree": "0600b47bf0a3a609917d224d7fd06c40737bcd8e",
+  "policy_original": "898a-premerge-234315-original/main-rules.json",
+  "policy_sha256": "fa67e070ef92ce2536d6e9d9635d1817ca67f334b94ec856d533399cb52461ae",
+  "codex_clean_url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976",
+  "ci_success": 55,
+  "approved_M0_exception_used": false
+}

@@ -1,0 +1,10 @@
+{
+  "utc": "2026-10-06T22:17:54.227468+00:00",
+  "status": "13_RECORD_LOCATION_TRANSLATION_ONLY_NO_NEW_CAPTURE_ACCEPTANCE",
+  "source_sha256": "2644dd233d9d9391b1d53725004a887c3ffe9c188be03f633cfe5390e03ce1fb",
+  "relocated_sha256": "ddfa77702e3e19974c03deab5b01d40b273b05634e9d7a330b664241dbbfecd6",
+  "only_changed_fields": "13 root path prefixes",
+  "records": 13,
+  "accepted_historical": 3,
+  "rejected_historical": 10
+}

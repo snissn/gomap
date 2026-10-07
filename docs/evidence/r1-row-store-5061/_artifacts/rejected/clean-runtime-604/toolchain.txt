@@ -1,0 +1,10 @@
+go version go1.26.4 linux/amd64
+GOROOT=/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64
+GOCACHE=/home/mikers/.cache/gomap-r1-5066-go1264
+GOMODCACHE=/home/mikers/go/pkg/mod
+GOWORK=off
+GOTOOLCHAIN=local
+GOMAXPROCS=16
+GOGC=100
+GOMEMLIMIT=off
+GOFLAGS=

@@ -1,0 +1,14 @@
+{
+  "status": "PASS_SUPPORT_BYTE_AND_RECEIPT_CHECKS_ONLY",
+  "original_copy_pairs": 113,
+  "original_bytes": 9575389,
+  "prior_support_and_assembler_pins": 572,
+  "source_root_adoption_pins_verified": true,
+  "focused_actual_receipts": 12,
+  "Python_logs_text_observed_36_per_repair": true,
+  "original_FAIL_preserved": true,
+  "a645_original_job_PASS_hash_verified": true,
+  "missing_originals": [],
+  "process_exit_of_this_check": 0,
+  "scope": "No Go/tests/capture/CI polling/publication; local Python copying/hash/receipt checks only"
+}

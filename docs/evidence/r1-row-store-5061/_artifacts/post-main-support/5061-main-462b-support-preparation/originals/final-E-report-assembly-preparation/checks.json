@@ -1,0 +1,161 @@
+{
+  "scope": "private nonqualifying Python assembly/byte/refusal checks; no Go or capture",
+  "initial_format_check": {
+    "actual_exit": 1,
+    "stderr": "refused: 'bannerThis'",
+    "repair": "Only new private template: ${banner}This avoids Template identifier ambiguity; subsequent nine cases below passed."
+  },
+  "results": [
+    {
+      "name": "synthetic format-only assembly",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-manifest.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-report.md",
+        "--format-only"
+      ],
+      "expected_exit": 0,
+      "actual_exit": 0,
+      "stdout": "{\"status\": \"SYNTHETIC_FORMAT_ONLY_NONQUALIFYING\", \"output\": \"/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-report.md\", \"sha256\": \"ecd2554273fe158a42092fc5cad86fe71c000efd9dbbc78ad673e73b28ae6b45\", \"bytes\": 19032}\n",
+      "stderr": ""
+    },
+    {
+      "name": "existing output refused",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-manifest.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-report.md",
+        "--format-only"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: [Errno 17] File exists: '/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-report.md'\n"
+    },
+    {
+      "name": "synthetic cannot be actual evidence",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-manifest.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/refused-synthetic-actual.md"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: mode must match invocation; synthetic config cannot become actual evidence\n"
+    },
+    {
+      "name": "missing-actual-main",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/negative-missing-actual-main.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/refused-missing-actual-main.md"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: missing or invalid observed commit/digest\n"
+    },
+    {
+      "name": "wrong-fragment-hash",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/negative-wrong-fragment-hash.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/refused-wrong-fragment-hash.md",
+        "--format-only"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: input hash mismatch: /private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-C.md\n"
+    },
+    {
+      "name": "wrong-formatter-hash",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/negative-wrong-formatter-hash.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/refused-wrong-formatter-hash.md",
+        "--format-only"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: input hash mismatch: /private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/report-a.py\n"
+    },
+    {
+      "name": "wrong-artifact-root",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/negative-wrong-artifact-root.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/refused-wrong-artifact-root.md",
+        "--format-only"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: wrong artifact root: artifacts belong outside TreeDB\n"
+    },
+    {
+      "name": "altered-historical-report",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/negative-altered-historical-report.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/refused-altered-historical-report.md",
+        "--format-only"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: historical report changed; reassess before replacing the frozen snapshot\n"
+    },
+    {
+      "name": "unsafe-receipt-link",
+      "argv": [
+        "/opt/homebrew/opt/python@3.14/bin/python3.14",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/assemble.py",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/negative-unsafe-receipt-link.json",
+        "--out",
+        "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/refused-unsafe-receipt-link.md",
+        "--format-only"
+      ],
+      "expected_exit": 1,
+      "actual_exit": 1,
+      "stdout": "",
+      "stderr": "refused: unsafe artifact-relative publication path\n"
+    }
+  ],
+  "verbatim_history": true,
+  "verbatim_fragments": true,
+  "original_inputs_unchanged": [
+    "/private/tmp/gomap-r1-5061-final/TreeDB/docs/evidence/r1-row-store-5061/README.md",
+    "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/README.md",
+    "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/report-a.py",
+    "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/handoff.json",
+    "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/README.md",
+    "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/format.py",
+    "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/handoff.json",
+    "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/README.md",
+    "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/format.py",
+    "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/frozen-r1_lifecycle_validate.py",
+    "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/handoff.json",
+    "/private/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/audit.md",
+    "/private/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/audit.json"
+  ],
+  "refused_outputs_not_created": true
+}

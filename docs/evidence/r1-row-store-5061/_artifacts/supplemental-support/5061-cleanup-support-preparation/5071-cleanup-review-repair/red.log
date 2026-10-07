@@ -1,0 +1,15 @@
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/hook-clean
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/rename-clean
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/hook-cleanup-fails
+    leaf_manifest_revision_gc_5066_test.go:445: cleanup cause/poison missing: before revision rename cut poisoned=false
+=== RUN   TestLeafManifestRevisionGCQuarantineCleanup5066/rename-cleanup-fails
+    leaf_manifest_revision_gc_5066_test.go:445: cleanup cause/poison missing: is a directory poisoned=false
+--- FAIL: TestLeafManifestRevisionGCQuarantineCleanup5066 (0.18s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/hook-clean (0.05s)
+    --- PASS: TestLeafManifestRevisionGCQuarantineCleanup5066/rename-clean (0.05s)
+    --- FAIL: TestLeafManifestRevisionGCQuarantineCleanup5066/hook-cleanup-fails (0.04s)
+    --- FAIL: TestLeafManifestRevisionGCQuarantineCleanup5066/rename-cleanup-fails (0.04s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.206s
+FAIL

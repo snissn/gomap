@@ -1,0 +1,10 @@
+{
+  "utc": "2026-10-06T10:54:15.233040+00:00",
+  "final_5071_head": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+  "final_C_head": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+  "scope": "Two R1 docs only; runtime/tests/harness unchanged from46/c580 and tested52",
+  "corrected_total_GC_owned_child_FDs": 18,
+  "breakdown": "16 selected exact child deletion handles +1scan child OR quarantine placeholder +1temporary link-validation child; existing parent/manager/registry/process and arbitrary testobserver hooks excluded",
+  "proof": "ValidateStableChildIdentity opensone Unixchild/defercloses; Fstat identity/registry metadata opennoadditionalchild; placeholderperdelete closed before next; productiondisabledobserver opensnone",
+  "original_receipts": "Original52handoff and prior16+1retained-authority wording kept unchanged; this separate root correction supplements those originalbytes. Sampled BeforeRename28 is not globalpeak."
+}
