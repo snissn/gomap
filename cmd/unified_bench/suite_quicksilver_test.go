@@ -436,6 +436,23 @@ func TestQuicksilverReaderTimerExcludesWriterDrain(t *testing.T) {
 	}
 }
 
+func TestQuicksilverCheckpointNanosecondRoundTrip(t *testing.T) {
+	for _, elapsed := range []time.Duration{1, 32259, 1633660, 100001} {
+		t.Run(elapsed.String(), func(t *testing.T) {
+			// The measured duration travels through milliseconds in the suite JSON
+			// before the canonical exporter reconstructs a nanosecond duration.
+			ms := float64(elapsed) / float64(time.Millisecond)
+			reports := []quicksilverResult{{Engine: "treedb", DBName: "TreeDB", InitialCheckpointMS: ms, FinalCheckpointMS: ms}}
+			run := quicksilverBenchprofRuns(BenchConfig{}, quicksilverSmokeConfig(), reports)[0]
+			for _, phase := range []string{"quicksilver_initial", "quicksilver_final"} {
+				if got := run.CheckpointDurations[phase]["TreeDB"]; got != elapsed {
+					t.Fatalf("%s: duration round trip lost a nanosecond: got %s, want %s", phase, got, elapsed)
+				}
+			}
+		})
+	}
+}
+
 func TestQuicksilverMultiEngineMarkdown(t *testing.T) {
 	c := quicksilverSmokeConfig()
 	reports := []quicksilverResult{
