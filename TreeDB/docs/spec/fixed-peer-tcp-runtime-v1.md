@@ -24,7 +24,12 @@ consumes it; a dormant shard reservation promptly closes incoming connections
 without authenticating or serving requests. Takeover interrupts that temporary
 Accept loop, clears its deadline, and returns the same socket after the existing
 lifecycle checks succeed. No reservation goroutine remains on the serving path.
-Bind errors still refuse startup. Failure and shutdown close both consumed and unused sockets. Nodes-only
+Bind errors still refuse startup. Failure and shutdown close both consumed and
+unused sockets. Public control shutdown drains admitted HTTP requests before
+closing the consumed listener explicitly, including when its owned `Serve`
+goroutine has not yet registered with `http.Server`. Close joins that goroutine
+before returning; partial startup without a started goroutine requires no join.
+Nodes-only
 immutable standbys retain their existing absence of a public vector endpoint.
 This pool is bounded by local configured roles, independent of remote inventory;
 it adds startup bookkeeping and no lookup to ordinary RPC/query/mutation paths.
