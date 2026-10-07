@@ -60,7 +60,10 @@ def process_census(text, owner=None, benchmark_names=()):
         if owner is not None and pid == owner["pid"]:
             need(ppid == owner["ppid"] and pgid == owner["pgid"] and comm == owner["comm"], "owned PID custody mismatch")
             continue
-        if comm in GO_PROCESS_NAMES or comm.endswith(".test") or comm in benchmark_names:
+        # Linux comm truncates to 15 bytes. A visible partial .test suffix at
+        # that boundary is conservatively foreign even when not configured.
+        truncated_test = len(comm.encode("utf-8")) == 15 and comm.endswith((".t", ".te", ".tes"))
+        if comm in GO_PROCESS_NAMES or comm.endswith(".test") or truncated_test or comm in benchmark_names:
             foreign.append({"pid": pid, "ppid": ppid, "pgid": pgid, "state": state, "comm": comm})
     need(not foreign, "foreign active Go/build/test work: " + json.dumps(foreign, sort_keys=True))
     return len(seen)

@@ -24,7 +24,8 @@ def census(pid, comm, state="S", ppid=700, pgid=None):
 
 class CensusTests(unittest.TestCase):
     def test_active_foreign_tooling_and_tests(self):
-        for comm in ("go", "compile", "link", "asm", "cgo", "vet", "cover", "test2json", "preprofile", "db.test", "freelist.test"):
+        for comm in ("go", "compile", "link", "asm", "cgo", "vet", "cover", "test2json", "preprofile", "db.test", "freelist.test",
+                     "integration.tes", "abcdefghijklm.t", "abcdefghijkl.te", "\u00e9" * 5 + "x.tes"):
             for state in ("S", "R", "D", "T", "I"):
                 with self.subTest(comm=comm, state=state), self.assertRaisesRegex(ValueError, "foreign active"):
                     process_census(INIT + census(901, comm, state))
@@ -61,6 +62,17 @@ class CensusTests(unittest.TestCase):
             with self.subTest(comm=comm), self.assertRaisesRegex(ValueError, "foreign active"):
                 process_census(INIT + census(901, comm), benchmark_names=names)
             process_census(INIT + census(901, comm, "Z"), benchmark_names=names)
+        for basename in ("integration.test", "abcdefghijklm.test", "abcdefghijkl.test"):
+            comm = linux_comm("/foreign/" + basename)
+            self.assertEqual(len(comm.encode()), 15)
+            with self.subTest(basename=basename), self.assertRaisesRegex(ValueError, "foreign active"):
+                process_census(INIT + census(901, comm))
+            process_census(INIT + census(901, comm, "Z"))
+            process_census(INIT + census(901, comm), {"pid": 901, "ppid": 700, "pgid": 901, "comm": comm})
+        # A full-width unrelated comm or shorter partial suffix is not evidence
+        # of a truncated .test name. Unknown long prefixes remain observational limits.
+        for comm in ("x" * 15, "ordinary.tes", "ordinary.te", "ordinary.t", "custom-reader-b"):
+            process_census(INIT + census(901, comm))
         for path in ("/owned/\u2603.test", "/owned/bad\nname", "/"):
             with self.assertRaises(ValueError):
                 linux_comm(path)
@@ -137,11 +149,13 @@ class OfflineTests(unittest.TestCase):
     def test_between_endpoint_foreign_record_even_resealed(self):
         sample = self.value["samples"][1]
         path = self.packet / sample["path"]
-        path.write_text(path.read_text() + census(909, "compile"))
-        sample["sha256"] = sha(path)
-        self.seal()
-        with self.assertRaisesRegex(ValueError, "foreign active"):
-            self.check()
+        original = path.read_text()
+        for comm in ("compile", "integration.tes", "abcdefghijklm.t", "abcdefghijkl.te"):
+            path.write_text(original + census(909, comm))
+            sample["sha256"] = sha(path)
+            self.seal()
+            with self.subTest(comm=comm), self.assertRaisesRegex(ValueError, "foreign active"):
+                self.check()
 
     def test_raw_tamper_and_missing(self):
         path = self.packet / self.value["samples"][1]["path"]
