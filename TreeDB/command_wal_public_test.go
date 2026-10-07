@@ -2403,8 +2403,22 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 		if err := batch.Close(); err != nil {
 			t.Fatalf("%s batch Close: %v", epoch, err)
 		}
-		if err := db.Checkpoint(); err != nil {
-			t.Fatalf("%s Checkpoint: %v", epoch, err)
+		_, epochLastLSN := db.publicCommandWALPendingRange()
+		if epochLastLSN == 0 {
+			t.Fatalf("%s has no pending command WAL LSN", epoch)
+		}
+		// Publish the durable cached boundary without the public wrapper's
+		// additional cleanup call. Leave fallback refresh and reclamation to
+		// the final public checkpoint under test.
+		if err := db.cached.Checkpoint(); err != nil {
+			t.Fatalf("%s cached Checkpoint: %v", epoch, err)
+		}
+		if got := db.backend.State().AppliedCommandLSN; got != epochLastLSN {
+			t.Fatalf("%s applied LSN=%d, want %d", epoch, got, epochLastLSN)
+		}
+		db.clearPublishedPublicCommandWALPending()
+		if first, last := db.publicCommandWALPendingRange(); first != 0 || last != 0 {
+			t.Fatalf("%s pending LSN range=(%d,%d), want empty", epoch, first, last)
 		}
 	}
 	before := publicCommandWALSegmentNames(t, dir)
@@ -2413,10 +2427,11 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	}
 	// Exercise the gate explicitly so its coverage does not depend on whether a
 	// setup checkpoint happened to attempt backend reclamation on this platform.
+	withheldBefore := withheldUnlinks.Load()
 	if err := db.backend.CleanupCommandWALCoveredSegments(false); !errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
 		t.Fatalf("fixture cleanup gate: %v, want stale cleanup proof", err)
 	}
-	if withheldUnlinks.Load() == 0 {
+	if withheldUnlinks.Load() <= withheldBefore {
 		t.Fatal("fixture cleanup gate did not observe a covered generation")
 	}
 	restoreCleanup()
