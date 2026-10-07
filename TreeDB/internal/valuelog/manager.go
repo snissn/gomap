@@ -58,11 +58,18 @@ type File struct {
 	// retirementIdentity is captured under manager.mu before retirement or
 	// destructive admission. It survives Close and is independent of pins.
 	retirementIdentity rootpublication.StableIdentity
-	currentWritable    atomic.Bool
-	dictLookup         DictLookup
-	templateLookup     TemplateLookup
-	templateDecodeOpts templ.DecodeOptions
-	templateDefCache   *templateDefCache
+	// The physical parent is captured with retirementIdentity, independently of
+	// an optional pin registry. A missing configured alias is not absence proof.
+	retirementParentMu       sync.Mutex
+	retirementParent         *os.File
+	retirementParentIdentity rootpublication.StableIdentity
+	retirementParentUsers    int
+	retirementParentReleased bool
+	currentWritable          atomic.Bool
+	dictLookup               DictLookup
+	templateLookup           TemplateLookup
+	templateDecodeOpts       templ.DecodeOptions
+	templateDefCache         *templateDefCache
 	// compactLeafPayloadAllowed is derived at open time from the file ID and
 	// path. Hot reads should not re-run filepath parsing for every leaf payload.
 	// Tests may still construct File literals directly; those fall back to
@@ -1836,7 +1843,11 @@ func (m *Manager) Close() error {
 	m.retryWorkers.Wait()
 	m.mu.Lock()
 	var err error
+	var parents []*os.File
 	for _, f := range m.files {
+		if parent := releaseRetirementParent(f); parent != nil {
+			parents = append(parents, parent)
+		}
 		if e := m.unobserveStableFileLocked(f); e != nil {
 			err = errors.Join(err, e)
 		}
@@ -1846,6 +1857,11 @@ func (m *Manager) Close() error {
 	}
 	m.files = nil
 	m.retiredCount = 0
+	m.mu.Unlock()
+	for _, parent := range parents {
+		err = errors.Join(err, parent.Close())
+	}
+	m.mu.Lock()
 	m.closeErr = err
 	close(m.closeDone)
 	m.mu.Unlock()
@@ -1933,7 +1949,7 @@ func (m *Manager) Refresh() error {
 				if !existing.IsZombie.Load() || filepath.Clean(filepath.Dir(existing.Path)) != filepath.Clean(dir) {
 					continue
 				}
-				if err := validateStableDeletePathIdentity(existing.Path, existing.retirementIdentity); err != nil {
+				if err := validateRetirementPath(existing, existing.retirementIdentity); err != nil {
 					m.mu.Unlock()
 					return err
 				}
@@ -2032,6 +2048,9 @@ func (m *Manager) RegisterSegment(path string, id uint32) error {
 }
 
 func (m *Manager) registerSegmentLocked(path string, id uint32) error {
+	if m.closing {
+		return os.ErrClosed
+	}
 	if m.files == nil {
 		m.files = make(map[uint32]*File, 16)
 	}
@@ -2520,7 +2539,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, leaseErr)
 			return
 		}
-		if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+		if err := validateRetirementPath(f, identity); err != nil {
 			abortStableDeleteLease(lease)
 			log.Printf("valuelog: retry zombie delete path validation failed for %s: %v", f.Path, err)
 			return
@@ -2532,12 +2551,13 @@ func (m *Manager) retryZombieDelete(f *File) {
 			commitStableDeleteLease(lease)
 			m.mu.Lock()
 			var unobserveErr error
+			var parent *os.File
 			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
-				m.forgetSegmentLocked(f)
+				parent = m.forgetSegmentLocked(f)
 				unobserveErr = m.unobserveStableFileLocked(f)
 			}
 			m.mu.Unlock()
-			if finishErr := errors.Join(removeErr, syncErr, unobserveErr); finishErr != nil {
+			if finishErr := errors.Join(removeErr, syncErr, unobserveErr, closeRetirementParent(parent)); finishErr != nil {
 				log.Printf("valuelog: removed retired zombie %s with finalization error: %v", f.Path, finishErr)
 			}
 			return
@@ -2560,6 +2580,9 @@ func (m *Manager) retryZombieDelete(f *File) {
 func (m *Manager) MarkZombie(id uint32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closing {
+		return nil
+	}
 	f, ok := m.files[id]
 	if !ok {
 		return &fileNotFoundError{id: id}
@@ -2582,6 +2605,9 @@ func (m *Manager) MarkZombieIfTracked(id uint32) (tracked bool, newlyMarked bool
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.closing {
+		return false, false, nil
+	}
 	f, ok := m.files[id]
 	if !ok {
 		return false, false, nil
@@ -2601,6 +2627,10 @@ func (m *Manager) MarkZombieIfTracked(id uint32) (tracked bool, newlyMarked bool
 // This is useful when another component owns lifecycle/deletion.
 func (m *Manager) EvictSegment(id uint32) error {
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return nil
+	}
 	f, ok := m.files[id]
 	if !ok {
 		m.mu.Unlock()
@@ -2610,10 +2640,15 @@ func (m *Manager) EvictSegment(id uint32) error {
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "evict"}
 	}
-	m.forgetSegmentLocked(f)
+	m.retryWorkers.Add(1)
+	defer m.retryWorkers.Done()
+	m.detachSegmentLocked(f)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
-	return errors.Join(unobserveErr, f.Close())
+	// Keep the parent borrowable until the real Close joins an external closer.
+	closeErr := f.Close()
+	parent := releaseRetirementParent(f)
+	return errors.Join(unobserveErr, closeErr, closeRetirementParent(parent))
 }
 
 // RemapStats reports aggregate remap executions and tracked dead mappings.
@@ -2992,7 +3027,7 @@ func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublicat
 		m.mu.Unlock()
 		return err
 	}
-	if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+	if err := validateRetirementPath(f, identity); err != nil {
 		abortStableDeleteLease(lease)
 		m.mu.Unlock()
 		return err
@@ -3041,7 +3076,7 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, err
 	}
-	if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+	if err := validateRetirementPath(f, identity); err != nil {
 		abortStableDeleteLease(lease)
 		m.mu.Unlock()
 		return false, err
@@ -3076,7 +3111,7 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 		m.mu.Unlock()
 		return err
 	}
-	if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+	if err := validateRetirementPath(f, identity); err != nil {
 		abortStableDeleteLease(lease)
 		m.mu.Unlock()
 		return err
@@ -3087,7 +3122,9 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	return m.finishDirectSegmentDeletion(f, identity, lease)
 }
 
-var removeSegmentPath = os.Remove
+// Fault injection wraps the supplied operation; stable deletion supplies its
+// exact-root removal rather than reopening the diagnostic pathname.
+var removeSegmentPath = func(path string, remove func(string) error) error { return remove(path) }
 
 func segmentNamespaceResource(path string) durabilitycut.Resource {
 	if filepath.Base(filepath.Dir(filepath.Clean(path))) == "leaf_vlog" {
@@ -3097,7 +3134,7 @@ func segmentNamespaceResource(path string) durabilitycut.Resource {
 }
 
 func removeSegmentFileOnce(path string) (bool, error) {
-	err := removeSegmentPath(path)
+	err := removeSegmentPath(path, os.Remove)
 	if err == nil {
 		return true, durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, segmentNamespaceResource(path), filepath.Dir(path), path, "")
 	}
@@ -3135,19 +3172,19 @@ func removeSegmentFileWithRetry(path string) (bool, error) {
 	return false, lastErr
 }
 
-func removeSegmentFileOnceStable(path string, identity rootpublication.StableIdentity, stable bool) (bool, error) {
+func removeSegmentFileOnceStable(path string, identity rootpublication.StableIdentity, stable bool, parent *os.File) (bool, error) {
 	if stable {
-		return removeStableSegmentFileOnce(path, identity)
+		return removeStableSegmentFileOnce(path, identity, parent)
 	}
 	return removeSegmentFileOnce(path)
 }
 
-func removeSegmentFileWithRetryStable(path string, identity rootpublication.StableIdentity) (bool, error) {
+func removeSegmentFileWithRetryStable(path string, identity rootpublication.StableIdentity, parent *os.File) (bool, error) {
 	const attempts = 40
 	backoff := 25 * time.Millisecond
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		removed, err := removeSegmentFileOnceStable(path, identity, true)
+		removed, err := removeSegmentFileOnceStable(path, identity, true, parent)
 		if removed {
 			return true, err
 		}

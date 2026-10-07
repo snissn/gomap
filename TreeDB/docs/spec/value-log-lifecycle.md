@@ -147,17 +147,35 @@ ID remains an error. Every manager validates the current pathname
 against the captured retired identity independently of live-segment discovery,
 including entries that discovery filters out, such as directories. A replacement
 regular-file inode is a resource conflict; non-regular entries are refused, and a
-disappeared pathname is a benign deletion race. This
+disappeared pathname is a benign deletion race only when absence is proved
+through the physical parent retained at retirement admission. This
 check resolves only the parent directory's symlinks, preserving configured
 symlink segment directories, then opens a no-follow child of an exact parent
 handle and requires a regular file. It never resolves the segment child itself.
-A changed parent alias still has to yield the captured physical file identity;
+A changed parent alias still has to yield the captured physical parent and file identities;
 a conflicting replacement is refused and preserved. The Unix child open is
 nonblocking, so a replacement FIFO cannot stall refresh or reclamation while the manager lock is held. Links are refused,
 including links back to the original inode. Quarantine recovery uses the same
 safe identity lookup. The check does not access the retired handle.
 The manager captures a separate immutable retirement identity from its owned
-open handle before publishing a zombie or admitting explicit removal. It reuses
+open handle before publishing a zombie or admitting explicit removal. At that
+cold admission it also retains an exact physical-parent handle, independently
+of pin registration. A vanished alias or renamed physical directory cannot
+make the still-present target count as deleted. After actual File.Close completes,
+each physical attempt opens the configured parent again and verifies it against that retained physical identity. The checked
+operation root anchors quarantine creation, rename, identity lookup, rollback,
+unlink and recovery. Alias loss or a different parent before this capture refuses
+while the target remains. Later alias changes cannot redirect the captured root
+operations; the check does not promise an atomic alias-and-rename predicate.
+The saved parent is absence/comparison authority, never a fallback deletion path.
+Initial capture requires a linked child matching the open segment. A missing
+child or empty rebound parent at that first admission fails before retirement
+publication. After capture, genuine child absence is proved through the retained
+parent even when the configured parent name has disappeared.
+The parent survives failed attempts until successful ownership release, eviction
+or manager Close. Eviction keeps the parent borrowable until its actual File.Close
+joins; short operation borrows preserve it through that lifecycle transfer.
+The last owner or borrower closes it outside the manager mutex. It reuses
 the registered identity when available, without modifying the identity exposed
 to pinned readers. Refresh, deletion and retry use that retained identity even
 without an external pin registry. Capture failure leaves ownership and zombie
@@ -167,8 +185,11 @@ and registry observation until physical deletion succeeds, unless an explicit
 `EvictSegment` call transfers lifecycle ownership to its caller. Incomplete
 physical deletion leaves that owner excluded from new snapshots; refresh
 and explicit retries validate its captured identity rather than adopt a
-replacement. Quarantine unlink checks again after close. A successful deletion
-forgets only the same tracked file, so an explicitly evicted and newly registered
+replacement. Quarantine unlink checks again after close. A successful-absence
+result before rename must prove absence through the retained
+parent. A completed canonical-name rename retains its existing completion and
+deterministic-quarantine recovery semantics, including an injected post-unlink cut.
+Successful deletion forgets only the same tracked file, so an explicitly evicted and newly registered
 owner cannot be removed by an older operation. External registry leases
 separately enforce pin exclusion. `RemoveSegmentIfUnpinned` retains its existing
 admitted-attempt boolean when the returned error reports a failed deletion;
