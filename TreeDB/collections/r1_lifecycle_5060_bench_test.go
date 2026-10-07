@@ -26,15 +26,20 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 	requireStandaloneColumnProductionAuthorityTest(b)
 	documents := r1LifecycleDimension5060(b, "DOCUMENTS", 4096, 32)
 	callsPerEpoch := r1LifecycleDimension5060(b, "CALLS_PER_EPOCH", 1024, 8)
-	result := r1LifecycleResult5060{Schema: "gomap-r1-lifecycle-result-v2", Epochs: b.N, Documents: documents, CallsPerEpoch: callsPerEpoch}
+	result := r1LifecycleResult5060{Schema: "gomap-r1-lifecycle-result-v3", Epochs: b.N, Documents: documents, CallsPerEpoch: callsPerEpoch}
 	result.PID, result.GOMAXPROCS = os.Getpid(), runtime.GOMAXPROCS(0)
 	result.Schedule = r1LifecycleSchedule5060
 	operations := []string{"ordinary_get", "prepared_get", "indexed_update", "typed_replace", "delete", "typed_insert", "typed_upsert", "post_upsert_get"}
 	result.Operations = make(map[string]uint64, len(operations))
-	_, db, col := r1MutationOpen5059(b, true)
+	dir, db, col, cleanup := r1LifecycleNew5060(b, true)
+	result.FreshProfile = r1LifecycleProfile5060(b, db)
 	result.BackendProfile = string(db.ResolvedProfile())
 	var candidates []ColumnAssetRef
-	defer func() { _ = db.Close() }()
+	defer func() {
+		if err := cleanup(); err != nil {
+			b.Error(err)
+		}
+	}()
 	want, known := make(map[string]map[string]any, documents), r1MutationKnown5059()
 	fixture := sha256.New()
 	for start := 0; start < documents; start += 32 {
@@ -63,7 +68,7 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 	}
 	r1LifecycleAssert5060(b, held, captured, known)
 	result.FixtureSHA256 = fmt.Sprintf("%x", fixture.Sum(nil))
-	result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), "ingest"))
+	result.Census = append(result.Census, r1LifecycleCensus5060(b, dir, "ingest"))
 
 	samples := make([]int64, 0, callsPerEpoch*b.N)
 	seenIDs := make(map[string]int, min(documents, callsPerEpoch/2))
@@ -200,13 +205,13 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 		if epoch == 0 {
 			r1LifecycleAssert5060(b, held, captured, known)
 		}
-		result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("churn-%d", epoch)))
+		result.Census = append(result.Census, r1LifecycleCensus5060(b, dir, fmt.Sprintf("churn-%d", epoch)))
 		observe := func(phase string) {
 			r1LifecycleCurrent5060(b, col, want, known)
 			if epoch == 0 {
 				r1LifecycleAssert5060(b, held, captured, known)
 			}
-			result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), fmt.Sprintf("%s-%d", phase, epoch)))
+			result.Census = append(result.Census, r1LifecycleCensus5060(b, dir, fmt.Sprintf("%s-%d", phase, epoch)))
 		}
 		result.Maintenance = append(result.Maintenance, r1LifecycleFold5060(b, db, col, epoch, &candidates, observe))
 		if epoch == 0 {
@@ -218,9 +223,11 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 				b.Fatalf("held view release leaked handles: %+v", stats)
 			}
 			released := r1LifecycleReclaim5060(b, db, col, &candidates)
+			result.AfterViewReleaseFinal = new(r1LifecycleFinalRecord5060)
+			*result.AfterViewReleaseFinal = r1LifecycleFinal5060(b, db, col, &candidates)
 			result.AfterViewReleaseGC = &released
 			r1LifecycleCurrent5060(b, col, want, known)
-			result.Census = append(result.Census, r1LifecycleCensus5060(b, db.Dir(), "after_view_release"))
+			result.Census = append(result.Census, r1LifecycleCensus5060(b, dir, "after_view_release"))
 		}
 		b.StartTimer()
 	}
@@ -234,11 +241,10 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 	b.ReportMetric(float64(loopBytes)/float64(totalCalls), "loop-B/call")
 	b.ReportMetric(float64(loopAllocs)/float64(totalCalls), "loop-allocs/call")
 	b.ReportMetric(float64(heapHigh), "sampled-heap-high-B")
-	dir := db.Dir()
-	if err := db.Close(); err != nil {
+	if err := cleanup(); err != nil {
 		b.Fatal(err)
 	}
-	db = openTypedMinimaDB(b, dir)
+	db, cleanup, result.ReopenProfile = r1LifecycleOpen5060(b, dir)
 	col, err = NewCollectionManager(db).OpenCollection("r1")
 	if err != nil {
 		b.Fatal(err)
@@ -274,18 +280,23 @@ func BenchmarkR1Lifecycle5060(b *testing.B) {
 
 // Logical lengths, not allocated blocks; the walk includes every regular file
 // once and preserves unknown files as other rather than silently dropping them.
-func r1LifecycleCensus5060(b *testing.B, dir, phase string) r1LifecycleCensusRecord5060 {
+func r1LifecycleCensus5060(b testing.TB, dir, phase string) r1LifecycleCensusRecord5060 {
 	b.Helper()
 	bytes, files := make(map[string]int64), make(map[string]int)
-	for _, component := range []string{"index", "persistent_vlog", "persistent_leaf_log", "typed_assets", "redo_wal", "other"} {
+	for _, component := range []string{"index", "persistent_vlog", "persistent_leaf_log", "typed_assets", "redo_wal", "dictionary_store", "template_store", "immutable_manifest_metadata", "other"} {
 		bytes[component], files[component] = 0, 0
 	}
+	paths := make(map[string]r1LifecycleFileRecord5060)
+	var totalBytes int64
 	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !entry.Type().IsRegular() {
+		if entry.IsDir() {
 			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("census nonregular file: %s", path)
 		}
 		info, err := entry.Info()
 		if err != nil {
@@ -296,21 +307,11 @@ func r1LifecycleCensus5060(b *testing.B, dir, phase string) r1LifecycleCensusRec
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		component := "other"
-		switch {
-		case strings.HasPrefix(rel, "wal/"):
-			component = "redo_wal"
-		case strings.HasPrefix(rel, "value_vlog/"):
-			component = "persistent_vlog"
-		case strings.Contains(rel, "leaf_vlog/"):
-			component = "persistent_leaf_log"
-		case strings.Contains(rel, "column-assets/") || strings.Contains(rel, "column_assets/"):
-			component = "typed_assets"
-		case strings.HasSuffix(rel, ".db"), rel == "index.db.bak", rel == "index.db.new":
-			component = "index"
-		}
+		component := r1LifecycleFileComponent5060(rel)
 		bytes[component] += info.Size()
 		files[component]++
+		paths[rel] = r1LifecycleFileRecord5060{Component: component, Bytes: info.Size()}
+		totalBytes += info.Size()
 		return nil
 	})
 	if err != nil {
@@ -320,7 +321,7 @@ func r1LifecycleCensus5060(b *testing.B, dir, phase string) r1LifecycleCensusRec
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
 	b.Logf("phase=%s process_heap_alloc=%d heap_inuse=%d heap_objects=%d num_gc=%d (sampled, no forced GC)", phase, memory.HeapAlloc, memory.HeapInuse, memory.HeapObjects, memory.NumGC)
-	return r1LifecycleCensusRecord5060{Phase: phase, LogicalBytes: bytes, RegularFiles: files, HeapAlloc: memory.HeapAlloc, HeapInuse: memory.HeapInuse, HeapObjects: memory.HeapObjects, NumGC: memory.NumGC}
+	return r1LifecycleCensusRecord5060{Scope: "full-profile-root", Files: paths, TotalBytes: totalBytes, TotalFiles: len(paths), Phase: phase, LogicalBytes: bytes, RegularFiles: files, HeapAlloc: memory.HeapAlloc, HeapInuse: memory.HeapInuse, HeapObjects: memory.HeapObjects, NumGC: memory.NumGC}
 }
 
 func r1LifecycleDimension5060(b *testing.B, suffix string, fallback, multiple int) int {
@@ -337,44 +338,58 @@ func r1LifecycleDimension5060(b *testing.B, suffix string, fallback, multiple in
 }
 
 type r1LifecycleResult5060 struct {
-	Schedule             string                             `json:"schedule"`
-	BackendProfile       string                             `json:"backend_profile"`
-	DistinctIDs          int                                `json:"distinct_ids"`
-	RevisitedIDs         int                                `json:"cross_epoch_revisited_ids"`
-	RevisitedDistinctIDs int                                `json:"revisited_distinct_ids"`
-	IDCoverage           []r1LifecycleIDCoverage5060        `json:"id_coverage"`
-	AfterViewReleaseGC   *r1LifecycleReclaimRecord5060      `json:"after_view_release_gc"`
-	PID                  int                                `json:"pid"`
-	GOMAXPROCS           int                                `json:"gomaxprocs"`
-	Schema               string                             `json:"schema"`
-	Epochs               int                                `json:"epochs"`
-	Documents            int                                `json:"documents"`
-	CallsPerEpoch        int                                `json:"calls_per_epoch"`
-	FixtureSHA256        string                             `json:"fixture_sha256"`
-	TotalCalls           uint64                             `json:"total_calls"`
-	CallNS               uint64                             `json:"call_ns"`
-	LoopBytes            uint64                             `json:"loop_bytes"`
-	LoopAllocs           uint64                             `json:"loop_allocs"`
-	P95NS                uint64                             `json:"p95_ns"`
-	P99NS                uint64                             `json:"p99_ns"`
-	SampledHeapHigh      uint64                             `json:"sampled_heap_high_bytes"`
-	ProcessRetainedHeap  uint64                             `json:"process_retained_heap_bytes"`
-	Census               []r1LifecycleCensusRecord5060      `json:"census"`
-	Maintenance          []r1LifecycleMaintenanceRecord5060 `json:"maintenance"`
-	Operations           map[string]uint64                  `json:"operations"`
+	FreshProfile          r1LifecycleProfileRecord5060       `json:"fresh_profile"`
+	ReopenProfile         r1LifecycleProfileRecord5060       `json:"reopen_profile"`
+	AfterViewReleaseFinal *r1LifecycleFinalRecord5060        `json:"after_view_release_final"`
+	Schedule              string                             `json:"schedule"`
+	BackendProfile        string                             `json:"backend_profile"`
+	DistinctIDs           int                                `json:"distinct_ids"`
+	RevisitedIDs          int                                `json:"cross_epoch_revisited_ids"`
+	RevisitedDistinctIDs  int                                `json:"revisited_distinct_ids"`
+	IDCoverage            []r1LifecycleIDCoverage5060        `json:"id_coverage"`
+	AfterViewReleaseGC    *r1LifecycleReclaimRecord5060      `json:"after_view_release_gc"`
+	PID                   int                                `json:"pid"`
+	GOMAXPROCS            int                                `json:"gomaxprocs"`
+	Schema                string                             `json:"schema"`
+	Epochs                int                                `json:"epochs"`
+	Documents             int                                `json:"documents"`
+	CallsPerEpoch         int                                `json:"calls_per_epoch"`
+	FixtureSHA256         string                             `json:"fixture_sha256"`
+	TotalCalls            uint64                             `json:"total_calls"`
+	CallNS                uint64                             `json:"call_ns"`
+	LoopBytes             uint64                             `json:"loop_bytes"`
+	LoopAllocs            uint64                             `json:"loop_allocs"`
+	P95NS                 uint64                             `json:"p95_ns"`
+	P99NS                 uint64                             `json:"p99_ns"`
+	SampledHeapHigh       uint64                             `json:"sampled_heap_high_bytes"`
+	ProcessRetainedHeap   uint64                             `json:"process_retained_heap_bytes"`
+	Census                []r1LifecycleCensusRecord5060      `json:"census"`
+	Maintenance           []r1LifecycleMaintenanceRecord5060 `json:"maintenance"`
+	Operations            map[string]uint64                  `json:"operations"`
+}
+
+type r1LifecycleFileRecord5060 struct {
+	Component string `json:"component"`
+	Bytes     int64  `json:"bytes"`
 }
 
 type r1LifecycleCensusRecord5060 struct {
-	Phase        string           `json:"phase"`
-	LogicalBytes map[string]int64 `json:"logical_bytes"`
-	RegularFiles map[string]int   `json:"regular_files"`
-	HeapAlloc    uint64           `json:"heap_alloc"`
-	HeapInuse    uint64           `json:"heap_inuse"`
-	HeapObjects  uint64           `json:"heap_objects"`
-	NumGC        uint32           `json:"num_gc"`
+	Scope        string                               `json:"scope"`
+	Files        map[string]r1LifecycleFileRecord5060 `json:"files"`
+	TotalBytes   int64                                `json:"total_bytes"`
+	TotalFiles   int                                  `json:"total_files"`
+	Phase        string                               `json:"phase"`
+	LogicalBytes map[string]int64                     `json:"logical_bytes"`
+	RegularFiles map[string]int                       `json:"regular_files"`
+	HeapAlloc    uint64                               `json:"heap_alloc"`
+	HeapInuse    uint64                               `json:"heap_inuse"`
+	HeapObjects  uint64                               `json:"heap_objects"`
+	NumGC        uint32                               `json:"num_gc"`
 }
 
 type r1LifecycleMaintenanceRecord5060 struct {
+	Full                r1LifecycleFullRecord5060    `json:"full"`
+	Final               r1LifecycleFinalRecord5060   `json:"final"`
 	Epoch               int                          `json:"epoch"`
 	FlushNS             int64                        `json:"flush_ns"`
 	CheckpointNS        int64                        `json:"checkpoint_ns"`
@@ -407,4 +422,27 @@ type r1LifecycleIDCoverage5060 struct {
 func r1LifecycleAggregateGC5060(stats ColumnAssetGCStats) ColumnAssetGCStats {
 	stats.Plan.Entries, stats.Plan.SegmentEntries = nil, nil
 	return stats
+}
+
+func r1LifecycleFileComponent5060(rel string) string {
+	switch {
+	case strings.Contains(rel, "/wal/"):
+		return "redo_wal"
+	case strings.HasPrefix(rel, "dictdb/"):
+		return "dictionary_store"
+	case strings.HasPrefix(rel, "templatedb/"):
+		return "template_store"
+	case strings.HasPrefix(filepath.Base(rel), "manifest.durable."):
+		return "immutable_manifest_metadata"
+	case strings.Contains(rel, "/value_vlog/"):
+		return "persistent_vlog"
+	case strings.Contains(rel, "leaf_vlog/"):
+		return "persistent_leaf_log"
+	case strings.Contains(rel, "column-assets/") || strings.Contains(rel, "column_assets/"):
+		return "typed_assets"
+	case strings.HasSuffix(rel, ".db") || strings.HasSuffix(rel, "index.db.bak") || strings.HasSuffix(rel, "index.db.new"):
+		return "index"
+	default:
+		return "other"
+	}
 }

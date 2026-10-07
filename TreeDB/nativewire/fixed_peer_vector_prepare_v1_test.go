@@ -1108,6 +1108,17 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	// local follower FSM has caught up. Keep the real retry prefix required.
 	waitInsertPrefix(replay.CommitIndex)
 	checkDurableCompletions("snapshot-plus-tail reopen")
+	// DATA replay and durable preparation do not prove that the independent
+	// CATALOG Raft tail has replayed the ACTIVE lifecycle record on every voter.
+	// Wait for serving activation under the existing test context before asserting it.
+	fixedPeerWaitV1(t, ctx, func() bool {
+		for _, node := range nodes {
+			if node.preparedVector == nil || node.vector == nil || node.vectorInitializationPhaseV1() != "active" {
+				return false
+			}
+		}
+		return true
+	})
 	for _, node := range nodes {
 		if node.preparedVector == nil || node.vector == nil || node.vectorInitializationPhaseV1() != "active" {
 			t.Fatalf("voter %s did not recover prepared serving state", node.config.NodeID)

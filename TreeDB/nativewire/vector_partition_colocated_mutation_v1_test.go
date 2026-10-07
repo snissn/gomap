@@ -366,10 +366,13 @@ func TestFixedPeerColocatedExactIDMutationsRF4RealRaftV1(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Rejoining restarts independent DATA and CATALOG voters. Require
+		// actual catalog serving activation as well as the applied DATA prefix
+		// before the shared harness captures every voter's current backend.
 		fixedPeerWaitV1(t, ctx, func() bool {
 			for _, replica := range nodes {
 				status, err := replica.Status(ctx)
-				if err != nil || len(status.Groups) != 1 || status.Groups[0].Applied.Index < afterLeaderLoss.AppliedIndex {
+				if err != nil || len(status.Groups) != 1 || status.Groups[0].Applied.Index < afterLeaderLoss.AppliedIndex || status.VectorPhase != "active" {
 					return false
 				}
 			}
