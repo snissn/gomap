@@ -47,6 +47,13 @@ without another unlink. Its test-only admission
 barrier is fixed before the calls and runs outside manager and cleanup locks.
 `TestManagerRetirementIdentityCaptureFailure` requires failed identity capture to
 leave both zombie transitions and all four removal APIs before their state change.
+`TestManagerRetirementAdmissionBlocksEviction` pauses all four direct removal
+APIs, final Release and a real retry worker before their first parent borrow,
+with and without registry pins. Eviction must refuse while the exact owner and
+unused parent remain retained; successful unlink joins and balances admission.
+`TestManagerInactiveZombieAllowsEviction` proves that an inactive zombie remains
+evictable while its persistent segment stays on disk.
+
 Retirement state tests balance repeated marking, ownership removal, eviction and
 Close, preserve successful absence when the parent directory disappears, and race
 pinned registry-identity reads against retirement publication. Nil-registry special-
