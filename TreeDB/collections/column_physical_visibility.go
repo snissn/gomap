@@ -9,6 +9,7 @@ import (
 )
 
 type columnPhysicalVisibleRow struct {
+	Sparse            bool
 	Preserved         *columnRowCoordinates
 	Generation        uint64
 	PartID            uint64
@@ -253,7 +254,7 @@ func (c *Collection) latestColumnPhysicalVisibleRowAtSnapshot(
 			return nil
 		},
 	})
-	if err == nil && found && latest.Preserved != nil {
+	if err == nil && found && (latest.Preserved != nil || latest.Sparse) {
 		rows := []columnPhysicalVisibleRow{latest}
 		err = c.resolveColumnMetadataRows(nil, snap, catalog, cfg, projected, ColumnAssetReadIntegrityVerify, rows)
 		latest = rows[0]
@@ -270,7 +271,7 @@ func (c *Collection) resolveColumnMetadataRows(ctx context.Context, snap *backen
 	}()
 	var scratch columnPhysicalRowReaderScratch
 	for i := range rows {
-		if rows[i].Preserved == nil || rows[i].Deleted {
+		if (rows[i].Preserved == nil && !rows[i].Sparse) || rows[i].Deleted {
 			continue
 		}
 		if ctx != nil {
@@ -338,6 +339,7 @@ func (idx *columnPhysicalVisibilityIndex) upsert(row columnPhysicalScanRowView) 
 }
 
 func (idx *columnPhysicalVisibilityIndex) assignColumnPhysicalVisibleRow(dst *columnPhysicalVisibleRow, row columnPhysicalScanRowView) {
+	dst.Sparse = row.Sparse
 	dst.Preserved = row.Preserved
 	dst.Generation = row.Generation
 	dst.PartID = row.PartID
@@ -416,6 +418,7 @@ func (idx *columnPhysicalVisibilityIndex) cloneBytes(raw []byte) []byte {
 }
 
 func assignColumnPhysicalVisibleRow(dst *columnPhysicalVisibleRow, row columnPhysicalScanRowView) {
+	dst.Sparse = row.Sparse
 	dst.Preserved = row.Preserved
 	dst.Generation = row.Generation
 	dst.PartID = row.PartID

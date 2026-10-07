@@ -42,6 +42,7 @@ type lane struct {
 	vlogBlockCodec                 valuelog.BlockCodec
 	vlogCaps                       vlogWriterCaps
 	vlogMu                         sync.Mutex
+	finiteWorkspace                *PreparedFiniteLeafWorkspace // protected by vlogMu; optional prepared owner
 	vlogCh                         chan vlogWriteRequest
 	vlogWorkers                    int
 	vlogPrepCh                     chan vlogDictPrepareTask

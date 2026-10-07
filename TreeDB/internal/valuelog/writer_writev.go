@@ -175,6 +175,11 @@ func (w *Writer) shouldUseRawWritev(records []Record, k int, rawPayloadBytes int
 //
 // dst must be at least len(records) long.
 func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
+	if w != nil && w.finiteLoan != nil {
+		if err := w.finiteLoan.admitRawBatch(records, k, false); err != nil {
+			return nil, FrameStats{}, err
+		}
+	}
 	if w == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil writer")
 	}
@@ -424,6 +429,11 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 //
 // dst must be at least len(records) long.
 func (w *Writer) AppendRawFramesBufferedInto(records []Record, k int, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
+	if w != nil && w.finiteLoan != nil {
+		if err := w.finiteLoan.admitRawBatch(records, k, true); err != nil {
+			return nil, FrameStats{}, err
+		}
+	}
 	if w == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil writer")
 	}

@@ -102,15 +102,21 @@ its captured state.
 | Insert complete native rows | `InsertTypedBatchWithStats`: returned IDs follow input order. |
 | Replace existing rows | `ReplaceTypedBatch`: per-input `Matched` and `Modified`; missing IDs are unmatched. |
 | Insert missing and replace existing rows atomically | `UpsertTypedBatch`: count of existing IDs, including unchanged rows. |
-| Change selected fields | `UpdateBatch`: complete-document callback and per-input `Matched`/`Modified`. |
+| Patch declared strings | `PatchTypedStringsBatch`: explicit strings and optional expected row revision; matched/modified counts. |
+| Change general fields | `UpdateBatch`: complete-document callback and per-input `Matched`/`Modified`. |
 | Delete | `DeleteBatch`: count of previously present deleted IDs. |
 
 Native replacement and upsert supply all declared columns plus complete residual
 JSON. `UpdateBatch` reconstructs a complete current row and accepts a complete
 replacement or a no-op; it can change indexed strings and residual null/missing
 fields. That route incurs materialization and replacement work.
-`UpdateTypedMetadataByID` is restricted to `meta.*`, so use the generic callback
-for the selected top-level fields.
+`PatchTypedStringsBatch` accepts eligible row-owned declared strings without
+reconstructing unchanged fields. Supply the captured schema hash, an ID and
+explicit `{Column, Value}` edits. Empty strings are values; absent edits retain
+their existing physical source. The default residual mode preserves the primary
+entry exactly. Explicit Replace supplies the entire non-column JSON object.
+Use `UpdateBatch` for general JSON/null/deletion changes or unsupported schemas.
+`UpdateTypedMetadataByID` retains its `meta.*` restriction.
 
 Duplicate inputs or unique conflicts reject the batch without partial visible
 primary/index changes. Unique ownership handoffs within a valid batch use its

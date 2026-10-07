@@ -671,6 +671,32 @@ same operation without a vector parameter or automatic retry after ambiguous
 commit. See the normalized-vector and storage-format contracts for cold reads
 and fold costs.
 
+`Collection.PatchTypedStringsBatch(requests, expectedSchemaHash)` changes
+explicit declared string slots in one collection-local command. It owns IDs,
+edit names/values, optional expected row refs and residual bytes for the call.
+IDs must be distinct; missing IDs are skipped, but invalid explicit edits are
+rejected even for missing IDs. Each column appears at most once per request.
+The captured schema must match and use JSON non-column retention, classic
+manifest authority, row-owned string columns and supported scalar string
+indexes. Source-v2, vectors, lists, column-part owners and unsupported indexes
+are rejected before WAL. The operation returns matched and modified counts.
+
+An absent edit preserves its exact physical source; an empty string sets a
+present value. Null and deletion are not edit carriers. `Expected`, when
+present, must name the same ID and match its current full row revision. The
+default `TypedStringResidualPreserve` requires no supplied residual and emits
+no primary replacement. Existing persistent primary pointers remain exact;
+only the canonical empty inline residual is admitted on that route.
+`TypedStringResidualReplace` supplies the complete non-column JSON object,
+including matching ID, and cannot shadow declared paths. Missing residual
+fields are deleted by replacement; explicit null remains null. Indexed string
+changes validate final unique owners, permitting a valid swap in one batch.
+Equal edits create no own WAL publication. Stale expected refs, schema/input
+errors and unique conflicts fail before append; ambiguous ACKs retain the
+ordinary fence and must not be blindly retried. The existing metadata API
+remains restricted to `meta.*`; all-string metadata and native string patches
+coexist through flattened sources, without widening format 13's authority.
+
 | Method | Contract |
 |---|---|
 | `CollectionManager.CreateCollection` | WAL-off behavior publishes the catalog entry under the selected non-sync durability mode. Command-WAL behavior uses a `CatalogCreateCollection` frame and publishes the catalog root plus `AppliedCommandLSN` in one backend tuple. Retrying creation with identical metadata is idempotent; retrying with incompatible metadata fails without changing the existing collection. |

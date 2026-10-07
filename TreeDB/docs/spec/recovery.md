@@ -294,6 +294,30 @@ them coherently; a fold raced by post-capture metadata must retry. Errors after
 durable intent retain the normal commit-ambiguous/recovery-required fence, even
 for a subsequent no-op request.
 
+Declared-string patches use kind `CollectionUpdateBatchByID` (102), payload
+format 17, version 1. Its little-endian payload contains schema hash `u64`,
+schema count `u32`, document count `u32`, then a length-prefixed collection
+name. Each sorted distinct document contains a length-prefixed ID, predecessor
+generation/part/row/LSN (`u64` each), edit count `u32`, ascending distinct
+schema ordinal `u32` and length-prefixed UTF-8 string for each edit, a one-byte
+residual Replace flag, and length-prefixed residual bytes. Preserve requires
+an empty residual and at least one changed edit. Raw lengths/counts, canonical
+ordering and UTF-8 are validated before the owned decoder allocates. The
+command carries logical changed values and a preceding revision guard, never
+unchanged full-row values or primary/asset pointers.
+
+Replay checks collection/schema/count and predecessor coordinates against the
+current captured snapshot, validates residual ownership and re-enters the same
+native patch planner. Missing/tombstoned predecessors, stale guards, unknown
+ordinals and logical no-change frames fail closed. It preserves existing
+primary pointers when the command has no primary delta, builds fresh sparse
+row assets/flattened locators, validates final unique owners and publishes the
+same atomic roots plus applied LSN. Residual replacement uses the ordinary
+persistent value-log route. No second replay watermark or independent journal
+is introduced. CRL2/format 13 metadata remains restricted to its existing
+metadata semantics; all-string metadata writes can use CRL3 without adding
+non-metadata changes to format 13.
+
 Collection insert/update frames may use `CollectionTypedBatchByIDV1` (payload format
 11). Decode the accepted string/FP32 values and retained bytes separately,
 validate the typed schema against the opened collection, and pass the typed

@@ -356,6 +356,19 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 	if err != nil {
 		return nil, payload, result, err
 	}
+	// Only the flattened all-string route has no vector/list borrowed
+	// payloads. Preserve the existing non-string metadata path until those
+	// consumers have an equivalent owned read-session contract.
+	flatStrings := true
+	for _, col := range cfg.Columns {
+		owner, e := columnStoreColumnOwner(col)
+		flatStrings = flatStrings && e == nil && col.ValueType == ColumnStoreValueString && owner == TypedStorageOwnerRowAsset
+	}
+	if flatStrings {
+		if err := view.preparePointRowCredit(physical); err != nil {
+			return nil, payload, result, err
+		}
+	}
 	projection, err := view.pointRowScanProjection(physical, nil)
 	if err != nil {
 		return nil, payload, result, err
@@ -386,9 +399,26 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 		if err != nil {
 			return nil, payload, result, err
 		}
-		scoring, err := decodeColumnScoringRowLocatorBorrowedID(id, locator)
+		var scoring DocumentRowRef
+		var sources []columnRowCoordinates
+		if flatStrings {
+			sources, err = columnFieldSourcesForLocator(id, locator, cfg.Columns)
+		} else {
+			scoring, err = decodeColumnScoringRowLocatorBorrowedID(id, locator)
+		}
 		if err != nil {
 			return nil, payload, result, err
+		}
+		if flatStrings {
+			// The previous row's strings were copied into owned Go strings
+			// below. No borrowed value may remain when this boundary evicts
+			// row blocks or closes an asset handle.
+			clear(scratch.Values)
+			clear(oldValues)
+			clear(newValues)
+			if err := view.preparePointRowEmission(cfg, ColumnAssetReadIntegrityVerify); err != nil {
+				return nil, payload, result, err
+			}
 		}
 		row, err := view.fetchDocumentPointRow(physical, latest, projection, &scratch, nil)
 		if err != nil {
@@ -406,6 +436,11 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 					break
 				}
 			}
+		}
+		if flatStrings {
+			// CRL3 scatter reads may evict between sources after copying
+			// selected strings; release the final scratch aliases as well.
+			clear(scratch.Values)
 		}
 		copy(newValues, oldValues)
 		var object map[string]any
@@ -511,8 +546,19 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 			values[j] = newValues[j]
 			wal.Values = append(wal.Values, newValues[j].String)
 		}
-		preserved := columnCoordinates(scoring)
-		plan.metadataDocuments = append(plan.metadataDocuments, columnWriteDocument{ID: bytes.Clone(id), Document: retained, preserved: &preserved, declaredValues: values, declaredValuesReady: true})
+		if flatStrings {
+			stored := make([]bool, len(cfg.Columns))
+			for _, j := range columns {
+				if oldValues[j].Type != newValues[j].Type || oldValues[j].Present != newValues[j].Present || oldValues[j].Null != newValues[j].Null || oldValues[j].String != newValues[j].String {
+					stored[j] = true
+					sources[j] = columnRowCoordinates{}
+				}
+			}
+			plan.nativeStringDocuments = append(plan.nativeStringDocuments, columnWriteDocument{ID: bytes.Clone(id), Document: retained, fieldSources: sources, storedColumns: stored, declaredValues: values, declaredValuesReady: true})
+		} else {
+			preserved := columnCoordinates(scoring)
+			plan.metadataDocuments = append(plan.metadataDocuments, columnWriteDocument{ID: bytes.Clone(id), Document: retained, preserved: &preserved, declaredValues: values, declaredValuesReady: true})
+		}
 		payload.Documents = append(payload.Documents, wal)
 		plan.results[pos].Modified = true
 		result.ModifiedCount++
@@ -521,72 +567,10 @@ func (c *Collection) buildTypedMetadataPlan(ids [][]byte, set map[string]any, un
 	if len(changed) == 0 {
 		return plan, payload, result, nil
 	}
-	replacements := batchUniqueReplacementOwners(runtimes, changed)
-	for _, update := range changed {
-		if err := rejectReplaceUniqueConflictsOrdered(plan.snap, catalog, runtimes, update, replacements); err != nil {
-			return nil, payload, result, err
-		}
-	}
-	if err := rejectBatchUniqueConflicts(runtimes, changed); err != nil {
+	if err := buildTypedMutationRootDeltas(plan, changed, runtimes, opts, func(preparedBatchUpdate) bool { return true }); err != nil {
 		return nil, payload, result, err
 	}
-	add := func(name string, policy backenddb.OrderedRootStoragePolicy, table memtable.Table) {
-		plan.rootNames = append(plan.rootNames, name)
-		plan.baseRootIDs[name] = catalog.rootID(name)
-		plan.policies = append(plan.policies, policy)
-		plan.deltaTables = append(plan.deltaTables, table)
-	}
-	primary := newCollectionRunTable(len(changed))
-	for _, update := range changed {
-		setCollectionRunCopiedValue(primary, update.documentID, update.document)
-	}
-	primary.Freeze()
-	add(collectionPrimaryRootName(plan.meta.Name), opts.dataStoragePolicy, primary)
-	if len(runtimes) > 0 && persistIndexStateForOptions(opts) {
-		var stateTable memtable.Table
-		for _, update := range changed {
-			if !update.indexStateChanged {
-				continue
-			}
-			if stateTable == nil {
-				stateTable = newCollectionRunTable(len(changed))
-				add(collectionIndexStateRootName(plan.meta.Name), opts.indexStateStoragePolicy, stateTable)
-			}
-			raw, err := encodeRuntimeOrderedDocumentIndexState(update.newState, runtimes)
-			if err != nil {
-				return nil, payload, result, err
-			}
-			stateTable.SetSteal(bytes.Clone(update.documentID), raw)
-		}
-		if stateTable != nil {
-			stateTable.Freeze()
-		}
-	}
-	for j, runtime := range runtimes {
-		var table memtable.Table
-		for _, update := range changed {
-			if !orderedDocumentIndexRuntimeChanged(update.oldState, update.newState, j) {
-				continue
-			}
-			if table == nil {
-				table = newCollectionRunTable(0)
-				add(runtimeSecondaryRootName(plan.meta.Name, runtime), runtime.def.storagePolicy, table)
-			}
-			for _, value := range update.oldState.valuesAt(j) {
-				if _, err := deleteCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, value, update.documentID); err != nil {
-					return nil, payload, result, err
-				}
-			}
-			for _, value := range update.newState.valuesAt(j) {
-				if _, err := setCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, value, update.documentID); err != nil {
-					return nil, payload, result, err
-				}
-			}
-		}
-		if table != nil {
-			table.Freeze()
-		}
-	}
+
 	return plan, payload, result, nil
 }
 
@@ -702,4 +686,83 @@ func applyTypedMetadataPath(object map[string]any, path string, value any, unset
 	}
 	object[key] = value
 	return true, nil
+}
+
+func buildTypedMutationRootDeltas(plan *updateBatchPlan, changed []preparedBatchUpdate, runtimes []indexRuntime, opts collectionOptions, writePrimary func(preparedBatchUpdate) bool) error {
+	catalog := plan.catalog
+	replacements := batchUniqueReplacementOwners(runtimes, changed)
+	for _, update := range changed {
+		if err := rejectReplaceUniqueConflictsOrdered(plan.snap, catalog, runtimes, update, replacements); err != nil {
+			return err
+		}
+	}
+	if err := rejectBatchUniqueConflicts(runtimes, changed); err != nil {
+		return err
+	}
+	add := func(name string, policy backenddb.OrderedRootStoragePolicy, table memtable.Table) {
+		plan.rootNames = append(plan.rootNames, name)
+		plan.baseRootIDs[name] = catalog.rootID(name)
+		plan.policies = append(plan.policies, policy)
+		plan.deltaTables = append(plan.deltaTables, table)
+	}
+	var primary memtable.Table
+	for _, update := range changed {
+		if !writePrimary(update) {
+			continue
+		}
+		if primary == nil {
+			primary = newCollectionRunTable(len(changed))
+		}
+		setCollectionRunCopiedValue(primary, update.documentID, update.document)
+	}
+	if primary != nil {
+		primary.Freeze()
+		add(collectionPrimaryRootName(plan.meta.Name), opts.dataStoragePolicy, primary)
+	}
+	if len(runtimes) > 0 && persistIndexStateForOptions(opts) {
+		var stateTable memtable.Table
+		for _, update := range changed {
+			if !update.indexStateChanged {
+				continue
+			}
+			if stateTable == nil {
+				stateTable = newCollectionRunTable(len(changed))
+				add(collectionIndexStateRootName(plan.meta.Name), opts.indexStateStoragePolicy, stateTable)
+			}
+			raw, err := encodeRuntimeOrderedDocumentIndexState(update.newState, runtimes)
+			if err != nil {
+				return err
+			}
+			stateTable.SetSteal(bytes.Clone(update.documentID), raw)
+		}
+		if stateTable != nil {
+			stateTable.Freeze()
+		}
+	}
+	for j, runtime := range runtimes {
+		var table memtable.Table
+		for _, update := range changed {
+			if !orderedDocumentIndexRuntimeChanged(update.oldState, update.newState, j) {
+				continue
+			}
+			if table == nil {
+				table = newCollectionRunTable(0)
+				add(runtimeSecondaryRootName(plan.meta.Name, runtime), runtime.def.storagePolicy, table)
+			}
+			for _, value := range update.oldState.valuesAt(j) {
+				if _, err := deleteCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, value, update.documentID); err != nil {
+					return err
+				}
+			}
+			for _, value := range update.newState.valuesAt(j) {
+				if _, err := setCollectionSecondaryIndexEntryForValueType(table, runtime.def.valueType, value, update.documentID); err != nil {
+					return err
+				}
+			}
+		}
+		if table != nil {
+			table.Freeze()
+		}
+	}
+	return nil
 }

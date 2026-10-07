@@ -970,6 +970,13 @@ func readOnlyWorkerTarget(opts ApplyOptions) int {
 // preparation or validation fails, no root apply runs and no durable output
 // ownership is produced.
 func (z *Zipper) ApplyWithOptions(rootID uint64, b *batch.Batch, opts ApplyOptions) (ApplyResult, error) {
+	if z.preparedOwned != nil {
+		// This serial owner preserves ordinary B1 maintenance. Span-native and
+		// parallel routes have separate ownership and maintenance contracts.
+		if opts.SpanNativeApply || opts.ParallelApplyConcurrency > 1 {
+			return ApplyResult{}, ErrPreparedOwnedWorkspace
+		}
+	}
 	var prepared ReadOnlyPrepareResult
 	var preparedNs uint64
 	result := ApplyResult{}
@@ -1092,6 +1099,16 @@ func (z *Zipper) PrepareReadOnly(rootID uint64, b *batch.Batch, opts ReadOnlyPre
 // PrepareReadOnly and exists for hot planning paths that already own canonical
 // op slices.
 func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []batch.DeleteRange, opts ReadOnlyPrepareOptions) (ReadOnlyPrepareResult, error) {
+	if z.preparedOwned != nil {
+		if err := z.preparedOwned.validateRoot(z, rootID, ops, ranges); err != nil {
+			return ReadOnlyPrepareResult{}, err
+		}
+		// The closed owned lane admits aggregate point preparation only.
+		// Retained spans/key arenas and caller callbacks need their own ledger.
+		if !opts.OmitKeys || !opts.DiscardLeafSpans || !opts.CountTouchedOldEntries || opts.LeafSpanCallback != nil || len(opts.leafSpans) != 0 || cap(opts.leafSpans) != 0 || cap(opts.keyArena) != 0 || !z.preparedOwned.buildersAdmitted || z.preparedOwned.applyScratch == nil {
+			return ReadOnlyPrepareResult{}, ErrPreparedOwnedWorkspace
+		}
+	}
 	result := ReadOnlyPrepareResult{
 		OmitKeys:               opts.OmitKeys,
 		OmitOpKeys:             opts.OmitOpKeys || opts.OmitKeys,
@@ -1164,6 +1181,10 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 	oldNode, _, leafScratch, leafScratchRef, loadSource, err := z.loadNodeRef(ref, scratch)
 	if err != nil {
 		return err
+	}
+	if z.preparedOwned != nil {
+		oldNode.SetFixedKeyScratch(z.preparedOwned.prepareKeyScratch)
+		defer oldNode.TakeKeyScratch()
 	}
 	recordZipperNodeLoad(&result.Metrics, ref, oldNode, loadSource)
 	if leafScratchRef {

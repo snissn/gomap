@@ -14755,11 +14755,12 @@ type vlogDictPrepareTask struct {
 }
 
 type vlogDictPrepareResult struct {
-	fi      int
-	body    []byte
-	bodyBuf *vlogPreparedFrameBody
-	stats   valuelog.FrameStats
-	err     error
+	fi         int
+	body       []byte
+	bodyBuf    *vlogPreparedFrameBody
+	finiteBody *valuelog.FiniteFramePreparer
+	stats      valuelog.FrameStats
+	err        error
 }
 
 func (db *DB) publishVlogDictPrepareResult(task vlogDictPrepareTask, res vlogDictPrepareResult) {
@@ -17273,15 +17274,25 @@ func (db *DB) appendWALOneChecked(l *lane, record logRecord, durability journalD
 }
 
 type preparedDictFrame struct {
-	start   int
-	end     int
-	body    []byte
-	bodyBuf *vlogPreparedFrameBody
-	stats   valuelog.FrameStats
+	start      int
+	end        int
+	body       []byte
+	bodyBuf    *vlogPreparedFrameBody
+	finiteBody *valuelog.FiniteFramePreparer
+	stats      valuelog.FrameStats
 }
 
 func releasePreparedDictFrame(frame *preparedDictFrame) {
-	if frame == nil || frame.bodyBuf == nil {
+	if frame == nil {
+		return
+	}
+	if frame.finiteBody != nil {
+		frame.finiteBody.ReleaseBody()
+		frame.finiteBody = nil
+		frame.body = nil
+		return
+	}
+	if frame.bodyBuf == nil {
 		return
 	}
 	putVlogPreparedFrameBody(frame.bodyBuf)
@@ -17630,7 +17641,30 @@ func (db *DB) appendValueLogObserved(l *lane, dictID uint64, dict []byte, record
 	return ptrs, err
 }
 
-func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture, observer valuelog.ProducedFrameObserver) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
+func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture, observer valuelog.ProducedFrameObserver, finite ...*PreparedFiniteLeafWorkspace) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
+	var workspace *PreparedFiniteLeafWorkspace
+	if len(finite) > 1 {
+		return nil, nil, errPreparedFiniteLeafWorkspace
+	}
+	if len(finite) == 1 {
+		workspace = finite[0]
+	}
+	var ownedPtrs []page.ValuePtr
+	if workspace != nil {
+		// Stable capture and producer observers still need a separately reviewed
+		// bounded token/registry owner; do not fall back to their generic allocation.
+		if capture != nil || observer != nil {
+			return nil, nil, errPreparedFiniteLeafWorkspace
+		}
+		if err := workspace.validateSelectorInputs(db, l, dictID, dict, len(records)); err != nil {
+			return nil, nil, err
+		}
+		var pointerErr error
+		ownedPtrs, pointerErr = workspace.preparePointers(len(records))
+		if pointerErr != nil {
+			return nil, nil, pointerErr
+		}
+	}
 	if !db.splitValueLogEnabled() {
 		return nil, nil, errWALUnavailable
 	}
@@ -17924,6 +17958,9 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 	}
 	rawLimit := db.valueLogBlockRawLimit(l, finalWriteMode, retainedStorageFirstBatch || valueLogRecordsLookRetainedJSONLike(records))
 	recordBlockK := !retainedStorageFirstBatch && db.valueLogBlockRawLimit(l, finalWriteMode, false) > 0
+	if workspace != nil && (prepareWriteMode == vlogWriteDict || prepareWriteMode == vlogWriteBlock && db.shouldUseVlogDictPrepWorkers(l, 2, rawPayloadBytes)) {
+		return nil, nil, errPreparedFiniteLeafWorkspace
+	}
 	preparedDictFrames, prepEncodeWallNs, prepareErr := db.prepareAppendFrames(
 		l,
 		dictID,
@@ -17958,6 +17995,11 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		lockWaitStart = time.Now()
 	}
 	l.vlogMu.Lock()
+	if laneErr := workspace.beginLane(l); laneErr != nil {
+		workspace.endLane(l)
+		l.vlogMu.Unlock()
+		return nil, nil, laneErr
+	}
 	lockHoldStart := time.Time{}
 	if leafLogAppend || durability == journalDurabilitySync {
 		waited := time.Since(lockWaitStart)
@@ -17972,17 +18014,20 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		lockHoldStart = time.Now()
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
 		return nil, nil, err
 	}
 	w := l.vlog
 	if w == nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
 		return nil, nil, errWALUnavailable
 	}
 	if capture != nil {
 		stableWriter, ok := w.(stableValueWriter)
 		if !ok {
+			workspace.endLane(l)
 			l.vlogMu.Unlock()
 			return nil, nil, fmt.Errorf("%w: outer-leaf writer lacks stable capture", rootpublication.ErrUnresolvedResource)
 		}
@@ -17990,6 +18035,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		// Pay that debt before max-segment rotation or any append can mutate the
 		// newly-created segment.
 		if err := stableWriter.CertifyStableCreationNamespace(); err != nil {
+			workspace.endLane(l)
 			l.vlogMu.Unlock()
 			return nil, nil, err
 		}
@@ -18012,6 +18058,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		}
 	}
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeldCapture(l, w, capture); rotateErr != nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
 		return nil, nil, rotateErr
 	}
@@ -18021,6 +18068,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 	// Rotation may replace the writer; reload it before appending.
 	w = l.vlog
 	if w == nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
 		return nil, nil, errWALUnavailable
 	}
@@ -18073,6 +18121,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 			}
 			if est > 0 && w.Size() > maxBytes-est {
 				if rotateErr := db.rotateValueLogMuHeldCapture(l, capture); rotateErr != nil {
+					workspace.endLane(l)
 					l.vlogMu.Unlock()
 					return nil, nil, rotateErr
 				}
@@ -18081,6 +18130,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 				// segment and capabilities match the writer instance.
 				w = l.vlog
 				if w == nil {
+					workspace.endLane(l)
 					l.vlogMu.Unlock()
 					return nil, nil, errWALUnavailable
 				}
@@ -18104,7 +18154,10 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 	}
 	if usePreparedFrames {
 		rawBatchUsed = true
-		ptrs = cowValueLogPtrs(len(records), observer)
+		ptrs = ownedPtrs
+		if workspace == nil {
+			ptrs = cowValueLogPtrs(len(records), observer)
+		}
 		for fi := range preparedDictFrames {
 			pf := &preparedDictFrames[fi]
 			if maxBytes := db.valueLogMaxSegmentBytesForLane(l); maxBytes > 0 && len(pf.body) > 0 && w.Size() > maxBytes-int64(len(pf.body)) {
@@ -18173,26 +18226,50 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		useRawBatch := dictID == 0 && finalWriteMode != vlogWriteBlock && len(records) > 1
 		preferBufferedRaw := useRawBatch && hasRawBufferedInto && !autoRawBypass
 		if useRawBatch && (preferBufferedRaw || hasRawInto) {
-			ptrs = cowValueLogPtrs(len(records), observer)
+			ptrs = ownedPtrs
+			if workspace == nil {
+				ptrs = cowValueLogPtrs(len(records), observer)
+			}
 			var (
 				stats    valuelog.FrameStats
 				batchErr error
 			)
 			oldObserver, observerErr := installCOWProducerObserver(w, observer)
 			if observerErr != nil {
+				workspace.endLane(l)
 				l.vlogMu.Unlock()
-				putCOWValueLogPtrs(ptrs, observer)
+				if workspace == nil {
+					putCOWValueLogPtrs(ptrs, observer)
+				}
 				return nil, nil, observerErr
+			}
+			var loan *valuelog.FiniteWriterLoan
+			if workspace != nil {
+				var loanErr error
+				loan, loanErr = workspace.beginWriter(w, len(records), rawPayloadBytes)
+				if loanErr != nil {
+					restoreCOWProducerObserver(w, observer, oldObserver)
+					workspace.endLane(l)
+					l.vlogMu.Unlock()
+					return nil, nil, loanErr
+				}
 			}
 			if preferBufferedRaw {
 				_, stats, batchErr = rawBufferedInto.AppendRawFramesBufferedInto(records, k, ptrs)
 			} else {
 				_, stats, batchErr = rawWriterInto.AppendRawFramesWritevInto(records, k, ptrs)
 			}
+			if loan != nil {
+				if closeErr := loan.Close(); batchErr == nil {
+					batchErr = closeErr
+				}
+			}
 			restoreCOWProducerObserver(w, observer, oldObserver)
 			if batchErr != nil {
 				err = batchErr
-				putCOWValueLogPtrs(ptrs, observer)
+				if workspace == nil {
+					putCOWValueLogPtrs(ptrs, observer)
+				}
 				ptrs = nil
 			} else {
 				rawFrameBytes = stats.RawPayloadBytes
@@ -18204,7 +18281,10 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 				}
 			}
 		} else {
-			ptrs = cowValueLogPtrs(len(records), observer)
+			ptrs = ownedPtrs
+			if workspace == nil {
+				ptrs = cowValueLogPtrs(len(records), observer)
+			}
 		}
 	}
 	if err == nil && !rawBatchUsed {
@@ -18216,6 +18296,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 				if leafLogAppend {
 					appendHold += time.Since(lockHoldStart)
 				}
+				workspace.endLane(l)
 				l.vlogMu.Unlock()
 				runtime.Gosched()
 				relockWaitStart := time.Time{}
@@ -18237,8 +18318,11 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 				}
 				w = l.vlog
 				if w == nil {
+					workspace.endLane(l)
 					l.vlogMu.Unlock()
-					putCOWValueLogPtrs(ptrs, observer)
+					if workspace == nil {
+						putCOWValueLogPtrs(ptrs, observer)
+					}
 					return nil, nil, errWALUnavailable
 				}
 				if l.vlogCaps.writer != w {
@@ -18305,7 +18389,26 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 					err = observerErr
 					break
 				}
+				var loan *valuelog.FiniteWriterLoan
+				if workspace != nil {
+					raw := 0
+					for j := i; j < end; j++ {
+						raw += len(records[j].Value)
+					}
+					var loanErr error
+					loan, loanErr = workspace.beginWriter(w, end-i, raw)
+					if loanErr != nil {
+						restoreCOWProducerObserver(w, observer, oldObserver)
+						err = loanErr
+						break
+					}
+				}
 				_, stats, frameErr := statsWriterInto.AppendFrameWithStatsInto(dictID, dict, records[i:end], dst)
+				if loan != nil {
+					if closeErr := loan.Close(); frameErr == nil {
+						frameErr = closeErr
+					}
+				}
 				restoreCOWProducerObserver(w, observer, oldObserver)
 				if frameErr != nil {
 					err = frameErr
@@ -18329,6 +18432,10 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 					encodeRawBytes += stats.RawPayloadBytes
 				}
 				continue
+			}
+			if workspace != nil {
+				err = errPreparedFiniteLeafWorkspace
+				break
 			}
 			if hasStats {
 				oldObserver, observerErr := installCOWProducerObserver(w, observer)
@@ -18434,6 +18541,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 	if leafLogAppend {
 		appendHold += time.Since(lockHoldStart)
 	}
+	workspace.endLane(l)
 	l.vlogMu.Unlock()
 	if len(retainPaths) > 0 {
 		for _, path := range retainPaths {
@@ -18444,12 +18552,16 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		db.markValueLogRetain(retainPath)
 	}
 	if err != nil {
-		putCOWValueLogPtrs(ptrs, observer)
+		if workspace == nil {
+			putCOWValueLogPtrs(ptrs, observer)
+		}
 		return nil, nil, err
 	}
 	for i := range ptrs {
 		if !page.IsValueLogFileID(ptrs[i].FileID) {
-			putCOWValueLogPtrs(ptrs, observer)
+			if workspace == nil {
+				putCOWValueLogPtrs(ptrs, observer)
+			}
 			return nil, nil, fmt.Errorf("cachingdb: appendValueLog produced invalid pointer idx=%d ptr=%+v", i, ptrs[i])
 		}
 	}
@@ -18573,7 +18685,9 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 	}
 	resources, err := capture.freeze(ptrs)
 	if err != nil {
-		putCOWValueLogPtrs(ptrs, observer)
+		if workspace == nil {
+			putCOWValueLogPtrs(ptrs, observer)
+		}
 		return nil, nil, err
 	}
 	return ptrs, resources, nil
@@ -18587,7 +18701,22 @@ func (db *DB) appendValueLogOneRaw(l *lane, dictID uint64, dict []byte, rid uint
 	return db.appendValueLogOneInternal(l, dictID, dict, rid, value, durability, true)
 }
 
-func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool) (page.ValuePtr, string, error) {
+func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid uint64, value []byte, durability journalDurability, allowQueue bool, finite ...*PreparedFiniteLeafWorkspace) (page.ValuePtr, string, error) {
+	var workspace *PreparedFiniteLeafWorkspace
+	if len(finite) > 1 {
+		return page.ValuePtr{}, "", errPreparedFiniteLeafWorkspace
+	}
+	if len(finite) == 1 {
+		workspace = finite[0]
+	}
+	if workspace != nil {
+		if allowQueue {
+			return page.ValuePtr{}, "", errPreparedFiniteLeafWorkspace
+		}
+		if err := workspace.validateSelectorInputs(db, l, dictID, dict, 1); err != nil {
+			return page.ValuePtr{}, "", err
+		}
+	}
 	if !db.splitValueLogEnabled() {
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
@@ -18772,15 +18901,24 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			keepIoNs = 0
 			keepEncodeNs = 0
 		}
-		prepared, prepNs, prepErr := db.prepareAppendFrameOne(
-			rid,
-			value,
-			finalWriteMode,
-			finalBlockCodec,
-			keepIoNs,
-			keepEncodeNs,
-			keepSafety,
-		)
+		var prepared preparedDictFrame
+		var prepNs int64
+		var prepErr error
+		if workspace != nil {
+			prepStart := time.Now()
+			prepared, prepErr = workspace.prepareFrameOne(rid, value, finalBlockCodec, keepIoNs, keepEncodeNs, keepSafety)
+			prepNs = time.Since(prepStart).Nanoseconds()
+		} else {
+			prepared, prepNs, prepErr = db.prepareAppendFrameOne(
+				rid,
+				value,
+				finalWriteMode,
+				finalBlockCodec,
+				keepIoNs,
+				keepEncodeNs,
+				keepSafety,
+			)
+		}
 		if prepErr != nil {
 			return page.ValuePtr{}, "", prepErr
 		}
@@ -18792,26 +18930,30 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	}
 
 	if allowQueue && db.shouldQueueValueLogOne(l, dictID, len(value), durability, finalWriteMode, wallStart) {
-		if preparedOneFrame.bodyBuf != nil {
+		if preparedOneFrame.bodyBuf != nil || preparedOneFrame.finiteBody != nil {
 			releasePreparedDictFrame(&preparedOneFrame)
 		}
 		if dictID == 0 && !l.vlogQueueing.Load() && l.vlogMu.TryLock() {
 			if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+				workspace.endLane(l)
 				l.vlogMu.Unlock()
 				return page.ValuePtr{}, "", err
 			}
 			w := l.vlog
 			if w == nil {
+				workspace.endLane(l)
 				l.vlogMu.Unlock()
 				return page.ValuePtr{}, "", errWALUnavailable
 			}
 			if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+				workspace.endLane(l)
 				l.vlogMu.Unlock()
 				return page.ValuePtr{}, "", rotateErr
 			}
 			// Reload writer in case rotation replaced l.vlog.
 			w = l.vlog
 			if w == nil {
+				workspace.endLane(l)
 				l.vlogMu.Unlock()
 				return page.ValuePtr{}, "", errWALUnavailable
 			}
@@ -18889,6 +19031,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			if db.testBeforeVlogUnlock != nil {
 				db.testBeforeVlogUnlock(int(l.id))
 			}
+			workspace.endLane(l)
 			l.vlogMu.Unlock()
 			if err != nil {
 				return page.ValuePtr{}, "", err
@@ -18969,6 +19112,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		lockWaitStart = time.Now()
 	}
 	l.vlogMu.Lock()
+	if laneErr := workspace.beginLane(l); laneErr != nil {
+		workspace.endLane(l)
+		l.vlogMu.Unlock()
+		releasePreparedDictFrame(&preparedOneFrame)
+		return page.ValuePtr{}, "", laneErr
+	}
 	lockHoldStart := time.Time{}
 	if leafLogAppend || durability == journalDurabilitySync {
 		waited := time.Since(lockWaitStart)
@@ -18983,23 +19132,26 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		lockHoldStart = time.Now()
 	}
 	if err := db.ensureValueLogWriterMuHeld(l); err != nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
-		if preparedOneFrame.bodyBuf != nil {
+		if preparedOneFrame.bodyBuf != nil || preparedOneFrame.finiteBody != nil {
 			releasePreparedDictFrame(&preparedOneFrame)
 		}
 		return page.ValuePtr{}, "", err
 	}
 	w := l.vlog
 	if w == nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
-		if preparedOneFrame.bodyBuf != nil {
+		if preparedOneFrame.bodyBuf != nil || preparedOneFrame.finiteBody != nil {
 			releasePreparedDictFrame(&preparedOneFrame)
 		}
 		return page.ValuePtr{}, "", errWALUnavailable
 	}
 	if rotateErr := db.rotateValueLogForMaxSegmentMuHeld(l, w); rotateErr != nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
-		if preparedOneFrame.bodyBuf != nil {
+		if preparedOneFrame.bodyBuf != nil || preparedOneFrame.finiteBody != nil {
 			releasePreparedDictFrame(&preparedOneFrame)
 		}
 		return page.ValuePtr{}, "", rotateErr
@@ -19007,8 +19159,9 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	// Reload writer in case rotation replaced l.vlog.
 	w = l.vlog
 	if w == nil {
+		workspace.endLane(l)
 		l.vlogMu.Unlock()
-		if preparedOneFrame.bodyBuf != nil {
+		if preparedOneFrame.bodyBuf != nil || preparedOneFrame.finiteBody != nil {
 			releasePreparedDictFrame(&preparedOneFrame)
 		}
 		return page.ValuePtr{}, "", errWALUnavailable
@@ -19025,8 +19178,8 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	startSize := w.Size()
 	flushedBoundary := false
 	syncedBoundary := false
-	usePreparedOneFrame := preparedOneFrame.bodyBuf != nil && caps.prepared != nil
-	if preparedOneFrame.bodyBuf != nil && caps.prepared == nil {
+	usePreparedOneFrame := (preparedOneFrame.bodyBuf != nil || preparedOneFrame.finiteBody != nil) && caps.prepared != nil
+	if (preparedOneFrame.bodyBuf != nil || preparedOneFrame.finiteBody != nil) && caps.prepared == nil {
 		releasePreparedDictFrame(&preparedOneFrame)
 	}
 
@@ -19037,6 +19190,16 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 		compressionResetter.ResetCompressionHints()
 	}
 
+	var loan *valuelog.FiniteWriterLoan
+	if workspace != nil {
+		loan, err = workspace.beginWriter(w, 1, len(value))
+		if err != nil {
+			releasePreparedDictFrame(&preparedOneFrame)
+			workspace.endLane(l)
+			l.vlogMu.Unlock()
+			return page.ValuePtr{}, "", err
+		}
+	}
 	stats := valuelog.FrameStats{Records: 1, RawPayloadBytes: len(value), StoredPayloadBytes: len(value)}
 	if usePreparedOneFrame {
 		pf := &preparedOneFrame
@@ -19112,6 +19275,12 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 			}
 		}
 	}
+	if loan != nil {
+		if closeErr := loan.Close(); err == nil {
+			err = closeErr
+		}
+	}
+
 	if err == nil {
 		switch durability {
 		case journalDurabilityFlush:
@@ -19152,6 +19321,7 @@ func (db *DB) appendValueLogOneInternal(l *lane, dictID uint64, dict []byte, rid
 	if leafLogAppend {
 		appendHold += time.Since(lockHoldStart)
 	}
+	workspace.endLane(l)
 	l.vlogMu.Unlock()
 	if err != nil {
 		return page.ValuePtr{}, "", err
@@ -28882,7 +29052,11 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 	} else {
 		var w *valuelog.Writer
 		if db.isLeafLogAppendLane(l) {
-			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+			if l.finiteWorkspace != nil {
+				w, err = valuelog.NewWriterWithFiniteBacking(path, fileID, db.valueLogIdentityPins, l.finiteWorkspace.writerBacking)
+			} else {
+				w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+			}
 		} else {
 			w, err = valuelog.NewWriter(path, fileID)
 		}
@@ -28972,7 +29146,11 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 	}
 	var w *valuelog.Writer
 	if db.isLeafLogAppendLane(l) {
-		w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+		if l.finiteWorkspace != nil {
+			w, err = valuelog.NewWriterWithFiniteBacking(path, fileID, db.valueLogIdentityPins, l.finiteWorkspace.writerBacking)
+		} else {
+			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
+		}
 	} else {
 		w, err = valuelog.NewWriter(path, fileID)
 	}

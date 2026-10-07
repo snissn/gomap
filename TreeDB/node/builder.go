@@ -19,6 +19,7 @@ func (b *Builder) internalChildTypeError(operation, reason string, incoming page
 // Builder facilitates O(N) sequential construction of a node.
 // It avoids the O(log N) search and O(N) shift of standard insertion.
 type Builder struct {
+	ownedScratch          *ownedBuilderScratch
 	data                  []byte
 	pageID                uint64
 	pType                 page.PageType
@@ -293,12 +294,14 @@ func NewBuilderWithOptions(data []byte, pType page.PageType, opts BuilderOptions
 
 // ResetWithOptions reinitializes an existing builder instance for reuse.
 func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts BuilderOptions) {
+	owned := b.ownedScratch
 	b.ReleaseScratch()
 
 	leafPrefix := opts.LeafPrefixCompression
 	leafColumnarV2 := pType == page.PageTypeLeaf && opts.LeafColumnar && !leafPrefix
 	heapStart := len(data)
 	*b = Builder{
+		ownedScratch:          owned,
 		data:                  data,
 		pType:                 pType,
 		dirEnd:                NodeHeaderSize,
@@ -310,6 +313,10 @@ func (b *Builder) ResetWithOptions(data []byte, pType page.PageType, opts Builde
 		leafPackedValuePtr:    opts.PackedValuePtr,
 		leafEntryRevisions:    pType == page.PageTypeLeaf && opts.EntryRevisions,
 		internalBaseDelta:     opts.InternalBaseDelta,
+	}
+	if owned != nil {
+		b.bindOwnedScratch(pType, opts)
+		return
 	}
 	if pType == page.PageTypeLeaf && opts.LeafColumnar {
 		if leafPrefix {
@@ -356,6 +363,9 @@ func (b *Builder) ReleaseScratch() {
 	if b == nil {
 		return
 	}
+	if b.ownedScratch != nil {
+		b.ownedScratch.clear()
+	}
 	b.releaseLeafColumnarV2Scratch()
 	b.releaseLeafColumnarPrefixV2Scratch()
 	b.releaseInternalBaseDeltaScratch()
@@ -391,6 +401,18 @@ func (b *Builder) SetInternalFenceBounds(low, high []byte) {
 	if b.pType != page.PageTypeInternal {
 		return
 	}
+	if b.ownedScratch != nil {
+		if b.ownedKeyCheck(low) != nil || b.ownedKeyCheck(high) != nil || len(low) > cap(b.ownedScratch.low) || len(high) > cap(b.ownedScratch.high) {
+			b.ownedScratch.err = ErrOwnedBuilderScratch
+			return
+		}
+		b.internalFenceBounds = true
+		b.internalFenceLow = b.ownedScratch.low[:len(low)]
+		copy(b.internalFenceLow, low)
+		b.internalFenceHigh = b.ownedScratch.high[:len(high)]
+		copy(b.internalFenceHigh, high)
+		return
+	}
 	b.internalFenceBounds = true
 	if len(low) == 0 {
 		b.internalFenceLow = nil
@@ -409,6 +431,18 @@ func (b *Builder) SetInternalFenceBounds(low, high []byte) {
 // Finish or FinishNoNode copies the bounds into the encoded page.
 func (b *Builder) SetInternalFenceBoundsBorrowed(low, high []byte) {
 	if b.pType != page.PageTypeInternal {
+		return
+	}
+	if b.ownedScratch != nil {
+		if b.ownedKeyCheck(low) != nil || b.ownedKeyCheck(high) != nil || len(low) > cap(b.ownedScratch.low) || len(high) > cap(b.ownedScratch.high) {
+			b.ownedScratch.err = ErrOwnedBuilderScratch
+			return
+		}
+		b.internalFenceBounds = true
+		b.internalFenceLow = b.ownedScratch.low[:len(low)]
+		copy(b.internalFenceLow, low)
+		b.internalFenceHigh = b.ownedScratch.high[:len(high)]
+		copy(b.internalFenceHigh, high)
 		return
 	}
 	b.internalFenceBounds = true
@@ -553,6 +587,9 @@ func (b *Builder) AddLeafEntry(key, value []byte, flags byte, valPtr page.ValueP
 
 // AddLeafEntryWithRevision appends a native revision-bearing leaf entry.
 func (b *Builder) AddLeafEntryWithRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision) error {
+	if err := b.ownedKeyCheck(key); err != nil {
+		return err
+	}
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
@@ -666,6 +703,15 @@ func (b *Builder) addLeafEntryColumnarV2(key, value []byte, flags byte, valPtr p
 		return ErrNodeFull
 	}
 
+	if b.ownedScratch != nil {
+		n := len(key)
+		if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
+			n += len(value)
+		}
+		if len(b.leafColumnarV2Entries) == cap(b.leafColumnarV2Entries) || n > cap(b.leafColumnarV2Arena)-len(b.leafColumnarV2Arena) {
+			return ErrOwnedBuilderScratch
+		}
+	}
 	keyOff, keyLen := b.leafColumnarV2AppendBytes(key)
 	valueOff, valueLen := uint32(0), uint16(0)
 	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
@@ -731,6 +777,11 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		return ErrNodeFull
 	}
 
+	if b.ownedScratch != nil {
+		if len(b.leafColumnarPrefixV2Entries) == cap(b.leafColumnarPrefixV2Entries) || suffixLen > cap(b.leafColumnarV2Arena)-len(b.leafColumnarV2Arena) || (flags&FlagPointer == 0 && flags&FlagTombstone == 0 && len(value) > cap(b.leafColumnarPrefixV2ValueArena)-len(b.leafColumnarPrefixV2ValueArena)) {
+			return ErrOwnedBuilderScratch
+		}
+	}
 	suffixOff, suffixLenU16 := b.leafColumnarV2AppendBytes(key[prefixLen:])
 	valueOff, valueLen := uint32(0), uint16(0)
 	if flags&FlagPointer == 0 && flags&FlagTombstone == 0 {
@@ -763,7 +814,11 @@ func (b *Builder) addLeafEntryColumnarPrefixV2(key, value []byte, flags byte, va
 		b.leafPrevKey = b.leafPrevKeyBuf[:len(key)]
 	} else {
 		if cap(b.leafPrevKey) < len(key) {
-			b.leafPrevKey = make([]byte, len(key))
+			if b.ownedScratch != nil {
+				b.leafPrevKey = b.ownedScratch.previous[:len(key)]
+			} else {
+				b.leafPrevKey = make([]byte, len(key))
+			}
 		}
 		b.leafPrevKey = b.leafPrevKey[:len(key)]
 	}
@@ -780,6 +835,9 @@ func (b *Builder) AddLeafEntryWithPrefix(key, value []byte, flags byte, valPtr p
 // AddLeafEntryWithPrefixRevision appends a native revision-bearing leaf entry
 // using precomputed size/prefix data.
 func (b *Builder) AddLeafEntryWithPrefixRevision(key, value []byte, flags byte, valPtr page.ValuePtr, revision page.EntryRevision, entrySize, prefixLen, suffixLen int) error {
+	if err := b.ownedKeyCheck(key); err != nil {
+		return err
+	}
 	if b.pType != page.PageTypeLeaf {
 		return ErrInvalidType
 	}
@@ -912,7 +970,11 @@ func (b *Builder) AddLeafEntryWithPrefixRevision(key, value []byte, flags byte, 
 			b.leafPrevKey = b.leafPrevKeyBuf[:len(key)]
 		} else {
 			if cap(b.leafPrevKey) < len(key) {
-				b.leafPrevKey = make([]byte, len(key))
+				if b.ownedScratch != nil {
+					b.leafPrevKey = b.ownedScratch.previous[:len(key)]
+				} else {
+					b.leafPrevKey = make([]byte, len(key))
+				}
 			}
 			b.leafPrevKey = b.leafPrevKey[:len(key)]
 		}
@@ -935,6 +997,9 @@ func (b *Builder) AddInternalChild(key []byte, childPageID uint64) error {
 // common fields such as kind/file id to the page header and narrowing offsets
 // when segment sizing gives us a hard bound.
 func (b *Builder) AddInternalChildRef(key []byte, ref page.ChildRef) error {
+	if err := b.ownedKeyCheck(key); err != nil {
+		return err
+	}
 	if b.pType != page.PageTypeInternal {
 		return b.internalChildTypeError("add internal child ref", "builder is not internal", ref.Kind)
 	}
@@ -1041,6 +1106,9 @@ func (b *Builder) AddInternalLeafLogChildFromNode(src *Node, index uint16) error
 		return ErrCorruptedNode
 	}
 	keyLen := int(binary.LittleEndian.Uint16(src.data[ptr : ptr+2]))
+	if b.ownedScratch != nil && (b.ownedScratch.err != nil || keyLen > b.ownedScratch.maxKey) {
+		return ErrOwnedBuilderScratch
+	}
 	entrySize := internalLeafLogRefHeaderSize + keyLen
 	if ptr+entrySize > len(src.data) {
 		return ErrCorruptedNode
@@ -1062,6 +1130,9 @@ func (b *Builder) AddInternalLeafLogChildFromNode(src *Node, index uint16) error
 }
 
 func (b *Builder) finalize() {
+	if b.ownedScratch != nil && b.ownedScratch.err != nil {
+		panic(b.ownedScratch.err)
+	}
 	internalBaseDeltaApplied := false
 	if b.pType == page.PageTypeInternal && b.internalBaseDelta {
 		internalBaseDeltaApplied = b.finishInternalBaseDelta()
@@ -1739,6 +1810,9 @@ func (b *Builder) addInternalChildBaseDelta(key []byte, childPageID uint64) erro
 		return ErrNodeFull
 	}
 
+	if b.ownedScratch != nil && (len(b.internalBaseEntries) == cap(b.internalBaseEntries) || len(key) > cap(b.internalBaseArena)-len(b.internalBaseArena)) {
+		return ErrOwnedBuilderScratch
+	}
 	keyCopy := b.internalBaseCopyBytes(key)
 	b.internalBaseEntries = append(b.internalBaseEntries, internalBaseDeltaEntry{
 		key:   keyCopy,

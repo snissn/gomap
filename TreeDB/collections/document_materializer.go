@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -953,7 +954,7 @@ func (v *CollectionReadView) resolveDocumentRowRefLatest(ref DocumentRowRef, sta
 	expected := latest
 	if scoringRef && len(value) != columnPrimaryRowLocatorValueSize {
 		// The complete CRL2 value was validated above.
-		expected, err = decodeColumnRowCoordinates(ref.DocumentID, value[36:])
+		expected, err = decodeColumnScoringRowLocatorBorrowedID(ref.DocumentID, value)
 		if err != nil {
 			return DocumentRowRef{}, err
 		}
@@ -969,6 +970,9 @@ func (v *CollectionReadView) resolveDocumentRowRefLatest(ref DocumentRowRef, sta
 
 func (v *CollectionReadView) fetchDocumentPointRow(view columnPhysicalScanSnapshotView, ref DocumentRowRef, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
 	row, err := v.fetchDocumentPointRowUnresolved(view, ref, projection, scratch, stats)
+	if err == nil && row.Sparse {
+		return v.resolveSparseDocumentPointRow(view, ref, projection, scratch, row, stats)
+	}
 	if err != nil || row.Preserved == nil {
 		return row, err
 	}
@@ -1160,10 +1164,13 @@ func documentPointRowWorkspaceCredit(cfg ColumnStoreConfig, maxEncodedBytes int6
 		credit += n * width
 		return true
 	}
-	// Three declared-value arrays, JSON scalar slots, and fixed cursor/map
-	// descriptors. Raw variable payload scratch has at most two growth spans.
-	width := 3*uint64(unsafe.Sizeof(columnDeclaredValue{})) + uint64(unsafe.Sizeof(columnReconstructedDeclaredValue{}))
-	if !add(uint64(len(cfg.Columns)), width) || !add(64, 128) || !add(uint64(maxEncodedBytes), 2) {
+	// Five declared-value arrays include latest-row, scatter source/output,
+	// projection, and emission scratch. Two source-coordinate arrays and one
+	// reusable ordinal projection are charged per admitted schema slot. Raw
+	// variable payload scratch and owned scatter strings have at most two
+	// schema-scaled growth spans; no allocation repeats once per source group.
+	width := 5*uint64(unsafe.Sizeof(columnDeclaredValue{})) + uint64(unsafe.Sizeof(columnReconstructedDeclaredValue{})) + 2*uint64(unsafe.Sizeof(columnRowCoordinates{})) + uint64(unsafe.Sizeof(int(0)))
+	if !add(uint64(len(cfg.Columns)), width) || !add(64, 128) || !add(uint64(maxEncodedBytes), 2*uint64(max(len(cfg.Columns), 1))) {
 		return 0, errDocumentPointRowOversize
 	}
 	for _, col := range cfg.Columns {
@@ -1290,6 +1297,12 @@ func (v *CollectionReadView) preparePointRowEmission(cfg ColumnStoreConfig, inte
 		handles = v.assetManager.ActiveHandles()
 	}
 	if len(v.pointRowBlocks) <= documentPointRowMaxBorrowedBlocks-3 && handles <= documentPointRowMaxBorrowedBlocks-3 && v.pointRowOpenFiles() <= documentPointRowMaxBorrowedBlocks-3 {
+		if v.rowAssetReadCache != nil {
+			v.rowAssetReadCache.admitResource = v.admitPointRowAsset
+		}
+		if v.typedColumnAssetReadCache != nil {
+			v.typedColumnAssetReadCache.admitResource = v.admitPointRowAsset
+		}
 		return nil
 	}
 	v.pointRowBlocks = nil
@@ -1310,7 +1323,14 @@ func (v *CollectionReadView) preparePointRowEmission(cfg ColumnStoreConfig, inte
 	if err != nil {
 		return err
 	}
-	return v.ensureAssetReadCaches(cfg, integrity)
+	if err := v.ensureAssetReadCaches(cfg, integrity); err != nil {
+		return err
+	}
+	v.rowAssetReadCache.admitResource = v.admitPointRowAsset
+	if v.typedColumnAssetReadCache != nil {
+		v.typedColumnAssetReadCache.admitResource = v.admitPointRowAsset
+	}
+	return nil
 }
 
 func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotView, assetRef columnManifestAssetRefForScan) (*columnPhysicalRowReaderBlock, error) {
@@ -1963,6 +1983,7 @@ func documentRowRefCoordinatesFromVisibleRow(row columnPhysicalVisibleRow) Docum
 
 func columnPhysicalVisibleRowFromReaderRow(row columnPhysicalRowReaderRow) columnPhysicalVisibleRow {
 	return columnPhysicalVisibleRow{
+		Sparse:            row.Sparse,
 		Preserved:         row.Preserved,
 		Generation:        row.Generation,
 		PartID:            row.PartID,
@@ -2160,4 +2181,95 @@ func maxInt64ForMetric(n, floor int64) int64 {
 func documentMaterializationWork(s DocumentMaterializationStats) workstats.OutputStats {
 	return workstats.OutputStats{Requested: s.DocumentsRequested, Fetched: s.DocumentsFetched, Missing: s.DocumentsMissing,
 		OutputBytes: s.OutputBytes, RetainedPayloadFetches: s.RetainedPayloadFetches, JSONReconstructionRows: s.JSONReconstructionRows, TypedColumnRows: s.TypedColumnRows}
+}
+
+// Copy selected strings before loading another source: bounded cache eviction
+// may release any previously borrowed asset. Direct coordinates never recurse.
+func (v *CollectionReadView) resolveSparseDocumentPointRow(view columnPhysicalScanSnapshotView, latest DocumentRowRef, projection columnPhysicalScanProjection, scratch *columnPhysicalRowReaderScratch, row columnPhysicalVisibleRow, stats *DocumentMaterializationStats) (columnPhysicalVisibleRow, error) {
+	raw, found, err := collectionGetAppendAtCatalogRoot(v.snapshot, v.catalog, collectionColumnRowLocatorRootName(v.catalog.meta.Name), latest.DocumentID, nil)
+	if err != nil || !found {
+		return columnPhysicalVisibleRow{}, errors.Join(err, errors.New("collections: sparse row missing locator"))
+	}
+	actual, sources, err := decodeColumnFieldLocator(latest.DocumentID, raw, len(view.Config.Columns))
+	if err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	if err := validateDocumentRowRefMatchesRowRef(latest, actual); err != nil {
+		return columnPhysicalVisibleRow{}, err
+	}
+	groups := make([]columnRowCoordinates, len(sources))
+	copy(groups, sources)
+	slices.SortFunc(groups, compareColumnCoordinates)
+	groups = slices.Compact(groups)
+	values := make([]columnDeclaredValue, projection.count)
+	var ownedStringBytes int64
+	// Latest identity is owned by the caller; no latest asset alias is needed
+	// after source coordinates have been validated.
+	clear(scratch.Values[:cap(scratch.Values)])
+	row.Values = nil
+	row.ID = latest.DocumentID
+	var sourceScratch columnPhysicalRowReaderScratch
+	selected := columnPhysicalScanProjection{outputByColumn: make([]int, len(view.Config.Columns))}
+	for _, source := range groups {
+		selected.count = 0
+		for i := range selected.outputByColumn {
+			selected.outputByColumn[i] = -1
+		}
+		for i := range view.Config.Columns {
+			if sources[i] == source && projection.outputByColumn[i] >= 0 {
+				selected.outputByColumn[i] = selected.count
+				selected.count++
+			}
+		}
+		if selected.count == 0 {
+			continue
+		}
+		// Every preceding source string has been copied. No asset-backed
+		// field survives this alias boundary, so eviction may close its file.
+		clear(sourceScratch.Values[:cap(sourceScratch.Values)])
+		if err := v.preparePointRowEmission(*v.catalog.meta.Options.ColumnStore, v.rowAssetReadCache.readIntegrity); err != nil {
+			return columnPhysicalVisibleRow{}, err
+		}
+		fetched, err := v.fetchDocumentPointRowUnresolved(view, source.ref(latest.DocumentID), selected, &sourceScratch, stats)
+		if err != nil {
+			return columnPhysicalVisibleRow{}, err
+		}
+		if fetched.Deleted {
+			return columnPhysicalVisibleRow{}, errors.New("collections: sparse source is deleted")
+		}
+		for i, col := range view.Config.Columns {
+			from, to := selected.outputByColumn[i], projection.outputByColumn[i]
+			if from < 0 || to < 0 {
+				continue
+			}
+			value := fetched.Values[from]
+			if value.Type != col.ValueType {
+				return columnPhysicalVisibleRow{}, errors.New("collections: sparse source does not own selected slot")
+			}
+			if value.Type != ColumnStoreValueString {
+				return columnPhysicalVisibleRow{}, errors.New("collections: sparse source requires string schema")
+			}
+			if value.Present && !value.Null {
+				n := len(value.String)
+				if value.StringBytes != nil {
+					n = len(value.StringBytes)
+				}
+				if int64(n) > v.pointRowMaxBlockBytes*int64(len(view.Config.Columns))-ownedStringBytes {
+					return columnPhysicalVisibleRow{}, errDocumentPointRowOversize
+				}
+				ownedStringBytes += int64(n)
+				if value.StringBytes != nil {
+					value.String = string(value.StringBytes)
+				} else {
+					value.String = strings.Clone(value.String)
+				}
+				value.StringBytes = nil
+			}
+			values[to] = value
+		}
+	}
+	scratch.Values = values
+	row.Values = values
+	row.ID = latest.DocumentID
+	return row, nil
 }

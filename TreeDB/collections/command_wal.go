@@ -2,6 +2,7 @@ package collections
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -520,6 +521,42 @@ func replayCollectionReplaceSourceByIDCommandWAL(db *backenddb.DB, env commitlog
 }
 
 func replayCollectionUpdateBatchByIDCommandWAL(db *backenddb.DB, env commitlog.CommandEnvelope) error {
+	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedStringsPatchV1 {
+		payload, err := commitlog.DecodeCollectionTypedStringsPayload(env.Payload)
+		if err != nil {
+			return err
+		}
+		intent, err := db.NewCommandWALReplayIntent(env)
+		if err != nil {
+			return err
+		}
+		collection, err := newCommandWALReplayCollectionManager(db).openCollectionWithCommandWALIntent(payload.Collection, intent)
+		if err != nil {
+			return err
+		}
+		cfg := collection.Meta().Options.ColumnStore
+		if cfg == nil || cfg.SchemaHash != payload.SchemaHash || len(cfg.Columns) != int(payload.SchemaCount) {
+			return errors.New("collections: string patch replay schema mismatch")
+		}
+		requests := make([]TypedStringPatch, len(payload.Documents))
+		for i, d := range payload.Documents {
+			if d.RowIndex > uint64(maxCollectionInt) {
+				return errors.New("collections: string patch replay row index overflow")
+			}
+			expected := DocumentRowRef{DocumentID: d.ID, Generation: d.Generation, PartID: d.PartID, RowIndex: int(d.RowIndex), AppliedCommandLSN: d.AppliedCommandLSN}
+			requests[i] = TypedStringPatch{ID: d.ID, Expected: &expected, Residual: d.Residual}
+			if d.ReplaceResidual {
+				requests[i].ResidualMode = TypedStringResidualReplace
+			}
+			for _, e := range d.Edits {
+				requests[i].Edits = append(requests[i].Edits, TypedStringEdit{Column: cfg.Columns[e.Column].Name, Value: e.Value})
+			}
+		}
+		workstats.Replay.TypedRowsDecoded.Add(uint64(len(requests)))
+		_, err = collection.patchTypedStringsBatch(requests, payload.SchemaHash, &payload, intent)
+		return err
+	}
+
 	if env.PayloadFormat == commitlog.PayloadFormatCollectionTypedMetadataByIDV1 {
 		payload, err := commitlog.DecodeCollectionTypedMetadataPayload(env.Payload)
 		if err != nil {

@@ -58,6 +58,7 @@ type columnPhysicalScanDiagnostics struct {
 }
 
 type columnPhysicalScanRowView struct {
+	Sparse            bool
 	Preserved         *columnRowCoordinates
 	Generation        uint64
 	PartID            uint64
@@ -2343,6 +2344,7 @@ func scanColumnPhysicalAssetRowsWithManifestOperation(raw []byte, ref ColumnAsse
 		if visitor != nil {
 			// ID and Values alias the asset buffer and scanner scratch; visitors must copy to retain them.
 			if err := visitor(columnPhysicalScanRowView{
+				Sparse:            version == columnPhysicalAssetVersionV10,
 				Preserved:         preserved,
 				Generation:        header.Generation,
 				PartID:            header.PartID,
@@ -2508,8 +2510,15 @@ func columnPhysicalScanOperationFromBytes(raw []byte) (ColumnPublishOperation, b
 }
 
 func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *ColumnStoreConfig, projection columnPhysicalScanProjection, rowValues []columnDeclaredValue) error {
+	var sparseMask []byte
+	if version == columnPhysicalAssetVersionV10 {
+		sparseMask = readColumnSparseStoredColumns(cur, cfg.Columns)
+		if cur.err != nil {
+			return cur.err
+		}
+	}
 	for colIdx, col := range cfg.Columns {
-		if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col) {
+		if (version == columnPhysicalAssetVersionV10 && !columnSparseSlotStored(sparseMask, colIdx)) || (version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col)) {
 			if output := projection.outputByColumn[colIdx]; output >= 0 {
 				rowValues[output] = columnDeclaredValue{}
 			}
@@ -2532,6 +2541,9 @@ func scanColumnPhysicalRowValues(cur *manifestCursor, version uint16, cfg *Colum
 			if cur.err != nil {
 				return cur.err
 			}
+		}
+		if version == columnPhysicalAssetVersionV10 && (!present || null) {
+			return fmt.Errorf("column[%d] sparse owned slot requires a present non-null string", colIdx)
 		}
 		outputIdx := projection.outputByColumn[colIdx]
 		selected := outputIdx >= 0

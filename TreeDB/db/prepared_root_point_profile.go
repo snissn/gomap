@@ -66,10 +66,15 @@ func (r *preparedNoDictionaryLeafPageReader) ReadUnsafeTo(ptr page.ValuePtr, dst
 // context/system delta after the command WAL append; an excess there is a
 // violated preflight invariant and must take the publisher's poison path.
 type PreparedRootPointProfile struct {
-	BaseRoot    uint64
-	PointOps    int
-	MaxKeyBytes uint32
-	OutputPages uint64
+	BaseRoot                   uint64
+	PointOps                   int
+	MaxKeyBytes                uint32
+	OutputPages                uint64
+	TouchedOldPages            uint64
+	TouchedOldInternalChildren uint64
+	TouchedOldLeafEntries      uint64
+	TouchedOldLeafPages        uint64
+	MaxTouchedDepth            uint32
 }
 
 // PreparedRootPointCensusLimit limits reads made by the pre-WAL profile. The
@@ -157,7 +162,7 @@ func (db *DB) profilePreparedRootPointEntries(rootID uint64, policy OrderedRootS
 	if err != nil {
 		return PreparedRootPointProfile{}, fmt.Errorf("%w: %v", ErrPreparedRootPointProfileLimit, err)
 	}
-	return PreparedRootPointProfile{BaseRoot: rootID, PointOps: len(entries), MaxKeyBytes: maxKeyBytes, OutputPages: pages}, nil
+	return PreparedRootPointProfile{BaseRoot: rootID, PointOps: len(entries), MaxKeyBytes: maxKeyBytes, OutputPages: pages, TouchedOldPages: result.TouchedOldPages, TouchedOldInternalChildren: result.TouchedOldInternalChildren, TouchedOldLeafEntries: result.TouchedOldLeafEntries, TouchedOldLeafPages: result.TouchedOldLeafPages, MaxTouchedDepth: result.MaxTouchedDepth}, nil
 }
 
 // ProfilePreparedRootWholePointBudget handles a root whose future PUT keys

@@ -634,8 +634,17 @@ func columnStoreRowAssetPayloadAccounting(raw []byte, ref ColumnAssetRef, expect
 		if header.Operation == ColumnPublishOperationDelete {
 			return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("column physical asset delete row[%d] is not marked deleted", rowIdx)
 		}
+		var sparseMask []byte
+		if version == columnPhysicalAssetVersionV10 {
+			bitmapStart := cur.pos
+			sparseMask = readColumnSparseStoredColumns(&cur, columns)
+			out.RowEncodingHeaderBytes = addColumnStorePhysicalAccountingBytes(out.RowEncodingHeaderBytes, int64(cur.pos-bitmapStart))
+			if cur.err != nil {
+				return ColumnStoreRowAssetByteAccounting{}, cur.err
+			}
+		}
 		for colIdx, col := range columns {
-			if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col) {
+			if (version == columnPhysicalAssetVersionV10 && !columnSparseSlotStored(sparseMask, colIdx)) || (version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(col)) {
 				continue
 			}
 			valueHeaderStart := cur.pos
@@ -656,6 +665,9 @@ func columnStoreRowAssetPayloadAccounting(raw []byte, ref ColumnAssetRef, expect
 				if cur.err != nil {
 					return ColumnStoreRowAssetByteAccounting{}, cur.err
 				}
+			}
+			if version == columnPhysicalAssetVersionV10 && (!present || null) {
+				return ColumnStoreRowAssetByteAccounting{}, fmt.Errorf("row[%d] column[%d] sparse owned slot requires a present non-null string", rowIdx, colIdx)
 			}
 			valueHeaderBytes := int64(cur.pos - valueHeaderStart)
 			out.RowValueHeaderBytes = addColumnStorePhysicalAccountingBytes(out.RowValueHeaderBytes, valueHeaderBytes)

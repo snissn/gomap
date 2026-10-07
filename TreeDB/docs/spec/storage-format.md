@@ -1279,6 +1279,31 @@ updates retain one ordinary full row, never a chain of metadata rows. Scoring
 uses the preserved coordinates; current materialization uses the metadata row.
 Readers continue to accept CRL1. Fold emits ordinary full rows and CRL1 locators.
 
+Declared-string patches and all-string metadata updates use `CRL3`. The first
+36 bytes identify the latest sparse row, followed by `u32 BE SchemaCount`,
+`u32 BE SourceCount`, `SourceCount` physical coordinates (four `u64 BE` fields
+per coordinate), and `SchemaCount` zero-based `u32 BE` source ordinals. The
+schema ordinal order is the captured catalog's declared row-column order.
+Sources are sorted lexicographically by generation, part, row, then LSN,
+deduplicated, and every group must be used. Each source is the latest row or
+strictly precedes it in both generation and applied LSN. Counts, exact length,
+coordinates and ordinals are checked before owned allocation; catalog reads
+also require the exact schema count. There are at most as many source groups
+as declared columns, regardless of the number of patches. Each coordinate
+names the row that physically owns that field; readers never follow another
+locator or a historical root chain. Untouched coordinates remain byte-for-byte
+identical across repeated disjoint edits.
+
+The primary retained entry remains in the existing primary tree. A Preserve
+patch emits no primary delta and keeps its persistent `ValuePtr` exactly.
+A residual Replace emits an ordinary primary replacement in the same command.
+No extra residual asset or reachability rule is introduced. Captured manifests
+retain all referenced row assets; held readers keep their captured root and
+manifest. Fold resolves the flattened sources, emits ordinary full rows and
+CRL1, and retires captured assets only through existing publication/GC rules.
+CRL2 remains the vector/content metadata representation; CRL3 is admitted only
+for all-string row-owned schemas. Old binaries reject CRL3/TCPA10 databases.
+
 Raw side-root block value:
 
 ```text
@@ -2078,6 +2103,17 @@ through the preserved ordinary row. The existing active/recovery manifests keep
 those referenced assets reachable. A fold that races with newer metadata retries
 before removing its captured assets. This pre-alpha extension has no migration:
 old binaries reject v9/CRL2 databases.
+
+Version 10 is a sparse declared-string update encoding. The unchanged complete
+row schema is in the TCPA header. Each non-deleted update row encodes its ID,
+false deleted flag, a length-prefixed bitmap of exactly `ceil(ColumnCount/8)`
+bytes, then ordinary declared values only for set bits in schema order. Unused
+high bitmap bits must be zero. A set bit owns a present non-null string; an
+unset bit owns no value, and is distinct from null or a missing value in an
+ordinary older source. CRL3 supplies the physical source for every slot.
+Insert and delete rows cannot use this encoding. Readers, scans, integrity
+checks and compaction use the same bitmap interpretation; malformed counts,
+nonstring owned slots and mismatched source ownership fail closed.
 
 Version 2 row payloads are:
 

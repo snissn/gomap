@@ -17685,6 +17685,7 @@ type preparedBatchUpdate struct {
 }
 
 type updateBatchPlan struct {
+	nativeStringDocuments       []columnWriteDocument
 	metadataDocuments           []columnWriteDocument
 	typedProjection             *trustedFloat32Projection
 	results                     []UpdateBatchResult
@@ -20051,7 +20052,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 	if plan == nil {
 		return nil, nil
 	}
-	if len(plan.deltaTables) == 0 {
+	if len(plan.deltaTables) == 0 && len(plan.nativeStringDocuments) == 0 {
 		return plan.results, nil
 	}
 	if err := rejectCatalogRootOverlaysForWrite(plan.catalog); err != nil {
@@ -20092,6 +20093,15 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 			immediateColumnInput.declaredRows = make([]columnDeclaredRow, len(plan.metadataDocuments))
 			for i, doc := range plan.metadataDocuments {
 				immediateColumnInput.declaredRows[i] = columnDeclaredRow{ID: doc.ID, Values: doc.declaredValues, Preserved: doc.preserved}
+			}
+		}
+		if plan.nativeStringDocuments != nil {
+			immediateColumnInput.sparseOnly = true
+			immediateColumnInput.documents = plan.nativeStringDocuments
+			immediateColumnInput.declaredRowsReady = true
+			immediateColumnInput.declaredRows = make([]columnDeclaredRow, len(plan.nativeStringDocuments))
+			for i, doc := range plan.nativeStringDocuments {
+				immediateColumnInput.declaredRows[i] = columnDeclaredRow{ID: doc.ID, Values: doc.declaredValues, Stored: doc.storedColumns}
 			}
 		}
 		var cleanup func()

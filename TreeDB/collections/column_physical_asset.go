@@ -19,17 +19,18 @@ import (
 )
 
 const (
-	columnPhysicalAssetMagic     = uint32(0x54435041) // TCPA
-	columnPhysicalAssetVersionV1 = uint16(1)
-	columnPhysicalAssetVersionV2 = uint16(2)
-	columnPhysicalAssetVersionV3 = uint16(3)
-	columnPhysicalAssetVersionV4 = uint16(4)
-	columnPhysicalAssetVersionV5 = uint16(5)
-	columnPhysicalAssetVersionV6 = uint16(6)
-	columnPhysicalAssetVersionV7 = uint16(7)
-	columnPhysicalAssetVersionV8 = uint16(8)
-	columnPhysicalAssetVersionV9 = uint16(9) // metadata rows with preserved full-row coordinates
-	columnPhysicalAssetVersion   = columnPhysicalAssetVersionV4
+	columnPhysicalAssetMagic      = uint32(0x54435041) // TCPA
+	columnPhysicalAssetVersionV1  = uint16(1)
+	columnPhysicalAssetVersionV2  = uint16(2)
+	columnPhysicalAssetVersionV3  = uint16(3)
+	columnPhysicalAssetVersionV4  = uint16(4)
+	columnPhysicalAssetVersionV5  = uint16(5)
+	columnPhysicalAssetVersionV6  = uint16(6)
+	columnPhysicalAssetVersionV7  = uint16(7)
+	columnPhysicalAssetVersionV8  = uint16(8)
+	columnPhysicalAssetVersionV10 = uint16(10) // sparse declared-string slots
+	columnPhysicalAssetVersionV9  = uint16(9)  // metadata rows with preserved full-row coordinates
+	columnPhysicalAssetVersion    = columnPhysicalAssetVersionV4
 )
 
 const (
@@ -40,6 +41,8 @@ const (
 var ErrColumnDeclaredValueUnsupported = errors.New("collections: unsupported column declared value")
 
 type columnWriteDocument struct {
+	fieldSources            []columnRowCoordinates
+	storedColumns           []bool
 	preserved               *columnRowCoordinates
 	ID                      []byte
 	Document                []byte
@@ -315,6 +318,7 @@ type columnDeclaredValue struct {
 }
 
 type columnDeclaredRow struct {
+	Stored    []bool // nil owns every ordinary slot; sparse rows carry an exact schema bitmap
 	Preserved *columnRowCoordinates
 	ID        []byte
 	Deleted   bool
@@ -937,6 +941,7 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 	}
 	rowCount := rows.Len()
 	metadataOnly := false
+	sparseOnly := false
 	if rowCount < 0 {
 		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset negative row count")
 	}
@@ -947,6 +952,10 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 		}
 		if rowIdx == 0 {
 			metadataOnly = row.Preserved != nil
+			sparseOnly = row.Stored != nil
+		}
+		if (row.Stored != nil) != sparseOnly || (sparseOnly && (metadataOnly || len(row.Stored) != len(input.Columns) || input.Operation != ColumnPublishOperationUpdate || row.Deleted)) {
+			return nil, columnPhysicalAssetSummary{}, errors.New("collections: invalid sparse physical row shape")
 		}
 		if (row.Preserved != nil) != metadataOnly {
 			return nil, columnPhysicalAssetSummary{}, errors.New("collections: mixed metadata and ordinary physical rows")
@@ -968,6 +977,12 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d] values=%d columns=%d", rowIdx, len(row.Values), len(input.Columns))
 			}
 			for colIdx, value := range row.Values {
+				if sparseOnly && !row.Stored[colIdx] {
+					continue
+				}
+				if sparseOnly && (input.Columns[colIdx].ValueType != ColumnStoreValueString || !value.Present || value.Null) {
+					return nil, columnPhysicalAssetSummary{}, errors.New("collections: sparse physical row requires string slots")
+				}
 				if metadataOnly && !columnMetadataStoredColumn(input.Columns[colIdx]) {
 					continue
 				}
@@ -1013,7 +1028,10 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 	if err != nil {
 		return nil, columnPhysicalAssetSummary{}, err
 	}
-	if metadataOnly {
+	if sparseOnly {
+		version = columnPhysicalAssetVersionV10
+		useDenseIDRows, useFixedIDRows = false, false
+	} else if metadataOnly {
 		version = columnPhysicalAssetVersionV9
 		useDenseIDRows, useFixedIDRows = false, false
 	} else if useDenseIDRows {
@@ -1080,6 +1098,9 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 		}
 		writeManifestBytes(&b, row.ID)
 		writeManifestBool(&b, row.Deleted)
+		if sparseOnly {
+			writeColumnSparseStoredColumns(&b, row.Stored)
+		}
 		if metadataOnly {
 			writeColumnPreservedRow(&b, *row.Preserved)
 		}
@@ -1088,6 +1109,9 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 		}
 		for colIdx, value := range row.Values {
 			col := input.Columns[colIdx]
+			if sparseOnly && !row.Stored[colIdx] {
+				continue
+			}
 			if metadataOnly && !columnMetadataStoredColumn(col) {
 				continue
 			}
@@ -1186,6 +1210,9 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 	header.RowCount = int(rowCount)
 	if version == columnPhysicalAssetVersionV9 && (columnCount > uint64(len(raw)-cur.pos)/2 || rowCount > uint64(len(raw)-cur.pos)/41) {
 		return columnPhysicalAsset{}, errors.New("collections: metadata row counts exceed payload")
+	}
+	if version == columnPhysicalAssetVersionV10 && (columnCount > uint64(len(raw)-cur.pos)/2 || rowCount > uint64(len(raw)-cur.pos)/6) {
+		return columnPhysicalAsset{}, errors.New("collections: sparse row counts exceed payload")
 	}
 	asset := columnPhysicalAsset{
 		Header:  header,
@@ -1291,8 +1318,21 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 			row.Preserved = readColumnPreservedRow(&cur, row.ID, header.Generation, header.AppliedCommandLSN, header.Operation, row.Deleted)
 		}
 		if !row.Deleted {
+			if version == columnPhysicalAssetVersionV10 {
+				mask := readColumnSparseStoredColumns(&cur, asset.Columns)
+				if cur.err != nil {
+					return columnPhysicalAsset{}, cur.err
+				}
+				row.Stored = make([]bool, int(columnCount))
+				for i := range row.Stored {
+					row.Stored[i] = columnSparseSlotStored(mask, i)
+				}
+			}
 			row.Values = make([]columnDeclaredValue, int(columnCount))
 			for colIdx := 0; colIdx < int(columnCount); colIdx++ {
+				if version == columnPhysicalAssetVersionV10 && !row.Stored[colIdx] {
+					continue
+				}
 				if version == columnPhysicalAssetVersionV9 && !columnMetadataStoredColumn(asset.Columns[colIdx]) {
 					continue
 				}
@@ -1304,6 +1344,9 @@ func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {
 					value.Present = cur.bool()
 				} else {
 					value.Present = true
+				}
+				if version == columnPhysicalAssetVersionV10 && (value.Type != ColumnStoreValueString || !value.Present || value.Null) {
+					return columnPhysicalAsset{}, errors.New("collections: sparse owned slot requires a present non-null string")
 				}
 				if !value.Present {
 					if !value.Null {
@@ -1489,7 +1532,7 @@ func validateColumnPhysicalAssetForManifest(raw []byte, ref ColumnAssetRef, cfg 
 
 func isSupportedColumnPhysicalAssetVersion(version uint16) bool {
 	switch version {
-	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6, columnPhysicalAssetVersionV7, columnPhysicalAssetVersionV8, columnPhysicalAssetVersionV9:
+	case columnPhysicalAssetVersionV1, columnPhysicalAssetVersionV2, columnPhysicalAssetVersionV3, columnPhysicalAssetVersionV4, columnPhysicalAssetVersionV5, columnPhysicalAssetVersionV6, columnPhysicalAssetVersionV7, columnPhysicalAssetVersionV8, columnPhysicalAssetVersionV9, columnPhysicalAssetVersionV10:
 		return true
 	default:
 		return false
@@ -1942,4 +1985,41 @@ func (c *manifestCursor) fixedWidthSliceByteLen(n uint64, elemBytes uint64, labe
 		return 0, false
 	}
 	return n * elemBytes, true
+}
+
+func writeColumnSparseStoredColumns(b *bytes.Buffer, stored []bool) {
+	mask := make([]byte, (len(stored)+7)/8)
+	for i, yes := range stored {
+		if yes {
+			mask[i/8] |= 1 << uint(i%8)
+		}
+	}
+	writeManifestBytes(b, mask)
+}
+
+// The borrowed bitmap is bounded by the already validated schema, and unused
+// high bits are rejected rather than ignored. Unstored is distinct from null.
+func readColumnSparseStoredColumns(cur *manifestCursor, columns []ColumnStoreColumn) []byte {
+	mask := cur.bytesView()
+	if cur.err != nil {
+		return nil
+	}
+	if len(mask) != (len(columns)+7)/8 || len(columns) == 0 {
+		cur.err = errors.New("collections: sparse row bitmap width")
+		return nil
+	}
+	if n := len(columns) % 8; n != 0 && mask[len(mask)-1]>>uint(n) != 0 {
+		cur.err = errors.New("collections: sparse row unused bitmap bits")
+		return nil
+	}
+	for i, col := range columns {
+		if columnSparseSlotStored(mask, i) && col.ValueType != ColumnStoreValueString {
+			cur.err = errors.New("collections: sparse row owns a nonstring slot")
+			return nil
+		}
+	}
+	return mask
+}
+func columnSparseSlotStored(mask []byte, ordinal int) bool {
+	return mask[ordinal/8]&(1<<uint(ordinal%8)) != 0
 }

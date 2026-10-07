@@ -115,6 +115,7 @@ const (
 	PayloadFormatCollectionSourceImportV2       PayloadFormat = 14
 	PayloadFormatCollectionSplitVectorInsertV1  PayloadFormat = 15
 	PayloadFormatCollectionVectorPrepareV1      PayloadFormat = 16
+	PayloadFormatCollectionTypedStringsPatchV1  PayloadFormat = 17
 )
 
 // RawKVOp is a deterministic raw key/value mutation inside a RawKVBatch
@@ -2181,7 +2182,7 @@ func validateCommandEnvelopeIdentity(env CommandEnvelope) error {
 			return ErrCorrupt
 		}
 	case CommandKindCollectionUpdateBatchByID:
-		if env.Scope != CommandScopeCollection || (env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 && env.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1 && env.PayloadFormat != PayloadFormatCollectionTypedMetadataByIDV1) {
+		if env.Scope != CommandScopeCollection || (env.PayloadFormat != PayloadFormatCollectionUpdateBatchByIDV1 && env.PayloadFormat != PayloadFormatCollectionTypedBatchByIDV1 && env.PayloadFormat != PayloadFormatCollectionTypedMetadataByIDV1 && env.PayloadFormat != PayloadFormatCollectionTypedStringsPatchV1) {
 			return ErrCorrupt
 		}
 	case CommandKindCollectionReplaceSourceByID:
@@ -2226,6 +2227,9 @@ func validateCommandEnvelopePayload(env CommandEnvelope) error {
 	case CommandKindCollectionDeleteBatchByID:
 		return validateCollectionDeleteBatchByIDPayload(env.Payload)
 	case CommandKindCollectionUpdateBatchByID:
+		if env.PayloadFormat == PayloadFormatCollectionTypedStringsPatchV1 {
+			return validateCollectionTypedStringsPayload(env.Payload)
+		}
 		if env.PayloadFormat == PayloadFormatCollectionTypedMetadataByIDV1 {
 			return validateCollectionTypedMetadataPayload(env.Payload)
 		}

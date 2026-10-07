@@ -86,6 +86,7 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 }
 
 type Writer struct {
+	finiteLoan             *FiniteWriterLoan
 	producedFrameObserver  ProducedFrameObserver
 	f                      *os.File
 	stableParent           *os.File
@@ -661,7 +662,17 @@ func NewStagingWriter(path string, fileID uint32) (*Writer, error) {
 	return newFileWriter(path, fileID, false, syncStagingFileData, nil)
 }
 
-func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry) (*Writer, error) {
+func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*os.File) error, registry *rootpublication.IdentityPinRegistry, finite ...*FiniteWriterBacking) (*Writer, error) {
+	var finiteBacking *FiniteWriterBacking
+	if len(finite) > 1 {
+		return nil, ErrFiniteWriterLoan
+	}
+	if len(finite) == 1 {
+		finiteBacking = finite[0]
+		if err := finiteBacking.admitConstructor(); err != nil {
+			return nil, err
+		}
+	}
 	f, created, err := openLogFile(path)
 	if err != nil {
 		return nil, err
@@ -669,6 +680,9 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 	w := &Writer{
 		f:      f,
 		syncFn: syncFn,
+	}
+	if finiteBacking != nil {
+		finiteBacking.recordConstructor(w)
 	}
 	w.stableParent, w.stableParentErr = captureStableValueLogParent(path, f)
 	if err := w.observeStableResourceFile(f, registry); err != nil {
@@ -988,6 +1002,9 @@ func (w *Writer) PendingBytes() int {
 }
 
 func (w *Writer) Flush() error {
+	if w != nil && w.finiteLoan != nil {
+		return ErrFiniteWriterLoan
+	}
 	if err := w.stableRotationFailStopError(); err != nil {
 		return err
 	}
@@ -1008,6 +1025,9 @@ func (w *Writer) RotateTo(path string, fileID uint32) error {
 // the provided path and reuses the writer's buffers for future appends. When
 // syncCurrent is false, the current file is flushed to the OS but not fsynced.
 func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) error {
+	if w != nil && w.finiteLoan != nil {
+		return ErrFiniteWriterLoan
+	}
 	if w == nil {
 		return errors.New("valuelog: nil writer")
 	}
@@ -1223,6 +1243,13 @@ func syncDir(path string) (err error) {
 }
 
 func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (page.ValuePtr, error) {
+	if w != nil && w.finiteLoan != nil {
+		var rec [1]Record
+		rec[0] = Record{RID: rid, Value: value}
+		if err := w.finiteLoan.admitFrame(dictID, dict, rec[:]); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
@@ -1404,6 +1431,9 @@ func (w *Writer) AppendOneFrameWithStats(dictID uint64, dict []byte, rid uint64,
 // AppendRawRecord appends a raw value-log record (CRC + header + payload)
 // without re-encoding. The length argument should include any pointer flags.
 func (w *Writer) AppendRawRecord(raw []byte, length uint32) (page.ValuePtr, error) {
+	if w != nil && w.finiteLoan != nil {
+		return page.ValuePtr{}, ErrFiniteWriterLoan
+	}
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
@@ -1435,6 +1465,9 @@ func (w *Writer) AppendFrame(dictID uint64, dict []byte, records []Record) ([]pa
 }
 
 func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Record) ([]page.ValuePtr, FrameStats, error) {
+	if w != nil && w.finiteLoan != nil {
+		return nil, FrameStats{}, ErrFiniteWriterLoan
+	}
 	dst := make([]page.ValuePtr, len(records))
 	ptrs, stats, err := w.AppendFrameWithStatsInto(dictID, dict, records, dst)
 	if err != nil {
@@ -1447,6 +1480,11 @@ func (w *Writer) AppendFrameWithStats(dictID uint64, dict []byte, records []Reco
 // and returns its value pointer without requiring caller-owned pointer-slice
 // scratch.
 func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
+	if w != nil && w.finiteLoan != nil {
+		if err := w.finiteLoan.admitEncoded(body, 1); err != nil {
+			return page.ValuePtr{}, err
+		}
+	}
 	if w == nil {
 		return page.ValuePtr{}, errors.New("valuelog: nil writer")
 	}
@@ -1509,6 +1547,11 @@ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
 //
 // The body must be produced by EncodeFrame/EncodeFrameWithOptions.
 func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr) ([]page.ValuePtr, error) {
+	if w != nil && w.finiteLoan != nil {
+		if err := w.finiteLoan.admitEncoded(body, k); err != nil {
+			return nil, err
+		}
+	}
 	if w == nil {
 		return nil, errors.New("valuelog: nil writer")
 	}
@@ -1585,6 +1628,11 @@ func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr)
 // This is a performance-oriented helper to avoid allocating a new pointer slice
 // on every frame append.
 func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []Record, dst []page.ValuePtr) ([]page.ValuePtr, FrameStats, error) {
+	if w != nil && w.finiteLoan != nil {
+		if err := w.finiteLoan.admitFrame(dictID, dict, records); err != nil {
+			return nil, FrameStats{}, err
+		}
+	}
 	if w == nil {
 		return nil, FrameStats{}, errors.New("valuelog: nil writer")
 	}
@@ -2718,6 +2766,9 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 }
 
 func (w *Writer) Sync() error {
+	if w != nil && w.finiteLoan != nil {
+		return ErrFiniteWriterLoan
+	}
 	if w == nil {
 		return nil
 	}
@@ -2739,6 +2790,9 @@ func (w *Writer) Sync() error {
 }
 
 func (w *Writer) Close() (retErr error) {
+	if w != nil && w.finiteLoan != nil {
+		return ErrFiniteWriterLoan
+	}
 	if w == nil {
 		return nil
 	}

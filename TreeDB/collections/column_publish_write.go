@@ -8,6 +8,7 @@ import (
 	"sort"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -45,6 +46,7 @@ type columnWritePublishInput struct {
 	preparedInsert       bool
 	preparedTypedBatch   *typedColumnAdapterPreparedBatch
 	metadataOnly         bool
+	sparseOnly           bool
 	candidateAdmission   *typedGraphFoldAssetAdmission
 	selectStableResource func(rootpublication.StableResourceSelector) (*rootpublication.StableResourceSet, error)
 	reuseSegment         *columnManifestSegmentOwnership
@@ -959,6 +961,34 @@ func combineOrderedRootGroupPreflight(first, second backenddb.OrderedRootGroupPr
 }
 
 func prepareColumnWritePublishInputBeforeCommandWAL(input columnWritePublishInput) (columnWritePublishInput, error) {
+	if input.sparseOnly {
+		if err := validateTypedStringPatchMeta(input.meta, input.meta.Options.ColumnStore.SchemaHash); err != nil {
+			return columnWritePublishInput{}, err
+		}
+		if !input.declaredRowsReady || len(input.declaredRows) != input.rows || len(input.documents) != input.rows {
+			return columnWritePublishInput{}, ErrTypedStringPatchInvalid
+		}
+		for i, row := range input.declaredRows {
+			if len(row.Stored) != len(input.meta.Options.ColumnStore.Columns) || len(row.Values) != len(row.Stored) || len(input.documents[i].fieldSources) != len(row.Stored) || !bytes.Equal(row.ID, input.documents[i].ID) || len(row.ID) == 0 {
+				return columnWritePublishInput{}, ErrTypedStringPatchInvalid
+			}
+			for j, stored := range row.Stored {
+				source := input.documents[i].fieldSources[j]
+				if stored != (source == (columnRowCoordinates{})) {
+					return columnWritePublishInput{}, ErrTypedStringPatchInvalid
+				}
+				if stored {
+					value := row.Values[j]
+					if value.Type != ColumnStoreValueString || !value.Present || value.Null || !utf8.ValidString(value.String) || value.StringBytes != nil && !utf8.Valid(value.StringBytes) {
+						return columnWritePublishInput{}, ErrTypedStringPatchInvalid
+					}
+				} else if err := validateDocumentRowRefForPointFetch(0, source.ref(row.ID)); err != nil {
+					return columnWritePublishInput{}, err
+				}
+			}
+		}
+		return input, nil
+	}
 	if input.metadataOnly {
 		if err := validateColumnMetadataPublishInput(input); err != nil {
 			return columnWritePublishInput{}, err

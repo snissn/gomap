@@ -3,6 +3,7 @@ package collections
 import (
 	"encoding/binary"
 	"fmt"
+	"slices"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -47,10 +48,16 @@ func decodeColumnScoringRowLocatorBorrowedID(id, value []byte) (DocumentRowRef, 
 	if err != nil || len(value) == columnPrimaryRowLocatorValueSize {
 		return latest, err
 	}
+	if string(value[:4]) == "CRL3" {
+		return DocumentRowRef{}, fmt.Errorf("collections: sparse string row has no single scoring coordinate")
+	}
 	return decodeColumnRowCoordinates(id, value[36:])
 }
 
 func decodeColumnRowCoordinates(id, value []byte) (DocumentRowRef, error) {
+	if len(value) != 32 {
+		return DocumentRowRef{}, fmt.Errorf("collections: invalid row coordinate width")
+	}
 	row := binary.BigEndian.Uint64(value[16:])
 	if row > uint64(^uint(0)>>1) {
 		return DocumentRowRef{}, fmt.Errorf("collections: primary row locator for id %q row index overflows int", id)
@@ -90,7 +97,13 @@ func decodeColumnPrimaryRowLocator(id, value []byte) (DocumentRowRef, error) {
 func decodeColumnPrimaryRowLocatorBorrowedID(id, value []byte) (DocumentRowRef, error) {
 	legacy := len(value) == columnPrimaryRowLocatorValueSize && string(value[:4]) == "CRL1"
 	metadata := len(value) == columnPrimaryRowLocatorValueSize+32 && string(value[:4]) == "CRL2"
-	if !legacy && !metadata {
+	sparse := len(value) >= 44 && string(value[:4]) == "CRL3"
+	if sparse {
+		if _, err := validateColumnFieldLocator(id, value, -1); err != nil {
+			return DocumentRowRef{}, err
+		}
+	}
+	if !legacy && !metadata && !sparse {
 		return DocumentRowRef{}, fmt.Errorf("collections: invalid primary row locator for id %q value=%x", string(id), value)
 	}
 	ref, err := decodeColumnRowCoordinates(id, value[4:36])
@@ -148,9 +161,15 @@ func buildColumnPrimaryRowLocatorTable(plan ColumnPublishPlan, documents []colum
 			table.DeleteSteal(append([]byte(nil), document.ID...))
 			continue
 		}
-		ref := DocumentRowRef{Generation: plan.UpdatedActiveManifest.Generation, PartID: columnPhysicalRowAssetPartID, RowIndex: row, AppliedCommandLSN: plan.AppliedCommandLSN}
+		ref := DocumentRowRef{DocumentID: document.ID, Generation: plan.UpdatedActiveManifest.Generation, PartID: columnPhysicalRowAssetPartID, RowIndex: row, AppliedCommandLSN: plan.AppliedCommandLSN}
 		encoded := encodeColumnPrimaryRowLocator(ref)
-		if document.preserved != nil {
+		if document.fieldSources != nil {
+			var err error
+			encoded, err = encodeColumnFieldRowLocator(ref, document.fieldSources)
+			if err != nil {
+				return nil, err
+			}
+		} else if document.preserved != nil {
 			encoded = encodeColumnMetadataRowLocator(ref, *document.preserved)
 		}
 		setCollectionRunValue(table, append([]byte(nil), document.ID...), encoded)
@@ -163,4 +182,156 @@ func closeColumnPrimaryRowLocatorDelta(delta backenddb.OrderedRootDeltaPublishIn
 	if delta.Iter != nil {
 		_ = delta.Iter.Close()
 	}
+}
+
+// CRL3 stores a flattened, schema-ordinal field map. A zero source is replaced
+// by this publication's latest row; all other coordinates remain exact.
+func compareColumnCoordinates(a, b columnRowCoordinates) int {
+	if a.Generation != b.Generation {
+		if a.Generation < b.Generation {
+			return -1
+		}
+		return 1
+	}
+	if a.PartID != b.PartID {
+		if a.PartID < b.PartID {
+			return -1
+		}
+		return 1
+	}
+	if a.RowIndex != b.RowIndex {
+		if a.RowIndex < b.RowIndex {
+			return -1
+		}
+		return 1
+	}
+	if a.AppliedCommandLSN != b.AppliedCommandLSN {
+		if a.AppliedCommandLSN < b.AppliedCommandLSN {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+func encodeColumnFieldRowLocator(latest DocumentRowRef, fields []columnRowCoordinates) ([]byte, error) {
+	if len(fields) == 0 || uint64(len(fields)) > uint64(^uint32(0)) {
+		return nil, fmt.Errorf("collections: invalid sparse field count")
+	}
+	current := columnCoordinates(latest)
+	groups := make([]columnRowCoordinates, 0, len(fields))
+	for _, c := range fields {
+		if c == (columnRowCoordinates{}) {
+			c = current
+		}
+		if _, err := decodeColumnRowCoordinates(latest.DocumentID, encodeColumnPrimaryRowLocator(c.ref(nil))[4:]); err != nil {
+			return nil, err
+		}
+		if c != current && (c.Generation >= current.Generation || c.AppliedCommandLSN >= current.AppliedCommandLSN) {
+			return nil, fmt.Errorf("collections: sparse field source must precede latest row")
+		}
+		groups = append(groups, c)
+	}
+	slices.SortFunc(groups, compareColumnCoordinates)
+	groups = slices.Compact(groups)
+	b := make([]byte, 44+32*len(groups)+4*len(fields))
+	copy(b, encodeColumnPrimaryRowLocator(latest))
+	b[3] = '3'
+	binary.BigEndian.PutUint32(b[36:], uint32(len(fields)))
+	binary.BigEndian.PutUint32(b[40:], uint32(len(groups)))
+	for i, c := range groups {
+		copy(b[44+i*32:], encodeColumnPrimaryRowLocator(c.ref(nil))[4:])
+	}
+	for i, c := range fields {
+		if c == (columnRowCoordinates{}) {
+			c = current
+		}
+		j, _ := slices.BinarySearchFunc(groups, c, compareColumnCoordinates)
+		binary.BigEndian.PutUint32(b[44+32*len(groups)+i*4:], uint32(j))
+	}
+	return b, nil
+}
+
+// expectedSchema is -1 only while validating an untyped locator envelope.
+// Counts and exact encoded length are proved before allocating owned coordinates.
+// validateColumnFieldLocator validates borrowed canonical bytes without
+// allocating schema-sized backing before the captured reader admits its credit.
+// The all-groups-used check scans the bounded ordinal section per source group;
+// this work is charged to the public read (O(schema*groups), groups<=schema).
+func validateColumnFieldLocator(id, raw []byte, expectedSchema int) (DocumentRowRef, error) {
+	if len(raw) < 44 || string(raw[:4]) != "CRL3" {
+		return DocumentRowRef{}, fmt.Errorf("collections: invalid sparse row locator")
+	}
+	s, g := uint64(binary.BigEndian.Uint32(raw[36:])), uint64(binary.BigEndian.Uint32(raw[40:]))
+	if s == 0 || g == 0 || g > s || s > uint64(len(raw))/4 || 44+32*g+4*s != uint64(len(raw)) || expectedSchema >= 0 && s != uint64(expectedSchema) {
+		return DocumentRowRef{}, fmt.Errorf("collections: invalid sparse locator schema/source counts")
+	}
+	latest, err := decodeColumnRowCoordinates(id, raw[4:36])
+	if err != nil {
+		return DocumentRowRef{}, err
+	}
+	current := columnCoordinates(latest)
+	var previous columnRowCoordinates
+	for i := 0; i < int(g); i++ {
+		ref, err := decodeColumnRowCoordinates(id, raw[44+i*32:44+(i+1)*32])
+		if err != nil {
+			return DocumentRowRef{}, err
+		}
+		c := columnCoordinates(ref)
+		if i > 0 && compareColumnCoordinates(previous, c) >= 0 {
+			return DocumentRowRef{}, fmt.Errorf("collections: noncanonical sparse source order")
+		}
+		if c != current && (c.Generation >= current.Generation || c.AppliedCommandLSN >= current.AppliedCommandLSN) {
+			return DocumentRowRef{}, fmt.Errorf("collections: sparse source does not precede latest")
+		}
+		previous = c
+	}
+	start := 44 + 32*int(g)
+	for i := 0; i < int(s); i++ {
+		if uint64(binary.BigEndian.Uint32(raw[start+i*4:])) >= g {
+			return DocumentRowRef{}, fmt.Errorf("collections: sparse source ordinal outside groups")
+		}
+	}
+	for j := 0; j < int(g); j++ {
+		used := false
+		for i := 0; i < int(s); i++ {
+			if binary.BigEndian.Uint32(raw[start+i*4:]) == uint32(j) {
+				used = true
+				break
+			}
+		}
+		if !used {
+			return DocumentRowRef{}, fmt.Errorf("collections: unused sparse source group")
+		}
+	}
+	return latest, nil
+}
+
+func decodeColumnFieldSources(id, raw []byte, expectedSchema int) ([]columnRowCoordinates, error) {
+	_, fields, err := decodeColumnFieldLocator(id, raw, expectedSchema)
+	return fields, err
+}
+
+// decodeColumnFieldLocator allocates only the final field-coordinate backing;
+// group coordinates remain borrowed raw bytes, never a second decoded arena.
+func decodeColumnFieldLocator(id, raw []byte, expectedSchema int) (DocumentRowRef, []columnRowCoordinates, error) {
+	latest, err := validateColumnFieldLocator(id, raw, expectedSchema)
+	if err != nil {
+		return DocumentRowRef{}, nil, err
+	}
+	s, g := int(binary.BigEndian.Uint32(raw[36:])), int(binary.BigEndian.Uint32(raw[40:]))
+	if uint64(s) > uint64(^uint(0)>>1)/32 {
+		return DocumentRowRef{}, nil, fmt.Errorf("collections: sparse field backing overflows int")
+	}
+	fields := make([]columnRowCoordinates, s)
+	start := 44 + 32*g
+	for i := range fields {
+		j := int(binary.BigEndian.Uint32(raw[start+i*4:]))
+		ref, err := decodeColumnRowCoordinates(id, raw[44+j*32:44+(j+1)*32])
+		if err != nil {
+			return DocumentRowRef{}, nil, err
+		}
+		fields[i] = columnCoordinates(ref)
+	}
+	return latest, fields, nil
 }
