@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from prepare_config import draft
-from protocol import C3_FIXTURE, identity, process_environment, sha, write, validate_toolchain, selected_input_paths, digest
+from protocol import C3_FIXTURE, identity, process_environment, sha, write, validate_toolchain, selected_input_paths, digest, build_command, module_command
 from build import git_source_authority
 
 def main():
@@ -30,7 +30,8 @@ def main():
         {"path": "pkg/tool/linux_amd64/" + name, "sha256": "5" * 64, "bytes": 1, "mode": 0o755}
         for name in ("asm", "compile", "link")], "headers": [
         {"path": "pkg/include/" + name, "sha256": "6" * 64, "bytes": 1, "mode": 0o644}
-        for name in ("funcdata.h", "textflag.h")]}
+        for name in ("funcdata.h", "textflag.h")],
+        "go_env": {"path": "go.env", "sha256": "9" * 64, "bytes": 1, "mode": 0o644}}
     config.update(go_binary="/synthetic/go/bin/go", go_binary_sha256=toolchain["go_binary_sha256"],
                   go_version="synthetic Go version", toolchain_identity=validate_toolchain(toolchain))
     # Real tiny Git objects exercise offline provenance without pretending the
@@ -95,7 +96,7 @@ def main():
                 write(path, generated)
             elif name == "go_env":
                 effective = process_environment(config["environment"])
-                write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH", "CGO_ENABLED")}, "GOENV": "", "GOOS": "linux", "GOARCH": "amd64"})
+                write(path, {**{key: effective[key] for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH", "CGO_ENABLED", "GOAMD64", "GOEXPERIMENT")}, "GOENV": "", "GOOS": "linux", "GOARCH": "amd64"})
             else:
                 path.write_text("synthetic-refusal-input " + name + "\n")
             retained[name] = {"path": path.name, "sha256": sha(path)}
@@ -106,6 +107,8 @@ def main():
                         "environment": config["environment"], "effective_process_environment": process_environment(config["environment"]),
                         "go_version": config["go_version"], "go_binary_sha256": config["go_binary_sha256"], "toolchain_identity": config["toolchain_identity"],
                         "race": False, "build_tags": [], "artifacts": artifacts,
+                        "exit_code": 0, "command": build_command(config["go_binary"], declaration["binary"]),
+                        "module_producer_command": module_command(config["go_binary"]),
                         "external_input_identity": config["external_input_identity"],
                         **{field: artifacts[name]["sha256"] for field, name in (("compiled_inputs_before_sha256", "compiled_inputs_before"),
                         ("compiled_input_closure_sha256", "compiled_input_closure"), ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs"))}})
@@ -158,10 +161,13 @@ def main():
         completion["config_sha256"] = sha(packet / "config.json")
         write(packet / "completion.json", completion)
 
-    def damage_toolchain(packet, header=False):
+    def damage_toolchain(packet, header=False, go_env=False):
         raw = packet / "baseline-toolchain.raw"
         value = json.loads(raw.read_text())
-        value["headers" if header else "executables"][0 if header else 1]["sha256"] = "8" * 64
+        if go_env:
+            value["go_env"]["sha256"] = "8" * 64
+        else:
+            value["headers" if header else "executables"][0 if header else 1]["sha256"] = "8" * 64
         write(raw, value)
         artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
         artifacts["toolchain"]["sha256"] = sha(raw)
@@ -206,6 +212,8 @@ def main():
             value["inventory"]["go_binary_sha256"] = "7" * 64
         elif field == "header":
             value["inventory"]["headers"][0]["sha256"] = "8" * 64
+        elif field == "go-env":
+            value["inventory"]["go_env"]["sha256"] = "8" * 64
         else:
             value["inventory"]["executables"][1]["sha256"] = "6" * 64
         write(path, value)
@@ -248,10 +256,13 @@ def main():
         ("build-process-environment", damage_build_environment, "build process environment mismatch"),
         ("actual-go-environment", damage_go_environment, "actual go env mismatch GOENV"),
         ("actual-go-cgo-enabled", lambda p: damage_go_environment(p, "CGO_ENABLED", "1"), "actual go env mismatch CGO_ENABLED"),
+        ("actual-go-amd64", lambda p: damage_go_environment(p, "GOAMD64", "v3"), "actual go env mismatch GOAMD64"),
+        ("actual-go-experiments", lambda p: damage_go_environment(p, "GOEXPERIMENT", "arenas"), "actual go env mismatch GOEXPERIMENT"),
         ("wrong-frozen-fixture", damage_fixture, "fixture differs from frozen source"),
         ("same-product", damage_same_product, "distinct production_commit"),
         ("rehashed-toolchain", damage_toolchain, "Go toolchain inventory mismatch"),
         ("rehashed-assembler-header", lambda p: damage_toolchain(p, True), "Go toolchain inventory mismatch"),
+        ("rehashed-go-env", lambda p: damage_toolchain(p, go_env=True), "Go toolchain inventory mismatch"),
         ("rehashed-go-version", lambda p: damage_build_toolchain(p, "go_version", "different"), "toolchain mismatch"),
         ("rehashed-go-launcher", lambda p: damage_build_toolchain(p, "go_binary_sha256", "7" * 64), "toolchain mismatch"),
         ("rehashed-compiled-cgo", damage_compiled_cgo, "compiled Cgo inputs forbidden"),
@@ -263,8 +274,27 @@ def main():
         ("changed-live-version", lambda p: damage_live_toolchain(p, "version"), "live toolchain version mismatch"),
         ("changed-live-launcher", lambda p: damage_live_toolchain(p, "launcher"), "Go toolchain inventory mismatch"),
         ("changed-live-assembler-header", lambda p: damage_live_toolchain(p, "header"), "Go toolchain inventory mismatch"),
+        ("changed-live-go-env", lambda p: damage_live_toolchain(p, "go-env"), "Go toolchain inventory mismatch"),
         ("changed-live-compiler", lambda p: damage_live_toolchain(p, "compiler"), "Go toolchain inventory mismatch"),
     ]
+    argv = build_command(config["go_binary"], config["variants"]["baseline"]["binary"])
+    for label, command_value in (
+            ("gcflags", argv[:2] + ["-gcflags=all=-N -l"] + argv[2:]),
+            ("ldflags", argv[:2] + ["-ldflags=-s -w"] + argv[2:]),
+            ("race", argv[:2] + ["-race"] + argv[2:]),
+            ("output", argv[:4] + ["/synthetic/other-binary"] + argv[5:]),
+            ("package", argv[:-1] + ["./TreeDB"]),
+            ("launcher", ["/synthetic/other-go"] + argv[1:]),
+            ("order", argv[:2] + argv[3:5] + [argv[2], argv[5]]),
+            ("empty", [])):
+        cases.append(("rehashed-build-" + label,
+                      lambda p, a=command_value: damage_build_toolchain(p, "command", a), "actual ordinary build invocation mismatch"))
+    for label, exit_value in (("failed", 1), ("bool", False), ("float", 0.0)):
+        cases.append(("rehashed-build-exit-" + label,
+                      lambda p, v=exit_value: damage_build_toolchain(p, "exit_code", v), "actual ordinary build invocation mismatch"))
+    cases.append(("rehashed-module-producer", lambda p: damage_build_toolchain(p, "module_producer_command",
+                  [config["go_binary"], "list", "-deps", "-test", "-json", "./TreeDB/mvcc"]),
+                  "actual module producer invocation mismatch"))
     results = []
     for label, mutation, expected in cases:
         packet = root / label
