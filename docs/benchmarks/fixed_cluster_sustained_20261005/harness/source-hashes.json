@@ -1,7 +1,7 @@
 {
-  "state": "PROVISIONAL_REPAIRED_SOURCE_ONLY_PENDING_INDEPENDENT_REVIEW",
+  "admission_granted": false,
   "files": {
-    "README.md": "fb2f15655412d03d68aaf7a21e04fe0fc9ba544779fc5119d03848d5cdb591b8",
+    "README.md": "451b99b932af7b508265eaf0163544d391f6da910019d728e76ba3b56d341ac5",
     "check.py": "4c3dc453bcf9e6fe9d4eb9b5b95a5e9cf2ade33ae69a164f6cfc733b6c7ec7ef",
     "checkpoint_window_checks.py": "dac0260f4b68cf818c33f6a46151b7b8ea9a6e99f9294247ea6a3b4c4a7f3d4a",
     "cumulative_workload_checks.py": "3e023fa9fd9fede64fb6f728c45acc6e016911a3135beaeab4d6d81aa26500e7",
@@ -20,10 +20,10 @@
     "gomap-trial24-prefix-oracle-prepare-root-v1.py": "679cef8bb78868150612f1de0828b9925c182515d727b4ecfc64f0dad9495089",
     "gomap-trial24-read-audit-accounting-root-v1.py": "4603b534c431becac178eb2f3fa089285b64420ab0888b43d4e8e947a364bf49",
     "gomap-trial24-resource-accounting-root-v1.py": "f727da12817081b89ae519211d9a54a363bfb426130a23e20d663ca3e71ad49c",
-    "instantiate.py": "f11bed627773aca6889372abd0d7b8fd1e7422e0c4c287b232ebde78b0748c73",
-    "matched_report.py": "405d98b3c87b06d9d5706e7b963e1b9ab3f3d8f5dc9d0e5790fb1214e4dff922",
-    "matched_workload_checks.py": "c0e0bbbba06a5ffed4e804a64ccad1e4cbe7640f21be6e1151ce7bddd593b306",
-    "packet.json": "746fc477c35735d5b29e124d723befd36c9fd0075028175e0e082e92ed0a4231",
+    "instantiate.py": "6d5ee0c691c8732c822a7bc487f0833846b57409c9360361a3061c5cb45a0bd1",
+    "matched_report.py": "5921779eb38c37956d17cea668ae670578acad51a958049ce8754bc2ea35a7d3",
+    "matched_workload_checks.py": "15c79ffd3dce15463ee5cad8141e29f905dc2e2768b08f0768f1ad1ad1aad98d",
+    "packet.json": "a8d8f654613859745108c20a520a058f994cdcdcc424d75772a6d09756c727dc",
     "recall_aggregation_checks.py": "f535a8f69c23894e1dd857fc981053b9ecc8d8b44f3bc5962f281201be3a52f2",
     "receipt_closure_checks.py": "6a2487d702c2229a7123bd6670252843d8742dcc37e89655988b04b0e2e2ac7d",
     "root-adapters/runtime-build-prepare-root-v1.py": "35056cd5a63e42657963db616f438d61965efa52474ed9dded426910fd894d16",
@@ -49,10 +49,10 @@
     "workload_profile.py": "37bbbf979b31c39ee694e3498f025547db3aa8870bae9121b2efe98fc70a78e4"
   },
   "role_count": 15,
-  "transitive_source_count": 14,
   "root_owned_ancillary_adapters": 2,
+  "runtime_started": false,
   "source_head": null,
   "source_tree": null,
-  "runtime_started": false,
-  "admission_granted": false
+  "state": "PROVISIONAL_REPAIRED_SOURCE_ONLY_PENDING_INDEPENDENT_REVIEW",
+  "transitive_source_count": 14
 }

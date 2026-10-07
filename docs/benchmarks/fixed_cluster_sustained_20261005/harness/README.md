@@ -474,8 +474,12 @@ raw locators. W4 is EXPIRED_SETUP_ONLY_NOT_MEASURED; W5-W6 are
 UNISSUED_PROSPECTIVELY_RETIRED. Those three unmeasured rows have empty pins.
 evidence is a nonempty mapping of record names to exact regular-file path/SHA
 references; issued W1-W4 must include their unchanged original budget under
-budget. ROOT assembles that ledger from retained actual records; the reporter
-authenticates and retains their bytes without inventing interpretations of
+budget. The reviewed reporter SOURCE fixes the original W1-W4 paths and digests
+in ORIGINAL_BUDGETS; a caller-supplied replacement or relocated copy is refused
+even when its newly calculated raw and ledger hashes match. An optional
+original_budget alias must identify that same fixed budget. ROOT assembles the
+ledger from retained actual records; the reporter retains their bytes without
+inventing interpretations of
 independent acceptance or three-copy receipts. Existing failures, deadlines and
 unissued attempts are never relabeled.
 

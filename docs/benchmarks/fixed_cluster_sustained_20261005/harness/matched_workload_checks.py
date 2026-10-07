@@ -339,13 +339,26 @@ def continuation_controls():
   refs={'record':pinned('history-record-'+str(i),dict(synthetic_only=True,campaign=campaign))}
   if i<4:refs['budget']=pinned('original-budget-'+str(i),dict(synthetic_only=True,campaign=campaign))
   evidence.append(refs)
+ # Rebind only an isolated synthetic reporter copy; shipped SOURCE pins remain
+ # fixed. CLI cases still execute the real validation body in a fresh process.
+ assert set(reporter.ORIGINAL_BUDGETS)==set(w.MATCHED_CAMPAIGNS[:4])
+ synthetic_budgets={c:evidence[i]['budget'] for i,c in enumerate(w.MATCHED_CAMPAIGNS[:4])}
+ tree=ast.parse((R/'matched_report.py').read_bytes())
+ replacements=0
+ for node in tree.body:
+  if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id=='ORIGINAL_BUDGETS' for t in node.targets):
+   node.value=ast.parse(repr(synthetic_budgets),mode='eval').body;replacements+=1
+ assert replacements==1
+ synthetic=root/'synthetic-reporter';synthetic.mkdir()
+ target=synthetic/'matched_report.py';target.write_text(ast.unparse(tree)+'\n')
+ for name in ('source_paths.py','workload_profile.py'):(synthetic/name).write_bytes((R/name).read_bytes())
  statuses=('complete','complete','complete','EXPIRED_SETUP_ONLY_NOT_MEASURED','UNISSUED_PROSPECTIVELY_RETIRED','UNISSUED_PROSPECTIVELY_RETIRED')
  history=dict(Version=1,state='INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT',windows=[dict(campaign=c,status=status,pins=copy.deepcopy(old['windows'][i]['pins']) if i<3 else {},evidence=evidence[i]) for i,(c,status) in enumerate(zip(w.MATCHED_CAMPAIGNS,statuses))])
  manifest=dict(Version=2,revision=w.CONTINUATION_REVISION,decision=decision,historical=pinned('full-original-ledger',history),windows=copy.deepcopy(old['windows'][:3]+future))
  def cli(label,entry,reason=None,flags=()):
   path=root/(label+'-manifest.json');path.write_text(json.dumps(entry))
   out=root/(label+'-output.json')
-  argv=[sys.executable,*flags,'-B',str(R/'matched_report.py'),'--windows',str(path),'--windows-sha256',sha(path.read_bytes()),'--out',str(out)]
+  argv=[sys.executable,*flags,'-B',str(target),'--windows',str(path),'--windows-sha256',sha(path.read_bytes()),'--out',str(out)]
   p=subprocess.run(argv,capture_output=True,text=True,timeout=60)
   for suffix,value in [('argv.json',json.dumps(argv)),('stdout',p.stdout),('stderr',p.stderr),('exit',str(p.returncode)+'\n')]: (root/(label+'.'+suffix)).write_text(value)
   if reason is None:
@@ -393,6 +406,18 @@ def continuation_controls():
   ('missing_history_evidence',lambda z:z['windows'][4].__setitem__('evidence',{}),'retained historical evidence references'),
   ('unmeasured_has_selected_pins',lambda z:z['windows'][3].__setitem__('pins',copy.deepcopy(old['windows'][3]['pins'])),'unmeasured historical attempts have no selected measurements')]:
   cli(label,changed_history(label,edit),reason)
+ # A caller cannot bless substituted bytes by calculating new ledger/raw hashes.
+ for i in range(4):
+  replacement=pinned('replacement-budget-'+str(i),dict(synthetic_only=True,campaign=w.MATCHED_CAMPAIGNS[i],reset=True))
+  cli('budget_rehashed_substitution_'+str(i),changed_history('budget_rehashed_'+str(i),lambda z,i=i,ref=replacement:z['windows'][i]['evidence'].__setitem__('budget',ref)),'unchanged predeclared original budget path/digest')
+  clone=pinned('relocated-budget-'+str(i),None,Path(evidence[i]['budget']['path']).read_bytes())
+  assert clone['sha256']==evidence[i]['budget']['sha256']
+  cli('budget_same_bytes_relocated_'+str(i),changed_history('budget_relocated_'+str(i),lambda z,i=i,ref=clone:z['windows'][i]['evidence'].__setitem__('budget',ref)),'unchanged predeclared original budget path/digest')
+  cli('budget_swapped_campaign_'+str(i),changed_history('budget_swapped_'+str(i),lambda z,i=i:z['windows'][i]['evidence'].__setitem__('budget',evidence[(i+1)%4]['budget'])),'unchanged predeclared original budget path/digest')
+  cli('budget_alias_substitution_'+str(i),changed_history('budget_alias_'+str(i),lambda z,i=i,ref=replacement:z['windows'][i]['evidence'].__setitem__('original_budget',ref)),'unchanged original budget alias path/digest')
+ # The optional legacy alias, when present, identifies the same fixed budget.
+ alias=changed_history('valid_budget_alias',lambda z:z['windows'][3]['evidence'].__setitem__('original_budget',evidence[3]['budget']))
+ cli('unchanged_budget_alias',alias)
  for label,edit,reason in [
   ('missing_selected',lambda z:z['windows'].pop(),'six fixed selected windows'),
   ('duplicate_selected',lambda z:z['windows'].__setitem__(4,copy.deepcopy(z['windows'][3])),'exact campaign order and retained outcome'),
@@ -416,7 +441,7 @@ def continuation_controls():
   cli(label,z,reason)
  for flag in ('-O','-OO'):
   path=root/('optimized-'+flag[1:]+'-manifest.json');path.write_text(json.dumps(manifest));out=root/('optimized-'+flag[1:]+'-output.json')
-  argv=[sys.executable,flag,str(R/'matched_report.py'),'--windows',str(path),'--windows-sha256',sha(path.read_bytes()),'--out',str(out)]
+  argv=[sys.executable,flag,str(target),'--windows',str(path),'--windows-sha256',sha(path.read_bytes()),'--out',str(out)]
   p=subprocess.run(argv,capture_output=True,text=True,timeout=60)
   for suffix,value in [('argv.json',json.dumps(argv)),('stdout',p.stdout),('stderr',p.stderr),('exit',str(p.returncode)+'\n')]: (root/('optimized-'+flag[1:]+'.'+suffix)).write_text(value)
   assert p.returncode==1 and 'ordinary Python required' in p.stderr and not out.exists()

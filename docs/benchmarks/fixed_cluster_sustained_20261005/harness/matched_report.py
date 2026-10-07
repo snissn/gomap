@@ -22,6 +22,8 @@ def scalar(value):
  need(type(value) in (int,float) and math.isfinite(value) and value>=0,'finite nonnegative measured scalar');return value
 def describe(values):
  return None if not values else dict(median=statistics.median(values),minimum=min(values),maximum=max(values))
+# Original issued budgets are fixed SOURCE bindings, never caller-selected hashes.
+ORIGINAL_BUDGETS={'rf4matched5068w01c1': {'path': '/Volumes/FlashDrive/gomap-5021-sustained-evidence-root-v1/rf4matched5068w01c1-phase-budget-root-v1.json', 'sha256': '03cb3d23d64e399731a184b88fb35b895fcca8b6bc1a1c2cee82d17670f43dd1'}, 'rf4matched5068w02c4': {'path': '/Volumes/FlashDrive/gomap-5021-sustained-evidence-root-v1/rf4matched5068w02c4-phase-budget-root-v1.json', 'sha256': 'caae9ca3786bb38a31229654bbb873c3876860d170c8c4d79cc39e207c0d637c'}, 'rf4matched5068w03c4': {'path': '/Volumes/FlashDrive/gomap-5021-sustained-evidence-root-v1/rf4matched5068w03c4-phase-budget-root-v1.json', 'sha256': '4e737bec0aa234515f3a6ed605c64f30ce79a4e60e29efd51bbce942f912a353'}, 'rf4matched5068w04c1': {'path': '/Volumes/FlashDrive/gomap-5021-sustained-evidence-root-v1/rf4matched5068w04c1-phase-budget-root-v1.json', 'sha256': '65a3cd01faf367234dc179cddfe27a8952124d23919ea39aaa30913255c92925'}}
 ROLES=('node-a','node-b','node-c','node-d','client')
 def role_bytes(values):
  need(isinstance(values,dict) and set(values)==set(ROLES),'exact five observed resource roles')
@@ -76,7 +78,12 @@ def selection(manifest):
  for i,(row,campaign,status) in enumerate(zip(history,workload_source.MATCHED_CAMPAIGNS,statuses)):
   need(isinstance(row,dict) and set(row)=={'campaign','status','pins','evidence'} and row['campaign']==campaign and row['status']==status,'exact historical campaign order and immutable outcome')
   need(isinstance(row['pins'],dict) and isinstance(row['evidence'],dict) and row['evidence'] and all(isinstance(k,str) and k for k in row['evidence']),'retained historical evidence references')
-  if i<4:need('budget' in row['evidence'],'issued historical original budget reference')
+  if i<4:
+   need('budget' in row['evidence'],'issued historical original budget reference')
+   expected=ORIGINAL_BUDGETS[campaign]
+   need(row['evidence']['budget']==expected,'unchanged predeclared original budget path/digest')
+   if 'original_budget' in row['evidence']:
+    need(row['evidence']['original_budget']==expected,'unchanged original budget alias path/digest')
   for ref in row['evidence'].values():read_ref(ref)
   if i<3:need(row['pins']==rows[i].get('pins') and rows[i].get('campaign')==campaign and rows[i].get('status')=='complete','unchanged selected legacy raw locators and outcomes')
   else:need(row['pins']=={},'unmeasured historical attempts have no selected measurements')
