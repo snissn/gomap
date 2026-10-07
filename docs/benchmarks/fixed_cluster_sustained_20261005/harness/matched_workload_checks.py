@@ -78,6 +78,9 @@ def matched_controls():
    ra.rd.DURATION=60000000000;ra.rd.SPACING=5000000000;ra.rd.CONCURRENCY=concurrency
    ns,run=visibility_fixture(ra.rd,6);p,r=ns['p'],ns['r']
    p['Concurrency']=r['Concurrency']=concurrency
+   # The Go default-six producer omits the zero-valued Originals member.
+   for report_row in (p,r):
+    report_row.pop('Originals',None);report_row['Profile']='changing-top10'
    for a in r['Attempts']:
     a['Worker']=a['Ordinal']%concurrency if a['Phase']=='warmup' else ([1,0,2,3,0,1,3,2,0,1,2,3,1,0,3,2][a['Ordinal']] if concurrency==4 else 0)
     if concurrency==4 and a['Phase']=='measured' and a['Ordinal']<4:
@@ -130,6 +133,7 @@ def matched_controls():
  finally:ra.rd.DURATION,ra.rd.SPACING,ra.rd.CONCURRENCY,ra.rd.c.QUERY_RUN=old
  report=load(R/'matched_report.py','matched_descriptive_report')
  manifest=dict(Version=1,windows=report_windows);summary=report.build(manifest)
+ (root/'report-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  assert [w['concurrency'] for w in summary['windows']]==[1,4,4,1,1,4] and summary['campaign_acceptance'] is False
  assert all(arm['complete_windows']==3 for arm in summary['per_arm'].values())
  checks.append('matched_actual_descriptive_report_six_windows_arm_median_min_max_no_pooled_tail')
@@ -206,3 +210,37 @@ print(json.dumps({'checks':checks,'mixed_argv':mixed,'permission_argv':argv,'run
  assert proc.returncode==0,(label,proc.stderr)
  result=json.loads(proc.stdout);assert len(result['checks'])==8 and not result['runtime_started'] and result['network_calls']==0
  checks.extend('permission_'+label+'_'+name for name in result['checks'])
+
+# Append new schema controls after every predecessor label. Exercise the actual
+# reporter CLI and complete pinned producer-shaped packet, not a field-only stub.
+report_root=fixtures/'matched-source-controls'
+report_schema=report_root/'raw-schema-controls';report_schema.mkdir()
+report_manifest=json.loads((report_root/'report-manifest.json').read_bytes())
+def report_cli(label,manifest,expected):
+ entry=report_schema/(label+'-windows.json');entry.write_text(json.dumps(manifest))
+ output=report_schema/(label+'-output.json')
+ argv=[sys.executable,'-B',str(R/'matched_report.py'),'--windows',str(entry),'--windows-sha256',sha(entry.read_bytes()),'--out',str(output)]
+ proc=subprocess.run(argv,capture_output=True,timeout=20)
+ for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',(str(proc.returncode)+'\n').encode()),('argv.json',json.dumps(argv).encode())]:(report_schema/(label+'.'+suffix)).write_bytes(value)
+ assert (proc.returncode==0)==expected,(label,proc.stderr)
+ assert output.exists()==expected,(label,'refusal must leave output absent')
+ checks.append('matched_report_actual_CLI_schema_'+label)
+ return json.loads(output.read_bytes()) if expected else None
+full=report_cli('omitted_default_six_complete',report_manifest,True)
+assert all(w['metrics']['originals']==6 and w['metrics']['prefixes']==7 for w in full['windows'])
+partial_manifest=copy.deepcopy(report_manifest)
+for row in partial_manifest['windows'][3:]:row.update(status='incomplete',pins={})
+partial=report_cli('omitted_default_six_partial',partial_manifest,True)
+assert [w['status'] for w in partial['windows']]==['complete']*3+['incomplete']*3
+assert partial['per_arm']['C1']['complete_windows']==1 and partial['per_arm']['C4']['complete_windows']==2
+schema_negatives=[('originals_bool',lambda r:r.__setitem__('Originals',True)),('originals_float',lambda r:r.__setitem__('Originals',6.0)),('originals_stale48',lambda r:r.__setitem__('Originals',48)),('originals_null',lambda r:r.__setitem__('Originals',None)),('profile',lambda r:r.__setitem__('Profile','invariant')),('kind',lambda r:r.__setitem__('Kind','fixed_cluster_read_window_v1')),('writes_missing',lambda r:r['Writes'].pop()),('writes_duplicate',lambda r:r['Writes'][1].__setitem__('Ordinal',0)),('writes_bool',lambda r:r['Writes'][0].__setitem__('Ordinal',False)),('prefix_missing',lambda r:r['Prefixes'].pop()),('prefix_duplicate',lambda r:r['Prefixes'][1].__setitem__('Prefix',0)),('prefix_float',lambda r:r['Prefixes'][0].__setitem__('Prefix',0.0))]
+for field in ('Version','Concurrency','WarmupPlanned','MaxAttempts','OutputBytes','RequestedDuration','PaceInterval'):
+ schema_negatives.extend([(field+'_bool',lambda r,field=field:r.__setitem__(field,True)),(field+'_float',lambda r,field=field:r.__setitem__(field,float(r[field]))),(field+'_wrong',lambda r,field=field:r.__setitem__(field,r[field]+1))])
+for event in (0,1):
+ for label,edit in schema_negatives:
+  manifest=copy.deepcopy(report_manifest);ref=manifest['windows'][0]['pins']['stdout']
+  events=[json.loads(line) for line in Path(ref['path']).read_bytes().splitlines()]
+  edit(events[event]['Report']);raw=b''.join(json.dumps(row,separators=(',',':')).encode()+b'\n' for row in events)
+  target=report_schema/('event%d-%s-stdout.jsonl'%(event,label));target.write_bytes(raw)
+  manifest['windows'][0]['pins']['stdout']=dict(path=str(target),sha256=sha(raw))
+  report_cli('event%d_%s'%(event,label),manifest,False)

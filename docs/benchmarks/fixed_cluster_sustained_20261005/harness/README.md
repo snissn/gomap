@@ -429,3 +429,14 @@ original collector or measured harness identity. Run the corrected helper only
 against the same pinned raw packet; no new collector, active admission, workload
 replay or native oracle is implied. Generic full-role instantiation is not this
 postcapture correction. Root retains artifact acceptance and publication.
+
+The matched descriptive reporter consumes the immutable Go planned/result schema.
+For the default six-write campaign, Go omits the zero-valued `Originals` field;
+omitted or integer zero means six, matching the retained read validator. The
+reporter independently requires six contiguous `Writes`, seven contiguous
+`Prefixes`, the `changing-top10` profile, and the exact typed C1/C4 duration,
+spacing, warmup and evidence caps. It authenticates the unchanged raw reports
+and outer accounting/source joins before producing any output. Failed and
+incomplete windows remain in their declared order. This offline reporter repair
+is a separately reviewed current-source supplement; it does not alter frozen
+measurement sources, raw observations, prior acceptances or qualification status.
