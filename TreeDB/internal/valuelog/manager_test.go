@@ -2164,7 +2164,7 @@ func TestManagerReleaseZombieDeleteFailureKeepsSegmentTracked(t *testing.T) {
 	}
 
 	origRemove := removeSegmentPath
-	removeSegmentPath = func(string) error { return errors.New("remove failed") }
+	removeSegmentPath = func(string, func(string) error) error { return errors.New("remove failed") }
 	t.Cleanup(func() { removeSegmentPath = origRemove })
 
 	if err := mgr.Release(set); err == nil {

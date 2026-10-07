@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -914,6 +915,13 @@ func TestCOWFreezeCloseRace(t *testing.T) {
 }
 
 func TestCOWCursorGeometricStackWitness(t *testing.T) {
+	// TotalAlloc is process-wide. Like testing.AllocsPerRun, isolate these
+	// short, uncontended allocation brackets to one P. Complete explicit GC
+	// before each bracket and prevent automatic GC from entering it.
+	previousProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(previousProcs)
+	previousGC := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(previousGC)
 	for _, count := range []int{64, 256, 1024, 4096} {
 		b, w := cowTestWriter(t, DefaultCOWLimits())
 		// Only this immutable iterator fixture uses degree2 to reach heights
