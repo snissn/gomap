@@ -1487,8 +1487,12 @@ with background prune disabled. It checks effective/persisted settings at fresh
 open and reopen, inventories the full profile root (including side stores and
 immutable manifest metadata), and times exhaustive owned `CompactStorage`, final
 fallback convergence, typed GC and leaf GC separately. Older off-profile packets
-remain historical evidence and fail this schema; physical-growth acceptance is
-pending. See the [lifecycle spec](../../TreeDB/docs/spec/r1-row-lifecycle.md).
+remain historical evidence and fail this schema. The
+[integrated R1 evidence](../../TreeDB/docs/evidence/r1-row-store-5061/README.md)
+records the accepted five-process/five-epoch supported packet, component growth,
+and finite maintenance costs. Cross-route equivalence and duration-unbounded
+physical capacity remain unqualified. See the
+[lifecycle spec](../../TreeDB/docs/spec/r1-row-lifecycle.md).
 
 
 ### Opt-in retained foreground duration/fence capture

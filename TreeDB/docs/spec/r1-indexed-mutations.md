@@ -1,6 +1,6 @@
 # R1 indexed row mutations
 
-Status: selected contract and qualification tests for [#5059](https://github.com/snissn/gomap/issues/5059), under [#5056](https://github.com/snissn/gomap/issues/5056). Final qualification depends on the accepted [#5057](https://github.com/snissn/gomap/issues/5057) fixture, baseline and retained cost matrix. This page does not record a completed performance gate.
+Status: accepted selected contract and correctness qualification for [#5059](https://github.com/snissn/gomap/issues/5059), under [#5056](https://github.com/snissn/gomap/issues/5056). The [integrated evidence](../evidence/r1-row-store-5061/README.md) records the landed-source comparator and finite serial mutation-cost acceptance using independently frozen receipts. Larger populations and concurrent writers remain outside this selected qualification.
 
 The [selected R1.1 decision v1](https://github.com/snissn/gomap/issues/5057#issuecomment-6007333084)
 fixture uses caller-supplied external IDs and authoritative non-null
