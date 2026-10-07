@@ -49,6 +49,13 @@ def finite(value, scope, positive=False, integer=False):
     need(type(value) in ((int,) if integer else (int,float)) and math.isfinite(value)
          and (value > 0 if positive else value >= 0), "invalid " + scope)
 
+def counter(value, scope):
+    """Match the producer's decimal strconv.ParseUint(..., 64) observations."""
+    need(type(value) is str and re.fullmatch(r"[0-9]+", value), "missing/invalid " + scope)
+    parsed = int(value)
+    need(parsed <= (1 << 64) - 1, "out-of-range " + scope)
+    return parsed
+
 def case_names(case):
     parts = (case["profile"], case["mode"], case["layout"], "N" + str(case["keys"]))
     return "-".join(parts), "/".join(("BenchmarkCOWSustainedPublicMVCC",) + parts)
@@ -82,10 +89,7 @@ def validate_completion(completion):
 def quiescent_owners(stats, phase):
     values = {}
     for key in ("views", "active_cuts", "generations", "current_roots", "frozen_roots", "external_leases"):
-        value = stats.get("treedb.cache.cow." + key)
-        need(type(value) is str and re.fullmatch(r"[0-9]+", value), "invalid quiescent owner " + key)
-        values[key] = int(value)
-        need(values[key] <= (1 << 64) - 1, "out-of-range quiescent owner " + key)
+        values[key] = counter(stats.get("treedb.cache.cow." + key), "quiescent owner " + key)
     need(values["views"] == 0 and values["active_cuts"] == 1 and values["current_roots"] > 0
          and values["generations"] >= values["current_roots"]
          and values["generations"] - values["current_roots"] == values["frozen_roots"]
@@ -103,7 +107,7 @@ def validate_config(c):
     need(c["result_class"] in ("construction","matched-supported-evidence"), "unsupported qualification request")
     need(c["qualification"] == "pending_native_observations", "native/product/C4 qualification unavailable")
     need(digest(c["native_requirements"]) == digest({"eligibility":{"status":"PENDING"},"whole_public_maintenance_charge":{"status":"PENDING","cap_records":32,"cap_bytes":1<<20}}), "native eligibility/whole-call caps pending")
-    need(c["cycles"] == 3 and c["order"] == ["baseline","candidate","candidate","baseline"], "frozen ABBA contract")
+    need(type(c["cycles"]) is int and c["cycles"] == 3 and c["order"] == ["baseline","candidate","candidate","baseline"], "frozen ABBA contract")
     finite(c["timeout_seconds"], "timeout", True, True)
     need(0 < c["timeout_seconds"] <= 3600, "timeout resource bound")
     need(set(c["environment"]) == CONTROLS and all(type(v) is str for v in c["environment"].values()), "explicit environment controls")
@@ -133,6 +137,7 @@ def validate_config(c):
     expected=set(itertools.product(PROFILES,MODES,LAYOUTS,SIZES));cells=[]
     for x in c["cases"]:
         exact(x,("id","profile","mode","layout","keys","benchmark","package","iterations","warmup_iterations","workload_contract","comparable_metrics","comparison_metrics","timed_scope","ack_contract","rules","latency_groups"),"case")
+        need(type(x["keys"]) is int, "invalid case key count")
         cells.append((x["profile"],x["mode"],x["layout"],x["keys"]))
         need((x["id"],x["benchmark"])==case_names(x),"case/benchmark identity mismatch")
         need(x["package"]==C4_PACKAGE,"wrong package")
@@ -260,9 +265,12 @@ def validate_raw(r,case,epochs):
     finite(r["epochs"],"raw epochs",True,True)
     finite(r["overlapping_readers"],"raw overlap",True,True)
     n=case["keys"];mode=case["mode"];need(r["leaf"]==case["benchmark"].split("/",1)[1] and r["epochs"]==epochs,"raw leaf/epochs mismatch")
-    fixed={"group_width":16,"pin_ring":2,"shards":4,"flush_threshold":16<<20,"background_checkpoint_interval":-1,"disable_side_stores":True,"limits":LIMITS,"recorder_capacity":n*(epochs*8+8)+512+n*(3+6*epochs)+6,"force_pointers":case["layout"]=="forced_pointer","pointer_threshold":1 if case["layout"]=="forced_pointer" else 1<<30,"read_cut_capability":mode=="cow_btree"}
+    fixed={"group_width":16,"pin_ring":2,"shards":4,"flush_threshold":16<<20,"background_checkpoint_interval":-1,"disable_side_stores":True,"recorder_capacity":n*(epochs*8+8)+512+n*(3+6*epochs)+6,"force_pointers":case["layout"]=="forced_pointer","pointer_threshold":1 if case["layout"]=="forced_pointer" else 1<<30,"read_cut_capability":mode=="cow_btree"}
     fixed.update(MAINTENANCE_OPTIONS)
     for k,v in fixed.items():need(type(r[k]) is type(v) and r[k]==v,"raw option mismatch "+k)
+    exact(r["limits"], LIMITS, "raw limits")
+    for key, value in LIMITS.items():
+        need(type(r["limits"][key]) is int and r["limits"][key] == value, "raw limit mismatch " + key)
     need(r["ordinary_ack"]==ACK[case["profile"]],"wrong resolved ordinary ACK")
     need(r["native_eligibility"]==r["whole_maintenance_charge"]=="PENDING" and r["qualification"]=="pending_native_observations","native qualification unavailable")
     expected=expected_calls(n,epochs,mode);seen=collections.Counter();intervals=[]
@@ -272,6 +280,8 @@ def validate_raw(r,case,epochs):
         count,inp,out=expected[key];seen[key]+=1;need(call["input"]==inp and call["output"]==out,"partial group/history work")
         need(call["outcome"]=="success" and call["error"]=="","public call failure")
         for k in ("input","output","start_ns","completion_ns","duration_ns"):finite(call[k],k,integer=True)
+        need(all(call[k] <= (1 << 63) - 1 for k in ("start_ns", "completion_ns", "duration_ns")),
+             "out-of-range call timing")
         need(call["completion_ns"]-call["start_ns"]==call["duration_ns"] and call["duration_ns"]>0,"inconsistent whole-call timing")
         intervals.append((call["start_ns"],call["completion_ns"]))
     need(seen==collections.Counter({k:v[0] for k,v in expected.items()}),"missing/duplicate phase/work/Close")
@@ -286,7 +296,7 @@ def validate_raw(r,case,epochs):
         for k,value in expected_counts.items():need(type(proof[k]) is int and proof[k]==value,"incomplete/wrong actual representation count "+phase+" "+k)
         for side in ("owners_before","owners_after"):
             exact(proof[side],LAYOUT_OWNER_KEYS if mode=="cow_btree" else (),"representation owner census")
-            for k,value in proof[side].items():need(type(value) is str and re.fullmatch(r"[0-9]+",value),"invalid representation owner counter "+k)
+            for k,value in proof[side].items():counter(value,"representation owner counter "+k)
         need(proof["owners_before"]==proof["owners_after"],"representation diagnostic owner leak")
     overlap=0
     for epoch in range(1,epochs+1):
@@ -309,8 +319,8 @@ def validate_raw(r,case,epochs):
         if boundary["phase"]=="reopen_counter_reset":need(stats=={},"invalid reopened counter reset");previous={};continue
         need(all(stats.get(k)==v for k,v in MAINTENANCE_STATS.items()),"resolved manual maintenance mismatch")
         for k in required:
-            value=stats.get(k);need(type(value) is str and re.fullmatch(r"[0-9]+",value),"missing/invalid required counter "+k)
-            if k.endswith("_total") and k in previous:need(int(value)>=int(previous[k]),"counter regression "+k)
+            value=counter(stats.get(k),"required counter "+k)
+            if k.endswith("_total") and k in previous:need(value>=int(previous[k]),"counter regression "+k)
         need(stats.get("treedb.profile.resolved")==case["profile"] and stats.get("treedb.cache.memtable_mode")==mode and stats.get("treedb.profile.ordinary_ack_class")==ACK[case["profile"]],"resolved boundary profile/mode/ACK mismatch")
         route=ACK_ROUTE if case["profile"]!="no_wal_fast" else dict(ACK_ROUTE, **{"treedb.command_wal.enabled":"false","treedb.cache.command_wal.external_durability":"false","treedb.cache.redo_log.mode":"disabled_unsafe"})
         need(all(stats.get(k)==v for k,v in route.items()),"actual WAL/redo routing mismatch")
@@ -338,7 +348,7 @@ def validate_raw(r,case,epochs):
         receipts.extend(("unsupported_prune:before_effects","backend_lag:unchanged_backend_commit_sequence_with_visible_history","checkpoint:backend_commit_sequence_advanced"))
     else:receipts.extend(("backend_progress:observed_nonregressing_with_visible_history","checkpoint:completed_public_calls"))
     if case["layout"]=="forced_pointer":
-        raw=boundary_map["pinned_checkpoint"].get("treedb.cache.vlog_payload_kind.raw_bytes.single_value");need(type(raw) is str and re.fullmatch(r"[0-9]+",raw) and int(raw)>0,"missing persistent single-value write observation")
+        raw=counter(boundary_map["pinned_checkpoint"].get("treedb.cache.vlog_payload_kind.raw_bytes.single_value"),"persistent single-value counter");need(raw>0,"missing persistent single-value write observation")
         receipts.append("forced_pointer:positive_single_value_vlog_raw_bytes")
     receipts.extend(("old_pins:immutable_seed_after_checkpoint","reopen:complete_point_history_payload"))
     need(r["oracle_receipts"]==receipts,"missing/unmatched exact oracle receipts")
