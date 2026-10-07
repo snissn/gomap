@@ -1307,7 +1307,7 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			projectionBlockedReason = rebuiltDurableResourceFallbackOuterLeafDelta
 		}
 		durableResources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
-			sourceResources, sourceExact, projectionBlockedReason, sourceIndex, sourceIndexID, sourceIndexIdentity, newPager, nextMeta,
+			sourceResources, sourceExact, true, projectionBlockedReason, sourceIndex, sourceIndexID, sourceIndexIdentity, newPager, nextMeta,
 		)
 		runStats.DurableResourceCaptureDuration += time.Since(durableCaptureStarted)
 		if err != nil {
@@ -1735,7 +1735,7 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 		projectionBlockedReason = rebuiltDurableResourceFallbackOuterLeafDelta
 	}
 	resources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
-		sourceResources, sourceExact, projectionBlockedReason, snapshot.idx, sourceIndexID, sourceIndexIdentity, newPager, meta,
+		sourceResources, sourceExact, false, projectionBlockedReason, snapshot.idx, sourceIndexID, sourceIndexIdentity, newPager, meta,
 	)
 	if err == nil {
 		err = ctx.Err()
