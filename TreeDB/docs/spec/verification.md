@@ -78,6 +78,21 @@ The existing external-Close joining assertions remain unchanged: eviction must
 keep parent authority borrowable until actual handle cleanup completes. Quarantine
 normal and recovery operations use one post-Close identity-checked operation root;
 failed-unlink hooks wrap its supplied removal rather than reopen a diagnostic path.
+`TestManagerSymlinkParentRetirementQuarantineRedirect` substitutes an intermediate
+quarantine directory with a relative link to a foreign sibling directory, at the
+real canonical-unlink cut or the failed-removal hook. Both registry modes require
+foreign bytes and identity to survive, the original target to be removed or
+restored as appropriate, honest ownership completion, and a valid rollback retry.
+`TestManagerSymlinkParentRetirementQuarantineRecoveryRedirect` checks that recovery
+restores the unexpected captured child and refuses redirected directory cleanup.
+Normal and recovery child operations retain the nested quarantine root and exact
+directory handle; cross-parent rename/link never re-resolve that intermediate
+name. `TestManagerSymlinkParentRetirementCrossParentHandles` moves the captured
+quarantine and installs an unrelated real directory at its old name, then checks
+retained-handle rename, no-replace link collision, successful rollback link and
+foreign-sentinel preservation without requiring symlink privileges.
+Existing portable startup and partial-rollback recovery cases exercise
+directory opening and cross-parent operations on Windows as well as Unix.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 
