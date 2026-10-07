@@ -2,6 +2,13 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+`TestManagerRefreshDuringRetiredSegmentUnlink` exercises actual close-before-
+unlink and failed-unlink ownership without scheduler timing. Refresh discovers
+new live segments while excluding the closed zombie. Companion tests preserve
+different-path ID conflicts and closed-live-handle errors.
+`BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
+directory refresh; segment creation, manager open and cleanup are outside the timer.
+
 Immutable memtable foundation: `TestCOWOwnedHeadersAndBytes` covers old header
 identity, caller/output alias attempts and legacy arena poison/reset isolation;
 `TestCOWPrivatePreparationCancelAndResourceOwnership` covers private cancellation,

@@ -1909,6 +1909,12 @@ func (m *Manager) Refresh() error {
 		}
 		m.mu.Lock()
 		for _, seg := range segments {
+			if existing := m.files[seg.id]; existing != nil && existing.IsZombie.Load() && filepath.Clean(existing.Path) == filepath.Clean(seg.path) {
+				// Retirement owns this entry until deletion (including any retry)
+				// completes. Its handle may already be closed before unlink, so
+				// refresh must neither stat it nor resurrect it as a live segment.
+				continue
+			}
 			if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
 				if errors.Is(err, os.ErrNotExist) {
 					// Online rewrite/GC can delete a segment after listSegments() sees it
