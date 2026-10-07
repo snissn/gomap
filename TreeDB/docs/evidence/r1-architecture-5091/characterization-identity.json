@@ -1,0 +1,34 @@
+{
+  "attribution.test": {
+    "sha256": "f78d005b0ece4272f60784d0ea5db9d2c7f341dbb9b82bcd4831215c73a7b27d",
+    "bytes": 43586992
+  },
+  "attribution-v2.test": {
+    "sha256": "07c9ef584a0b65edb12efb3dac68c9abaf88e325a9ed03ea07d6d8304f2f65b4",
+    "bytes": 43587104
+  },
+  "attribution-v3.test": {
+    "sha256": "385d9cc702e7fc6b606af258fe5676988d53ecbd61622c5aa252334d02fb47ee",
+    "bytes": 43615344
+  },
+  "gc-attribution.test": {
+    "sha256": "29b0a2aed356ac68789edb7f063bfae8662bb880e8a344138f016040e1bdd8d9",
+    "bytes": 55317029
+  },
+  "attribution-v1-source.go": {
+    "sha256": "666fd0e133707dc67dfd7c0b4159cc9e8548edadd698de40ade5a1429a4237f0",
+    "bytes": 7642
+  },
+  "attribution-v2-source.go": {
+    "sha256": "dfaecac6e810dff01d20ff8d69b740d8423ad8becb74423f388c234e212fbb80",
+    "bytes": 7759
+  },
+  "attribution-v3-source.go": {
+    "sha256": "04eb688e1d89ae4e88e428d2cbfa93901e388dffdf212ef99e3e064813cce36f",
+    "bytes": 11020
+  },
+  "gc-attribution-source.go": {
+    "sha256": "dfec7f07f5430e07b884660fff52f593f59d9fcb2c1c98d9ab22b315c4d5a65e",
+    "bytes": 1923
+  }
+}
