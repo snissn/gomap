@@ -224,7 +224,9 @@ profile-dir filenames or existing native-prune validator contracts.
 The closed `--suite c4-sustained` dispatch shares the C3 builder, immutable Git
 source authority, compiled module validation, fixed child environment, host and
 TMPDIR admission, and process-group watchdog. C3 remains the default suite.
-`build.py` is unchanged. The full maintained fixture contract and allocation
+The builder's closed `--suite c4` selection compiles `./TreeDB/mvcc/cowsustained`, while
+its default C3 selection compiles the isolated public C3 harness package.
+The full maintained fixture contract and allocation
 scope are in [cow-c4-sustained-evidence.md](../../TreeDB/docs/benchmarks/cow-c4-sustained-evidence.md).
 
 `prepare_c4_config.py` creates a non-runnable draft covering all 36 leaves.
@@ -262,6 +264,11 @@ Both retain the original seed pins across all checkpoints. Failed or partial
 lifecycles, extra files, missing/duplicate work, nonfinite values, counter
 regression and changed native claims refuse. File hashes and recomputed raw
 validation are bound to the ordinary benchmark row and full process receipt.
+Each process receipt hashes the work contract for its actual phase: a 1-epoch
+warmup describes its 1-epoch history and layout cardinality even when measured
+processes execute 8 epochs. The command, row and raw lifecycle count must agree.
+At released, preclose and reopened boundaries, COW owner counters must match the
+single published database cut, including generations, roots and external leases.
 
 `c4_analyze.py` calls the shared provenance validator using an explicit closed
 protocol and dependency selection. Its raw summary retains foreground call
@@ -279,6 +286,10 @@ configuration, process, source/object/mode, module, binary, tooling and host
 corruption must all refuse. This refusal smoke and actual Linux normal/race
 fixture execution remain distinct gates. Standalone JSON/Go logs are not
 benchprof profile-dir inputs and introduce no benchprof filename changes.
+The completion record has exactly the declared fields and the literal pending
+native/product/C4 claim; copied packets cannot promote that claim. Use `--case`
+to select named refusal checks when only an affected validator needs rechecking.
+`python3 -B scripts/cow_c3_read/c4_contract_test.py` checks the phase contract.
 
 The C4 schema v2 finite construction disables generational maintenance and all
 three background checkpoint triggers plus background index vacuum using actual

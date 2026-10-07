@@ -1,4 +1,4 @@
-package mvcc
+package cowsustained
 
 import (
 	"bytes"
@@ -7,7 +7,9 @@ import (
 	"flag"
 	"fmt"
 	treedb "github.com/snissn/gomap/TreeDB"
+	cowhelpers "github.com/snissn/gomap/TreeDB/internal/cowbench"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/mvcc"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -158,13 +160,13 @@ func TestCOWSustainedPublicMVCCRepresentationRefusalClosesSnapshot(t *testing.T)
 						t.Error(err)
 					}
 				}()
-				store := New(db)
+				store := mvcc.New(db)
 				keys := c4Keys(16)
-				mutations := make([]Mutation, len(keys))
+				mutations := make([]mvcc.Mutation, len(keys))
 				for i, key := range keys {
-					mutations[i] = Mutation{Key: key, Value: c4Value(0)}
+					mutations[i] = mvcc.Mutation{Key: key, Value: c4Value(0)}
 				}
-				if err := store.CommitAt(1, mutations, CommitRelaxed); err != nil {
+				if err := store.CommitAt(1, mutations, mvcc.CommitRelaxed); err != nil {
 					t.Fatal(err)
 				}
 				before := db.Stats()
@@ -214,16 +216,16 @@ func TestCOWSustainedPublicMVCCCutRefusalRecovery(t *testing.T) {
 						t.Error(err)
 					}
 				}()
-				s := New(db)
+				s := mvcc.New(db)
 				keys := c4Keys(16)
-				mutations := make([]Mutation, len(keys))
+				mutations := make([]mvcc.Mutation, len(keys))
 				for i, key := range keys {
-					mutations[i] = Mutation{Key: key, Value: c4Value(0)}
+					mutations[i] = mvcc.Mutation{Key: key, Value: c4Value(0)}
 				}
-				if err = s.CommitAt(1, mutations, CommitRelaxed); err != nil {
+				if err = s.CommitAt(1, mutations, mvcc.CommitRelaxed); err != nil {
 					t.Fatal(err)
 				}
-				old, err := s.IterateVersions(VersionIteratorOptions{})
+				old, err := s.IterateVersions(mvcc.VersionIteratorOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -250,7 +252,7 @@ func TestCOWSustainedPublicMVCCCutRefusalRecovery(t *testing.T) {
 				if _, err = s.GetAt(keys[0], 100); !errors.Is(err, memtable.ErrCOWCapacity) {
 					t.Fatalf("point fallback: %v", err)
 				}
-				if _, err = s.IterateVersions(VersionIteratorOptions{}); !errors.Is(err, memtable.ErrCOWCapacity) {
+				if _, err = s.IterateVersions(mvcc.VersionIteratorOptions{}); !errors.Is(err, memtable.ErrCOWCapacity) {
 					t.Fatalf("history fallback: %v", err)
 				}
 				// Existing iterator owns its full resource set independently of new capture.
@@ -319,16 +321,16 @@ func TestCOWSustainedPublicMVCCWriteRefusalRecovery(t *testing.T) {
 						t.Error(x)
 					}
 				}()
-				store := New(db)
+				store := mvcc.New(db)
 				keys := c4Keys(16)
-				seed := make([]Mutation, 16)
+				seed := make([]mvcc.Mutation, 16)
 				for i, key := range keys {
-					seed[i] = Mutation{Key: key, Value: c4Value(0)}
+					seed[i] = mvcc.Mutation{Key: key, Value: c4Value(0)}
 				}
-				if err = store.CommitAt(1, seed, CommitRelaxed); err != nil {
+				if err = store.CommitAt(1, seed, mvcc.CommitRelaxed); err != nil {
 					t.Fatal(err)
 				}
-				old, err := store.IterateVersions(VersionIteratorOptions{})
+				old, err := store.IterateVersions(mvcc.VersionIteratorOptions{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -376,13 +378,13 @@ func TestCOWSustainedPublicMVCCWriteRefusalRecovery(t *testing.T) {
 					t.Fatal("pressure was view-count limit rather than total bytes")
 				}
 				t.Logf("public pin pressure owners=%d added_total_bytes=%d charged_bytes_per_owner=%g max_total_bytes=%d", len(cuts), endCharge-startCharge, float64(endCharge-startCharge)/float64(len(cuts)), opts.COWMemtableLimits.MaxTotalBytes)
-				groups := []CommitGroup{{Timestamp: 100}, {Timestamp: 101}}
+				groups := []mvcc.CommitGroup{{Timestamp: 100}, {Timestamp: 101}}
 				for g := range groups {
 					for i := 0; i < 16; i++ {
-						groups[g].Mutations = append(groups[g].Mutations, Mutation{Key: []byte(fmt.Sprintf("denied/%d/%02d", g, i)), Value: c4Value(1)})
+						groups[g].Mutations = append(groups[g].Mutations, mvcc.Mutation{Key: []byte(fmt.Sprintf("denied/%d/%02d", g, i)), Value: c4Value(1)})
 					}
 				}
-				err = store.CommitGroupAt(groups, CommitRelaxed)
+				err = store.CommitGroupAt(groups, mvcc.CommitRelaxed)
 				if !errors.Is(err, memtable.ErrCOWCapacity) {
 					t.Fatalf("ordinary group did not preserve prepublication capacity refusal: %v", err)
 				}
@@ -416,7 +418,7 @@ func TestCOWSustainedPublicMVCCWriteRefusalRecovery(t *testing.T) {
 					t.Fatalf("current oracle after refusal: %v", err)
 				}
 				for attempt := 0; attempt < 4; attempt++ {
-					err = store.CommitGroupAt(groups, CommitRelaxed)
+					err = store.CommitGroupAt(groups, mvcc.CommitRelaxed)
 					if err == nil {
 						break
 					}
@@ -430,7 +432,7 @@ func TestCOWSustainedPublicMVCCWriteRefusalRecovery(t *testing.T) {
 				for _, group := range groups {
 					for _, mutation := range group.Mutations {
 						got, x := store.GetAt(mutation.Key, 1000)
-						if x != nil || got.State != Present || got.Timestamp != group.Timestamp || !bytes.Equal(got.Value, mutation.Value) {
+						if x != nil || got.State != mvcc.Present || got.Timestamp != group.Timestamp || !bytes.Equal(got.Value, mutation.Value) {
 							t.Fatalf("retried group oracle: %+v %v", got, x)
 						}
 					}
@@ -462,7 +464,7 @@ func TestCOWSustainedPublicMVCCManualMaintenancePins(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			store := New(db)
+			store := mvcc.New(db)
 			keys := c4Keys(16)
 			var snapshots []c4Boundary
 			observe := func(phase string) map[string]string {
@@ -470,18 +472,18 @@ func TestCOWSustainedPublicMVCCManualMaintenancePins(t *testing.T) {
 				if e := c4AdmitMaintenance(stats); e != nil {
 					t.Fatal(e)
 				}
-				if e := cowPublicACKRouting(p, stats); e != nil {
+				if e := cowhelpers.ACKRouting(p, stats); e != nil {
 					t.Fatal(e)
 				}
 				snapshots = append(snapshots, c4Boundary{phase, stats})
 				return stats
 			}
 			observe("opened")
-			muts := make([]Mutation, len(keys))
+			muts := make([]mvcc.Mutation, len(keys))
 			for i, k := range keys {
-				muts[i] = Mutation{Key: k, Value: c4Value(0)}
+				muts[i] = mvcc.Mutation{Key: k, Value: c4Value(0)}
 			}
-			if err = store.CommitAt(1, muts, CommitRelaxed); err != nil {
+			if err = store.CommitAt(1, muts, mvcc.CommitRelaxed); err != nil {
 				t.Fatal(err)
 			}
 			if err = db.Checkpoint(); err != nil {
@@ -491,18 +493,18 @@ func TestCOWSustainedPublicMVCCManualMaintenancePins(t *testing.T) {
 			if err = layoutRecord.proveLayout(db, "seed_layout", c4Expected(keys, 0), true); err != nil {
 				t.Fatal(err)
 			}
-			pins := make([]*VersionIterator, 2)
+			pins := make([]*mvcc.VersionIterator, 2)
 			for i := range pins {
-				pins[i], err = store.IterateVersions(VersionIteratorOptions{ReadTimestamp: 1})
+				pins[i], err = store.IterateVersions(mvcc.VersionIteratorOptions{ReadTimestamp: 1})
 				if err != nil {
 					t.Fatal(err)
 				}
 				defer pins[i].Close()
 			}
 			for i, k := range keys {
-				muts[i] = Mutation{Key: k, Value: c4Value(1)}
+				muts[i] = mvcc.Mutation{Key: k, Value: c4Value(1)}
 			}
-			if err = store.CommitAt(2, muts, CommitRelaxed); err != nil {
+			if err = store.CommitAt(2, muts, mvcc.CommitRelaxed); err != nil {
 				t.Fatal(err)
 			}
 			if err = db.Checkpoint(); err != nil {
@@ -567,7 +569,7 @@ func TestCOWSustainedPublicMVCCManualMaintenancePins(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer db.Close()
-			store = New(db)
+			store = mvcc.New(db)
 			for _, k := range keys {
 				got, e := store.GetAt(k, 100)
 				if e != nil || got.Timestamp != 2 || !bytes.Equal(got.Value, c4Value(1)) {

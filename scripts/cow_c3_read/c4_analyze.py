@@ -18,7 +18,6 @@ def quantiles(values):
 def analyze(packet,emit=True):
     packet=Path(packet).resolve()
     c,rows,receipts,completion=validate_packet(packet,"c4-sustained")
-    need(completion["schema"]==c["schema"],"completion schema mismatch")
     module_identities=[]
     for variant in ("baseline","candidate"):
         build=load(packet/(variant+"-build-receipt.json"))

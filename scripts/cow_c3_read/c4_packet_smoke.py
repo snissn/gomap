@@ -35,15 +35,20 @@ def config_mutation(key,value):
         c=load(packet/"config.json");c[key]=value;replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
     return run
 
-def raw_mutation(change,profile=None):
+def raw_mutation(change,profile=None,mode=None):
     def run(packet):
-        receipts=load(packet/"receipts.json");r=next((r for r in receipts if profile is None or r["case"].startswith(profile+"-")));entry=r["raw_lifecycles"][-1];path=packet/(r["label"]+"-lifecycle")/entry["path"]
+        receipts=load(packet/"receipts.json");r=next(r for r in receipts if (profile is None or r["case"].startswith(profile+"-")) and (mode is None or "-"+mode+"-" in r["case"]));entry=r["raw_lifecycles"][-1];path=packet/(r["label"]+"-lifecycle")/entry["path"]
         raw=load(path);change(raw);replace_json(path,raw);entry["sha256"]=sha(path);replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
     return run
 
 def receipt_mutation(change):
     def run(packet):
         receipts=load(packet/"receipts.json");change(receipts[0]);replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
+    return run
+
+def completion_mutation(change):
+    def run(packet):
+        completion=load(packet/"completion.json");change(completion);replace_json(packet/"completion.json",completion)
     return run
 
 def mutate_config(change):
@@ -106,10 +111,15 @@ def omit_tombstone_proof(raw):
         proof["pointers" if raw["layout"]=="forced_pointer" else "inline"]-=omitted
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument("--positive",type=Path,required=True);p.add_argument("--out",type=Path,required=True);args=p.parse_args()
+    p=argparse.ArgumentParser();p.add_argument("--positive",type=Path,required=True);p.add_argument("--out",type=Path,required=True);p.add_argument("--case",action="append",help="Run only these named refusal checks");args=p.parse_args()
     positive=args.positive.resolve();out=args.out.resolve();need(not out.exists() and not out.is_relative_to(positive),"smoke output needs distinct new directory")
     validation=analyze(positive,emit=False);out.mkdir(parents=True)
     cases={
+        "completion-native-claim":completion_mutation(lambda c:c.update(claim="Native/product/C4 qualified")),
+        "completion-unknown-field":completion_mutation(lambda c:c.update(qualification="PASS")),
+        "completion-missing-claim":completion_mutation(lambda c:c.pop("claim")),
+        "completion-bool-runs":completion_mutation(lambda c:c.update(runs=True)),
+        "receipt-wrong-phase-work":receipt_mutation(lambda r:r.update(work_contract_sha256="0"*64)),
         "native-qualification":config_mutation("qualification","qualified"),
         "product-result-class":config_mutation("result_class","product-qualified"),
         "matched-same-product":config_mutation("result_class","matched-supported-evidence"),
@@ -182,6 +192,25 @@ def main():
         cases["wrong-maintenance-"+key]=raw_mutation(lambda r,k=key,v=value:r["boundaries"][0]["stats"].update({k:"1" if v=="0" else "unexpected"}))
     for phase in ("released","preclose"):
         cases["extra-checkpoint-"+phase]=raw_mutation(lambda r,p=phase:next(b for b in r["boundaries"] if b["phase"]==p)["stats"].update({"treedb.cache.checkpoint.runs":str(int(next(b for b in r["boundaries"] if b["phase"]==p)["stats"]["treedb.cache.checkpoint.runs"])+1)}))
+    for phase in ("released","preclose","reopened"):
+        for key in ("views","active_cuts","generations","current_roots","frozen_roots","external_leases"):
+            def mutate_owner(raw,p=phase,k=key):
+                stats=next(b for b in raw["boundaries"] if b["phase"]==p)["stats"]
+                name="treedb.cache.cow."+k
+                stats[name]="0" if k=="current_roots" else str(int(stats[name])+1)
+            cases["quiescent-owner-"+phase+"-"+key]=raw_mutation(mutate_owner,mode="cow_btree")
+    for phase in ("released", "preclose", "reopened"):
+        def overflow_owner(raw, p=phase):
+            stats = next(b for b in raw["boundaries"] if b["phase"] == p)["stats"]
+            current = 1 << 64
+            generations = current + int(stats["treedb.cache.cow.frozen_roots"])
+            stats.update({"treedb.cache.cow.current_roots": str(current),
+                          "treedb.cache.cow.generations": str(generations),
+                          "treedb.cache.cow.external_leases": str(generations + 3)})
+        cases["quiescent-balanced-overflow-" + phase] = raw_mutation(overflow_owner, mode="cow_btree")
+    if args.case:
+        need(len(args.case)==len(set(args.case)) and set(args.case)<=set(cases),"unknown/duplicate refusal selection")
+        cases={name:cases[name] for name in args.case}
     results=[]
     for name,change in cases.items():
         packet=out/name;copy_packet(positive,packet);change(packet)

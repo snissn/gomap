@@ -86,7 +86,7 @@ lifecycle failures retain outcome/error receipts and refuse acceptance.
 
 ```sh
 mkdir /tmp/cow-c4-raw
-GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowsustained -run '^$' \
   -bench '^BenchmarkCOWSustainedPublicMVCC/command_wal_relaxed/cow_btree/inline/N512$' \
   -benchtime=4x -benchmem -count=1 -args \
   -cow-c4-public-output-dir=/tmp/cow-c4-raw
@@ -147,3 +147,14 @@ toolchain identity.
 Copied-positive cases cover an unbound Go launcher, missing toolchain identity and an invalid matched
 same-product configuration; source-manifest corruption is a corruption refusal,
 not a claim to have exercised a valid semantic source-mode mutation.
+
+The standalone C4 test package imports the ordinary exported MVCC product.
+Build with `build.py --suite c4`; retain the complete selected-minus-product
+harness closure, including the lifecycle fixture, TestMain and shared admission
+helpers, with identical bytes and modes across products. Warmup receipts describe
+their actual epoch count separately from measured work. At released, preclose
+and reopened boundaries, require zero views, one active cut, positive current
+roots, exact generation/frozen-root balance and exact external-lease balance.
+The completion record has a closed schema and preserves the pending native
+qualification claim. Copied-positive mutation checks refuse changes to any of
+these observations even when dependent artifact hashes are recomputed.

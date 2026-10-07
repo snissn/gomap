@@ -6,9 +6,10 @@ import math
 from pathlib import Path
 import re
 
-from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products
+from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products, validate_harness_fixtures, C4_PACKAGE
 
 SCHEMA = "gomap-cow-sustained-public-v2"
+COMPLETION_CLAIM = "Supported sustained construction/evidence only; native/product/C4 qualification pending"
 PROFILES = ("command_wal_durable", "command_wal_relaxed", "no_wal_fast")
 MODES = ("cow_btree", "append_only", "btree")
 LAYOUTS = ("inline", "forced_pointer")
@@ -60,6 +61,38 @@ def workload(keys, epochs):
             "representation_diagnostics":{"stages":list(LAYOUT_PHASES),"seed_entries":keys,"final_entries":keys*(1+3*epochs),"logical_tombstones_checked":True},
             "native_qualification":"PENDING","maintenance_cap_records":32,"maintenance_cap_bytes":1<<20}
 
+def work_contract(case, phase):
+    need(phase in ("warmup", "measured", "construction"), "unknown work phase")
+    epochs = case["warmup_iterations"] if phase == "warmup" else case["iterations"]
+    return workload(case["keys"], epochs)
+
+def validate_completion(completion):
+    exact(completion, ("schema", "at", "runs", "config_sha256", "receipts_sha256",
+                       "script_identity_sha256", "claim"), "completion")
+    need(completion["schema"] == SCHEMA and completion["claim"] == COMPLETION_CLAIM,
+         "completion must preserve pending native/product/C4 qualification")
+    need(type(completion["at"]) is str and re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?\+00:00", completion["at"]),
+         "invalid completion timestamp")
+    finite(completion["runs"], "completion runs", positive=True, integer=True)
+    for key in ("config_sha256", "receipts_sha256", "script_identity_sha256"):
+        need(type(completion[key]) is str and re.fullmatch(r"[0-9a-f]{64}", completion[key]),
+             "invalid completion identity " + key)
+
+def quiescent_owners(stats, phase):
+    values = {}
+    for key in ("views", "active_cuts", "generations", "current_roots", "frozen_roots", "external_leases"):
+        value = stats.get("treedb.cache.cow." + key)
+        need(type(value) is str and re.fullmatch(r"[0-9]+", value), "invalid quiescent owner " + key)
+        values[key] = int(value)
+        need(values[key] <= (1 << 64) - 1, "out-of-range quiescent owner " + key)
+    need(values["views"] == 0 and values["active_cuts"] == 1 and values["current_roots"] > 0
+         and values["generations"] >= values["current_roots"]
+         and values["generations"] - values["current_roots"] == values["frozen_roots"]
+         and values["external_leases"] >= 3
+         and values["external_leases"] - 3 == values["generations"],
+         "quiescent owners do not match the published database cut at " + phase)
+
 def validate_config(c):
     exact(c, ("schema","suite","status","coordinator_acceptance","result_class","qualification",
               "native_requirements","cycles","order","timeout_seconds","go_binary","go_binary_sha256",
@@ -101,7 +134,7 @@ def validate_config(c):
         exact(x,("id","profile","mode","layout","keys","benchmark","package","iterations","warmup_iterations","workload_contract","comparable_metrics","comparison_metrics","timed_scope","ack_contract","rules","latency_groups"),"case")
         cells.append((x["profile"],x["mode"],x["layout"],x["keys"]))
         need((x["id"],x["benchmark"])==case_names(x),"case/benchmark identity mismatch")
-        need(x["package"]=="github.com/snissn/gomap/TreeDB/mvcc","wrong package")
+        need(x["package"]==C4_PACKAGE,"wrong package")
         for k in ("iterations","warmup_iterations"):finite(x[k],k,True,True);need(x[k]<=8,"finite epoch bound")
         need(digest(x["workload_contract"])==digest(workload(x["keys"],x["iterations"])),"schedule/work contract mismatch")
         need(x["ack_contract"]=="CommitRelaxed; resolved profile ordinary ACK" and x["timed_scope"]==TIMED_SCOPE,"ACK/timing scope")
@@ -110,8 +143,7 @@ def validate_config(c):
         need(digest(x["rules"])==digest(metric_rules()),"metric rules mismatch")
     need(len(cells)==36 and len(set(cells))==36 and set(cells)==expected,"missing/duplicate/extra sustained matrix")
     need(c["comparison_metrics"]==["ns/op","B/op","allocs/op"],"comparison metrics mismatch")
-    need(len(c["fixtures"])==2 and {f["path"] for f in c["fixtures"]}=={"TreeDB/mvcc/cow_c4_public_bench_test.go","TreeDB/mvcc/cow_c4_public_fixture_test.go"},"frozen fixtures missing")
-    for f in c["fixtures"]:exact(f,("path","sha256"),"fixture");need(re.fullmatch(r"[0-9a-f]{64}",f["sha256"] or ""),"fixture hash required")
+    validate_harness_fixtures(c["fixtures"], suite="c4")
     return c
 
 def config(path):return validate_config(load(path))
@@ -283,7 +315,8 @@ def validate_raw(r,case,epochs):
         need(all(stats.get(k)==v for k,v in route.items()),"actual WAL/redo routing mismatch")
         previous=stats;boundary_map[boundary["phase"]]=stats
     if mode=="cow_btree":
-        need(int(boundary_map["released"]["treedb.cache.cow.views"])==0 and int(boundary_map["preclose"]["treedb.cache.cow.views"])==0,"public pin owners not released")
+        for phase in ("released", "preclose", "reopened"):
+            quiescent_owners(boundary_map[phase], phase)
     validate_ordinary_ack(boundary_map,case["profile"],n,epochs)
     baseline=int(boundary_map["opened"]["treedb.commit_seq"])
     observed_sequence=[int(b["stats"]["treedb.commit_seq"]) for b in r["boundaries"] if b["stats"] and b["phase"]!="reopened"]

@@ -1,4 +1,4 @@
-package mvcc
+package cowsustained
 
 import (
 	"bytes"
@@ -9,7 +9,9 @@ import (
 	"fmt"
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/caching"
+	cowhelpers "github.com/snissn/gomap/TreeDB/internal/cowbench"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
+	"github.com/snissn/gomap/TreeDB/mvcc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"os"
 	"path/filepath"
@@ -187,7 +189,7 @@ func c4Keys(n int) [][]byte {
 	return keys
 }
 
-// Shared fixture payloads are immutable; the Store owns its encoded copies.
+// Shared fixture payloads are immutable; the mvcc.Store owns its encoded copies.
 var c4Payloads = func() [c4MaxEpochs + 1][]byte {
 	var values [c4MaxEpochs + 1][]byte
 	for e := range values {
@@ -201,22 +203,22 @@ func c4Value(epoch int) []byte { return c4Payloads[epoch] }
 // Full retained history follows logical-key order and descending timestamps.
 // Equal-timestamp ordinary/grouped replacements retain one record; each epoch
 // adds exactly its insert, tombstone, and reinsert to the immutable seed.
-func c4Expected(keys [][]byte, epochs int) []Version {
-	want := make([]Version, 0, len(keys)*(1+3*epochs))
+func c4Expected(keys [][]byte, epochs int) []mvcc.Version {
+	want := make([]mvcc.Version, 0, len(keys)*(1+3*epochs))
 	for _, key := range keys {
 		for e := epochs; e > 0; e-- {
 			ts := uint64(10 * e)
 			want = append(want,
-				Version{Key: key, Value: c4Value(e), Timestamp: ts + 3, State: Present},
-				Version{Key: key, Timestamp: ts + 2, State: Tombstone},
-				Version{Key: key, Value: c4Value(e), Timestamp: ts + 1, State: Present})
+				mvcc.Version{Key: key, Value: c4Value(e), Timestamp: ts + 3, State: mvcc.Present},
+				mvcc.Version{Key: key, Timestamp: ts + 2, State: mvcc.Tombstone},
+				mvcc.Version{Key: key, Value: c4Value(e), Timestamp: ts + 1, State: mvcc.Present})
 		}
-		want = append(want, Version{Key: key, Value: c4Value(0), Timestamp: 1, State: Present})
+		want = append(want, mvcc.Version{Key: key, Value: c4Value(0), Timestamp: 1, State: mvcc.Present})
 	}
 	return want
 }
 
-func c4CheckIterator(it *VersionIterator, want []Version) (uint64, error) {
+func c4CheckIterator(it *mvcc.VersionIterator, want []mvcc.Version) (uint64, error) {
 	var n uint64
 	var err error
 	for it.Valid() {
@@ -240,8 +242,8 @@ func c4CheckIterator(it *VersionIterator, want []Version) (uint64, error) {
 	}
 	return n, err
 }
-func c4History(s *Store, want []Version, ts uint64) (uint64, error) {
-	it, err := s.IterateVersions(VersionIteratorOptions{ReadTimestamp: ts})
+func c4History(s *mvcc.Store, want []mvcc.Version, ts uint64) (uint64, error) {
+	it, err := s.IterateVersions(mvcc.VersionIteratorOptions{ReadTimestamp: ts})
 	if err != nil {
 		return 0, err
 	}
@@ -271,7 +273,7 @@ func (r *c4Record) boundary(db *treedb.DB, phase string) error {
 	if checkpointCount != expectedCheckpoints {
 		return fmt.Errorf("manual checkpoint window %s: got %d want %d", phase, checkpointCount, expectedCheckpoints)
 	}
-	if err := cowPublicACKRouting(treedb.Profile(r.Profile), stats); err != nil {
+	if err := cowhelpers.ACKRouting(treedb.Profile(r.Profile), stats); err != nil {
 		return err
 	}
 	required := []string{"treedb.cache.snapshot.rotations_total", "treedb.cache.snapshot.rotated_shards_total", "treedb.cache.snapshot.enqueued_records_total", "treedb.commit_seq", "treedb.command_wal.append.count_total", "treedb.command_wal.file_sync.calls_total"}
@@ -305,7 +307,7 @@ func (r *c4Record) boundary(db *treedb.DB, phase string) error {
 // Representation diagnostics are outside the epoch timer. Each actual public
 // snapshot call is retained; the pure layout validator performs no public calls.
 // MVCC logical tombstones are ordinary stored values and obey the same layout.
-func (r *c4Record) proveLayout(db *treedb.DB, phase string, want []Version, pointers bool) (err error) {
+func (r *c4Record) proveLayout(db *treedb.DB, phase string, want []mvcc.Version, pointers bool) (err error) {
 	proof := c4LayoutProof{Phase: phase, OwnersBefore: map[string]string{}, OwnersAfter: map[string]string{}}
 	ownerKeys := []string{"treedb.cache.cow.views", "treedb.cache.cow.active_cuts", "treedb.cache.cow.external_leases"}
 	if r.Mode == "cow_btree" {
@@ -358,7 +360,7 @@ func (r *c4Record) proveLayout(db *treedb.DB, phase string, want []Version, poin
 			if !bytes.Equal(entry.Key, physical) {
 				return 0, errors.New("layout physical key mismatch")
 			}
-			if e = cowPublicValueLayout(entry, pointers); e != nil {
+			if e = cowhelpers.ValueLayout(entry, pointers); e != nil {
 				return 0, e
 			}
 			proof.Entries++
@@ -468,7 +470,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		return r, err
 	}
 	var db *treedb.DB
-	var pins []*VersionIterator
+	var pins []*mvcc.VersionIterator
 	bench, _ := t.(*testing.B)
 	if bench != nil {
 		bench.StopTimer()
@@ -495,7 +497,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		if stats["treedb.profile.resolved"] != string(p) || stats["treedb.cache.memtable_mode"] != mode || stats["treedb.profile.ordinary_ack_class"] != p.OrdinaryAckClass() || db.SupportsMVCCReadCut() != (mode == "cow_btree") {
 			return errors.New("resolved mode/profile/ACK/capability mismatch")
 		}
-		return cowPublicACKRouting(p, stats)
+		return cowhelpers.ACKRouting(p, stats)
 	}
 	if err = validate(); err != nil {
 		return r, err
@@ -515,34 +517,34 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		}
 		return nil
 	}
-	s := New(db)
+	s := mvcc.New(db)
 	keys := c4Keys(n)
-	oracle := make([][]Version, epochs+1)
+	oracle := make([][]mvcc.Version, epochs+1)
 	for e := range oracle {
 		oracle[e] = c4Expected(keys, e)
 	}
-	commit := func(phase string, groups []CommitGroup) error {
+	commit := func(phase string, groups []mvcc.CommitGroup) error {
 		count := 0
 		for _, g := range groups {
 			count += len(g.Mutations)
 		}
 		return call(phase, "CommitGroupAt", uint64(count), func() (uint64, error) {
-			e := s.CommitGroupAt(groups, CommitRelaxed)
+			e := s.CommitGroupAt(groups, mvcc.CommitRelaxed)
 			if e != nil {
 				return 0, e
 			}
 			return uint64(count), nil
 		})
 	}
-	muts := func(start, end, e int, del bool) []Mutation {
-		v := make([]Mutation, end-start)
+	muts := func(start, end, e int, del bool) []mvcc.Mutation {
+		v := make([]mvcc.Mutation, end-start)
 		for i := range v {
-			v[i] = Mutation{Key: keys[start+i], Value: c4Value(e), Delete: del}
+			v[i] = mvcc.Mutation{Key: keys[start+i], Value: c4Value(e), Delete: del}
 		}
 		return v
 	}
 	for start := 0; start < n; start += c4GroupWidth {
-		if err = commit("seed", []CommitGroup{{Timestamp: 1, Mutations: muts(start, start+c4GroupWidth, 0, false)}}); err != nil {
+		if err = commit("seed", []mvcc.CommitGroup{{Timestamp: 1, Mutations: muts(start, start+c4GroupWidth, 0, false)}}); err != nil {
 			return r, err
 		}
 	}
@@ -551,7 +553,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	}
 	for i := 0; i < 2; i++ {
 		err = call("pin", "IterateVersions.acquire", 0, func() (uint64, error) {
-			it, e := s.IterateVersions(VersionIteratorOptions{})
+			it, e := s.IterateVersions(mvcc.VersionIteratorOptions{})
 			if e == nil {
 				pins = append(pins, it)
 			}
@@ -569,7 +571,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 					ts = uint64(e*10 + 3)
 				}
 				v, x := s.GetAt(key, ts)
-				if x == nil && (v.State != Present || v.Timestamp != ts || !bytes.Equal(v.Value, c4Value(e))) {
+				if x == nil && (v.State != mvcc.Present || v.Timestamp != ts || !bytes.Equal(v.Value, c4Value(e))) {
 					x = errors.New("point oracle mismatch")
 				}
 				return 1, x
@@ -582,11 +584,11 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 			for _, key := range keys {
 				for _, deleted := range []bool{false, true} {
 					ts := uint64(e*10 + 1)
-					state := Present
+					state := mvcc.Present
 					value := c4Value(e)
 					if deleted {
 						ts++
-						state = Tombstone
+						state = mvcc.Tombstone
 						value = nil
 					}
 					if err := call(phase, "GetAt.historical", 1, func() (uint64, error) {
@@ -617,7 +619,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		ts := uint64(e * 10)
 		for start := 0; start < n; start += c4GroupWidth {
 			end := start + c4GroupWidth
-			if err = commit(phase+"_growth", []CommitGroup{{Timestamp: ts + 1, Mutations: muts(start, end, e, false)}, {Timestamp: ts + 2, Mutations: muts(start, end, e, true)}, {Timestamp: ts + 3, Mutations: muts(start, end, e, false)}}); err != nil {
+			if err = commit(phase+"_growth", []mvcc.CommitGroup{{Timestamp: ts + 1, Mutations: muts(start, end, e, false)}, {Timestamp: ts + 2, Mutations: muts(start, end, e, true)}, {Timestamp: ts + 3, Mutations: muts(start, end, e, false)}}); err != nil {
 				return r, err
 			}
 		}
@@ -628,14 +630,14 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 			return r, err
 		}
 		err = call(phase+"_ordinary", "CommitAt", 1, func() (uint64, error) {
-			return 1, s.CommitAt(ts+3, []Mutation{{Key: keys[0], Value: c4Value(e)}}, CommitRelaxed)
+			return 1, s.CommitAt(ts+3, []mvcc.Mutation{{Key: keys[0], Value: c4Value(e)}}, mvcc.CommitRelaxed)
 		})
 		if err != nil {
 			return r, err
 		}
 		beforeCount := len(oracle[e])
 		for start := 0; start < n; start += c4GroupWidth {
-			if err = commit(phase+"_replacement", []CommitGroup{{Timestamp: ts + 3, Mutations: muts(start, start+c4GroupWidth, e, false)}}); err != nil {
+			if err = commit(phase+"_replacement", []mvcc.CommitGroup{{Timestamp: ts + 3, Mutations: muts(start, start+c4GroupWidth, e, false)}}); err != nil {
 				return r, err
 			}
 		}
@@ -654,7 +656,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 			<-start
 			var x error
 			for j := 0; j < n/c4GroupWidth && x == nil; j++ {
-				x = commit(phase+"_overlap", []CommitGroup{{Timestamp: ts + 3, Mutations: muts(j*c4GroupWidth, (j+1)*c4GroupWidth, e, false)}})
+				x = commit(phase+"_overlap", []mvcc.CommitGroup{{Timestamp: ts + 3, Mutations: muts(j*c4GroupWidth, (j+1)*c4GroupWidth, e, false)}})
 			}
 			results <- x
 		}()
@@ -668,7 +670,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 				}
 				x = call(phase+"_overlap", "GetAt", 1, func() (uint64, error) {
 					v, y := s.GetAt(key, ts+3)
-					if y == nil && (v.State != Present || v.Timestamp != ts+3 || !bytes.Equal(v.Value, c4Value(e))) {
+					if y == nil && (v.State != mvcc.Present || v.Timestamp != ts+3 || !bytes.Equal(v.Value, c4Value(e))) {
 						y = errors.New("overlap point mismatch")
 					}
 					return 1, y
@@ -814,7 +816,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	if err = validate(); err != nil {
 		return r, err
 	}
-	s = New(db)
+	s = mvcc.New(db)
 	// Reopen counters are a new process-local DB authority, so they start a new
 	// ledger rather than pretending monotonicity across the Close boundary.
 	r.Boundaries = append(r.Boundaries, c4Boundary{Phase: "reopen_counter_reset", Stats: map[string]string{}})

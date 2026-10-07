@@ -843,3 +843,12 @@ The standalone collector/analyzer shares C3 provenance machinery; these
 artifacts are not benchprof profile-dir inputs. Native eligibility and whole
 public maintenance charge remain PENDING, and qualification remains
 `pending_native_observations`.
+
+### Ordinary sustained MVCC COW fixture
+
+`BenchmarkCOWSustainedPublicMVCC` runs in `./TreeDB/mvcc/cowsustained`.
+Its Go benchmark stdout, profiles and lifecycle JSON are standalone evidence,
+with the complete harness frozen separately from ordinary MVCC product changes.
+See [the C4 fixture contract](../../TreeDB/docs/benchmarks/cow-c4-sustained-evidence.md)
+for reproduction, phase-specific work and pending native qualification. These
+artifacts are not benchprof inputs.

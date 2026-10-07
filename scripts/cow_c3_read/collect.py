@@ -27,6 +27,9 @@ def invocation_command(selected, binary, case, item, timeout, raw_directory=None
         return selected.command(binary, case, item, timeout)
     return selected.command(binary, case, item, timeout, raw_directory)
 
+def invocation_work_contract(selected, case, item):
+    return selected.work_contract(case, item["phase"])
+
 def wait_child(child, timeout, grace=3.0):
     deadline, timed_out, quit_sent, killed = time.monotonic() + timeout, False, False, False
     try:
@@ -129,7 +132,8 @@ def main():
             need(build.get("effective_process_environment") == env, "build process environment mismatch")
             # Root must retain actual build command/exit and go env/list module /
             # compiled dependency/buildinfo outputs, not just asserted labels.
-            validate_build_command(build, c["go_binary"], v["binary"])
+            validate_build_command(build, c["go_binary"], v["binary"],
+                                   "c4" if args.suite == "c4-sustained" else "c3")
             required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
             need(set(build["artifacts"]) == required, "missing/extra build provenance artifacts")
             frozen_artifacts = {}
@@ -196,7 +200,7 @@ def main():
                      child_user_seconds=usage.ru_utime, child_system_seconds=usage.ru_stime,
                      stdout_sha256=sha(stdout), stderr_sha256=sha(stderr), source_drift_after=changes,
                      binary_sha256=sha(s["binary"]), before=before, after=after,
-                     work_contract_sha256=digest(case["workload_contract"]), timed_out=timed_out, validation_error=None)
+                     work_contract_sha256=digest(invocation_work_contract(selected, case, item)), timed_out=timed_out, validation_error=None)
             receipts.append(r)
             write(out / "receipts.json", receipts)
             try:
@@ -223,7 +227,7 @@ def main():
         write(out / "completion.json", {"schema": selected.SCHEMA, "at": now(), "runs": len(receipts),
               "config_sha256": sha(out / "config.json"), "receipts_sha256": sha(out / "receipts.json"),
               "script_identity_sha256": sha(out / "script-identity.json"),
-              "claim": "C3-read matched evidence only; coordinator acceptance pending; no C4/M7/parent qualification" if args.suite == "c3-read" else "Supported sustained construction/evidence only; native/product/C4 qualification pending"})
+              "claim": "C3-read matched evidence only; coordinator acceptance pending; no C4/M7/parent qualification" if args.suite == "c3-read" else selected.COMPLETION_CLAIM})
     except BaseException as error:
         write(out / "failure.json", {"at": now(), "type": type(error).__name__, "error": str(error), "retained_runs": len(receipts)})
         raise

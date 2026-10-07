@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import statistics
 from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command
-from collect import host_gate, selected_protocol, invocation_command
+from collect import host_gate, selected_protocol, invocation_command, invocation_work_contract
 from build import verify_git_receipt, objects
 
 def summary(values):
@@ -23,6 +23,9 @@ def validate_packet(packet, suite="c3-read"):
     need(json.loads((packet / "environment.json").read_text()) ==
          {"effective_controls": c["environment"], "effective_process_environment": env}, "captured process environment mismatch")
     completion = json.loads((packet / "completion.json").read_text())
+    if suite == "c4-sustained":
+        completion = selected.load(packet / "completion.json")
+        selected.validate_completion(completion)
     for key, file in (("config_sha256", "config.json"), ("receipts_sha256", "receipts.json"), ("script_identity_sha256", "script-identity.json")):
         need(sha(packet / file) == completion[key], "packet identity mismatch " + file)
     script_hashes = json.loads((packet / "script-identity.json").read_text())
@@ -39,7 +42,8 @@ def validate_packet(packet, suite="c3-read"):
         need(build["binary_sha256"] == declaration["binary_sha256"] and build["source_tree_sha256"] == declaration["source_tree_sha256"], "unbound build receipt")
         need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "build controls drift")
         need(build.get("effective_process_environment") == env, "build process environment mismatch")
-        validate_build_command(build, c["go_binary"], declaration["binary"])
+        validate_build_command(build, c["go_binary"], declaration["binary"],
+                               "c4" if suite == "c4-sustained" else "c3")
         artifacts = json.loads((packet / (variant + "-build-artifacts.json")).read_text())
         required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
         need(set(artifacts) == set(build["artifacts"]) == required, "missing/extra build provenance map")
@@ -85,7 +89,7 @@ def validate_packet(packet, suite="c3-read"):
             need(type(raw_directory) is str and Path(raw_directory).is_absolute() and Path(raw_directory).name == name + "-lifecycle", "unbound raw directory")
         need(r["command"] == invocation_command(selected, c["variants"][r["variant"]]["binary"], case, expected, c["timeout_seconds"], raw_directory), "invocation mismatch")
         need(r["elapsed_seconds"] > 0 and r["child_max_rss_kib"] > 0 and r["child_user_seconds"] >= 0 and r["child_system_seconds"] >= 0, "invalid process measurements")
-        need(r["work_contract_sha256"] == digest(case["workload_contract"]), "workload contract mismatch")
+        need(r["work_contract_sha256"] == digest(invocation_work_contract(selected, case, expected)), "workload contract mismatch")
         parsed = selected.row(packet / (name + ".stdout"), packet / (name + ".stderr"), case, r["variant"], r["phase"])
         need(parsed == r["row"], "cached row differs from raw stream")
         for direction in ("before", "after"):
