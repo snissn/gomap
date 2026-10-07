@@ -1,0 +1,7 @@
+{
+  "frozen_commit": "797d783b21b36e7a0e540cd8190b4ec5921711fe",
+  "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "runtime_and_landed_harness_tracked_diff_empty": true,
+  "characterization_additions": "untracked Linux test files only; clean flag false because docs/tests present"
+}

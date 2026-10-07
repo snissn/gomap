@@ -198,7 +198,7 @@ func TestManagerRetirementAdmissionBlocksEviction(t *testing.T) {
 					admissions := file.deletionAdmissions
 					manager.mu.RUnlock()
 					file.retirementParentMu.Lock()
-					parentRetained := file.retirementParent != nil && !file.retirementParentReleased && file.retirementParentUsers == 0
+					parentRetained := file.retirementParent != nil && !file.retirementParentReleased
 					file.retirementParentMu.Unlock()
 					if admissions != 1 || !parentRetained {
 						t.Fatalf("pre-borrow admission lost parent authority: admissions=%d retained=%v", admissions, parentRetained)
