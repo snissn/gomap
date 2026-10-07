@@ -119,35 +119,60 @@ func TestR1CapturedReaderBoundsBorrowedBlocks(t *testing.T) {
 }
 
 func TestR1GetIntoDoesNotAllocateWholeIntermediateDocument(t *testing.T) {
-	_, d, col := openTypedMinimaCollectionMeta(t, r1ReadCollectionMeta())
-	defer d.Close()
-	content := strings.Repeat("ordinary scalar string ", 3000)
-	if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, r1ReadColumns([]string{content}, []string{"u1"})); err != nil {
-		t.Fatal(err)
-	}
-	if err := col.Flush(); err != nil {
-		t.Fatal(err)
-	}
-	dst := make([]byte, 0, len(content)+256)
-	if _, found, err := col.GetInto([]byte("a"), dst); err != nil || !found {
-		t.Fatalf("warm found=%t err=%v", found, err)
-	}
-	var before, after runtime.MemStats
-	runtime.ReadMemStats(&before)
-	const reads = 10
-	for i := 0; i < reads; i++ {
-		got, found, err := col.GetInto([]byte("a"), dst)
-		if err != nil || !found {
-			t.Fatalf("found=%t err=%v", found, err)
+	measure := func(repeat int) (allocated, sourceBacking, outputBytes uint64) {
+		_, d, col := openTypedMinimaCollectionMeta(t, r1ReadCollectionMeta())
+		defer d.Close()
+		content := strings.Repeat("ordinary scalar string ", repeat)
+		if _, _, err := col.InsertTypedBatchWithStats([][]byte{[]byte("a")}, [][]byte{[]byte(`{"id":"a"}`)}, r1ReadColumns([]string{content}, []string{"u1"})); err != nil {
+			t.Fatal(err)
 		}
-		if &got[0] != &dst[:cap(dst)][0] {
-			t.Fatal("caller output buffer was not reused")
+		if err := col.Flush(); err != nil {
+			t.Fatal(err)
 		}
+		dst := make([]byte, 0, len(content)+256)
+		if _, found, err := col.GetInto([]byte("a"), dst); err != nil || !found {
+			t.Fatalf("warm found=%t err=%v", found, err)
+		}
+		v, err := col.OpenCollectionReadView()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := v.FetchDocumentsByID([][]byte{[]byte("a")}, DocumentFetchOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		for _, ref := range v.columnSnapshotView.AssetRefs {
+			sourceBacking += uint64(ref.Ref.Length)
+		}
+		if err := v.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		const reads = 10
+		for i := 0; i < reads; i++ {
+			got, found, err := col.GetInto([]byte("a"), dst)
+			if err != nil || !found {
+				t.Fatalf("found=%t err=%v", found, err)
+			}
+			if &got[0] != &dst[:cap(dst)][0] {
+				t.Fatal("caller output buffer was not reused")
+			}
+			outputBytes = uint64(len(got))
+		}
+		runtime.ReadMemStats(&after)
+		return (after.TotalAlloc - before.TotalAlloc) / reads, sourceBacking, outputBytes
 	}
-	runtime.ReadMemStats(&after)
-	allocated := (after.TotalAlloc - before.TotalAlloc) / reads
-	if allocated >= uint64(len(content)/2) {
-		t.Fatalf("public GetInto allocated %d bytes for %d-byte string into sufficient caller storage", allocated, len(content))
+	small, smallSource, smallOutput := measure(3000)
+	large, largeSource, largeOutput := measure(6000)
+	// This is a growth invariant, not a performance adjustment: all source
+	// backing remains charged in public B/op. Doubling the string may grow its
+	// owned encoded asset once, but must not also grow a complete intermediate
+	// output. Fixed metadata/workspace costs cancel between the two sizes.
+	if largeSource <= smallSource || largeOutput <= smallOutput || large <= small {
+		t.Fatal("fixture did not grow")
+	}
+	if large-small >= (largeSource-smallSource)+(largeOutput-smallOutput)/2 {
+		t.Fatalf("GetInto growth allocated=%d source=%d output=%d; duplicate full output backing", large-small, largeSource-smallSource, largeOutput-smallOutput)
 	}
 }
 
@@ -266,5 +291,79 @@ func TestR1CapturedReaderOversizeOwnedFallback(t *testing.T) {
 	cfg := *v.catalog.meta.Options.ColumnStore
 	if _, err := documentPointRowBlockCredit(columnManifestAssetRefForScan{Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1PartImage, Length: math.MaxInt64}, Rows: 1}, cfg); !errors.Is(err, errDocumentPointRowOversize) {
 		t.Fatalf("overflow did not choose owned eligibility: %v", err)
+	}
+}
+
+// Descriptor identity is not content immutability. A held reader may return its
+// validated owned snapshot or reject an integrity change; it must never emit a
+// changed mapped payload without validation. The owned output already returned
+// to the caller must survive mutation, retry and view close.
+func TestR1CapturedReaderHeldContentMutation(t *testing.T) {
+	for _, forceReadAt := range []bool{false, true} {
+		for _, integrity := range []ColumnAssetReadIntegrity{ColumnAssetReadIntegrityVerify, ColumnAssetReadIntegrityCachedVerify, ColumnAssetReadIntegritySkipChecksums} {
+			t.Run(fmt.Sprintf("readat%t/%s", forceReadAt, integrity), func(t *testing.T) {
+				_, d, col := openTypedMinimaCollectionMeta(t, r1ReadCollectionMeta())
+				defer d.Close()
+				id := []byte("a")
+				want := []byte(`{"content":"stable captured content","user":"u1","id":"a"}`)
+				if _, _, err := col.InsertTypedBatchWithStats([][]byte{id}, [][]byte{[]byte(`{"id":"a"}`)}, r1ReadColumns([]string{"stable captured content"}, []string{"u1"})); err != nil {
+					t.Fatal(err)
+				}
+				if err := col.Flush(); err != nil {
+					t.Fatal(err)
+				}
+				v, err := col.OpenCollectionReadView()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer v.Close()
+				v.forceAssetReadAtFallbackForTest = forceReadAt
+				opts := DocumentFetchOptions{ColumnAssetReadIntegrity: integrity}
+				first, err := v.FetchDocumentsByID([][]byte{id}, opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				r1RequireCompleteRow(t, first.Results[0].Document, want)
+				ref := v.columnSnapshotView.AssetRefs[0].Ref
+				path, err := columnAssetSegmentPath(d.ColumnAssetRootDir(), ref)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, err := readColumnPhysicalAssetFromManager(d.ColumnAssetRootDir(), ref)
+				if err != nil {
+					t.Fatal(err)
+				}
+				offset := bytes.Index(raw, []byte("stable captured content"))
+				if offset < 0 {
+					t.Fatal("fixture has no content bytes")
+				}
+				file, err := os.OpenFile(path, os.O_RDWR, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := file.WriteAt([]byte("S"), ref.Offset+int64(offset)); err != nil {
+					file.Close()
+					t.Fatal(err)
+				}
+				if err := file.Close(); err != nil {
+					t.Fatal(err)
+				}
+				second, err := v.FetchDocumentsByID([][]byte{id}, opts)
+				if err != nil {
+					if !strings.Contains(err.Error(), "checksum") {
+						t.Fatal(err)
+					}
+					if v.assetManager.ActiveHandles() != 0 || v.pointRowOpenFiles() != 0 || v.pointRowCreditUsed != 0 {
+						t.Fatal("failed integrity read retained admission")
+					}
+				} else {
+					r1RequireCompleteRow(t, second.Results[0].Document, want)
+				}
+				if err := v.Close(); err != nil {
+					t.Fatal(err)
+				}
+				r1RequireCompleteRow(t, first.Results[0].Document, want)
+			})
+		}
 	}
 }

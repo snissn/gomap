@@ -892,6 +892,7 @@ func (v *CollectionReadView) materializerColumnSnapshotView(cfg ColumnStoreConfi
 		if err := validateOrderedDocumentPartRefs(view.AssetRefs); err != nil {
 			return view, err
 		}
+		prepareDocumentPointRowDimensions(&view)
 		view.Catalog, view.snapshot = nil, nil
 		view.CommitSeq, view.SystemRoot = 0, 0
 		catalog.materializerMetadata = &view
@@ -1173,6 +1174,30 @@ func documentPointRowWorkspaceCredit(cfg ColumnStoreConfig, maxEncodedBytes int6
 	return int64(credit), nil
 }
 
+// prepareDocumentPointRowDimensions derives only schema/manifest maxima. The
+// classic catalog calls it after complete validation, so ephemeral readers do
+// not repeat a scan of every historical part. Other prepared owners derive the
+// same dimensions on their local metadata copy; unsupported sizes keep the
+// existing owned fallback rather than weakening admission.
+func prepareDocumentPointRowDimensions(view *columnPhysicalScanSnapshotView) {
+	if view.pointRowDimensionsPrepared {
+		return
+	}
+	view.pointRowDimensionsPrepared = true
+	for _, refs := range [][]columnManifestAssetRefForScan{view.AssetRefs, view.TypedColumnPartRefs} {
+		for _, ref := range refs {
+			credit, err := documentPointRowBlockCredit(ref, view.FullConfig)
+			if err != nil {
+				view.pointRowDimensionsErr = err
+				return
+			}
+			view.pointRowMaximumEncoded = max(view.pointRowMaximumEncoded, ref.Ref.Length)
+			view.pointRowMaximumCredit = max(view.pointRowMaximumCredit, credit)
+		}
+	}
+	view.pointRowWorkspaceCredit, view.pointRowDimensionsErr = documentPointRowWorkspaceCredit(view.FullConfig, view.pointRowMaximumEncoded)
+}
+
 func (v *CollectionReadView) preparePointRowCredit(view columnPhysicalScanSnapshotView) error {
 	if v.pointRowCreditLimit != 0 {
 		return nil
@@ -1183,28 +1208,18 @@ func (v *CollectionReadView) preparePointRowCredit(view columnPhysicalScanSnapsh
 	if descriptorCredit < 0 {
 		return errDocumentPointRowOversize
 	}
-	var maximum, maxCredit int64
-	for _, refs := range [][]columnManifestAssetRefForScan{view.AssetRefs, view.TypedColumnPartRefs} {
-		for _, ref := range refs {
-			credit, err := documentPointRowBlockCredit(ref, view.FullConfig)
-			if err != nil {
-				return err
-			}
-			if credit > math.MaxInt64-descriptorCredit {
-				return errDocumentPointRowOversize
-			}
-			credit += descriptorCredit
-			maximum = max(maximum, ref.Ref.Length)
-			maxCredit = max(maxCredit, credit)
-		}
+	prepareDocumentPointRowDimensions(&view)
+	if view.pointRowDimensionsErr != nil {
+		return view.pointRowDimensionsErr
 	}
-	workspace, err := documentPointRowWorkspaceCredit(view.FullConfig, maximum)
-	if err != nil {
-		return err
-	}
+	maximum, maxCredit, workspace := view.pointRowMaximumEncoded, view.pointRowMaximumCredit, view.pointRowWorkspaceCredit
 	if maxCredit <= 0 {
 		return errors.New("collections: document row admission has no captured asset")
 	}
+	if maxCredit > math.MaxInt64-descriptorCredit {
+		return errDocumentPointRowOversize
+	}
+	maxCredit += descriptorCredit
 	if maxCredit > (math.MaxInt64-workspace)/documentPointRowMaxBorrowedBlocks {
 		return errDocumentPointRowOversize
 	}

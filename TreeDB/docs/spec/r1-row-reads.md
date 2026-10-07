@@ -72,7 +72,8 @@ clone start with no certification. Corrupt or incomplete preparation is never
 memoized. Source-directory V2, absent-locator and unsupported layouts preserve
 their established routing and validation.
 
-Shared metadata owns decoded immutable manifest references/configuration only;
+Shared metadata owns decoded immutable manifest references/configuration and pure
+schema/manifest admission maxima only;
 it never retains a snapshot, request context, asset handle or decoded row. Each
 operation binds those references to its existing captured snapshot and catalog.
 A held view retains its original cut through later schema, index and document
@@ -90,13 +91,19 @@ batch and range documents remain independent of mapped assets, decoder scratch,
 subsequent fetches and view close. Batch/range slices cap each individual document
 span; `GetInto` retains caller-buffer capacity for reuse.
 
-The existing mapped-resource manager owns each exact range mapping or heap-copy
-fallback. Reads and checksum identity use the same already opened descriptor.
-That descriptor remains open until every associated handle releases, and handles
-release before file close. A path replacement cannot retarget a held descriptor.
-Serving-authorized assets retain their existing exact holder/pool authority;
-private readers cannot bypass it. Forced read-at and checksum modes retain their
-current contracts.
+The existing mapped-resource manager owns each bounded encoded range as ordinary
+Go heap backing. Ordinary reads use `ReadAt` on the exact already opened
+validated descriptor; checksum verification and decoding use that owned range.
+Descriptor identity does not certify immutable file contents. Once loaded, later
+external content writes cannot mutate a held view's validated values. A path
+replacement cannot retarget the descriptor, which remains open until associated
+handles release; handles release before file close. Serving-authorized assets
+keep their exact holder/pool authority and copy the authorized range into the
+same bounded owned lifetime before retaining decoded values. The serving pool's
+existing backing is charged to its own owner, and the view's owned range remains
+fully charged too. Checksum modes still govern first-load validation; ownership
+is independent of checksum mode. Source-directory V2 and unsupported fallbacks
+retain their established behavior.
 
 Each view admits at most **32** borrowed row blocks, **32** resource handles and
 **32** private asset descriptors, independently. Admission precedes load/open.
@@ -121,7 +128,8 @@ bounded-route performance claim. Invalid dimensions/corruption fail closed.
 Any failed load/decode releases reservations, descriptors and borrowed scratch
 before returning, so a retry cannot accumulate failed pins. Reusable scalar/JSON
 scratch clears raw, string, map and buffer aliases after every emission and on
-close. The optional flat residual-object cursor uses the existing parser's fixed
+close. The common emitter reuses its schema-sized written-field map and at most
+64 retained-field sort slots; larger retained objects use temporary owned slots. The optional flat residual-object cursor uses the existing parser's fixed
 64-descriptor arena; nested, escaped, oversized and unsupported objects retain
 the existing `UseNumber` decoder.
 
@@ -149,6 +157,12 @@ block/handle/descriptor/backing admission, failed-load cleanup and alias ownersh
 witnesses. Shared-emitter differential tests compare standard JSON bytes and
 retained-object decoder behavior, including invalid inputs. The existing
 mapped-resource descriptor-lease tests cover path replacement and closed handles.
+`TestR1CapturedReaderHeldContentMutation` checks retained values and owned output
+under external content mutation in all three checksum modes. The two-size public
+`GetInto` growth witness charges source backing once and rejects an additional
+complete-output allocation; all source bytes still count in performance B/op.
+The mixed graph serving test checks base/suffix authority, retained content under
+external mutation and independent owned output after holder release.
 
 The R1 contract/baseline and final integrated evidence own measured comparison,
 noise and conditional index-format decisions. This spec defines semantics and

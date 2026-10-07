@@ -101,7 +101,7 @@ type Manager struct {
 	mu     sync.Mutex
 	nextID uint64
 	stats  Stats
-	active map[uint64]Pin
+	active map[uint64]*Pin
 }
 
 type globalPinKey struct {
@@ -120,12 +120,12 @@ func ConservativeHandleMetadataBytes() uint64 {
 var globalResourceState = struct {
 	mu     sync.Mutex
 	stats  Stats
-	active map[globalPinKey]Pin
-}{active: make(map[globalPinKey]Pin)}
+	active map[globalPinKey]*Pin
+}{active: make(map[globalPinKey]*Pin)}
 
 // NewManager constructs an empty manager.
 func NewManager() *Manager {
-	return &Manager{active: make(map[uint64]Pin)}
+	return &Manager{active: make(map[uint64]*Pin)}
 }
 
 // AcquireOptions controls resource acquisition and accounting labels. ResourceRoot
@@ -147,8 +147,7 @@ type Handle struct {
 	mu         sync.Mutex
 	mgr        *Manager
 	id         uint64
-	key        Key
-	scope      Scope
+	pin        Pin
 	source     Source
 	bytes      []byte
 	accounted  int64
@@ -163,7 +162,7 @@ func (h *Handle) Key() Key {
 	if h == nil {
 		return Key{}
 	}
-	return h.key
+	return h.pin.Key
 }
 
 // Scope returns the lifetime scope.
@@ -171,7 +170,7 @@ func (h *Handle) Scope() Scope {
 	if h == nil {
 		return Scope{}
 	}
-	return h.scope
+	return h.pin.Scope
 }
 
 // Source returns the backing source.
@@ -440,10 +439,12 @@ func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []
 		m.stats.ActiveDerivedMetadataBytes += bytes
 		m.stats.TotalDerivedMetadataBytes += uint64(bytes)
 	}
-	pin := Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason, Root: opts.ResourceRoot, Path: opts.ResourcePath}
-	m.active[id] = pin
-	globalRegisterPin(m, id, pin, opts.ValidationMode, opts.FallbackReason)
-	return &Handle{mgr: m, id: id, key: key, scope: scope, source: source, bytes: data, accounted: bytes, release: release}
+	// One immutable owner record serves both maintenance registries. Copies
+	// are produced only for reporting, and registrations disappear at Release.
+	h := &Handle{mgr: m, id: id, pin: Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason, Root: opts.ResourceRoot, Path: opts.ResourcePath}, source: source, bytes: data, accounted: bytes, release: release}
+	m.active[id] = &h.pin
+	globalRegisterPin(m, id, &h.pin, opts.ValidationMode, opts.FallbackReason)
+	return h
 }
 
 func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr error) {
@@ -506,7 +507,7 @@ func (m *Manager) PinSummary() []Pin {
 	defer m.mu.Unlock()
 	out := make([]Pin, 0, len(m.active))
 	for _, pin := range m.active {
-		out = append(out, pin)
+		out = append(out, *pin)
 	}
 	return out
 }
@@ -541,7 +542,7 @@ func GlobalPinSummaryWithLimit(maxPins int) ([]Pin, error) {
 	}
 	out := make([]Pin, 0, len(globalResourceState.active))
 	for _, pin := range globalResourceState.active {
-		out = append(out, pin)
+		out = append(out, *pin)
 	}
 	return out, nil
 }
@@ -616,7 +617,7 @@ func (m *Manager) recordError() {
 	globalRecordError()
 }
 
-func globalRegisterPin(manager *Manager, id uint64, pin Pin, validation ValidationMode, fallback FallbackReason) {
+func globalRegisterPin(manager *Manager, id uint64, pin *Pin, validation ValidationMode, fallback FallbackReason) {
 	globalResourceState.mu.Lock()
 	defer globalResourceState.mu.Unlock()
 	bytes := pin.Bytes

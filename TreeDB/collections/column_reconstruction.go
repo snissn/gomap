@@ -488,7 +488,7 @@ func reconstructColumnJSONDocumentProjectedIntoWithScratch(arena []byte, cfg Col
 			}
 		}
 	}
-	arena, err = marshalColumnReconstructedJSONObjectProjectedInto(arena, cfg, obj, declared, projection, stats)
+	arena, err = marshalColumnReconstructedJSONObjectProjectedIntoWithScratch(arena, cfg, obj, declared, projection, stats, scratch)
 	if err != nil {
 		return arena[:start], nil, fmt.Errorf("collections: encode reconstructed column payload: %w", err)
 	}
@@ -523,9 +523,22 @@ func marshalColumnReconstructedJSONObjectProjected(cfg ColumnStoreConfig, retain
 }
 
 func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	return marshalColumnReconstructedJSONObjectProjectedIntoWithScratch(arena, cfg, retained, declared, projection, stats, nil)
+}
+
+func marshalColumnReconstructedJSONObjectProjectedIntoWithScratch(arena []byte, cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats, scratch *columnDocumentReconstructionScratch) ([]byte, error) {
 	projectionActive := projection.active()
 	arena = append(arena, '{')
-	written := make(map[string]struct{}, len(cfg.Columns))
+	var written map[string]struct{}
+	if scratch != nil {
+		if scratch.written == nil {
+			scratch.written = make(map[string]struct{}, len(cfg.Columns))
+		}
+		written = scratch.written
+		clear(written)
+	} else {
+		written = make(map[string]struct{}, len(cfg.Columns))
+	}
 	first := true
 	reconstructed := uint64(0)
 	writeField := func(key string, value any, scalar *columnDeclaredValue) error {
@@ -587,7 +600,12 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 			written[col.Path] = struct{}{}
 		}
 	}
-	keys := make([]string, 0, len(retained))
+	var keys []string
+	if scratch != nil && len(retained) <= 64 {
+		keys = scratch.keys[:0]
+	} else {
+		keys = make([]string, 0, len(retained))
+	}
 	for key := range retained {
 		if _, ok := written[key]; ok {
 			continue
@@ -599,6 +617,9 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 			continue
 		}
 		keys = append(keys, key)
+	}
+	if scratch != nil && len(retained) <= 64 {
+		scratch.keys = keys
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
@@ -894,6 +915,8 @@ type columnDocumentReconstructionScratch struct {
 	cursor   columnRetainedSemanticStreamV1JSONCursor
 	object   map[string]any
 	declared []columnReconstructedDeclaredValue
+	written  map[string]struct{}
+	keys     []string
 }
 
 func (s *columnDocumentReconstructionScratch) clearBorrowed() {
@@ -902,6 +925,9 @@ func (s *columnDocumentReconstructionScratch) clearBorrowed() {
 	}
 	clear(s.object)
 	clear(s.declared)
+	clear(s.written)
+	clear(s.keys)
+	s.keys = s.keys[:0]
 	s.cursor.document = nil
 	s.cursor.pathInterner = nil
 	s.cursor.nodes = s.cursor.nodes[:0]

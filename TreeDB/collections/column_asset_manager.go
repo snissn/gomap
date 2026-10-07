@@ -2987,9 +2987,11 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	return raw, nil
 }
 
-// readBoundedRange uses the existing resource manager's range lifetime. The
-// complete segment is not mmap-backed by a point reader. Mapping and checksum
-// identity use the same opened descriptor. Handles release before file close.
+// readBoundedRange retains owned bytes for the captured reader. The opened
+// descriptor establishes identity; it does not certify immutable contents.
+// Checksum validation and decoding use the same owned range, so later external
+// writes cannot change previously validated borrowed values. Handles release
+// before file close.
 func (c *columnPhysicalAssetReadCache) readBoundedRange(ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) ([]byte, error) {
 	key := mappedResourceKeyForColumnAssetRef(ref)
 	for _, h := range c.resourceHandles {
@@ -3007,7 +3009,7 @@ func (c *columnPhysicalAssetReadCache) readBoundedRange(ref ColumnAssetRef, read
 			return nil, err
 		}
 	}
-	h, err := c.resourceManager.AcquireOpenFileRange(key, c.resourceScope, reader.file, mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), PreferMapped: !c.forceReadAtFallback, AllowHeapCopy: true, ResourceRoot: c.rootDir})
+	h, err := c.resourceManager.AcquireOpenFileRange(key, c.resourceScope, reader.file, mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), PreferMapped: false, AllowHeapCopy: true, ResourceRoot: c.rootDir})
 	if err != nil {
 		return nil, err
 	}
@@ -3040,21 +3042,18 @@ func (c *columnPhysicalAssetReadCache) readServingAsset(ref ColumnAssetRef, dst 
 	}
 	if c.boundedRangeViews {
 		key := mappedResourceKeyForColumnAssetRef(ref)
-		found := false
 		for _, h := range c.resourceHandles {
 			if h != nil && !h.Released() && h.Key().Equal(key) {
-				found = true
-				break
+				c.lastView = true
+				return h.Bytes(), nil
 			}
 		}
-		if !found {
-			if c.resourceManager.ActiveHandles() >= documentPointRowMaxBorrowedBlocks {
-				return nil, errors.New("collections: document asset handle admission exhausted before borrow")
-			}
-			if c.admitResource != nil {
-				if err := c.admitResource(ref); err != nil {
-					return nil, err
-				}
+		if c.resourceManager.ActiveHandles() >= documentPointRowMaxBorrowedBlocks {
+			return nil, errors.New("collections: document asset handle admission exhausted before borrow")
+		}
+		if c.admitResource != nil {
+			if err := c.admitResource(ref); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -3067,6 +3066,32 @@ func (c *columnPhysicalAssetReadCache) readServingAsset(ref ColumnAssetRef, dst 
 	err := c.servingSourceAccess.withMaterializerAsset(c.rootDir, ref, borrowScope, func(borrowed columnServingBorrowedRange) error {
 		c.servingBorrows++
 		identity := borrowed.Identity()
+		if c.boundedRangeViews {
+			// The serving holder proves range/lifetime authority, not content
+			// immutability. Retain one owned validated range under this view.
+			if ref.Length > int64(maxCollectionInt) {
+				return errDocumentPointRowOversize
+			}
+			raw = make([]byte, int(ref.Length))
+			n, err := borrowed.ReadAt(raw)
+			if err != nil && err != io.EOF {
+				return err
+			}
+			if n != len(raw) {
+				return io.ErrUnexpectedEOF
+			}
+			if err := c.verifyReadChecksumWithIdentity(raw, ref, identity); err != nil {
+				return err
+			}
+			h, err := c.resourceManager.AcquireBytes(mappedResourceKeyForColumnAssetRef(ref), c.resourceScope, mappedresource.SourceHeapCopy, raw, mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), ResourceRoot: c.rootDir})
+			if err != nil {
+				return err
+			}
+			c.resourceHandles = append(c.resourceHandles, h)
+			c.lastView = true
+			c.rememberVerifiedRowIndexReadWithIdentity(ref, identity)
+			return nil
+		}
 		if view := borrowed.Bytes(); view != nil {
 			raw = view
 			if err := c.verifyReadChecksumWithIdentity(raw, ref, identity); err != nil {

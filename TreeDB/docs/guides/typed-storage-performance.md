@@ -853,3 +853,17 @@ bounded document ranges return complete rows; see
 including locator acquisition, reconstruction and owned output. Opening a
 prepared view drains pending writes; distinguish setup and first fetch from
 warmed view reuse. Nullable/numeric typed batch carriers remain unsupported here.
+
+For captured classic readers, encoded ranges are bounded owned Go backing.
+Their first-load allocation and retained range residency are fully charged,
+including when `GetInto` reuses caller output storage. Descriptor identity and
+serving-holder authority do not certify file-content immutability. Shared
+validated metadata includes pure admission dimensions without retaining row
+bytes or file handles. Unrelated manifest validation precedes certification.
+
+The initial committed R rehearsal is diagnostic: all complete-row oracles
+passed, but several whole noise blocks failed and the 4k ordinary range time
+target was missed. Its mapped lifetime was subsequently corrected to owned
+ranges. No qualifying improvement is established by those timings; the owned
+source requires a fresh complete matched campaign on the reviewed public
+harness, with all original failures retained. Go B/op remains unadjusted.

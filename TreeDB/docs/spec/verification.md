@@ -41,7 +41,10 @@ checks complete rows, independent block/handle/descriptor caps, backing credit,
 eviction and owned output after close. `TestR1CapturedReaderFailedLoadReleasesAdmission`
 checks corruption refusal, reservation/descriptor cleanup and same-view retry.
 `TestR1CapturedReaderOversizeOwnedFallback` checks explicit owned fallback and
-stale-reference refusal. `TestR1GetIntoDoesNotAllocateWholeIntermediateDocument`
+stale-reference refusal. `TestR1CapturedReaderHeldContentMutation` checks stable owned range/output
+under external file writes in verify, cached-verify and skip-checksum modes.
+The mixed graph materializer also checks content ownership through serving
+holder release. `TestR1GetIntoDoesNotAllocateWholeIntermediateDocument`
 and `TestR1GetIntoAliasesReallocationAndErrorOwnership` cover public final-buffer
 emission, aliases, growth and missing/error ownership. Existing `TestR1TypedRow*`,
 `TestCollectionReadView*` and serving-materializer suites remain the held-cut,

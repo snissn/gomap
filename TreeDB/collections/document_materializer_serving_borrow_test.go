@@ -474,7 +474,9 @@ func TestTypedGraphPublicMaterializerMixedBaseSuffixParityAndOldView(t *testing.
 			t.Fatalf("%s cache did not split base borrows from suffix-local reads: %+v", name, cache)
 		}
 	}
-	if view.assetCounters().servingBorrows == 0 || got.Stats.AssetMmapHits == 0 {
+	// The captured materializer retains owned validated ranges while the
+	// serving holder still authorizes base reads and suffixes use owned ReadAt.
+	if view.assetCounters().servingBorrows == 0 || got.Stats.AssetReadAtFallbacks == 0 {
 		_ = view.Close()
 		t.Fatalf("mixed route stats=%+v", got.Stats)
 	}
@@ -490,6 +492,56 @@ func TestTypedGraphPublicMaterializerMixedBaseSuffixParityAndOldView(t *testing.
 	if wantErr != nil || plainCloseErr != nil || plainAssets.servingBorrows != 0 || !reflect.DeepEqual(got.Results, want.Results) {
 		_ = view.Close()
 		t.Fatalf("mixed serving/local parity fetch=%v close=%v generic_stats=%+v equal=%t", wantErr, plainCloseErr, want.Stats, reflect.DeepEqual(got.Results, want.Results))
+	}
+
+	// The holder authorizes the base range but does not certify stable file
+	// contents. A captured materializer owns validated range bytes: an external
+	// write after its first fetch cannot mutate its cached values or outputs.
+	marker := []byte(columns[1].Strings[1])
+	mutated := false
+	for _, cache := range []*columnPhysicalAssetReadCache{view.rowAssetReadCache, view.typedColumnAssetReadCache} {
+		for _, handle := range cache.resourceHandles {
+			offset := bytes.Index(handle.Bytes(), marker)
+			if offset < 0 {
+				continue
+			}
+			key := handle.Key()
+			var ref ColumnAssetRef
+			for _, refs := range [][]columnManifestAssetRefForScan{view.columnSnapshotView.AssetRefs, view.columnSnapshotView.TypedColumnPartRefs} {
+				for _, candidate := range refs {
+					if mappedResourceKeyForColumnAssetRef(candidate.Ref).Equal(key) {
+						ref = candidate.Ref
+					}
+				}
+			}
+			path, err := columnAssetSegmentPath(cache.rootDir, ref)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := marker[0]
+			if _, err := file.WriteAt([]byte{original ^ 0x20}, ref.Offset+int64(offset)); err != nil {
+				file.Close()
+				t.Fatal(err)
+			}
+			stable, readErr := view.FetchDocumentsByID(ids, DocumentFetchOptions{})
+			_, restoreErr := file.WriteAt([]byte{original}, ref.Offset+int64(offset))
+			closeErr := file.Close()
+			if readErr != nil || restoreErr != nil || closeErr != nil || !reflect.DeepEqual(stable.Results, got.Results) {
+				t.Fatalf("held graph content mutation fetch=%v restore=%v close=%v", readErr, restoreErr, closeErr)
+			}
+			mutated = true
+			break
+		}
+		if mutated {
+			break
+		}
+	}
+	if !mutated {
+		t.Fatal("graph fixture did not exercise a retained content range")
 	}
 
 	// A later publication must not change either the borrowed base mapping or
@@ -518,6 +570,9 @@ func TestTypedGraphPublicMaterializerMixedBaseSuffixParityAndOldView(t *testing.
 	}
 	if activeHandles != 0 || closed.fileCloses != closed.fileOpens {
 		t.Fatalf("mixed request cleanup active_handles=%d counters=%+v", activeHandles, closed)
+	}
+	if !reflect.DeepEqual(held.Results, got.Results) {
+		t.Fatal("owned graph outputs changed after holder release")
 	}
 	if afterClose.mappedBackings != beforeClose.mappedBackings || afterClose.descriptorsLive != beforeClose.descriptorsLive || afterClose.fallbackBytes != beforeClose.fallbackBytes {
 		t.Fatalf("request close changed current holder backing before=%+v after=%+v", beforeClose, afterClose)
