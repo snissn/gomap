@@ -1,0 +1,15 @@
+{
+  "PUBLICATION_SHA256SUMS_sha256": "de985caac9e58b1900282c8269ed484227a584d79dde94a539606c10169a4f05",
+  "binary_member_count": 9,
+  "capture_count": 16,
+  "core_SHA256SUMS_sha256": "0c378823a405dc4af75fe33228ccc29d94d3172ac8c8a63d58226b2e677616dc",
+  "overlay_bytes": 271917606,
+  "overlay_sha256": "60571ff052920fe7620c296a18d13a9aedc37854852626267cab9a033b3b8670",
+  "physical_files": 1429,
+  "scope": "Complete physical immutable original-byte stage frozen; public retrieval/replay remains pending",
+  "stage": "/home/mikers/gomap-r1-publication-stage-M-3325dfe-20261006",
+  "support_ledgers": 9,
+  "text_bytes": 206927921,
+  "text_files": 1428,
+  "utc": "2026-10-07T01:12:32.596113+00:00"
+}

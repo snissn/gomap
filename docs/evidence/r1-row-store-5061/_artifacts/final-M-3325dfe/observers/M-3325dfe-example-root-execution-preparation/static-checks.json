@@ -1,0 +1,38 @@
+{
+  "actual_M_example_inputs_inspected_via_local_Git_objects": {
+    "examples/typed_rows/README.md": {
+      "blob": "a268b790e245aecc77712ee82e04be19cc564b27",
+      "bytes": 2337,
+      "sha256": "4f8d6a29461e5f848a8c71119f6454cfff0a0a48d65c26041631342aabce90e0"
+    },
+    "examples/typed_rows/main.go": {
+      "blob": "f54a456e2d16bbb78cfc637d80f8b6b48410c563",
+      "bytes": 9653,
+      "sha256": "593786d47dfb761ad7b60f6ef344f396e5c33281cdf3f41176d59a13f0f44f2f"
+    }
+  },
+  "ast_parse": "PASS",
+  "imports": [
+    "argparse",
+    "datetime",
+    "hashlib",
+    "json",
+    "os",
+    "pathlib",
+    "subprocess",
+    "sys"
+  ],
+  "later_original_go_commands": [
+    "observed([cfg['real_go'], 'vet', './examples/typed_rows'], 'vet', environment)",
+    "observed([cfg['real_go'], 'run', './examples/typed_rows', '-dir', str(dbdir)], 'example', environment)",
+    "observed([cfg['real_go'], 'version'], 'go-version', environment)"
+  ],
+  "method": "STATIC AST ONLY; helper and Go commands never executed",
+  "no_actual_remote_configuration_or_results_observed": true,
+  "runtime_behavior_tested": false,
+  "subprocess_call_sites": [
+    "subprocess.check_output(['git', '-C', str(REPO), *args])",
+    "subprocess.check_output(['git', '-C', str(REPO), 'cat-file', '--batch'], input=('\\n'.join(ids) + '\\n').encode())",
+    "subprocess.call(command, cwd=REPO, env=environment, stdout=out, stderr=err)"
+  ]
+}

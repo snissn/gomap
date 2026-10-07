@@ -1,0 +1,28 @@
+{
+  "actual_fetch": [
+    "gh",
+    "api",
+    "repos/snissn/gomap/actions/jobs/112443391281/logs"
+  ],
+  "bytes": 556488,
+  "excluded_placeholder": {
+    "bytes": 0,
+    "path": "a645-windows-caching-rest1-success-original.log",
+    "reason": "gh run view refused partialrun log; Pythonassertionthenfailed; nojoblogproof"
+  },
+  "fixture_PASS_rows": [
+    "2026-10-06T19:05:57.6190521Z {\"Time\":\"2026-10-06T19:05:57.615515Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum (0.18s)\\n\"}",
+    "2026-10-06T19:05:58.0068441Z {\"Time\":\"2026-10-06T19:05:58.0004758Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum (0.38s)\\n\"}",
+    "2026-10-06T19:05:58.4904570Z {\"Time\":\"2026-10-06T19:05:58.4848322Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture (0.48s)\\n\"}",
+    "2026-10-06T19:05:58.9553266Z {\"Time\":\"2026-10-06T19:05:58.9520295Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install (0.47s)\\n\"}",
+    "2026-10-06T19:05:58.9557023Z {\"Time\":\"2026-10-06T19:05:58.9520295Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime (1.52s)\\n\"}"
+  ],
+  "head": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+  "job": 112443391281,
+  "job_conclusion": "success",
+  "log_sha256": "2665436cc2cd71d4b151ea2a012ced521f059769eab1d6a9a1cba13c0d77a0c4",
+  "raw_log": "/tmp/gomap-r1-execution-20261005/a645-windows-caching-rest1-success-rest-original.log",
+  "reviewer": "/root",
+  "run": 37514004072,
+  "scope": "Repaired WindowsjobactualPASS; requiredoverallCInotyetcomplete; originalebeFAILstillretained"
+}

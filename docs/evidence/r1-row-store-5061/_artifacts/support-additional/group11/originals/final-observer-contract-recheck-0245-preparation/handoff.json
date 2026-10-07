@@ -1,0 +1,77 @@
+{
+  "status": "PREPARATION_ONLY_NO_LANDING_OR_RUN_OBSERVED",
+  "route": "gpt-6.1-sol/high",
+  "inspected_candidate": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "observers": {
+    "/tmp/gomap-r1-execution-20261005/mutation-receipt-preparation/observe.py": {
+      "sha256": "ebe05a3822f2716596831ceb464bc8c95adb340eb52f7bfa75b87183a3602efa",
+      "bytes": 9063
+    },
+    "/tmp/gomap-r1-execution-20261005/final-A-semantic-equivalence-preparation/observe-with-environment.py": {
+      "sha256": "f477dacf465f347afa423759cbc6f148f8e6bbb391903e333bcddc0cd323990d",
+      "bytes": 12547
+    },
+    "/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/observe.py": {
+      "sha256": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68",
+      "bytes": 8856
+    }
+  },
+  "candidate_source_blobs": {
+    "scripts/r1_collection_capture.sh": {
+      "git_blob": "abc2008715641c2133fe8958295913782f42c5a3",
+      "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e"
+    },
+    "scripts/r1_collection_source.py": {
+      "git_blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+      "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c"
+    },
+    "scripts/r1_lifecycle_capture.py": {
+      "git_blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+      "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8"
+    },
+    "scripts/r1_lifecycle_validate.py": {
+      "git_blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+      "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968"
+    },
+    "cmd/collection_workload_bench/r1.go": {
+      "git_blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+      "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e"
+    },
+    "cmd/collection_workload_bench/r1_mutation_sweep.go": {
+      "git_blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+      "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c"
+    }
+  },
+  "candidate_A_unchanged_blob_checks": {
+    "cmd/collection_workload_bench/r1.go": true,
+    "cmd/collection_workload_bench/r1_sqlite.go": true,
+    "scripts/r1_collection_summary.py": true,
+    "scripts/r1_collection_source.py": true
+  },
+  "candidate_original_sidecar": {
+    "path": "/tmp/gomap-r1-execution-20261005/5071-0245-final-source-original.json",
+    "sha256": "1aad15e78c86b7d72116541f738476819a84cd630776815ae7ed0be5b0dfff2b",
+    "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+    "A_C_harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "authority": "original candidate observation; NOT actual merged source or landing"
+  },
+  "blocking_inputs": [
+    "actual merged selected source SHA and external landing/review observations",
+    "exact clean full remote checkout at that actual SHA",
+    "fresh external source/runtime/harness pins derived from that checkout",
+    "D compiled-test/helper harness distinct from A/C harness",
+    "new disjoint output/receipt/config paths",
+    "A approved equivalence certificate after actual independently observed runner/build/run/validation receipts"
+  ],
+  "contract_checks": [
+    "A six-engine4096/32/1000/5 durable/flushed flags match candidate",
+    "C4096/100/5 sweep flags and six independent expected validation pins match candidate",
+    "D4096/1024/5epochs/5freshprocesses driver/compiler/validator flags match candidate",
+    "All strict build argv agree with selected driver",
+    "A original validator receives source-manifest only; binary/packet pins checked externally",
+    "D source(real_go) runs go list, not executed in this audit",
+    "Syntax AST parsed without observer execution",
+    "All original observer/helper/source/packet bytes unmodified"
+  ],
+  "limitations": "Read-only local Git-object inspection. No SSH, Go, timing/capture, CI polling or GitHub action. No remote path/toolchain/landing success asserted."
+}

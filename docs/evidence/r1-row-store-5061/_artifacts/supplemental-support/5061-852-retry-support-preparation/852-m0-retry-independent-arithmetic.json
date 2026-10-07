@@ -1,0 +1,164 @@
+{
+  "utc": "2026-10-06T10:37:40.172423+00:00",
+  "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "run": 37449625940,
+  "job": 112222760575,
+  "artifact": 11405557900,
+  "verdict": "PASS exactheadUNCHANGEDgate oneboundedverification",
+  "gates": {
+    "legacy_completed_without_abort": true,
+    "legacy_cv_at_most_10_percent": true,
+    "public_status_explicit": true
+  },
+  "public_status": "production-index-vacuum-available",
+  "independent_raw_math_verified": true,
+  "samples": {
+    "legacy": 10,
+    "public": 10
+  },
+  "cpu_models": [
+    "AMD EPYC 9V74 80-Core Processor"
+  ],
+  "gated_metrics": {
+    "vacuum-total-ns/op": {
+      "median": 16444069630.0,
+      "cv": 0.003914204521337084
+    },
+    "max-writer-pause-ns": {
+      "median": 69782127.0,
+      "cv": 0.025843847618495272
+    },
+    "foreground-p99-ns/op": {
+      "median": 42248700.0,
+      "cv": 0.012040679744253789
+    }
+  },
+  "files": [
+    {
+      "path": "commands.txt",
+      "bytes": 383,
+      "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+    },
+    {
+      "path": "fixture.json",
+      "bytes": 1215,
+      "sha256": "92b1f6469730d68e43f3ce0d059c466a3d73ecb3df677418317f3076cfa50fc3"
+    },
+    {
+      "path": "legacy-benchstat-input.txt",
+      "bytes": 11130,
+      "sha256": "4ff276c7d19752521b949dbe2f5604eff027e3d02eb1994d28109761052aa30d"
+    },
+    {
+      "path": "raw/legacy-1.txt",
+      "bytes": 1113,
+      "sha256": "9b493983fd4269f533c80cc94ac46e03dc36ae35fd636de19f73d1076de296ee"
+    },
+    {
+      "path": "raw/legacy-10.txt",
+      "bytes": 1113,
+      "sha256": "ecc282c6adb7d6aee8912afc026682ba24609a3e7c7947d693a2faf3af26305b"
+    },
+    {
+      "path": "raw/legacy-2.txt",
+      "bytes": 1113,
+      "sha256": "a571ca36238bac032e9196250efb76a92728f10ec0a5f013af5a356ee88c602d"
+    },
+    {
+      "path": "raw/legacy-3.txt",
+      "bytes": 1113,
+      "sha256": "5c854bfd3f94905c13399cb1fb28af051b3efbbe36d6171c135a2bd2f545197a"
+    },
+    {
+      "path": "raw/legacy-4.txt",
+      "bytes": 1113,
+      "sha256": "3ceed7d24631187241baa192d084f279c1ad74648ad2fa36d56ed39cfdd2743d"
+    },
+    {
+      "path": "raw/legacy-5.txt",
+      "bytes": 1113,
+      "sha256": "8f1a360cf36ef197b9817b376a8567d5a1809af6d8a632d1fbe1fe7a1d0ee55d"
+    },
+    {
+      "path": "raw/legacy-6.txt",
+      "bytes": 1113,
+      "sha256": "8d80081b32187badcd73cfff9427a29924a3d4b269a4c0fed5db36caf41b0a91"
+    },
+    {
+      "path": "raw/legacy-7.txt",
+      "bytes": 1113,
+      "sha256": "541e3543f098b767b3c6c54a537d97c146f3060d069f246e331061ebb4213e21"
+    },
+    {
+      "path": "raw/legacy-8.txt",
+      "bytes": 1113,
+      "sha256": "fb4ddaf50dbb0a54d75711025ce58b0e511bd4ac0cc7771f74c63f847c355c7a"
+    },
+    {
+      "path": "raw/legacy-9.txt",
+      "bytes": 1113,
+      "sha256": "1819fb1150ef0ea8d50e58be27ebee3584da29ff1c785791521757650f53690d"
+    },
+    {
+      "path": "raw/public-1.txt",
+      "bytes": 661,
+      "sha256": "9e0abe79e1d5070c6aa14f09d3cde4ed4db14c7095561f3c09f28fd61cd965b2"
+    },
+    {
+      "path": "raw/public-10.txt",
+      "bytes": 661,
+      "sha256": "ba758d2a8c983572e0b838ca704ebd85a404c2bd15fe539ae35dbbaf32ce7bd1"
+    },
+    {
+      "path": "raw/public-2.txt",
+      "bytes": 661,
+      "sha256": "9a460d05718b1674ed164743fdb1f17e51d62ab353b3d1d7e2196448710ac8c2"
+    },
+    {
+      "path": "raw/public-3.txt",
+      "bytes": 661,
+      "sha256": "63deb382efdc392bae706c739a3115d25810bab06f20a76202643f65a9e81ad9"
+    },
+    {
+      "path": "raw/public-4.txt",
+      "bytes": 665,
+      "sha256": "8aae943befbb47a03e879d3969d1a77f59498fee054961faa9c79fe3001d63b0"
+    },
+    {
+      "path": "raw/public-5.txt",
+      "bytes": 661,
+      "sha256": "949756cd4f2c16a4ec560fba257a033ac89d495e5352ca3f0bd87a45aac672f6"
+    },
+    {
+      "path": "raw/public-6.txt",
+      "bytes": 665,
+      "sha256": "252f6a3cbd6be47dcaf9ef4cdcea3ae605dc926d9f45d227d88c17c58dad69d2"
+    },
+    {
+      "path": "raw/public-7.txt",
+      "bytes": 665,
+      "sha256": "c6e759d6ecedd27a9d4cd4ef601eaf2b7df010ac487452b3a141c72f2690f5b6"
+    },
+    {
+      "path": "raw/public-8.txt",
+      "bytes": 665,
+      "sha256": "f5fec8a1ac07f58310cbd0ce02212543e5fb2a49f01b61063ca5b6e70244fca1"
+    },
+    {
+      "path": "raw/public-9.txt",
+      "bytes": 661,
+      "sha256": "615eeb40ae771bcc69ae421f476cd941a1ed84a6f667d3b232048a9135e7b235"
+    },
+    {
+      "path": "results.json",
+      "bytes": 16735,
+      "sha256": "e49b02faac5d32efd6140be9e57b320777ba746732963248279fdce9c181c967"
+    },
+    {
+      "path": "summary.md",
+      "bytes": 2024,
+      "sha256": "4e41f43d59760cdfd70b32e8a09f52c2027078b8e4623c736436d43ab62bb20a"
+    }
+  ],
+  "limitations": "Original failed run stays FAIL; sameCPUmodel as852original does not establish samehost/environment or binary/perf regression comparison. No causallyprovedinfrastructureflake. Cleanuperrorrepair stillrequired beforemerge; finalnewhead gates remainmandatory."
+}

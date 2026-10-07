@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-06T22:25:03.081959+00:00",
+  "argv": [
+    "gh",
+    "api",
+    "--method",
+    "POST",
+    "repos/snissn/gomap/actions/runs/37535081909/force-cancel"
+  ],
+  "exit": 0,
+  "stdout": "{}",
+  "stderr": ""
+}

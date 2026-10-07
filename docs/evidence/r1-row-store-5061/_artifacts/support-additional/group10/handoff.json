@@ -1,0 +1,46 @@
+{
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION",
+  "group_number": 10,
+  "original_files": 113,
+  "original_bytes": 9575389,
+  "exact_candidate": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "A_C_harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "metadata": {
+    "inventory.json": {
+      "sha256": "6db7571f656592864e1b8f97f9f8991f6a3b0e6eeb85fcf248bb05a435d30182",
+      "bytes": 331132
+    },
+    "readiness.json": {
+      "sha256": "b777e52bdae4e2c6ed9127db8c5eee0abc8664298d625c2a383ecfa94a2b7541",
+      "bytes": 482
+    },
+    "checks.json": {
+      "sha256": "d0ba77152cf26a7fa83271592391ca2bdcf65113d04af41dff71df974a15cee6",
+      "bytes": 541
+    },
+    "handoff.md": {
+      "sha256": "eb3b1a5b726fb9256b9215e3fc55cc24fc57d92066c1695a3dd78bd2e0ea7217",
+      "bytes": 4506
+    },
+    "prepare.py": {
+      "sha256": "1533fb4eebb669e15a7607e0657b19557c506bc720976ef15476176b67fca523",
+      "bytes": 12354
+    },
+    "append-adoption.py": {
+      "sha256": "a2f0e75a67138551ea729cee1766c20b11c7492a753bfee26108134ed72b9bb3",
+      "bytes": 2124
+    }
+  },
+  "checks_exit": 0,
+  "prior_files_verified_unchanged": 572,
+  "requested_originals_missing": [],
+  "root_source_adoption_included": true,
+  "group_adoption": false,
+  "current_CI_or_hosted_observed": false,
+  "actual_landing_observed": false,
+  "archive_copy": false,
+  "publication": false,
+  "zip_original_hash_verified_not_copied": true,
+  "worker_released": true
+}

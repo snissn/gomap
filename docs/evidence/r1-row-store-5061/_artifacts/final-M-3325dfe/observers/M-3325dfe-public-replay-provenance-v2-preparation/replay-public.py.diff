@@ -1,0 +1,11 @@
+--- original/replay-public.py
++++ provenance-v2/replay-public.py
+@@ -23,7 +23,7 @@
+ MTREE = '0600b47bf0a3a609917d224d7fd06c40737bcd8e'
+ HELPERS = {
+  'restorer': '66f6c4096014322e3407b3efc5959751f534307ebe9a3e272b6148eba2f40ea6',
+- 'certified_A_compare': '5bc6c7eb0c00b8f78860e31769ac4731f1d1aed2f91013e2a9b1ed7633065c75',
++ 'certified_A_compare': '3c4502ebb4620ac010b615ca10bbdd45a4448f66e2c7ed663d57c32413c1c2c2',
+  'original_A_compare': '1a54cac528e5c8acc2501ec67b13d9a185b011e1467856741ada320a8bfdcfc8',
+  'original_D_validator': 'dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968',
+ }

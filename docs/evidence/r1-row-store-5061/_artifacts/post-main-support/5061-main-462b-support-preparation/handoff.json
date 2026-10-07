@@ -1,0 +1,23 @@
+{
+  "A_C_harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "binary_excluded": 1,
+  "checks": "checks.json",
+  "classification": "Focused source-bound checks and hosted review proof; historical pending states and format-only preparation stay unpromoted.",
+  "directory": "/private/tmp/gomap-r1-execution-20261005/5061-main-462b-support-preparation",
+  "duplicates_skipped": 0,
+  "head": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+  "inventory": "inventory.json",
+  "ledger": "SUPPORT_SHA256SUMS",
+  "missing_current_gates": [
+    "Actual required CI completion/current merge authorization",
+    "Actual merge SHA and verified landing",
+    "Independently observed final C/A/D build/run/validation receipts and qualification",
+    "Actual immutable publication/download/restore/semantic replay"
+  ],
+  "original_bytes": 1778246,
+  "original_count": 90,
+  "prior_frozen_pins_unchanged": 894,
+  "route": "gpt-6.1-sol",
+  "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+  "status": "RELEASED_PRIVATE_SUPPORT_PREPARATION_ONLY"
+}

@@ -243,18 +243,20 @@ func TestQuicksilverConcurrentMissClassesPerReader(t *testing.T) {
 			t.Run(mixture+"/"+strconv.Itoa(workers), func(t *testing.T) {
 				c := quicksilverRealisticSmokeConfig()
 				c.Mixture, c.Workers, c.MissPercent, c.ReadBatch = mixture, workers, 100, 1
-				c.Duration = 20 * time.Millisecond
+				// Exercise the same concurrent public-read loop with a fixed quota;
+				// scheduling delays must not let a reader finish before its first read.
+				c.Reads = workers * 301
 				f := newQuicksilverFixture(c)
-				p, err := quicksilverReadPhase(&fixedNameDB{}, c, f, 3, nil, nil, nil)
+				p, err := quicksilverReadPhase(&fixedNameDB{}, c, f, 2, nil, nil, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if p.RequestedPresent != 0 || p.RequestedAbsent != p.Ops {
+				if p.Ops != c.Reads || p.RequestedPresent != 0 || p.RequestedAbsent != p.Ops {
 					t.Fatalf("incorrect all-miss phase accounting: %+v", p)
 				}
 				for w, reader := range f.readers {
 					counts := reader.missKinds
-					if reader.count == 0 || counts[0]+counts[1]+counts[2] != reader.count || max(counts[0], counts[1], counts[2])-min(counts[0], counts[1], counts[2]) > 1 {
+					if reader.count != 301 || counts[0] == 0 || counts[1] == 0 || counts[2] == 0 || counts[0]+counts[1]+counts[2] != reader.count || max(counts[0], counts[1], counts[2])-min(counts[0], counts[1], counts[2]) > 1 {
 						t.Fatalf("reader %d: %d actual reads have skewed miss classes %v", w, reader.count, counts)
 					}
 				}

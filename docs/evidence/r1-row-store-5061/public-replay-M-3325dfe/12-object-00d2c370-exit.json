@@ -1,0 +1,18 @@
+{
+  "execution_error": null,
+  "exit_code": 0,
+  "input_after_sha256": {
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-host-original.json": "cf0cce6e46a7f4ce830329897217582b03af42d47d36b635d8710a4a4de22edd",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-root-approved-inputs-original.json": "a4166c3fe81dff988f689e69ebb44bece9cdd1047e0d69a95be7b2f3f854631c"
+  },
+  "monotonic_ns": 2838874453269676,
+  "stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "stdout": {
+    "bytes": 41,
+    "sha256": "a8fff1205c5bb33e8a25faa37cb6ac2ff56d425f37d049ad9223528d8160514d"
+  },
+  "utc": "2026-10-07T01:24:05.843145+00:00"
+}

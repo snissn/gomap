@@ -1,0 +1,27 @@
+{
+  "utc": "2026-10-06T10:50:29.719275+00:00",
+  "head": "c5803b93caca11825cb826a54a568ff522b80373",
+  "parents": [
+    "b29a3747a99681963e1799c9c303b5a502667c92",
+    "46aa32fd8c8ed1de83f783d07b30b8d0433feff6"
+  ],
+  "clean": true,
+  "runtime_sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "C_harness_blobs_unchanged": true,
+  "parent_runtime_and_tests_and_docs_blobs_equal": true,
+  "README_conflict_resolution": "Preserved both original C mutation-sweep contract paragraph and currentmain native compiled-source provenance paragraphs byteexact",
+  "delta_from_parent": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/docs/spec/r1-indexed-mutations.md",
+    "cmd/benchprof/README.md",
+    "cmd/collection_workload_bench/README.md",
+    "cmd/collection_workload_bench/main.go",
+    "cmd/collection_workload_bench/r1_mutation_sweep.go",
+    "cmd/collection_workload_bench/r1_mutation_sweep_test.go",
+    "cmd/unified_bench/README.md",
+    "scripts/r1_collection_capture.sh"
+  ],
+  "canonical_refresh_check": "PASS14workflows56members",
+  "prior_C_repair_tests_applicability": "C harness unchanged; its accepted actual8848 tests under originalsource remain retained; changed runtime cleanup actual52 normal/race/vet separate; new currentheadCI mandatory"
+}

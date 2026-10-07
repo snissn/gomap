@@ -1,0 +1,5 @@
+DB directory: /home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/db
+Captured Ada: {"email":"ada@example.test","city":"London","name":"Ada","bio":"Analytical engines","active":true,"id":"ada","optional":null,"score":7.25}
+Boston: {"email":"ada-new@example.test","city":"Boston","name":"Ada","bio":"Analytical engines","active":true,"id":"ada","optional":null,"score":9.25}
+Boston: {"email":"grace@example.test","city":"Boston","name":"Grace","bio":"Compilers","active":true,"id":"grace","optional":null,"score":8.5}
+Verified durable reopen: 2 complete rows; current and removed secondary postings; deleted row absent.

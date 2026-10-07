@@ -1,0 +1,4 @@
+{
+  "classification": "ROOT_INPUT_PREFLIGHT_REFUSAL_BEFORE_APPROVAL_OR_REPLAY",
+  "reason": "Root expected generic CLEAN, original reviewer uses CLEAN_WITH_PENDING_ROOT_APPROVAL_AND_PUBLIC_REPLAY. Exact original verdict and no findings now bound in new root v2 execution script; review status is not changed."
+}

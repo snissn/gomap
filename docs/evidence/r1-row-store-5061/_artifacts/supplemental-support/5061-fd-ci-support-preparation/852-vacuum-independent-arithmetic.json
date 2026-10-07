@@ -1,0 +1,5158 @@
+{
+  "current": {
+    "git_sha": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "directory": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact",
+    "environment": {
+      "artifact_paths": [
+        "fixture.json",
+        "results.json",
+        "summary.md",
+        "commands.txt",
+        "legacy-benchstat-input.txt",
+        "legacy-benchstat.txt (when benchstat is installed)",
+        "raw/legacy-*.txt",
+        "raw/public-*.txt"
+      ],
+      "commands": [
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem"
+      ],
+      "cpu_set": "0,1",
+      "device": "/dev/root",
+      "dirty_state": "clean",
+      "filesystem": "ext4",
+      "git_sha": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "go_version": "go version go1.26.8 linux/amd64",
+      "goarch": "amd64",
+      "gomaxprocs": "2",
+      "gomemlimit": "8GiB",
+      "goos": "linux",
+      "repetitions": 10
+    },
+    "cpu_models_from_all_raw_files": [
+      "AMD EPYC 9V74 80-Core Processor"
+    ],
+    "gates": {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": false,
+      "public_status_explicit": true
+    },
+    "public_status": "production-index-vacuum-available",
+    "gated": {
+      "vacuum-total-ns/op": {
+        "samples": [
+          27914816309.0,
+          28700948012.0,
+          27034966878.0,
+          29868877469.0,
+          26852172412.0,
+          26615321545.0,
+          28178292873.0,
+          25826811091.0,
+          32959453521.0,
+          38064216136.0
+        ],
+        "mean": 29201587624.6,
+        "median": 28046554591.0,
+        "cv": 0.12729458807664798,
+        "min": 25826811091.0,
+        "max": 38064216136.0,
+        "limit_cv": 0.1,
+        "pass": false
+      },
+      "max-writer-pause-ns": {
+        "samples": [
+          89916922.0,
+          88581325.0,
+          84560740.0,
+          87170738.0,
+          89018676.0,
+          88313254.0,
+          87053921.0,
+          86639541.0,
+          88005711.0,
+          115663452.0
+        ],
+        "mean": 90492428.0,
+        "median": 88159482.5,
+        "cv": 0.0990837207310864,
+        "min": 84560740.0,
+        "max": 115663452.0,
+        "limit_cv": 0.1,
+        "pass": true
+      },
+      "foreground-p99-ns/op": {
+        "samples": [
+          27704427.0,
+          30692980.0,
+          16370274.0,
+          61877274.0,
+          17013576.0,
+          16362453.0,
+          41168745.0,
+          15238239.0,
+          79221534.0,
+          110909846.0
+        ],
+        "mean": 41655934.8,
+        "median": 29198703.5,
+        "cv": 0.7805810471896165,
+        "min": 15238239.0,
+        "max": 110909846.0,
+        "limit_cv": 0.1,
+        "pass": false
+      }
+    },
+    "constant_legacy_work": {
+      "concurrent-aborts/op": [
+        0.0
+      ],
+      "cutover-clone-pages/op": [
+        0.0
+      ],
+      "deferred-cutovers/op": [
+        0.0
+      ],
+      "dirty-descriptors/op": [
+        0.0
+      ],
+      "foreground-exposure-misses/op": [
+        0.0
+      ],
+      "foreground-overlap-samples/op": [
+        4096.0
+      ],
+      "foreground-points/op": [
+        2048.0
+      ],
+      "foreground-ranges/op": [
+        2048.0
+      ],
+      "preclone-pages/op": [
+        345.0
+      ],
+      "reclone-pages/op": [
+        0.0
+      ],
+      "tail-mutations/op": [
+        2176.0
+      ],
+      "tail-points/op": [
+        128.0
+      ],
+      "tail-ranges/op": [
+        2048.0
+      ],
+      "vacuum-errors/op": [
+        0.0
+      ]
+    },
+    "arithmetic_checks": [
+      {
+        "group": "legacy",
+        "raw_files": 10,
+        "one_benchmark_row_per_file": true,
+        "n_one_and_PASS_every_file": true,
+        "all_advertised_samples_mean_median_sample_cv_verified": true
+      },
+      {
+        "group": "public",
+        "raw_files": 10,
+        "one_benchmark_row_per_file": true,
+        "n_one_and_PASS_every_file": true,
+        "all_advertised_samples_mean_median_sample_cv_verified": true
+      }
+    ],
+    "stats": {
+      "legacy": {
+        "B/op": {
+          "samples": [
+            702860040.0,
+            702724064.0,
+            703139456.0,
+            702995096.0,
+            702784184.0,
+            702919256.0,
+            702921152.0,
+            702791712.0,
+            702808168.0,
+            702856840.0
+          ],
+          "mean": 702879996.8,
+          "median": 702858440.0,
+          "cv": 0.0001717670746648423,
+          "min": 702724064.0,
+          "max": 703139456.0
+        },
+        "allocs/op": {
+          "samples": [
+            1192181.0,
+            1192192.0,
+            1192184.0,
+            1192192.0,
+            1192167.0,
+            1192178.0,
+            1192193.0,
+            1192173.0,
+            1192221.0,
+            1192214.0
+          ],
+          "mean": 1192189.5,
+          "median": 1192188.0,
+          "cv": 1.4340114064083855e-05,
+          "min": 1192167.0,
+          "max": 1192221.0
+        },
+        "collection-basis-ns/op": {
+          "samples": [
+            2474399.0,
+            2577962.0,
+            2366761.0,
+            2451456.0,
+            2611413.0,
+            2722116.0,
+            2341444.0,
+            2335274.0,
+            2489732.0,
+            2418428.0
+          ],
+          "mean": 2478898.5,
+          "median": 2462927.5,
+          "cv": 0.05088029168620472,
+          "min": 2335274.0,
+          "max": 2722116.0
+        },
+        "concurrent-aborts/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cutover-clone-pages/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cutover-ns/op": {
+          "samples": [
+            49356881.0,
+            49132214.0,
+            47638876.0,
+            48670126.0,
+            48534482.0,
+            50285602.0,
+            47871496.0,
+            49323415.0,
+            48753553.0,
+            49770924.0
+          ],
+          "mean": 48933756.9,
+          "median": 48942883.5,
+          "cv": 0.01663714960542146,
+          "min": 47638876.0,
+          "max": 50285602.0
+        },
+        "deferred-cutovers/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "dirty-descriptors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "final-pager-sync-ns/op": {
+          "samples": [
+            40559019.0,
+            39447198.0,
+            36920632.0,
+            38499510.0,
+            40483212.0,
+            38026569.0,
+            39181735.0,
+            37315194.0,
+            39250817.0,
+            65891226.0
+          ],
+          "mean": 41557511.2,
+          "median": 39216276.0,
+          "cv": 0.20777615801709148,
+          "min": 36920632.0,
+          "max": 65891226.0
+        },
+        "foreground-exposure-misses/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "foreground-overlap-samples/op": {
+          "samples": [
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0
+          ],
+          "mean": 4096.0,
+          "median": 4096.0,
+          "cv": 0.0,
+          "min": 4096.0,
+          "max": 4096.0
+        },
+        "foreground-p95-ns/op": {
+          "samples": [
+            10005459.0,
+            10001694.0,
+            9983870.0,
+            10037878.0,
+            9978189.0,
+            9990889.0,
+            9992746.0,
+            9983296.0,
+            10185136.0,
+            17118892.0
+          ],
+          "mean": 10727804.9,
+          "median": 9997220.0,
+          "cv": 0.20940370086912838,
+          "min": 9978189.0,
+          "max": 17118892.0
+        },
+        "foreground-p99-ns/op": {
+          "samples": [
+            27704427.0,
+            30692980.0,
+            16370274.0,
+            61877274.0,
+            17013576.0,
+            16362453.0,
+            41168745.0,
+            15238239.0,
+            79221534.0,
+            110909846.0
+          ],
+          "mean": 41655934.8,
+          "median": 29198703.5,
+          "cv": 0.7805810471896165,
+          "min": 15238239.0,
+          "max": 110909846.0
+        },
+        "foreground-points/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "foreground-ranges/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "max-writer-pause-ns": {
+          "samples": [
+            89916922.0,
+            88581325.0,
+            84560740.0,
+            87170738.0,
+            89018676.0,
+            88313254.0,
+            87053921.0,
+            86639541.0,
+            88005711.0,
+            115663452.0
+          ],
+          "mean": 90492428.0,
+          "median": 88159482.5,
+          "cv": 0.0990837207310864,
+          "min": 84560740.0,
+          "max": 115663452.0
+        },
+        "ns/op": {
+          "samples": [
+            27914838542.0,
+            28700976374.0,
+            27034994368.0,
+            29868905670.0,
+            26852201575.0,
+            26615347703.0,
+            28178317690.0,
+            25826839663.0,
+            32959482484.0,
+            38064244088.0
+          ],
+          "mean": 29201614815.7,
+          "median": 28046578116.0,
+          "cv": 0.1272944849315058,
+          "min": 25826839663.0,
+          "max": 38064244088.0
+        },
+        "preclone-pages/op": {
+          "samples": [
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0
+          ],
+          "mean": 345.0,
+          "median": 345.0,
+          "cv": 0.0,
+          "min": 345.0,
+          "max": 345.0
+        },
+        "preflush-ns/op": {
+          "samples": [
+            862145.0,
+            767134.0,
+            733936.0,
+            768297.0,
+            797660.0,
+            807725.0,
+            778731.0,
+            1545106.0,
+            17705168.0,
+            4326.0
+          ],
+          "mean": 2477022.8,
+          "median": 788195.5,
+          "cv": 2.165115220160867,
+          "min": 4326.0,
+          "max": 17705168.0
+        },
+        "reclone-pages/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "swap-publish-ns/op": {
+          "samples": [
+            518907.0,
+            496033.0,
+            522213.0,
+            694738.0,
+            469284.0,
+            419190.0,
+            467672.0,
+            393472.0,
+            479780.0,
+            476505.0
+          ],
+          "mean": 493779.4,
+          "median": 478142.5,
+          "cv": 0.16429273186741766,
+          "min": 393472.0,
+          "max": 694738.0
+        },
+        "system-reserve-ns/op": {
+          "samples": [
+            187057.0,
+            189370.0,
+            169050.0,
+            163882.0,
+            220847.0,
+            196490.0,
+            171834.0,
+            167167.0,
+            182250.0,
+            167288.0
+          ],
+          "mean": 181523.5,
+          "median": 177042.0,
+          "cv": 0.09773074038247036,
+          "min": 163882.0,
+          "max": 220847.0
+        },
+        "system-tree-ns/op": {
+          "samples": [
+            37143638.0,
+            39159453.0,
+            37693325.0,
+            38581973.0,
+            38695509.0,
+            38829496.0,
+            38028960.0,
+            39071461.0,
+            38805519.0,
+            39854077.0
+          ],
+          "mean": 38586341.1,
+          "median": 38750514.0,
+          "cv": 0.020221782599723015,
+          "min": 37143638.0,
+          "max": 39854077.0
+        },
+        "tail-mutations/op": {
+          "samples": [
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0
+          ],
+          "mean": 2176.0,
+          "median": 2176.0,
+          "cv": 0.0,
+          "min": 2176.0,
+          "max": 2176.0
+        },
+        "tail-points/op": {
+          "samples": [
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0
+          ],
+          "mean": 128.0,
+          "median": 128.0,
+          "cv": 0.0,
+          "min": 128.0,
+          "max": 128.0
+        },
+        "tail-ranges/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "user-tree-ns/op": {
+          "samples": [
+            214818.0,
+            158955.0,
+            162160.0,
+            148560.0,
+            163702.0,
+            164343.0,
+            146617.0,
+            149361.0,
+            179645.0,
+            151063.0
+          ],
+          "mean": 163922.4,
+          "median": 160557.5,
+          "cv": 0.12499629562721687,
+          "min": 146617.0,
+          "max": 214818.0
+        },
+        "vacuum-errors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "vacuum-total-ns/op": {
+          "samples": [
+            27914816309.0,
+            28700948012.0,
+            27034966878.0,
+            29868877469.0,
+            26852172412.0,
+            26615321545.0,
+            28178292873.0,
+            25826811091.0,
+            32959453521.0,
+            38064216136.0
+          ],
+          "mean": 29201587624.6,
+          "median": 28046554591.0,
+          "cv": 0.12729458807664798,
+          "min": 25826811091.0,
+          "max": 38064216136.0
+        }
+      },
+      "public": {
+        "B/op": {
+          "samples": [
+            34120232.0,
+            37771128.0,
+            35306064.0,
+            35699728.0,
+            26476696.0,
+            36988992.0,
+            35717400.0,
+            34899568.0,
+            28928144.0,
+            37392952.0
+          ],
+          "mean": 34330090.4,
+          "median": 35502896.0,
+          "cv": 0.10823972714744194,
+          "min": 26476696.0,
+          "max": 37771128.0
+        },
+        "allocs/op": {
+          "samples": [
+            55694.0,
+            61684.0,
+            58278.0,
+            59443.0,
+            47198.0,
+            61029.0,
+            58703.0,
+            56857.0,
+            51381.0,
+            61663.0
+          ],
+          "mean": 57193.0,
+          "median": 58490.5,
+          "cv": 0.08230468257601914,
+          "min": 47198.0,
+          "max": 61684.0
+        },
+        "foreground-exposure-misses/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "foreground-overlap-samples/op": {
+          "samples": [
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            81.0,
+            160.0,
+            160.0,
+            160.0,
+            111.0,
+            160.0
+          ],
+          "mean": 147.2,
+          "median": 160.0,
+          "cv": 0.18950976902850122,
+          "min": 81.0,
+          "max": 160.0
+        },
+        "foreground-p95-ns": {
+          "samples": [
+            18929728.0,
+            20380335.0,
+            18472233.0,
+            18468910.0,
+            17827420.0,
+            17823695.0,
+            16295880.0,
+            16265588.0,
+            56858822.0,
+            132818004.0
+          ],
+          "mean": 33414061.5,
+          "median": 18470571.5,
+          "cv": 1.1077313815249297,
+          "min": 16265588.0,
+          "max": 132818004.0
+        },
+        "foreground-p99-ns": {
+          "samples": [
+            26094285.0,
+            27758820.0,
+            22387865.0,
+            19005975.0,
+            18951053.0,
+            18863112.0,
+            18681547.0,
+            20423899.0,
+            62319899.0,
+            182310717.0
+          ],
+          "mean": 41679717.2,
+          "median": 21405882.0,
+          "cv": 1.227139505531411,
+          "min": 18681547.0,
+          "max": 182310717.0
+        },
+        "foreground-points/op": {
+          "samples": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "mean": 80.0,
+          "median": 80.0,
+          "cv": 0.0,
+          "min": 80.0,
+          "max": 80.0
+        },
+        "foreground-ranges/op": {
+          "samples": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "mean": 80.0,
+          "median": 80.0,
+          "cv": 0.0,
+          "min": 80.0,
+          "max": 80.0
+        },
+        "foreground-samples/op": {
+          "samples": [
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0
+          ],
+          "mean": 160.0,
+          "median": 160.0,
+          "cv": 0.0,
+          "min": 160.0,
+          "max": 160.0
+        },
+        "ns/op": {
+          "samples": [
+            493106938.0,
+            595811956.0,
+            439965654.0,
+            454849060.0,
+            253413047.0,
+            455433265.0,
+            418086946.0,
+            415224370.0,
+            478181109.0,
+            1293315378.0
+          ],
+          "mean": 529738772.3,
+          "median": 455141162.5,
+          "cv": 0.5311552451429332,
+          "min": 253413047.0,
+          "max": 1293315378.0
+        },
+        "vacuum-concurrent-retries/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          "mean": 0.2,
+          "median": 0.0,
+          "cv": 2.1081851067789192,
+          "min": 0.0,
+          "max": 1.0
+        },
+        "vacuum-unexpected-errors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "vacuum-unsupported/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      }
+    },
+    "raw_rows_numeric_order": {
+      "legacy": [
+        {
+          "raw_file": "raw/legacy-1.txt",
+          "benchmark_n": 1,
+          "ns/op": 27914838542.0,
+          "collection-basis-ns/op": 2474399.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 49356881.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 40559019.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 10005459.0,
+          "foreground-p99-ns/op": 27704427.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 89916922.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 862145.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 518907.0,
+          "system-reserve-ns/op": 187057.0,
+          "system-tree-ns/op": 37143638.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 214818.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 27914816309.0,
+          "B/op": 702860040.0,
+          "allocs/op": 1192181.0
+        },
+        {
+          "raw_file": "raw/legacy-2.txt",
+          "benchmark_n": 1,
+          "ns/op": 28700976374.0,
+          "collection-basis-ns/op": 2577962.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 49132214.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 39447198.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 10001694.0,
+          "foreground-p99-ns/op": 30692980.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 88581325.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 767134.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 496033.0,
+          "system-reserve-ns/op": 189370.0,
+          "system-tree-ns/op": 39159453.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 158955.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 28700948012.0,
+          "B/op": 702724064.0,
+          "allocs/op": 1192192.0
+        },
+        {
+          "raw_file": "raw/legacy-3.txt",
+          "benchmark_n": 1,
+          "ns/op": 27034994368.0,
+          "collection-basis-ns/op": 2366761.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 47638876.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 36920632.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 9983870.0,
+          "foreground-p99-ns/op": 16370274.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 84560740.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 733936.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 522213.0,
+          "system-reserve-ns/op": 169050.0,
+          "system-tree-ns/op": 37693325.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 162160.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 27034966878.0,
+          "B/op": 703139456.0,
+          "allocs/op": 1192184.0
+        },
+        {
+          "raw_file": "raw/legacy-4.txt",
+          "benchmark_n": 1,
+          "ns/op": 29868905670.0,
+          "collection-basis-ns/op": 2451456.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 48670126.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 38499510.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 10037878.0,
+          "foreground-p99-ns/op": 61877274.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 87170738.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 768297.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 694738.0,
+          "system-reserve-ns/op": 163882.0,
+          "system-tree-ns/op": 38581973.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 148560.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 29868877469.0,
+          "B/op": 702995096.0,
+          "allocs/op": 1192192.0
+        },
+        {
+          "raw_file": "raw/legacy-5.txt",
+          "benchmark_n": 1,
+          "ns/op": 26852201575.0,
+          "collection-basis-ns/op": 2611413.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 48534482.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 40483212.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 9978189.0,
+          "foreground-p99-ns/op": 17013576.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 89018676.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 797660.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 469284.0,
+          "system-reserve-ns/op": 220847.0,
+          "system-tree-ns/op": 38695509.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 163702.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 26852172412.0,
+          "B/op": 702784184.0,
+          "allocs/op": 1192167.0
+        },
+        {
+          "raw_file": "raw/legacy-6.txt",
+          "benchmark_n": 1,
+          "ns/op": 26615347703.0,
+          "collection-basis-ns/op": 2722116.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 50285602.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 38026569.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 9990889.0,
+          "foreground-p99-ns/op": 16362453.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 88313254.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 807725.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 419190.0,
+          "system-reserve-ns/op": 196490.0,
+          "system-tree-ns/op": 38829496.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 164343.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 26615321545.0,
+          "B/op": 702919256.0,
+          "allocs/op": 1192178.0
+        },
+        {
+          "raw_file": "raw/legacy-7.txt",
+          "benchmark_n": 1,
+          "ns/op": 28178317690.0,
+          "collection-basis-ns/op": 2341444.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 47871496.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 39181735.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 9992746.0,
+          "foreground-p99-ns/op": 41168745.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 87053921.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 778731.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 467672.0,
+          "system-reserve-ns/op": 171834.0,
+          "system-tree-ns/op": 38028960.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 146617.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 28178292873.0,
+          "B/op": 702921152.0,
+          "allocs/op": 1192193.0
+        },
+        {
+          "raw_file": "raw/legacy-8.txt",
+          "benchmark_n": 1,
+          "ns/op": 25826839663.0,
+          "collection-basis-ns/op": 2335274.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 49323415.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 37315194.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 9983296.0,
+          "foreground-p99-ns/op": 15238239.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 86639541.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 1545106.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 393472.0,
+          "system-reserve-ns/op": 167167.0,
+          "system-tree-ns/op": 39071461.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 149361.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 25826811091.0,
+          "B/op": 702791712.0,
+          "allocs/op": 1192173.0
+        },
+        {
+          "raw_file": "raw/legacy-9.txt",
+          "benchmark_n": 1,
+          "ns/op": 32959482484.0,
+          "collection-basis-ns/op": 2489732.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 48753553.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 39250817.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 10185136.0,
+          "foreground-p99-ns/op": 79221534.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 88005711.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 17705168.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 479780.0,
+          "system-reserve-ns/op": 182250.0,
+          "system-tree-ns/op": 38805519.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 179645.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 32959453521.0,
+          "B/op": 702808168.0,
+          "allocs/op": 1192221.0
+        },
+        {
+          "raw_file": "raw/legacy-10.txt",
+          "benchmark_n": 1,
+          "ns/op": 38064244088.0,
+          "collection-basis-ns/op": 2418428.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 49770924.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 65891226.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 17118892.0,
+          "foreground-p99-ns/op": 110909846.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 115663452.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 4326.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 476505.0,
+          "system-reserve-ns/op": 167288.0,
+          "system-tree-ns/op": 39854077.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 151063.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 38064216136.0,
+          "B/op": 702856840.0,
+          "allocs/op": 1192214.0
+        }
+      ],
+      "public": [
+        {
+          "raw_file": "raw/public-1.txt",
+          "benchmark_n": 1,
+          "ns/op": 493106938.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 18929728.0,
+          "foreground-p99-ns": 26094285.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 34120232.0,
+          "allocs/op": 55694.0
+        },
+        {
+          "raw_file": "raw/public-2.txt",
+          "benchmark_n": 1,
+          "ns/op": 595811956.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 20380335.0,
+          "foreground-p99-ns": 27758820.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 37771128.0,
+          "allocs/op": 61684.0
+        },
+        {
+          "raw_file": "raw/public-3.txt",
+          "benchmark_n": 1,
+          "ns/op": 439965654.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 18472233.0,
+          "foreground-p99-ns": 22387865.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35306064.0,
+          "allocs/op": 58278.0
+        },
+        {
+          "raw_file": "raw/public-4.txt",
+          "benchmark_n": 1,
+          "ns/op": 454849060.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 18468910.0,
+          "foreground-p99-ns": 19005975.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35699728.0,
+          "allocs/op": 59443.0
+        },
+        {
+          "raw_file": "raw/public-5.txt",
+          "benchmark_n": 1,
+          "ns/op": 253413047.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 81.0,
+          "foreground-p95-ns": 17827420.0,
+          "foreground-p99-ns": 18951053.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 1.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 26476696.0,
+          "allocs/op": 47198.0
+        },
+        {
+          "raw_file": "raw/public-6.txt",
+          "benchmark_n": 1,
+          "ns/op": 455433265.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 17823695.0,
+          "foreground-p99-ns": 18863112.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 36988992.0,
+          "allocs/op": 61029.0
+        },
+        {
+          "raw_file": "raw/public-7.txt",
+          "benchmark_n": 1,
+          "ns/op": 418086946.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 16295880.0,
+          "foreground-p99-ns": 18681547.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35717400.0,
+          "allocs/op": 58703.0
+        },
+        {
+          "raw_file": "raw/public-8.txt",
+          "benchmark_n": 1,
+          "ns/op": 415224370.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 16265588.0,
+          "foreground-p99-ns": 20423899.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 34899568.0,
+          "allocs/op": 56857.0
+        },
+        {
+          "raw_file": "raw/public-9.txt",
+          "benchmark_n": 1,
+          "ns/op": 478181109.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 111.0,
+          "foreground-p95-ns": 56858822.0,
+          "foreground-p99-ns": 62319899.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 1.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 28928144.0,
+          "allocs/op": 51381.0
+        },
+        {
+          "raw_file": "raw/public-10.txt",
+          "benchmark_n": 1,
+          "ns/op": 1293315378.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 132818004.0,
+          "foreground-p99-ns": 182310717.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 37392952.0,
+          "allocs/op": 61663.0
+        }
+      ]
+    },
+    "pause_minus_cutover_and_finalsync_ns": {
+      "samples": [
+        1022.0,
+        1913.0,
+        1232.0,
+        1102.0,
+        982.0,
+        1083.0,
+        690.0,
+        932.0,
+        1341.0,
+        1302.0
+      ],
+      "min": 690.0,
+      "max": 1913.0
+    },
+    "receipts": {
+      "files": [
+        {
+          "path": "commands.txt",
+          "bytes": 383,
+          "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+        },
+        {
+          "path": "fixture.json",
+          "bytes": 1215,
+          "sha256": "92b1f6469730d68e43f3ce0d059c466a3d73ecb3df677418317f3076cfa50fc3"
+        },
+        {
+          "path": "legacy-benchstat-input.txt",
+          "bytes": 11130,
+          "sha256": "bddafef2824f4bb79c947f6045d97d237c4adc3a238546cbe7ed2d59a57365cc"
+        },
+        {
+          "path": "raw/legacy-1.txt",
+          "bytes": 1113,
+          "sha256": "6912117d1cc38d198a3e8455c12f7dd489cb43db746a090a4548a9f4a4cb42d2"
+        },
+        {
+          "path": "raw/legacy-10.txt",
+          "bytes": 1113,
+          "sha256": "d60b32942a20004089bdfe17dcc36567a0abfb5d144041854bf04d696fbae586"
+        },
+        {
+          "path": "raw/legacy-2.txt",
+          "bytes": 1113,
+          "sha256": "ed2001c425bb9116f341d980373ea4787ee27a6eb7f3f59f94b22ff94f46f5e6"
+        },
+        {
+          "path": "raw/legacy-3.txt",
+          "bytes": 1113,
+          "sha256": "e55c7aa84d743a43dc15ba8cb10e385d66bf9364943718c0f9b2e4732aeb7ddb"
+        },
+        {
+          "path": "raw/legacy-4.txt",
+          "bytes": 1113,
+          "sha256": "80347637a223b2e62fc108dc993e8686a1253de4eb9c1fe2e2532f3f2fa0e30e"
+        },
+        {
+          "path": "raw/legacy-5.txt",
+          "bytes": 1113,
+          "sha256": "aa56a0fbb3724002d322c52d892791223bd4512f47a8c8f3d3b17a94b480927b"
+        },
+        {
+          "path": "raw/legacy-6.txt",
+          "bytes": 1113,
+          "sha256": "37baa2f6e044c5f107fc84a712c7ea516ae56cc6bd98c2fa38874d402eeb215a"
+        },
+        {
+          "path": "raw/legacy-7.txt",
+          "bytes": 1113,
+          "sha256": "c5a51300d9eda5c648ea1caf8ab2576863c2fc8868545ce26f8b152a7e687b74"
+        },
+        {
+          "path": "raw/legacy-8.txt",
+          "bytes": 1113,
+          "sha256": "a1ca0e9f33714f7ca175e8b59aeebe6041a1f39558adf14f413e56a92e1500f9"
+        },
+        {
+          "path": "raw/legacy-9.txt",
+          "bytes": 1113,
+          "sha256": "721c7e4c3170b77876fea5e8b231cb497fddaa6b991afc7f1b99892922380c6f"
+        },
+        {
+          "path": "raw/public-1.txt",
+          "bytes": 661,
+          "sha256": "10a00afc7f0568551c775c6e337b6804aba22751ea1cbafeaff20a55337ae447"
+        },
+        {
+          "path": "raw/public-10.txt",
+          "bytes": 661,
+          "sha256": "342e1b52724a5deabf01e468a31a70b07d5b65f5f55a8b0199394cde0bfd9c76"
+        },
+        {
+          "path": "raw/public-2.txt",
+          "bytes": 661,
+          "sha256": "11bdf06cd42ecbc15026d68f65e52fd9de1736524f8bb3f4b6740e0d0303b0ed"
+        },
+        {
+          "path": "raw/public-3.txt",
+          "bytes": 661,
+          "sha256": "4580f0b4fd2b8c02e2e280f7a66db1e5d2a4557c32e8dc44e89cd4c9a662d28a"
+        },
+        {
+          "path": "raw/public-4.txt",
+          "bytes": 661,
+          "sha256": "119a4df7a4a28e6e94b311d9489663daf7d1ab06c640af2cdd5a3422af09779e"
+        },
+        {
+          "path": "raw/public-5.txt",
+          "bytes": 666,
+          "sha256": "754585e566b166e4f6d613945da00e068eaec27e52a9d1e644a5c889aefcbc27"
+        },
+        {
+          "path": "raw/public-6.txt",
+          "bytes": 661,
+          "sha256": "476eaa8a7c3fd61b55818a6c6cd956f10795124dc6fdb14c8300450ea764a25d"
+        },
+        {
+          "path": "raw/public-7.txt",
+          "bytes": 661,
+          "sha256": "e5dc9f10450563c74d5f7fbe7038c8c46df9e54680af15bbf65069f5c86e2f88"
+        },
+        {
+          "path": "raw/public-8.txt",
+          "bytes": 661,
+          "sha256": "52b3f0309be47d0728f05e0bf76b46682e7270ac86675fc506396235c3191f25"
+        },
+        {
+          "path": "raw/public-9.txt",
+          "bytes": 665,
+          "sha256": "6d62e469730ba194ce458ade963f7afa8ccd343fe52308a4d349e2392b7f088a"
+        },
+        {
+          "path": "results.json",
+          "bytes": 16750,
+          "sha256": "42ef9b74b27dceff3ed2508468337f2f4aef16873d8046b05ddbf6a3a5160804"
+        },
+        {
+          "path": "summary.md",
+          "bytes": 2024,
+          "sha256": "6a0ed135bbd3dce32893a3c2b587dc5b7ef850e2e041d220b0dcee13c9195e9b"
+        }
+      ],
+      "zip": {
+        "path": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact.zip",
+        "bytes": 18242,
+        "sha256": "f0334fd3e05c4ffb0844bcc8c2c5eefb3aefafdb15191503996cc2870f084c7d"
+      },
+      "job_log": {
+        "path": "/tmp/gomap-r1-execution-20261005/852-stable-legacy-failed.log",
+        "sha256": "9c56e319ce0bd78d1a3bd6775f93b233aceb0e4f095ea12fa6af0102811d242f"
+      }
+    },
+    "fixture": {
+      "environment": {
+        "command": "scripts/treedb_vacuum_m0_capture.sh",
+        "device": "/dev/root",
+        "dirty_state": "clean",
+        "filesystem": "ext4",
+        "git_sha": "852aa29e1eed3511f93aba244aef917c89d033e8",
+        "go_version": "go1.26.8",
+        "goarch": "amd64",
+        "goos": "linux"
+      },
+      "fixture": {
+        "collection_root_span": 1,
+        "fixture": "m0-index-debt",
+        "index_bytes": 1441792,
+        "key_count": 512,
+        "leaf_log_bytes": 0,
+        "live_pages": 143,
+        "logical_digest": "42a8a8ef9648dced3ae61f8caa35e921058c17d73265ffdf2db47b93a9d9b599",
+        "offline_index_bytes": 131072,
+        "offline_value_log_bytes": 1207296,
+        "parameters": {
+          "chunk_size": 65536,
+          "collection_documents": 128,
+          "collection_generations": 3,
+          "debt_compactions": 16,
+          "pointer_threshold": 512,
+          "user_generations": 3,
+          "user_keys": 384
+        },
+        "reclaimable_page_percent": 59.25925925925926,
+        "reclaimable_pages": 208,
+        "schema_version": 1,
+        "status": "offline-ceiling",
+        "value_log_bytes": 1207296
+      },
+      "repetitions": 10,
+      "schema_version": 1,
+      "status": "production-index-vacuum-unavailable",
+      "timing_boundary": "one fixed-work vacuum operation; setup excluded"
+    }
+  },
+  "observed_green_control": {
+    "git_sha": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+    "directory": "/tmp/gomap-r1-execution-20261005/095-vacuum-artifact",
+    "environment": {
+      "artifact_paths": [
+        "fixture.json",
+        "results.json",
+        "summary.md",
+        "commands.txt",
+        "legacy-benchstat-input.txt",
+        "legacy-benchstat.txt (when benchstat is installed)",
+        "raw/legacy-*.txt",
+        "raw/public-*.txt"
+      ],
+      "commands": [
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem"
+      ],
+      "cpu_set": "0,1",
+      "device": "/dev/root",
+      "dirty_state": "clean",
+      "filesystem": "ext4",
+      "git_sha": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+      "go_version": "go version go1.26.8 linux/amd64",
+      "goarch": "amd64",
+      "gomaxprocs": "2",
+      "gomemlimit": "8GiB",
+      "goos": "linux",
+      "repetitions": 10
+    },
+    "cpu_models_from_all_raw_files": [
+      "AMD EPYC 7763 64-Core Processor"
+    ],
+    "gates": {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": true,
+      "public_status_explicit": true
+    },
+    "public_status": "production-index-vacuum-available",
+    "gated": {
+      "vacuum-total-ns/op": {
+        "samples": [
+          16437068916.0,
+          16632336077.0,
+          16445425386.0,
+          16426750507.0,
+          16450275141.0,
+          16437820791.0,
+          16424965715.0,
+          16433783644.0,
+          16448581266.0,
+          16461058186.0
+        ],
+        "mean": 16459806562.9,
+        "median": 16441623088.5,
+        "cv": 0.0037438077617348024,
+        "min": 16424965715.0,
+        "max": 16632336077.0,
+        "limit_cv": 0.1,
+        "pass": true
+      },
+      "max-writer-pause-ns": {
+        "samples": [
+          63206114.0,
+          61090636.0,
+          64561964.0,
+          64855025.0,
+          65240709.0,
+          63869829.0,
+          65578160.0,
+          65947903.0,
+          64028340.0,
+          65225848.0
+        ],
+        "mean": 64360452.8,
+        "median": 64708494.5,
+        "cv": 0.02208716839538686,
+        "min": 61090636.0,
+        "max": 65947903.0,
+        "limit_cv": 0.1,
+        "pass": true
+      },
+      "foreground-p99-ns/op": {
+        "samples": [
+          41004064.0,
+          40387267.0,
+          40426363.0,
+          38860657.0,
+          39982193.0,
+          39642813.0,
+          39876466.0,
+          40312849.0,
+          39972898.0,
+          39094242.0
+        ],
+        "mean": 39955981.2,
+        "median": 39977545.5,
+        "cv": 0.016005452732528142,
+        "min": 38860657.0,
+        "max": 41004064.0,
+        "limit_cv": 0.1,
+        "pass": true
+      }
+    },
+    "constant_legacy_work": {
+      "concurrent-aborts/op": [
+        0.0
+      ],
+      "cutover-clone-pages/op": [
+        0.0
+      ],
+      "deferred-cutovers/op": [
+        0.0
+      ],
+      "dirty-descriptors/op": [
+        0.0
+      ],
+      "foreground-exposure-misses/op": [
+        0.0
+      ],
+      "foreground-overlap-samples/op": [
+        4096.0
+      ],
+      "foreground-points/op": [
+        2048.0
+      ],
+      "foreground-ranges/op": [
+        2048.0
+      ],
+      "preclone-pages/op": [
+        345.0
+      ],
+      "reclone-pages/op": [
+        0.0
+      ],
+      "tail-mutations/op": [
+        2176.0
+      ],
+      "tail-points/op": [
+        128.0
+      ],
+      "tail-ranges/op": [
+        2048.0
+      ],
+      "vacuum-errors/op": [
+        0.0
+      ]
+    },
+    "arithmetic_checks": [
+      {
+        "group": "legacy",
+        "raw_files": 10,
+        "one_benchmark_row_per_file": true,
+        "n_one_and_PASS_every_file": true,
+        "all_advertised_samples_mean_median_sample_cv_verified": true
+      },
+      {
+        "group": "public",
+        "raw_files": 10,
+        "one_benchmark_row_per_file": true,
+        "n_one_and_PASS_every_file": true,
+        "all_advertised_samples_mean_median_sample_cv_verified": true
+      }
+    ],
+    "stats": {
+      "legacy": {
+        "B/op": {
+          "samples": [
+            703124048.0,
+            702996656.0,
+            702861304.0,
+            703054000.0,
+            702820360.0,
+            702868920.0,
+            703194664.0,
+            703362072.0,
+            703204800.0,
+            703048720.0
+          ],
+          "mean": 703053554.4,
+          "median": 703051360.0,
+          "cv": 0.00024710381658140046,
+          "min": 702820360.0,
+          "max": 703362072.0
+        },
+        "allocs/op": {
+          "samples": [
+            1192122.0,
+            1192147.0,
+            1192099.0,
+            1192106.0,
+            1192080.0,
+            1192100.0,
+            1192119.0,
+            1192156.0,
+            1192169.0,
+            1192124.0
+          ],
+          "mean": 1192122.2,
+          "median": 1192120.5,
+          "cv": 2.345354738919034e-05,
+          "min": 1192080.0,
+          "max": 1192169.0
+        },
+        "collection-basis-ns/op": {
+          "samples": [
+            2930684.0,
+            2693630.0,
+            2790371.0,
+            2639660.0,
+            2828221.0,
+            2897530.0,
+            3028080.0,
+            3117540.0,
+            2928371.0,
+            2942164.0
+          ],
+          "mean": 2879625.1,
+          "median": 2912950.5,
+          "cv": 0.05054213759079464,
+          "min": 2639660.0,
+          "max": 3117540.0
+        },
+        "concurrent-aborts/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cutover-clone-pages/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cutover-ns/op": {
+          "samples": [
+            58578635.0,
+            55270771.0,
+            59469200.0,
+            59424213.0,
+            56481455.0,
+            58015521.0,
+            56525530.0,
+            60927194.0,
+            59008933.0,
+            60210780.0
+          ],
+          "mean": 58391223.2,
+          "median": 58793784.0,
+          "cv": 0.03095005615320877,
+          "min": 55270771.0,
+          "max": 60927194.0
+        },
+        "deferred-cutovers/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "dirty-descriptors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "final-pager-sync-ns/op": {
+          "samples": [
+            4626215.0,
+            5819024.0,
+            5091581.0,
+            5429731.0,
+            8757741.0,
+            5853225.0,
+            9051498.0,
+            5019918.0,
+            5018034.0,
+            5013695.0
+          ],
+          "mean": 5968066.2,
+          "median": 5260656.0,
+          "cv": 0.26725563507471717,
+          "min": 4626215.0,
+          "max": 9051498.0
+        },
+        "foreground-exposure-misses/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "foreground-overlap-samples/op": {
+          "samples": [
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0
+          ],
+          "mean": 4096.0,
+          "median": 4096.0,
+          "cv": 0.0,
+          "min": 4096.0,
+          "max": 4096.0
+        },
+        "foreground-p95-ns/op": {
+          "samples": [
+            26403832.0,
+            27095726.0,
+            26682209.0,
+            26563991.0,
+            26938852.0,
+            26470901.0,
+            26745193.0,
+            26249438.0,
+            26545318.0,
+            26346630.0
+          ],
+          "mean": 26604209.0,
+          "median": 26554654.5,
+          "cv": 0.009982298853215258,
+          "min": 26249438.0,
+          "max": 27095726.0
+        },
+        "foreground-p99-ns/op": {
+          "samples": [
+            41004064.0,
+            40387267.0,
+            40426363.0,
+            38860657.0,
+            39982193.0,
+            39642813.0,
+            39876466.0,
+            40312849.0,
+            39972898.0,
+            39094242.0
+          ],
+          "mean": 39955981.2,
+          "median": 39977545.5,
+          "cv": 0.016005452732528142,
+          "min": 38860657.0,
+          "max": 41004064.0
+        },
+        "foreground-points/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "foreground-ranges/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "max-writer-pause-ns": {
+          "samples": [
+            63206114.0,
+            61090636.0,
+            64561964.0,
+            64855025.0,
+            65240709.0,
+            63869829.0,
+            65578160.0,
+            65947903.0,
+            64028340.0,
+            65225848.0
+          ],
+          "mean": 64360452.8,
+          "median": 64708494.5,
+          "cv": 0.02208716839538686,
+          "min": 61090636.0,
+          "max": 65947903.0
+        },
+        "ns/op": {
+          "samples": [
+            16437098951.0,
+            16632363858.0,
+            16445453217.0,
+            16426772508.0,
+            16450300448.0,
+            16437850517.0,
+            16424996201.0,
+            16433807620.0,
+            16448611712.0,
+            16461085637.0
+          ],
+          "mean": 16459834066.9,
+          "median": 16441651867.0,
+          "cv": 0.0037438118464643115,
+          "min": 16424996201.0,
+          "max": 16632363858.0
+        },
+        "preclone-pages/op": {
+          "samples": [
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0
+          ],
+          "mean": 345.0,
+          "median": 345.0,
+          "cv": 0.0,
+          "min": 345.0,
+          "max": 345.0
+        },
+        "preflush-ns/op": {
+          "samples": [
+            918479.0,
+            980364.0,
+            994449.0,
+            31273866.0,
+            30235175.0,
+            868916.0,
+            822190.0,
+            31206448.0,
+            853457.0,
+            912647.0
+          ],
+          "mean": 9906599.1,
+          "median": 949421.5,
+          "cv": 1.4629713260205464,
+          "min": 822190.0,
+          "max": 31273866.0
+        },
+        "reclone-pages/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "swap-publish-ns/op": {
+          "samples": [
+            563408.0,
+            484602.0,
+            577374.0,
+            565502.0,
+            541627.0,
+            491144.0,
+            589888.0,
+            578556.0,
+            528093.0,
+            494239.0
+          ],
+          "mean": 541443.3,
+          "median": 552517.5,
+          "cv": 0.07347533499147707,
+          "min": 484602.0,
+          "max": 589888.0
+        },
+        "system-reserve-ns/op": {
+          "samples": [
+            239826.0,
+            222764.0,
+            208097.0,
+            218837.0,
+            226081.0,
+            216041.0,
+            222864.0,
+            216393.0,
+            258731.0,
+            227253.0
+          ],
+          "mean": 225688.7,
+          "median": 222814.0,
+          "cv": 0.06346966627766257,
+          "min": 208097.0,
+          "max": 258731.0
+        },
+        "system-tree-ns/op": {
+          "samples": [
+            43595098.0,
+            42953940.0,
+            43873829.0,
+            46624865.0,
+            43572340.0,
+            43613338.0,
+            43291483.0,
+            46595514.0,
+            44433627.0,
+            46923409.0
+          ],
+          "mean": 44547744.3,
+          "median": 43743583.5,
+          "cv": 0.03467058971101972,
+          "min": 42953940.0,
+          "max": 46923409.0
+        },
+        "tail-mutations/op": {
+          "samples": [
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0
+          ],
+          "mean": 2176.0,
+          "median": 2176.0,
+          "cv": 0.0,
+          "min": 2176.0,
+          "max": 2176.0
+        },
+        "tail-points/op": {
+          "samples": [
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0
+          ],
+          "mean": 128.0,
+          "median": 128.0,
+          "cv": 0.0,
+          "min": 128.0,
+          "max": 128.0
+        },
+        "tail-ranges/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "user-tree-ns/op": {
+          "samples": [
+            211142.0,
+            227864.0,
+            197687.0,
+            194090.0,
+            207145.0,
+            198841.0,
+            247310.0,
+            209560.0,
+            205222.0,
+            208057.0
+          ],
+          "mean": 210691.8,
+          "median": 207601.0,
+          "cv": 0.07540923114979524,
+          "min": 194090.0,
+          "max": 247310.0
+        },
+        "vacuum-errors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "vacuum-total-ns/op": {
+          "samples": [
+            16437068916.0,
+            16632336077.0,
+            16445425386.0,
+            16426750507.0,
+            16450275141.0,
+            16437820791.0,
+            16424965715.0,
+            16433783644.0,
+            16448581266.0,
+            16461058186.0
+          ],
+          "mean": 16459806562.9,
+          "median": 16441623088.5,
+          "cv": 0.0037438077617348024,
+          "min": 16424965715.0,
+          "max": 16632336077.0
+        }
+      },
+      "public": {
+        "B/op": {
+          "samples": [
+            22211768.0,
+            41076984.0,
+            37472016.0,
+            36821928.0,
+            37839624.0,
+            37746456.0,
+            29881944.0,
+            41234400.0,
+            33922416.0,
+            38793872.0
+          ],
+          "mean": 35700140.8,
+          "median": 37609236.0,
+          "cv": 0.16205070956037046,
+          "min": 22211768.0,
+          "max": 41234400.0
+        },
+        "allocs/op": {
+          "samples": [
+            39461.0,
+            54278.0,
+            61498.0,
+            60167.0,
+            60852.0,
+            61777.0,
+            52879.0,
+            60277.0,
+            60181.0,
+            61018.0
+          ],
+          "mean": 57238.8,
+          "median": 60229.0,
+          "cv": 0.12164953646916238,
+          "min": 39461.0,
+          "max": 61777.0
+        },
+        "foreground-exposure-misses/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "foreground-overlap-samples/op": {
+          "samples": [
+            50.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            121.0,
+            160.0,
+            160.0,
+            160.0
+          ],
+          "mean": 145.1,
+          "median": 160.0,
+          "cv": 0.24529059745758075,
+          "min": 50.0,
+          "max": 160.0
+        },
+        "foreground-p95-ns": {
+          "samples": [
+            3121930.0,
+            3178058.0,
+            3176732.0,
+            2941712.0,
+            3639263.0,
+            3045575.0,
+            2914893.0,
+            3837087.0,
+            3128092.0,
+            3089483.0
+          ],
+          "mean": 3207282.5,
+          "median": 3125011.0,
+          "cv": 0.09264658576053791,
+          "min": 2914893.0,
+          "max": 3837087.0
+        },
+        "foreground-p99-ns": {
+          "samples": [
+            6596546.0,
+            4964838.0,
+            4360114.0,
+            4414772.0,
+            4166901.0,
+            4021307.0,
+            3913400.0,
+            5456961.0,
+            4284249.0,
+            4016988.0
+          ],
+          "mean": 4619607.6,
+          "median": 4322181.5,
+          "cv": 0.18218799922194465,
+          "min": 3913400.0,
+          "max": 6596546.0
+        },
+        "foreground-points/op": {
+          "samples": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "mean": 80.0,
+          "median": 80.0,
+          "cv": 0.0,
+          "min": 80.0,
+          "max": 80.0
+        },
+        "foreground-ranges/op": {
+          "samples": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "mean": 80.0,
+          "median": 80.0,
+          "cv": 0.0,
+          "min": 80.0,
+          "max": 80.0
+        },
+        "foreground-samples/op": {
+          "samples": [
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0
+          ],
+          "mean": 160.0,
+          "median": 160.0,
+          "cv": 0.0,
+          "min": 160.0,
+          "max": 160.0
+        },
+        "ns/op": {
+          "samples": [
+            97927864.0,
+            126839054.0,
+            124708075.0,
+            123585890.0,
+            134911785.0,
+            126856926.0,
+            104492007.0,
+            131515988.0,
+            115984432.0,
+            131284655.0
+          ],
+          "mean": 121810667.6,
+          "median": 125773564.5,
+          "cv": 0.099502605966934,
+          "min": 97927864.0,
+          "max": 134911785.0
+        },
+        "vacuum-concurrent-retries/op": {
+          "samples": [
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          "mean": 0.3,
+          "median": 0.0,
+          "cv": 1.6101529717988265,
+          "min": 0.0,
+          "max": 1.0
+        },
+        "vacuum-unexpected-errors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "vacuum-unsupported/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      }
+    },
+    "raw_rows_numeric_order": {
+      "legacy": [
+        {
+          "raw_file": "raw/legacy-1.txt",
+          "benchmark_n": 1,
+          "ns/op": 16437098951.0,
+          "collection-basis-ns/op": 2930684.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 58578635.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 4626215.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26403832.0,
+          "foreground-p99-ns/op": 41004064.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 63206114.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 918479.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 563408.0,
+          "system-reserve-ns/op": 239826.0,
+          "system-tree-ns/op": 43595098.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 211142.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16437068916.0,
+          "B/op": 703124048.0,
+          "allocs/op": 1192122.0
+        },
+        {
+          "raw_file": "raw/legacy-2.txt",
+          "benchmark_n": 1,
+          "ns/op": 16632363858.0,
+          "collection-basis-ns/op": 2693630.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 55270771.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 5819024.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 27095726.0,
+          "foreground-p99-ns/op": 40387267.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 61090636.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 980364.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 484602.0,
+          "system-reserve-ns/op": 222764.0,
+          "system-tree-ns/op": 42953940.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 227864.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16632336077.0,
+          "B/op": 702996656.0,
+          "allocs/op": 1192147.0
+        },
+        {
+          "raw_file": "raw/legacy-3.txt",
+          "benchmark_n": 1,
+          "ns/op": 16445453217.0,
+          "collection-basis-ns/op": 2790371.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 59469200.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 5091581.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26682209.0,
+          "foreground-p99-ns/op": 40426363.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 64561964.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 994449.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 577374.0,
+          "system-reserve-ns/op": 208097.0,
+          "system-tree-ns/op": 43873829.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 197687.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16445425386.0,
+          "B/op": 702861304.0,
+          "allocs/op": 1192099.0
+        },
+        {
+          "raw_file": "raw/legacy-4.txt",
+          "benchmark_n": 1,
+          "ns/op": 16426772508.0,
+          "collection-basis-ns/op": 2639660.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 59424213.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 5429731.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26563991.0,
+          "foreground-p99-ns/op": 38860657.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 64855025.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 31273866.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 565502.0,
+          "system-reserve-ns/op": 218837.0,
+          "system-tree-ns/op": 46624865.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 194090.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16426750507.0,
+          "B/op": 703054000.0,
+          "allocs/op": 1192106.0
+        },
+        {
+          "raw_file": "raw/legacy-5.txt",
+          "benchmark_n": 1,
+          "ns/op": 16450300448.0,
+          "collection-basis-ns/op": 2828221.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 56481455.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 8757741.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26938852.0,
+          "foreground-p99-ns/op": 39982193.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 65240709.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 30235175.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 541627.0,
+          "system-reserve-ns/op": 226081.0,
+          "system-tree-ns/op": 43572340.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 207145.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16450275141.0,
+          "B/op": 702820360.0,
+          "allocs/op": 1192080.0
+        },
+        {
+          "raw_file": "raw/legacy-6.txt",
+          "benchmark_n": 1,
+          "ns/op": 16437850517.0,
+          "collection-basis-ns/op": 2897530.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 58015521.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 5853225.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26470901.0,
+          "foreground-p99-ns/op": 39642813.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 63869829.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 868916.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 491144.0,
+          "system-reserve-ns/op": 216041.0,
+          "system-tree-ns/op": 43613338.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 198841.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16437820791.0,
+          "B/op": 702868920.0,
+          "allocs/op": 1192100.0
+        },
+        {
+          "raw_file": "raw/legacy-7.txt",
+          "benchmark_n": 1,
+          "ns/op": 16424996201.0,
+          "collection-basis-ns/op": 3028080.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 56525530.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 9051498.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26745193.0,
+          "foreground-p99-ns/op": 39876466.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 65578160.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 822190.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 589888.0,
+          "system-reserve-ns/op": 222864.0,
+          "system-tree-ns/op": 43291483.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 247310.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16424965715.0,
+          "B/op": 703194664.0,
+          "allocs/op": 1192119.0
+        },
+        {
+          "raw_file": "raw/legacy-8.txt",
+          "benchmark_n": 1,
+          "ns/op": 16433807620.0,
+          "collection-basis-ns/op": 3117540.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 60927194.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 5019918.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26249438.0,
+          "foreground-p99-ns/op": 40312849.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 65947903.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 31206448.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 578556.0,
+          "system-reserve-ns/op": 216393.0,
+          "system-tree-ns/op": 46595514.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 209560.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16433783644.0,
+          "B/op": 703362072.0,
+          "allocs/op": 1192156.0
+        },
+        {
+          "raw_file": "raw/legacy-9.txt",
+          "benchmark_n": 1,
+          "ns/op": 16448611712.0,
+          "collection-basis-ns/op": 2928371.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 59008933.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 5018034.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26545318.0,
+          "foreground-p99-ns/op": 39972898.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 64028340.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 853457.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 528093.0,
+          "system-reserve-ns/op": 258731.0,
+          "system-tree-ns/op": 44433627.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 205222.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16448581266.0,
+          "B/op": 703204800.0,
+          "allocs/op": 1192169.0
+        },
+        {
+          "raw_file": "raw/legacy-10.txt",
+          "benchmark_n": 1,
+          "ns/op": 16461085637.0,
+          "collection-basis-ns/op": 2942164.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 60210780.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 5013695.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 26346630.0,
+          "foreground-p99-ns/op": 39094242.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 65225848.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 912647.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 494239.0,
+          "system-reserve-ns/op": 227253.0,
+          "system-tree-ns/op": 46923409.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 208057.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 16461058186.0,
+          "B/op": 703048720.0,
+          "allocs/op": 1192124.0
+        }
+      ],
+      "public": [
+        {
+          "raw_file": "raw/public-1.txt",
+          "benchmark_n": 1,
+          "ns/op": 97927864.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 50.0,
+          "foreground-p95-ns": 3121930.0,
+          "foreground-p99-ns": 6596546.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 1.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 22211768.0,
+          "allocs/op": 39461.0
+        },
+        {
+          "raw_file": "raw/public-2.txt",
+          "benchmark_n": 1,
+          "ns/op": 126839054.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 3178058.0,
+          "foreground-p99-ns": 4964838.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 41076984.0,
+          "allocs/op": 54278.0
+        },
+        {
+          "raw_file": "raw/public-3.txt",
+          "benchmark_n": 1,
+          "ns/op": 124708075.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 3176732.0,
+          "foreground-p99-ns": 4360114.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 37472016.0,
+          "allocs/op": 61498.0
+        },
+        {
+          "raw_file": "raw/public-4.txt",
+          "benchmark_n": 1,
+          "ns/op": 123585890.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 2941712.0,
+          "foreground-p99-ns": 4414772.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 36821928.0,
+          "allocs/op": 60167.0
+        },
+        {
+          "raw_file": "raw/public-5.txt",
+          "benchmark_n": 1,
+          "ns/op": 134911785.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 3639263.0,
+          "foreground-p99-ns": 4166901.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 37839624.0,
+          "allocs/op": 60852.0
+        },
+        {
+          "raw_file": "raw/public-6.txt",
+          "benchmark_n": 1,
+          "ns/op": 126856926.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 3045575.0,
+          "foreground-p99-ns": 4021307.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 37746456.0,
+          "allocs/op": 61777.0
+        },
+        {
+          "raw_file": "raw/public-7.txt",
+          "benchmark_n": 1,
+          "ns/op": 104492007.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 121.0,
+          "foreground-p95-ns": 2914893.0,
+          "foreground-p99-ns": 3913400.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 1.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 29881944.0,
+          "allocs/op": 52879.0
+        },
+        {
+          "raw_file": "raw/public-8.txt",
+          "benchmark_n": 1,
+          "ns/op": 131515988.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 3837087.0,
+          "foreground-p99-ns": 5456961.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 41234400.0,
+          "allocs/op": 60277.0
+        },
+        {
+          "raw_file": "raw/public-9.txt",
+          "benchmark_n": 1,
+          "ns/op": 115984432.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 3128092.0,
+          "foreground-p99-ns": 4284249.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 1.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 33922416.0,
+          "allocs/op": 60181.0
+        },
+        {
+          "raw_file": "raw/public-10.txt",
+          "benchmark_n": 1,
+          "ns/op": 131284655.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 3089483.0,
+          "foreground-p99-ns": 4016988.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 38793872.0,
+          "allocs/op": 61018.0
+        }
+      ]
+    },
+    "pause_minus_cutover_and_finalsync_ns": {
+      "samples": [
+        1264.0,
+        841.0,
+        1183.0,
+        1081.0,
+        1513.0,
+        1083.0,
+        1132.0,
+        791.0,
+        1373.0,
+        1373.0
+      ],
+      "min": 791.0,
+      "max": 1513.0
+    },
+    "receipts": {
+      "files": [
+        {
+          "path": "commands.txt",
+          "bytes": 383,
+          "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+        },
+        {
+          "path": "fixture.json",
+          "bytes": 1215,
+          "sha256": "c1f209d58b1023dbc38d7cafb7f17d5eb3a382e3da8640000093c7fe40b6d82b"
+        },
+        {
+          "path": "legacy-benchstat-input.txt",
+          "bytes": 11130,
+          "sha256": "2e11becdcb70ffb1ea5a61d4c41631458da46a829717870713e8e906106c2aee"
+        },
+        {
+          "path": "raw/legacy-1.txt",
+          "bytes": 1113,
+          "sha256": "64aaec1291a74702518c51ec622ea4fe8c9b4af6b6fe26d0380142e562d1d8d9"
+        },
+        {
+          "path": "raw/legacy-10.txt",
+          "bytes": 1113,
+          "sha256": "c61cccaa5d4d9d76e1fe13a1c7fbe8d4686a7c9c0cc09e5d5571373a0b09f2ed"
+        },
+        {
+          "path": "raw/legacy-2.txt",
+          "bytes": 1113,
+          "sha256": "6fd82a26893f2b001313b4e1bf4ceb9dad2222357c30dcd31c687e49c707ad1d"
+        },
+        {
+          "path": "raw/legacy-3.txt",
+          "bytes": 1113,
+          "sha256": "dc36533a0f0317e9bc81e9acb60a25bfb7f0726308cb654e468e8509c1fc3a19"
+        },
+        {
+          "path": "raw/legacy-4.txt",
+          "bytes": 1113,
+          "sha256": "0589b33b6304188cf5bb0644553822244b6740f46a379f8c39e40a4a16c448b7"
+        },
+        {
+          "path": "raw/legacy-5.txt",
+          "bytes": 1113,
+          "sha256": "9b52d30374bcd709824e9fba4edfd3aeb50590533c8e7fc2d0b7258fd8aeb36c"
+        },
+        {
+          "path": "raw/legacy-6.txt",
+          "bytes": 1113,
+          "sha256": "e616f2bd91e461b8a056ebf7c06a2c5ff8d3306a16978058804d4cfb7c40a4f0"
+        },
+        {
+          "path": "raw/legacy-7.txt",
+          "bytes": 1113,
+          "sha256": "c2c5787009662dd98a7a8cae2378f5bd68f1d46eef8c53b184c170698024cfaf"
+        },
+        {
+          "path": "raw/legacy-8.txt",
+          "bytes": 1113,
+          "sha256": "9d3f8e6c39aae561d7f97a12a9e7b13081d6bec43cf78b1483b0ffff994eaacc"
+        },
+        {
+          "path": "raw/legacy-9.txt",
+          "bytes": 1113,
+          "sha256": "9f25f1ad7530a4f4988aaeb08b5ef20926bf4ae98dca4786d2a739a63f0853b2"
+        },
+        {
+          "path": "raw/public-1.txt",
+          "bytes": 666,
+          "sha256": "7343d8a6b9eebf32220d8d0864a413b564be482f88165a4504c55f9c7579ca8e"
+        },
+        {
+          "path": "raw/public-10.txt",
+          "bytes": 661,
+          "sha256": "a045871675bb550ec410e9792b10130606e442809abae760ae6cfa09d84c6768"
+        },
+        {
+          "path": "raw/public-2.txt",
+          "bytes": 661,
+          "sha256": "f41606fa68d0f310700310831f9961dc7105f30a4dfcfd3dc883a77a0a4ab3b4"
+        },
+        {
+          "path": "raw/public-3.txt",
+          "bytes": 661,
+          "sha256": "d297071f100d530e323a1faa6b5055709b1683975d7092912455a3a35f2047e1"
+        },
+        {
+          "path": "raw/public-4.txt",
+          "bytes": 661,
+          "sha256": "956d7d2a85b518cf898413ab0681a57b677dd369ef5318c94dada801a4d84341"
+        },
+        {
+          "path": "raw/public-5.txt",
+          "bytes": 661,
+          "sha256": "9dbd19f50d0fcc355ff8e3ec0b2dc3ef6e208468da1323f5fb085147556dec7d"
+        },
+        {
+          "path": "raw/public-6.txt",
+          "bytes": 661,
+          "sha256": "b8f412ff0fdfc711369e2de806404c2c098bc96b40bcf538c0886f7ed3670d80"
+        },
+        {
+          "path": "raw/public-7.txt",
+          "bytes": 665,
+          "sha256": "24df4e62761a2e24ab10e3ab8f25ca33691232eff907af3eeb44ad8c516492aa"
+        },
+        {
+          "path": "raw/public-8.txt",
+          "bytes": 661,
+          "sha256": "20488268da93b780cea4e0640485c33249509b47371830a6cd40d7a936c847ea"
+        },
+        {
+          "path": "raw/public-9.txt",
+          "bytes": 665,
+          "sha256": "6cb6cf2cd6ea6e84b230affb6ba2ee5b60c379c944f395007bd3f17aa5e90cfc"
+        },
+        {
+          "path": "results.json",
+          "bytes": 16729,
+          "sha256": "c594b56308d4dbe3c36cf8a10433540061e7f5b45d54d8593f9f2da7de6b83bd"
+        },
+        {
+          "path": "summary.md",
+          "bytes": 2024,
+          "sha256": "b5d4d59c96c8b5ec345601beeec7a521a0764076208e37871959d48e7a0f8de1"
+        }
+      ],
+      "zip": {
+        "path": "/tmp/gomap-r1-execution-20261005/095-vacuum-artifact.zip",
+        "bytes": 18137,
+        "sha256": "8846e5a96112d579958f8f858135e63cbd0e875a4023003205fc2f663dc03325"
+      }
+    },
+    "fixture": {
+      "environment": {
+        "command": "scripts/treedb_vacuum_m0_capture.sh",
+        "device": "/dev/root",
+        "dirty_state": "clean",
+        "filesystem": "ext4",
+        "git_sha": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+        "go_version": "go1.26.8",
+        "goarch": "amd64",
+        "goos": "linux"
+      },
+      "fixture": {
+        "collection_root_span": 1,
+        "fixture": "m0-index-debt",
+        "index_bytes": 1441792,
+        "key_count": 512,
+        "leaf_log_bytes": 0,
+        "live_pages": 143,
+        "logical_digest": "42a8a8ef9648dced3ae61f8caa35e921058c17d73265ffdf2db47b93a9d9b599",
+        "offline_index_bytes": 131072,
+        "offline_value_log_bytes": 1207296,
+        "parameters": {
+          "chunk_size": 65536,
+          "collection_documents": 128,
+          "collection_generations": 3,
+          "debt_compactions": 16,
+          "pointer_threshold": 512,
+          "user_generations": 3,
+          "user_keys": 384
+        },
+        "reclaimable_page_percent": 59.25925925925926,
+        "reclaimable_pages": 208,
+        "schema_version": 1,
+        "status": "offline-ceiling",
+        "value_log_bytes": 1207296
+      },
+      "repetitions": 10,
+      "schema_version": 1,
+      "status": "production-index-vacuum-unavailable",
+      "timing_boundary": "one fixed-work vacuum operation; setup excluded"
+    }
+  },
+  "historical_red": {
+    "git_sha": "1567a8a0a8b496d90e310c24b2cee53c2a169366",
+    "directory": "/tmp/gomap-r1-execution-20261005/1567-vacuum-artifact",
+    "environment": {
+      "artifact_paths": [
+        "fixture.json",
+        "results.json",
+        "summary.md",
+        "commands.txt",
+        "legacy-benchstat-input.txt",
+        "legacy-benchstat.txt (when benchstat is installed)",
+        "raw/legacy-*.txt",
+        "raw/public-*.txt"
+      ],
+      "commands": [
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem"
+      ],
+      "cpu_set": "0,1",
+      "device": "/dev/root",
+      "dirty_state": "clean",
+      "filesystem": "ext4",
+      "git_sha": "1567a8a0a8b496d90e310c24b2cee53c2a169366",
+      "go_version": "go version go1.26.8 linux/amd64",
+      "goarch": "amd64",
+      "gomaxprocs": "2",
+      "gomemlimit": "8GiB",
+      "goos": "linux",
+      "repetitions": 10
+    },
+    "cpu_models_from_all_raw_files": [
+      "AMD EPYC 9V74 80-Core Processor"
+    ],
+    "gates": {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": false,
+      "public_status_explicit": true
+    },
+    "public_status": "production-index-vacuum-available",
+    "gated": {
+      "vacuum-total-ns/op": {
+        "samples": [
+          54362354885.0,
+          35430258485.0,
+          42743902463.0,
+          35434143438.0,
+          51256738544.0,
+          61146400471.0,
+          40674468036.0,
+          36493926101.0,
+          48242366060.0,
+          30534381144.0
+        ],
+        "mean": 43631893962.7,
+        "median": 41709185249.5,
+        "cv": 0.22505228515706435,
+        "min": 30534381144.0,
+        "max": 61146400471.0,
+        "limit_cv": 0.1,
+        "pass": false
+      },
+      "max-writer-pause-ns": {
+        "samples": [
+          106595024.0,
+          102614347.0,
+          100257340.0,
+          98571602.0,
+          100941647.0,
+          98724045.0,
+          119594941.0,
+          102254714.0,
+          159753100.0,
+          106312591.0
+        ],
+        "mean": 109561935.1,
+        "median": 102434530.5,
+        "cv": 0.1704833277124989,
+        "min": 98571602.0,
+        "max": 159753100.0,
+        "limit_cv": 0.1,
+        "pass": false
+      },
+      "foreground-p99-ns/op": {
+        "samples": [
+          167902611.0,
+          57955616.0,
+          212013166.0,
+          70030231.0,
+          148231991.0,
+          171419576.0,
+          109882304.0,
+          74223367.0,
+          149900455.0,
+          48617886.0
+        ],
+        "mean": 121017720.3,
+        "median": 129057147.5,
+        "cv": 0.46683548959434745,
+        "min": 48617886.0,
+        "max": 212013166.0,
+        "limit_cv": 0.1,
+        "pass": false
+      }
+    },
+    "constant_legacy_work": {
+      "concurrent-aborts/op": [
+        0.0
+      ],
+      "cutover-clone-pages/op": [
+        0.0
+      ],
+      "deferred-cutovers/op": [
+        0.0
+      ],
+      "dirty-descriptors/op": [
+        0.0
+      ],
+      "foreground-exposure-misses/op": [
+        0.0
+      ],
+      "foreground-overlap-samples/op": [
+        4096.0
+      ],
+      "foreground-points/op": [
+        2048.0
+      ],
+      "foreground-ranges/op": [
+        2048.0
+      ],
+      "preclone-pages/op": [
+        345.0
+      ],
+      "reclone-pages/op": [
+        0.0
+      ],
+      "tail-mutations/op": [
+        2176.0
+      ],
+      "tail-points/op": [
+        128.0
+      ],
+      "tail-ranges/op": [
+        2048.0
+      ],
+      "vacuum-errors/op": [
+        0.0
+      ]
+    },
+    "arithmetic_checks": [
+      {
+        "group": "legacy",
+        "raw_files": 10,
+        "one_benchmark_row_per_file": true,
+        "n_one_and_PASS_every_file": true,
+        "all_advertised_samples_mean_median_sample_cv_verified": true
+      },
+      {
+        "group": "public",
+        "raw_files": 10,
+        "one_benchmark_row_per_file": true,
+        "n_one_and_PASS_every_file": true,
+        "all_advertised_samples_mean_median_sample_cv_verified": true
+      }
+    ],
+    "stats": {
+      "legacy": {
+        "B/op": {
+          "samples": [
+            702780760.0,
+            702995016.0,
+            703136992.0,
+            702926048.0,
+            703340224.0,
+            702859744.0,
+            702767040.0,
+            702930232.0,
+            703010152.0,
+            702815936.0
+          ],
+          "mean": 702956214.4,
+          "median": 702928140.0,
+          "cv": 0.0002516770362938401,
+          "min": 702767040.0,
+          "max": 703340224.0
+        },
+        "allocs/op": {
+          "samples": [
+            1192129.0,
+            1192162.0,
+            1192216.0,
+            1192157.0,
+            1192200.0,
+            1192140.0,
+            1192125.0,
+            1192165.0,
+            1192180.0,
+            1192160.0
+          ],
+          "mean": 1192163.4,
+          "median": 1192161.0,
+          "cv": 2.4446385870904022e-05,
+          "min": 1192125.0,
+          "max": 1192216.0
+        },
+        "collection-basis-ns/op": {
+          "samples": [
+            3479683.0,
+            3253303.0,
+            3440936.0,
+            3468046.0,
+            3491122.0,
+            3437110.0,
+            3481167.0,
+            3306121.0,
+            3241745.0,
+            3467927.0
+          ],
+          "mean": 3406716.0,
+          "median": 3454431.5,
+          "cv": 0.029102350344652125,
+          "min": 3241745.0,
+          "max": 3491122.0
+        },
+        "concurrent-aborts/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cutover-clone-pages/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "cutover-ns/op": {
+          "samples": [
+            63602039.0,
+            64456705.0,
+            63257870.0,
+            60275291.0,
+            60966522.0,
+            61367106.0,
+            62319905.0,
+            64896903.0,
+            60742142.0,
+            62376914.0
+          ],
+          "mean": 62426139.7,
+          "median": 62348409.5,
+          "cv": 0.02562479564388112,
+          "min": 60275291.0,
+          "max": 64896903.0
+        },
+        "deferred-cutovers/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "dirty-descriptors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "final-pager-sync-ns/op": {
+          "samples": [
+            42991082.0,
+            38156240.0,
+            36997697.0,
+            38294608.0,
+            39973582.0,
+            37355186.0,
+            57272703.0,
+            37356028.0,
+            99009455.0,
+            43934275.0
+          ],
+          "mean": 47134085.6,
+          "median": 39134095.0,
+          "cv": 0.4078076557725267,
+          "min": 36997697.0,
+          "max": 99009455.0
+        },
+        "foreground-exposure-misses/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "foreground-overlap-samples/op": {
+          "samples": [
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0,
+            4096.0
+          ],
+          "mean": 4096.0,
+          "median": 4096.0,
+          "cv": 0.0,
+          "min": 4096.0,
+          "max": 4096.0
+        },
+        "foreground-p95-ns/op": {
+          "samples": [
+            15988654.0,
+            10014764.0,
+            10013851.0,
+            10010717.0,
+            48352589.0,
+            68004799.0,
+            14062385.0,
+            19213334.0,
+            38571742.0,
+            9986891.0
+          ],
+          "mean": 24421972.6,
+          "median": 15025519.5,
+          "cv": 0.831255942008544,
+          "min": 9986891.0,
+          "max": 68004799.0
+        },
+        "foreground-p99-ns/op": {
+          "samples": [
+            167902611.0,
+            57955616.0,
+            212013166.0,
+            70030231.0,
+            148231991.0,
+            171419576.0,
+            109882304.0,
+            74223367.0,
+            149900455.0,
+            48617886.0
+          ],
+          "mean": 121017720.3,
+          "median": 129057147.5,
+          "cv": 0.46683548959434745,
+          "min": 48617886.0,
+          "max": 212013166.0
+        },
+        "foreground-points/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "foreground-ranges/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "max-writer-pause-ns": {
+          "samples": [
+            106595024.0,
+            102614347.0,
+            100257340.0,
+            98571602.0,
+            100941647.0,
+            98724045.0,
+            119594941.0,
+            102254714.0,
+            159753100.0,
+            106312591.0
+          ],
+          "mean": 109561935.1,
+          "median": 102434530.5,
+          "cv": 0.1704833277124989,
+          "min": 98571602.0,
+          "max": 159753100.0
+        },
+        "ns/op": {
+          "samples": [
+            54362383557.0,
+            35430294009.0,
+            42743934310.0,
+            35434176839.0,
+            51256773748.0,
+            61146433551.0,
+            40674522759.0,
+            36493997528.0,
+            48242395824.0,
+            30534413222.0
+          ],
+          "mean": 43631932534.7,
+          "median": 41709228534.5,
+          "cv": 0.22505198439373325,
+          "min": 30534413222.0,
+          "max": 61146433551.0
+        },
+        "preclone-pages/op": {
+          "samples": [
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0,
+            345.0
+          ],
+          "mean": 345.0,
+          "median": 345.0,
+          "cv": 0.0,
+          "min": 345.0,
+          "max": 345.0
+        },
+        "preflush-ns/op": {
+          "samples": [
+            5118.0,
+            6009.0,
+            4737.0,
+            5228.0,
+            5538.0,
+            5348.0,
+            7842.0,
+            5358.0,
+            4717.0,
+            2358662.0
+          ],
+          "mean": 240855.7,
+          "median": 5353.0,
+          "cv": 3.089492256133451,
+          "min": 4717.0,
+          "max": 2358662.0
+        },
+        "reclone-pages/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "swap-publish-ns/op": {
+          "samples": [
+            601698.0,
+            552194.0,
+            2178199.0,
+            492083.0,
+            879308.0,
+            667148.0,
+            701239.0,
+            2129245.0,
+            552154.0,
+            646036.0
+          ],
+          "mean": 939930.4,
+          "median": 656592.0,
+          "cv": 0.6899373572258847,
+          "min": 492083.0,
+          "max": 2178199.0
+        },
+        "system-reserve-ns/op": {
+          "samples": [
+            267694.0,
+            265521.0,
+            312091.0,
+            338631.0,
+            310549.0,
+            376108.0,
+            312542.0,
+            278751.0,
+            253513.0,
+            288676.0
+          ],
+          "mean": 300407.6,
+          "median": 299612.5,
+          "cv": 0.12490395011630279,
+          "min": 253513.0,
+          "max": 376108.0
+        },
+        "system-tree-ns/op": {
+          "samples": [
+            50431458.0,
+            51315130.0,
+            48399464.0,
+            47961286.0,
+            48184200.0,
+            48584554.0,
+            48936517.0,
+            49905938.0,
+            48252593.0,
+            49015558.0
+          ],
+          "mean": 49098669.8,
+          "median": 48760535.5,
+          "cv": 0.022488927220501144,
+          "min": 47961286.0,
+          "max": 51315130.0
+        },
+        "tail-mutations/op": {
+          "samples": [
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0,
+            2176.0
+          ],
+          "mean": 2176.0,
+          "median": 2176.0,
+          "cv": 0.0,
+          "min": 2176.0,
+          "max": 2176.0
+        },
+        "tail-points/op": {
+          "samples": [
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0,
+            128.0
+          ],
+          "mean": 128.0,
+          "median": 128.0,
+          "cv": 0.0,
+          "min": 128.0,
+          "max": 128.0
+        },
+        "tail-ranges/op": {
+          "samples": [
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0,
+            2048.0
+          ],
+          "mean": 2048.0,
+          "median": 2048.0,
+          "cv": 0.0,
+          "min": 2048.0,
+          "max": 2048.0
+        },
+        "user-tree-ns/op": {
+          "samples": [
+            210678.0,
+            242887.0,
+            254024.0,
+            214463.0,
+            213793.0,
+            204088.0,
+            205110.0,
+            234464.0,
+            209186.0,
+            207453.0
+          ],
+          "mean": 219614.6,
+          "median": 212235.5,
+          "cv": 0.0802364598019032,
+          "min": 204088.0,
+          "max": 254024.0
+        },
+        "vacuum-errors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "vacuum-total-ns/op": {
+          "samples": [
+            54362354885.0,
+            35430258485.0,
+            42743902463.0,
+            35434143438.0,
+            51256738544.0,
+            61146400471.0,
+            40674468036.0,
+            36493926101.0,
+            48242366060.0,
+            30534381144.0
+          ],
+          "mean": 43631893962.7,
+          "median": 41709185249.5,
+          "cv": 0.22505228515706435,
+          "min": 30534381144.0,
+          "max": 61146400471.0
+        }
+      },
+      "public": {
+        "B/op": {
+          "samples": [
+            35133984.0,
+            35700480.0,
+            35836328.0,
+            34921384.0,
+            35947408.0,
+            36413680.0,
+            35492136.0,
+            37507056.0,
+            35468496.0,
+            34336088.0
+          ],
+          "mean": 35675704.0,
+          "median": 35596308.0,
+          "cv": 0.024243192206519406,
+          "min": 34336088.0,
+          "max": 37507056.0
+        },
+        "allocs/op": {
+          "samples": [
+            58081.0,
+            58736.0,
+            59290.0,
+            57428.0,
+            59419.0,
+            59700.0,
+            58793.0,
+            62290.0,
+            58650.0,
+            56613.0
+          ],
+          "mean": 58900.0,
+          "median": 58764.5,
+          "cv": 0.025762181669116768,
+          "min": 56613.0,
+          "max": 62290.0
+        },
+        "foreground-exposure-misses/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "foreground-overlap-samples/op": {
+          "samples": [
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0
+          ],
+          "mean": 160.0,
+          "median": 160.0,
+          "cv": 0.0,
+          "min": 160.0,
+          "max": 160.0
+        },
+        "foreground-p95-ns": {
+          "samples": [
+            16396321.0,
+            74136864.0,
+            16235886.0,
+            17185332.0,
+            18522890.0,
+            105318232.0,
+            16883592.0,
+            22878917.0,
+            17843845.0,
+            17036937.0
+          ],
+          "mean": 32243881.6,
+          "median": 17514588.5,
+          "cv": 0.9686521941235418,
+          "min": 16235886.0,
+          "max": 105318232.0
+        },
+        "foreground-p99-ns": {
+          "samples": [
+            20738618.0,
+            85221953.0,
+            20808441.0,
+            27984289.0,
+            106278548.0,
+            154890127.0,
+            28146777.0,
+            66599905.0,
+            23528508.0,
+            22591455.0
+          ],
+          "mean": 55678862.1,
+          "median": 28065533.0,
+          "cv": 0.8356871629820412,
+          "min": 20738618.0,
+          "max": 154890127.0
+        },
+        "foreground-points/op": {
+          "samples": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "mean": 80.0,
+          "median": 80.0,
+          "cv": 0.0,
+          "min": 80.0,
+          "max": 80.0
+        },
+        "foreground-ranges/op": {
+          "samples": [
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0,
+            80.0
+          ],
+          "mean": 80.0,
+          "median": 80.0,
+          "cv": 0.0,
+          "min": 80.0,
+          "max": 80.0
+        },
+        "foreground-samples/op": {
+          "samples": [
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0,
+            160.0
+          ],
+          "mean": 160.0,
+          "median": 160.0,
+          "cv": 0.0,
+          "min": 160.0,
+          "max": 160.0
+        },
+        "ns/op": {
+          "samples": [
+            450386384.0,
+            839622206.0,
+            459656976.0,
+            431267741.0,
+            523292358.0,
+            817151589.0,
+            432588952.0,
+            538893719.0,
+            451221137.0,
+            447038348.0
+          ],
+          "mean": 539111941.0,
+          "median": 455439056.5,
+          "cv": 0.2908169987230907,
+          "min": 431267741.0,
+          "max": 839622206.0
+        },
+        "vacuum-concurrent-retries/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "vacuum-unexpected-errors/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        },
+        "vacuum-unsupported/op": {
+          "samples": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "mean": 0.0,
+          "median": 0.0,
+          "cv": 0.0,
+          "min": 0.0,
+          "max": 0.0
+        }
+      }
+    },
+    "raw_rows_numeric_order": {
+      "legacy": [
+        {
+          "raw_file": "raw/legacy-1.txt",
+          "benchmark_n": 1,
+          "ns/op": 54362383557.0,
+          "collection-basis-ns/op": 3479683.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 63602039.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 42991082.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 15988654.0,
+          "foreground-p99-ns/op": 167902611.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 106595024.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 5118.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 601698.0,
+          "system-reserve-ns/op": 267694.0,
+          "system-tree-ns/op": 50431458.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 210678.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 54362354885.0,
+          "B/op": 702780760.0,
+          "allocs/op": 1192129.0
+        },
+        {
+          "raw_file": "raw/legacy-2.txt",
+          "benchmark_n": 1,
+          "ns/op": 35430294009.0,
+          "collection-basis-ns/op": 3253303.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 64456705.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 38156240.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 10014764.0,
+          "foreground-p99-ns/op": 57955616.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 102614347.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 6009.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 552194.0,
+          "system-reserve-ns/op": 265521.0,
+          "system-tree-ns/op": 51315130.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 242887.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 35430258485.0,
+          "B/op": 702995016.0,
+          "allocs/op": 1192162.0
+        },
+        {
+          "raw_file": "raw/legacy-3.txt",
+          "benchmark_n": 1,
+          "ns/op": 42743934310.0,
+          "collection-basis-ns/op": 3440936.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 63257870.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 36997697.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 10013851.0,
+          "foreground-p99-ns/op": 212013166.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 100257340.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 4737.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 2178199.0,
+          "system-reserve-ns/op": 312091.0,
+          "system-tree-ns/op": 48399464.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 254024.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 42743902463.0,
+          "B/op": 703136992.0,
+          "allocs/op": 1192216.0
+        },
+        {
+          "raw_file": "raw/legacy-4.txt",
+          "benchmark_n": 1,
+          "ns/op": 35434176839.0,
+          "collection-basis-ns/op": 3468046.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 60275291.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 38294608.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 10010717.0,
+          "foreground-p99-ns/op": 70030231.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 98571602.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 5228.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 492083.0,
+          "system-reserve-ns/op": 338631.0,
+          "system-tree-ns/op": 47961286.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 214463.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 35434143438.0,
+          "B/op": 702926048.0,
+          "allocs/op": 1192157.0
+        },
+        {
+          "raw_file": "raw/legacy-5.txt",
+          "benchmark_n": 1,
+          "ns/op": 51256773748.0,
+          "collection-basis-ns/op": 3491122.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 60966522.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 39973582.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 48352589.0,
+          "foreground-p99-ns/op": 148231991.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 100941647.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 5538.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 879308.0,
+          "system-reserve-ns/op": 310549.0,
+          "system-tree-ns/op": 48184200.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 213793.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 51256738544.0,
+          "B/op": 703340224.0,
+          "allocs/op": 1192200.0
+        },
+        {
+          "raw_file": "raw/legacy-6.txt",
+          "benchmark_n": 1,
+          "ns/op": 61146433551.0,
+          "collection-basis-ns/op": 3437110.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 61367106.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 37355186.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 68004799.0,
+          "foreground-p99-ns/op": 171419576.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 98724045.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 5348.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 667148.0,
+          "system-reserve-ns/op": 376108.0,
+          "system-tree-ns/op": 48584554.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 204088.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 61146400471.0,
+          "B/op": 702859744.0,
+          "allocs/op": 1192140.0
+        },
+        {
+          "raw_file": "raw/legacy-7.txt",
+          "benchmark_n": 1,
+          "ns/op": 40674522759.0,
+          "collection-basis-ns/op": 3481167.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 62319905.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 57272703.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 14062385.0,
+          "foreground-p99-ns/op": 109882304.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 119594941.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 7842.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 701239.0,
+          "system-reserve-ns/op": 312542.0,
+          "system-tree-ns/op": 48936517.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 205110.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 40674468036.0,
+          "B/op": 702767040.0,
+          "allocs/op": 1192125.0
+        },
+        {
+          "raw_file": "raw/legacy-8.txt",
+          "benchmark_n": 1,
+          "ns/op": 36493997528.0,
+          "collection-basis-ns/op": 3306121.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 64896903.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 37356028.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 19213334.0,
+          "foreground-p99-ns/op": 74223367.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 102254714.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 5358.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 2129245.0,
+          "system-reserve-ns/op": 278751.0,
+          "system-tree-ns/op": 49905938.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 234464.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 36493926101.0,
+          "B/op": 702930232.0,
+          "allocs/op": 1192165.0
+        },
+        {
+          "raw_file": "raw/legacy-9.txt",
+          "benchmark_n": 1,
+          "ns/op": 48242395824.0,
+          "collection-basis-ns/op": 3241745.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 60742142.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 99009455.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 38571742.0,
+          "foreground-p99-ns/op": 149900455.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 159753100.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 4717.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 552154.0,
+          "system-reserve-ns/op": 253513.0,
+          "system-tree-ns/op": 48252593.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 209186.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 48242366060.0,
+          "B/op": 703010152.0,
+          "allocs/op": 1192180.0
+        },
+        {
+          "raw_file": "raw/legacy-10.txt",
+          "benchmark_n": 1,
+          "ns/op": 30534413222.0,
+          "collection-basis-ns/op": 3467927.0,
+          "concurrent-aborts/op": 0.0,
+          "cutover-clone-pages/op": 0.0,
+          "cutover-ns/op": 62376914.0,
+          "deferred-cutovers/op": 0.0,
+          "dirty-descriptors/op": 0.0,
+          "final-pager-sync-ns/op": 43934275.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 4096.0,
+          "foreground-p95-ns/op": 9986891.0,
+          "foreground-p99-ns/op": 48617886.0,
+          "foreground-points/op": 2048.0,
+          "foreground-ranges/op": 2048.0,
+          "max-writer-pause-ns": 106312591.0,
+          "preclone-pages/op": 345.0,
+          "preflush-ns/op": 2358662.0,
+          "reclone-pages/op": 0.0,
+          "swap-publish-ns/op": 646036.0,
+          "system-reserve-ns/op": 288676.0,
+          "system-tree-ns/op": 49015558.0,
+          "tail-mutations/op": 2176.0,
+          "tail-points/op": 128.0,
+          "tail-ranges/op": 2048.0,
+          "user-tree-ns/op": 207453.0,
+          "vacuum-errors/op": 0.0,
+          "vacuum-total-ns/op": 30534381144.0,
+          "B/op": 702815936.0,
+          "allocs/op": 1192160.0
+        }
+      ],
+      "public": [
+        {
+          "raw_file": "raw/public-1.txt",
+          "benchmark_n": 1,
+          "ns/op": 450386384.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 16396321.0,
+          "foreground-p99-ns": 20738618.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35133984.0,
+          "allocs/op": 58081.0
+        },
+        {
+          "raw_file": "raw/public-2.txt",
+          "benchmark_n": 1,
+          "ns/op": 839622206.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 74136864.0,
+          "foreground-p99-ns": 85221953.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35700480.0,
+          "allocs/op": 58736.0
+        },
+        {
+          "raw_file": "raw/public-3.txt",
+          "benchmark_n": 1,
+          "ns/op": 459656976.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 16235886.0,
+          "foreground-p99-ns": 20808441.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35836328.0,
+          "allocs/op": 59290.0
+        },
+        {
+          "raw_file": "raw/public-4.txt",
+          "benchmark_n": 1,
+          "ns/op": 431267741.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 17185332.0,
+          "foreground-p99-ns": 27984289.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 34921384.0,
+          "allocs/op": 57428.0
+        },
+        {
+          "raw_file": "raw/public-5.txt",
+          "benchmark_n": 1,
+          "ns/op": 523292358.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 18522890.0,
+          "foreground-p99-ns": 106278548.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35947408.0,
+          "allocs/op": 59419.0
+        },
+        {
+          "raw_file": "raw/public-6.txt",
+          "benchmark_n": 1,
+          "ns/op": 817151589.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 105318232.0,
+          "foreground-p99-ns": 154890127.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 36413680.0,
+          "allocs/op": 59700.0
+        },
+        {
+          "raw_file": "raw/public-7.txt",
+          "benchmark_n": 1,
+          "ns/op": 432588952.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 16883592.0,
+          "foreground-p99-ns": 28146777.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35492136.0,
+          "allocs/op": 58793.0
+        },
+        {
+          "raw_file": "raw/public-8.txt",
+          "benchmark_n": 1,
+          "ns/op": 538893719.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 22878917.0,
+          "foreground-p99-ns": 66599905.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 37507056.0,
+          "allocs/op": 62290.0
+        },
+        {
+          "raw_file": "raw/public-9.txt",
+          "benchmark_n": 1,
+          "ns/op": 451221137.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 17843845.0,
+          "foreground-p99-ns": 23528508.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 35468496.0,
+          "allocs/op": 58650.0
+        },
+        {
+          "raw_file": "raw/public-10.txt",
+          "benchmark_n": 1,
+          "ns/op": 447038348.0,
+          "foreground-exposure-misses/op": 0.0,
+          "foreground-overlap-samples/op": 160.0,
+          "foreground-p95-ns": 17036937.0,
+          "foreground-p99-ns": 22591455.0,
+          "foreground-points/op": 80.0,
+          "foreground-ranges/op": 80.0,
+          "foreground-samples/op": 160.0,
+          "vacuum-concurrent-retries/op": 0.0,
+          "vacuum-unexpected-errors/op": 0.0,
+          "vacuum-unsupported/op": 0.0,
+          "B/op": 34336088.0,
+          "allocs/op": 56613.0
+        }
+      ]
+    },
+    "pause_minus_cutover_and_finalsync_ns": {
+      "samples": [
+        1903.0,
+        1402.0,
+        1773.0,
+        1703.0,
+        1543.0,
+        1753.0,
+        2333.0,
+        1783.0,
+        1503.0,
+        1402.0
+      ],
+      "min": 1402.0,
+      "max": 2333.0
+    },
+    "receipts": {
+      "files": [
+        {
+          "path": "commands.txt",
+          "bytes": 383,
+          "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+        },
+        {
+          "path": "fixture.json",
+          "bytes": 1215,
+          "sha256": "ad7fefe11335eabe72bd38395eef666efd89be9f4050722adf8609b5eb2d52c1"
+        },
+        {
+          "path": "legacy-benchstat-input.txt",
+          "bytes": 11130,
+          "sha256": "d427ceb3a0e50e81d1989a54a26f64787d4b3b5f85c8f49268343370285229c6"
+        },
+        {
+          "path": "raw/legacy-1.txt",
+          "bytes": 1113,
+          "sha256": "8d60ecd7e3147265a9f68ec42e4e3d4865a0f5510845ceb03de30a040e9b3382"
+        },
+        {
+          "path": "raw/legacy-10.txt",
+          "bytes": 1113,
+          "sha256": "d8490bb1df30d6f3cf9469c628c4da70e856a713c82fef16ca57af5bf8961757"
+        },
+        {
+          "path": "raw/legacy-2.txt",
+          "bytes": 1113,
+          "sha256": "5ab8f782f93d391e698f014f9a9beb2802066c61aa4aaa5a6c4e61ef6e1acb56"
+        },
+        {
+          "path": "raw/legacy-3.txt",
+          "bytes": 1113,
+          "sha256": "55fe21c82397cf6484936b9b254c47f8a05782a63859d11158ff5609d0fc336b"
+        },
+        {
+          "path": "raw/legacy-4.txt",
+          "bytes": 1113,
+          "sha256": "ebdaa12602653535b3f3c757803905cf7b9fb23bca52022ea1eda7c69ea1078d"
+        },
+        {
+          "path": "raw/legacy-5.txt",
+          "bytes": 1113,
+          "sha256": "49b435786adfa4d09c91062443cd6c1ec94e5d80f141c0e339457c01700fea85"
+        },
+        {
+          "path": "raw/legacy-6.txt",
+          "bytes": 1113,
+          "sha256": "fe5da431b89dc38458198627615e5954a9473f645e677625022230843bdb5313"
+        },
+        {
+          "path": "raw/legacy-7.txt",
+          "bytes": 1113,
+          "sha256": "2a108ba53e18a17d9b69abc2a9bed1589397b92a15e7d5ced5aa509bb1f0194a"
+        },
+        {
+          "path": "raw/legacy-8.txt",
+          "bytes": 1113,
+          "sha256": "1d7c9993af131280babcba32b790e581cd50bbd704ce393585cf1dd1313e06af"
+        },
+        {
+          "path": "raw/legacy-9.txt",
+          "bytes": 1113,
+          "sha256": "a61e73525f65e529fd5cb1daf0850623e440e66e7854d106f11ef4177422309e"
+        },
+        {
+          "path": "raw/public-1.txt",
+          "bytes": 661,
+          "sha256": "55c107024512baae4598c69e4cccc07c59cac77df28598d9a67e047d0642b9a9"
+        },
+        {
+          "path": "raw/public-10.txt",
+          "bytes": 661,
+          "sha256": "1f938db0e988bde6f983d9e1d2c39684082e36b77b68ea3b1b4f8cba5f59d05b"
+        },
+        {
+          "path": "raw/public-2.txt",
+          "bytes": 661,
+          "sha256": "4e18ab903204d3122c61b353eb70c9556a204743687cc71a817e675acb7e1996"
+        },
+        {
+          "path": "raw/public-3.txt",
+          "bytes": 661,
+          "sha256": "bc6c5d6b22402064ae4cb08700a7c65ff061c3d21a4d6e235dd053f3376bc7b3"
+        },
+        {
+          "path": "raw/public-4.txt",
+          "bytes": 661,
+          "sha256": "d64a30e9f98736a21bed4b4c64473c3a324a57fd090e670cddb48c5a6d3fb238"
+        },
+        {
+          "path": "raw/public-5.txt",
+          "bytes": 661,
+          "sha256": "253153eaf404d0ed93b288b9f5106d86d6a887d1513c7cce197f130bc4331aa0"
+        },
+        {
+          "path": "raw/public-6.txt",
+          "bytes": 661,
+          "sha256": "2ca445ad95e155d272038f99ce84829d95e5bb121e06f56ef58f25445cb2bb5c"
+        },
+        {
+          "path": "raw/public-7.txt",
+          "bytes": 661,
+          "sha256": "6ec148e2bdef0023f2a335dff8c87430819f207e6f1562c496e4ded8ca0f40db"
+        },
+        {
+          "path": "raw/public-8.txt",
+          "bytes": 661,
+          "sha256": "0a94b537b00383dadaa069897f7f79144d9c578b663baf7bc4602b3533f83fcb"
+        },
+        {
+          "path": "raw/public-9.txt",
+          "bytes": 661,
+          "sha256": "d2104f4413837b4105fd068a2f5c825ab9320bb24708c3096d44e43b0a3d5605"
+        },
+        {
+          "path": "results.json",
+          "bytes": 16723,
+          "sha256": "1d399a59fd282bf0398db419c349344a8bba109ebee42b7e59c9b4ca56a038b8"
+        },
+        {
+          "path": "summary.md",
+          "bytes": 2026,
+          "sha256": "03a2ed5462dd978b264ec109f964f78745f519dff970713acf53434f18cd77af"
+        }
+      ],
+      "job_log": {
+        "path": "/tmp/gomap-r1-execution-20261005/1567-stable-legacy-failed.log",
+        "sha256": "fb3e79184c1d233a7d18ac56b1bbee893f383675d708cd51a8b9b076837a2153"
+      }
+    },
+    "fixture": {
+      "environment": {
+        "command": "scripts/treedb_vacuum_m0_capture.sh",
+        "device": "/dev/root",
+        "dirty_state": "clean",
+        "filesystem": "ext4",
+        "git_sha": "1567a8a0a8b496d90e310c24b2cee53c2a169366",
+        "go_version": "go1.26.8",
+        "goarch": "amd64",
+        "goos": "linux"
+      },
+      "fixture": {
+        "collection_root_span": 1,
+        "fixture": "m0-index-debt",
+        "index_bytes": 1441792,
+        "key_count": 512,
+        "leaf_log_bytes": 0,
+        "live_pages": 143,
+        "logical_digest": "42a8a8ef9648dced3ae61f8caa35e921058c17d73265ffdf2db47b93a9d9b599",
+        "offline_index_bytes": 131072,
+        "offline_value_log_bytes": 1207296,
+        "parameters": {
+          "chunk_size": 65536,
+          "collection_documents": 128,
+          "collection_generations": 3,
+          "debt_compactions": 16,
+          "pointer_threshold": 512,
+          "user_generations": 3,
+          "user_keys": 384
+        },
+        "reclaimable_page_percent": 59.25925925925926,
+        "reclaimable_pages": 208,
+        "schema_version": 1,
+        "status": "offline-ceiling",
+        "value_log_bytes": 1207296
+      },
+      "repetitions": 10,
+      "schema_version": 1,
+      "status": "production-index-vacuum-unavailable",
+      "timing_boundary": "one fixed-work vacuum operation; setup excluded"
+    }
+  },
+  "source_applicability": {
+    "base": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+    "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "all_changed_paths": [
+      {
+        "path": ".github/ci/ci_impact.json",
+        "status": "M",
+        "base_blob": "b081ee51424232c8d08d3f50601c204e9d3555ad",
+        "head_blob": "a0e602ce1ae2d2baec8198dfbde7722344888a2c",
+        "diff_sha256": "fce5a53cc321d8bb2921bd224e4e2bca67c2c49ccea7a2cb578ac7ff70003f04"
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+        "status": "M",
+        "base_blob": "0ff598428898bc445d995c1fb8204f4e2ea359f5",
+        "head_blob": "6b62b35cff8e2ede152ea092bff4cb53b8e6ba01",
+        "diff_sha256": "71d6179806c4a40f13eaced14aeb9402ea03c595430df3c855efc3774b220023"
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go",
+        "status": "A",
+        "base_blob": null,
+        "head_blob": "3d0f589a95ab6ef6063fb4df6d72dfe7676d932e",
+        "diff_sha256": "61e049fc03e182eecd2421a60ddfcf42026edd06eb55edf279ea8455014ac9bf"
+      }
+    ],
+    "full_diff_sha256": "887d407b4602bcf19c85531ed37b5b4fcb3363d620638d3478831b8cad1a2522",
+    "unchanged_relevant_source_paths": [
+      {
+        "path": ".github/workflows/treedb-vacuum-m0.yml",
+        "base_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+        "head_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+        "sha256": "9026cc7e16f7bb0cbbac8c380368e4fcce5a6d6016d333c7a9b276420b6c8235",
+        "equal": true
+      },
+      {
+        "path": "scripts/treedb_vacuum_m0_capture.sh",
+        "base_blob": "99e5a145e1a7ecf748b87ed957484b8214f6f8d9",
+        "head_blob": "99e5a145e1a7ecf748b87ed957484b8214f6f8d9",
+        "sha256": "60a42f57efda47c52320a88f6a87a033ae99fe0e727c7f89193987c415a9b607",
+        "equal": true
+      },
+      {
+        "path": "scripts/treedb_vacuum_m0_summarize.py",
+        "base_blob": "431d8add7518e2195e5c5c73d2475d5862d2cf3f",
+        "head_blob": "431d8add7518e2195e5c5c73d2475d5862d2cf3f",
+        "sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+        "equal": true
+      },
+      {
+        "path": "scripts/treedb_vacuum_m0_summarize_test.py",
+        "base_blob": "7a00d325f5eb035ad97670112457ee0c525de47e",
+        "head_blob": "7a00d325f5eb035ad97670112457ee0c525de47e",
+        "sha256": "1bb88ca37e7faeb18ceacd68cb1518dc756dcf93a54f4ccb38ed2d8880355d8d",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_collection_bench_test.go",
+        "base_blob": "c5347bb64a3900d1a051576b93fc395db8912039",
+        "head_blob": "c5347bb64a3900d1a051576b93fc395db8912039",
+        "sha256": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_collection_latency_external_bench_test.go",
+        "base_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53",
+        "head_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53",
+        "sha256": "5324dc8d5254db831be6f60a6fbbc1473277591064414fc52db2fe141ee5bec0",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_m0_fixture_test.go",
+        "base_blob": "9c16343a393f95943e17f124f6d6c9ad7be4a7bb",
+        "head_blob": "9c16343a393f95943e17f124f6d6c9ad7be4a7bb",
+        "sha256": "39f464862b644b29a71f945602d4c3e27e90784df23c8d20fdb50264076fd78b",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_online.go",
+        "base_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+        "head_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+        "sha256": "8e9d828ba099ec6ab2ef736d93bc42e327549c6ee66c07d734253ea8d7e4d41b",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/leaf_generation_gc.go",
+        "base_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+        "head_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+        "sha256": "c56131db852cb71150e41e007a9a8165f7b9bfe7ee7367e0e8a2e92331bd89fb",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/db.go",
+        "base_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "head_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/durable_root_runtime.go",
+        "base_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+        "head_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+        "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/recoverable_root_set.go",
+        "base_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "head_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/compact_storage.go",
+        "base_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e",
+        "head_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e",
+        "sha256": "59d57c87ce42abbdc32ecd168eeae26ce4a377ef8ad6b05cf0607a7c826d6e21",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vlog_rewrite.go",
+        "base_blob": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "head_blob": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "sha256": "c4624e593d029a7117aa240a991cc66618c3a2935cf00ce767fc0ff47b1ea5ab",
+        "equal": true
+      }
+    ],
+    "new_test_file_no_init": true,
+    "new_test_file_top_level_declarations": [
+      "func TestLeafManifestRevisionGCBoundedDescriptors(t *testing.T) {",
+      "func revisionFDCount(t *testing.T) int {",
+      "func TestLeafManifestRevisionGCPartialCancellation(t *testing.T) {",
+      "func TestLeafManifestRevisionGCLaterInventoryFailure(t *testing.T) {",
+      "func TestLeafManifestRevisionGCFreshHeldProtection(t *testing.T) {"
+    ],
+    "runtime_applicability": "Only changed production source is leaf_manifest_revision_gc.go. Both selected timing fixtures call db.Open with new TempDir, IndexOuterLeavesInValueLog false, PointerThreshold4096. Legacy explicitly publishes PagerLeaves. gcLeafManifestRevisions is reached only from leafGenerationGC after the !indexOuterLeavesInValueLog early return; selected bench/vacuum sources do not call these GC entrypoints. Explicit compaction/rewrite GC callers also retain that early return. New Linux test functions are excluded by -run ^$; no new init. ci_impact.json is inventory metadata. Therefore the changed FD GC path is not exercised by the selected M0 benchmark; this is source-path applicability, not binary equivalence or proof against all indirect build/layout effects."
+  },
+  "recorded_common_environment_fields": {
+    "go_version": "go version go1.26.8 linux/amd64",
+    "goos": "linux",
+    "goarch": "amd64",
+    "cpu_set": "0,1",
+    "gomaxprocs": "2",
+    "gomemlimit": "8GiB",
+    "filesystem": "ext4",
+    "device": "/dev/root",
+    "repetitions": 10,
+    "commands": [
+      "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+      "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem"
+    ],
+    "dirty_state": "clean"
+  },
+  "matched_host_environment": false,
+  "host_constraint": "095 CPU model is EPYC7763; 852 and1567 model is EPYC9V74. Host identities, actual storage hardware, contention/scheduler/sync traces are not present. Even same model would not establish matched host. No cross-head performance conclusion."
+}

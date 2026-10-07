@@ -1,0 +1,8 @@
+{
+  "original_exit": 1,
+  "phase": "input preflight before any descriptive outputs",
+  "missing_path": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/scripts/r1_lifecycle_validate.py",
+  "correct_frozen_validator": "final-D-report-preparation/frozen-r1_lifecycle_validate.py",
+  "validator_sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+  "source": "new runner corrects path only; original qualifier/capture/validator unchanged"
+}

@@ -1,0 +1,378 @@
+{
+  "fixture_settings": {
+    "JournalLanes": 3,
+    "ValueLogGenerationPolicy": "Off"
+  },
+  "focused_raw_receipt_checks": [
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/caching",
+        "-run",
+        "^TestCOWMaintenanceAcceptedRefreshPressureLifetime$/^central-index-compaction$/^capture$",
+        "-count=1",
+        "-timeout=3m"
+      ],
+      "actual_cwd": "/home/mikers/gomap-r1-5071-consolidated-ebe414",
+      "actual_environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "directory": "ebe414-cow-failure-focused-validation-v2-original",
+      "driver_sha256": "cdfdfec94e64b713aa6bead8cda2a187cbcaffe1e4c938857d2c3dbf1a263ce8",
+      "exit": 0,
+      "exit_utc": "2026-10-06T18:33:22.050168+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "phase": "normal",
+      "raw_fail_rows": 0,
+      "raw_log_sha256": "c471ac74151b4ea2a9faaf7bbc41e06c21124997ef6a6de1cd222b31d7a4bdf3",
+      "scope": "FOCUSED_CORRECTNESS_ONLY; NOT_WINDOWS_OR_PERFORMANCE_ACCEPTANCE",
+      "start_utc": "2026-10-06T18:33:13.717057+00:00",
+      "test_pass_rows": 2,
+      "tested_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc"
+    },
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/caching/cow_maintenance_lifetime_test.go"
+      ],
+      "actual_cwd": "/home/mikers/gomap-r1-5071-cow-repair-a645",
+      "actual_environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "directory": "a645-cow-fixture-validation-original",
+      "driver_sha256": "72e1c525e56c456b54f202a8e8a5b98976c78f1660d22beb911131293b641413",
+      "exit": 0,
+      "exit_utc": "2026-10-06T18:44:29.182366+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "phase": "format",
+      "raw_fail_rows": 0,
+      "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scope": "FOCUSED_CORRECTNESS_ONLY; NOT_WINDOWS_OR_PERFORMANCE_ACCEPTANCE",
+      "start_utc": "2026-10-06T18:44:29.125784+00:00",
+      "test_pass_rows": 0,
+      "tested_source": "a64560e86f45bf28162a8ed99d0fa984e051fd02"
+    },
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/caching",
+        "-run",
+        "^TestCOWMaintenanceAcceptedRefreshPressureLifetime$",
+        "-count=1",
+        "-timeout=5m"
+      ],
+      "actual_cwd": "/home/mikers/gomap-r1-5071-cow-repair-a645",
+      "actual_environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "directory": "a645-cow-fixture-validation-original",
+      "driver_sha256": "72e1c525e56c456b54f202a8e8a5b98976c78f1660d22beb911131293b641413",
+      "exit": 0,
+      "exit_utc": "2026-10-06T18:44:42.573269+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "phase": "normal",
+      "raw_fail_rows": 0,
+      "raw_log_sha256": "ce045d58e0cdec52995840b3b3f5983d3561005c6401fde604044060f2aaf74e",
+      "scope": "FOCUSED_CORRECTNESS_ONLY; NOT_WINDOWS_OR_PERFORMANCE_ACCEPTANCE",
+      "start_utc": "2026-10-06T18:44:29.222374+00:00",
+      "test_pass_rows": 7,
+      "tested_source": "a64560e86f45bf28162a8ed99d0fa984e051fd02"
+    },
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/caching",
+        "-run",
+        "^TestCOWMaintenanceAcceptedRefreshPressureLifetime$",
+        "-count=1",
+        "-timeout=5m"
+      ],
+      "actual_cwd": "/home/mikers/gomap-r1-5071-cow-repair-a645",
+      "actual_environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "directory": "a645-cow-fixture-validation-original",
+      "driver_sha256": "72e1c525e56c456b54f202a8e8a5b98976c78f1660d22beb911131293b641413",
+      "exit": 0,
+      "exit_utc": "2026-10-06T18:45:11.001769+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "phase": "race",
+      "raw_fail_rows": 0,
+      "raw_log_sha256": "2faf5da2a4c7164de607af8ca50047117342bd9ee5e55c19f29717e31927f0df",
+      "scope": "FOCUSED_CORRECTNESS_ONLY; NOT_WINDOWS_OR_PERFORMANCE_ACCEPTANCE",
+      "start_utc": "2026-10-06T18:44:42.619846+00:00",
+      "test_pass_rows": 7,
+      "tested_source": "a64560e86f45bf28162a8ed99d0fa984e051fd02"
+    },
+    {
+      "actual_argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/caching"
+      ],
+      "actual_cwd": "/home/mikers/gomap-r1-5071-cow-repair-a645",
+      "actual_environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "directory": "a645-cow-fixture-validation-original",
+      "driver_sha256": "72e1c525e56c456b54f202a8e8a5b98976c78f1660d22beb911131293b641413",
+      "exit": 0,
+      "exit_utc": "2026-10-06T18:45:12.842956+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "phase": "vet",
+      "raw_fail_rows": 0,
+      "raw_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scope": "FOCUSED_CORRECTNESS_ONLY; NOT_WINDOWS_OR_PERFORMANCE_ACCEPTANCE",
+      "start_utc": "2026-10-06T18:45:11.041044+00:00",
+      "test_pass_rows": 0,
+      "tested_source": "a64560e86f45bf28162a8ed99d0fa984e051fd02"
+    }
+  ],
+  "historical_dirty_integrated_source": {
+    "clean": false,
+    "commit": "17597a9758e19517b168adaeb531536e33928a7b"
+  },
+  "inventory_sha256": "cc63f5cf7df481bcea9db8e99ab44af5e18b81ae31aef77d256aed2b108c5f16",
+  "limitations": [
+    "Private ninth supplemental group, pending root adoption. Eight frozen groups and assembler were untouched; no automatic public inclusion or acceptance.",
+    "Original Windows ebe failure remains FAIL. Matching main3cfe Windows PASS and unchanged Linux ebe count=1 PASS do not trace original causality, prove Windows equivalence, or waive repaired-head required CI. The reviewer supported a fixture scheduling hole through source; original worker/basis sequence remains untraced.",
+    "Fixture repair275ea selects generation Off and explicit JournalLanes: 3. It preserves total lane count, while Off changes optional generation policy and does not preserve hot/warm/cold classification. Explicit maintenance/refresh assertions remain. Production runtime and C harness SHA pins are unchanged; no whole-binary equivalence or performance acceptance follows.",
+    "17597 is the integration commit, not main: its actual second parent is main764985. Historical integrated source manifest is clean=false and retained verbatim. Final source and actual focused receipts are clean a645; no relabeling of tested8506/ebe historical events.",
+    "Advisory inventory drift is preserved in refresh/check logs, the 17597-to-a645 inventory Git diff and independent review. Refresh/check does not enable authority. Individual Python logs record21+15 PASS, with root-adoption byte pins; independent Python start/exit/argv/environment receipts are absent.",
+    "Initial focused Linux driver FileExistsError is retained alongside its actual textual driver/SSH log. No nonexistent initial normal receipts were reconstructed. Empty failed Windows-download placeholder is excluded; actual555937-byte failed log is retained.",
+    "Historical ebe M0 success/artifact metadata is source-bound only; no new a645 M0 or performance claim. Original Windows FAIL and cleanup observations retain their own classifications.",
+    "Actual postpush head/base/body snapshot binds a645/main764985 and matured PR body. Status rollup is an observed historical snapshot; current exact-head CI, hosted review/threads, landing, landed actual A/C/D and E publication/replay are not yet accepted in this group.",
+    "Go executable bytes, bundles and full source archives are excluded. Exact historical argv/cwd/environment, driver hashes, source maps and raw start/exit/log receipts are retained. New local Git-object observations are explicitly labeled and are not historical test receipts."
+  ],
+  "new_git_object_observations": [
+    {
+      "argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "275ea4f2de90cf2db2fa735234f748ef300dd564"
+      ],
+      "bytes": 279,
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit": 0,
+      "name": "commit-275ea.txt",
+      "observed_utc": "2026-10-06T18:50:16.998599+00:00",
+      "sha256": "d7739a2c5569eefd0a0bf8fd05319b9e69bd24334daf157084e5cba23c9a9068"
+    },
+    {
+      "argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "17597a9758e19517b168adaeb531536e33928a7b"
+      ],
+      "bytes": 293,
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit": 0,
+      "name": "commit-17597.txt",
+      "observed_utc": "2026-10-06T18:50:17.032148+00:00",
+      "sha256": "a3062416024f0cc24196e569dacacd9049ba8cbfef1acafcab16ac8e6e417fd3"
+    },
+    {
+      "argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "a64560e86f45bf28162a8ed99d0fa984e051fd02"
+      ],
+      "bytes": 282,
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit": 0,
+      "name": "commit-a645.txt",
+      "observed_utc": "2026-10-06T18:50:17.048634+00:00",
+      "sha256": "e59ab7a7175fd8c6f2f5d3d63107ca4ae737b1002561284d85faea8d7a42c308"
+    },
+    {
+      "argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "7649857532521db69ff4cdcf236a11377c85ab3d"
+      ],
+      "bytes": 269,
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit": 0,
+      "name": "commit-main-764985.txt",
+      "observed_utc": "2026-10-06T18:50:17.065381+00:00",
+      "sha256": "f9045090deae5c62d2b70a066cc9b24859f1ac1da29b81276cf122bb1c95a963"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+        "275ea4f2de90cf2db2fa735234f748ef300dd564",
+        "--",
+        "TreeDB/caching/cow_maintenance_lifetime_test.go"
+      ],
+      "bytes": 1244,
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit": 0,
+      "name": "repair-fixture-diff.txt",
+      "observed_utc": "2026-10-06T18:50:17.081128+00:00",
+      "sha256": "1c6a3101283584726cc8243f0327eef7c442032857f3c5e5b071e41a92b0b881"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "17597a9758e19517b168adaeb531536e33928a7b",
+        "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+        "--",
+        ".github/ci/ci_impact.json"
+      ],
+      "bytes": 808,
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit": 0,
+      "name": "final-inventory-diff.txt",
+      "observed_utc": "2026-10-06T18:50:17.097692+00:00",
+      "sha256": "8e8b323c9272225b142305644e387186f6744620c29ef91da8c8870657bf78f3"
+    },
+    {
+      "argv": [
+        "git",
+        "show",
+        "a64560e86f45bf28162a8ed99d0fa984e051fd02:TreeDB/caching/cow_maintenance_lifetime_test.go"
+      ],
+      "bytes": 15662,
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit": 0,
+      "name": "a645-fixture-source.go",
+      "observed_utc": "2026-10-06T18:50:17.112177+00:00",
+      "sha256": "88aef9a7634ff8693ae790007d579dd27daeea0d2d0d25c337b1d4387fa3b054"
+    }
+  ],
+  "original_copy_pairs": "ALL_EXACT_UTF8_NONNUL_NONSYMLINK_MODE0644",
+  "postpush_binding": {
+    "base": "7649857532521db69ff4cdcf236a11377c85ab3d",
+    "head": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+    "mature_body_exact_match": true,
+    "mature_body_match_after_only_final_newline_removal": true,
+    "scope": "Snapshot only; no CI/review/merge acceptance"
+  },
+  "remaining_gates": [
+    "Root adoption/public supplemental selection",
+    "Exact-head required CI including repaired Windows fixture job",
+    "Exact-head hosted review and all review threads",
+    "Protected landing with current-main applicability",
+    "Actual landed A/C/D capture and independent validation",
+    "Public E artifact replay and outcome acceptance"
+  ],
+  "root_adoption_pin_checks": [
+    {
+      "path": "5071-cow-repair-final-source.json",
+      "result": "EXACT"
+    },
+    {
+      "path": "a645-cow-fixture-validation-root-review.json",
+      "result": "EXACT"
+    },
+    {
+      "path": "a645-cow-repair-source-applicability-review.json",
+      "result": "EXACT"
+    },
+    {
+      "path": "a645-cow-repair-source-applicability-review.md",
+      "result": "EXACT"
+    },
+    {
+      "path": "a645-test_ci_impact.py.log",
+      "result": "EXACT"
+    },
+    {
+      "path": "a645-test_refresh_ci_impact_inventory.py.log",
+      "result": "EXACT"
+    },
+    {
+      "path": "released-worktree-cleanup-result.json",
+      "result": "EXACT"
+    },
+    {
+      "path": "released-worktree-cleanup-result.md",
+      "result": "EXACT"
+    }
+  ],
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION"
+}

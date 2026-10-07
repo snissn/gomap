@@ -1,0 +1,18 @@
+{
+  "utc": "2026-10-07T01:18:27.390074+00:00",
+  "argv": [
+    "python3",
+    "-B",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-preparation/build-draft-inputs.py",
+    "--stage",
+    "/home/mikers/gomap-r1-publication-stage-M-3325dfe-20261006",
+    "--template",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/root-inputs.template.json",
+    "--bootstrap",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-bootstrap-original.json",
+    "--expected-bootstrap-sha256",
+    "d519d4b6649b3d96cc44cc1103ea8ba34c24397d90edd84b25a1e2a96172da8e",
+    "--out",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-draft-original"
+  ]
+}

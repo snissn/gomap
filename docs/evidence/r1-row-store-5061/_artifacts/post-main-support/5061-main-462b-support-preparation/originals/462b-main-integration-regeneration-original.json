@@ -1,0 +1,58 @@
+{
+  "utc": "2026-10-06T22:03:31.209193+00:00",
+  "status": "ROOT_CANONICAL_INVENTORY_REGENERATION_ONLY",
+  "head_before": "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+  "integrated_main": "462b3a98b90e1317fd16ce68dc78f03cd46ebbe9",
+  "cwd": "/private/tmp/gomap-r1-5067",
+  "conflict_paths": [
+    ".github/ci/ci_impact.json"
+  ],
+  "staged_tree": "0600b47bf0a3a609917d224d7fd06c40737bcd8e",
+  "inventory_sha256": "86f2cafbba0050cd9598812da43d50d991dd668c304b95eed69ac5e5affddedb",
+  "commands": [
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--with",
+        "pyyaml",
+        "python",
+        ".github/scripts/refresh_ci_impact_inventory.py"
+      ],
+      "exit": 0,
+      "log_sha256": "db37900fc1e4aa00706df4c1ef305a3f263329f3d9fdd2fe845a068b1a2f14ef"
+    },
+    {
+      "argv": [
+        "git",
+        "add",
+        ".github/ci/ci_impact.json"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--with",
+        "pyyaml",
+        "python",
+        ".github/scripts/refresh_ci_impact_inventory.py",
+        "--check"
+      ],
+      "exit": 0,
+      "log_sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

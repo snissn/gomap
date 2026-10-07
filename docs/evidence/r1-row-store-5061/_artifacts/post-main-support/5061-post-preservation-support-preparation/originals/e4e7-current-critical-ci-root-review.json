@@ -1,0 +1,70 @@
+{
+  "utc": "2026-10-06T20:47:26.888211+00:00",
+  "jobs": [
+    {
+      "name": "windows-core5",
+      "job_id": 112486076543,
+      "run_id": 37526268804,
+      "exact_head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+      "status": "completed",
+      "conclusion": "success",
+      "pins": {
+        "e4e7-windows-core5-success-job-original.json": {
+          "bytes": 2280,
+          "sha256": "a0243a2868dabd7ca59f5ea8076b9972eaa81511ace16e9d468caba4cc3bab7d"
+        },
+        "e4e7-windows-core5-success-log-original.log": {
+          "bytes": 1949120,
+          "sha256": "d5f94e3ef2cd144ac34ccb3587a525af3654b17d258e2df43648f8591bc2b5c7"
+        }
+      },
+      "target": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+      "target_pass_rows": 37,
+      "qualification": "source-bound actualcurrenthead CI only; no capture/capacityacceptance"
+    },
+    {
+      "name": "windows-caching-rest1",
+      "job_id": 112486076885,
+      "run_id": 37526268804,
+      "exact_head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+      "status": "completed",
+      "conclusion": "success",
+      "pins": {
+        "e4e7-windows-caching-rest1-success-job-original.json": {
+          "bytes": 2288,
+          "sha256": "57a5a31ea30243e0e8a466613f2456db2880471b33d90c6830699f3f0d9a75d9"
+        },
+        "e4e7-windows-caching-rest1-success-log-original.log": {
+          "bytes": 556449,
+          "sha256": "ca735f35f44aadfe234e02c8a474b8229a144c45db2a5cd1b002b1837d559536"
+        }
+      },
+      "target": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+      "target_pass_rows": 5,
+      "qualification": "source-bound actualcurrenthead CI only; no capture/capacityacceptance",
+      "target_fail_rows": 0,
+      "target_parent_output": "2026-10-06T20:42:36.1086426Z {\"Time\":\"2026-10-06T20:42:36.0968479Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime (0.42s)\\n\"}"
+    },
+    {
+      "name": "mvcc-raw-path",
+      "job_id": 112486076043,
+      "run_id": 37526268804,
+      "exact_head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+      "status": "completed",
+      "conclusion": "success",
+      "pins": {
+        "e4e7-mvcc-raw-path-success-job-original.json": {
+          "bytes": 2863,
+          "sha256": "4a2a68fb5922286d964e4c470ad6f945634b815a34703541cad73564b40e2881"
+        },
+        "e4e7-mvcc-raw-path-success-log-original.log": {
+          "bytes": 480907,
+          "sha256": "516ce528092ecc2d6e83bf625f49882507ee8390d9aa424c4beadc1270650101"
+        }
+      },
+      "target": null,
+      "target_pass_rows": null,
+      "qualification": "source-bound actualcurrenthead CI only; no capture/capacityacceptance"
+    }
+  ]
+}

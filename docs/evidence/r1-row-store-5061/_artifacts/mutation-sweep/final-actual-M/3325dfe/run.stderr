@@ -1,0 +1,160 @@
+2026/10/06 13:50:07 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8956 ratio=0.273
+2026/10/06 13:50:07 treedb: value-log dict published class=single_value dict_id=3930841542667720666 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:10 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8974 ratio=0.273
+2026/10/06 13:50:10 treedb: value-log dict published class=single_value dict_id=13111138346634482534 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:50:12 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8980 ratio=0.274
+2026/10/06 13:50:12 treedb: value-log dict published class=single_value dict_id=10403087980428576189 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:15 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8977 ratio=0.274
+2026/10/06 13:50:15 treedb: value-log dict published class=single_value dict_id=2726856925548046567 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:18 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32786 stored=8891 ratio=0.271
+2026/10/06 13:50:18 treedb: value-log dict published class=single_value dict_id=9861974927330497848 k=32 payload_ratio=0.011 total_ratio=0.149
+2026/10/06 13:50:23 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8996 ratio=0.274
+2026/10/06 13:50:23 treedb: value-log dict published class=single_value dict_id=16335933886852030217 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:50:27 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=9007 ratio=0.274
+2026/10/06 13:50:27 treedb: value-log dict published class=single_value dict_id=17586471043424501980 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:31 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32786 stored=8885 ratio=0.271
+2026/10/06 13:50:31 treedb: value-log dict published class=single_value dict_id=5833527935837359359 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:36 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8962 ratio=0.273
+2026/10/06 13:50:36 treedb: value-log dict published class=single_value dict_id=2657441118705263616 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:50:39 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32784 stored=8918 ratio=0.272
+2026/10/06 13:50:39 treedb: value-log dict published class=single_value dict_id=901880227023336474 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:50:43 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32784 stored=8903 ratio=0.272
+2026/10/06 13:50:43 treedb: value-log dict published class=single_value dict_id=3047758475824448277 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:46 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8978 ratio=0.274
+2026/10/06 13:50:46 treedb: value-log dict published class=single_value dict_id=9347946059280500992 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:50 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=9004 ratio=0.274
+2026/10/06 13:50:50 treedb: value-log dict published class=single_value dict_id=5320304827770327751 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:50:58 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8980 ratio=0.274
+2026/10/06 13:50:58 treedb: value-log dict published class=single_value dict_id=6648314707142966349 k=32 payload_ratio=0.012 total_ratio=0.150
+2026/10/06 13:51:07 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8968 ratio=0.273
+2026/10/06 13:51:07 treedb: value-log dict published class=single_value dict_id=2447803558359813860 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:51:16 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8985 ratio=0.274
+2026/10/06 13:51:16 treedb: value-log dict published class=single_value dict_id=4638719242895428882 k=32 payload_ratio=0.009 total_ratio=0.147
+2026/10/06 13:51:25 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8962 ratio=0.273
+2026/10/06 13:51:25 treedb: value-log dict published class=single_value dict_id=11566017145926032465 k=32 payload_ratio=0.010 total_ratio=0.148
+2026/10/06 13:51:28 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8967 ratio=0.273
+2026/10/06 13:51:28 treedb: value-log dict published class=single_value dict_id=12386384684828621025 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:51:30 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8977 ratio=0.274
+2026/10/06 13:51:30 treedb: value-log dict published class=single_value dict_id=4388638453419818666 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:51:33 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8962 ratio=0.273
+2026/10/06 13:51:33 treedb: value-log dict published class=single_value dict_id=10850888256092487082 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:51:36 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8959 ratio=0.273
+2026/10/06 13:51:36 treedb: value-log dict published class=single_value dict_id=9215373783987083482 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:51:41 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8962 ratio=0.273
+2026/10/06 13:51:41 treedb: value-log dict published class=single_value dict_id=4663519764345093467 k=32 payload_ratio=0.011 total_ratio=0.150
+2026/10/06 13:51:45 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32784 stored=8906 ratio=0.272
+2026/10/06 13:51:45 treedb: value-log dict published class=single_value dict_id=1029502003198519914 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:51:50 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8964 ratio=0.273
+2026/10/06 13:51:50 treedb: value-log dict published class=single_value dict_id=3284051388450767186 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:51:54 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32784 stored=8917 ratio=0.272
+2026/10/06 13:51:54 treedb: value-log dict published class=single_value dict_id=2368907734613636408 k=32 payload_ratio=0.010 total_ratio=0.148
+2026/10/06 13:51:58 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8974 ratio=0.273
+2026/10/06 13:51:58 treedb: value-log dict published class=single_value dict_id=14245168451696547626 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:52:01 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8980 ratio=0.274
+2026/10/06 13:52:01 treedb: value-log dict published class=single_value dict_id=9711086787185345404 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:52:04 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8985 ratio=0.274
+2026/10/06 13:52:04 treedb: value-log dict published class=single_value dict_id=12255491427265519903 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:52:08 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8958 ratio=0.273
+2026/10/06 13:52:08 treedb: value-log dict published class=single_value dict_id=16192741602043280998 k=32 payload_ratio=0.010 total_ratio=0.148
+2026/10/06 13:52:16 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8975 ratio=0.274
+2026/10/06 13:52:16 treedb: value-log dict published class=single_value dict_id=7113905697818134321 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:52:24 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32786 stored=8941 ratio=0.273
+2026/10/06 13:52:24 treedb: value-log dict published class=single_value dict_id=3581993485331574898 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:52:33 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8948 ratio=0.273
+2026/10/06 13:52:33 treedb: value-log dict published class=single_value dict_id=16856968911053188975 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:52:41 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8989 ratio=0.274
+2026/10/06 13:52:41 treedb: value-log dict published class=single_value dict_id=2628694910416245606 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:52:43 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8970 ratio=0.273
+2026/10/06 13:52:43 treedb: value-log dict published class=single_value dict_id=17685013637367882894 k=32 payload_ratio=0.010 total_ratio=0.148
+2026/10/06 13:52:46 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8986 ratio=0.274
+2026/10/06 13:52:46 treedb: value-log dict published class=single_value dict_id=1121724133166486117 k=32 payload_ratio=0.009 total_ratio=0.147
+2026/10/06 13:52:49 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8968 ratio=0.273
+2026/10/06 13:52:49 treedb: value-log dict published class=single_value dict_id=7090243330743832618 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:52:52 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8965 ratio=0.273
+2026/10/06 13:52:52 treedb: value-log dict published class=single_value dict_id=11313194944350940681 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:52:56 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32799 stored=8985 ratio=0.274
+2026/10/06 13:52:57 treedb: value-log dict published class=single_value dict_id=11486913790520979564 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:53:01 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8961 ratio=0.273
+2026/10/06 13:53:01 treedb: value-log dict published class=single_value dict_id=16569703616083070237 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:05 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32786 stored=8912 ratio=0.272
+2026/10/06 13:53:05 treedb: value-log dict published class=single_value dict_id=7081580701265992010 k=32 payload_ratio=0.009 total_ratio=0.147
+2026/10/06 13:53:10 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32786 stored=8896 ratio=0.271
+2026/10/06 13:53:10 treedb: value-log dict published class=single_value dict_id=11944102801994062990 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:53:13 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8989 ratio=0.274
+2026/10/06 13:53:13 treedb: value-log dict published class=single_value dict_id=6808836796716056274 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:16 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8987 ratio=0.274
+2026/10/06 13:53:16 treedb: value-log dict published class=single_value dict_id=3947839180350132579 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:20 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8966 ratio=0.273
+2026/10/06 13:53:20 treedb: value-log dict published class=single_value dict_id=6902611340053311199 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:23 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8951 ratio=0.273
+2026/10/06 13:53:23 treedb: value-log dict published class=single_value dict_id=1814666865865721747 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:53:31 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8932 ratio=0.272
+2026/10/06 13:53:31 treedb: value-log dict published class=single_value dict_id=16069826017562194473 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:53:38 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8979 ratio=0.274
+2026/10/06 13:53:38 treedb: value-log dict published class=single_value dict_id=11053873727396114013 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:46 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8960 ratio=0.273
+2026/10/06 13:53:46 treedb: value-log dict published class=single_value dict_id=14677702918953537170 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:54 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8985 ratio=0.274
+2026/10/06 13:53:54 treedb: value-log dict published class=single_value dict_id=10733972348564658677 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:57 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8977 ratio=0.274
+2026/10/06 13:53:57 treedb: value-log dict published class=single_value dict_id=12881824374027757351 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:53:59 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8961 ratio=0.273
+2026/10/06 13:53:59 treedb: value-log dict published class=single_value dict_id=1188660169247534942 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:54:02 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8949 ratio=0.273
+2026/10/06 13:54:03 treedb: value-log dict published class=single_value dict_id=17335393257921093681 k=32 payload_ratio=0.011 total_ratio=0.150
+2026/10/06 13:54:05 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8985 ratio=0.274
+2026/10/06 13:54:06 treedb: value-log dict published class=single_value dict_id=15163887869445231785 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:54:10 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32786 stored=8894 ratio=0.271
+2026/10/06 13:54:10 treedb: value-log dict published class=single_value dict_id=16409111343799131267 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:54:14 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8990 ratio=0.274
+2026/10/06 13:54:14 treedb: value-log dict published class=single_value dict_id=2747460307377147755 k=32 payload_ratio=0.012 total_ratio=0.151
+2026/10/06 13:54:19 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8955 ratio=0.273
+2026/10/06 13:54:19 treedb: value-log dict published class=single_value dict_id=9339665487922431638 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:54:23 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8982 ratio=0.274
+2026/10/06 13:54:23 treedb: value-log dict published class=single_value dict_id=647677194490381086 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:54:26 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8967 ratio=0.273
+2026/10/06 13:54:26 treedb: value-log dict published class=single_value dict_id=5258544614205425477 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:54:30 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8962 ratio=0.273
+2026/10/06 13:54:30 treedb: value-log dict published class=single_value dict_id=15286012367303131087 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:54:33 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8989 ratio=0.274
+2026/10/06 13:54:33 treedb: value-log dict published class=single_value dict_id=8378907169408415019 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:54:37 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8977 ratio=0.274
+2026/10/06 13:54:37 treedb: value-log dict published class=single_value dict_id=15010857668770340519 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:54:44 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8925 ratio=0.272
+2026/10/06 13:54:44 treedb: value-log dict published class=single_value dict_id=14574028617982530190 k=32 payload_ratio=0.010 total_ratio=0.148
+2026/10/06 13:54:52 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8960 ratio=0.273
+2026/10/06 13:54:52 treedb: value-log dict published class=single_value dict_id=4285268370681317268 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:54:59 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8951 ratio=0.273
+2026/10/06 13:54:59 treedb: value-log dict published class=single_value dict_id=5425921989586834682 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:07 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8966 ratio=0.273
+2026/10/06 13:55:07 treedb: value-log dict published class=single_value dict_id=12263084987943184355 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:10 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8962 ratio=0.273
+2026/10/06 13:55:10 treedb: value-log dict published class=single_value dict_id=9026493582806844898 k=32 payload_ratio=0.011 total_ratio=0.150
+2026/10/06 13:55:13 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8978 ratio=0.274
+2026/10/06 13:55:13 treedb: value-log dict published class=single_value dict_id=3175762302793255898 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:16 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8976 ratio=0.274
+2026/10/06 13:55:16 treedb: value-log dict published class=single_value dict_id=16021284456469875725 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:19 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8961 ratio=0.273
+2026/10/06 13:55:19 treedb: value-log dict published class=single_value dict_id=2560008891621089159 k=32 payload_ratio=0.012 total_ratio=0.151
+2026/10/06 13:55:23 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8980 ratio=0.274
+2026/10/06 13:55:23 treedb: value-log dict published class=single_value dict_id=8283586630840067204 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:28 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8951 ratio=0.273
+2026/10/06 13:55:28 treedb: value-log dict published class=single_value dict_id=17912368367510812120 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:32 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32786 stored=8897 ratio=0.271
+2026/10/06 13:55:32 treedb: value-log dict published class=single_value dict_id=11335936760231078252 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:37 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8968 ratio=0.273
+2026/10/06 13:55:37 treedb: value-log dict published class=single_value dict_id=15472974778341680675 k=32 payload_ratio=0.011 total_ratio=0.149
+2026/10/06 13:55:40 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8989 ratio=0.274
+2026/10/06 13:55:41 treedb: value-log dict published class=single_value dict_id=5775981222151153020 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:44 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32801 stored=8941 ratio=0.273
+2026/10/06 13:55:44 treedb: value-log dict published class=single_value dict_id=13887938904837240433 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:47 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8963 ratio=0.273
+2026/10/06 13:55:47 treedb: value-log dict published class=single_value dict_id=9863673735038325109 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:55:51 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8972 ratio=0.273
+2026/10/06 13:55:51 treedb: value-log dict published class=single_value dict_id=6536080151736714199 k=32 payload_ratio=0.010 total_ratio=0.149
+2026/10/06 13:55:58 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8968 ratio=0.273
+2026/10/06 13:55:58 treedb: value-log dict published class=single_value dict_id=15574961445654120781 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:56:06 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8962 ratio=0.273
+2026/10/06 13:56:06 treedb: value-log dict published class=single_value dict_id=15430319949804971171 k=32 payload_ratio=0.009 total_ratio=0.148
+2026/10/06 13:56:13 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=351 raw=32786 stored=8879 ratio=0.271
+2026/10/06 13:56:13 treedb: value-log dict published class=single_value dict_id=5915379558513019874 k=32 payload_ratio=0.009 total_ratio=0.148

@@ -1,0 +1,8 @@
+{
+  "scope": "Add only the actual_main_commit alias used by original root A/C cost decisions to existing source identity whitelist. Every present source field must still equal exact M; no approval/math/packet/receipt fields modified. Executor/template unchanged.",
+  "previous_sha256": "df71ce652147f3a55522e6c00f2a168f57266b66eb454060ce90eb792108c341",
+  "new_sha256": "a79091f4ee3d7f265f8c330c60b2eb01139d658001f46de80cbc096a13d8a79f",
+  "approved": false,
+  "no_execution": true,
+  "reason": "Root original A/C decision schema uses actual_main_commit; original builder only recognizes other exact-source aliases. Preserve original decision bytes rather than reserialize receipts."
+}

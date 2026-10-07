@@ -1,0 +1,226 @@
+[
+  {
+    "expected": {
+      "commit": "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+      "harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb",
+      "runtime_sha256": "0bdca3684ca4de3ddfae5e17b96e910bc7abb86532c48c40087f453df2c1a2c1"
+    },
+    "kind": "comparator",
+    "path": "comparator/baseline/0216e2e",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-baseline-landed-0216e2e",
+    "status": "accepted",
+    "validation": {
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/collection_workload_bench",
+        "r1-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/source.json",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/packet.json"
+      ],
+      "exit_code": 0,
+      "log": "validation.txt"
+    }
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/profile-postgc-7adf81c2",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/profile-postgc-7adf81c2",
+    "status": "rejected"
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/growth-order-1e7882",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/growth-order-1e7882",
+    "status": "rejected"
+  },
+  {
+    "expected": {
+      "commit": "b5663870a110dd9a84a873934815d5b0bcb649cb",
+      "harness_sha256": "ff22c0f82c7220e23aab9793ec177c4cba43e07208096c51edbd99fb9efb0c51",
+      "runtime_sha256": "4d4950757e75266540c795439eb07dee77ce273015fe36b71202cdb0ecf8d396"
+    },
+    "kind": "lifecycle",
+    "path": "rejected/profile-v3-rejected",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/profile-v3-rejected",
+    "status": "rejected"
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/manager-red-c4d49",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/manager-red-c4d49",
+    "status": "rejected"
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/revision-red-a21d5",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/revision-red-a21d5",
+    "status": "rejected"
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/source-guard-mismatch",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/source-guard-mismatch",
+    "status": "rejected"
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/clean-runtime-604",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/clean-runtime-604",
+    "status": "rejected"
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/frozen-validator-12f3bed",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/frozen-validator-12f3bed",
+    "status": "rejected"
+  },
+  {
+    "kind": "lifecycle",
+    "path": "rejected/original-context",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/original-context",
+    "status": "rejected"
+  },
+  {
+    "expected": {
+      "commit": "f95ea1aac407537342214805930c8907775b777f",
+      "harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb",
+      "runtime_sha256": "169793358010070497f6fd19b16da9ea0271c88ddecc91fdb10351aef86e5bb7"
+    },
+    "kind": "comparator",
+    "path": "comparator/historical-candidate/f95ea1a",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-candidate-integration-f95ea1a",
+    "status": "accepted",
+    "validation": {
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-candidate-integration-f95ea1a/collection_workload_bench",
+        "r1-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-candidate-integration-f95ea1a/source.json",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-candidate-integration-f95ea1a/packet.json"
+      ],
+      "exit_code": 0,
+      "log": "validation.txt"
+    }
+  },
+  {
+    "expected": {
+      "commit": "b53e3ae98924085c3d3331dae0d821dd101bf07f",
+      "harness_sha256": "f963bc88ed1df79fae88f5e2a7f34aea3cd3e19f70a368891011fcb73e14065b",
+      "runtime_sha256": "e69d0944e75365c682eac2ff44daee4606d9edc620eacf2438e4845e1f378254"
+    },
+    "kind": "lifecycle",
+    "path": "rejected/actual-size-b53e3ae-physical-growth",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/provisional-lifecycle-size-b53e3ae",
+    "status": "rejected"
+  },
+  {
+    "expected": {
+      "commit": "00d2c370a5907225ff36f82bb92ca3ee0679ea08",
+      "harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb",
+      "runtime_sha256": "53f92a2a08ddb0496e51734686b851790f79027df93e7d5a83d7f1258360248c"
+    },
+    "kind": "comparator",
+    "path": "comparator/final-typed-scope/00d2c370",
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-final-typed-scope-00d2c370",
+    "status": "accepted",
+    "validation": {
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370/collection_workload_bench",
+        "r1-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370/source.json",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370/packet.json"
+      ],
+      "exit_code": 0,
+      "log": "validation.txt"
+    }
+  },
+  {
+    "expected": {
+      "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff"
+    },
+    "kind": "comparator",
+    "path": "comparator/final-actual-M/3325dfe",
+    "root": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/A",
+    "status": "accepted",
+    "validation": {
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/collection_workload_bench",
+        "r1-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-expected-source.json",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/packet.json"
+      ],
+      "exit_code": 0,
+      "log": "original-independent-validation.log"
+    }
+  },
+  {
+    "expected": {
+      "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff"
+    },
+    "kind": "mutation-sweep",
+    "path": "mutation-sweep/final-actual-M/3325dfe",
+    "root": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/C",
+    "status": "accepted",
+    "validation": {
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/collection_workload_bench",
+        "r1-mutation-sweep-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-expected-source.json",
+        "-expected-commit",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "-expected-runtime",
+        "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+        "-expected-harness",
+        "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+        "-expected-landed-tooling-commit",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "-expected-binary-sha256",
+        "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+        "-expected-packet-sha256",
+        "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/packet.json"
+      ],
+      "exit_code": 0,
+      "log": "original-independent-validation.log"
+    }
+  },
+  {
+    "expected": {
+      "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "harness_sha256": "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+      "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff"
+    },
+    "kind": "lifecycle",
+    "path": "lifecycle/final-actual-M/3325dfe",
+    "root": "/home/mikers/gomap-r1-publication-mirror-inputs-M-3325dfe-20261006/D",
+    "status": "accepted",
+    "validation": {
+      "command": [
+        "/usr/bin/python3",
+        "/home/mikers/gomap-r1-final-source-20261006/scripts/r1_lifecycle_validate.py",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/packet.json",
+        "--expected-commit",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "--expected-runtime",
+        "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+        "--expected-harness",
+        "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+        "--expected-landed-tooling-commit",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "--expected-binary-sha256",
+        "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+        "--expected-packet-sha256",
+        "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc"
+      ],
+      "exit_code": 0,
+      "log": "original-independent-validation.log"
+    }
+  }
+]

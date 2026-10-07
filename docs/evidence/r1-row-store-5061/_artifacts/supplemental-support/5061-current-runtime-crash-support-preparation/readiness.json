@@ -1,0 +1,17 @@
+{
+  "schema": "r1-seventh-current-runtime-crash-support-readiness-v1",
+  "status": "PREPARATION_ONLY_ROOT_REVIEW_AND_STAGING_PENDING",
+  "checks": {
+    "all13_original_copies_equal_and_rechecked": true,
+    "review_declared_source_raw_summary_artifact_pins_match": true,
+    "selected_completed_job_fields_equal_review": true,
+    "original_vs_later_jobs_snapshot_drift_explicit": true,
+    "root_adoption_review_pins_match": true,
+    "head_testmerge_tree_equal": true,
+    "normal_and_race_each_27_expected_unique_pass_rows": true,
+    "selected_families_no_fail_or_skip": true,
+    "collections_package_pass_and_all_raw_fail_rows_zero": true,
+    "frozen_six_group_assembler_and_metadata_unchanged": true
+  },
+  "root_next": "Independently verify inventory and scope, then append as separate seventh support group; do not alter frozen six-group assembler or infer E acceptance."
+}

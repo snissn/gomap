@@ -1,0 +1,85 @@
+{
+  "mode": "root-supplied-evidence",
+  "artifact_link_prefix": "../../../../docs/evidence/r1-row-store-5061/_artifacts/",
+  "actual_main": null,
+  "actual_main_tree": null,
+  "landing_receipt": null,
+  "public_replay_receipt": null,
+  "historical_report": {
+    "path": "/private/tmp/gomap-r1-5061-final/TreeDB/docs/evidence/r1-row-store-5061/README.md",
+    "sha256": "e636404bed9bb61be7543428dbc97504bc8511228467cdfab07c21701acfde8b"
+  },
+  "interpretation": {
+    "path": null,
+    "sha256": null
+  },
+  "A_comparison": {
+    "path": null,
+    "sha256": null
+  },
+  "evidence": {
+    "A": {
+      "formatter": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/report-a.py",
+        "sha256": "b2e386b4ec939978b9de1759ff6a2b564abf2afc0ecd136171823302b1fdefa4"
+      },
+      "markdown": {
+        "path": null,
+        "sha256": null
+      },
+      "source_commit": null,
+      "landed_commit": null,
+      "runtime_sha256": null,
+      "harness_sha256": null,
+      "fixture_sha256": null,
+      "config_sha256": null,
+      "binary_sha256": null,
+      "packet_sha256": null,
+      "source_receipt": null,
+      "validation_receipt": null,
+      "decision_receipt": null
+    },
+    "C": {
+      "formatter": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/format.py",
+        "sha256": "52d94e91dcfd696c1d8aaa29f3a39ff0da010e5d238bf10818d802832a66323d"
+      },
+      "markdown": {
+        "path": null,
+        "sha256": null
+      },
+      "source_commit": null,
+      "landed_commit": null,
+      "runtime_sha256": null,
+      "harness_sha256": null,
+      "fixture_sha256": null,
+      "config_sha256": null,
+      "binary_sha256": null,
+      "packet_sha256": null,
+      "source_receipt": null,
+      "validation_receipt": null,
+      "decision_receipt": null
+    },
+    "D": {
+      "formatter": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/format.py",
+        "sha256": "022c45de44e96014de9ef343b639be4abd92189152efd411314b829b54c4da58"
+      },
+      "markdown": {
+        "path": null,
+        "sha256": null
+      },
+      "source_commit": null,
+      "landed_commit": null,
+      "runtime_sha256": null,
+      "harness_sha256": null,
+      "fixture_sha256": null,
+      "config_sha256": null,
+      "binary_sha256": null,
+      "packet_sha256": null,
+      "source_receipt": null,
+      "validation_receipt": null,
+      "decision_receipt": null
+    }
+  }
+}

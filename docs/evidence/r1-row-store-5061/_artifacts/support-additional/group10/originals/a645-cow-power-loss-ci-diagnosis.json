@@ -1,0 +1,897 @@
+{
+  "schema": "r1-cow-modeled-post-meta-ci-diagnosis-v1",
+  "created_utc": "2026-10-06T19:31:13.449129+00:00",
+  "heads": {
+    "main_control": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+    "current_base": "7649857532521db69ff4cdcf236a11377c85ab3d",
+    "failed_candidate": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+    "reviewed_repair": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b"
+  },
+  "original_required_CI": {
+    "run": 37514004072,
+    "job": 112443391460,
+    "job_name": "windows-core-5",
+    "receipt": {
+      "path": "/tmp/gomap-r1-execution-20261005/a645-windows-core5-failure-rest-original.log",
+      "sha256": "ecbc03a8bd0bde5dd36023d4b0ef71a12f45c34a240d83dcb990b8a033a85fba",
+      "bytes": 907496
+    },
+    "parent": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+    "child": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+    "child_elapsed_seconds": 5.9,
+    "selected_child_passes": 35,
+    "selected_child_fails": 1,
+    "selected_child_rows": [
+      {
+        "Time": "2026-10-06T19:20:53.0988689Z",
+        "Action": "run",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "raw_line": 3574
+      },
+      {
+        "Time": "2026-10-06T19:20:53.0988689Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync\n",
+        "raw_line": 3575
+      },
+      {
+        "Time": "2026-10-06T19:20:58.5569551Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Output": "    cow_power_loss_test.go:254: interruption classification err=collectionwal: recovery required: root publication cannot safely progress; reopen required\n",
+        "raw_line": 3576
+      },
+      {
+        "Time": "2026-10-06T19:20:59.0035791Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Output": "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync (5.90s)\n",
+        "raw_line": 3577
+      },
+      {
+        "Time": "2026-10-06T19:20:59.0035791Z",
+        "Action": "fail",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Elapsed": 5.9,
+        "raw_line": 3578
+      }
+    ],
+    "selected_fail_rows": [
+      {
+        "Time": "2026-10-06T19:20:59.0035791Z",
+        "Action": "fail",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Elapsed": 5.9,
+        "raw_line": 3578
+      },
+      {
+        "Time": "2026-10-06T19:22:59.9569855Z",
+        "Action": "fail",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+        "Elapsed": 209.71,
+        "raw_line": 3705
+      }
+    ]
+  },
+  "observed_main_control": {
+    "job": 112387967796,
+    "receipt": {
+      "path": "/tmp/gomap-r1-execution-20261005/main3cfe-windows-core5-original.log",
+      "sha256": "b80088786a734460bf2cb4ba6dcdc7bec579658fdc67cd12eac9d556d8abc869",
+      "bytes": 2023475
+    },
+    "selected_child_rows": [
+      {
+        "Time": "2026-10-06T16:55:18.6739119Z",
+        "Action": "run",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "raw_line": 3559
+      },
+      {
+        "Time": "2026-10-06T16:55:18.6739119Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Output": "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync\n",
+        "raw_line": 3560
+      },
+      {
+        "Time": "2026-10-06T16:55:19.089802Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Output": "    cow_power_loss_test.go:287: actual COW cut=before-meta-sync resource=meta matching_attempts=1 group_acknowledged=true recovered_group=true\n",
+        "raw_line": 3561
+      },
+      {
+        "Time": "2026-10-06T16:55:26.7825275Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Output": "--- PASS: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync (8.11s)\n",
+        "raw_line": 3562
+      },
+      {
+        "Time": "2026-10-06T16:55:26.7825275Z",
+        "Action": "pass",
+        "Package": "github.com/snissn/gomap/TreeDB",
+        "Test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/command_wal_durable/before-meta-sync",
+        "Elapsed": 8.11,
+        "raw_line": 3563
+      }
+    ],
+    "limit": "Observed main child PASS8.11s/one matching meta event/durable ACK/present group; not Windows schedule equivalence or causal unrelatedness."
+  },
+  "verdict": "SUPPORTED_TEST_PHASE_CLASSIFICATION_GAP; EXACT_TWO_FILE_REPAIR_CLEAN; ORIGINAL_REQUIRED_FAIL_UNWAIVED",
+  "conclusion": "BeforeMetaSync is already after the real meta write and is production-classified outcome-ambiguous. Asynchronous publication can poison the handle before a public/checkpoint readiness boundary reports the direct observer cause. Existing fixture recognizes only AfterMetaWrite despite identical post-write classification at BeforeMetaSync and AfterMetaSync. The red log proves a matching cut was captured and the recovery sentinel reached classification; it does not trace which readiness boundary or goroutine interleaving reported it. No product durability regression is established; minimal justified action is the narrowed three-post-write ResourceMeta classification repair with unchanged stable-image/group/ACK oracles and current-head validation.",
+  "phase_contract": [
+    {
+      "point": "BeforeMetaWrite",
+      "resource": "meta",
+      "metaMutated_at_observer_error": false,
+      "recovery_sentinel_without_direct_cut_cause_allowed": false,
+      "reason": "Emit before write and before metaMutated assignment."
+    },
+    {
+      "point": "AfterMetaWrite",
+      "resource": "meta",
+      "metaMutated_at_observer_error": true,
+      "recovery_sentinel_without_direct_cut_cause_allowed": true,
+      "reason": "Meta bytes written; ambiguous publisher poisons handle."
+    },
+    {
+      "point": "BeforeMetaSync",
+      "resource": "meta",
+      "metaMutated_at_observer_error": true,
+      "recovery_sentinel_without_direct_cut_cause_allowed": true,
+      "reason": "Occurs after write, before sync; same ambiguous classification."
+    },
+    {
+      "point": "AfterMetaSync",
+      "resource": "meta",
+      "metaMutated_at_observer_error": true,
+      "recovery_sentinel_without_direct_cut_cause_allowed": true,
+      "reason": "Completed sync observed before injected error; transaction still returns mutated error and runtime poison. Stable-image oracle must require present group."
+    }
+  ],
+  "transaction_function_slice": {
+    "main_control": {
+      "sha256": "a17455419132d8ba45703e4c1b2276e757845711361b204969d7e6e2cc886aa8",
+      "bytes": 2287,
+      "start_line": 1643,
+      "end_line": 1710
+    },
+    "current_base": {
+      "sha256": "a17455419132d8ba45703e4c1b2276e757845711361b204969d7e6e2cc886aa8",
+      "bytes": 2287,
+      "start_line": 1643,
+      "end_line": 1710
+    },
+    "failed_candidate": {
+      "sha256": "a17455419132d8ba45703e4c1b2276e757845711361b204969d7e6e2cc886aa8",
+      "bytes": 2287,
+      "start_line": 1692,
+      "end_line": 1759
+    },
+    "reviewed_repair": {
+      "sha256": "a17455419132d8ba45703e4c1b2276e757845711361b204969d7e6e2cc886aa8",
+      "bytes": 2287,
+      "start_line": 1692,
+      "end_line": 1759
+    }
+  },
+  "source_bindings": [
+    {
+      "path": "TreeDB/cow_power_loss_test.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "d66ebc603f09b4e0d9b5ec2fe51d2b32e6859997",
+          "sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+          "bytes": 10149
+        },
+        "current_base": {
+          "git_blob": "d66ebc603f09b4e0d9b5ec2fe51d2b32e6859997",
+          "sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+          "bytes": 10149
+        },
+        "failed_candidate": {
+          "git_blob": "d66ebc603f09b4e0d9b5ec2fe51d2b32e6859997",
+          "sha256": "f9ef0f2c49ad16be4fb1144ed9a25d9a33167f61e400792d0b0f928d38217ef8",
+          "bytes": 10149
+        },
+        "reviewed_repair": {
+          "git_blob": "c0bfd7c6302f013c2b53225d5b675ff5a7e5b11c",
+          "sha256": "3d5f3a5ad8ee9f32c379cfaf0d4f97f7149f7b847b6cce82678246e845980530",
+          "bytes": 10296
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+          "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+          "bytes": 56252
+        },
+        "current_base": {
+          "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+          "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+          "bytes": 56252
+        },
+        "failed_candidate": {
+          "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+          "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+          "bytes": 56252
+        },
+        "reviewed_repair": {
+          "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+          "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+          "bytes": 56252
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+          "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+          "bytes": 40172
+        },
+        "current_base": {
+          "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+          "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+          "bytes": 40172
+        },
+        "failed_candidate": {
+          "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+          "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+          "bytes": 40172
+        },
+        "reviewed_repair": {
+          "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+          "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+          "bytes": 40172
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/command_wal_raw.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+          "sha256": "15b3e97a4a9ee2e726b013443900d72ef5667d7a71eb9685435d0470163d4db9",
+          "bytes": 117419
+        },
+        "current_base": {
+          "git_blob": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+          "sha256": "15b3e97a4a9ee2e726b013443900d72ef5667d7a71eb9685435d0470163d4db9",
+          "bytes": 117419
+        },
+        "failed_candidate": {
+          "git_blob": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+          "sha256": "15b3e97a4a9ee2e726b013443900d72ef5667d7a71eb9685435d0470163d4db9",
+          "bytes": 117419
+        },
+        "reviewed_repair": {
+          "git_blob": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+          "sha256": "15b3e97a4a9ee2e726b013443900d72ef5667d7a71eb9685435d0470163d4db9",
+          "bytes": 117419
+        }
+      }
+    },
+    {
+      "path": "TreeDB/public.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "682959be85edfb499b0b1c372a08cc0c91118644",
+          "sha256": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+          "bytes": 104307
+        },
+        "current_base": {
+          "git_blob": "682959be85edfb499b0b1c372a08cc0c91118644",
+          "sha256": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+          "bytes": 104307
+        },
+        "failed_candidate": {
+          "git_blob": "682959be85edfb499b0b1c372a08cc0c91118644",
+          "sha256": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+          "bytes": 104307
+        },
+        "reviewed_repair": {
+          "git_blob": "682959be85edfb499b0b1c372a08cc0c91118644",
+          "sha256": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+          "bytes": 104307
+        }
+      }
+    },
+    {
+      "path": "TreeDB/command_wal_public_cached.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "e989f3fe292918fe9431c24a0851b676f3513414",
+          "sha256": "01f9874ef67d733112166f7b12e0e4c8bb03069d400dad1f05f97186be3ef331",
+          "bytes": 51448
+        },
+        "current_base": {
+          "git_blob": "e989f3fe292918fe9431c24a0851b676f3513414",
+          "sha256": "01f9874ef67d733112166f7b12e0e4c8bb03069d400dad1f05f97186be3ef331",
+          "bytes": 51448
+        },
+        "failed_candidate": {
+          "git_blob": "e989f3fe292918fe9431c24a0851b676f3513414",
+          "sha256": "01f9874ef67d733112166f7b12e0e4c8bb03069d400dad1f05f97186be3ef331",
+          "bytes": 51448
+        },
+        "reviewed_repair": {
+          "git_blob": "e989f3fe292918fe9431c24a0851b676f3513414",
+          "sha256": "01f9874ef67d733112166f7b12e0e4c8bb03069d400dad1f05f97186be3ef331",
+          "bytes": 51448
+        }
+      }
+    },
+    {
+      "path": "TreeDB/caching/cow_flush.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036",
+          "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+          "bytes": 7405
+        },
+        "current_base": {
+          "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036",
+          "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+          "bytes": 7405
+        },
+        "failed_candidate": {
+          "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036",
+          "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+          "bytes": 7405
+        },
+        "reviewed_repair": {
+          "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036",
+          "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+          "bytes": 7405
+        }
+      }
+    },
+    {
+      "path": "TreeDB/caching/cow_checkpoint.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+          "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+          "bytes": 6605
+        },
+        "current_base": {
+          "git_blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+          "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+          "bytes": 6605
+        },
+        "failed_candidate": {
+          "git_blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+          "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+          "bytes": 6605
+        },
+        "reviewed_repair": {
+          "git_blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+          "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+          "bytes": 6605
+        }
+      }
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+          "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+          "bytes": 1397560
+        },
+        "current_base": {
+          "git_blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+          "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+          "bytes": 1397560
+        },
+        "failed_candidate": {
+          "git_blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+          "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+          "bytes": 1397560
+        },
+        "reviewed_repair": {
+          "git_blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+          "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+          "bytes": 1397560
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+          "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+          "bytes": 114319
+        },
+        "current_base": {
+          "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+          "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+          "bytes": 114319
+        },
+        "failed_candidate": {
+          "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+          "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+          "bytes": 117323
+        },
+        "reviewed_repair": {
+          "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+          "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+          "bytes": 117323
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/durable_root_open_test.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "179eb8168c96c97c658c241a3977d6251f7035bd",
+          "sha256": "1e9260af83ac40244f9e977f3fc6baed65a5ac6c85b58a9d8239c4a9292a64e8",
+          "bytes": 39137
+        },
+        "current_base": {
+          "git_blob": "179eb8168c96c97c658c241a3977d6251f7035bd",
+          "sha256": "1e9260af83ac40244f9e977f3fc6baed65a5ac6c85b58a9d8239c4a9292a64e8",
+          "bytes": 39137
+        },
+        "failed_candidate": {
+          "git_blob": "179eb8168c96c97c658c241a3977d6251f7035bd",
+          "sha256": "1e9260af83ac40244f9e977f3fc6baed65a5ac6c85b58a9d8239c4a9292a64e8",
+          "bytes": 39137
+        },
+        "reviewed_repair": {
+          "git_blob": "179eb8168c96c97c658c241a3977d6251f7035bd",
+          "sha256": "1e9260af83ac40244f9e977f3fc6baed65a5ac6c85b58a9d8239c4a9292a64e8",
+          "bytes": 39137
+        }
+      }
+    },
+    {
+      "path": "TreeDB/db/api.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "401fcbac8c63d9caf24b5ebf13879782ddae883f",
+          "sha256": "521cec2fca5059f244e7ea55a391accc8ddeccb7274237e5e075ea67e51a8ad6",
+          "bytes": 56651
+        },
+        "current_base": {
+          "git_blob": "401fcbac8c63d9caf24b5ebf13879782ddae883f",
+          "sha256": "521cec2fca5059f244e7ea55a391accc8ddeccb7274237e5e075ea67e51a8ad6",
+          "bytes": 56651
+        },
+        "failed_candidate": {
+          "git_blob": "401fcbac8c63d9caf24b5ebf13879782ddae883f",
+          "sha256": "521cec2fca5059f244e7ea55a391accc8ddeccb7274237e5e075ea67e51a8ad6",
+          "bytes": 56651
+        },
+        "reviewed_repair": {
+          "git_blob": "401fcbac8c63d9caf24b5ebf13879782ddae883f",
+          "sha256": "521cec2fca5059f244e7ea55a391accc8ddeccb7274237e5e075ea67e51a8ad6",
+          "bytes": 56651
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/durabilitycut/durabilitycut.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+          "sha256": "7afdf8e19275b15062b1ce3dc2d7de0e58899b512616584d1189ba3f02ebfdd3",
+          "bytes": 8928
+        },
+        "current_base": {
+          "git_blob": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+          "sha256": "7afdf8e19275b15062b1ce3dc2d7de0e58899b512616584d1189ba3f02ebfdd3",
+          "bytes": 8928
+        },
+        "failed_candidate": {
+          "git_blob": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+          "sha256": "7afdf8e19275b15062b1ce3dc2d7de0e58899b512616584d1189ba3f02ebfdd3",
+          "bytes": 8928
+        },
+        "reviewed_repair": {
+          "git_blob": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+          "sha256": "7afdf8e19275b15062b1ce3dc2d7de0e58899b512616584d1189ba3f02ebfdd3",
+          "bytes": 8928
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/powerlossoracle/evidence.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "6263dec16a184998f4fc0a3e5c14a11ae5e6b4d5",
+          "sha256": "369c4647d480e03733c0fb4327e660f7d5e478c8cd9cf259c05f2bda6e54b51e",
+          "bytes": 14112
+        },
+        "current_base": {
+          "git_blob": "6263dec16a184998f4fc0a3e5c14a11ae5e6b4d5",
+          "sha256": "369c4647d480e03733c0fb4327e660f7d5e478c8cd9cf259c05f2bda6e54b51e",
+          "bytes": 14112
+        },
+        "failed_candidate": {
+          "git_blob": "6263dec16a184998f4fc0a3e5c14a11ae5e6b4d5",
+          "sha256": "369c4647d480e03733c0fb4327e660f7d5e478c8cd9cf259c05f2bda6e54b51e",
+          "bytes": 14112
+        },
+        "reviewed_repair": {
+          "git_blob": "6263dec16a184998f4fc0a3e5c14a11ae5e6b4d5",
+          "sha256": "369c4647d480e03733c0fb4327e660f7d5e478c8cd9cf259c05f2bda6e54b51e",
+          "bytes": 14112
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/powerlossoracle/ledger.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "1d24c53cc08d491b40ec552ee47e94365ac645ba",
+          "sha256": "bcec4c60d720bb9c01b5ee5e39064d18e8563608dcf84aadb664bd743f002a3d",
+          "bytes": 18730
+        },
+        "current_base": {
+          "git_blob": "1d24c53cc08d491b40ec552ee47e94365ac645ba",
+          "sha256": "bcec4c60d720bb9c01b5ee5e39064d18e8563608dcf84aadb664bd743f002a3d",
+          "bytes": 18730
+        },
+        "failed_candidate": {
+          "git_blob": "1d24c53cc08d491b40ec552ee47e94365ac645ba",
+          "sha256": "bcec4c60d720bb9c01b5ee5e39064d18e8563608dcf84aadb664bd743f002a3d",
+          "bytes": 18730
+        },
+        "reviewed_repair": {
+          "git_blob": "1d24c53cc08d491b40ec552ee47e94365ac645ba",
+          "sha256": "bcec4c60d720bb9c01b5ee5e39064d18e8563608dcf84aadb664bd743f002a3d",
+          "bytes": 18730
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/powerlossoracle/model.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "10bad40358231e3f21fb9437813ffb1859e6b5c2",
+          "sha256": "a95d335c22cdaa03f8ecb60741d7cddc252c1381f323f6f4a143f3c42309aaeb",
+          "bytes": 41870
+        },
+        "current_base": {
+          "git_blob": "10bad40358231e3f21fb9437813ffb1859e6b5c2",
+          "sha256": "a95d335c22cdaa03f8ecb60741d7cddc252c1381f323f6f4a143f3c42309aaeb",
+          "bytes": 41870
+        },
+        "failed_candidate": {
+          "git_blob": "10bad40358231e3f21fb9437813ffb1859e6b5c2",
+          "sha256": "a95d335c22cdaa03f8ecb60741d7cddc252c1381f323f6f4a143f3c42309aaeb",
+          "bytes": 41870
+        },
+        "reviewed_repair": {
+          "git_blob": "10bad40358231e3f21fb9437813ffb1859e6b5c2",
+          "sha256": "a95d335c22cdaa03f8ecb60741d7cddc252c1381f323f6f4a143f3c42309aaeb",
+          "bytes": 41870
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/powerlossoracle/scenario.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "4625312e60cad38bfe9c62ed89f64eee4636df8c",
+          "sha256": "653f8e077ee8c89fb21bea7e9032ad0cf256b4b21a66630c26f915d3cedb7bd5",
+          "bytes": 14025
+        },
+        "current_base": {
+          "git_blob": "4625312e60cad38bfe9c62ed89f64eee4636df8c",
+          "sha256": "653f8e077ee8c89fb21bea7e9032ad0cf256b4b21a66630c26f915d3cedb7bd5",
+          "bytes": 14025
+        },
+        "failed_candidate": {
+          "git_blob": "4625312e60cad38bfe9c62ed89f64eee4636df8c",
+          "sha256": "653f8e077ee8c89fb21bea7e9032ad0cf256b4b21a66630c26f915d3cedb7bd5",
+          "bytes": 14025
+        },
+        "reviewed_repair": {
+          "git_blob": "4625312e60cad38bfe9c62ed89f64eee4636df8c",
+          "sha256": "653f8e077ee8c89fb21bea7e9032ad0cf256b4b21a66630c26f915d3cedb7bd5",
+          "bytes": 14025
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/powerlossoracle/variant.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "dd2a96cb0fe9b92373959ac07d786ce22f9cab9e",
+          "sha256": "892ef43c62bb8e8014f0263faf96743b96b8586446787f955d525aac7517027c",
+          "bytes": 16015
+        },
+        "current_base": {
+          "git_blob": "dd2a96cb0fe9b92373959ac07d786ce22f9cab9e",
+          "sha256": "892ef43c62bb8e8014f0263faf96743b96b8586446787f955d525aac7517027c",
+          "bytes": 16015
+        },
+        "failed_candidate": {
+          "git_blob": "dd2a96cb0fe9b92373959ac07d786ce22f9cab9e",
+          "sha256": "892ef43c62bb8e8014f0263faf96743b96b8586446787f955d525aac7517027c",
+          "bytes": 16015
+        },
+        "reviewed_repair": {
+          "git_blob": "dd2a96cb0fe9b92373959ac07d786ce22f9cab9e",
+          "sha256": "892ef43c62bb8e8014f0263faf96743b96b8586446787f955d525aac7517027c",
+          "bytes": 16015
+        }
+      }
+    },
+    {
+      "path": "TreeDB/internal/powerlossreopen/reopen.go",
+      "versions": {
+        "main_control": {
+          "git_blob": "a7646a888ae2473dd241fc291aeaca149b344d0b",
+          "sha256": "c36e595574968b67b752a5cd184763079b0ac8acfc165fbd0e8ee099f920daf7",
+          "bytes": 8833
+        },
+        "current_base": {
+          "git_blob": "a7646a888ae2473dd241fc291aeaca149b344d0b",
+          "sha256": "c36e595574968b67b752a5cd184763079b0ac8acfc165fbd0e8ee099f920daf7",
+          "bytes": 8833
+        },
+        "failed_candidate": {
+          "git_blob": "a7646a888ae2473dd241fc291aeaca149b344d0b",
+          "sha256": "c36e595574968b67b752a5cd184763079b0ac8acfc165fbd0e8ee099f920daf7",
+          "bytes": 8833
+        },
+        "reviewed_repair": {
+          "git_blob": "a7646a888ae2473dd241fc291aeaca149b344d0b",
+          "sha256": "c36e595574968b67b752a5cd184763079b0ac8acfc165fbd0e8ee099f920daf7",
+          "bytes": 8833
+        }
+      }
+    }
+  ],
+  "relevant_source_evidence": [
+    {
+      "path": "TreeDB/cow_power_loss_test.go",
+      "lines": [
+        155,
+        164,
+        176,
+        203,
+        215,
+        240,
+        244,
+        250,
+        258,
+        275,
+        278,
+        281,
+        284
+      ],
+      "finding": "Fixture explicitly uses HotWarmCold successor rotation and exact scoped observer; cut!=nil already proves matching real event, resource is captured from first matching event. Existing meta exception covers only AfterMetaWrite. All reopen/group/ACK oracles occur after classification and were not reached by red child."
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "lines": [
+        1723,
+        1733,
+        1734,
+        1738,
+        1741,
+        1750,
+        1754
+      ],
+      "finding": "Only BeforeMetaWrite is pre-write. AfterMetaWrite, BeforeMetaSync and AfterMetaSync observer failures all return metaMutated=true. Exact storage-transaction function slice is unchanged3cfe/764/a645/aa861 despite rebuilt-index-helper changes elsewhere in this file."
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "lines": [
+        1313,
+        1339,
+        1341,
+        1342,
+        1450,
+        1456,
+        1460
+      ],
+      "finding": "mutated observer error reports PublishAmbiguous, retains cause in runtime poison and stores DB publicationPoisoned before coordinator reporting."
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "lines": [
+        176,
+        545,
+        557
+      ],
+      "finding": "Coordinator runs independently and reports exact active publication attempt after Publish returns; a separate caller can observe the DB poison flag in this interval."
+    },
+    {
+      "path": "TreeDB/db/command_wal_raw.go",
+      "lines": [
+        641,
+        643,
+        648,
+        649,
+        662,
+        663
+      ],
+      "finding": "Poison readiness returns ErrRecoveryRequired with root-publication message and no injected cut cause; exact message matches original failure."
+    },
+    {
+      "path": "TreeDB/public.go",
+      "lines": [
+        607,
+        621,
+        622,
+        2665,
+        2670,
+        2675
+      ],
+      "finding": "Public Checkpoint and other write/batch boundaries consult backend poison readiness before cache operation."
+    },
+    {
+      "path": "TreeDB/command_wal_public_cached.go",
+      "lines": [
+        414,
+        415,
+        418
+      ],
+      "finding": "Checkpoint publication hook uses FlushCommandWAL(true) or CheckCommandWALPublishReady; either can report existing poison instead of direct observer cause."
+    },
+    {
+      "path": "TreeDB/db/durable_root_open_test.go",
+      "lines": [
+        1061,
+        1092,
+        1095,
+        1096,
+        1099,
+        1100
+      ],
+      "finding": "Existing native directory publication cut regression independently specifies BeforeMetaSync as ambiguous with recovery-required denial."
+    }
+  ],
+  "R1_applicability": {
+    "changed_production_paths": [
+      "TreeDB/db/durable_root_runtime.go",
+      "TreeDB/db/leaf_generation_gc.go",
+      "TreeDB/db/leaf_manifest_revision_gc.go",
+      "TreeDB/db/vacuum_online.go",
+      "TreeDB/db/wal_recovery.go",
+      "TreeDB/internal/rootpublication/resource_selector.go",
+      "TreeDB/internal/valuelog/manager.go",
+      "TreeDB/internal/valuelog/stable_resource.go"
+    ],
+    "unchanged_core_path_bindings": "Fixture, public entry/readiness, cached COW flush/checkpoint, command-WAL poison/readiness, root activation and coordinator files are byte-identical to both main3cfe and currentbase764. Shared storage-transaction function byte-identical even though whole durable_root_runtime.go differs.",
+    "direct_limits": "Rebuilt packed projection/leaf physical GC changes are maintenance paths not selected by this checkpoint fixture, which does not enable native outer-leaf layout. WAL replay appender metadata changes are outside pre-classification execution; red child fails before modeled reopen. Manager retry admission/Close/resource release remains a shared lifecycle dependency and can affect timing; unchanged core paths do not prove whole-binary equivalence or unrelatedness."
+  },
+  "repair_review": {
+    "head": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b",
+    "status": "CLEAN",
+    "changed_paths": [
+      ".github/ci/ci_impact.json",
+      "TreeDB/cow_power_loss_test.go"
+    ],
+    "diff_sha256": "bbd6973b314c707e8043057f1f64f43b5614fe3640074af7e5d15cd95fec3c93",
+    "review": "Exactly adds AfterMetaWrite OR BeforeMetaSync OR AfterMetaSync, AND actual captured ResourceMeta, AND errors.Is(ErrRecoveryRequired). Nonnil error required; direct injected cause required for every other cut/resource. No observer/model or reopen/group/durable-ACK/NoWAL/completed-sync oracle changes. No generation/worker/profile change.",
+    "inventory_structurally_equal_except_discovery_digest": true,
+    "inventory_digests": {
+      "failed_candidate": {
+        "digest": "86cc9fdc2c94c3a3c04c5ea7698722362b880aee4f7177cd5a53d6ab4fb82021"
+      },
+      "reviewed_repair": {
+        "digest": "b69c1c70c2d591da3cc3d2a06702b6880b7503b5b614369c75c9d79e0d04c279"
+      }
+    },
+    "runtime_inputs": 1122,
+    "runtime_sha256_before": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+    "runtime_sha256_after": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+    "runtime_maps_equal": true,
+    "A_C_harness_sha256_before": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "A_C_harness_sha256_after": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "A_C_harness_blobs_equal": true,
+    "A_C_harness_bindings": {
+      "cmd/collection_workload_bench/main.go": {
+        "git_blob": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+        "sha256": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+        "bytes": 41537
+      },
+      "cmd/collection_workload_bench/r1.go": {
+        "git_blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+        "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+        "bytes": 43896
+      },
+      "cmd/collection_workload_bench/r1_mutation_sweep.go": {
+        "git_blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+        "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+        "bytes": 19159
+      },
+      "cmd/collection_workload_bench/r1_sqlite.go": {
+        "git_blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+        "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+        "bytes": 10041
+      },
+      "scripts/r1_collection_capture.sh": {
+        "git_blob": "abc2008715641c2133fe8958295913782f42c5a3",
+        "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+        "bytes": 3171
+      },
+      "scripts/r1_collection_summary.py": {
+        "git_blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+        "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+        "bytes": 2159
+      },
+      "scripts/r1_collection_source.py": {
+        "git_blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+        "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+        "bytes": 1994
+      }
+    },
+    "D_unchanged_bindings": [
+      {
+        "path": "scripts/r1_lifecycle_capture.py",
+        "before": {
+          "git_blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+          "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+          "bytes": 10594
+        },
+        "after": {
+          "git_blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+          "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+          "bytes": 10594
+        }
+      },
+      {
+        "path": "scripts/r1_lifecycle_validate.py",
+        "before": {
+          "git_blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+          "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+          "bytes": 61009
+        },
+        "after": {
+          "git_blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+          "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+          "bytes": 61009
+        }
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+        "before": {
+          "git_blob": "f95143eff5ca5cf0d7e9d5434088ac23ea84aa33",
+          "sha256": "1c0d069fafe30ad63bf495154dbdb8e73167ef0215c9ed945bf013a93158d7d7",
+          "bytes": 19406
+        },
+        "after": {
+          "git_blob": "f95143eff5ca5cf0d7e9d5434088ac23ea84aa33",
+          "sha256": "1c0d069fafe30ad63bf495154dbdb8e73167ef0215c9ed945bf013a93158d7d7",
+          "bytes": 19406
+        }
+      }
+    ],
+    "existing_correctness": "Previously reviewed R1 114/additive51 normal/race proofs remain applicable; two-file repair changes public modeled cut fixture outside those selected package scopes. Event source labels stay historical.",
+    "pending": "Root-owned whole public modeled fixture normal/race/vet and repaired-head required CI; no results inferred. Planned exact-landed A/C/D still require actual landing/build/environment/capture/noise acceptance."
+  },
+  "limits": [
+    "No Go/build/test/capture/GitHub/CI action, polling, source write or delegation by reviewer.",
+    "Original red/main logs unchanged and hashed; no retry/threshold change or CI waiver.",
+    "Original precise publisher/readiness/background owner schedule is not retained; supported contract diagnosis is not event-level causal proof.",
+    "Generation Off is not recommended for this fixture: explicit successor segment generation is required for real dependency-name cut coverage.",
+    "Current-head local/CI PASS, landing, binary equivalence, performance/capacity or retained packet acceptance not asserted."
+  ]
+}

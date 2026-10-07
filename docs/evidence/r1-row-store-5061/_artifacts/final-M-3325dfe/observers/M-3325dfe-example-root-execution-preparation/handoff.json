@@ -1,0 +1,60 @@
+{
+  "checks": {
+    "actual_M_example_inputs_inspected_via_local_Git_objects": {
+      "examples/typed_rows/README.md": {
+        "blob": "a268b790e245aecc77712ee82e04be19cc564b27",
+        "bytes": 2337,
+        "sha256": "4f8d6a29461e5f848a8c71119f6454cfff0a0a48d65c26041631342aabce90e0"
+      },
+      "examples/typed_rows/main.go": {
+        "blob": "f54a456e2d16bbb78cfc637d80f8b6b48410c563",
+        "bytes": 9653,
+        "sha256": "593786d47dfb761ad7b60f6ef344f396e5c33281cdf3f41176d59a13f0f44f2f"
+      }
+    },
+    "ast_parse": "PASS",
+    "imports": [
+      "argparse",
+      "datetime",
+      "hashlib",
+      "json",
+      "os",
+      "pathlib",
+      "subprocess",
+      "sys"
+    ],
+    "later_original_go_commands": [
+      "observed([cfg['real_go'], 'vet', './examples/typed_rows'], 'vet', environment)",
+      "observed([cfg['real_go'], 'run', './examples/typed_rows', '-dir', str(dbdir)], 'example', environment)",
+      "observed([cfg['real_go'], 'version'], 'go-version', environment)"
+    ],
+    "method": "STATIC AST ONLY; helper and Go commands never executed",
+    "no_actual_remote_configuration_or_results_observed": true,
+    "runtime_behavior_tested": false,
+    "subprocess_call_sites": [
+      "subprocess.check_output(['git', '-C', str(REPO), *args])",
+      "subprocess.check_output(['git', '-C', str(REPO), 'cat-file', '--batch'], input=('\\n'.join(ids) + '\\n').encode())",
+      "subprocess.call(command, cwd=REPO, env=environment, stdout=out, stderr=err)"
+    ]
+  },
+  "files": {
+    "handoff.md": {
+      "bytes": 3894,
+      "sha256": "11157c057415ff0287eb9917897dafead67c763e9150082c9c8478a0ad67f21a"
+    },
+    "run-example.py": {
+      "bytes": 11454,
+      "sha256": "4f48ca71d65c058e3fe2cb071120af1707a1b6332c6a4f41597267ec5669ce77"
+    },
+    "static-checks.json": {
+      "bytes": 1415,
+      "sha256": "728eb529268fb08fe64af59713862e6cba7cd0d33226e7c945d71f36270e863a"
+    }
+  },
+  "numeric_acceptance_separate": true,
+  "output": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example",
+  "required_absolute_new_db_child": "db",
+  "required_ordering": "root invokes AFTER D under externally held canonical111 flock",
+  "source_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "state": "PRIVATE_PREPARATION_ONLY_ROOT_REVIEW_AND_LATER_EXECUTION_PENDING"
+}

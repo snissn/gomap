@@ -1,0 +1,11 @@
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:TreeDB/cmd/treedb_rag_benchmark/application_runner.go:389:			return "", fmt.Errorf("provenance: final evidence binary is not bound to a full debug.ReadBuildInfo vcs.revision")
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:TreeDB/cmd/treedb_rag_benchmark/application_runner.go:2107:	info, ok := debug.ReadBuildInfo()
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:TreeDB/cmd/treedb_rag_benchmark/main.go:21:		harnessSHA           = flag.String("harness-revision", "", "expected exact debug.ReadBuildInfo vcs.revision (must match the clean final binary)")
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:TreeDB/cmd/treedb_rag_benchmark/minima_measured.go:306:	info, ok := debug.ReadBuildInfo()
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:TreeDB/cmd/treedb_rag_interleave/main.go:250:	info, ok := debug.ReadBuildInfo()
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:benchmarks/text_hybrid_scoreboard/treedb_adapter/main.go:399:	if info, ok := debug.ReadBuildInfo(); ok {
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:benchmarks/text_hybrid_scoreboard/treedb_adapter/main.go:400:		return info.Main.Version
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:cmd/treedb-fixed-peer/main.go:46:	if build, ok := debug.ReadBuildInfo(); ok {
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:cmd/treedb_text_hybrid_scale/main.go:2217:	buildInfo, _ := debug.ReadBuildInfo()
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:cmd/treedb_vector_partition_bench/m8_qualification_campaign.go:6:	"debug/buildinfo"
+3325dfe77940fec8587d8b61b1ac4e0b2f72caca:cmd/treedb_vector_partition_bench/system_node.go:951:	info, ok := debug.ReadBuildInfo()

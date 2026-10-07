@@ -1,0 +1,43 @@
+{
+  "utc": "2026-10-06T18:24:01.914632+00:00",
+  "candidate": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "independent_reviews": "CLEAN scoped runtime integration and nine-file C integration",
+  "focused_tests": "PASS normal/race/vet; raw original source identities retained",
+  "canonical_tests": "58 on8506, 36 affected inventory/impact checks onebe414; unchanged contracts apply",
+  "acceptance": "MATURE_FOR_CURRENT_HEAD_CI_AND_HOSTED_REVIEW",
+  "remaining_gates": [
+    "current-head required CI",
+    "current-head hosted review and threads",
+    "normal protected merge",
+    "actual-landed A/C/D capture and independent validation",
+    "artifact-first E public replay and acceptance"
+  ],
+  "pins": [
+    {
+      "path": "new-main-source-applicability-review.md",
+      "sha256": "bae76390be34c984ec8756c5e50f159543b7abc26fba8193ae91a15249513740"
+    },
+    {
+      "path": "new-main-source-applicability-review.json",
+      "sha256": "055bbc9ecc7c72cb20ad73ea696bb3de50f0ea6a48be27024b550f22b368bfa6"
+    },
+    {
+      "path": "5071-consolidated-C-review.md",
+      "sha256": "5de15b621c0b35fde9922ea796205eea9331c37378a58a5907ed06ba00e515a4"
+    },
+    {
+      "path": "5071-consolidated-C-review.json",
+      "sha256": "9c0c965a3a638cbacf34a3ffd75e8538f8374a5857e1638f62ed4c35824fb85e"
+    },
+    {
+      "path": "8506-focused-validation-root-review.json",
+      "sha256": "f6beed1cbe170ade2a4ac785c1bb60b55eceb82933fdfa9bd0fe2505b00a1547"
+    },
+    {
+      "path": "ebe414-additive-validation-root-review.json",
+      "sha256": "a1cc50a49e54d43cd3ceb0e7db85e3e66efbec271a0f2ba46985c3b92964d45f"
+    }
+  ]
+}
