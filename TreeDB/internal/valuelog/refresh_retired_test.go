@@ -3,7 +3,6 @@ package valuelog
 import (
 	"bytes"
 	"errors"
-	"os"
 	"path/filepath"
 	"testing"
 
