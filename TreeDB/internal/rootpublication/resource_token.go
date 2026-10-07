@@ -1431,6 +1431,16 @@ func OpenStableParent(path string) (*os.File, error) {
 	return openStableParent(path)
 }
 
+// OpenStableParentForRetention preserves the same exact physical opening as
+// OpenStableParent, with a fixed diagnostic Name so retained metadata has a
+// path-independent byte bound. The Name is never namespace authority.
+func OpenStableParentForRetention(path string) (*os.File, error) {
+	if path == "" {
+		return nil, fmt.Errorf("%w: stable parent path is empty", ErrUnresolvedResource)
+	}
+	return openStableParentNamed(path, "stable-retirement-parent")
+}
+
 // EnsureStableChildDirectory opens or creates name relative to the exact
 // already-open parent and establishes the child link's namespace durability
 // before returning it. The returned handle is the authority for constructing

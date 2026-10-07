@@ -525,7 +525,9 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 			return base, err
 		}
 		defer snap.close()
-		return snap.snapshot.GetAppend(key, base)
+		// This private capture has one synchronous owner; pins remain held until
+		// deferred close, so the owned append needs no exported Snapshot guard.
+		return snap.snapshot.tree.GetAppend(key, base)
 	}
 
 	retryEpoch := db.readRetryRefreshEpoch.Load()
@@ -556,7 +558,9 @@ func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, e
 			return base, page.LegacyEntryRevision, err
 		}
 		defer snap.close()
-		return snap.snapshot.GetVersionedAppend(key, base)
+		// This private capture has one synchronous owner; pins remain held until
+		// deferred close, so the owned append needs no exported Snapshot guard.
+		return snap.snapshot.tree.GetVersionedAppend(key, base)
 	}
 
 	retryEpoch := db.readRetryRefreshEpoch.Load()
