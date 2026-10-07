@@ -129,6 +129,13 @@ before closing tracked resources. Concurrent and repeated closes observe the
 same completion and error. Stable identity pins still prohibit deletion;
 shutdown does not bypass the gate or reclaim a pinned segment.
 
+Directory refresh leaves a tracked zombie at its original path under that
+retirement owner's control. The handle may already be closed while unlink or
+an owned retry is pending; refresh neither inspects that closed handle nor
+reopens the segment. Current snapshots continue to exclude the zombie, while
+new live segments are still discovered. A conflicting path for the same file
+ID remains an error.
+
 ### 2.2 External-version logical pruning is not segment GC
 
 `TreeDB/mvcc.PruneVersions` deletes obsolete physical index keys only after its
