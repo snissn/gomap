@@ -266,7 +266,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		_ = d.Close()
 		return err
 	}
-	if !outputHasLeafLogRefs {
+	if !outputHasLeafLogRefs && !d.ownedLeafManifests {
 		if err := writeLeafGenerationResetPendingAfterOfflineVacuum(opts.Dir); err != nil {
 			_ = newPager.Close()
 			_ = d.Close()
@@ -274,6 +274,16 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		}
 	}
 
+	if d.ownedLeafManifests && stagedLeafManifest != nil {
+		root, err := stageRebuiltOwnedLeafManifest(newPager, meta.SystemRootPageID, stagedLeafManifest)
+		if err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return err
+		}
+		meta.SystemRootPageID = root
+		meta.TotalPages = newPager.PageCount()
+	}
 	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
 		_ = newPager.Close()
 		_ = d.Close()

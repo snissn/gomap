@@ -612,6 +612,7 @@ type DB struct {
 	durableRootDirectoryRecordsEncoded atomic.Uint64
 	durableRootDirectoryPagesWritten   atomic.Uint64
 
+	ownedLeafManifests                 bool
 	dependencyDirectoryRequiredFeature bool
 
 	commandWALStatsMu                sync.Mutex
@@ -1323,6 +1324,9 @@ type Options struct {
 	// When enabled, internal nodes store encoded value-log pointers for leaf
 	// children. This is pre-alpha and changes on-disk format/assumptions.
 	IndexOuterLeavesInValueLog bool
+	// OwnedLeafManifests opts a new store into pager-owned manifest history.
+	// TreeDB exclusively owns index writes; external index mutation is unsupported.
+	OwnedLeafManifests bool
 	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
 	// encoding flags using deterministic heuristics from key/value shape.
 	//
@@ -2126,6 +2130,7 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 
 // Open opens the database.
 func Open(opts Options) (*DB, error) {
+	requestedOwned := opts.OwnedLeafManifests
 	if opts.NegativeLookupFilterBytes < 0 || opts.NegativeLookupFilterBytes > 64<<20 || (opts.NegativeLookupFilterBytes > 0 && opts.NegativeLookupFilterBytes < 8) {
 		return nil, errors.New("negative lookup filter budget must be zero or 8 bytes through 64 MiB")
 	}
@@ -2148,6 +2153,14 @@ func Open(opts Options) (*DB, error) {
 			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
+	}
+	ownedFeature, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureOwnedLeafManifestV1)
+	if err != nil {
+		return nil, err
+	}
+	opts.OwnedLeafManifests = requestedOwned || opts.OwnedLeafManifests || ownedFeature
+	if opts.OwnedLeafManifests && !opts.IndexOuterLeavesInValueLog {
+		return nil, errors.New("owned leaf manifests require outer leaves")
 	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = defaultChunkSize
@@ -2229,6 +2242,12 @@ func Open(opts Options) (*DB, error) {
 	lock, err := lockfile.Acquire(filepath.Join(opts.Dir, "LOCK"))
 	if err != nil {
 		return nil, err
+	}
+	if opts.OwnedLeafManifests && !ownedFeature {
+		if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil {
+			_ = lock.Close()
+			return nil, err
+		}
 	}
 	db, err := openWithLock(opts, lock)
 	if err != nil {
@@ -2438,6 +2457,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
+		ownedLeafManifests:                 opts.OwnedLeafManifests,
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
@@ -3329,6 +3349,9 @@ func (db *DB) recover() error {
 		}
 	}()
 	for _, record := range selected.SlotRecords {
+		if record.CommitSeq != 0 && record.OwnedLeafManifest != db.ownedLeafManifests {
+			return fmt.Errorf("%w: owned leaf manifest feature and physical root disagree", ErrLegacyFormatRebuildRequired)
+		}
 		if record.CommitSeq != 0 && (record.Directory.RootPageID != 0) != db.dependencyDirectoryRequiredFeature {
 			return fmt.Errorf("%w: dependency_directory_v2 feature and persisted root disagree; rebuild required", ErrLegacyFormatRebuildRequired)
 		}
@@ -3336,6 +3359,9 @@ func (db *DB) recover() error {
 	p.SetPageCount(selected.Record.TotalPages)
 	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
 		return fmt.Errorf("enable recovered COW freelist: %w", err)
+	}
+	if db.ownedLeafManifests {
+		idx.allocator.EnableBoundedPruneV1()
 	}
 	db.installDurableRootSelectionV1(selected)
 	selectionInstalled = true
@@ -3528,6 +3554,19 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if idx == nil {
 		return post, errors.New("missing index")
 	}
+	if db.ownedLeafManifests {
+		var ownedRetired []uint64
+		var err error
+		db.mu.RLock()
+		ownedPublicationSeq := db.meta.CommitSeq + 1
+		db.mu.RUnlock()
+		sysRootID, ownedRetired, leafManifest, leafManifestRawFileIDs, err = db.stageOwnedLeafManifestForCommit(idx, sysRootID, leafManifest, leafManifestRawFileIDs, ownedPublicationSeq, opts.preparedLimits)
+		if err != nil {
+			return post, prePublishErr(err)
+		}
+		retired = append(retired, ownedRetired...)
+		opts.leafManifestAlreadyPersistent = true
+	}
 	valueLogAppender := db.currentValueLogAppender()
 
 	debugTiming := commitTimingEnabled()
@@ -3709,13 +3748,16 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	var leafGenerationView *leafGenerationView
 	if leafManifest != nil {
 		db.leafGenerationManifest = leafManifest
+		if db.ownedLeafManifests {
+			db.clearLeafGenerationPendingFileIDs(leafManifestRawFileIDs)
+		}
 		post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
-		post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent
+		post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent && !db.ownedLeafManifests
 		post.persistLeafGenerationManifestView = leafManifest
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if db.leafPageLog != nil && !db.ownedLeafManifests {
 		stagedLeafManifest, err := db.stagedLeafGenerationManifestWithPendingResult(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
@@ -3758,7 +3800,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	db.publishSnapshotView(idx, newState, db.valueLogManager, opts.negativeCoverage)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
-	if db.leafPageLog != nil && len(post.clearLeafGenerationPendingFileIDs) == 0 {
+	if db.leafPageLog != nil && !db.ownedLeafManifests && len(post.clearLeafGenerationPendingFileIDs) == 0 {
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()

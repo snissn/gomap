@@ -192,6 +192,7 @@ type FreelistTxn struct {
 	consumed         bool
 	changedChunks    map[uint64]struct{}
 	replacedMetadata map[uint64]struct{}
+	pruneCursor      uint64 // scheduling only; never reuse authority
 	stats            FreelistTxnStats
 }
 

@@ -1364,6 +1364,21 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 		if hook := db.vacuumPagerSyncHook; hook != nil {
 			hook(vacuumPagerSyncFinal)
 		}
+		if db.ownedLeafManifests && stagedLeafGenerationView != nil {
+			root, ownedErr := stageRebuiltOwnedLeafManifest(newPager, nextMeta.SystemRootPageID, stagedLeafGenerationView.sourceManifest)
+			if ownedErr != nil {
+				cleanupNewPager()
+				return ownedErr
+			}
+			nextMeta.SystemRootPageID = root
+			nextMeta.TotalPages = newPager.PageCount()
+			manifest, ownedErr := loadOwnedLeafManifest(newPager, root, nextMeta.TotalPages)
+			if ownedErr != nil {
+				cleanupNewPager()
+				return ownedErr
+			}
+			stagedLeafGenerationView = newLeafGenerationView(manifest)
+		}
 		finalSyncStarted := time.Now()
 		var finalSyncErr error
 		if olderReplacement != nil {

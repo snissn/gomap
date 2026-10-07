@@ -27,6 +27,53 @@ func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGC
 	if err := db.admitLeafGenerationMaintenance(ctx, opts.MaintenanceLimits); err != nil {
 		return err
 	}
+	if db.ownedLeafManifests {
+		if opts.DryRun {
+			return nil
+		}
+		roots, err := db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { roots.Release() }()
+		stats.OwnedManifestIntrinsicWork.RootCaptures++
+		certificate := &ownedManifestPruneCertificate{roots: roots}
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			step, err := db.pruneOwnedLeafManifestStepWithCapturedRoots(ctx, certificate)
+			stats.OwnedManifestIntrinsicWork.Add(step.Intrinsic)
+			if errors.Is(err, ErrRecoverableRootSetStale) {
+				roots.Release()
+				roots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)
+				if err != nil {
+					return err
+				}
+				stats.OwnedManifestIntrinsicWork.RootCaptures++
+				certificate = &ownedManifestPruneCertificate{roots: roots}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			work := &stats.OwnedManifestPruneWork
+			work.NodeVisits += step.Work.NodeVisits
+			work.EntriesExamined += step.Work.EntriesExamined
+			work.PromotedPages += step.Work.PromotedPages
+			work.MutationPaths += step.Work.MutationPaths
+			work.MutationItems += step.Work.MutationItems
+			work.PageCredits += step.Work.PageCredits
+			work.ByteCredits += step.Work.ByteCredits
+			work.Wrapped = step.Work.Wrapped
+			stats.OwnedManifestPagesRetired = step.RetiredPages
+			stats.OwnedManifestPagesPromoted += step.Work.PromotedPages
+			stats.OwnedManifestIndexHighWaterPages = step.IndexHighWaterPages
+			if step.Work.Wrapped {
+				return nil
+			}
+		}
+	}
 	// Compatibility stores cannot mint immutable revision authority. Preserve
 	// the lawful segment phase without requiring a stable revision capture.
 	if db.leafGenerationManifestStore == nil {

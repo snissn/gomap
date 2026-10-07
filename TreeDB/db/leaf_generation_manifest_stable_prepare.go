@@ -18,6 +18,10 @@ func (db *DB) loadSelectedDurableLeafGenerationManifest() (*leafGenerationManife
 	if db == nil || db.durableRoot.slot > 1 {
 		return nil, false, nil
 	}
+	if db.ownedLeafManifests {
+		m, err := loadOwnedLeafManifest(db.idx.Load().pager, db.meta.SystemRootPageID, db.meta.TotalPages)
+		return m, true, err
+	}
 	resources := db.durableRoot.slotResources[db.durableRoot.slot]
 	if resources == nil {
 		return nil, false, nil
@@ -187,6 +191,9 @@ func (closure *LeafGenerationManifestStablePreparedClosure) abandonUnpublished()
 // runs the real replacement store. It returns the replacement's exact stable
 // token without publishing a B-tree/system-root/meta candidate.
 func (db *DB) PrepareLeafGenerationManifestStableClosure() (*LeafGenerationManifestStablePreparedClosure, error) {
+	if db != nil && db.ownedLeafManifests {
+		return nil, errors.New("pager-owned manifest history requires CheckpointOwnedLeafManifest; it has no independent FD closure")
+	}
 	if db == nil || db.closing.Load() {
 		return nil, ErrClosed
 	}
@@ -238,6 +245,9 @@ func (db *DB) PrepareLeafGenerationManifestStableClosure() (*LeafGenerationManif
 func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenerationManifest) (*LeafGenerationManifestStablePreparedClosure, *leafGenerationManifest, error) {
 	if db == nil || candidate == nil || db.leafGenerationManifestStore == nil {
 		return nil, nil, fmt.Errorf("%w: DB has no outer-leaf generation manifest producer", rootpublication.ErrUnresolvedResource)
+	}
+	if db.ownedLeafManifests {
+		return nil, nil, errors.New("owned manifests are staged with their publishing system root")
 	}
 	store := db.leafGenerationManifestStore
 	if store.mode != leafGenerationManifestStable {

@@ -800,6 +800,9 @@ func (db *DB) replaceLeafGenerationManifest(manifest *leafGenerationManifest) er
 	if db == nil {
 		return ErrClosed
 	}
+	if db.ownedLeafManifests {
+		return db.publishOwnedLeafManifestLocked(manifest)
+	}
 	if db.leafGenerationManifestStore == nil {
 		return saveLeafGenerationManifest(LeafLogDirPath(db.dir), manifest)
 	}

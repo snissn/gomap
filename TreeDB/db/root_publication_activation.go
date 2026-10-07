@@ -381,12 +381,12 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		install.leafManifest = leafManifest
 		install.installLeafManifest = true
 		install.post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
-		install.post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent
+		install.post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent && !db.ownedLeafManifests
 		install.post.persistLeafGenerationManifestView = leafManifest
 		install.post.persistLeafGenerationRawFileIDs = append(install.post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		install.leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if db.leafPageLog != nil && !db.ownedLeafManifests {
 		staged, err := db.stagedLeafGenerationManifestWithPendingResultAndLimit(manifestBasis, 0, next.CommitSeq, opts.preparedLimits)
 		if err != nil {
 			return nil, err
@@ -403,7 +403,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	if install.leafGenerationView == nil {
 		install.leafGenerationView = db.currentLeafGenerationView()
 	}
-	if db.leafPageLog != nil && len(install.post.clearLeafGenerationPendingFileIDs) == 0 {
+	if db.leafPageLog != nil && !db.ownedLeafManifests && len(install.post.clearLeafGenerationPendingFileIDs) == 0 {
 		install.post.drainLeafGenerationPending = true
 	}
 	install.post.commitSeq = next.CommitSeq
@@ -460,6 +460,9 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	install.post.oldState = db.state.Load()
 	if install.installLeafManifest {
 		db.leafGenerationManifest = install.leafManifest
+		if db.ownedLeafManifests {
+			db.clearLeafGenerationPendingFileIDs(install.post.persistLeafGenerationRawFileIDs)
+		}
 	}
 	newState := &DBState{
 		CommitSeq:         install.next.CommitSeq,
@@ -1177,7 +1180,8 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		return errors.New("durable root publication sequence exceeds commit frontier")
 	}
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: next.CommitSeq, DurableSeq: durableSeq,
+		OwnedLeafManifest: db.ownedLeafManifests,
+		CommitSeq:         next.CommitSeq, DurableSeq: durableSeq,
 		UserRootPageID: next.UserRootPageID, SystemRootPageID: next.SystemRootPageID,
 		TotalPages: next.TotalPages, MaxEntryRevision: next.MaxEntryRevision,
 		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
@@ -1189,7 +1193,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		ParentRecordDigest:   base.meta.RootRecordDigest,
 		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, durableSeq, recordPageID),
 	}
-	_, recordDigest, err := record.EncodePage(recordPageID)
+	recordDigest, err := record.DigestPage(recordPageID)
 	if err != nil {
 		return err
 	}

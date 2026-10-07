@@ -23,13 +23,15 @@ var TestHookCOWWaitBeforeSleep func()
 var TestHookAbortCOWCandidateFailure func() error
 
 type allocatorCOWStateV1 struct {
-	generation *FreelistGenerationV1
-	txn        *FreelistTxn
-	ledger     *ReservationLedger
-	prepared   *PreparedCOWCandidateV1
-	activated  []*PreparedCOWCandidateV1
-	waitErr    error
-	ready      *sync.Cond
+	generation   *FreelistGenerationV1
+	txn          *FreelistTxn
+	ledger       *ReservationLedger
+	prepared     *PreparedCOWCandidateV1
+	activated    []*PreparedCOWCandidateV1
+	waitErr      error
+	boundedPrune bool
+	pruneWork    BoundedPruneStats
+	ready        *sync.Cond
 }
 
 // COWPrepareProfileV1 is an allocation-free census of the live transaction
@@ -37,9 +39,11 @@ type allocatorCOWStateV1 struct {
 // It is a snapshot, not an admission limit: callers must also account for
 // retirements, pruning, and pages produced after the census.
 type COWPrepareProfileV1 struct {
+	BoundedPruneWork         BoundedPruneStats
 	Valid                    bool
 	HighWater                uint64
 	RetiredPages             uint64
+	FreePages                uint64
 	AllocatedPages           uint64
 	AbandonedAppendExtents   uint64
 	ChangedChunks            uint64
@@ -88,9 +92,11 @@ func (a *Allocator) cowPrepareProfileLockedV1() COWPrepareProfileV1 {
 		return profile
 	}
 	transaction, base := a.cow.txn, a.cow.generation
+	profile.BoundedPruneWork = a.cow.pruneWork
 	profile.Valid = true
 	profile.HighWater = transaction.highWater
 	profile.RetiredPages = transaction.root.retiredCount
+	profile.FreePages = transaction.root.freeCount
 	profile.AllocatedPages = uint64(len(transaction.allocated))
 	profile.AbandonedAppendExtents = uint64(len(transaction.abandonedAppends))
 	profile.ChangedChunks = uint64(len(transaction.changedChunks))
@@ -435,7 +441,7 @@ func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 	// free in this exact durable generation. A prepared candidate is immutable;
 	// retry returns it above instead of applying a fresher capability after the
 	// caller releases its reader-admission gate.
-	a.cow.txn.PruneWithCapability(capability)
+	a.pruneCOWLockedV1(a.cow.txn, capability)
 	auxiliary, err := a.cow.txn.allocateContiguousRange(auxiliaryPageCount)
 	if err != nil {
 		return rollback(err)
@@ -508,6 +514,7 @@ func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) err
 	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
 		return err
 	}
+	next.pruneCursor = a.cow.txn.pruneCursor
 	a.cow.generation = generation
 	a.cow.txn = next
 	a.cow.prepared = nil
@@ -574,7 +581,7 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	// The live transaction may already be based on a newer visible generation.
 	// Pruning it with the newly advanced recovery horizon is conservative and
 	// does not alter any immutable activated generation.
-	a.cow.txn.PruneWithCapability(nextCapability)
+	a.pruneCOWLockedV1(a.cow.txn, nextCapability)
 	a.cow.ready.Broadcast()
 	return nil
 }
@@ -689,7 +696,8 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	if err != nil {
 		return err
 	}
-	next.PruneWithCapability(nextCapability)
+	next.pruneCursor = a.cow.txn.pruneCursor
+	a.pruneCOWLockedV1(next, nextCapability)
 	a.cow.generation = generation
 	a.cow.txn = next
 	a.cow.prepared = nil
@@ -712,4 +720,51 @@ func (a *Allocator) COWGenerationV1() *FreelistGenerationV1 {
 		return nil
 	}
 	return a.cow.generation
+}
+
+// EnableBoundedPruneV1 changes scheduling only. The existing capability remains
+// mandatory and legacy allocators retain their original full prune behavior.
+func (a *Allocator) EnableBoundedPruneV1() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cow != nil {
+		a.cow.boundedPrune = true
+	}
+}
+func (a *Allocator) pruneCOWLockedV1(txn *FreelistTxn, cap ReuseCapability) {
+	if !a.cow.boundedPrune {
+		txn.PruneWithCapability(cap)
+		return
+	}
+	work := txn.PruneWithCapabilityBounded(cap)
+	a.cow.pruneWork.NodeVisits += work.NodeVisits
+	a.cow.pruneWork.EntriesExamined += work.EntriesExamined
+	a.cow.pruneWork.PromotedPages += work.PromotedPages
+	a.cow.pruneWork.MutationPaths += work.MutationPaths
+	a.cow.pruneWork.MutationItems += work.MutationItems
+	a.cow.pruneWork.PageCredits += work.PageCredits
+	a.cow.pruneWork.ByteCredits += work.ByteCredits
+	a.cow.pruneWork.Wrapped = work.Wrapped
+}
+func (a *Allocator) PruneCOWBoundedStepV1(cap ReuseCapability) (BoundedPruneStats, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.cow == nil || !a.cow.boundedPrune {
+		return BoundedPruneStats{}, ErrGenerationFormat
+	}
+	if a.cow.waitErr != nil {
+		return BoundedPruneStats{}, a.cow.waitErr
+	}
+	if a.cow.prepared != nil {
+		return BoundedPruneStats{}, ErrCOWCandidatePrepared
+	}
+	before := a.cow.pruneWork
+	a.pruneCOWLockedV1(a.cow.txn, cap)
+	after := a.cow.pruneWork
+	return BoundedPruneStats{
+		NodeVisits: after.NodeVisits - before.NodeVisits, EntriesExamined: after.EntriesExamined - before.EntriesExamined,
+		PromotedPages: after.PromotedPages - before.PromotedPages, MutationPaths: after.MutationPaths - before.MutationPaths,
+		MutationItems: after.MutationItems - before.MutationItems, PageCredits: after.PageCredits - before.PageCredits,
+		ByteCredits: after.ByteCredits - before.ByteCredits, Wrapped: after.Wrapped,
+	}, nil
 }

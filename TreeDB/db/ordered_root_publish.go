@@ -4097,6 +4097,27 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		}
 	}
 
+	if limits := opts.preparedLimits; limits != nil && db.ownedLeafManifests {
+		base := db.PreparedRootPublicationBaseProfile()
+		outputPages := base.OwnedManifestOutputPageAllowance
+		for _, profile := range limits.RootPointProfiles {
+			outputPages = preparedProfileAdd(outputPages, profile.OutputPages)
+		}
+		outputPages = preparedProfileAdd(outputPages, limits.SystemPointProfile.OutputPages)
+		if outputPages > limits.MaxTotalOutputPages {
+			return 0, nil, ErrPreparedRootPointProfileLimit
+		}
+		// Check the prospective owned-system-root output against the existing
+		// allocator budget before command append. This reserves no pages and
+		// enlarges no caller cap; materialization still checks its actual work.
+		cow := base.FreelistCOW
+		cow.HighWater = preparedProfileAdd(cow.HighWater, base.OwnedManifestOutputPageAllowance)
+		cow.AllocatedPages = preparedProfileAdd(cow.AllocatedPages, base.OwnedManifestOutputPageAllowance)
+		if err := CheckPreparedFreelistCOWProfile(cow, limits.FreelistCOW); err != nil {
+			return 0, nil, err
+		}
+	}
+
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false

@@ -14,18 +14,19 @@ import (
 // These are source counts, not a byte reservation or a bound on newly produced
 // pages and segments.
 type PreparedRootPublicationBaseProfile struct {
-	PagerPages              uint64
-	RegisteredValueLogFiles uint64
-	LeafGenerations         uint64
-	LeafGenerationFileIDs   uint64
-	PendingLeafFileIDs      uint64
-	VisibleResources        uint64
-	VisibleMembers          uint64
-	AllocatorDebt           uint64
-	Seals                   uint64
-	SealPrefixEntries       uint64
-	FreelistCOW             freelist.COWPrepareProfileV1
-	ValueLogRead            valuelog.PreparedReadProfile
+	OwnedManifestOutputPageAllowance uint64
+	PagerPages                       uint64
+	RegisteredValueLogFiles          uint64
+	LeafGenerations                  uint64
+	LeafGenerationFileIDs            uint64
+	PendingLeafFileIDs               uint64
+	VisibleResources                 uint64
+	VisibleMembers                   uint64
+	AllocatorDebt                    uint64
+	Seals                            uint64
+	SealPrefixEntries                uint64
+	FreelistCOW                      freelist.COWPrepareProfileV1
+	ValueLogRead                     valuelog.PreparedReadProfile
 }
 
 // PreparedRootPublicationLimits is a checked allocation ceiling for the
@@ -113,6 +114,11 @@ func (db *DB) PreparedRootPublicationBaseProfile() PreparedRootPublicationBasePr
 	var profile PreparedRootPublicationBaseProfile
 	if db == nil {
 		return profile
+	}
+	if db.ownedLeafManifests {
+		// Header, up to 32 chunks, one extra deletion/zipper sentinel; charged
+		// before command WAL append by the prepared caller.
+		profile.OwnedManifestOutputPageAllowance = 2 * (ownedLeafManifestMaxBytes/ownedLeafManifestChunkBytes + 2) * ownedLeafManifestMaxDepth
 	}
 	if idx := db.idx.Load(); idx != nil && idx.pager != nil {
 		profile.PagerPages = idx.pager.PageCount()

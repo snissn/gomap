@@ -99,6 +99,9 @@ func (db *DB) prepareDurableRootManifestResourcesV1(candidate *leafGenerationMan
 	if db == nil || candidate == nil || db.leafGenerationManifestStore == nil {
 		return nil, nil, nil, fmt.Errorf("%w: DB has no outer-leaf generation manifest producer", rootpublication.ErrUnresolvedResource)
 	}
+	if db.ownedLeafManifests {
+		return candidate.clone(), current, older, nil
+	}
 	if db.leafGenerationManifestStore.mode == leafGenerationManifestCompatibility {
 		if stableResourceSetHasKindV1(current, rootpublication.ResourceOuterLeafManifest) || stableResourceSetHasKindV1(older, rootpublication.ResourceOuterLeafManifest) {
 			return nil, nil, nil, fmt.Errorf("%w: compatibility manifest cannot replace exact durable-root authority", rootpublication.ErrResourceConflict)
@@ -1524,7 +1527,8 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 		}
 	}
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: next.CommitSeq, DurableSeq: durableSeq,
+		OwnedLeafManifest: db.ownedLeafManifests,
+		CommitSeq:         next.CommitSeq, DurableSeq: durableSeq,
 		UserRootPageID: next.UserRootPageID, SystemRootPageID: next.SystemRootPageID,
 		TotalPages: next.TotalPages, MaxEntryRevision: next.MaxEntryRevision,
 		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
@@ -1535,7 +1539,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 		ParentRecordDigest:   current.meta.RootRecordDigest,
 		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, durableSeq, recordPageID),
 	}
-	_, recordDigest, err := record.EncodePage(recordPageID)
+	recordDigest, err := record.DigestPage(recordPageID)
 	if err != nil {
 		return nil, err
 	}
@@ -2049,6 +2053,23 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
 		builder.SetPageID(pageID)
+		if i == 1 && db.ownedLeafManifests {
+			m := newLeafGenerationManifest(1)
+			m.ManifestRevision = 1
+			header, chunks, err := encodeOwnedLeafManifest(m)
+			if err != nil {
+				return err
+			}
+			if err := builder.AddLeafEntry(ownedLeafManifestHeaderKey, header, 0, page.ValuePtr{}); err != nil {
+				return err
+			}
+			for j, chunk := range chunks {
+				if err := builder.AddLeafEntry(ownedLeafManifestChunkKey(j), chunk, 0, page.ValuePtr{}); err != nil {
+					return err
+				}
+			}
+			db.leafGenerationManifest = m
+		}
 		builder.Finish()
 		rootIDs[i] = pageID
 	}
@@ -2075,6 +2096,9 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	ledger := freelist.NewReservationLedger()
 	if err := idx.allocator.EnableCOWV1(base, ledger); err != nil {
 		return err
+	}
+	if db.ownedLeafManifests {
+		idx.allocator.EnableBoundedPruneV1()
 	}
 	capability, err := freelist.NewReuseCapability(1, 1, 0)
 	if err != nil {
@@ -2116,7 +2140,8 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	}
 	recordPageID := auxiliary[len(auxiliary)-1]
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: 1, DurableSeq: 1,
+		OwnedLeafManifest: db.ownedLeafManifests,
+		CommitSeq:         1, DurableSeq: 1,
 		UserRootPageID: rootIDs[0], SystemRootPageID: rootIDs[1], TotalPages: generation.HighWater(),
 		Freelist: generation.GenerationRef(), FreelistFreeCount: generation.FreeCount(), FreelistRetiredCount: generation.RetiredCount(),
 		Manifest: manifestRef, Directory: directoryRef, MetaProjectionDigest: page.DurableMetaProjectionDigestV1(1, 1, recordPageID),
@@ -2242,8 +2267,13 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 	recordPageID := auxiliary[len(auxiliary)-1]
 	meta.TotalPages = generation.HighWater()
 	meta.FreelistHeadID = 0
+	ownedFeature, featureErr := requiredFormatFeatureEnabled(dir, RequiredFeatureOwnedLeafManifestV1)
+	if featureErr != nil {
+		return featureErr
+	}
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: meta.CommitSeq, DurableSeq: meta.CommitSeq,
+		OwnedLeafManifest: ownedFeature,
+		CommitSeq:         meta.CommitSeq, DurableSeq: meta.CommitSeq,
 		UserRootPageID: meta.UserRootPageID, SystemRootPageID: meta.SystemRootPageID,
 		TotalPages: meta.TotalPages, MaxEntryRevision: meta.MaxEntryRevision,
 		AppliedCommandLSN: meta.AppliedCommandLSN, LastCommitHeight: meta.LastCommitHeight,
@@ -2366,8 +2396,13 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 	if durableSeq > meta.CommitSeq {
 		return errors.New("rebuilt durable-root successor sequence exceeds commit frontier")
 	}
+	ownedFeature, featureErr := requiredFormatFeatureEnabled(dir, RequiredFeatureOwnedLeafManifestV1)
+	if featureErr != nil {
+		return featureErr
+	}
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: meta.CommitSeq, DurableSeq: durableSeq,
+		OwnedLeafManifest: ownedFeature,
+		CommitSeq:         meta.CommitSeq, DurableSeq: durableSeq,
 		UserRootPageID: meta.UserRootPageID, SystemRootPageID: meta.SystemRootPageID,
 		TotalPages: meta.TotalPages, MaxEntryRevision: meta.MaxEntryRevision,
 		AppliedCommandLSN: meta.AppliedCommandLSN, LastCommitHeight: meta.LastCommitHeight,

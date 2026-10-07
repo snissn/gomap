@@ -226,6 +226,16 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 	if err := validateDurableRootPageV1(source, record.SystemRootPageID, record.TotalPages); err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("system root page: %w", err)
 	}
+	if record.OwnedLeafManifest {
+		for _, descriptor := range resources.PhysicalDescriptors() {
+			if descriptor.Kind == rootpublication.ResourceOuterLeafManifest {
+				return durableRootSelectionV1{}, errors.New("owned root contains standalone manifest dependency")
+			}
+		}
+		if _, err := loadOwnedLeafManifest(source, record.SystemRootPageID, record.TotalPages); err != nil {
+			return durableRootSelectionV1{}, fmt.Errorf("owned leaf manifest: %w", err)
+		}
+	}
 	accepted = true
 	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, Freelist: generation, Manifest: manifest, resources: resources}, nil
 }
@@ -248,6 +258,9 @@ func validateDurableRootLineageV1(source freelist.PageSource, record rootpublica
 	parent, err := rootpublication.DecodeDurableRootRecordV1(parentImage, record.ParentRecordPageID, record.ParentRecordDigest)
 	if err != nil {
 		return fmt.Errorf("parent record: %w", err)
+	}
+	if parent.OwnedLeafManifest != record.OwnedLeafManifest {
+		return errors.New("mixed owned/standalone manifest lineage")
 	}
 	if parent.CommitSeq != record.ParentCommitSeq {
 		return fmt.Errorf("parent commit sequence mismatch: record=%d parent=%d", record.ParentCommitSeq, parent.CommitSeq)

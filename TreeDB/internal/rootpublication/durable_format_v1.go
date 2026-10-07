@@ -748,6 +748,9 @@ func allZeroV1(data []byte) bool {
 }
 
 type DurableRootRecordV1 struct {
+	// OwnedLeafManifest binds pager-owned manifest history to SystemRootPageID.
+	// Version 3 is deliberately refused by pre-feature readers.
+	OwnedLeafManifest bool
 	CommitSeq         uint64
 	DurableSeq        uint64
 	UserRootPageID    uint64
@@ -798,10 +801,31 @@ func (record DurableRootRecordV1) validate(pageID uint64) error {
 }
 
 func (record DurableRootRecordV1) EncodePage(pageID uint64) ([]byte, [32]byte, error) {
-	if err := record.validate(pageID); err != nil {
+	image := make([]byte, page.PageSize)
+	digest, err := record.encodePageInto(pageID, image)
+	if err != nil {
 		return nil, [32]byte{}, err
 	}
-	image := make([]byte, page.PageSize)
+	page.UpdateChecksum(image)
+	return image, digest, nil
+}
+
+// DigestPage computes the exact encoded record digest without retaining a page
+// image. Callers that only bind a future meta use this instead of discarding an
+// owned EncodePage result. All format versions share one encoder.
+func (record DurableRootRecordV1) DigestPage(pageID uint64) ([32]byte, error) {
+	var image [page.PageSize]byte
+	return record.encodePageInto(pageID, image[:])
+}
+
+func (record DurableRootRecordV1) encodePageInto(pageID uint64, image []byte) ([32]byte, error) {
+	if err := record.validate(pageID); err != nil {
+		return [32]byte{}, err
+	}
+	if len(image) != page.PageSize {
+		return [32]byte{}, ErrDurableRootRecordFormat
+	}
+	clear(image)
 	header := page.PageHeader{PageID: pageID, Flags: uint16(page.PageTypeDurableRootRecord)}
 	header.Encode(image)
 	copy(image[16:24], durableRootRecordMagicV1[:])
@@ -834,14 +858,21 @@ func (record DurableRootRecordV1) EncodePage(pageID uint64) ([]byte, [32]byte, e
 		binary.LittleEndian.PutUint64(image[184:192], record.Directory.PhysicalCount)
 		binary.LittleEndian.PutUint64(image[192:200], record.Directory.LogicalCount)
 	}
+	if record.OwnedLeafManifest {
+		binary.LittleEndian.PutUint16(image[24:26], 3)
+		image[344] = 1 // contiguous external dependency closure
+		if record.Directory != (DependencyDirectoryRefV2{}) {
+			image[344] = 2
+		}
+		image[345] = 1 // owned_leaf_manifest_v1
+	}
 	binary.LittleEndian.PutUint64(image[232:240], record.ParentRecordPageID)
 	binary.LittleEndian.PutUint64(image[240:248], record.ParentCommitSeq)
 	copy(image[248:280], record.ParentRecordDigest[:])
 	copy(image[280:312], record.MetaProjectionDigest[:])
 	digest := durableRootRecordDigestV1(image)
 	copy(image[312:344], digest[:])
-	page.UpdateChecksum(image)
-	return image, digest, nil
+	return digest, nil
 }
 
 func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]byte) (DurableRootRecordV1, error) {
@@ -854,9 +885,9 @@ func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]b
 	header := page.DecodeHeader(image)
 	version := binary.LittleEndian.Uint16(image[24:26])
 	if header.PageID != pageID || page.PageType(header.Flags) != page.PageTypeDurableRootRecord || header.Count != 0 ||
-		!bytes.Equal(image[16:24], durableRootRecordMagicV1[:]) || (version != 1 && version != 2) ||
+		!bytes.Equal(image[16:24], durableRootRecordMagicV1[:]) || (version != 1 && version != 2 && version != 3) ||
 		binary.LittleEndian.Uint16(image[26:28]) != durableRootRecordHeaderV1 || !allZeroV1(image[28:32]) ||
-		!allZeroV1(image[344:durableRootRecordHeaderV1]) || !allZeroV1(image[durableRootRecordHeaderV1:]) {
+		!validDurableRootRecordFeatureBytesV1(image, version) || !allZeroV1(image[durableRootRecordHeaderV1:]) {
 		return DurableRootRecordV1{}, ErrDurableRootRecordFormat
 	}
 	digest := durableRootRecordDigestV1(image)
@@ -881,7 +912,8 @@ func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]b
 	}
 	copy(record.Freelist.Digest[:], image[128:160])
 	copy(record.Manifest.Digest[:], image[200:232])
-	if version == 2 {
+	record.OwnedLeafManifest = version == 3
+	if version == 2 || (version == 3 && image[344] == 2) {
 		if !allZeroV1(image[200:232]) {
 			return DurableRootRecordV1{}, ErrDurableRootRecordFormat
 		}
@@ -903,9 +935,17 @@ func DecodeDurableRootRecordV1(image []byte, pageID uint64, expectedDigest [32]b
 	return record, nil
 }
 
+func validDurableRootRecordFeatureBytesV1(image []byte, version uint16) bool {
+	if version != 3 {
+		return allZeroV1(image[344:durableRootRecordHeaderV1])
+	}
+	return (image[344] == 1 || image[344] == 2) && image[345] == 1 && allZeroV1(image[346:durableRootRecordHeaderV1])
+}
+
 func durableRootRecordDigestV1(image []byte) [32]byte {
-	canonical := append([]byte(nil), image...)
+	var canonical [page.PageSize]byte
+	copy(canonical[:], image)
 	clear(canonical[8:12])
 	clear(canonical[312:344])
-	return sha256.Sum256(canonical)
+	return sha256.Sum256(canonical[:])
 }
