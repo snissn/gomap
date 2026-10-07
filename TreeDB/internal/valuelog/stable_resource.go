@@ -581,22 +581,40 @@ func stableDeleteNamespace(path string) (string, error) {
 	return fmt.Sprintf("%s:%d:%x/%s", identity.Platform, identity.VolumeID, identity.ObjectID, filepath.Base(path)), nil
 }
 
-func validateStableDeletePath(file *File) error {
+// prepareRetirementIdentityLocked preserves the original physical identity
+// before a handle can be closed. Registry observation and its reader-visible
+// identity remain separate: a pinned reader may access those without mu.
+func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.StableIdentity, error) {
 	if file == nil || file.File == nil || file.Path == "" {
-		return fmt.Errorf("%w: invalid value-log delete target", rootpublication.ErrUnresolvedResource)
+		return rootpublication.StableIdentity{}, fmt.Errorf("%w: invalid value-log retirement target", rootpublication.ErrUnresolvedResource)
+	}
+	if file.retirementIdentity != (rootpublication.StableIdentity{}) {
+		return file.retirementIdentity, nil
 	}
 	identity := file.stableIdentity
 	if identity == (rootpublication.StableIdentity{}) {
 		var err error
 		identity, err = rootpublication.StableIdentityFromFile(file.File)
 		if err != nil {
-			return err
+			return rootpublication.StableIdentity{}, err
 		}
 	}
-	return validateStableDeletePathIdentity(file.Path, identity)
+	file.retirementIdentity = identity
+	return identity, nil
+}
+
+// forgetSegmentLocked balances retirement ownership at every removal site.
+func (m *Manager) forgetSegmentLocked(file *File) {
+	if file.IsZombie.Load() {
+		m.retiredCount--
+	}
+	delete(m.files, file.ID)
 }
 
 func validateStableDeletePathIdentity(path string, identity rootpublication.StableIdentity) error {
+	if identity == (rootpublication.StableIdentity{}) {
+		return fmt.Errorf("%w: missing value-log retirement identity", rootpublication.ErrUnresolvedResource)
+	}
 	linkedIdentity, err := stableIdentityAtPath(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -634,26 +652,15 @@ func finishStableDeleteLease(lease *rootpublication.IdentityDeleteLease, deleted
 // unlink (required on Windows), then revalidates that the path still names the
 // identity captured before close. The registry lease excludes process-local
 // pin and delete races across this boundary.
-func closeAndRemoveStableSegmentFileResult(file *File, validateIdentity bool) (bool, error) {
+func closeAndRemoveStableSegmentFileResult(file *File, identity rootpublication.StableIdentity) (bool, error) {
 	if file == nil {
 		return true, nil
 	}
-	identity := file.stableIdentity
-	if validateIdentity && identity == (rootpublication.StableIdentity{}) {
-		var err error
-		identity, err = rootpublication.StableIdentityFromFile(file.File)
-		if err != nil {
-			return false, err
-		}
+	if identity == (rootpublication.StableIdentity{}) {
+		return false, fmt.Errorf("%w: missing value-log retirement identity", rootpublication.ErrUnresolvedResource)
 	}
 	closeErr := file.Close()
-	var removed bool
-	var removeErr error
-	if validateIdentity {
-		removed, removeErr = removeSegmentFileWithRetryStable(file.Path, identity)
-	} else {
-		removed, removeErr = removeSegmentFileWithRetry(file.Path)
-	}
+	removed, removeErr := removeSegmentFileWithRetryStable(file.Path, identity)
 	return removed, errors.Join(closeErr, removeErr)
 }
 
@@ -824,6 +831,11 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		return false, err
 	}
 	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
+		if os.IsNotExist(err) {
+			// An absent parent also makes the canonical target absent. Preserve
+			// ordinary successful-absence semantics without unchecked unlink.
+			return true, nil
+		}
 		if !os.IsExist(err) {
 			return false, err
 		}
@@ -897,6 +909,11 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		m.mu.Unlock()
 		return nil
 	}
+	identity, err := m.prepareRetirementIdentityLocked(file)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	lease, err := m.stableDeleteLease(file)
 	if errors.Is(err, ErrFilePinned) {
 		m.mu.Unlock()
@@ -907,16 +924,14 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		m.mu.Unlock()
 		return err
 	}
-	if lease != nil {
-		if err := validateStableDeletePath(file); err != nil {
-			abortStableDeleteLease(lease)
-			m.mu.Unlock()
-			return err
-		}
+	if err := validateStableDeletePathIdentity(file.Path, identity); err != nil {
+		abortStableDeleteLease(lease)
+		m.mu.Unlock()
+		return err
 	}
 	m.mu.Unlock()
 
-	deleted, unlinkErr := closeAndRemoveStableSegmentFileResult(file, lease != nil)
+	deleted, unlinkErr := closeAndRemoveStableSegmentFileResult(file, identity)
 	if !deleted {
 		abortStableDeleteLease(lease)
 		if isWindowsSharingViolationError(unlinkErr) {
@@ -930,7 +945,7 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	m.mu.Lock()
 	var unobserveErr error
 	if current, exists := m.files[file.ID]; exists && current == file && file.RefCount.Load() == 0 && file.IsZombie.Load() {
-		delete(m.files, file.ID)
+		m.forgetSegmentLocked(file)
 		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()

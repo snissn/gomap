@@ -20,6 +20,17 @@ rebounds in the primary and additional scan directories. Refresh and retirement
 retry must refuse without changing the directory or its sentinel, retain zombie
 ownership, and release the manager lock. Removing the replacement restores benign
 missing-path refresh; restoring the original file permits retirement to complete.
+`TestManagerRetirementIdentityNilRegistryReplacement` and
+`TestManagerRetirementIdentityNilRegistryDirectory` repeat those real failed-
+unlink cases without an external pin registry. The direct preexisting-replacement
+test covers all four explicit removal APIs; the quarantine-replacement test
+creates a new canonical file after close and proves its bytes and identity survive.
+`TestManagerRetirementIdentityCaptureFailure` requires failed identity capture to
+leave both zombie transitions and all four removal APIs before their state change.
+Retirement state tests balance repeated marking, ownership removal, eviction and
+Close, preserve successful absence when the parent directory disappears, and race
+pinned registry-identity reads against retirement publication. Nil-registry special-
+path tests retain FIFO and symlink refusal without a blocking open.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 
