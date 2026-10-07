@@ -345,3 +345,11 @@ No schedule retry, artificial call extension or packet exclusion is used.
 Canonical C4 workload, metric rules and pending native declarations use typed
 JSON identity. Copied and rehashed packet mutations must reject boolean or
 float substitutions for their literal integer fields.
+
+The frozen Linux host includes `cpu_count` and `cpu_affinity`. The latter is the
+sorted actual `os.sched_getaffinity(0)` mask: at least four distinct nonnegative
+integer CPU IDs. Missing/unsupported affinity observation refuses admission.
+Coordinator freeze records this actual mask; every collector pre/post snapshot
+and both offline analyzers require its exact equality to the frozen mask, even
+when copied host records and receipts are rehashed consistently. A large system
+CPU count does not substitute for available CPUs. No CPU quota policy is inferred.

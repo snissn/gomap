@@ -24,7 +24,7 @@ def main():
     config = draft()
     config.update(status="frozen-approved", coordinator_acceptance="synthetic refusal only, never executable collection")
     config["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/gopath/pkg/mod", TMPDIR=str(root))
-    config["host"].update(node="synthetic", machine="x86_64", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(root), tmpdir_device=root.stat().st_dev)
+    config["host"].update(node="synthetic", machine="x86_64", release="synthetic", cpu_count=4, cpu_affinity=[0, 2, 4, 6], max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(root), tmpdir_device=root.stat().st_dev)
     config["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
     toolchain = {"go_binary_sha256": "4" * 64, "executables": [
         {"path": "pkg/tool/linux_amd64/" + name, "sha256": "5" * 64, "bytes": 1, "mode": 0o755}

@@ -455,6 +455,20 @@ def finite_number(value):
     # Arbitrarily large JSON integers are finite without a float conversion.
     return type(value) is int or (type(value) is float and math.isfinite(value))
 
+def validate_cpu_affinity(mask):
+    need(type(mask) is list and len(mask) >= 4
+         and all(type(cpu) is int and cpu >= 0 for cpu in mask)
+         and mask == sorted(set(mask)), "CPU affinity must be sorted distinct nonnegative integers with at least four CPUs")
+    return mask
+
+def cpu_affinity():
+    need(callable(getattr(os, "sched_getaffinity", None)), "CPU affinity observation unavailable")
+    try:
+        mask = sorted(os.sched_getaffinity(0))
+    except OSError as error:
+        raise ValueError("CPU affinity observation unavailable") from error
+    return validate_cpu_affinity(mask)
+
 def config(path):
     c = json.loads(Path(path).read_text())
     need(c["schema"] == SCHEMA and c["status"] == "frozen-approved", "unfrozen configuration")
@@ -471,6 +485,7 @@ def config(path):
         need(isinstance(c[key], str) and re.fullmatch(r"[0-9a-f]{64}", c[key]), "missing frozen " + key)
     need(c["go_binary"] == str(Path(c["environment"]["GOROOT"]) / "bin/go"), "unbound Go launcher path")
     need(c["host"]["system"] == "Linux" and type(c["host"]["cpu_count"]) is int and c["host"]["cpu_count"] >= 4, "Linux host contract")
+    validate_cpu_affinity(c["host"].get("cpu_affinity"))
     tmpdir = Path(c["environment"]["TMPDIR"])
     need(tmpdir.is_absolute() and str(tmpdir) == c["environment"]["TMPDIR"] and ".." not in tmpdir.parts, "unresolved TMPDIR")
     need(c["host"]["tmpdir"] == str(tmpdir) and type(c["host"]["tmpdir_device"]) is int and c["host"]["tmpdir_device"] >= 0, "unbound temporary database filesystem")
