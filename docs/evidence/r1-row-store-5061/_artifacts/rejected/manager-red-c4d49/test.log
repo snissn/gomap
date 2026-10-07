@@ -1,0 +1,6 @@
+=== RUN   TestManagerCloseJoinsPinnedZombieRetry5066
+    retry_close_5066_test.go:44: Close returned while owned retry was still blocked (pending=true, err=<nil>)
+--- FAIL: TestManagerCloseJoinsPinnedZombieRetry5066 (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.011s
+FAIL

@@ -1,0 +1,27 @@
+{
+  "utc": "2026-10-06T22:05:33.240084+00:00",
+  "status": "ACTUAL_NEW_INTEGRATED_FOCUSED_SOURCE_CHECKOUT_ONLY_NOT_LANDING",
+  "head": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+  "tree": "0600b47bf0a3a609917d224d7fd06c40737bcd8e",
+  "clean": true,
+  "transferred_files_sha256": {
+    "898a-main-462b-integration.bundle": "46676047179f12f7293aee54d1326c6421561b2d4a984a7f83935ce552fb16cf",
+    "898a-main-462b-focused-validation.py": "63fd72db50ddf9b81dc17af0e5b42eb0235d74ad1544b5ecab8ade46ae0bfd53",
+    "462b-main-integration-local-candidate-original.json": "933b0ff9e2ca4de37cd42e91a192e150a0659721f916dc9ba5581b4b7dae2f82"
+  },
+  "load": " 12:05:33 up 32 days, 17:16,  6 users,  load average: 2.00, 1.82, 1.31\n",
+  "processes": [
+    "    PID ELAPSED %CPU COMMAND         COMMAND",
+    "2964593      67  103 unified-bench-A /home/mikers/quicksilver-maintenance-5028-20261006/qualification-v8/bin/unified-bench-A -suite quicksilver -dbs treedb -profile durable -quicksilver-case realistic -keys 3000000 -read-workers 4 -quicksilver-reads 6000000 -quicksilver-updates 40000 -quicksilver-duration 8s -quicksilver-read-batch 64 -quicksilver-commit ordinary -max-wall 30m -seed 24 -quicksilver-mixture primary -quicksilver-working-set uniform -quicksilver-miss-percent 90 -quicksilver-measure-dir /home/mikers/quicksilver-maintenance-5028-20261006/qualification-v8/cal-primary-s24-n3000000-full-b8192/C2/db -keep",
+    "2966371       0  5.5 python3         python3 -B -",
+    " 635514 2517659  0.5 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b",
+    "   2499 2826951  0.4 gnome-shell     /usr/bin/gnome-shell --mode=ubuntu",
+    "2971628 1223583  0.3 codex           /home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex app-server --listen unix:// --managed-daemon",
+    "   4644 2820107  0.3 tmux: server    tmux",
+    "2964584      67  0.2 python3         python3 -B /home/mikers/quicksilver-maintenance-5028-20261006/source-qualification-v8-A/scripts/unified_bench_quicksilver_capture.py /home/mikers/quicksilver-maintenance-5028-20261006/qualification-v8/manifest.json /home/mikers/quicksilver-maintenance-5028-20261006/qualification-v8/plans/guard-primary-s24-n3000000-full-b8192-C2.json",
+    " 641714 2513956  0.2 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox",
+    " 702994 2473031  0.2 codex           /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox",
+    "2948500     743  0.2 python3         python3 -B /home/mikers/quicksilver-maintenance-5028-20261006/qualification-v8-selected-source-preparation-v1/qualification-v8-collection-controller.py offline-calibration",
+    "    967 2826954  0.1 napi/phy0-0     [napi/phy0-0]"
+  ]
+}

@@ -1,0 +1,111 @@
+{
+  "utc": "2026-10-06T18:18:50.710004+00:00",
+  "tested_source": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+  "selected_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "applicability": "SelectedruntimeandTreeDBruntime/testblobsunchanged8506->ebe414; newCcommand/harnesscoveredseparately; thisdoesnotrelabeleventssourcenorqualifyperformance",
+  "tree_changed_paths": [
+    "TreeDB/docs/spec/r1-indexed-mutations.md"
+  ],
+  "counts": {
+    "normal": {
+      "test_pass_rows": 114,
+      "selected_crash_lifecycle_rows": {
+        "TestR1MutationCrashCuts5059": 19,
+        "TestR1LifecycleRecoveryAfterMaintenance5060": 4,
+        "TestR1LifecycleMixedCycles5060": 3,
+        "TestR1LifecycleLogicalFoldAndVacuum5060": 1
+      },
+      "package_pass_rows": [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/TreeDB/collections"
+      ],
+      "raw_fail_rows": 0,
+      "log_sha256": "8508f0707a3a5112d69bd47ca6e356fcdf28bd171ca75c90e745265e1a539b01",
+      "start_utc": "2026-10-06T18:13:28.340973+00:00",
+      "exit_utc": "2026-10-06T18:14:42.944350+00:00",
+      "exit": 0
+    },
+    "race": {
+      "test_pass_rows": 114,
+      "selected_crash_lifecycle_rows": {
+        "TestR1MutationCrashCuts5059": 19,
+        "TestR1LifecycleRecoveryAfterMaintenance5060": 4,
+        "TestR1LifecycleMixedCycles5060": 3,
+        "TestR1LifecycleLogicalFoldAndVacuum5060": 1
+      },
+      "package_pass_rows": [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/TreeDB/collections"
+      ],
+      "raw_fail_rows": 0,
+      "log_sha256": "7c54356f9e2fc0b318b72c59bd0f47375a6b66087e0ef06ac9ff5f1afbca1e9d",
+      "start_utc": "2026-10-06T18:14:43.027030+00:00",
+      "exit_utc": "2026-10-06T18:16:49.980789+00:00",
+      "exit": 0
+    }
+  },
+  "vet_exit": 0,
+  "state": "FOCUSED_CORRECTNESS_PASS_NORMAL_RACE_VET",
+  "files": [
+    {
+      "path": "normal-exit.json",
+      "bytes": 108295,
+      "sha256": "5632378dcc0e6229406e5b973e6ddf5eb535d78f394e659c43a5802930b65287"
+    },
+    {
+      "path": "normal-start.json",
+      "bytes": 109608,
+      "sha256": "8155ef52141daeaaa538831c2685e7b3dcc20d61ea90ccdec745aac1bf8657be"
+    },
+    {
+      "path": "normal.log",
+      "bytes": 116483,
+      "sha256": "8508f0707a3a5112d69bd47ca6e356fcdf28bd171ca75c90e745265e1a539b01"
+    },
+    {
+      "path": "race-exit.json",
+      "bytes": 108295,
+      "sha256": "83dffd1c6bd8cf435daaaf9b501c58eb1f77d372241422aa46e189e0c3abbe63"
+    },
+    {
+      "path": "race-start.json",
+      "bytes": 109621,
+      "sha256": "6b6c24a0e53b07703a55270396fd73e90f0c8502e3254a4eaad228bce33b2570"
+    },
+    {
+      "path": "race.log",
+      "bytes": 116547,
+      "sha256": "7c54356f9e2fc0b318b72c59bd0f47375a6b66087e0ef06ac9ff5f1afbca1e9d"
+    },
+    {
+      "path": "source-after.json",
+      "bytes": 105879,
+      "sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c"
+    },
+    {
+      "path": "source-before.json",
+      "bytes": 105879,
+      "sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c"
+    },
+    {
+      "path": "vet-exit.json",
+      "bytes": 108295,
+      "sha256": "e28b584440726872a201c2e355994cf7f26004d06514ea0b3440ba51c776cf29"
+    },
+    {
+      "path": "vet-start.json",
+      "bytes": 109389,
+      "sha256": "f99a6a25ad28c638ed96fdffd1260a3b7358e71effa21e0047fc9daaba299476"
+    },
+    {
+      "path": "vet.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

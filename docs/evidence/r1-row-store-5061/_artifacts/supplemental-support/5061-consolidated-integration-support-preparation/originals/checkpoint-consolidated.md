@@ -1,0 +1,14 @@
+<!-- codex-issue-graph-executor:state -->
+R1 execution checkpoint — 2026-10-06 18:22 UTC
+
+#5065 is merged and #5058 reads are accepted. #5059 retains mutation-cost criterion 6; #5060, #5061, #5066 and #5056 remain open for actual landed-source qualification.
+
+The user approved the scoped auxiliary M0 red/inconclusive-CI exception. All original FAILs remain failed, all raw receipts are preserved, and no thresholds/sample/outlier rules change. The exception accepts no performance result and waives no required TreeDB gate, correctness/lifetime/durability finding, review or A/C/D outcome gate.
+
+Main advanced to `3cfe2ad8` during the approval wait. Root integrated its 56 changed production inputs and incorporated the already-reviewed nine-file #5072 mutation harness into [#5071](https://github.com/snissn/gomap/pull/5071), candidate `ebe414b6d6a22a7f616c108157a01f8ed109e7cc`. This graph reassessment gives A/C/D one reviewed landing and avoids a second serial strict-base integration/CI cycle. #5072 stays open as incorporation-pending and will close only after the combined code actually lands; #5059 cost remains open until accepted fresh measurements.
+
+Independent scoped runtime/C integration reviews are CLEAN. Exact runtime `cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9` covers 1,122 source inputs; A/C harness `706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822` matches accepted C source. R1/GC/resource/shutdown suites pass 114 test rows normally and under race plus vet at `8506`, whose runtime and TreeDB test blobs apply unchanged to `ebe414`. Exact `ebe414` additive C/shared-main tests pass 51 rows normally and under race plus vet. All 58 Python contract checks pass with 36 affected inventory/impact checks repeated after C integration. Raw original source identities and initial failures remain intact; this is focused correctness, not retained performance acceptance.
+
+Next: current-head required CI and hosted review → normal protected #5071 merge → close #5072 as incorporated → freeze the actual landing → serial fresh C/A/D captures on Linux 111 with actual environment/load receipts → independent validation and certified A comparison → one artifact-first #5061 evidence PR with immutable release assets, actual example execution and fresh public restoration/replay → accept child and parent criteria.
+
+No current landing or fresh retained capture is claimed. Supported workload limits, generic replacement versus partial setter limits, finite lifecycle retention and external owners remain explicit.

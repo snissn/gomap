@@ -1,0 +1,107 @@
+{
+  "decision": "CLEAN",
+  "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "base": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+  "runtime_fix": "334571ef2ec7fc7b9590e0f0dca8c9c72be159d9",
+  "findings": [],
+  "scope": "Independent read-only exact-source and retained-evidence review; no Go/build/test/capture/GitHub/poller/agents used in reviewer lane.",
+  "source_clean": true,
+  "source_bindings": {
+    ".github/ci/ci_impact.json": {
+      "git_blob": "a0e602ce1ae2d2baec8198dfbde7722344888a2c",
+      "sha256": "a8d668bcb579163961cfc4a00a8a3e35f446b733cdf83cba7c4473169ba96be5",
+      "worktree_matches_commit": true
+    },
+    "TreeDB/db/leaf_manifest_revision_gc.go": {
+      "git_blob": "6b62b35cff8e2ede152ea092bff4cb53b8e6ba01",
+      "sha256": "d6f6786283be1460ba37d304dd9df88cc61ee35983cd3b87ad7b5c4d66509276",
+      "worktree_matches_commit": true
+    },
+    "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go": {
+      "git_blob": "3d0f589a95ab6ef6063fb4df6d72dfe7676d932e",
+      "sha256": "5ecfbe10af899e9456e705a545b0313294efcfc6d9e3bf692b94bffc248163cc",
+      "worktree_matches_commit": true
+    }
+  },
+  "verification": "verification.json",
+  "validated_guarantees": [
+    {
+      "guarantee": "At most16 selected exact child handles and leases survive complete inventory validation through mutation; other child handles close immediately. Initial names/digests schedule work and detect semantic changes, never authorize reopening old physical objects. Fresh exact-handle identity and namespace lease establish each later batch deletion authority.",
+      "source": "TreeDB/db/leaf_manifest_revision_gc.go:69,110,171,203,248,270,291"
+    },
+    {
+      "guarantee": "Entire retained directory is checked before every batch first unlink, including canonical names, manifest decoding, frozen current view, binding validation, initial digest matching and presence of all still-pending candidates. Fresh current/held/registry protection can remove pending names. Initially protected names remain conservatively outside pending.",
+      "source": "TreeDB/db/leaf_manifest_revision_gc.go:232,248,260,270,306"
+    },
+    {
+      "guarantee": "Post-segment root capture, write/rootReuse/store locks, current and both recovery-slot resources, held/prepared authority and existing same-parent quarantine/identity/sync sequence remain in force. No numeric-identity-only ABA reopening shortcut.",
+      "source": "TreeDB/db/leaf_manifest_revision_gc.go:17,50,88,319"
+    },
+    {
+      "guarantee": "Initial census totals/protected/eligible/eligible bytes accumulate once; late protection changes actual deleted count without rewriting historical census. Durable deletion counts survive partial cancellation/failure, uncompleted selected leases/handles abort/close, and retries converge.",
+      "source": "TreeDB/db/leaf_manifest_revision_gc.go:124,131,144,161"
+    },
+    {
+      "guarantee": "NativeEntries/NativeBytes preserve existing per-inventory footprint admission, independently rechecked for shrinking scans. No cumulative rescan-I/O quota is introduced.",
+      "source": "TreeDB/db/leaf_manifest_revision_gc.go:119,168,189,220; TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go:83"
+    }
+  ],
+  "evidence": {
+    "red": {
+      "source": "e03f4ca9eb341aa96f343b9b771e2c77f058f544",
+      "retained_original": "../5071-bounded-fd/red.log",
+      "result": "Actual isolated RLIMIT64 dry inventory fails with EMFILE before mutation, exit1."
+    },
+    "broad_normal": {
+      "source": "334571ef2ec7fc7b9590e0f0dca8c9c72be159d9",
+      "package_seconds": 40.007,
+      "result": "PASS,82 pass lines including subtests; exact runtime identical to final."
+    },
+    "broad_race": {
+      "source": "334571ef2ec7fc7b9590e0f0dca8c9c72be159d9",
+      "package_seconds": 44.808,
+      "result": "PASS,82 pass lines including subtests; exact runtime identical to final."
+    },
+    "low_fd": {
+      "limit": 64,
+      "initial_revisions": 257,
+      "deleted": 255,
+      "protected": 2,
+      "remaining_after_held_release": 1,
+      "baseline_fd": 12,
+      "rename_sampled_fd": 28,
+      "result": "Complete one-call GC under actual process RLIMIT64; malformed inventory yields zero first-call deletion; admitted initial footprint still admits shrinking batches."
+    },
+    "late_held_final": {
+      "source": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "normal_seconds": 1.04,
+      "race_seconds": 2.142,
+      "result": "PASS:41 initial eligible,16 durable deleted,25 become held and survive fresh scan; later unheld call deletes25."
+    },
+    "vet_final": {
+      "source": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "exit_code": 0,
+      "result": "Actual sidecar argv/exit0,empty log hash checked."
+    },
+    "benchmark_smoke_final": {
+      "source": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "iterations": 1,
+      "revisions_per_op": 32,
+      "ns_per_op": 201271686,
+      "bytes_per_op": 228688,
+      "allocs_per_op": 2570,
+      "result": "PASS single-operation completion/cost smoke only; no baseline,spread/noise,capacity or comparative performance conclusion."
+    },
+    "receipt_binding": {
+      "source_files": 3,
+      "artifacts": 9,
+      "result": "Independent Git blob/SHA256,worktree equality,raw artifact hash/size,sidecar equality/argv/exit/timestamp and334571->final runtime identity checks pass."
+    }
+  },
+  "limitations": [
+    "Worst-case repeated complete scans cost O(N\u00b2/16); bounded descriptors trade extra explicit maintenance scan work. This is documented, not a measured capacity claim.",
+    "FD28 is sampled at BeforeRename, not a continuous global peak measurement. Static bound is16 retained selected handles plus one transient scan child; successful actual RLIMIT64 whole operation is the low-FD evidence.",
+    "First inventory names/digests do not continuously retain physical incarnations of unselected candidates. Each later batch obtains fresh physical authority; no stale original physical-object continuity is claimed.",
+    "Local exact-source review and retained Linux tests do not establish current-head hosted CI/review/retained C/A/D performance gates. Root must refresh affected evidence for the changed runtime; older095 success and the one-op smoke cannot substitute."
+  ]
+}

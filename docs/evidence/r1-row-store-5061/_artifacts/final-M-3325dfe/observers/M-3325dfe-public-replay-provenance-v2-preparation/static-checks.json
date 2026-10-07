@@ -1,0 +1,74 @@
+{
+  "all_unapproved_flags_preserved": true,
+  "builder_ast_identical_after_two_literal_reversals": true,
+  "executor_ast_identical_after_single_SHA_reversal": true,
+  "files": [
+    {
+      "diff_bytes": 605,
+      "diff_name": "replay-public.py.diff",
+      "diff_sha256": "a5fcb25b4b93006de6cae4c3f315aee1447ed39f8d4cf86fccddfdbdf6a510ca",
+      "new_bytes": 34425,
+      "new_name": "replay-public.py",
+      "new_sha256": "1bcdfa4ebc4489b2292caeb25a3f5ffd38a1adb347a0e455e8f4d736c4a07fcc",
+      "original_bytes": 34425,
+      "original_path": "/home/mikers/gomap-r1-final-observers-20261006/final-public-replay-executor-preparation/replay-public.py",
+      "original_sha256": "343135d1c72fa4bb86a4185849fbba70b0ba5ca8c0dc166a6366052b227f12aa",
+      "role": "executor"
+    },
+    {
+      "diff_bytes": 1692,
+      "diff_name": "build-draft-inputs.py.diff",
+      "diff_sha256": "8560cd3174dcb9bac0d68cf0ac590073566f02f37cfa23553dff364c76bb9bef",
+      "new_bytes": 22314,
+      "new_name": "build-draft-inputs.py",
+      "new_sha256": "df71ce652147f3a55522e6c00f2a168f57266b66eb454060ce90eb792108c341",
+      "original_bytes": 22296,
+      "original_path": "/home/mikers/gomap-r1-final-observers-20261006/final-public-input-builder-v2-preparation/build-draft-inputs.py",
+      "original_sha256": "070488cb9c969d0c561ba0c310172e62f89087999d24ea14dae9e4ea010e57af",
+      "role": "builder"
+    },
+    {
+      "diff_bytes": 590,
+      "diff_name": "root-inputs.template.json.diff",
+      "diff_sha256": "bb2df5f3ae4b3a8dfb7071516c4128379eed7969b58c9608c87a9c4ff7e839c0",
+      "new_bytes": 15652,
+      "new_name": "root-inputs.template.json",
+      "new_sha256": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4",
+      "original_bytes": 15649,
+      "original_path": "/home/mikers/gomap-r1-final-observers-20261006/final-public-input-builder-v2-preparation/root-inputs.template.json",
+      "original_sha256": "bbcc02ef96051b79cf43b8666505ff9f98f59ca39e652988b73797d5a0869dfd",
+      "role": "input_template"
+    }
+  ],
+  "helper_execution_performed": false,
+  "literal_scope": {
+    "build-draft-inputs.py": [
+      "cert_name leaf only (PREFIX unchanged)",
+      "TEMPLATE_SHA matching new exact template only"
+    ],
+    "replay-public.py": [
+      "certified_A_compare hardcoded SHA only"
+    ],
+    "root-inputs.template.json": [
+      "frozen_validator_public_paths.certified_A_compare.stage_relative only",
+      "frozen_validator_public_paths.certified_A_compare.sha256 only"
+    ]
+  },
+  "method": "Exact literal replacements, inverse AST identity, JSON two-field equality, and reviewed helper CLI inspection only",
+  "remote_original_modification_or_transfer_performed": false,
+  "reviewed_adapter_sha256": "3c4502ebb4620ac010b615ca10bbdd45a4448f66e2c7ed663d57c32413c1c2c2",
+  "same_adapter_cli_required_names": [
+    "certificate",
+    "expected-certificate-sha256",
+    "repo",
+    "before",
+    "after",
+    "receipts",
+    "accepted-freeze",
+    "original-compare"
+  ],
+  "schema": "gomap-r1-public-replay-provenance-v2-static-checks-v1",
+  "source_approval_or_numeric_disposition_changed": false,
+  "template_json_identical_except_two_requested_fields": true,
+  "utc": "2026-10-07T00:47:22.524497+00:00"
+}

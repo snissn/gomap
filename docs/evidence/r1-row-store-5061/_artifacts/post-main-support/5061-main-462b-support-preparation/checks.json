@@ -1,0 +1,96 @@
+{
+  "candidate_source_runtime_harness_pins_verified": true,
+  "canonical_ci_contract_tests": {
+    "actual_exit": 0,
+    "text_observed_tests": 36
+  },
+  "canonical_regeneration_commands_verified": 4,
+  "copied_originals_exact": 90,
+  "four_focused_execution_receipts": [
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/db/maintenance_reachability.go",
+        "TreeDB/db/vlog_rewrite_chunk_plan.go"
+      ],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "phase": "format",
+      "receipt_verified": true
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "./TreeDB/collections",
+        "-run",
+        "^(TestValueLogPhysicalLiveBytes_.*|TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers|TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork|TestEstimateValueLogLiveBytesBySegment(UsesSharedCollectorAndCaches|RefreshesOnceOnMissingSnapshotFile)|TestCompactStorageAudit_(ValueLogCollectorsMatchStandaloneGroupedAliases|ProtectedRootsOnlyExtendLeafProjection|ProtectedPagerRootsMatchStandalonePlansWithMemoReuse)|TestMaintenanceRootScansDeduplicateRoleAliasesByRootID|TestEstimateValueLogLiveBytesByChunk_(SplitsPointerRecordsAcrossChunks|DedupsGroupedPointers)|TestValueLogRewriteChunkPlan_SelectsStaleChunk|TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt|TestR1Lifecycle(LogicalFoldAndVacuum|MixedCycles|RecoveryAfterMaintenance)5060)$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "log_sha256": "f3f69b7c52dd67796d574749c6eb7049c0db586dc554eac96c2f31c680dee21f",
+      "phase": "normal",
+      "receipt_verified": true
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "./TreeDB/collections",
+        "-run",
+        "^(TestValueLogPhysicalLiveBytes_.*|TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers|TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork|TestEstimateValueLogLiveBytesBySegment(UsesSharedCollectorAndCaches|RefreshesOnceOnMissingSnapshotFile)|TestCompactStorageAudit_(ValueLogCollectorsMatchStandaloneGroupedAliases|ProtectedRootsOnlyExtendLeafProjection|ProtectedPagerRootsMatchStandalonePlansWithMemoReuse)|TestMaintenanceRootScansDeduplicateRoleAliasesByRootID|TestEstimateValueLogLiveBytesByChunk_(SplitsPointerRecordsAcrossChunks|DedupsGroupedPointers)|TestValueLogRewriteChunkPlan_SelectsStaleChunk|TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt|TestR1Lifecycle(LogicalFoldAndVacuum|MixedCycles|RecoveryAfterMaintenance)5060)$",
+        "-count=1",
+        "-timeout=12m"
+      ],
+      "log_sha256": "0a2cbb824fe4c65870a55b695b37d5c11c27c3497d68e38d3672e24fbfc75f87",
+      "phase": "race",
+      "receipt_verified": true
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "./TreeDB/collections"
+      ],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "phase": "vet",
+      "receipt_verified": true
+    }
+  ],
+  "hosted_exact_head_clean": {
+    "head": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+    "not_merge_authority": true,
+    "url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976"
+  },
+  "location_only_original_inspection": {
+    "historical_accepted": 3,
+    "historical_rejected": 10,
+    "not_current_acceptance": true,
+    "records": 13
+  },
+  "new_execution_scope": "Local Python byte/hash/receipt consistency checks only; no original command was re-executed.",
+  "original_bytes": 1778246,
+  "prior_frozen_pins_unchanged": 894,
+  "required_ci_original_snapshot": {
+    "conclusion": null,
+    "jobs_allocated": 33,
+    "not_completion": true,
+    "run": 37539305355,
+    "status": "pending"
+  },
+  "source_before_after_equal": true,
+  "status": "ORIGINAL_BYTES_AND_RECEIPTS_VERIFIED_ONLY"
+}

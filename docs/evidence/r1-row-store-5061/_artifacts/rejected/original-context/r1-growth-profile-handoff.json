@@ -1,0 +1,496 @@
+{
+  "base": "0cf08802eb2766a13e319d06736e8c895008722e",
+  "binary_sha256": "56d03d528ccefc2bce6758a2dbed63b3f3ef526cca2b7b5548a48e52ed5879d4",
+  "boundaries": "No production edits, external writes, push, merge, unsafe flags, dummy writes, or111 Go work.185 own lock released. No additional experiment scheduled.",
+  "branch": "codex/r1-growth-probe",
+  "clean_before_after": true,
+  "command": "collections.test -test.run=^TestR1SupportedProfileGrowthProbe$ -test.count=1 -test.timeout=2m -test.v",
+  "diagnosis": [
+    {
+      "evidence": "final fallback-converged LeafGenerationGC actually deletes 22937B; row/index/reopen preserved",
+      "seam": "missing final leaf GC ordering",
+      "source": "TreeDB/db/leaf_generation_gc.go:497 recovery-only generation retained until durable fallback advances"
+    },
+    {
+      "evidence": "revision bytes554 at ingestion;83693 before final leaf GC;87733 after (54 revisions). No successful published-revision pruning API found in full source search",
+      "seam": "published immutable manifest revision retention",
+      "source": "TreeDB/db/leaf_generation_manifest_store.go:302 immutable revision producer;334 failed unpublished cleanup only; TreeDB/db/leaf_generation_manifest_stable_prepare.go:136 Release releases authority without unlink;158 abandonUnpublished deliberately unpublished only"
+    },
+    {
+      "evidence": "Manager.Close clears files but does not cancel or join retry workers; sleepers remain until next bounded backoff expires",
+      "seam": "deletion worker shutdown lifecycle",
+      "source": "TreeDB/internal/valuelog/manager.go:1749 Close;2327 retry cleanup;2343 time.Sleep; TreeDB/internal/valuelog/stable_resource.go:885 worker spawn; manager.go:2851 additional worker spawn"
+    }
+  ],
+  "env": {
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "16",
+    "GOMEMLIMIT": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "go": "go1.26.4 linux/amd64",
+  "harness_sha256": "40c57335e0794e415faf79c976c1d62a137e5b19c6bc4cecb67c84aa6816d583",
+  "head": "7adf81c2afcf2f6de2f9d76303f6b09bba5b4db4",
+  "immutable_predecessor_evidence": {
+    "fallback_green": "/home/mikers/gomap-r1-growth-evidence-20261005/fallback-green-b55b3c99",
+    "fallback_red": "/home/mikers/gomap-r1-growth-evidence-20261005/fallback-red-2e2dae8b"
+  },
+  "linux_worktree": "/home/mikers/gomap-r1-growth-probe-185",
+  "local_worktree": "/tmp/gomap-r1-growth-probe",
+  "next_decision": "Root scope/independent ownership review before runtime edits or D integration. Add final supported leaf GC to schedule only after reviewed successor; total growth remains open.",
+  "owned_new_file": "TreeDB/collections/r1_growth_profile_probe_test.go",
+  "profile": {
+    "DisableBackgroundPrune": true,
+    "cached_wrapper": "absent direct backend",
+    "opener": "OptionsFor(ProfileCommandWALDurable)+OpenBackend",
+    "persisted_outer": true,
+    "persisted_packed": true,
+    "runtime_overrides": "none other than DisableBackgroundPrune",
+    "side_store_cleanup": "returned OpenBackend owner closure; same fresh profile opener on reopen"
+  },
+  "proposed_manifest_scope": "Leaf-manifest producer/GC owner must assess private published-revision prune: preserve operational current revision, exact current/recovery resource closures and all identity pins; exact parent/child identity lease+durable unlink only. Never reuse abandonUnpublished against published revisions.",
+  "proposed_narrow_shutdown_fix": "Manager-owned cancelable retry wait and worker join; register retry workers under lock with closed guard to avoid Add/Wait race; stop/join without holding mutex needed by worker; preserve stable deletion gates.",
+  "proposed_narrow_shutdown_reproducer": "Use existing stable identity pin manager fixture; hold exact token, mark tracked file zombie, start retry and synchronize at retry-wait barrier; call Manager.Close while token remains pinned; assert retry terminated before Close returns and file remains. Release token afterward. No sleep/goleak suppression.",
+  "raw_paths": {
+    "compile_failure": "/home/mikers/gomap-r1-growth-evidence-20261005/profile-e6f72455",
+    "logger_failure": "/home/mikers/gomap-r1-growth-evidence-20261005/profile-c2c4c370",
+    "postgc_failed_exit1": "/home/mikers/gomap-r1-growth-evidence-20261005/profile-postgc-7adf81c2",
+    "profile_failed_exit1": "/home/mikers/gomap-r1-growth-evidence-20261005/profile-2cde6c8c"
+  },
+  "result": {
+    "failure": "TestMain goleak: sleeping retryZombieDelete workers after owner cleanup",
+    "oracle": "five fixed-live epochs, current/held/historical-index/reopen PASS",
+    "postconvergence_leaf_gc": {
+      "BytesDeleted": 22937,
+      "FilesDeleted": 1,
+      "GenerationsDeleted": 1,
+      "GenerationsEligible": 1,
+      "elapsed_ns": 49649313
+    },
+    "test_process_exit": 1,
+    "typed_file1_actual_deletions": 5,
+    "typed_file1_actual_recreations": 4
+  },
+  "runtime_sha256": "4d4950757e75266540c795439eb07dee77ce273015fe36b71202cdb0ecf8d396",
+  "runtime_working_sha256": "11d39d68c3bfba4f700b0fed9ec0bb5baab84c99c6b18352ccb3d75ab2b236c4",
+  "scope": "nonqualifying isolated supported-profile correctness diagnostic; no capacity acceptance",
+  "source_before_after_identical": true,
+  "trajectory": [
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 469,
+        "persistent_leaf_log": 5140,
+        "persistent_vlog": 1014,
+        "redo_wal": 6265,
+        "template_store": 0,
+        "typed_assets": 5490
+      },
+      "durable_manifest_revision_bytes": 554,
+      "durable_manifest_revision_files": 2,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 3,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 2,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "ingest",
+      "roots": [
+        {
+          "AppliedCommandLSN": 0,
+          "CommitSeq": 1,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 3,
+          "UserRootPageID": 2,
+          "Visible": false
+        },
+        {
+          "AppliedCommandLSN": 1,
+          "CommitSeq": 2,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 9,
+          "UserRootPageID": 2,
+          "Visible": false
+        },
+        {
+          "AppliedCommandLSN": 2,
+          "CommitSeq": 3,
+          "Durable": false,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 54,
+          "UserRootPageID": 2,
+          "Visible": true
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1231,
+        "persistent_leaf_log": 28960,
+        "persistent_vlog": 1485,
+        "redo_wal": 7615,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 14233,
+      "durable_manifest_revision_files": 16,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 24,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "epoch-0-reclaimed",
+      "roots": [
+        {
+          "AppliedCommandLSN": 7,
+          "CommitSeq": 18,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 7,
+          "CommitSeq": 17,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1378,
+        "persistent_leaf_log": 69293,
+        "persistent_vlog": 1957,
+        "redo_wal": 1380,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 27756,
+      "durable_manifest_revision_files": 25,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 35,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "epoch-1-reclaimed",
+      "roots": [
+        {
+          "AppliedCommandLSN": 12,
+          "CommitSeq": 29,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 12,
+          "CommitSeq": 28,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1526,
+        "persistent_leaf_log": 90438,
+        "persistent_vlog": 2428,
+        "redo_wal": 1379,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 43925,
+      "durable_manifest_revision_files": 34,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 46,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "epoch-2-reclaimed",
+      "roots": [
+        {
+          "AppliedCommandLSN": 17,
+          "CommitSeq": 40,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 17,
+          "CommitSeq": 39,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1673,
+        "persistent_leaf_log": 114075,
+        "persistent_vlog": 2900,
+        "redo_wal": 1380,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 62576,
+      "durable_manifest_revision_files": 43,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 57,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "epoch-3-reclaimed",
+      "roots": [
+        {
+          "AppliedCommandLSN": 22,
+          "CommitSeq": 51,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 22,
+          "CommitSeq": 50,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1820,
+        "persistent_leaf_log": 140125,
+        "persistent_vlog": 3373,
+        "redo_wal": 1381,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 83693,
+      "durable_manifest_revision_files": 52,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 68,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "epoch-4-reclaimed",
+      "roots": [
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 62,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 61,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1820,
+        "persistent_leaf_log": 140125,
+        "persistent_vlog": 3373,
+        "redo_wal": 1381,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 83693,
+      "durable_manifest_revision_files": 52,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 68,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "before-final-leaf-gc",
+      "roots": [
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 62,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 61,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1820,
+        "persistent_leaf_log": 120657,
+        "persistent_vlog": 3373,
+        "redo_wal": 1381,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 87733,
+      "durable_manifest_revision_files": 54,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 68,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "after-final-leaf-gc",
+      "roots": [
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 62,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 61,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    },
+    {
+      "components": {
+        "dictionary_store": 0,
+        "index": 4194304,
+        "other": 1820,
+        "persistent_leaf_log": 120657,
+        "persistent_vlog": 3373,
+        "redo_wal": 11,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "durable_manifest_revision_bytes": 87733,
+      "durable_manifest_revision_files": 54,
+      "files": {
+        "dictionary_store": 0,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 68,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "phase": "reopen",
+      "roots": [
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 62,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": true
+        },
+        {
+          "AppliedCommandLSN": 27,
+          "CommitSeq": 61,
+          "Durable": true,
+          "MaxEntryRevision": 0,
+          "SystemRootPageID": 10,
+          "UserRootPageID": 11,
+          "Visible": false
+        }
+      ]
+    }
+  ]
+}

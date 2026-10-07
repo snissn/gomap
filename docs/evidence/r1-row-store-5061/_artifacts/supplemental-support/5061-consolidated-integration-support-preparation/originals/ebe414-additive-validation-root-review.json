@@ -1,0 +1,108 @@
+{
+  "utc": "2026-10-06T18:24:01.914632+00:00",
+  "reviewed_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "counts": {
+    "normal": {
+      "test_pass_rows": 51,
+      "families": {
+        "TestR1MutationSweepSmokeAndCorruption": 29,
+        "TestRewriteSwapPreservesWinningCurrentRevision": 1,
+        "TestSelectedValueLogRewriteRevisionLifetime": 10,
+        "TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle": 1,
+        "TestCOWProducedFrameObserverMatchesEncodedFrames": 9,
+        "TestCOWProducedFrameObserverRejectsBeforeObservation": 1
+      },
+      "package_pass_rows": [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/cmd/collection_workload_bench"
+      ],
+      "start_utc": "2026-10-06T18:17:31.967607+00:00",
+      "exit_utc": "2026-10-06T18:18:14.426408+00:00",
+      "log_sha256": "aa4d20c766a19dfe9a5576bc1a1fb2f4387ebcf665b0e0e48f523667fc024bd1",
+      "exit": 0
+    },
+    "race": {
+      "test_pass_rows": 51,
+      "families": {
+        "TestR1MutationSweepSmokeAndCorruption": 29,
+        "TestRewriteSwapPreservesWinningCurrentRevision": 1,
+        "TestSelectedValueLogRewriteRevisionLifetime": 10,
+        "TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle": 1,
+        "TestCOWProducedFrameObserverMatchesEncodedFrames": 9,
+        "TestCOWProducedFrameObserverRejectsBeforeObservation": 1
+      },
+      "package_pass_rows": [
+        "github.com/snissn/gomap/cmd/collection_workload_bench",
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db"
+      ],
+      "start_utc": "2026-10-06T18:18:14.467150+00:00",
+      "exit_utc": "2026-10-06T18:19:07.722310+00:00",
+      "log_sha256": "569ff8f367fcec17e360706ebe38bd224a437b624fae949d1c68274dbb85d2ff",
+      "exit": 0
+    }
+  },
+  "vet_exit": 0,
+  "state": "FOCUSED_CORRECTNESS_PASS_NORMAL_RACE_VET",
+  "files": [
+    {
+      "path": "normal-exit.json",
+      "bytes": 108295,
+      "sha256": "4b670b70232f04f92f3b05efb74b81b03016be6684a7a8e26b7c041cee571851"
+    },
+    {
+      "path": "normal-start.json",
+      "bytes": 109742,
+      "sha256": "e08641cace921c19cde746859701429ca3df4096c8d78300e102a90bbbad7bc3"
+    },
+    {
+      "path": "normal.log",
+      "bytes": 54612,
+      "sha256": "aa4d20c766a19dfe9a5576bc1a1fb2f4387ebcf665b0e0e48f523667fc024bd1"
+    },
+    {
+      "path": "race-exit.json",
+      "bytes": 108295,
+      "sha256": "399f6c812ee4c0acd84d16ed7723458256ade38512c12ad9ae026d6dc7d8fba4"
+    },
+    {
+      "path": "race-start.json",
+      "bytes": 109755,
+      "sha256": "2c89a4fb1307a867c6f06ab3d1ccfcdf0445b2711e4b893326020ddd94122cf0"
+    },
+    {
+      "path": "race.log",
+      "bytes": 54717,
+      "sha256": "569ff8f367fcec17e360706ebe38bd224a437b624fae949d1c68274dbb85d2ff"
+    },
+    {
+      "path": "source-after.json",
+      "bytes": 105879,
+      "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000"
+    },
+    {
+      "path": "source-before.json",
+      "bytes": 105879,
+      "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000"
+    },
+    {
+      "path": "vet-exit.json",
+      "bytes": 108295,
+      "sha256": "95c802b6b2f0b069202007338180b8774630871b0872c5d6b40aa28ba088b6ff"
+    },
+    {
+      "path": "vet-start.json",
+      "bytes": 109304,
+      "sha256": "d552e0d900966b6cad922af54f8728df15c7a875968639c09e19fa35a54a70e7"
+    },
+    {
+      "path": "vet.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "scope": "New-main shared runtime seams plus unchanged reviewed C smoke and fail-closed corruption coverage; no retained performance qualification"
+}

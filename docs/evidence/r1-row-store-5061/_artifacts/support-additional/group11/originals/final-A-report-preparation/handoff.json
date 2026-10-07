@@ -1,0 +1,91 @@
+{
+  "status": "PREPARATION_COMPLETE_UNQUALIFIED_NO_FINAL_CAPTURE",
+  "route": "gpt-6.1-sol/high",
+  "scope": "private Python formatting/report helper only",
+  "helper": "/tmp/gomap-r1-execution-20261005/final-A-report-preparation/report-a.py",
+  "helper_sha256": "b2e386b4ec939978b9de1759ff6a2b564abf2afc0ecd136171823302b1fdefa4",
+  "inspected_source": {
+    "commit": "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+    "path": "cmd/collection_workload_bench/r1.go",
+    "git_blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+    "text_copy": "/tmp/gomap-r1-execution-20261005/final-A-report-preparation/inspected-baseline-r1-source.txt",
+    "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+    "argv": [
+      "git",
+      "show",
+      "0216e2e9ee701dee0eda96c569dc0c8facb37ca9:cmd/collection_workload_bench/r1.go"
+    ],
+    "exit_code": 0
+  },
+  "baseline_input": "/tmp/gomap-r1-execution-20261005/captures/r1-baseline-landed-0216e2e/packet.json",
+  "original_input_pins": {
+    "/private/tmp/gomap-r1-execution-20261005/captures/r1-baseline-landed-0216e2e/packet.json": "d3bcec0a4924267afeee67a13ec1e5f83c8ef930a12d1b46538c3cd71746013f",
+    "/private/tmp/gomap-r1-execution-20261005/captures/r1-baseline-landed-0216e2e/summary.json": "fc6c883f2753a46439a47d2460eeadf9c5af1121f0e37bf97c36ed52ec5adc22",
+    "/private/tmp/gomap-r1-execution-20261005/compare_r1_packets.py": "1a54cac528e5c8acc2501ec67b13d9a185b011e1467856741ada320a8bfdcfc8"
+  },
+  "verification": {
+    "argv": [
+      "python3",
+      "/tmp/gomap-r1-execution-20261005/final-A-report-preparation/check-report.py"
+    ],
+    "exit_code": 0,
+    "checks": 1214,
+    "enabled_groups": 92,
+    "skipped_groups": 4,
+    "noise_inconclusive_groups": 69,
+    "receipt": "/tmp/gomap-r1-execution-20261005/final-A-report-preparation/checks.json"
+  },
+  "outputs": {
+    "markdown": "/tmp/gomap-r1-execution-20261005/final-A-report-preparation/verified-baseline-format.md",
+    "json": "/tmp/gomap-r1-execution-20261005/final-A-report-preparation/verified-baseline-format.json"
+  },
+  "files": {
+    "README.md": {
+      "sha256": "10c917668c9fc61103a3fa4881384873463677614a98b2a7b836d10793ea15c4",
+      "bytes": 2995
+    },
+    "baseline-format-smoke.json": {
+      "sha256": "13b111f43a6c2e60caeefeb2d3b6abc557050c06351029b187b362bc45356ef1",
+      "bytes": 11147472
+    },
+    "baseline-format-smoke.md": {
+      "sha256": "284df7aed8c567f78d2c563f0453ee29f793938195923dee38be1a48bb5f22d8",
+      "bytes": 29380
+    },
+    "check-report.py": {
+      "sha256": "e01fe9cee2b87375974a12b83ef4023c7a67dacda5d82e9abb8fc29c38a94169",
+      "bytes": 5402
+    },
+    "checks.json": {
+      "sha256": "11c4beeb15cc3b1605feaab14d9bcccf2ee4801eb036cad38bd4982ba046967a",
+      "bytes": 72445
+    },
+    "inspected-baseline-r1-source.txt": {
+      "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+      "bytes": 43896
+    },
+    "report-a.py": {
+      "sha256": "b2e386b4ec939978b9de1759ff6a2b564abf2afc0ecd136171823302b1fdefa4",
+      "bytes": 13140
+    },
+    "synthetic-denominator-format-only.json": {
+      "sha256": "f095571e75df5ee32e975088a093178945c77ef130e51fa27198d4fa5f7508f5",
+      "bytes": 4746680
+    },
+    "synthetic-nonfinite-format-only.json": {
+      "sha256": "7d9888fcd48dd8a69fb0f1a44a72f9b060b7406bd9d2e7ae0ccf3839883823cc",
+      "bytes": 4746665
+    },
+    "verified-baseline-format.json": {
+      "sha256": "13b111f43a6c2e60caeefeb2d3b6abc557050c06351029b187b362bc45356ef1",
+      "bytes": 11147472
+    },
+    "verified-baseline-format.md": {
+      "sha256": "5cc495852cc89f413eef8bbc90d2df4bc5042006727eb40836cbad4c62d4d42f",
+      "bytes": 24842
+    }
+  },
+  "unchanged": "original packet, source metadata, baseline summary, original comparator, prior observers/certificates and all repository paths",
+  "pending": "Root supplies independently accepted actual final A packet. No final source, landing, validation, timing or acceptance is asserted.",
+  "writer_and_resource_lock": "released; no Go processes or host locks acquired"
+}

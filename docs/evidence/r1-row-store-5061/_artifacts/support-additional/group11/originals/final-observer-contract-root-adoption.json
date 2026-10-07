@@ -1,0 +1,34 @@
+{
+  "utc": "2026-10-06T20:20:06.284931+00:00",
+  "reviewer": "/root",
+  "status": "ROOT_ADOPTED_PRIVATE_PREPARATION_ONLY",
+  "files": {
+    "derivation-template-handoff.json": {
+      "bytes": 984,
+      "sha256": "2a91da9b9a3109ebebf72d375af4115b653f612c8d1ce5a6684f34fcef58ef24"
+    },
+    "handoff.json": {
+      "bytes": 3985,
+      "sha256": "07f80c9af478ecc7e532b296558ce39ccb00008fe635de4059f7184f398bd780"
+    },
+    "derive-configs.py": {
+      "bytes": 7795,
+      "sha256": "eda94146836c9a91f8e9f25a7148a1387e79a151c8b8a6aca547b21158711a7e"
+    },
+    "root-inputs.template.json": {
+      "bytes": 770,
+      "sha256": "9d4141886330bd5a6cd06e9ce200a64fb47bb664fa296b72e6de2a3e744be903"
+    },
+    "derive-configs.md": {
+      "bytes": 2157,
+      "sha256": "1029f2c778fdeeb108ad51646bdc553e105a134a02e43f194e63c5fecddb9562"
+    },
+    "handoff.md": {
+      "bytes": 7367,
+      "sha256": "eca975da9981d597b75ed60b67b20b066151d4c8151f3177e1f2714d812e0313"
+    }
+  },
+  "scope": "derive-only future Linux111 configs from actual clean merged source and externally verified landing; no capture launched, no actual inputs supplied",
+  "review": "Root read entire derive-only script; canonical lock marker plus callerflock, exact clean source repeated, matchingactualGoenv, A/C and distinctcompiledtestD independentlyderived, exclusivepaths, no packetdeclared expectations",
+  "limits": "Syntax-only preparation. No actualGo/source derivation yet; root must inspect actualsource/configreceipts before invokingeachlane serially."
+}

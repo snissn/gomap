@@ -1,0 +1,11 @@
+PASS: compile via builtin compile (no pycache); actual historical supplied summary renders all16 primary rows and64 phase/domain counter rows.
+PASS: separate ACK/Flush sections; supplied raw links and diagnostic scope; exact uint64 integer formatting.
+missing_cell: refused
+duplicate_cell: refused
+missing_metric: refused
+missing_ACK_counter: refused
+missing_Flush_counter: refused
+nonfinite: refused
+missing_original_repetitions: refused
+wrong_summary_schema: refused
+PASS: original packet and reviewed summarizer byte hashes unchanged. No Go/capture/GitHub/CI polling/source edits.

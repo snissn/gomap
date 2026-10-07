@@ -1,0 +1,105 @@
+
+======================================================================
+FAIL: test_invocation_names_original_capture_executable (r1_lifecycle_validate_test.RealPacketTests) (executable='')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 103, in test_invocation_names_original_capture_executable
+    self.reject_matching_packet_receipt('mislabeled benchmark command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_invocation_names_original_capture_executable (r1_lifecycle_validate_test.RealPacketTests) (executable='collections.test')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 103, in test_invocation_names_original_capture_executable
+    self.reject_matching_packet_receipt('mislabeled benchmark command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_invocation_names_original_capture_executable (r1_lifecycle_validate_test.RealPacketTests) (executable='/other/collections.test')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 103, in test_invocation_names_original_capture_executable
+    self.reject_matching_packet_receipt('mislabeled benchmark command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_invocation_names_original_capture_executable (r1_lifecycle_validate_test.RealPacketTests) (executable='/home/mikers/gomap-r1-evidence-20261005/r1-5060-maintenance-clean-a54d51a/collections.test.other')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 103, in test_invocation_names_original_capture_executable
+    self.reject_matching_packet_receipt('mislabeled benchmark command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_build_command_targets_same_capture_executable_and_package (r1_lifecycle_validate_test.RealPacketTests) (index=0, value='')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 113, in test_build_command_targets_same_capture_executable_and_package
+    self.reject_matching_packet_receipt('mislabeled build command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_build_command_targets_same_capture_executable_and_package (r1_lifecycle_validate_test.RealPacketTests) (index=1, value='build')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 113, in test_build_command_targets_same_capture_executable_and_package
+    self.reject_matching_packet_receipt('mislabeled build command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_build_command_targets_same_capture_executable_and_package (r1_lifecycle_validate_test.RealPacketTests) (index=2, value='-race')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 113, in test_build_command_targets_same_capture_executable_and_package
+    self.reject_matching_packet_receipt('mislabeled build command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_build_command_targets_same_capture_executable_and_package (r1_lifecycle_validate_test.RealPacketTests) (index=3, value='--output')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 113, in test_build_command_targets_same_capture_executable_and_package
+    self.reject_matching_packet_receipt('mislabeled build command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_build_command_targets_same_capture_executable_and_package (r1_lifecycle_validate_test.RealPacketTests) (index=4, value='/other/collections.test')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 113, in test_build_command_targets_same_capture_executable_and_package
+    self.reject_matching_packet_receipt('mislabeled build command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_build_command_targets_same_capture_executable_and_package (r1_lifecycle_validate_test.RealPacketTests) (index=5, value='./TreeDB/db')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 113, in test_build_command_targets_same_capture_executable_and_package
+    self.reject_matching_packet_receipt('mislabeled build command')
+  File "/private/tmp/gomap-r1-5060/scripts/r1_lifecycle_validate_test.py", line 94, in reject_matching_packet_receipt
+    validate(self.path,
+AssertionError: ValueError not raised
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.839s
+
+FAILED (failures=10)

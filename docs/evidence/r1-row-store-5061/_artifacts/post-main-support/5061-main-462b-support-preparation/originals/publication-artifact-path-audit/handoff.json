@@ -1,0 +1,236 @@
+{
+  "ci_interactions": {
+    "TreeDB_go_list_and_vet": "Repo-root docs is outside TreeDB working directory and the TreeDB/runtime prefixes.",
+    "docs_check": [
+      {
+        "forbidden_docs_root_matches": [],
+        "pinned_planned_files_inspected": 569,
+        "plan": "/private/tmp/gomap-r1-execution-20261005/5061-support-assembly-complete-preparation/assembly-plan.json",
+        "scope": "Static inspection of files selected by these frozen plans only; no docs-check command run."
+      },
+      {
+        "forbidden_docs_root_matches": [],
+        "pinned_planned_files_inspected": 215,
+        "plan": "/private/tmp/gomap-r1-execution-20261005/supplemental-10-11-assembly-preparation/assembly-plan.json",
+        "scope": "Static inspection of files selected by these frozen plans only; no docs-check command run."
+      }
+    ],
+    "format": "gofmt -l $(git ls-files *.go) still includes the two original .go filenames under _artifacts. No formatting command run or source bytes changed.",
+    "root_go_list_and_vet": "Root ./... excludes _artifacts during discovery before TreeDB package filtering."
+  },
+  "constraints_observed": [
+    "No Go, build, test, capture, SSH, GitHub action or polling.",
+    "No source, stage, frozen helper, ledger or original mutation.",
+    "Only new audit handoff files written.",
+    "No delegation."
+  ],
+  "fixture_copies": [
+    {
+      "bytes": 15662,
+      "exact_a645_git_object_bytes": true,
+      "fixture_git_blob": "d4eda66439832cf91cfeba0904acb90023f0a8df",
+      "frozen_relative": "supplemental-support/5061-cow-fixture-current-gates-support-preparation/originals/source-cli/a645-fixture-source.go",
+      "mode": "0644",
+      "original_classification": "NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION",
+      "original_enters_runtime_inventory": true,
+      "original_treeDB_destination": "TreeDB/docs/evidence/r1-row-store-5061/supplemental-support/5061-cow-fixture-current-gates-support-preparation/originals/source-cli/a645-fixture-source.go",
+      "proposed_destination": "docs/evidence/r1-row-store-5061/_artifacts/supplemental-support/5061-cow-fixture-current-gates-support-preparation/originals/source-cli/a645-fixture-source.go",
+      "proposed_enters_runtime_inventory": false,
+      "proposed_wildcard_ancestor_ignored": "_artifacts",
+      "regular_nonsymlink": true,
+      "sha256": "88aef9a7634ff8693ae790007d579dd27daeea0d2d0d25c337b1d4387fa3b054",
+      "source_absolute": "/private/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/originals/source-cli/a645-fixture-source.go"
+    },
+    {
+      "bytes": 15662,
+      "exact_a645_git_object_bytes": true,
+      "fixture_git_blob": "d4eda66439832cf91cfeba0904acb90023f0a8df",
+      "frozen_relative": "supplemental-support/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/a645-fixture-source.go",
+      "mode": "0644",
+      "original_classification": "NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION",
+      "original_enters_runtime_inventory": true,
+      "original_treeDB_destination": "TreeDB/docs/evidence/r1-row-store-5061/supplemental-support/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/a645-fixture-source.go",
+      "proposed_destination": "docs/evidence/r1-row-store-5061/_artifacts/supplemental-support/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/a645-fixture-source.go",
+      "proposed_enters_runtime_inventory": false,
+      "proposed_wildcard_ancestor_ignored": "_artifacts",
+      "regular_nonsymlink": true,
+      "sha256": "88aef9a7634ff8693ae790007d579dd27daeea0d2d0d25c337b1d4387fa3b054",
+      "source_absolute": "/private/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/a645-fixture-source.go"
+    }
+  ],
+  "fixture_source_authority": {
+    "bytes": 15662,
+    "commit": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+    "git_blob": "d4eda66439832cf91cfeba0904acb90023f0a8df",
+    "internal_import": "github.com/snissn/gomap/TreeDB/internal/memtable",
+    "no_leading_build_constraint": true,
+    "original_source_is_test_file": true,
+    "package": "caching",
+    "path": "TreeDB/caching/cow_maintenance_lifetime_test.go",
+    "retained_names_are_ordinary_go_files": true,
+    "sha256": "88aef9a7634ff8693ae790007d579dd27daeea0d2d0d25c337b1d4387fa3b054",
+    "uses_original_package_private_names": [
+      "DB",
+      "Open",
+      "Options",
+      "cow",
+      "vlogCompressionOff"
+    ]
+  },
+  "frozen_input_pins": [
+    {
+      "bytes": 1022472,
+      "nonsymlink": true,
+      "path": "/private/tmp/gomap-r1-execution-20261005/5061-support-assembly-complete-preparation/assembly-plan.json",
+      "sha256": "97ea29fa5d67b3d15449d3bfebdc59faaa78c1f0bbfd11008e055a4789e92144"
+    },
+    {
+      "bytes": 6947,
+      "nonsymlink": true,
+      "path": "/private/tmp/gomap-r1-execution-20261005/5061-support-assembly-complete-preparation/assemble-support-complete.py",
+      "sha256": "d154e36e2d1ae0a472e0dbacca9e490a498f09c9dd7d681e08550e4c18881ae1"
+    },
+    {
+      "bytes": 84451,
+      "nonsymlink": true,
+      "path": "/private/tmp/gomap-r1-execution-20261005/supplemental-10-11-assembly-preparation/assembly-plan.json",
+      "sha256": "9ffdb5e269b17435e5e97624c9aaf35f2cd546e188fa0e3b856491214a9dd394"
+    },
+    {
+      "bytes": 13842,
+      "nonsymlink": true,
+      "path": "/private/tmp/gomap-r1-execution-20261005/prepare-evidence-publication-final.py",
+      "sha256": "d03f6fe489ae7bd0296cd31dcff1785cbd25d855acb714afe1191ea73a0b426a"
+    },
+    {
+      "bytes": 4299,
+      "nonsymlink": true,
+      "path": "/private/tmp/gomap-r1-execution-20261005/verify-publication-replay.py",
+      "sha256": "66f6c4096014322e3407b3efc5959751f534307ebe9a3e272b6148eba2f40ea6"
+    }
+  ],
+  "go_wildcard_authority": [
+    {
+      "rule": "Local wildcard traversal skips directory components beginning with underscore.",
+      "url": "https://raw.githubusercontent.com/golang/go/go1.26.4/src/cmd/go/internal/search/search.go"
+    },
+    {
+      "rule": "Module wildcard traversal also prunes underscore directory trees.",
+      "url": "https://raw.githubusercontent.com/golang/go/go1.26.4/src/cmd/go/internal/modload/search.go"
+    }
+  ],
+  "inspected_head": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+  "inspected_repository": "/private/tmp/gomap-r1-5067",
+  "recommendation": {
+    "artifact_root": "docs/evidence/r1-row-store-5061/_artifacts",
+    "canonical_primary_report": "TreeDB/docs/evidence/r1-row-store-5061/README.md",
+    "preserve": "Entire staged tree below this outer artifact root; all frozen relative paths, bytes, ledgers, helpers, original argv and classifications unchanged.",
+    "report_relative_artifact_link": "../../../../docs/evidence/r1-row-store-5061/_artifacts"
+  },
+  "remaining_root_actions": [
+    "Choose proposed outer artifact root before actual publication staging, keeping frozen helpers and all relative members unchanged.",
+    "Stage core plus all adopted supplements only after actual qualification; generate final supplemental PUBLICATION_SHA256SUMS relative to artifact root after all files are final.",
+    "Use final public Git SHA/root-relative URLs and pinned release overlay in fresh Linux download/replay; preserve exact original receipts and support input paths.",
+    "Compare actual committed-E runtime/A-C harness/D harness inventories against accepted measured-M evidence; ensure only intended primary report/artifact changes.",
+    "Run normal required final CI including formatting on unchanged captured .go bytes. No threshold, acceptance, or gate waiver supplied by this audit."
+  ],
+  "replay_preservation": {
+    "binary_overlay_index": "No path or byte changes; release overlay remains the same pinned object.",
+    "core_SHA256SUMS_members": "Remain relative to artifact stage root, not repo root.",
+    "original_capture_argv": "Preserve historical original absolute argv/cwd in receipts; separately describe current replay path translation.",
+    "primary_report_links": "New primary report uses ../../../../docs/evidence/r1-row-store-5061/_artifacts/ or final immutable public URLs. Do not rewrite frozen evidence.",
+    "restore_command": "python3 <downloaded-helper>/verify-publication-replay.py --stage <downloaded-artifact-root> --out <fresh-nonoverlapping-restore-root>",
+    "stage_helpers_accept_arbitrary_outer_stage": true,
+    "supplemental_ledgers": "Remain within their original namespaces and relative paths.",
+    "support_inputs": "Read directly from downloaded artifact stage under independently verified PUBLICATION_SHA256SUMS, preserving core-only restorer behavior."
+  },
+  "schema_version": 1,
+  "source_pins": [
+    {
+      "bytes": 1994,
+      "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+      "git_blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+      "path": "scripts/r1_collection_source.py",
+      "relevant_lines": [
+        14,
+        18,
+        24,
+        33,
+        37,
+        43
+      ],
+      "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c"
+    },
+    {
+      "bytes": 10594,
+      "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+      "git_blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+      "path": "scripts/r1_lifecycle_capture.py",
+      "relevant_lines": [
+        13,
+        32,
+        50
+      ],
+      "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8"
+    },
+    {
+      "bytes": 639,
+      "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+      "git_blob": "8b383de2309424864ae17d7b2afba507ab474b39",
+      "path": ".github/workflows/format.yml",
+      "relevant_lines": [
+        28
+      ],
+      "sha256": "ebd68ccc334734d7904240311e98124a3827feb8cd2defd1c9f3dd14c2749ec6"
+    },
+    {
+      "bytes": 2847,
+      "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+      "git_blob": "976fb10c965f0c228fabb623cc432e09ff2056f9",
+      "path": ".github/workflows/root-tests.yml",
+      "relevant_lines": [
+        76,
+        85
+      ],
+      "sha256": "49b2670b50e750a730582d1c84c408a7608c9327fa07c5dbfe58fda93795757e"
+    },
+    {
+      "bytes": 48207,
+      "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+      "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+      "path": ".github/workflows/treedb-tests.yml",
+      "relevant_lines": [
+        233,
+        234,
+        468,
+        495,
+        721
+      ],
+      "sha256": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477"
+    },
+    {
+      "bytes": 1921,
+      "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+      "git_blob": "082c58b0b40b553dbca73e825392e9ac8c6739d4",
+      "path": "scripts/docs_check.sh",
+      "relevant_lines": [
+        59,
+        60
+      ],
+      "sha256": "4442a4582b51896d5d603aa7f492969d47a5e4cef3a199edb4d3288e4172ba2a"
+    }
+  ],
+  "static_runtime_projection": {
+    "algorithm": "Exact committed path/blob predicate and digest loop from inspected scripts/r1_collection_source.py; no source_identity execution, no Go and no capture. Projection adds only the two frozen fixture copies, not an actual E commit.",
+    "bad_treeDB_projection_runtime_sha256": "1b307e518189661d806a6bc242c0d93c356f8c3bc657a93d14f531fa607b0b5c",
+    "bad_treeDB_projection_selected_blob_count": 1124,
+    "baseline_commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+    "baseline_runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+    "baseline_selected_blob_count": 1122,
+    "proposed_root_docs_projection_equal_to_baseline": true,
+    "proposed_root_docs_projection_runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+    "scope_limit": "Final publication commit still requires root to compare actual measured-M and committed-E runtime/harness manifests. This projection makes no current merge, capture or clean-worktree claim."
+  },
+  "status": "READ_ONLY_STATIC_RECOMMENDATION_NOT_PUBLICATION_OR_ACCEPTANCE",
+  "utc": "2026-10-06T22:06:00.162817+00:00"
+}

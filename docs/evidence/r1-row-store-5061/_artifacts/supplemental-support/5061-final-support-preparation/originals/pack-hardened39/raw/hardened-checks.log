@@ -1,0 +1,41 @@
+e6c05004b8514f24ce4d980d9f241522b2db3967
+545fd3b47cb13728f72c4e45eb40f3982fcc364f
+--- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority (0.31s)
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+--- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority (0.28s)
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+--- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority (0.29s)
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	8.306s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.061s
+FAIL
+NORMAL_EXIT=1
+--- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority (0.31s)
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+    --- FAIL: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id (0.00s)
+        r1_rebuilt_pack_projection_test.go:277: failed capture mutated published authority
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	2.972s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	1.029s
+FAIL
+RACE_EXIT=1
+VET_EXIT=0

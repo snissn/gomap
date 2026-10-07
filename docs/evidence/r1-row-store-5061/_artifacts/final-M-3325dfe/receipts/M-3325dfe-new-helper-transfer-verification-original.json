@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-07T00:12:44.953622+00:00",
+  "state": "NEW_PRIVATE_HELPER_AND_ADVISORY_TRANSFER_BYTES_VERIFIED_ONLY_NO_PUBLIC_OR_COST_ACCEPTANCE",
+  "files": {
+    "M-3325dfe-root-A-qualification.py": "d460473141c7ece8b3a864bb652f4bc4bad351be0743b01ac7607bdd37072839",
+    "final-root-A-qualification-review.md": "ef060c79fc3b6fdd0f6eba163c66ed97e193c860478410ee6920267fb7ac0f19",
+    "final-public-replay-executor-preparation/replay-public.py": "343135d1c72fa4bb86a4185849fbba70b0ba5ca8c0dc166a6366052b227f12aa",
+    "final-public-replay-executor-preparation/root-inputs.schema.json": "92e71d8552045272f7768e87541f608d0084e536972f7894f5626b3cb3f06633",
+    "final-public-replay-executor-preparation/root-inputs.template.json": "bbcc02ef96051b79cf43b8666505ff9f98f59ca39e652988b73797d5a0869dfd",
+    "M-3325dfe-C-cost-interpretation-preparation/handoff.md": "67a50ca955dab7bdb28f69907fe4b3d87ee247432b648cc7d061fe2f092bb1a8",
+    "M-3325dfe-C-cost-interpretation-preparation/handoff.json": "c1e02fcf67c1b1cae90761f7f7c4a37324f058109eca2c2bcd3d5d28a28cd0df"
+  }
+}

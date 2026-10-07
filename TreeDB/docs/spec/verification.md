@@ -2,6 +2,117 @@
 
 This document maps specification invariants to existing tests and harnesses.
 
+`TestManagerRefreshDuringRetiredSegmentUnlink` exercises actual close-before-
+unlink and failed-unlink ownership without scheduler timing. Refresh discovers
+new live segments while excluding the closed zombie. Companion tests preserve
+different-path ID conflicts and closed-live-handle errors.
+`TestManagerRefreshRetiredSegmentRejectsReboundPath` completes a real failed
+unlink and rollback, proves unchanged-identity refresh with the closed handle,
+then replaces the pathname. Refresh and retirement retry must report a resource
+conflict while preserving the replacement's bytes/identity and zombie ownership.
+`TestManagerRefreshRetiredSegmentRejectsSpecialPath` exercises failed-unlink
+rollback followed by a FIFO, a link to the original inode, and a link to a FIFO.
+Refresh and retirement retry must refuse promptly while retaining the special
+entry and zombie ownership; the failed-test path unblocks and joins a legacy
+FIFO open before reporting the regression.
+`TestManagerRefreshRetiredSegmentRejectsDirectoryPath` exercises directory
+rebounds in the primary and additional scan directories. Refresh and retirement
+retry must refuse without changing the directory or its sentinel, retain zombie
+ownership, and release the manager lock. Removing the replacement restores benign
+missing-path refresh; restoring the original file permits retirement to complete.
+`TestManagerRetirementIdentityNilRegistryReplacement` and
+`TestManagerRetirementIdentityNilRegistryDirectory` repeat those real failed-
+unlink cases without an external pin registry. The direct preexisting-replacement
+test covers all four explicit removal APIs; the quarantine-replacement test
+creates a new canonical file after close and proves its bytes and identity survive.
+`TestManagerDirectRetirementPostPreflightReplacement` pauses each of the four
+real removal APIs at Close's existing cache lock after immutable identity
+admission, substitutes a valid segment before quarantine rename, then unblocks
+and joins the operation. With and without the registry, conflict must retain
+the original zombie and observation, exclude it from snapshots, refuse repeated
+refresh and retry, and preserve replacement bytes and inode. Restoring the
+original permits cleanup. Companion portable tests retain ownership on ordinary
+failed unlink, preserve missing-path retry and Force's refcount behavior, and
+protect a different current owner during successful old-file finalization. The
+same-pointer case first proves public eviction refuses the admitted operation,
+then privately replaces the quarantined owner with balanced zombie and registry
+bookkeeping to exercise the finalizer comparison. Both registry modes preserve
+the replacement observation, bytes and physical identity and balance the old
+admission. Parent lifetime checks retain a successful Stat during an active
+borrow and require an invalid descriptor plus released, nil, zero-borrow state
+after joined cleanup, independently of platform-specific closed-Stat errors.
+`TestRetirementParentDeletedWindows` checks actual delete-pending empty-directory
+proof against live/nonempty directories, regular files, closed/nil handles and
+unrelated errors. Permission or query failures never imply absence.
+`TestManagerDirectRetirementCloseJoinsAdmission` pauses actual direct removal
+and final-Release cleanup after the closed flag, and requires Manager.Close to
+join physical removal and ownership completion with and without a registry.
+`TestManagerDirectRetirementJoinsExternalClose` requires physical deletion to
+wait for actual File.Close or EvictSegment handle cleanup. The queued-removal
+test admits two real nil-registry direct calls, pauses the first unlink, then
+publishes a successor after that unlink succeeds but before the deletion mutex
+is released. The second call must observe the first File's completed deletion,
+return success without canonical access, and preserve the successor's bytes
+without another unlink. Its test-only admission
+barrier is fixed before the calls and runs outside manager and cleanup locks.
+`TestManagerRetirementIdentityCaptureFailure` requires failed identity capture to
+leave both zombie transitions and all four removal APIs before their state change.
+`TestManagerRetirementAdmissionBlocksEviction` pauses all four direct removal
+APIs, final Release and a real retry worker before their first parent borrow,
+with and without registry pins. Eviction must refuse while the exact owner and
+unused parent remain retained; successful unlink joins and balances admission.
+`TestManagerInactiveZombieAllowsEviction` proves that an inactive zombie remains
+evictable while its persistent segment stays on disk.
+
+Retirement state tests balance repeated marking, ownership removal, eviction and
+Close, preserve successful absence when the parent directory disappears, and race
+pinned registry-identity reads against retirement publication. Nil-registry special-
+path tests retain FIFO and symlink refusal without a blocking open.
+`TestManagerRetirementSymlinkParentSupported` covers primary/additional symlink
+segment directories with and without the pin registry: final Release closes the
+handle, failed unlink restores it, unchanged Refresh succeeds, and retry deletes
+it. Direct removal covers all four APIs. Child-refusal and alias-rebound tests
+preserve regular, directory, symlink and FIFO replacements, original resources,
+zombie ownership and lock release; FIFO failure paths unblock and join. Matching
+quarantine recovery also works through a configured parent alias. These Unix
+fixtures retain exact-child no-follow validation rather than resolving child links.
+`TestManagerSymlinkParentRetirementAliasDisappears` pauses real Close after
+destructive admission, removes the configured alias, and requires all four APIs
+with and without a registry to refuse while retaining the owner and original
+physical bytes. Restoring the alias permits retry.
+`TestManagerSymlinkParentRetirementAliasReboundHardlink` uses the same real Close
+pause, then redirects the alias to a foreign parent containing a hard link to
+the original inode. All four APIs and both registry modes preserve both links
+and the owner on refusal; restoring the original parent permits its deletion
+without removing the foreign link. Separate retired retry,
+physical-parent rename/replacement, true physical absence and post-rename cut
+fixtures prove the exact-parent absence boundary and deterministic recovery.
+Initial capture through an empty rebound alias must preserve the live owner,
+open handle and optional registry observation without modifying that directory.
+`TestManagerDirectRetirementParentLifetime` checks release on deletion, eviction
+and manager Close, and delays release until an admitted eviction borrow joins.
+The existing external-Close joining assertions remain unchanged: eviction must
+keep parent authority borrowable until actual handle cleanup completes. Quarantine
+normal and recovery operations use one post-Close identity-checked operation root;
+failed-unlink hooks wrap its supplied removal rather than reopen a diagnostic path.
+`TestManagerSymlinkParentRetirementQuarantineRedirect` substitutes an intermediate
+quarantine directory with a relative link to a foreign sibling directory, at the
+real canonical-unlink cut or the failed-removal hook. Both registry modes require
+foreign bytes and identity to survive, the original target to be removed or
+restored as appropriate, honest ownership completion, and a valid rollback retry.
+`TestManagerSymlinkParentRetirementQuarantineRecoveryRedirect` checks that recovery
+restores the unexpected captured child and refuses redirected directory cleanup.
+Normal and recovery child operations retain the nested quarantine root and exact
+directory handle; cross-parent rename/link never re-resolve that intermediate
+name. `TestManagerSymlinkParentRetirementCrossParentHandles` moves the captured
+quarantine and installs an unrelated real directory at its old name, then checks
+retained-handle rename, no-replace link collision, successful rollback link and
+foreign-sentinel preservation without requiring symlink privileges.
+Existing portable startup and partial-rollback recovery cases exercise
+directory opening and cross-parent operations on Windows as well as Unix.
+`BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
+directory refresh; segment creation, manager open and cleanup are outside the timer.
+
 Immutable memtable foundation: `TestCOWOwnedHeadersAndBytes` covers old header
 identity, caller/output alias attempts and legacy arena poison/reset isolation;
 `TestCOWPrivatePreparationCancelAndResourceOwnership` covers private cancellation,

@@ -1,0 +1,36 @@
+{
+  "verdict": "CLEAN",
+  "scope": "Static literal/AST/JSON/interface review only; no activation, execution or acceptance",
+  "checks": {
+    "executor_original_pin": true,
+    "executor_new_pin": true,
+    "executor_exact_single_literal_delta": true,
+    "executor_inverse_ast": true,
+    "builder_original_pin": true,
+    "builder_new_pin": true,
+    "builder_exact_two_literal_delta": true,
+    "builder_inverse_ast": true,
+    "input_template_original_pin": true,
+    "input_template_new_pin": true,
+    "template_exact_two_fields": true,
+    "adapter_exact_pin": true,
+    "same_adapter_cli": true
+  },
+  "reviewed_pins": {
+    "replay-public.py": "1bcdfa4ebc4489b2292caeb25a3f5ffd38a1adb347a0e455e8f4d736c4a07fcc",
+    "build-draft-inputs.py": "df71ce652147f3a55522e6c00f2a168f57266b66eb454060ce90eb792108c341",
+    "root-inputs.template.json": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4"
+  },
+  "reviewed_adapter_sha256": "3c4502ebb4620ac010b615ca10bbdd45a4448f66e2c7ed663d57c32413c1c2c2",
+  "original_pins": {
+    "replay-public.py": "343135d1c72fa4bb86a4185849fbba70b0ba5ca8c0dc166a6366052b227f12aa",
+    "build-draft-inputs.py": "070488cb9c969d0c561ba0c310172e62f89087999d24ea14dae9e4ea010e57af",
+    "root-inputs.template.json": "bbcc02ef96051b79cf43b8666505ff9f98f59ca39e652988b73797d5a0869dfd"
+  },
+  "findings": [],
+  "limits": [
+    "Original-source comparison uses frozen read-only observation bytes independently hash-checked against pinned originals.",
+    "Root must supply actual separately approved provenance certificate and public-stage bytes.",
+    "All approval flags and frozen originals remain unchanged; no numeric cost or D acceptance conferred."
+  ]
+}

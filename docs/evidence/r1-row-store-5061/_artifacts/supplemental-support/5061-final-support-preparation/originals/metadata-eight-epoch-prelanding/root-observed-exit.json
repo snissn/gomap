@@ -1,0 +1,8 @@
+{
+  "command": "ssh mikers@192.168.0.111 flock -n /home/mikers/gomap-r1-evidence-20261005/timed-capture.lock bash /home/mikers/gomap-r1-evidence-20261005/metadata-eight-epoch-prelanding-run.sh",
+  "native_session": 59155,
+  "observed_exit": 0,
+  "qualification": "prelanding rehearsal",
+  "source": "f79616f2aeb99b43af81877f26d646cca51177b9",
+  "observation_utc": "2026-10-06T08:39:29Z"
+}

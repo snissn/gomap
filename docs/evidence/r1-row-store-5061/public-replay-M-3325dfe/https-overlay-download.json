@@ -1,0 +1,9 @@
+{
+  "bytes": 271917606,
+  "end_utc": "2026-10-07T01:24:24.736873+00:00",
+  "final_https_url": "https://release-assets.githubusercontent.com/github-production-release-asset/567933707/07ead177-9096-4813-ad50-3290e66e3406?sp=r&sv=2018-11-09&sr=b&spr=https&se=2026-10-07T02%3A18%3A24Z&rscd=attachment%3B+filename%3Dbinary-overlay.tar.gz&rsct=application%2Foctet-stream&skoid=96c2d410-5711-43a1-aedd-ab1947aa7ab0&sktid=398a6654-997b-47e9-b12b-9515b896b4de&skt=2026-10-07T01%3A18%3A11Z&ske=2026-10-07T02%3A18%3A24Z&sks=b&skv=2018-11-09&sig=JbqxmUSOJUSJCfyf8ILgKoBSpf9xMFLkp7H7%2FzLplRU%3D&jwt=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJnaXRodWIuY29tIiwiYXVkIjoicmVsZWFzZS1hc3NldHMuZ2l0aHVidXNlcmNvbnRlbnQuY29tIiwia2V5Ijoia2V5MSIsImV4cCI6MTc5MTMzOTg0NiwibmJmIjoxNzkxMzM2MjQ2LCJwYXRoIjoicmVsZWFzZWFzc2V0cHJvZHVjdGlvbi5ibG9iLmNvcmUud2luZG93cy5uZXQifQ.nQThvRvkpF--Yb-QzSRi-1nUT0u9_knsKhNNFETRLCo&response-content-disposition=attachment%3B%20filename%3Dbinary-overlay.tar.gz&response-content-type=application%2Foctet-stream",
+  "original_https_url": "https://github.com/snissn/gomap/releases/download/r1-5056-evidence-M3325dfe-20261006-v1/binary-overlay.tar.gz",
+  "sha256": "60571ff052920fe7620c296a18d13a9aedc37854852626267cab9a033b3b8670",
+  "source": "actual HTTPS response; no private capture copying",
+  "start_utc": "2026-10-07T01:24:05.844915+00:00"
+}

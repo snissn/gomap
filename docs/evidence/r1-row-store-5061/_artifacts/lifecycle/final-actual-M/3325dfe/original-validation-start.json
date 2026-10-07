@@ -1,0 +1,38 @@
+{
+  "argv": [
+    "/usr/bin/python3",
+    "/home/mikers/gomap-r1-final-source-20261006/scripts/r1_lifecycle_validate.py",
+    "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/packet.json",
+    "--expected-commit",
+    "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+    "--expected-runtime",
+    "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+    "--expected-harness",
+    "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+    "--expected-landed-tooling-commit",
+    "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+    "--expected-binary-sha256",
+    "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+    "--expected-packet-sha256",
+    "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc"
+  ],
+  "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+  "environment": {
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "16",
+    "GOMEMLIMIT": "off",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "HOME": "/home/mikers",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "R1_GO": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/go"
+  },
+  "utc": "2026-10-07T00:57:42Z"
+}

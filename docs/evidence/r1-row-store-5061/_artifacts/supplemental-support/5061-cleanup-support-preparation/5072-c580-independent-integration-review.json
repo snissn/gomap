@@ -1,0 +1,121 @@
+{
+  "utc": "2026-10-06T11:00:07.266043+00:00",
+  "observed_candidate_commit": "c5803b93caca11825cb826a54a568ff522b80373",
+  "final_candidate_commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+  "actual_landed_commit": null,
+  "operations": "Read-only Git object inspection and private Python report generation; no Go/tests/captures/polling/GitHub/delegation/source edits",
+  "original_artifact_sha256": {
+    "5072-c580-integration-review.json": "3b4a643cfd892c32296afc438dae4f2db6325ef101e56159ab21ab785776a0d8",
+    "5072-c580-source.json": "8c43e82669ba51466f191e7012d9a0251e0e13dc189ad27402eb7e66f3011018",
+    "final-A-source-semantic-review-b29.json": "da73e6580960ba27e5d81df0c58aa5ccc7e1a562f41ce8826d720bebca3ca519",
+    "final-A-source-semantic-review-b29.md": "d439003339a95367d40f21069c0d8a5a633a93c1996f16b5f3aa97373186c558",
+    "final-A-source-semantic-bindings-b29.json": "9432023f11401de4fa254f42fdf2618744162c11e4b734bbc8c90f31cfe801c1"
+  },
+  "status": "CLEAN for final90fa; c580 C integration source clean with known doc-only FD bound omission corrected in final descendant",
+  "scope": "Narrow C integration/source applicability, including final doc-only descendant; no runtime/performance qualification",
+  "candidate_parents": [
+    "b29a3747a99681963e1799c9c303b5a502667c92",
+    "46aa32fd8c8ed1de83f783d07b30b8d0433feff6"
+  ],
+  "final_parents": [
+    "c5803b93caca11825cb826a54a568ff522b80373",
+    "3182e15dfe1aa11120db9d309ad0d590283398d6"
+  ],
+  "final_observed_clean": true,
+  "delta_from_46": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/docs/spec/r1-indexed-mutations.md",
+    "cmd/benchprof/README.md",
+    "cmd/collection_workload_bench/README.md",
+    "cmd/collection_workload_bench/main.go",
+    "cmd/collection_workload_bench/r1_mutation_sweep.go",
+    "cmd/collection_workload_bench/r1_mutation_sweep_test.go",
+    "cmd/unified_bench/README.md",
+    "scripts/r1_collection_capture.sh"
+  ],
+  "delta_from_46_raw_sha256": "02df1d0da3b495e8b91285ae82b93c257932d68e98f08a555f3c6f32a3f04609",
+  "C_reviewed_repair_commit": "8848da3d7122ac8505c8b42f78850d2464b2f350",
+  "C_code_and_capture_pins": {
+    "cmd/collection_workload_bench/r1_mutation_sweep.go": {
+      "git_blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+      "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+      "bytes": 19159
+    },
+    "cmd/collection_workload_bench/r1_mutation_sweep_test.go": {
+      "git_blob": "4b6512bb67794855e34ce7d6456567a445de323d",
+      "sha256": "91328ffb4b008b0f320df7d6a2f23d05d74f5084fb30a653eb5f3bd7691d27f8",
+      "bytes": 7281
+    },
+    "scripts/r1_collection_capture.sh": {
+      "git_blob": "abc2008715641c2133fe8958295913782f42c5a3",
+      "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+      "bytes": 3171
+    }
+  },
+  "README_resolution": {
+    "cmd/benchprof/README.md": {
+      "C_paragraph_sha256": "c73fd9a1237db5cca9d9cb01d53e24579e8befd0c3d264e9d11e38974b3d1c95",
+      "C_paragraph_bytes": 983,
+      "parent_reconstruction_byte_exact": true,
+      "C_paragraph_byte_exact_accepted_8848_and_b29": true,
+      "final_blob": "50c4c94750822086c9a5bfc1f8887b9759e025ee",
+      "current_main_blob": "a22674763dd1b4086d870bb5a0175eb0f7ae2f98"
+    },
+    "cmd/unified_bench/README.md": {
+      "C_paragraph_sha256": "03ea8062d367e410126728846d25f2d6f4bada347cea0ec47c7eb8a07c9c9ee9",
+      "C_paragraph_bytes": 864,
+      "parent_reconstruction_byte_exact": true,
+      "C_paragraph_byte_exact_accepted_8848_and_b29": true,
+      "final_blob": "cdd16f5324d5c6d3cce14ac03fd24e91434c5ac9",
+      "current_main_blob": "3df39fc78e7d4edbb80e819c0f3d3b5f3f933109"
+    }
+  },
+  "runtime_sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873",
+  "runtime_input_count": 1098,
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "runtime_blob_map_equal_46_and_3182": true,
+  "root_source_inventory_recomputed_equal": true,
+  "git_ls_tree_z_sha256": {
+    "c5803b93caca11825cb826a54a568ff522b80373": "9234ec3e29b25904b0f5712129124d76aa1c24e2379f3c0cffff5ee81a0c3413",
+    "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0": "a822ae92cb49d0fe84cd52da36c9dcaa8e7552cf6b0a175cae3c30aa09693901",
+    "46aa32fd8c8ed1de83f783d07b30b8d0433feff6": "ff379064f75be582a9d111093ab33962a5c126702683062ca43e3b5b4a165d21",
+    "3182e15dfe1aa11120db9d309ad0d590283398d6": "63ec9fab5c8445e66d8eec403359b7c68a3ceaa3281789fc189a19b4d95e196f"
+  },
+  "canonical_inventory": {
+    "status": "PASS",
+    "workflows": 14,
+    "members": 56,
+    "discovery_source_sha256": "03a7a33b29472ebd78df1d02f794b05e1820e3d1a57eb86a214bae9337be9738",
+    "tree_inventory_sha256": "a822ae92cb49d0fe84cd52da36c9dcaa8e7552cf6b0a175cae3c30aa09693901"
+  },
+  "CLI_contract": "Six independent source/runtime/harness/landed-source/executing-binary/original-packet pins required; source equals expected exact landed source. Hash actual os.Executable and original packet bytes; explicit semantic-only always UNQUALIFIED and cannot mix acceptance pins.",
+  "physical_counter_contract": "Each serial changed-field durable UpdateBatch ACK requires observed physical file-sync calls >= operations and positive WAL write bytes; snapshots/deltas retain aggregate async background attribution. No width-size byte formula.",
+  "tests_source_applicability": "Two C Go blobs/capture script are exactly accepted8848/b29. Original focused normal/race/vet and diagnostic packet proof remain original-source evidence; current runtime exact-head CI and retained landed captures remain root gates. No tests rerun here.",
+  "known_doc_correction": {
+    "original_candidate": "c5803b93caca11825cb826a54a568ff522b80373",
+    "final_candidate": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+    "changed_paths": [
+      "TreeDB/docs/guides/typed-row-store.md",
+      "TreeDB/docs/spec/r1-row-lifecycle.md"
+    ],
+    "raw_diff_sha256": "a6d3ef742ccc6ef58f8e426ba929424821bc442b2153bc0b53ea77e6248f0140",
+    "final_doc_pins": {
+      "TreeDB/docs/guides/typed-row-store.md": {
+        "git_blob": "5e7bc127091be3791a6f4971c7b242c47142d294",
+        "sha256": "4134748794037a87fe4db02794247cfc5cc0b19fb6e9f53b04617b09d00e584b"
+      },
+      "TreeDB/docs/spec/r1-row-lifecycle.md": {
+        "git_blob": "95333b2c958168b1ae09869ccea36b543ce920eb",
+        "sha256": "a27d67a7d190d7bc695937451e2029db46ead88eaea0d4d3ffda535ceb521c71"
+      }
+    },
+    "docs_byte_equal_parent3182": true,
+    "verified_scope": "At most18 GC child handles =16 selected +1 scan child OR quarantine placeholder +1 temporary link validation; existing parent/manager and other process handles excluded. ValidateStableChildLink\u2192validateStableChildIdentity temporarily opens linked child and defers Close. Static FD boundary only; no physical capacity claim.",
+    "source": "TreeDB/internal/rootpublication/resource_token.go:1566,1576,1580; TreeDB/db/leaf_manifest_revision_gc.go:247,339,354,360"
+  },
+  "material_findings": [],
+  "final_gates": [
+    "Root verifies current-head hosted review/CI and actual landing.",
+    "Retained numerical qualification requires reviewed landed tooling and independent frozen receipts; source/workload semantic transfer does not qualify runtime/performance."
+  ]
+}

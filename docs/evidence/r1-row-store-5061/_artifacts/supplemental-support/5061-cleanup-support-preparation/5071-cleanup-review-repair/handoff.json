@@ -1,0 +1,273 @@
+{
+  "status": "writer and canonical185 lock released; clean focused repair for independent review/root integration",
+  "source": {
+    "source_commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+    "base": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "files": [
+      {
+        "path": ".github/ci/ci_impact.json",
+        "git_blob": "9ad0838b92a03b911b3b6228da5bbd10865400fc",
+        "sha256": "1e85f803fd2aacfd41a8fad52eda1a735d8077ed35f0434cc473e208a47f69d2",
+        "size": 100563
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+        "git_blob": "eddde48dbd47b1f548a5c442b50dc27559ed0ee5",
+        "sha256": "f28cd5029b92c547a3e1942d27cd70139ce5314af831d598aa8c7c4aee01d9bc",
+        "size": 13733
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+        "git_blob": "bf6c414e933c1ac4152ef887de6063a40e18ba0f",
+        "sha256": "9097d03d84329d708e1a843594d74fe8a67ef90d9f55163b43c8d6621cac1efe",
+        "size": 17356
+      },
+      {
+        "path": "TreeDB/docs/guides/typed-row-store.md",
+        "git_blob": "a13de106d56bde58d877d68182c3f97a0c24fec6",
+        "sha256": "34ab8481a4f778f5f657712476c7e0bbc5127deb932744b733e3443d673e89fb",
+        "size": 11153
+      },
+      {
+        "path": "TreeDB/docs/spec/r1-row-lifecycle.md",
+        "git_blob": "6ad5e044e39f500f1d37f0170b0048999f75026f",
+        "sha256": "3331bb41ee19da854d5c0cab9e0c405d53d4ba61391fe9ffaf5a1fbe4259a087",
+        "size": 26751
+      }
+    ],
+    "checks": [
+      {
+        "command": "uv run --with pyyaml python .github/scripts/refresh_ci_impact_inventory.py --check",
+        "exit_code": 0
+      },
+      {
+        "command": "uv run --with pyyaml python .github/scripts/test_refresh_ci_impact_inventory.py",
+        "exit_code": 0,
+        "tests": 15,
+        "elapsed_seconds": 16.502
+      },
+      {
+        "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_ci_impact.py",
+        "exit_code": 0,
+        "tests": 21,
+        "elapsed_seconds": 14.808
+      },
+      {
+        "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_ci_contract.py",
+        "exit_code": 0,
+        "tests": 6
+      },
+      {
+        "command": "PYTHONDONTWRITEBYTECODE=1 python3 .github/scripts/test_treedb_windows_core_headroom.py",
+        "exit_code": 0,
+        "tests": 16
+      }
+    ],
+    "observation": "Commands and exits observed through exec tool; no independent raw child receipt created for these Python checks.",
+    "support": [
+      {
+        "path": "red.log",
+        "sha256": "684c1a3b3d08419735f78bc1f9c2c49639f02ac27c5be48df4fa0f920e7cc005",
+        "size": 1048
+      },
+      {
+        "path": "red-test-source.txt",
+        "sha256": "1108469af24b77f0df57260df34137ce4519e8fc1a149a58120501fe5ebb6b75",
+        "size": 16030
+      },
+      {
+        "path": "checks.py",
+        "sha256": "ea5b65421238cafd29a83dd26adc7eb051b14f31c81eda554e1eb7aa0a8fae55",
+        "size": 1969
+      },
+      {
+        "path": "checks-final.py",
+        "sha256": "a41c0733d42da7147b2903bf97d89103576d46b4ec29bb22a00b1bba0f5ab0db",
+        "size": 2149
+      }
+    ],
+    "bundle": {
+      "path": "/tmp/gomap-r1-execution-20261005/5071-cleanup-final.bundle",
+      "sha256": "0f4127fa57c26507c5fdb31340b011db010b958c4868a5afba4bc84b01fc54d2"
+    }
+  },
+  "validation": {
+    "source_commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+    "source_clean_before": true,
+    "hostname": "mikers-B560-DS3H-AC-Y1",
+    "toolchain_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+    "toolchain_version": "go version go1.26.4 linux/amd64",
+    "environment": {
+      "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+      "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+      "GOMODCACHE": "/home/mikers/go/pkg/mod",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local"
+    },
+    "steps": [
+      {
+        "name": "normal",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "./TreeDB/db",
+          "-run",
+          "TestLeafManifestRevisionGC|TestLeafGenerationGCReclaimsReleasedManifest",
+          "-count=1",
+          "-timeout=3m",
+          "-v"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791283431.2645202,
+        "finished_unix": 1791283503.1722896,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/normal.log",
+        "log_sha256": "02177cca2935db8e97a3e0074325e3cc19b1a80e195ed99eac82d0504cf54405"
+      },
+      {
+        "name": "race",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-race",
+          "./TreeDB/db",
+          "-run",
+          "TestLeafManifestRevisionGC|TestLeafGenerationGCReclaimsReleasedManifest",
+          "-count=1",
+          "-timeout=3m",
+          "-v"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791283503.1724987,
+        "finished_unix": 1791283628.502114,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/race.log",
+        "log_sha256": "3bcc2ec352bc4a402c60131e1dc2542ed75f4d02fa922ca9b449a8b5f5f39fcf"
+      },
+      {
+        "name": "vet",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "vet",
+          "./TreeDB/db"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791283628.5022178,
+        "finished_unix": 1791283632.8517835,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/vet.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "load_before": [
+      26.40087890625,
+      27.29248046875,
+      21.267578125
+    ],
+    "serialization_lock": "/home/mikers/gomap-r1-correctness-185.lock",
+    "load_after": [
+      21.2490234375,
+      26.38134765625,
+      22.23388671875
+    ],
+    "source_commit_after": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+    "source_clean_after": true
+  },
+  "artifacts": [
+    {
+      "path": "checks-final.py",
+      "size": 2149,
+      "sha256": "a41c0733d42da7147b2903bf97d89103576d46b4ec29bb22a00b1bba0f5ab0db"
+    },
+    {
+      "path": "checks.py",
+      "size": 1969,
+      "sha256": "ea5b65421238cafd29a83dd26adc7eb051b14f31c81eda554e1eb7aa0a8fae55"
+    },
+    {
+      "path": "final/final-checks.json",
+      "size": 2674,
+      "sha256": "7f22ab6ecbf6e21ed6ad52fac338fa89ca7b60c855ca60d9044e445a1a4d2699"
+    },
+    {
+      "path": "final/normal.log",
+      "size": 4034,
+      "sha256": "02177cca2935db8e97a3e0074325e3cc19b1a80e195ed99eac82d0504cf54405"
+    },
+    {
+      "path": "final/race.log",
+      "size": 4034,
+      "sha256": "3bcc2ec352bc4a402c60131e1dc2542ed75f4d02fa922ca9b449a8b5f5f39fcf"
+    },
+    {
+      "path": "final/vet.log",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "intermediate-b4/final-checks.json",
+      "size": 2424,
+      "sha256": "2a3bbe8022e6e9878948acdc6e272fa9ba5c609a3840cfd2314343d8db0ff3ad"
+    },
+    {
+      "path": "intermediate-b4/normal.log",
+      "size": 3866,
+      "sha256": "1f9dec75962e2762e8be2e9ce5c62c2d83093c89c9031d96fb387e3dc5426b92"
+    },
+    {
+      "path": "intermediate-b4/race.log",
+      "size": 3866,
+      "sha256": "843027949f9d89a8a96ca8a2ab737287851e352e7a560ad9304dda6991b40b02"
+    },
+    {
+      "path": "intermediate-b4/vet.log",
+      "size": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "red-test-source.txt",
+      "size": 16030,
+      "sha256": "1108469af24b77f0df57260df34137ce4519e8fc1a149a58120501fe5ebb6b75"
+    },
+    {
+      "path": "red.log",
+      "size": 1048,
+      "sha256": "684c1a3b3d08419735f78bc1f9c2c49639f02ac27c5be48df4fa0f920e7cc005"
+    },
+    {
+      "path": "source-and-ci.json",
+      "size": 3044,
+      "sha256": "bbd8d84914c5d7e3c05610e4507f31bbbbbfef0d4db8cfc1f389206eb7747f1f"
+    }
+  ],
+  "red": {
+    "runtime_base": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "test_source": "red-test-source.txt",
+    "command": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "./TreeDB/db",
+      "-run",
+      "^TestLeafManifestRevisionGCQuarantineCleanup5066$",
+      "-count=1",
+      "-v"
+    ],
+    "observed_exit_code": 1,
+    "classification": "original deterministic negative; base runtime plus uncommitted exact new test; no clean measured binary/independent process sidecar claimed",
+    "result": "hook/rename cleanup failure lost cleanup cause and poison; both clean cases passed"
+  },
+  "intermediate": {
+    "source_commit": "b4e02d903f79f60d791aec4bf205ca80576b4cd2",
+    "classification": "intermediate source-clean normal/race/vet; preserved unchanged, not rebound to final52"
+  },
+  "claims": {
+    "all_eight_cleanup_cases_passed_without_skips": true,
+    "rename_sampled_fd_peak": 28,
+    "fd_baseline": 11,
+    "rlimit": 64,
+    "descriptor_static_bound": "16 selected exact child handles plus one scan child OR quarantine placeholder; other process descriptors separate",
+    "whole_gc_locks": "writeMu/rootReuseMu held throughout explicit GC including rescans",
+    "work": "O(N^2/16) worst case full inventory rescans; per-phase footprint limits not cumulative I/O/pause quotas",
+    "performance_or_capacity_acceptance": false,
+    "new_main_integrated": false,
+    "push_or_github_write": false
+  },
+  "next": "Root integrates current f2c93cfc test/docs-only main/inventory, independently reviews exact repair and refreshes current-head CI; no worker merge/push."
+}

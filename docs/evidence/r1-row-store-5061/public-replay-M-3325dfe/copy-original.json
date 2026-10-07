@@ -1,0 +1,961 @@
+{
+  "copies": {
+    "01-public-remote-exit.json": {
+      "bytes": 731,
+      "sha256": "b1ba1a294f739e7699c543662056697e2b2448a26c88051ce6dedf0d20d03050",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/01-public-remote-exit.json"
+    },
+    "01-public-remote-start.json": {
+      "bytes": 1136,
+      "sha256": "f863e30de08a6a9ade8ebc4252717a20730f065d7dca9f3dce2d7b9bb34418db",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/01-public-remote-start.json"
+    },
+    "01-public-remote-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/01-public-remote-stderr.log"
+    },
+    "01-public-remote-stdout.log": {
+      "bytes": 36,
+      "sha256": "b80335d9046da9229d0cb74cc482d8ffccf7a6b8d2853d03db1fa3b545e474b1",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/01-public-remote-stdout.log"
+    },
+    "02-public-head-exit.json": {
+      "bytes": 731,
+      "sha256": "1d8916139e0c35fad9c98a3e9de6f3bf0c95b50e93ed3f02e70c74f5a952b095",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/02-public-head-exit.json"
+    },
+    "02-public-head-start.json": {
+      "bytes": 1122,
+      "sha256": "f10d5c6a339ddabe0808a2b423a791e5aadc5ec62983f8c9dde8c5eedfe6990d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/02-public-head-start.json"
+    },
+    "02-public-head-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/02-public-head-stderr.log"
+    },
+    "02-public-head-stdout.log": {
+      "bytes": 41,
+      "sha256": "50d84a227858ca3ed23dda9405753a576dad583715cf6742747008531aef890a",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/02-public-head-stdout.log"
+    },
+    "03-fetch-public-24ac6866-exit.json": {
+      "bytes": 732,
+      "sha256": "3799f36ebde96d4a89d6ea090678e54878a3aa2dd37bfbd97ad0aed2618ba327",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/03-fetch-public-24ac6866-exit.json"
+    },
+    "03-fetch-public-24ac6866-start.json": {
+      "bytes": 1250,
+      "sha256": "8c8f0d67ff3fd915293772964971dc1ed62bc90eab035dac3e548b16fb51e80c",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/03-fetch-public-24ac6866-start.json"
+    },
+    "03-fetch-public-24ac6866-stderr.log": {
+      "bytes": 113,
+      "sha256": "5ffc7222a46ffc6ac97de0bdffb03f2b4093e1239535ff9fde5aef7bc1246ea9",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/03-fetch-public-24ac6866-stderr.log"
+    },
+    "03-fetch-public-24ac6866-stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/03-fetch-public-24ac6866-stdout.log"
+    },
+    "04-object-24ac6866-exit.json": {
+      "bytes": 731,
+      "sha256": "a7a57e835b549da42a1fa1c771be796d6689f2f163c6209802e4917f448bb038",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/04-object-24ac6866-exit.json"
+    },
+    "04-object-24ac6866-start.json": {
+      "bytes": 1167,
+      "sha256": "0a23fc9fe4dfe6f8a7cc1bba6ae1c5ba6a0d4f14e437bc66dc314c459a9a916b",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/04-object-24ac6866-start.json"
+    },
+    "04-object-24ac6866-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/04-object-24ac6866-stderr.log"
+    },
+    "04-object-24ac6866-stdout.log": {
+      "bytes": 41,
+      "sha256": "50d84a227858ca3ed23dda9405753a576dad583715cf6742747008531aef890a",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/04-object-24ac6866-stdout.log"
+    },
+    "05-fetch-public-3325dfe7-exit.json": {
+      "bytes": 732,
+      "sha256": "c9eb9ee5df6f3cdd59f2c4d96eee5389a6a5b84b83436418fa5c6512227ad5a0",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/05-fetch-public-3325dfe7-exit.json"
+    },
+    "05-fetch-public-3325dfe7-start.json": {
+      "bytes": 1250,
+      "sha256": "9138cdad859f55e56b67c5cebf73a27e61a7b26666050dca86ee1c77a3e21f42",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/05-fetch-public-3325dfe7-start.json"
+    },
+    "05-fetch-public-3325dfe7-stderr.log": {
+      "bytes": 117,
+      "sha256": "494b9fc9fde6f42b307b32b07f49784068a83ff90326a4d84af32bc4974ea1c0",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/05-fetch-public-3325dfe7-stderr.log"
+    },
+    "05-fetch-public-3325dfe7-stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/05-fetch-public-3325dfe7-stdout.log"
+    },
+    "06-object-3325dfe7-exit.json": {
+      "bytes": 731,
+      "sha256": "7ceaaf492091e64e2c84a47928984bd439472a6c68355baee870550271f4e41d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/06-object-3325dfe7-exit.json"
+    },
+    "06-object-3325dfe7-start.json": {
+      "bytes": 1167,
+      "sha256": "29fd94476219af49a6579d9de31d0e7e8dd19234d691aff83d9408b2995dc104",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/06-object-3325dfe7-start.json"
+    },
+    "06-object-3325dfe7-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/06-object-3325dfe7-stderr.log"
+    },
+    "06-object-3325dfe7-stdout.log": {
+      "bytes": 41,
+      "sha256": "c214a0d4ff49a39b9a971e75f227bf45700fd972d3e110d3c215bbf0f5eeb66d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/06-object-3325dfe7-stdout.log"
+    },
+    "07-fetch-public-0216e2e9-exit.json": {
+      "bytes": 732,
+      "sha256": "8f9d2097373934b59c9bdabd4bb121539ad988c5f1fbe3596c2c7dc00c0e27da",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/07-fetch-public-0216e2e9-exit.json"
+    },
+    "07-fetch-public-0216e2e9-start.json": {
+      "bytes": 1250,
+      "sha256": "bcd2513f9bc4b7fd35372fd4128818d401449233d3d3ff5134304addf2a301ec",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/07-fetch-public-0216e2e9-start.json"
+    },
+    "07-fetch-public-0216e2e9-stderr.log": {
+      "bytes": 117,
+      "sha256": "09a768455125a449aa91b93d22881b7885b1873148f2ce668aa47984b2ac3296",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/07-fetch-public-0216e2e9-stderr.log"
+    },
+    "07-fetch-public-0216e2e9-stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/07-fetch-public-0216e2e9-stdout.log"
+    },
+    "08-object-0216e2e9-exit.json": {
+      "bytes": 731,
+      "sha256": "782328ca5d414baf5ff489529eadb6e8c25e7a3e58de97c34f6a13c02e67dffb",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/08-object-0216e2e9-exit.json"
+    },
+    "08-object-0216e2e9-start.json": {
+      "bytes": 1167,
+      "sha256": "f1e0f079f18dcd59f2541bacb3b3b9342871ab066b767b5498644b923578c94d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/08-object-0216e2e9-start.json"
+    },
+    "08-object-0216e2e9-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/08-object-0216e2e9-stderr.log"
+    },
+    "08-object-0216e2e9-stdout.log": {
+      "bytes": 41,
+      "sha256": "57d208652ce054f8da89743b77bf00cd37cc73596125c0b01cfa78fb99319eb0",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/08-object-0216e2e9-stdout.log"
+    },
+    "09-fetch-public-f95ea1aa-exit.json": {
+      "bytes": 732,
+      "sha256": "d99e422e10db4193d8a9a8f717be60eeb3d8b1daad212d0edc371a516d2d9ef3",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/09-fetch-public-f95ea1aa-exit.json"
+    },
+    "09-fetch-public-f95ea1aa-start.json": {
+      "bytes": 1250,
+      "sha256": "91fce88ab65b303d2ebfef20a7a62a0b9e4907eb8723e1b1c3f003c2f0afd6e7",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/09-fetch-public-f95ea1aa-start.json"
+    },
+    "09-fetch-public-f95ea1aa-stderr.log": {
+      "bytes": 117,
+      "sha256": "0a836a2d5050c7c9443ea0272897b5ef394e28ee25006158eb67f3995c571949",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/09-fetch-public-f95ea1aa-stderr.log"
+    },
+    "09-fetch-public-f95ea1aa-stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/09-fetch-public-f95ea1aa-stdout.log"
+    },
+    "10-object-f95ea1aa-exit.json": {
+      "bytes": 731,
+      "sha256": "c29a50ae85a73762bb47209d53d226adb058b4a44306ebb61ab0960dd3bf476e",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/10-object-f95ea1aa-exit.json"
+    },
+    "10-object-f95ea1aa-start.json": {
+      "bytes": 1167,
+      "sha256": "65af05bed9a72742c7f70552158a7b8b2713398fde804c445a22096cf91b53f5",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/10-object-f95ea1aa-start.json"
+    },
+    "10-object-f95ea1aa-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/10-object-f95ea1aa-stderr.log"
+    },
+    "10-object-f95ea1aa-stdout.log": {
+      "bytes": 41,
+      "sha256": "6a6fa5cd527fdee89786c7a5bc842f489e93e51d05aced0a8ded4b521baad4fa",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/10-object-f95ea1aa-stdout.log"
+    },
+    "11-fetch-public-00d2c370-exit.json": {
+      "bytes": 732,
+      "sha256": "fede026717502de8295f1a3a38ed455d447773ade66586b97b8eb003479f6f4a",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/11-fetch-public-00d2c370-exit.json"
+    },
+    "11-fetch-public-00d2c370-start.json": {
+      "bytes": 1250,
+      "sha256": "6b9b4f5ed42a4c060993ee8e591db61295d33613fac42d4950bb0990df95fc0a",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/11-fetch-public-00d2c370-start.json"
+    },
+    "11-fetch-public-00d2c370-stderr.log": {
+      "bytes": 117,
+      "sha256": "523f7d6910e5a78ef7e60c45d22fdc43e09892352e863b6abfdcc9672b18f489",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/11-fetch-public-00d2c370-stderr.log"
+    },
+    "11-fetch-public-00d2c370-stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/11-fetch-public-00d2c370-stdout.log"
+    },
+    "12-object-00d2c370-exit.json": {
+      "bytes": 731,
+      "sha256": "8f3902e68f85f5ed1d8a2e018a8dddc31484300a750b958ce437d6baed62e02a",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/12-object-00d2c370-exit.json"
+    },
+    "12-object-00d2c370-start.json": {
+      "bytes": 1167,
+      "sha256": "1663e9042a6fbe4ac1d0125d36afc1bff48cb53955f98779648233b38a85a5da",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/12-object-00d2c370-start.json"
+    },
+    "12-object-00d2c370-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/12-object-00d2c370-stderr.log"
+    },
+    "12-object-00d2c370-stdout.log": {
+      "bytes": 41,
+      "sha256": "a8fff1205c5bb33e8a25faa37cb6ac2ff56d425f37d049ad9223528d8160514d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/12-object-00d2c370-stdout.log"
+    },
+    "13-actual-M-tree-exit.json": {
+      "bytes": 731,
+      "sha256": "c306e5d476c3886594e2d060dcce8dd1837ad02c98a37bd379f375db59bae1da",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/13-actual-M-tree-exit.json"
+    },
+    "13-actual-M-tree-start.json": {
+      "bytes": 1165,
+      "sha256": "595a2e83cea4441e83c1604ae3767459a22cf21b040de4a06b21cb113c515623",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/13-actual-M-tree-start.json"
+    },
+    "13-actual-M-tree-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/13-actual-M-tree-stderr.log"
+    },
+    "13-actual-M-tree-stdout.log": {
+      "bytes": 41,
+      "sha256": "7978132d457125db78812776fdfb236f32f6e16edcd9325bae713a02acaaa0d1",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/13-actual-M-tree-stdout.log"
+    },
+    "14-public-artifact-tree-exit.json": {
+      "bytes": 735,
+      "sha256": "8d1890e1a8a9cddb8399d9a5db95f57cf67b7e20e85c5840606c579905d6ea97",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/14-public-artifact-tree-exit.json"
+    },
+    "14-public-artifact-tree-start.json": {
+      "bytes": 1200,
+      "sha256": "61718846fd4583f9c3fa8c226cf1533134ad221af2203e3c09f0f2ebbe5f4e2d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/14-public-artifact-tree-start.json"
+    },
+    "14-public-artifact-tree-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/14-public-artifact-tree-stderr.log"
+    },
+    "14-public-artifact-tree-stdout.log": {
+      "bytes": 262903,
+      "sha256": "c09b4a505cf876768e6b724a17ebd11ffa18620e3701123d155d06e6d340372d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/14-public-artifact-tree-stdout.log"
+    },
+    "15-original-restorer-exit.json": {
+      "bytes": 369499,
+      "sha256": "a3e72512e93e7d049a323ec78a7b871ff019059e5f3de4b5caad57dadaebeeee",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/15-original-restorer-exit.json"
+    },
+    "15-original-restorer-start.json": {
+      "bytes": 370140,
+      "sha256": "05d39252417edb50790cb6b54b0970c797d4f9eba267e8bf4df246b614eef166",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/15-original-restorer-start.json"
+    },
+    "15-original-restorer-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/15-original-restorer-stderr.log"
+    },
+    "15-original-restorer-stdout.log": {
+      "bytes": 166,
+      "sha256": "16b46dd5197c5e0bb2db40b935c1b0e8b62f976d0056c2145f865147c9ff4c8f",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/15-original-restorer-stdout.log"
+    },
+    "16-source-tree-0216e2e9-exit.json": {
+      "bytes": 402320,
+      "sha256": "2745fb497e10513ac703d79dc3d0d6d35f1bcb8a4c8f1c8ae6dffabfcc5af9e9",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/16-source-tree-0216e2e9-exit.json"
+    },
+    "16-source-tree-0216e2e9-start.json": {
+      "bytes": 402761,
+      "sha256": "c4f7a37893b2e3f7c32ceb9d2a79ccfb5d43452be4bb7335d3d6a0534af8bdb2",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/16-source-tree-0216e2e9-start.json"
+    },
+    "16-source-tree-0216e2e9-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/16-source-tree-0216e2e9-stderr.log"
+    },
+    "16-source-tree-0216e2e9-stdout.log": {
+      "bytes": 774865,
+      "sha256": "1123d8eacc5ae308ae949918ee89126cc7c7fc0c9293f65051bdbc915d2b9eb1",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/16-source-tree-0216e2e9-stdout.log"
+    },
+    "17-source-blobs-0216e2e9-exit.json": {
+      "bytes": 402320,
+      "sha256": "f09b82eb3b88db3c054066389d9323c1ffacef478e9748cbff58a63c4876f03f",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/17-source-blobs-0216e2e9-exit.json"
+    },
+    "17-source-blobs-0216e2e9-start.json": {
+      "bytes": 402817,
+      "sha256": "ca3769880bbee13461fa75d48f4a40643d6c5ec7b4fd38e5533956c062e5d3cb",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/17-source-blobs-0216e2e9-start.json"
+    },
+    "17-source-blobs-0216e2e9-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/17-source-blobs-0216e2e9-stderr.log"
+    },
+    "17-source-blobs-0216e2e9-stdin.raw": {
+      "bytes": 246,
+      "sha256": "ba8a38790d7f6a4b06c6e786431fb06bf33be987c560a14452855daea5800587",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/17-source-blobs-0216e2e9-stdin.raw"
+    },
+    "17-source-blobs-0216e2e9-stdout.log": {
+      "bytes": 102159,
+      "sha256": "7e492fa4f829166be834ca5609639786802f71cf886ed56a7865757eca06f991",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/17-source-blobs-0216e2e9-stdout.log"
+    },
+    "18-historical-A-0216e2e-exit.json": {
+      "bytes": 402316,
+      "sha256": "61ba7757e662b8284f40d3666cd76e0f8c4d57e40fe6af39363b827b1bb1f772",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/18-historical-A-0216e2e-exit.json"
+    },
+    "18-historical-A-0216e2e-start.json": {
+      "bytes": 403005,
+      "sha256": "8f08b68a4063810aa739f2ee00dbdfefb6d124d144c6367a393de9005da8e385",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/18-historical-A-0216e2e-start.json"
+    },
+    "18-historical-A-0216e2e-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/18-historical-A-0216e2e-stderr.log"
+    },
+    "18-historical-A-0216e2e-stdout.log": {
+      "bytes": 91,
+      "sha256": "dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/18-historical-A-0216e2e-stdout.log"
+    },
+    "19-source-tree-f95ea1aa-exit.json": {
+      "bytes": 402320,
+      "sha256": "4d99d084fc2c75b907a01421a27d03750ea59a258a44c6c996bcd36116349faa",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/19-source-tree-f95ea1aa-exit.json"
+    },
+    "19-source-tree-f95ea1aa-start.json": {
+      "bytes": 402761,
+      "sha256": "818a2ff4731c535f998e5d2c056a7e6a0002164c41f7bc32af6a43fb0f39bf66",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/19-source-tree-f95ea1aa-start.json"
+    },
+    "19-source-tree-f95ea1aa-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/19-source-tree-f95ea1aa-stderr.log"
+    },
+    "19-source-tree-f95ea1aa-stdout.log": {
+      "bytes": 777003,
+      "sha256": "8e11a150bfe9f4399d0391df19209ece73bc5b9d450d0e85474397b6171e1fd8",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/19-source-tree-f95ea1aa-stdout.log"
+    },
+    "20-source-blobs-f95ea1aa-exit.json": {
+      "bytes": 402320,
+      "sha256": "855c251f061e3e5e663e41b23486640dafd199ca9d4ef5e57ddebcad8c876ecd",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/20-source-blobs-f95ea1aa-exit.json"
+    },
+    "20-source-blobs-f95ea1aa-start.json": {
+      "bytes": 402817,
+      "sha256": "38b6c255baedaa610d38f0a60e98430411e8a91afe905f96ae5a743ea1920b53",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/20-source-blobs-f95ea1aa-start.json"
+    },
+    "20-source-blobs-f95ea1aa-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/20-source-blobs-f95ea1aa-stderr.log"
+    },
+    "20-source-blobs-f95ea1aa-stdin.raw": {
+      "bytes": 246,
+      "sha256": "ba8a38790d7f6a4b06c6e786431fb06bf33be987c560a14452855daea5800587",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/20-source-blobs-f95ea1aa-stdin.raw"
+    },
+    "20-source-blobs-f95ea1aa-stdout.log": {
+      "bytes": 102159,
+      "sha256": "7e492fa4f829166be834ca5609639786802f71cf886ed56a7865757eca06f991",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/20-source-blobs-f95ea1aa-stdout.log"
+    },
+    "21-historical-A-f95ea1a-exit.json": {
+      "bytes": 402316,
+      "sha256": "6b794f542b2a4dcdd1ceb2fd361b8735d059ff0dee5a95ae9b2830725188aeb0",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/21-historical-A-f95ea1a-exit.json"
+    },
+    "21-historical-A-f95ea1a-start.json": {
+      "bytes": 403041,
+      "sha256": "daa0e4ae8b321dfb7f44f908ede1b112884b12d127491a7003511695588e2917",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/21-historical-A-f95ea1a-start.json"
+    },
+    "21-historical-A-f95ea1a-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/21-historical-A-f95ea1a-stderr.log"
+    },
+    "21-historical-A-f95ea1a-stdout.log": {
+      "bytes": 91,
+      "sha256": "dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/21-historical-A-f95ea1a-stdout.log"
+    },
+    "22-source-tree-00d2c370-exit.json": {
+      "bytes": 402320,
+      "sha256": "31602d6eccbf69f0860c6567a08ed4c765831cf7d97f8204acd26a59ab991cd9",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/22-source-tree-00d2c370-exit.json"
+    },
+    "22-source-tree-00d2c370-start.json": {
+      "bytes": 402761,
+      "sha256": "fadf7a2bd0e820260e3ed3255ab6a1965243eed206dde3b7998d594c215d6656",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/22-source-tree-00d2c370-start.json"
+    },
+    "22-source-tree-00d2c370-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/22-source-tree-00d2c370-stderr.log"
+    },
+    "22-source-tree-00d2c370-stdout.log": {
+      "bytes": 777838,
+      "sha256": "62c6b0966239ed442e90f7e4ab1bf399cf70642ee303754099a450d29623b020",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/22-source-tree-00d2c370-stdout.log"
+    },
+    "23-source-blobs-00d2c370-exit.json": {
+      "bytes": 402320,
+      "sha256": "de2a39659d634fce4901ffba48c6c0726d8798c736ca66c159b228a69263f2ed",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/23-source-blobs-00d2c370-exit.json"
+    },
+    "23-source-blobs-00d2c370-start.json": {
+      "bytes": 402817,
+      "sha256": "e4d444dd390bf2305bdd67ffe6b75709664e4f898eb701f2bff7af4d7fcaeb21",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/23-source-blobs-00d2c370-start.json"
+    },
+    "23-source-blobs-00d2c370-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/23-source-blobs-00d2c370-stderr.log"
+    },
+    "23-source-blobs-00d2c370-stdin.raw": {
+      "bytes": 246,
+      "sha256": "ba8a38790d7f6a4b06c6e786431fb06bf33be987c560a14452855daea5800587",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/23-source-blobs-00d2c370-stdin.raw"
+    },
+    "23-source-blobs-00d2c370-stdout.log": {
+      "bytes": 102159,
+      "sha256": "7e492fa4f829166be834ca5609639786802f71cf886ed56a7865757eca06f991",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/23-source-blobs-00d2c370-stdout.log"
+    },
+    "24-historical-A-00d2c370-exit.json": {
+      "bytes": 402316,
+      "sha256": "a1aec6d57561d76b7860a025a67d64795c7e9f0a55698bc972c493a414088b16",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/24-historical-A-00d2c370-exit.json"
+    },
+    "24-historical-A-00d2c370-start.json": {
+      "bytes": 403035,
+      "sha256": "cd532379c501408c56747927fdb54b999cbd52fe43ec252b394c0d9d4c72df77",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/24-historical-A-00d2c370-start.json"
+    },
+    "24-historical-A-00d2c370-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/24-historical-A-00d2c370-stderr.log"
+    },
+    "24-historical-A-00d2c370-stdout.log": {
+      "bytes": 91,
+      "sha256": "dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/24-historical-A-00d2c370-stdout.log"
+    },
+    "25-source-tree-3325dfe7-exit.json": {
+      "bytes": 402321,
+      "sha256": "795feb5f8d3159dd9f4e4ad2229f6b588df267546914cda2bbd14c87f39e4d7c",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/25-source-tree-3325dfe7-exit.json"
+    },
+    "25-source-tree-3325dfe7-start.json": {
+      "bytes": 402761,
+      "sha256": "c4c63aee7478c61e4bb93b8ac120aee421658e47c3b7d3bb713d15c9bf0b845f",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/25-source-tree-3325dfe7-start.json"
+    },
+    "25-source-tree-3325dfe7-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/25-source-tree-3325dfe7-stderr.log"
+    },
+    "25-source-tree-3325dfe7-stdout.log": {
+      "bytes": 1035734,
+      "sha256": "95ee1e7ad3d41b78be0610b12aafd7a7df364619e9ca7c397f391ae418a9e694",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/25-source-tree-3325dfe7-stdout.log"
+    },
+    "26-source-blobs-3325dfe7-exit.json": {
+      "bytes": 402320,
+      "sha256": "87bac82900ed1aa43ddf4a789d768b4ae4d1c116d97d0ddda4cb8d205bd8325a",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/26-source-blobs-3325dfe7-exit.json"
+    },
+    "26-source-blobs-3325dfe7-start.json": {
+      "bytes": 402817,
+      "sha256": "18793a9c4f0542e829589efcef30f18baa98ec7997ae894ca1e572b3a731e812",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/26-source-blobs-3325dfe7-start.json"
+    },
+    "26-source-blobs-3325dfe7-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/26-source-blobs-3325dfe7-stderr.log"
+    },
+    "26-source-blobs-3325dfe7-stdin.raw": {
+      "bytes": 287,
+      "sha256": "f6903199e3e0735ac577e041452d949441c854e1d72c3740210ef0295c52928c",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/26-source-blobs-3325dfe7-stdin.raw"
+    },
+    "26-source-blobs-3325dfe7-stdout.log": {
+      "bytes": 122325,
+      "sha256": "a13aae0ab37b69646faec177f8d3bcd4e13117ef48fa4bc60bde83352b5ae7c6",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/26-source-blobs-3325dfe7-stdout.log"
+    },
+    "27-actual-A-original-validator-exit.json": {
+      "bytes": 402316,
+      "sha256": "53b5b7c34eb89cdeb4120b7d2ea62022a3953eb6293f9d3c6bf1b8caf0770d38",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/27-actual-A-original-validator-exit.json"
+    },
+    "27-actual-A-original-validator-start.json": {
+      "bytes": 403037,
+      "sha256": "ed24fc6b912243c404057aebf06fd9f7eac4ec0e7a98196d161a06335374f1e8",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/27-actual-A-original-validator-start.json"
+    },
+    "27-actual-A-original-validator-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/27-actual-A-original-validator-stderr.log"
+    },
+    "27-actual-A-original-validator-stdout.log": {
+      "bytes": 91,
+      "sha256": "dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/27-actual-A-original-validator-stdout.log"
+    },
+    "28-source-tree-3325dfe7-exit.json": {
+      "bytes": 402321,
+      "sha256": "52c5c8325612f9b41b37f019bc1758a99165835b9a0d2e63506186c71ec177e3",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/28-source-tree-3325dfe7-exit.json"
+    },
+    "28-source-tree-3325dfe7-start.json": {
+      "bytes": 402761,
+      "sha256": "25411599a289a758f8d352efb0cc187c3cb6add5523d7f18ee2e77e8b4ab5a02",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/28-source-tree-3325dfe7-start.json"
+    },
+    "28-source-tree-3325dfe7-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/28-source-tree-3325dfe7-stderr.log"
+    },
+    "28-source-tree-3325dfe7-stdout.log": {
+      "bytes": 1035734,
+      "sha256": "95ee1e7ad3d41b78be0610b12aafd7a7df364619e9ca7c397f391ae418a9e694",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/28-source-tree-3325dfe7-stdout.log"
+    },
+    "29-source-blobs-3325dfe7-exit.json": {
+      "bytes": 402320,
+      "sha256": "0967619162b50cad5634512b9d413757b0152806835361815a0f12ab7a527d30",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/29-source-blobs-3325dfe7-exit.json"
+    },
+    "29-source-blobs-3325dfe7-start.json": {
+      "bytes": 402817,
+      "sha256": "77b6636a8c000b06b5287612d38d1564666f344c10618bb83c38dff9581b04b2",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/29-source-blobs-3325dfe7-start.json"
+    },
+    "29-source-blobs-3325dfe7-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/29-source-blobs-3325dfe7-stderr.log"
+    },
+    "29-source-blobs-3325dfe7-stdin.raw": {
+      "bytes": 287,
+      "sha256": "f6903199e3e0735ac577e041452d949441c854e1d72c3740210ef0295c52928c",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/29-source-blobs-3325dfe7-stdin.raw"
+    },
+    "29-source-blobs-3325dfe7-stdout.log": {
+      "bytes": 122325,
+      "sha256": "a13aae0ab37b69646faec177f8d3bcd4e13117ef48fa4bc60bde83352b5ae7c6",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/29-source-blobs-3325dfe7-stdout.log"
+    },
+    "30-actual-C-original-validator-exit.json": {
+      "bytes": 402316,
+      "sha256": "84205f949a9870d2630a99e5ef5aba1f65a38709a83770c012a237a3ad49e928",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/30-actual-C-original-validator-exit.json"
+    },
+    "30-actual-C-original-validator-start.json": {
+      "bytes": 403619,
+      "sha256": "1264866434a2e6d7a35c8aa2d4fe5952874036bb530a4aae247de1c8cfd00b46",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/30-actual-C-original-validator-start.json"
+    },
+    "30-actual-C-original-validator-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/30-actual-C-original-validator-stderr.log"
+    },
+    "30-actual-C-original-validator-stdout.log": {
+      "bytes": 77,
+      "sha256": "96af1845dcf43e609d648637f07b3f1df90ef5c4a505604741249e010b7884d8",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/30-actual-C-original-validator-stdout.log"
+    },
+    "31-source-tree-3325dfe7-exit.json": {
+      "bytes": 402321,
+      "sha256": "2dcaaf34c8d735483a9e47062bb61491afb1016458720c4a5dba02a2b79288d9",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/31-source-tree-3325dfe7-exit.json"
+    },
+    "31-source-tree-3325dfe7-start.json": {
+      "bytes": 402761,
+      "sha256": "6a1bd49882e9bcecd00df0b5cff4905457db4e05d0f893e42215d17964b2354d",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/31-source-tree-3325dfe7-start.json"
+    },
+    "31-source-tree-3325dfe7-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/31-source-tree-3325dfe7-stderr.log"
+    },
+    "31-source-tree-3325dfe7-stdout.log": {
+      "bytes": 1035734,
+      "sha256": "95ee1e7ad3d41b78be0610b12aafd7a7df364619e9ca7c397f391ae418a9e694",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/31-source-tree-3325dfe7-stdout.log"
+    },
+    "32-source-blobs-3325dfe7-exit.json": {
+      "bytes": 402322,
+      "sha256": "959a1807b3a4b9b273cc3cd09359438ad4f75ebbaec003e4b219bddedbb62238",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/32-source-blobs-3325dfe7-exit.json"
+    },
+    "32-source-blobs-3325dfe7-start.json": {
+      "bytes": 402819,
+      "sha256": "85435ecd24194a061e52f4563b2b527c69961b117399a13f32d00b44b4c70be7",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/32-source-blobs-3325dfe7-start.json"
+    },
+    "32-source-blobs-3325dfe7-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/32-source-blobs-3325dfe7-stderr.log"
+    },
+    "32-source-blobs-3325dfe7-stdin.raw": {
+      "bytes": 64616,
+      "sha256": "92c3339eac05649416ed2774d9aae5d237c47eefdf47975b464c8af700b0c9f2",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/32-source-blobs-3325dfe7-stdin.raw"
+    },
+    "32-source-blobs-3325dfe7-stdout.log": {
+      "bytes": 34221716,
+      "sha256": "07c4bcecf62c73874255262676b8fda69250b5d206535088c19d8be81e70d52a",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/32-source-blobs-3325dfe7-stdout.log"
+    },
+    "33-actual-D-original-validator-exit.json": {
+      "bytes": 402318,
+      "sha256": "d10bde64e5bb6627c55393f43abf5fe527521b2fb66d74a180b898ceb565328e",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/33-actual-D-original-validator-exit.json"
+    },
+    "33-actual-D-original-validator-start.json": {
+      "bytes": 403434,
+      "sha256": "99b0ef1256ac22d3ee8bacde794779d15164c09cc0371b590ab3f2f1b3509880",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/33-actual-D-original-validator-start.json"
+    },
+    "33-actual-D-original-validator-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/33-actual-D-original-validator-stderr.log"
+    },
+    "33-actual-D-original-validator-stdout.log": {
+      "bytes": 8942,
+      "sha256": "da097926f9aa8a2f778de4ec89222c7a26fc7e6a91073a6138cdccd8c6acad05",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/33-actual-D-original-validator-stdout.log"
+    },
+    "34-certified-A-descriptive-comparison-exit.json": {
+      "bytes": 402320,
+      "sha256": "f621dafe2fb9f4f47a4175117c35c08c4e4a542c3268d2a47292cef4d8e20e89",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/34-certified-A-descriptive-comparison-exit.json"
+    },
+    "34-certified-A-descriptive-comparison-start.json": {
+      "bytes": 403885,
+      "sha256": "8d00b1b3d52e48bcffe46cff061f0f67d494e7b0d7a3b98a85e847ced2d6fe2b",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/34-certified-A-descriptive-comparison-start.json"
+    },
+    "34-certified-A-descriptive-comparison-stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/34-certified-A-descriptive-comparison-stderr.log"
+    },
+    "34-certified-A-descriptive-comparison-stdout.log": {
+      "bytes": 339430,
+      "sha256": "a7c55ffc991c8630b31dcf7fcfb08e9c63c867f635615325978dfad62f343fde",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/34-certified-A-descriptive-comparison-stdout.log"
+    },
+    "builder-draft/draft-root-inputs.json": {
+      "bytes": 26561,
+      "sha256": "3ab4b7c15f2a0749f57a2272bb462413ee57e27d0da35406f31e9bee6f1cfc8e",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-draft-original/draft-root-inputs.json"
+    },
+    "builder-draft/independent-input-inventory.json": {
+      "bytes": 980399,
+      "sha256": "9c93db332af5fe2fe7950216b37ef8728e4b209af761e2c9c9c9e6492ac1d355",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-draft-original/independent-input-inventory.json"
+    },
+    "execution-host.json": {
+      "bytes": 555,
+      "sha256": "1cbb32a5e5e3a6150c6d233aa3c644eaae09a2c52504bae7af2109dd0035cc76",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/execution-host.json"
+    },
+    "https-overlay-download.json": {
+      "bytes": 1354,
+      "sha256": "05f4c22c51824a789109ee599c6b4593206e3b6310c14d8a4bc0537d56e86481",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/https-overlay-download.json"
+    },
+    "public-replay-result.json": {
+      "bytes": 406977,
+      "sha256": "920ed1596949e90df3acf34ff069f4852cd172d6164fa4eba2db02e6cbbc4398",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/public-replay-result.json"
+    },
+    "report-assembly/README-assembled-original.md": {
+      "bytes": 184455,
+      "sha256": "1ddb2850479ea2c38788c9cad497c6a6350d19d062cd96862e9f09de214047c0",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/README-assembled-original.md"
+    },
+    "report-assembly/assembler-exit-original.json": {
+      "bytes": 145,
+      "sha256": "ffa5dc3c666b6411469be8cb2158530f907c39de1213a1ecd5b13c915b7240d5",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/assembler-exit-original.json"
+    },
+    "report-assembly/assembler-output-original.log": {
+      "bytes": 279,
+      "sha256": "26d93fadc8d6ba4e187dcddbebdbebb7bdff353ee0078e4b9a13f774302e6b44",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/assembler-output-original.log"
+    },
+    "report-assembly/assembler-start-original.json": {
+      "bytes": 568,
+      "sha256": "5a8124f58b0e98d9e4a73af18a895e4a17bba272bd577784de051999e41e2f28",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/assembler-start-original.json"
+    },
+    "report-assembly/historical-README-original.md": {
+      "bytes": 15419,
+      "sha256": "e636404bed9bb61be7543428dbc97504bc8511228467cdfab07c21701acfde8b",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/historical-README-original.md"
+    },
+    "report-assembly/interpretation-root-approved-original.md": {
+      "bytes": 9846,
+      "sha256": "49fa1dd67a4efa3f5e9e4443beeb57318c5630d055b17f9f286c13464d935ca8",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/interpretation-root-approved-original.md"
+    },
+    "report-assembly/manifest-root-approved-original.json": {
+      "bytes": 43275,
+      "sha256": "d2ca00058aa3a4e2dc1833754880305e08ee4b330b2abae7957c630b7c380ac5",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/manifest-root-approved-original.json"
+    },
+    "report-proposal/handoff.json": {
+      "bytes": 63991,
+      "sha256": "e1d7fc3053253ac64cd29ddc5f030de53f687e4977a96df4fa668380edb2ab88",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-manifest-interpretation-preparation/handoff.json"
+    },
+    "report-proposal/handoff.md": {
+      "bytes": 1182,
+      "sha256": "925f0b76fcd747282d18b5945e113f202655a3d87936725c0889f80d9cc9f625",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-manifest-interpretation-preparation/handoff.md"
+    },
+    "report-proposal/interpretation.md": {
+      "bytes": 8515,
+      "sha256": "cfd3e77f25daabe036ca70696e492502dc1b5516ef157a18f6f2c1cdea8ef34c",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-manifest-interpretation-preparation/interpretation.md"
+    },
+    "report-proposal/manifest-draft.json": {
+      "bytes": 42927,
+      "sha256": "425b0b42f54716d271653c67544666fb6d192822f98a8ec9283790e5cb071ccd",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-manifest-interpretation-preparation/manifest-draft.json"
+    },
+    "restored-path-translations.json": {
+      "bytes": 6171,
+      "sha256": "b7340496536274d70eb4a2883621057e14b3c9ef52685ae09368f9de66e665d3",
+      "source": "/home/mikers/gomap-r1-public-proof-M-3325dfe-20261006/restored-path-translations.json"
+    },
+    "root-operations/M-3325dfe-E-artifact-copy-original.json": {
+      "bytes": 378870,
+      "sha256": "b6f21bac9c4db4a35ba9088433100bddc3f752f88f9e37bb166e3bc56cb3d6be",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-E-artifact-copy-original.json"
+    },
+    "root-operations/M-3325dfe-artifact-commit-root-verification-original.json": {
+      "bytes": 509,
+      "sha256": "f3283499ae708bae80b8da1c26dd25da9ddb19027668027e5d7011bbe0ba98b9",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-artifact-commit-root-verification-original.json"
+    },
+    "root-operations/M-3325dfe-artifact-original-whitespace-check.log": {
+      "bytes": 22566281,
+      "sha256": "a9b9e352d0094017153dacded9abef5c6876ae85334fba1ef5bb1df30754f43f",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-artifact-original-whitespace-check.log"
+    },
+    "root-operations/M-3325dfe-fresh-public-git-root-original.py": {
+      "bytes": 1630,
+      "sha256": "fd9cf0d01113868dc7933446b5cae7a5704fc37bdbe9bd4bfc8c6ad2bb566d1d",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-fresh-public-git-root-original.py"
+    },
+    "root-operations/M-3325dfe-physical-publication-freeze-original.json": {
+      "bytes": 698,
+      "sha256": "4703829990579eeb58b83237d6c2b5aa9bdaf5cf6756278f759015021bb1e2e3",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-physical-publication-freeze-original.json"
+    },
+    "root-operations/M-3325dfe-public-bootstrap-root-original.py": {
+      "bytes": 3273,
+      "sha256": "663a45ae619af93c9606ca5b4518294f42bd5069d634a5049c26ad525dbb0f01",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-bootstrap-root-original.py"
+    },
+    "root-operations/M-3325dfe-public-builder-bootstrap-original.json": {
+      "bytes": 1269,
+      "sha256": "d519d4b6649b3d96cc44cc1103ea8ba34c24397d90edd84b25a1e2a96172da8e",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-bootstrap-original.json"
+    },
+    "root-operations/M-3325dfe-public-builder-exit-original.json": {
+      "bytes": 145,
+      "sha256": "d1160a64dc3e4b54db84008f1131d5ce141fb0e2f78ae24c5f0bd22b00fa3f87",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-exit-original.json"
+    },
+    "root-operations/M-3325dfe-public-builder-output-original.log": {
+      "bytes": 356,
+      "sha256": "0aaa311774cab205e2b56bc6dfb7002a8a425b63e13433a4d5f36dd725d33009",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-output-original.log"
+    },
+    "root-operations/M-3325dfe-public-builder-start-original.json": {
+      "bytes": 782,
+      "sha256": "31e1313e34020793a33e2d8936c33ea434a2590827baed70dde6787b4f77997c",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-builder-start-original.json"
+    },
+    "root-operations/M-3325dfe-public-executor-exit-original.json": {
+      "bytes": 235,
+      "sha256": "137fbed5dbd80b698322166f1ed8376effa2899e2150310549d0597bec1971c3",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-executor-exit-original.json"
+    },
+    "root-operations/M-3325dfe-public-executor-start-original.json": {
+      "bytes": 523,
+      "sha256": "538b6b42f6bd94da61d303d2d02df467b860e9157f21146914ffb39be1d90e96",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-executor-start-original.json"
+    },
+    "root-operations/M-3325dfe-public-executor-stderr-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-executor-stderr-original.log"
+    },
+    "root-operations/M-3325dfe-public-executor-stdout-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-executor-stdout-original.log"
+    },
+    "root-operations/M-3325dfe-public-git-acquisition-original.json": {
+      "bytes": 2640,
+      "sha256": "2d21b6cbfc18ffc7a74f2a00e3c060d583c53b0e4cf186b2e93bb6451b1eb18e",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-git-acquisition-original.json"
+    },
+    "root-operations/M-3325dfe-public-git-command-0-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-git-command-0-original.log"
+    },
+    "root-operations/M-3325dfe-public-git-command-1-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-git-command-1-original.log"
+    },
+    "root-operations/M-3325dfe-public-git-command-2-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-git-command-2-original.log"
+    },
+    "root-operations/M-3325dfe-public-git-command-3-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-git-command-3-original.log"
+    },
+    "root-operations/M-3325dfe-public-git-command-4-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-git-command-4-original.log"
+    },
+    "root-operations/M-3325dfe-public-git-command-5-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-git-command-5-original.log"
+    },
+    "root-operations/M-3325dfe-public-release-actual-original.json": {
+      "bytes": 5419,
+      "sha256": "f6edc257afe37b9afeeb2ecd21e2c922a7523ca091dc769fde890f52ed70bf90",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-release-actual-original.json"
+    },
+    "root-operations/M-3325dfe-public-replay-host-original.json": {
+      "bytes": 349,
+      "sha256": "cf0cce6e46a7f4ce830329897217582b03af42d47d36b635d8710a4a4de22edd",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-host-original.json"
+    },
+    "root-operations/M-3325dfe-public-replay-root-acceptance-original.json": {
+      "bytes": 726,
+      "sha256": "6e13ba5f5e1484fea06ebc532b2f1b3bed379d541f82d277f3184857438c6c42",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-root-acceptance-original.json"
+    },
+    "root-operations/M-3325dfe-public-replay-root-approval-and-execution-original.py": {
+      "bytes": 4966,
+      "sha256": "2f430c401538f92147736109212f9608c3e4a941638e6ea00ce05861764f9b40",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-root-approval-and-execution-original.py"
+    },
+    "root-operations/M-3325dfe-public-replay-root-approval-and-execution-v2-original.py": {
+      "bytes": 5138,
+      "sha256": "b26efce1d4b9c6aec67580e9f019e3f0f48613497556ef976c60e4fce6c20ce6",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-root-approval-and-execution-v2-original.py"
+    },
+    "root-operations/M-3325dfe-public-replay-root-approval-original.json": {
+      "bytes": 1463,
+      "sha256": "2326764678556aa0a61f02e74bbe4d3c9da3a4a7513229107eb99bbe33be6626",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-root-approval-original.json"
+    },
+    "root-operations/M-3325dfe-public-root-approved-inputs-original.json": {
+      "bytes": 26568,
+      "sha256": "a4166c3fe81dff988f689e69ebb44bece9cdd1047e0d69a95be7b2f3f854631c",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-root-approved-inputs-original.json"
+    },
+    "root-operations/M-3325dfe-public-root-preflight-refusal-original.json": {
+      "bytes": 312,
+      "sha256": "a2d6fe574a79b4b9ef4792b299f96f068268995af71e8c65d1ec41c1f22b0788",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-root-preflight-refusal-original.json"
+    },
+    "structure-review/handoff.json": {
+      "bytes": 7460,
+      "sha256": "e05ac737f5fced266783983eef67cfcdd74d1073ad27a9495480341f04a90494",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/handoff.json"
+    },
+    "structure-review/handoff.md": {
+      "bytes": 2652,
+      "sha256": "8732d6dd04495ffeec6a49de6390b0f6d824901ab9ea1cd1c3de45ac9626040e",
+      "source": "/home/mikers/gomap-r1-final-observers-20261006/handoff.md"
+    }
+  },
+  "excluded_download_partial": {
+    "bytes": 271917606,
+    "durable_public_source": "GitHub release asset bound by HTTPS original download receipt",
+    "sha256": "60571ff052920fe7620c296a18d13a9aedc37854852626267cab9a033b3b8670"
+  },
+  "no_private_working_DB_or_binary_copied": true,
+  "utc": "2026-10-07T01:28:16.142600+00:00"
+}

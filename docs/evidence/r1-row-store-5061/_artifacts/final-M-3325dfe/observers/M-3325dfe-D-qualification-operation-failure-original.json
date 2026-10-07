@@ -1,0 +1,11 @@
+{
+  "recorded_utc": "2026-10-07T01:02:47.452602+00:00",
+  "operation": "original root D qualifier",
+  "exit_code": 1,
+  "stderr": "D original-provenance qualification refused: original compiler/driver/validator environments disagree",
+  "original_qualifier_sha256": "82f2cbbc8288898a481edcdc099c6d5009cdf1bc77af0560ac31fa44818e81c5",
+  "originals_unchanged": true,
+  "results_directory_created": false,
+  "capture_and_original_validator_exit": 0,
+  "scope": "preserve original refusal; new strict one-field compiler record check independently reviewed before root adoption"
+}

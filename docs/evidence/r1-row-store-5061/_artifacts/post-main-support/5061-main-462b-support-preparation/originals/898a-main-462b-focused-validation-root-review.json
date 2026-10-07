@@ -1,0 +1,265 @@
+{
+  "utc": "2026-10-06T22:07:33.367494+00:00",
+  "status": "ROOT_FOCUSED_SOURCEBOUND_NORMAL_RACE_VET_PASS_ONLY_NO_LANDING",
+  "head": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+  "tree": "0600b47bf0a3a609917d224d7fd06c40737bcd8e",
+  "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "source_before_after_equal": true,
+  "root_vs_linux_source_equal": true,
+  "commands": [
+    {
+      "name": "format",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/db/maintenance_reachability.go",
+        "TreeDB/db/vlog_rewrite_chunk_plan.go"
+      ],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit": 0
+    },
+    {
+      "name": "normal",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "./TreeDB/collections",
+        "-run",
+        "^(TestValueLogPhysicalLiveBytes_.*|TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers|TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork|TestEstimateValueLogLiveBytesBySegment(UsesSharedCollectorAndCaches|RefreshesOnceOnMissingSnapshotFile)|TestCompactStorageAudit_(ValueLogCollectorsMatchStandaloneGroupedAliases|ProtectedRootsOnlyExtendLeafProjection|ProtectedPagerRootsMatchStandalonePlansWithMemoReuse)|TestMaintenanceRootScansDeduplicateRoleAliasesByRootID|TestEstimateValueLogLiveBytesByChunk_(SplitsPointerRecordsAcrossChunks|DedupsGroupedPointers)|TestValueLogRewriteChunkPlan_SelectsStaleChunk|TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt|TestR1Lifecycle(LogicalFoldAndVacuum|MixedCycles|RecoveryAfterMaintenance)5060)$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "log_sha256": "f3f69b7c52dd67796d574749c6eb7049c0db586dc554eac96c2f31c680dee21f",
+      "exit": 0,
+      "parent_PASS": [
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestCompactStorageAudit_ValueLogCollectorsMatchStandaloneGroupedAliases",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestCompactStorageAudit_ProtectedPagerRootsMatchStandalonePlansWithMemoReuse",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/caching",
+          "test": "TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt",
+          "elapsed": 0.03
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndCaches",
+          "elapsed": 0
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesBySegmentRefreshesOnceOnMissingSnapshotFile",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestMaintenanceRootScansDeduplicateRoleAliasesByRootID",
+          "elapsed": 0
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogPhysicalLiveBytes_FileSpanOracle",
+          "elapsed": 0.04
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogPhysicalLiveBytes_MemoizedProtectedRoots",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogPhysicalLiveBytes_ExhaustiveRolloverReopen",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesByChunk_SplitsPointerRecordsAcrossChunks",
+          "elapsed": 0
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesByChunk_DedupsGroupedPointers",
+          "elapsed": 0
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogRewriteChunkPlan_SelectsStaleChunk",
+          "elapsed": 0
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/collections",
+          "test": "TestR1LifecycleLogicalFoldAndVacuum5060",
+          "elapsed": 0.07
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/collections",
+          "test": "TestR1LifecycleMixedCycles5060",
+          "elapsed": 0.22
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/collections",
+          "test": "TestR1LifecycleRecoveryAfterMaintenance5060",
+          "elapsed": 0.14
+        }
+      ],
+      "package_PASS": [
+        "github.com/snissn/gomap/TreeDB/caching",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/TreeDB/collections"
+      ]
+    },
+    {
+      "name": "race",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "./TreeDB/collections",
+        "-run",
+        "^(TestValueLogPhysicalLiveBytes_.*|TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers|TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork|TestEstimateValueLogLiveBytesBySegment(UsesSharedCollectorAndCaches|RefreshesOnceOnMissingSnapshotFile)|TestCompactStorageAudit_(ValueLogCollectorsMatchStandaloneGroupedAliases|ProtectedRootsOnlyExtendLeafProjection|ProtectedPagerRootsMatchStandalonePlansWithMemoReuse)|TestMaintenanceRootScansDeduplicateRoleAliasesByRootID|TestEstimateValueLogLiveBytesByChunk_(SplitsPointerRecordsAcrossChunks|DedupsGroupedPointers)|TestValueLogRewriteChunkPlan_SelectsStaleChunk|TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt|TestR1Lifecycle(LogicalFoldAndVacuum|MixedCycles|RecoveryAfterMaintenance)5060)$",
+        "-count=1",
+        "-timeout=12m"
+      ],
+      "log_sha256": "0a2cbb824fe4c65870a55b695b37d5c11c27c3497d68e38d3672e24fbfc75f87",
+      "exit": 0,
+      "parent_PASS": [
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestCompactStorageAudit_ValueLogCollectorsMatchStandaloneGroupedAliases",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestCompactStorageAudit_ProtectedRootsOnlyExtendLeafProjection",
+          "elapsed": 0.03
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestCompactStorageAudit_ProtectedPagerRootsMatchStandalonePlansWithMemoReuse",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/caching",
+          "test": "TestVlogGenerationChunkHarness_StagesAndExecutesRealChunkDebt",
+          "elapsed": 0.04
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestMaintenanceReachabilityCollectorsSharePageWalkAndMatchStandaloneConsumers",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestMaintenanceReachabilityCollectorSelectionSkipsUnusedWork",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesBySegmentUsesSharedCollectorAndCaches",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesBySegmentRefreshesOnceOnMissingSnapshotFile",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestMaintenanceRootScansDeduplicateRoleAliasesByRootID",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogPhysicalLiveBytes_FileSpanOracle",
+          "elapsed": 0.06
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogPhysicalLiveBytes_MemoizedProtectedRoots",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogPhysicalLiveBytes_ExhaustiveRolloverReopen",
+          "elapsed": 0.04
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesByChunk_SplitsPointerRecordsAcrossChunks",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestEstimateValueLogLiveBytesByChunk_DedupsGroupedPointers",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/db",
+          "test": "TestValueLogRewriteChunkPlan_SelectsStaleChunk",
+          "elapsed": 0.01
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/collections",
+          "test": "TestR1LifecycleLogicalFoldAndVacuum5060",
+          "elapsed": 0.34
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/collections",
+          "test": "TestR1LifecycleMixedCycles5060",
+          "elapsed": 1.58
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/collections",
+          "test": "TestR1LifecycleRecoveryAfterMaintenance5060",
+          "elapsed": 3.71
+        }
+      ],
+      "package_PASS": [
+        "github.com/snissn/gomap/TreeDB/caching",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/TreeDB/collections"
+      ]
+    },
+    {
+      "name": "vet",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "./TreeDB/collections"
+      ],
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "exit": 0
+    }
+  ],
+  "scope": "Newmain physicalCRC accounting, collector cache/alias/bothroot projection and chunk-debt plus R1 logicalfold/mixedcycles/maintenance recovery; old fixture/crash/failure originals remain preserved; finalretained A/C/D stillrequired"
+}

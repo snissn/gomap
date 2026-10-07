@@ -1,0 +1,29 @@
+{
+  "already_covered_skipped": 8,
+  "claims": "Supporting originals only; root retains readiness, landing, acceptance and publication.",
+  "directory": "/private/tmp/gomap-r1-execution-20261005/5061-post-preservation-support-preparation",
+  "e4e_premerge_snapshot_counts": {
+    "FAILURE": 1,
+    "SUCCESS": 54
+  },
+  "excluded_binaries": 3,
+  "frozen_paths_unchanged": 790,
+  "inventory_sha256": "ba48f93053a9b03f7abf2ac99a8039155803888545d6ed432dc9b3f111b01df2",
+  "original_bytes": 46615176,
+  "original_count": 79,
+  "raw_patch_original_included_matches_review": true,
+  "readiness_sha256": "a10a9151153b2c95cdbd6e5243bf97d5007e854f6a85eec711a9cfa80ca2ae99",
+  "runtime_45d_original_review": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "semantic_group_counts": {
+    "45d-focused-repair": 33,
+    "e4e-current-crash-process-cuts": 8,
+    "e4e-final-success-and-premerge-guard": 28,
+    "preservation-and-portability": 6,
+    "sparse-original-fail-and-later-passes": 4
+  },
+  "source_heads": [
+    "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+    "45d2cf6828c50491f82ac00403f5d5328ba0c67e"
+  ],
+  "status": "READY_FOR_ROOT_REVIEW_ONLY"
+}

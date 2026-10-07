@@ -1,0 +1,138 @@
+[
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-baseline-landed-0216e2e",
+    "kind": "comparator",
+    "status": "accepted",
+    "path": "comparator/baseline/0216e2e",
+    "validation": {
+      "log": "validation.txt",
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/collection_workload_bench",
+        "r1-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/source.json",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/packet.json"
+      ],
+      "exit_code": 0
+    },
+    "expected": {
+      "commit": "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+      "runtime_sha256": "0bdca3684ca4de3ddfae5e17b96e910bc7abb86532c48c40087f453df2c1a2c1",
+      "harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb"
+    }
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/profile-postgc-7adf81c2",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/profile-postgc-7adf81c2"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/growth-order-1e7882",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/growth-order-1e7882"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/profile-v3-rejected",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/profile-v3-rejected",
+    "expected": {
+      "commit": "b5663870a110dd9a84a873934815d5b0bcb649cb",
+      "runtime_sha256": "4d4950757e75266540c795439eb07dee77ce273015fe36b71202cdb0ecf8d396",
+      "harness_sha256": "ff22c0f82c7220e23aab9793ec177c4cba43e07208096c51edbd99fb9efb0c51"
+    }
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/manager-red-c4d49",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/manager-red-c4d49"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/revision-red-a21d5",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/revision-red-a21d5"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/source-guard-mismatch",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/source-guard-mismatch"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/clean-runtime-604",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/clean-runtime-604"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/frozen-validator-12f3bed",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/frozen-validator-12f3bed"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/original-context",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/original-context"
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-candidate-integration-f95ea1a",
+    "kind": "comparator",
+    "status": "accepted",
+    "path": "comparator/historical-candidate/f95ea1a",
+    "validation": {
+      "log": "validation.txt",
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-candidate-integration-f95ea1a/collection_workload_bench",
+        "r1-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-candidate-integration-f95ea1a/source.json",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-candidate-integration-f95ea1a/packet.json"
+      ],
+      "exit_code": 0
+    },
+    "expected": {
+      "commit": "f95ea1aac407537342214805930c8907775b777f",
+      "runtime_sha256": "169793358010070497f6fd19b16da9ea0271c88ddecc91fdb10351aef86e5bb7",
+      "harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb"
+    }
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/provisional-lifecycle-size-b53e3ae",
+    "kind": "lifecycle",
+    "status": "rejected",
+    "path": "rejected/actual-size-b53e3ae-physical-growth",
+    "expected": {
+      "commit": "b53e3ae98924085c3d3331dae0d821dd101bf07f",
+      "runtime_sha256": "e69d0944e75365c682eac2ff44daee4606d9edc620eacf2438e4845e1f378254",
+      "harness_sha256": "f963bc88ed1df79fae88f5e2a7f34aea3cd3e19f70a368891011fcb73e14065b"
+    }
+  },
+  {
+    "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-final-typed-scope-00d2c370",
+    "kind": "comparator",
+    "status": "accepted",
+    "path": "comparator/final-typed-scope/00d2c370",
+    "validation": {
+      "log": "validation.txt",
+      "command": [
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370/collection_workload_bench",
+        "r1-validate",
+        "-source-manifest",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370/source.json",
+        "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370/packet.json"
+      ],
+      "exit_code": 0
+    },
+    "expected": {
+      "commit": "00d2c370a5907225ff36f82bb92ca3ee0679ea08",
+      "runtime_sha256": "53f92a2a08ddb0496e51734686b851790f79027df93e7d5a83d7f1258360248c",
+      "harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb"
+    }
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "claims": "Only original exact45d hosted/Sparse/CI observations, no landing or acceptance.",
+  "directory": "/private/tmp/gomap-r1-execution-20261005/5061-supplemental-final-gates-support-preparation",
+  "inventory_sha256": "e47ba6ddeab2cee133a03c7bc07c8399a52cc44565ed351972108a09270be13d",
+  "original_bytes": 684687,
+  "original_count": 13,
+  "prior_pins_unchanged": 875,
+  "semantic_group_counts": {
+    "current-head-hosted-classifier": 1,
+    "current-head-sparse-whole-job-pass": 3,
+    "historical-current-head-sparse-observations": 4,
+    "incomplete-current-head-ci-observations": 5
+  },
+  "skipped_previous_originals": 31,
+  "sourceSHA": "45d2cf6828c50491f82ac00403f5d5328ba0c67e",
+  "status": "READY_FOR_ROOT_REVIEW_ONLY_UNPROMOTED"
+}

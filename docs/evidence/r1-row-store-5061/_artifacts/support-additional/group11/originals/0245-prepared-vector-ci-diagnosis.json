@@ -1,0 +1,993 @@
+{
+  "schema": "bounded-read-only-ci-diagnosis-v1",
+  "created_utc": "2026-10-06T20:23:40.157550+00:00",
+  "verdict": "SOURCE_SUPPORTED_FIXTURE_SEQUENCE_GAP; ORIGINAL_FAILED_PREDICATE_CAUSE_NOT_OBSERVED",
+  "failed_run_id": 37521995513,
+  "failed_job_id": 112470641732,
+  "heads": {
+    "main_control": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+    "base": "7649857532521db69ff4cdcf236a11377c85ab3d",
+    "failed_candidate": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133"
+  },
+  "target_test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+  "original_failure": "owner-2 did not recover prepared serving state after snapshot-plus-tail reopen at original fixture line 1113; no data-race warning in the retained failed log",
+  "logs": [
+    {
+      "label": "failed_candidate",
+      "path": "/tmp/gomap-r1-execution-20261005/0245-linux-race2-failure-rest-original.log",
+      "sha256": "4d093c2fb9fae041fc0ca787b315040160b27294a2508e82338914d71df82b26",
+      "size_bytes": 4593655,
+      "data_race_warning_count": 0,
+      "matched_test_events": [
+        {
+          "raw_line": 15391,
+          "Time": "2026-10-06T20:12:51.198751894Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1"
+        },
+        {
+          "raw_line": 15393,
+          "Time": "2026-10-06T20:12:52.70968979Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-command"
+        },
+        {
+          "raw_line": 15396,
+          "Time": "2026-10-06T20:12:52.908885312Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-command",
+          "Elapsed": 0.2
+        },
+        {
+          "raw_line": 15397,
+          "Time": "2026-10-06T20:12:52.90943798Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-assets"
+        },
+        {
+          "raw_line": 15400,
+          "Time": "2026-10-06T20:12:53.117338821Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-assets",
+          "Elapsed": 0.21
+        },
+        {
+          "raw_line": 15401,
+          "Time": "2026-10-06T20:12:53.117588465Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-source"
+        },
+        {
+          "raw_line": 15404,
+          "Time": "2026-10-06T20:12:53.329294077Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-source",
+          "Elapsed": 0.21
+        },
+        {
+          "raw_line": 15405,
+          "Time": "2026-10-06T20:12:53.329528553Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-cancel-source"
+        },
+        {
+          "raw_line": 15408,
+          "Time": "2026-10-06T20:12:53.461287727Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-cancel-source",
+          "Elapsed": 0.13
+        },
+        {
+          "raw_line": 15409,
+          "Time": "2026-10-06T20:12:53.585548639Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-epoch-mismatch"
+        },
+        {
+          "raw_line": 15412,
+          "Time": "2026-10-06T20:12:53.7839863Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-epoch-mismatch",
+          "Elapsed": 0.2
+        },
+        {
+          "raw_line": 15413,
+          "Time": "2026-10-06T20:12:53.785102497Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-digest-mismatch"
+        },
+        {
+          "raw_line": 15416,
+          "Time": "2026-10-06T20:12:53.958971895Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-digest-mismatch",
+          "Elapsed": 0.17
+        },
+        {
+          "raw_line": 15417,
+          "Time": "2026-10-06T20:12:56.055093158Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Output": "    fixed_peer_vector_prepare_v1_test.go:1113: voter owner-2 did not recover prepared serving state\n"
+        },
+        {
+          "raw_line": 15419,
+          "Time": "2026-10-06T20:12:56.083441225Z",
+          "Action": "fail",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Elapsed": 4.88
+        }
+      ],
+      "parent_terminal": [
+        {
+          "raw_line": 15419,
+          "Time": "2026-10-06T20:12:56.083441225Z",
+          "Action": "fail",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Elapsed": 4.88
+        }
+      ],
+      "child_terminal_count": 6
+    },
+    {
+      "label": "main_control",
+      "path": "/tmp/gomap-r1-execution-20261005/main3cfe-linux-race2-rest-original.log",
+      "sha256": "7e7f8e22d8ff5c51939213a6ea39b694c78bb93ad9c968d4040899e3d65ed7ce",
+      "size_bytes": 4577864,
+      "data_race_warning_count": 0,
+      "matched_test_events": [
+        {
+          "raw_line": 15318,
+          "Time": "2026-10-06T17:00:35.531761678Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1"
+        },
+        {
+          "raw_line": 15320,
+          "Time": "2026-10-06T17:00:36.949152312Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-command"
+        },
+        {
+          "raw_line": 15323,
+          "Time": "2026-10-06T17:00:37.152071355Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-command",
+          "Elapsed": 0.2
+        },
+        {
+          "raw_line": 15324,
+          "Time": "2026-10-06T17:00:37.152551309Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-assets"
+        },
+        {
+          "raw_line": 15327,
+          "Time": "2026-10-06T17:00:37.35750796Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-assets",
+          "Elapsed": 0.2
+        },
+        {
+          "raw_line": 15328,
+          "Time": "2026-10-06T17:00:37.358144587Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-source"
+        },
+        {
+          "raw_line": 15331,
+          "Time": "2026-10-06T17:00:37.565321426Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-source",
+          "Elapsed": 0.21
+        },
+        {
+          "raw_line": 15332,
+          "Time": "2026-10-06T17:00:37.565552897Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-cancel-source"
+        },
+        {
+          "raw_line": 15335,
+          "Time": "2026-10-06T17:00:37.697401273Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/poll-cancel-source",
+          "Elapsed": 0.13
+        },
+        {
+          "raw_line": 15336,
+          "Time": "2026-10-06T17:00:37.820915312Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-epoch-mismatch"
+        },
+        {
+          "raw_line": 15339,
+          "Time": "2026-10-06T17:00:37.974589737Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-epoch-mismatch",
+          "Elapsed": 0.15
+        },
+        {
+          "raw_line": 15340,
+          "Time": "2026-10-06T17:00:37.974874448Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-digest-mismatch"
+        },
+        {
+          "raw_line": 15343,
+          "Time": "2026-10-06T17:00:38.162552987Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1/present-catalog-digest-mismatch",
+          "Elapsed": 0.19
+        },
+        {
+          "raw_line": 15345,
+          "Time": "2026-10-06T17:00:40.545890111Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Elapsed": 5.01
+        }
+      ],
+      "parent_terminal": [
+        {
+          "raw_line": 15345,
+          "Time": "2026-10-06T17:00:40.545890111Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Elapsed": 5.01
+        }
+      ],
+      "child_terminal_count": 6
+    }
+  ],
+  "source_bindings": [
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "bc3a9030a2c64aea423871c08fc3f41855544c68",
+          "sha256": "1f7c46fe0cb8c484faa649ac6d1f4cfbc2b46b5ea7f1b8c53e95de9447e0b489",
+          "size_bytes": 57147
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "bc3a9030a2c64aea423871c08fc3f41855544c68",
+          "sha256": "1f7c46fe0cb8c484faa649ac6d1f4cfbc2b46b5ea7f1b8c53e95de9447e0b489",
+          "size_bytes": 57147
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "bc3a9030a2c64aea423871c08fc3f41855544c68",
+          "sha256": "1f7c46fe0cb8c484faa649ac6d1f4cfbc2b46b5ea7f1b8c53e95de9447e0b489",
+          "size_bytes": 57147
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_tcp_runtime_v1_test.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "bc27eb6605f3ec8d3c6601afd4adbe12d568bc78",
+          "sha256": "8d6b25adeda1baae65090bab2ff413fdff89346af0fd8e7a3f44c971482f3fc0",
+          "size_bytes": 57975
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "bc27eb6605f3ec8d3c6601afd4adbe12d568bc78",
+          "sha256": "8d6b25adeda1baae65090bab2ff413fdff89346af0fd8e7a3f44c971482f3fc0",
+          "size_bytes": 57975
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "bc27eb6605f3ec8d3c6601afd4adbe12d568bc78",
+          "sha256": "8d6b25adeda1baae65090bab2ff413fdff89346af0fd8e7a3f44c971482f3fc0",
+          "size_bytes": 57975
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "c1530dcf05a82bd990903df6d10a0e89af00f6c2",
+          "sha256": "1ff5461fdcbdc064e42fcb7c66f9dd2a07c0b128fec310c883fee125ef033f69",
+          "size_bytes": 20123
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "c1530dcf05a82bd990903df6d10a0e89af00f6c2",
+          "sha256": "1ff5461fdcbdc064e42fcb7c66f9dd2a07c0b128fec310c883fee125ef033f69",
+          "size_bytes": 20123
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "c1530dcf05a82bd990903df6d10a0e89af00f6c2",
+          "sha256": "1ff5461fdcbdc064e42fcb7c66f9dd2a07c0b128fec310c883fee125ef033f69",
+          "size_bytes": 20123
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "baa86d6f0b7e966ff7a49f2c1c879c482f876727",
+          "sha256": "747811f65d1eef6a14b4452df94cd8b4a422e1c8ba4d640b858b29076f15bf14",
+          "size_bytes": 60923
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "baa86d6f0b7e966ff7a49f2c1c879c482f876727",
+          "sha256": "747811f65d1eef6a14b4452df94cd8b4a422e1c8ba4d640b858b29076f15bf14",
+          "size_bytes": 60923
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "baa86d6f0b7e966ff7a49f2c1c879c482f876727",
+          "sha256": "747811f65d1eef6a14b4452df94cd8b4a422e1c8ba4d640b858b29076f15bf14",
+          "size_bytes": 60923
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_runtime_v1.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "91f558b0bcda3addea7d2ad324acb11993cd4e0f",
+          "sha256": "3e9982cd4a0c20621cd7277fb1a4932ed9279dee21c520fb45537443b0c02cdc",
+          "size_bytes": 69407
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "91f558b0bcda3addea7d2ad324acb11993cd4e0f",
+          "sha256": "3e9982cd4a0c20621cd7277fb1a4932ed9279dee21c520fb45537443b0c02cdc",
+          "size_bytes": 69407
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "91f558b0bcda3addea7d2ad324acb11993cd4e0f",
+          "sha256": "3e9982cd4a0c20621cd7277fb1a4932ed9279dee21c520fb45537443b0c02cdc",
+          "size_bytes": 69407
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/internal/raftcluster/catalog_meta_raft.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "677b9ce0190bf8cc7cab71750d16fc74464b6946",
+          "sha256": "bb8f02b6b2597126bcb99fe9567530da2d236c5ee96c137e465cc733f556ca0e",
+          "size_bytes": 25532
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "677b9ce0190bf8cc7cab71750d16fc74464b6946",
+          "sha256": "bb8f02b6b2597126bcb99fe9567530da2d236c5ee96c137e465cc733f556ca0e",
+          "size_bytes": 25532
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "677b9ce0190bf8cc7cab71750d16fc74464b6946",
+          "sha256": "bb8f02b6b2597126bcb99fe9567530da2d236c5ee96c137e465cc733f556ca0e",
+          "size_bytes": 25532
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/internal/raftcluster/hashicorp_raft.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "88664b641756b5e69963682c34698ffaae546a36",
+          "sha256": "650dbb835553fe204e7b9483dd5208b2fc0b84dcdc1591d200c04cbc8dced872",
+          "size_bytes": 45914
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "88664b641756b5e69963682c34698ffaae546a36",
+          "sha256": "650dbb835553fe204e7b9483dd5208b2fc0b84dcdc1591d200c04cbc8dced872",
+          "size_bytes": 45914
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "88664b641756b5e69963682c34698ffaae546a36",
+          "sha256": "650dbb835553fe204e7b9483dd5208b2fc0b84dcdc1591d200c04cbc8dced872",
+          "size_bytes": 45914
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/internal/raftplacement/catalog_meta.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "987c3726f86cae56bda677efa492115190573cdb",
+          "sha256": "830087296bb3c89942e94fcd3ab253e7521e1729d542b15a55cc66c6636f8d9b",
+          "size_bytes": 41477
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "987c3726f86cae56bda677efa492115190573cdb",
+          "sha256": "830087296bb3c89942e94fcd3ab253e7521e1729d542b15a55cc66c6636f8d9b",
+          "size_bytes": 41477
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "987c3726f86cae56bda677efa492115190573cdb",
+          "sha256": "830087296bb3c89942e94fcd3ab253e7521e1729d542b15a55cc66c6636f8d9b",
+          "size_bytes": 41477
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/internal/raftplacement/catalog_meta_lifecycle.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "d16d41ca95aa9ff5be0b31ab64c3a15e91940784",
+          "sha256": "5801b3054321ba2fa7ef36e1d5bc0b1f575ef98c91e3ec5c5f3f2dfe7bb307fa",
+          "size_bytes": 98299
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "d16d41ca95aa9ff5be0b31ab64c3a15e91940784",
+          "sha256": "5801b3054321ba2fa7ef36e1d5bc0b1f575ef98c91e3ec5c5f3f2dfe7bb307fa",
+          "size_bytes": 98299
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "d16d41ca95aa9ff5be0b31ab64c3a15e91940784",
+          "sha256": "5801b3054321ba2fa7ef36e1d5bc0b1f575ef98c91e3ec5c5f3f2dfe7bb307fa",
+          "size_bytes": 98299
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/internal/raftfsm/fsm.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "2ce6889506d3e4bf7ba600b60f3c2f23453ae06d",
+          "sha256": "44fbf461121d3fab4a96bec56544d7b4c0b6f642f8c17edac491327946744837",
+          "size_bytes": 30853
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "2ce6889506d3e4bf7ba600b60f3c2f23453ae06d",
+          "sha256": "44fbf461121d3fab4a96bec56544d7b4c0b6f642f8c17edac491327946744837",
+          "size_bytes": 30853
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "2ce6889506d3e4bf7ba600b60f3c2f23453ae06d",
+          "sha256": "44fbf461121d3fab4a96bec56544d7b4c0b6f642f8c17edac491327946744837",
+          "size_bytes": 30853
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/internal/raftfsm/vector_partition_source_holder_v1.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "9d8c927de2237461c2f3a5ca91ba47c7958d2eac",
+          "sha256": "b960b4b702fef3c70ecf0591124151bf47f54411607617787ff2c7cc50378f27",
+          "size_bytes": 5504
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "9d8c927de2237461c2f3a5ca91ba47c7958d2eac",
+          "sha256": "b960b4b702fef3c70ecf0591124151bf47f54411607617787ff2c7cc50378f27",
+          "size_bytes": 5504
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "9d8c927de2237461c2f3a5ca91ba47c7958d2eac",
+          "sha256": "b960b4b702fef3c70ecf0591124151bf47f54411607617787ff2c7cc50378f27",
+          "size_bytes": 5504
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/collections/vector_partition_prepare_v1.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "cb144718a8111cfaa09ffb48edecc59479aeed71",
+          "sha256": "78fa0de4035028d4b759204172215c3decc75d969ebd75b4f19fdff8a3fa00de",
+          "size_bytes": 24229
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "cb144718a8111cfaa09ffb48edecc59479aeed71",
+          "sha256": "78fa0de4035028d4b759204172215c3decc75d969ebd75b4f19fdff8a3fa00de",
+          "size_bytes": 24229
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "cb144718a8111cfaa09ffb48edecc59479aeed71",
+          "sha256": "78fa0de4035028d4b759204172215c3decc75d969ebd75b4f19fdff8a3fa00de",
+          "size_bytes": 24229
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/collections/vector_partition_persistent_searcher_v1.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "1548b825200d8195b6eef4e153a24f964b41c4b1",
+          "sha256": "7eafb774c97f5b2846a55880410e0608f74f2fd33d0b7ee7c22cc0ddc45f1615",
+          "size_bytes": 191906
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "1548b825200d8195b6eef4e153a24f964b41c4b1",
+          "sha256": "7eafb774c97f5b2846a55880410e0608f74f2fd33d0b7ee7c22cc0ddc45f1615",
+          "size_bytes": 191906
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "1548b825200d8195b6eef4e153a24f964b41c4b1",
+          "sha256": "7eafb774c97f5b2846a55880410e0608f74f2fd33d0b7ee7c22cc0ddc45f1615",
+          "size_bytes": 191906
+        }
+      },
+      "byte_equal_all_three": true
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+          "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+          "size_bytes": 114319
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+          "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+          "size_bytes": 114319
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+          "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+          "size_bytes": 117323
+        }
+      },
+      "byte_equal_all_three": false
+    },
+    {
+      "path": "TreeDB/db/wal_recovery.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+          "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+          "size_bytes": 45904
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+          "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+          "size_bytes": 45904
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+          "sha256": "6bb969fd95fa17294d53ba49530d9e3fa30a79256ec6267d6b560d3611457e41",
+          "size_bytes": 47414
+        }
+      },
+      "byte_equal_all_three": false
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_gc.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "4559626cfefcacf4ead036eec69e98df49ea0c0a",
+          "sha256": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+          "size_bytes": 26958
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "4559626cfefcacf4ead036eec69e98df49ea0c0a",
+          "sha256": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+          "size_bytes": 26958
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+          "sha256": "c56131db852cb71150e41e007a9a8165f7b9bfe7ee7367e0e8a2e92331bd89fb",
+          "size_bytes": 27626
+        }
+      },
+      "byte_equal_all_three": false
+    },
+    {
+      "path": "TreeDB/db/vacuum_online.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "70d30583f9354b8284cf0303a90fa7627e92bd06",
+          "sha256": "4f24ad829975a9c74b2d9f976e2a17e523da7964f2720eb77c6c15487bc34993",
+          "size_bytes": 75334
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "70d30583f9354b8284cf0303a90fa7627e92bd06",
+          "sha256": "4f24ad829975a9c74b2d9f976e2a17e523da7964f2720eb77c6c15487bc34993",
+          "size_bytes": 75334
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+          "sha256": "8e9d828ba099ec6ab2ef736d93bc42e327549c6ee66c07d734253ea8d7e4d41b",
+          "size_bytes": 75347
+        }
+      },
+      "byte_equal_all_three": false
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_selector.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+          "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24",
+          "size_bytes": 2683
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+          "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24",
+          "size_bytes": 2683
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca",
+          "sha256": "39935124f1a9859b45984e4132faf6a871fb6b2ecb849a7017ebfda0c0e8d0d4",
+          "size_bytes": 4899
+        }
+      },
+      "byte_equal_all_three": false
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "881b1d4bfb041c13c9210be43a2df7b9c2e24082",
+          "sha256": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+          "size_bytes": 90520
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "881b1d4bfb041c13c9210be43a2df7b9c2e24082",
+          "sha256": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+          "size_bytes": 90520
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "976ddd6ed35599342c134eb78ed8433c91e994f9",
+          "sha256": "fc3bf7fe38eb984c8bc3397a8937adf9ad024fb075b6a0bd925c73ac4b22fbb5",
+          "size_bytes": 92214
+        }
+      },
+      "byte_equal_all_three": false
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "versions": {
+        "main_control": {
+          "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+          "git_blob": "27af14233e201939895b1cc216f6f7419349ad6a",
+          "sha256": "271def2d2ecafa4871dbc0497deb71230a2d73cd00979f908b7a4bad8b5fe5c8",
+          "size_bytes": 54370
+        },
+        "base": {
+          "commit": "7649857532521db69ff4cdcf236a11377c85ab3d",
+          "git_blob": "27af14233e201939895b1cc216f6f7419349ad6a",
+          "sha256": "271def2d2ecafa4871dbc0497deb71230a2d73cd00979f908b7a4bad8b5fe5c8",
+          "size_bytes": 54370
+        },
+        "failed_candidate": {
+          "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+          "git_blob": "ffffe0e0e16c285def4b82b5d5287186c6bb0df6",
+          "sha256": "f534ee2742eebf8b9c61fb5178992aaa73fe33ce549f580a6e9da8d02dc5e565",
+          "size_bytes": 54243
+        }
+      },
+      "byte_equal_all_three": false
+    }
+  ],
+  "scoped_diffs": [
+    {
+      "from": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+      "to": "7649857532521db69ff4cdcf236a11377c85ab3d",
+      "scope": [
+        "TreeDB/nativewire",
+        "TreeDB/internal/raftcluster",
+        "TreeDB/internal/raftfsm",
+        "TreeDB/internal/raftplacement",
+        "TreeDB/collections"
+      ],
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_size_bytes": 0,
+      "changed_paths": [],
+      "changed_production_paths": []
+    },
+    {
+      "from": "7649857532521db69ff4cdcf236a11377c85ab3d",
+      "to": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "scope": [
+        "TreeDB/nativewire",
+        "TreeDB/internal/raftcluster",
+        "TreeDB/internal/raftfsm",
+        "TreeDB/internal/raftplacement",
+        "TreeDB/collections"
+      ],
+      "diff_sha256": "1f095b7112569823e65ce662568ca1a917db25d7d7791d113dd4446183ee950e",
+      "diff_size_bytes": 35202,
+      "changed_paths": [
+        "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+        "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+        "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+        "TreeDB/collections/r1_lifecycle_5060_test.go"
+      ],
+      "changed_production_paths": []
+    }
+  ],
+  "source_facts": [
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "lines": [
+        1095,
+        1118
+      ],
+      "claim": "After reopen: wait for catalog base epoch/digest and a data leader, then data retry prefix and durable completion; immediately assert complete serving predicate.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go#L1095"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "lines": [
+        1011,
+        1024
+      ],
+      "claim": "waitInsertPrefix checks each data group Applied.Index against the retry commit index; it does not gate catalog lifecycle replay.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go#L1011"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "lines": [
+        868,
+        893
+      ],
+      "claim": "Durable completion checks use the data-group applied-index barrier and completion records.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go#L868"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "lines": [
+        950,
+        962
+      ],
+      "claim": "Before snapshot the same fixture already waits for all-voter Ready and active phase.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go#L950"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go",
+      "lines": [
+        371,
+        379
+      ],
+      "claim": "The helper uses a 120-second shared context.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go#L371"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_tcp_runtime_v1_test.go",
+      "lines": [
+        95,
+        105
+      ],
+      "claim": "fixedPeerWaitV1 checks the predicate and polls every 20ms until context cancellation fails the test.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_tcp_runtime_v1_test.go#L95"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1.go",
+      "lines": [
+        36,
+        73
+      ],
+      "claim": "Serving phase requires non-nil prepared/runtime state, current-FSM DB binding, matching applied base catalog and the exact lifecycle record in Active state.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_vector_prepare_v1.go#L36"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_vector_prepare_v1.go",
+      "lines": [
+        136,
+        200
+      ],
+      "claim": "Prepare state is authenticated from the local durable completion while catalog log replay can still be pending; admission later requires actual authority.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_vector_prepare_v1.go#L136"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go",
+      "lines": [
+        508,
+        579
+      ],
+      "claim": "Catalog and data groups open independent Raft providers.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go#L508"
+    },
+    {
+      "path": "TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go",
+      "lines": [
+        766,
+        799
+      ],
+      "claim": "Status reports local catalog base status and separate data group statuses; fixture omits catalog applied-index/lifecycle readiness from its initial wait.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go#L766"
+    },
+    {
+      "path": "TreeDB/internal/raftcluster/catalog_meta_raft.go",
+      "lines": [
+        287,
+        305
+      ],
+      "claim": "Catalog provider returns after NewRaft without a lifecycle-applied startup barrier.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/internal/raftcluster/catalog_meta_raft.go#L287"
+    },
+    {
+      "path": "TreeDB/internal/raftcluster/catalog_meta_raft.go",
+      "lines": [
+        620,
+        650
+      ],
+      "claim": "Catalog lifecycle replay is delivered through the catalog Raft FSM Apply; snapshot restore installs a catalog snapshot separately.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/internal/raftcluster/catalog_meta_raft.go#L620"
+    },
+    {
+      "path": "TreeDB/internal/raftplacement/catalog_meta.go",
+      "lines": [
+        793,
+        803
+      ],
+      "claim": "Catalog base epoch/digest and applied index are distinct local status fields.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/internal/raftplacement/catalog_meta.go#L793"
+    },
+    {
+      "path": "TreeDB/internal/raftplacement/catalog_meta_lifecycle.go",
+      "lines": [
+        1833,
+        1841
+      ],
+      "claim": "Phase reads the independently replayed exact lifecycle record under the catalog authority read lock.",
+      "commit": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+      "source_url": "https://github.com/snissn/gomap/blob/0245d8e0f5835dcba2929e4f1ba8b5d7ea909133/TreeDB/internal/raftplacement/catalog_meta_lifecycle.go#L1833"
+    }
+  ],
+  "finding": "The data-group committed-prefix and durable prepare completion barriers do not establish completion of the independent catalog group lifecycle replay. The base catalog epoch/digest can already match while the exact prepared partition lifecycle has not replayed Active.",
+  "original_cause_limit": "The fatal condition combines nil prepared state, nil runtime and non-active phase. The log reports none of the component values. Catalog replay ordering is a demonstrated missing fixture precondition, not an observed explanation of owner-2. Permanent stale DB bindings, nil state or catalog mismatch remain possible and must continue to fail.",
+  "minimal_repair": {
+    "where": "Immediately after waitInsertPrefix(replay.CommitIndex) and checkDurableCompletions(\"snapshot-plus-tail reopen\"), before the existing serving assertion loop",
+    "operation": "fixedPeerWaitV1 over every node: preparedVector != nil && vector != nil && vectorInitializationPhaseV1() == \"active\"",
+    "bound": "Existing 120-second test context and 20ms helper polling; no new timeout extension",
+    "preserve": [
+      "Data retry commit-index barrier",
+      "Durable prepare completions on every voter",
+      "Original strict prepared/current-DB/catalog assertions",
+      "Search after reopened serving readiness",
+      "Canonical document and original covered result equality",
+      "Original live-generation/revision/LSN and exact-retry assertions",
+      "Later intentional stale-FSM ownership/binding rejection"
+    ]
+  },
+  "r1_intersection": {
+    "catalog_nativewire_raft_collection_production_scope_byte_equal_base_to_failed": true,
+    "lower_level_changes": [
+      "Manager owns and joins exact zombie retry workers at Close; admission rejects after closing",
+      "Stable-resource deletion delegates retry startup to manager ownership",
+      "Replay appender retires metadata after exact completed manager handoff",
+      "Durable pack projection and bounded physical manifest GC changes also exist"
+    ],
+    "limit": "The shared runtime is changed. Unchanged upper-level paths and a green main control do not establish binary/performance equivalence, absence of R1 interaction, or a causal scheduling classification. No trace shows a failed handoff, stale binding or incorrect lifecycle application."
+  },
+  "observed_descendant_source_review": {
+    "head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+    "clean": true,
+    "changed_paths": [
+      ".github/ci/ci_impact.json",
+      "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go"
+    ],
+    "diff_sha256": "1cb8a8eb9f50d13627bb26ea328a4f6429b70873824632fd76d54f1bfe054181",
+    "diff_size_bytes": 2054,
+    "fixture_before_blob": "bc3a9030a2c64aea423871c08fc3f41855544c68",
+    "fixture_after_blob": "7b43cf502fb5aad3ba24fff565bb2abf32665013",
+    "fixture_after_sha256": "4cd1d1680234c08581f7e8114efe240c2aa9f8d12996d221cb724edd15dc6e24",
+    "exact_wait_only_addition_verified": true,
+    "original_fixture_text_preserved_verbatim_by_removing_only_addition": true,
+    "canonical_json_changed_leaves": [
+      "/discovery_source_sha256"
+    ],
+    "source_review_verdict": "CLEAN narrowly scoped readiness-wait repair; no runtime source changes in this descendant",
+    "tests_or_ci_acceptance_claimed": false
+  },
+  "validation_recommendation": "Root owns normal/race validation of the shared real-Raft preparation helper cases plus required exact-head CI. Match actual receipts before acceptance; no reviewer-run Go, CI rerun, or waiver.",
+  "actions_performed": [
+    "Read Git objects and retained original logs",
+    "Hash-bound source and original logs",
+    "Reviewed observed test-only descendant diff",
+    "Wrote these new private diagnosis files"
+  ],
+  "actions_not_performed": [
+    "No Go/build/test/capture/SSH/GitHub/CI polling or retry",
+    "No repository/source/old-evidence edits",
+    "No delegation"
+  ]
+}

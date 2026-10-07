@@ -1,0 +1,12 @@
+{
+  "schema": "gomap-r1-root-operation-failure-v1",
+  "operation": "root finite A/C cost acceptance",
+  "exit": 1,
+  "failed_script_sha256": "b9ebf9fdaf64ad441af5a0c6c57557fd6791dcda023522e3420fe104a6f1fddf",
+  "failed_at": "preflight pin assertion before all acceptance writes",
+  "file": "C/root-provenance-verification-original.json",
+  "incorrect_expected_summary_transcription": "bb1ec7409e6f5833ff9b7a9ec52deb5e267027c788508013e3c0de8c0ab61a7f1",
+  "actual_observed_sha256": "bb1ec7409e6f5833ff9b7a9ec52deb5e267027c788508013e3c0de8c0ab61a7f",
+  "cause": "Coordinator copied an extra character from compacted summary; original C file unchanged and independently provenance-qualified. New script changes only this literal; no validator rerun or measurement.",
+  "replacement_script_sha256": "02bd399f02003e0af669f89205572a0e4bb564cda09ab330ca9c509bd10d6236"
+}

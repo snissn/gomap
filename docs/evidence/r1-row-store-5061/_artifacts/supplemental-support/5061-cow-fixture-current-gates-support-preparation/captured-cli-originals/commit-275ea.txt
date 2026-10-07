@@ -1,0 +1,7 @@
+commit 275ea4f2de90cf2db2fa735234f748ef300dd564
+Author:     Mikers <snissn@gmail.com>
+AuthorDate: Tue Oct 6 08:43:12 2026 -1000
+Commit:     Mikers <snissn@gmail.com>
+CommitDate: Tue Oct 6 08:43:12 2026 -1000
+
+    Isolate COW maintenance lifetime fixture from periodic generation

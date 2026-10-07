@@ -1,0 +1,2249 @@
+{
+  "actual_M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "builder_v3_expected_prefixes": [
+    "receipts/A",
+    "receipts/C",
+    "receipts/D",
+    "results/A",
+    "results/C",
+    "results/D",
+    "selection/base13.json",
+    "selection/final16.json",
+    "5071-actual-M-landing-original.json"
+  ],
+  "config_prefix": "configs",
+  "files": 231,
+  "missing_actual_slots": [
+    {
+      "destination": "results/D/root-cost-acceptance-original.json",
+      "observed_exists_at_final_read": false,
+      "reason": "D numeric decision not supplied/accepted by this support-only task; root adds only actual decision bytes after review."
+    },
+    {
+      "destination": "selection/final16.json",
+      "reason": "Root creates actual final selection only after D decision; no selection or acceptance is fabricated."
+    },
+    {
+      "destination": "stage/core ledger",
+      "reason": "Stage absent on original read; root must stage frozen core and supply independent core SHA before copier execution.",
+      "stage_exists_at_final_read": false
+    },
+    {
+      "destination": "validation/*",
+      "reason": "Frozen validator paths are outside final namespace; root separately stages exact helper bytes and full publication ledger."
+    }
+  ],
+  "namespace": "final-M-3325dfe",
+  "not_performed": [
+    "assembly",
+    "publication",
+    "GitHub",
+    "Go/build/test/capture/benchmark",
+    "source changes",
+    "helper execution"
+  ],
+  "observer_inputs": {
+    "D_decision_exists_at_final_read": false,
+    "excluded": [
+      {
+        "path": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/go-tmp",
+        "reason": "private database/compiler scratch subtree strictly pruned"
+      },
+      {
+        "path": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/db",
+        "reason": "private database/compiler scratch subtree strictly pruned"
+      },
+      {
+        "path": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-A-C-prose-transfer.tar",
+        "reason": "private transfer archive excluded without reading contents"
+      },
+      {
+        "path": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-transfer.tar",
+        "reason": "private transfer archive excluded without reading contents"
+      },
+      {
+        "path": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-provenance-and-cost-reviews-transfer.tar",
+        "reason": "private transfer archive excluded without reading contents"
+      }
+    ],
+    "explicit_observer_files": [
+      "M-3325dfe-A-environment-diagnostic-original.py",
+      "M-3325dfe-C-cost-interpretation-root-adoption-original.json",
+      "M-3325dfe-D-descriptive-root-runner-original.py",
+      "M-3325dfe-D-descriptive-root-runner-v2-original.py",
+      "M-3325dfe-D-locale-provenance-v2-root-adoption-original.json",
+      "M-3325dfe-D-qualification-operation-failure-original.json",
+      "M-3325dfe-D-root-qualification-adoption-original.json",
+      "M-3325dfe-example-root-execution-adoption-original.json",
+      "M-3325dfe-final-A-C-prose-root-adoption-original.json",
+      "M-3325dfe-final-publication-tools-root-adoption-original.json",
+      "M-3325dfe-public-input-cost-identity-v3-root-adoption-original.json",
+      "M-3325dfe-public-input-cost-identity-v3-transfer-original.json",
+      "M-3325dfe-public-provenance-and-cost-root-adoption-original.json",
+      "M-3325dfe-public-provenance-and-cost-transfer-original.json",
+      "M-3325dfe-public-replay-executor-root-adoption-original.json",
+      "M-3325dfe-root-A-qualification-continuation-v2.py",
+      "M-3325dfe-root-A-qualification.py",
+      "M-3325dfe-root-cost-acceptance-original.py",
+      "M-3325dfe-root-cost-acceptance-v2-original.py",
+      "M-3325dfe-root-cost-operation-failure-original.json",
+      "M-3325dfe-root-future-publication-layout-original.json",
+      "M-3325dfe-root-inputs-original.json",
+      "derive-configs.py",
+      "observe-A-with-environment.py",
+      "observe-C.py",
+      "observe-D.py",
+      "final-root-A-qualification-review.md"
+    ],
+    "explicit_package_roots": [
+      "M-3325dfe-A-buildinfo-provenance-preparation",
+      "M-3325dfe-A-buildinfo-provenance-review",
+      "M-3325dfe-A-cost-interpretation-review",
+      "M-3325dfe-C-cost-interpretation-preparation",
+      "M-3325dfe-D-locale-provenance-v2-preparation",
+      "M-3325dfe-D-locale-provenance-v2-review",
+      "M-3325dfe-D-root-qualification-preparation",
+      "M-3325dfe-D-root-qualification-review",
+      "M-3325dfe-E-final-report-public-proof-layout-preparation",
+      "M-3325dfe-example-root-execution-preparation",
+      "M-3325dfe-example-root-execution-review",
+      "M-3325dfe-final-A-C-report-prose-preparation",
+      "M-3325dfe-final-support-and-report-layout-review",
+      "M-3325dfe-final-support-copier-v2-preparation",
+      "M-3325dfe-public-input-cost-identity-v3-preparation",
+      "M-3325dfe-public-input-cost-identity-v3-review",
+      "M-3325dfe-public-replay-provenance-v2-preparation",
+      "M-3325dfe-public-replay-provenance-v2-review"
+    ],
+    "explicit_receipt_files": [
+      "M-3325dfe-A-buildinfo-provenance-root-adoption-original.json",
+      "M-3325dfe-A-harness-equivalence-review-original.json",
+      "M-3325dfe-checkout-original.json",
+      "M-3325dfe-new-helper-transfer-verification-original.json",
+      "E-actual-M-integration-original.json"
+    ],
+    "required_pins": {
+      "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/compare-certified-v2.py": "3c4502ebb4620ac010b615ca10bbdd45a4448f66e2c7ed663d57c32413c1c2c2",
+      "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-preparation/qualify.py": "648f07a3135cbd2d35ac713e944d681dd2de7b7111c76a4e0ca3b10e50717953",
+      "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-copier-v2-preparation/copy-support.py": "dff812a25f9cbd82fde6044b724addc6b49f63a71e3e9949312a548ec7133b42",
+      "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-preparation/build-draft-inputs.py": "a79091f4ee3d7f265f8c330c60b2eb01139d658001f46de80cbc096a13d8a79f",
+      "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/replay-public.py": "1bcdfa4ebc4489b2292caeb25a3f5ffd38a1adb347a0e455e8f4d736c4a07fcc",
+      "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/root-inputs.template.json": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4",
+      "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-cost-acceptance-original.json": "d8ad4eb017813c154aa1aa00eff999cbf63e42cd87d55e227fc63929ebf3f0ed",
+      "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/root-cost-acceptance-original.json": "2930b8f63442bbbb4ac33157591f813e11a995c3e64b12b1260aecee614e2baf"
+    },
+    "source_observations": [
+      {
+        "ctime_ns": 1791330349621809298,
+        "device": 66306,
+        "inode": 5155287,
+        "mode": "0o644",
+        "mtime_ns": 1791330318662533617,
+        "size": 1149,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/5071-actual-M-landing-original.json"
+      },
+      {
+        "ctime_ns": 1791330349621874098,
+        "device": 66306,
+        "inode": 5807701,
+        "mode": "0o644",
+        "mtime_ns": 1791330284343714291,
+        "size": 1929,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/898a-final-exact-merge-gate-original/codex-gate.json"
+      },
+      {
+        "ctime_ns": 1791330349621895469,
+        "device": 66306,
+        "inode": 5807713,
+        "mode": "0o644",
+        "mtime_ns": 1791330281550325900,
+        "size": 523,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/898a-final-exact-merge-gate-original/main-ref.json"
+      },
+      {
+        "ctime_ns": 1791330349632621402,
+        "device": 66306,
+        "inode": 5807714,
+        "mode": "0o644",
+        "mtime_ns": 1791330282354652522,
+        "size": 30664,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/898a-final-exact-merge-gate-original/pr-body-checks.json"
+      },
+      {
+        "ctime_ns": 1791330349644838290,
+        "device": 66306,
+        "inode": 5807715,
+        "mode": "0o644",
+        "mtime_ns": 1791330282178828560,
+        "size": 27679,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/898a-final-exact-merge-gate-original/pr-graphql.json"
+      },
+      {
+        "ctime_ns": 1791330349644854310,
+        "device": 66306,
+        "inode": 5807716,
+        "mode": "0o644",
+        "mtime_ns": 1791330284344922841,
+        "size": 627,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/898a-final-exact-merge-gate-original/root-acceptance.json"
+      },
+      {
+        "ctime_ns": 1791330572158026627,
+        "device": 66306,
+        "inode": 111693400,
+        "mode": "0o664",
+        "mtime_ns": 1791330572158026627,
+        "size": 2251,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/A-config.json"
+      },
+      {
+        "ctime_ns": 1791330572158066468,
+        "device": 66306,
+        "inode": 111693401,
+        "mode": "0o664",
+        "mtime_ns": 1791330572158066468,
+        "size": 2251,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/C-config.json"
+      },
+      {
+        "ctime_ns": 1791330572158100808,
+        "device": 66306,
+        "inode": 111693402,
+        "mode": "0o664",
+        "mtime_ns": 1791330572158100808,
+        "size": 2251,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/D-config.json"
+      },
+      {
+        "ctime_ns": 1791330572157032878,
+        "device": 66306,
+        "inode": 111693398,
+        "mode": "0o664",
+        "mtime_ns": 1791330572157032878,
+        "size": 105879,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/derived-A-C-source.json"
+      },
+      {
+        "ctime_ns": 1791330572157421052,
+        "device": 66306,
+        "inode": 111693399,
+        "mode": "0o664",
+        "mtime_ns": 1791330572157421052,
+        "size": 325694,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/derived-D-source.json"
+      },
+      {
+        "ctime_ns": 1791330585191111861,
+        "device": 66306,
+        "inode": 111693404,
+        "mode": "0o664",
+        "mtime_ns": 1791330585191111861,
+        "size": 3972,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/root-config-acceptance-original.json"
+      },
+      {
+        "ctime_ns": 1791330572156678034,
+        "device": 66306,
+        "inode": 111693397,
+        "mode": "0o664",
+        "mtime_ns": 1791330572156678034,
+        "size": 931,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/root-inputs.json"
+      },
+      {
+        "ctime_ns": 1791330572173499156,
+        "device": 66306,
+        "inode": 111693403,
+        "mode": "0o664",
+        "mtime_ns": 1791330572173499156,
+        "size": 6745,
+        "source": "/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/source-derivation-receipt.json"
+      },
+      {
+        "ctime_ns": 1791333716345230089,
+        "device": 66306,
+        "inode": 5808689,
+        "mode": "0o644",
+        "mtime_ns": 1791333716345230089,
+        "size": 5724,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/buildinfo-provenance-extension.template.json"
+      },
+      {
+        "ctime_ns": 1791333716316229840,
+        "device": 66306,
+        "inode": 5808688,
+        "mode": "0o644",
+        "mtime_ns": 1791333716316229840,
+        "size": 23436,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/compare-certified-v2.py"
+      },
+      {
+        "ctime_ns": 1791333716249229264,
+        "device": 66306,
+        "inode": 5808686,
+        "mode": "0o644",
+        "mtime_ns": 1791333716249229264,
+        "size": 1606,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/gomap-buildinfo-uses-original.txt"
+      },
+      {
+        "ctime_ns": 1791333716287229590,
+        "device": 66306,
+        "inode": 5808687,
+        "mode": "0o644",
+        "mtime_ns": 1791333716287229590,
+        "size": 76528,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/read-only-observations.json"
+      },
+      {
+        "ctime_ns": 1791333716222229032,
+        "device": 66306,
+        "inode": 5808685,
+        "mode": "0o644",
+        "mtime_ns": 1791333716222229032,
+        "size": 1816,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/static-checks.json"
+      },
+      {
+        "ctime_ns": 1791333716193228783,
+        "device": 66306,
+        "inode": 5808684,
+        "mode": "0o644",
+        "mtime_ns": 1791333716193228783,
+        "size": 10364,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/v1-v2.diff"
+      },
+      {
+        "ctime_ns": 1791333716492231352,
+        "device": 66306,
+        "inode": 5808691,
+        "mode": "0o644",
+        "mtime_ns": 1791333716492231352,
+        "size": 3129,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791333716591232203,
+        "device": 66306,
+        "inode": 5808694,
+        "mode": "0o644",
+        "mtime_ns": 1791333716591232203,
+        "size": 2410,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791333716563231962,
+        "device": 66306,
+        "inode": 5808693,
+        "mode": "0o644",
+        "mtime_ns": 1791333716563231962,
+        "size": 2300,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-review/helper-review.json"
+      },
+      {
+        "ctime_ns": 1791333716529231671,
+        "device": 66306,
+        "inode": 5808692,
+        "mode": "0o644",
+        "mtime_ns": 1791333716529231671,
+        "size": 1834,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-review/helper-review.md"
+      },
+      {
+        "ctime_ns": 1791334339547977459,
+        "device": 66306,
+        "inode": 5808741,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547977459,
+        "size": 4138,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-cost-interpretation-review/gate-advisory.json"
+      },
+      {
+        "ctime_ns": 1791334339548002829,
+        "device": 66306,
+        "inode": 5808742,
+        "mode": "0o644",
+        "mtime_ns": 1791334339548002829,
+        "size": 1815,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-cost-interpretation-review/gate-advisory.md"
+      },
+      {
+        "ctime_ns": 1791334339548022589,
+        "device": 66306,
+        "inode": 5808743,
+        "mode": "0o644",
+        "mtime_ns": 1791334339548022589,
+        "size": 5270,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-cost-interpretation-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791334339548042749,
+        "device": 66306,
+        "inode": 5808744,
+        "mode": "0o644",
+        "mtime_ns": 1791334339548042749,
+        "size": 3596,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-cost-interpretation-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791334339548090730,
+        "device": 66306,
+        "inode": 5808745,
+        "mode": "0o644",
+        "mtime_ns": 1791334339548090730,
+        "size": 72004,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-cost-interpretation-review/original-read-only-extract.json"
+      },
+      {
+        "ctime_ns": 1791333414894639555,
+        "device": 66306,
+        "inode": 5155303,
+        "mode": "0o644",
+        "mtime_ns": 1791333414894639555,
+        "size": 3205,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-environment-diagnostic-original.py"
+      },
+      {
+        "ctime_ns": 1791331709851986561,
+        "device": 66306,
+        "inode": 5807878,
+        "mode": "0o644",
+        "mtime_ns": 1791331709851986561,
+        "size": 59830,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-C-cost-interpretation-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791331709790986038,
+        "device": 66306,
+        "inode": 5807866,
+        "mode": "0o644",
+        "mtime_ns": 1791331709790986038,
+        "size": 11578,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-C-cost-interpretation-preparation/handoff.md"
+      },
+      {
+        "ctime_ns": 1791331710233989839,
+        "device": 66306,
+        "inode": 5155295,
+        "mode": "0o644",
+        "mtime_ns": 1791331710233989839,
+        "size": 2386,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-C-cost-interpretation-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791335034352278264,
+        "device": 66306,
+        "inode": 5155318,
+        "mode": "0o644",
+        "mtime_ns": 1791335034352278264,
+        "size": 3699,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-descriptive-root-runner-original.py"
+      },
+      {
+        "ctime_ns": 1791335056761946708,
+        "device": 66306,
+        "inode": 5155320,
+        "mode": "0o664",
+        "mtime_ns": 1791335056761946708,
+        "size": 3751,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-descriptive-root-runner-v2-original.py"
+      },
+      {
+        "ctime_ns": 1791335034348511448,
+        "device": 66306,
+        "inode": 5808936,
+        "mode": "0o644",
+        "mtime_ns": 1791335034348511448,
+        "size": 1129826,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791335034349538778,
+        "device": 66306,
+        "inode": 5808937,
+        "mode": "0o644",
+        "mtime_ns": 1791335034349538778,
+        "size": 2323,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-preparation/handoff.md"
+      },
+      {
+        "ctime_ns": 1791335034351868540,
+        "device": 66306,
+        "inode": 5808938,
+        "mode": "0o644",
+        "mtime_ns": 1791335034351868540,
+        "size": 17456,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-preparation/qualify.py"
+      },
+      {
+        "ctime_ns": 1791335034351963621,
+        "device": 66306,
+        "inode": 5808939,
+        "mode": "0o644",
+        "mtime_ns": 1791335034351963621,
+        "size": 1153,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-preparation/qualify.py.diff"
+      },
+      {
+        "ctime_ns": 1791335034352025162,
+        "device": 66306,
+        "inode": 5808940,
+        "mode": "0o644",
+        "mtime_ns": 1791335034352025162,
+        "size": 2236,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-preparation/staticchecks.json"
+      },
+      {
+        "ctime_ns": 1791335034352102852,
+        "device": 66306,
+        "inode": 5808942,
+        "mode": "0o644",
+        "mtime_ns": 1791335034352102852,
+        "size": 1892,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791335034352161423,
+        "device": 66306,
+        "inode": 5808943,
+        "mode": "0o644",
+        "mtime_ns": 1791335034352161423,
+        "size": 1485,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791335034352333765,
+        "device": 66306,
+        "inode": 5155319,
+        "mode": "0o644",
+        "mtime_ns": 1791335034352333765,
+        "size": 1897,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791335034352223644,
+        "device": 66306,
+        "inode": 5155317,
+        "mode": "0o644",
+        "mtime_ns": 1791335034352223644,
+        "size": 576,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-qualification-operation-failure-original.json"
+      },
+      {
+        "ctime_ns": 1791332423468118585,
+        "device": 66306,
+        "inode": 5155299,
+        "mode": "0o644",
+        "mtime_ns": 1791332423468118585,
+        "size": 1229,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-root-qualification-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791332423267116857,
+        "device": 66306,
+        "inode": 5808398,
+        "mode": "0o644",
+        "mtime_ns": 1791332423267116857,
+        "size": 2738,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-root-qualification-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791332423327117372,
+        "device": 66306,
+        "inode": 5808440,
+        "mode": "0o644",
+        "mtime_ns": 1791332423327117372,
+        "size": 4063,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-root-qualification-preparation/handoff.md"
+      },
+      {
+        "ctime_ns": 1791332423353117596,
+        "device": 66306,
+        "inode": 5808441,
+        "mode": "0o644",
+        "mtime_ns": 1791332423353117596,
+        "size": 17332,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-root-qualification-preparation/qualify.py"
+      },
+      {
+        "ctime_ns": 1791332423293117081,
+        "device": 66306,
+        "inode": 5808435,
+        "mode": "0o644",
+        "mtime_ns": 1791332423293117081,
+        "size": 1465,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-root-qualification-preparation/static-checks.json"
+      },
+      {
+        "ctime_ns": 1791332423404284047,
+        "device": 66306,
+        "inode": 5808443,
+        "mode": "0o644",
+        "mtime_ns": 1791332423404284047,
+        "size": 4453,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-root-qualification-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791332423429118250,
+        "device": 66306,
+        "inode": 5808444,
+        "mode": "0o644",
+        "mtime_ns": 1791332423429118250,
+        "size": 2519,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-root-qualification-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791332725044710922,
+        "device": 66306,
+        "inode": 5808462,
+        "mode": "0o644",
+        "mtime_ns": 1791332725044710922,
+        "size": 6859,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-E-final-report-public-proof-layout-preparation/assemble.py"
+      },
+      {
+        "ctime_ns": 1791332724896709650,
+        "device": 66306,
+        "inode": 5808460,
+        "mode": "0o644",
+        "mtime_ns": 1791332724896709650,
+        "size": 1183,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-E-final-report-public-proof-layout-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791332725071711154,
+        "device": 66306,
+        "inode": 5808463,
+        "mode": "0o644",
+        "mtime_ns": 1791332725071711154,
+        "size": 2493,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-E-final-report-public-proof-layout-preparation/manifest-template.json"
+      },
+      {
+        "ctime_ns": 1791332724925709899,
+        "device": 66306,
+        "inode": 5808461,
+        "mode": "0o644",
+        "mtime_ns": 1791332724925709899,
+        "size": 1880,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-E-final-report-public-proof-layout-preparation/report-template.md"
+      },
+      {
+        "ctime_ns": 1791333103670965030,
+        "device": 66306,
+        "inode": 5155302,
+        "mode": "0o644",
+        "mtime_ns": 1791333103670965030,
+        "size": 1059,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-example-root-execution-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791333103290961764,
+        "device": 66306,
+        "inode": 5808153,
+        "mode": "0o644",
+        "mtime_ns": 1791333103290961764,
+        "size": 2317,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-example-root-execution-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791333103375962494,
+        "device": 66306,
+        "inode": 5808163,
+        "mode": "0o644",
+        "mtime_ns": 1791333103375962494,
+        "size": 3894,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-example-root-execution-preparation/handoff.md"
+      },
+      {
+        "ctime_ns": 1791333103318962005,
+        "device": 66306,
+        "inode": 5808154,
+        "mode": "0o644",
+        "mtime_ns": 1791333103318962005,
+        "size": 11454,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-example-root-execution-preparation/run-example.py"
+      },
+      {
+        "ctime_ns": 1791333103347962253,
+        "device": 66306,
+        "inode": 5808155,
+        "mode": "0o644",
+        "mtime_ns": 1791333103347962253,
+        "size": 1415,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-example-root-execution-preparation/static-checks.json"
+      },
+      {
+        "ctime_ns": 1791333103434963002,
+        "device": 66306,
+        "inode": 5808165,
+        "mode": "0o644",
+        "mtime_ns": 1791333103434963002,
+        "size": 3546,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-example-root-execution-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791333103466963277,
+        "device": 66306,
+        "inode": 5808168,
+        "mode": "0o644",
+        "mtime_ns": 1791333103466963277,
+        "size": 1885,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-example-root-execution-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791334658505343263,
+        "device": 66306,
+        "inode": 5155316,
+        "mode": "0o644",
+        "mtime_ns": 1791334658505343263,
+        "size": 951,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-A-C-prose-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791334658863115420,
+        "device": 66306,
+        "inode": 5808926,
+        "mode": "0o644",
+        "mtime_ns": 1791334658863115420,
+        "size": 3506,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-A-C-report-prose-preparation/A-C-interpretation.md"
+      },
+      {
+        "ctime_ns": 1791334658863165941,
+        "device": 66306,
+        "inode": 5808927,
+        "mode": "0o644",
+        "mtime_ns": 1791334658863165941,
+        "size": 3131,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-A-C-report-prose-preparation/A-comparison.md"
+      },
+      {
+        "ctime_ns": 1791334658863203131,
+        "device": 66306,
+        "inode": 5808928,
+        "mode": "0o644",
+        "mtime_ns": 1791334658863203131,
+        "size": 16304,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-A-C-report-prose-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791332725298713105,
+        "device": 66306,
+        "inode": 5155300,
+        "mode": "0o644",
+        "mtime_ns": 1791332725298713105,
+        "size": 2240,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-publication-tools-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791332725132711678,
+        "device": 66306,
+        "inode": 5808465,
+        "mode": "0o644",
+        "mtime_ns": 1791332725132711678,
+        "size": 5054,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-and-report-layout-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791332725166711970,
+        "device": 66306,
+        "inode": 5808466,
+        "mode": "0o644",
+        "mtime_ns": 1791332725166711970,
+        "size": 2126,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-and-report-layout-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791332724805708867,
+        "device": 66306,
+        "inode": 5808457,
+        "mode": "0o644",
+        "mtime_ns": 1791332724805708867,
+        "size": 11202,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-copier-v2-preparation/copy-support.py"
+      },
+      {
+        "ctime_ns": 1791332724719708128,
+        "device": 66306,
+        "inode": 5808454,
+        "mode": "0o644",
+        "mtime_ns": 1791332724719708128,
+        "size": 2387,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-copier-v2-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791332724832709100,
+        "device": 66306,
+        "inode": 5808458,
+        "mode": "0o644",
+        "mtime_ns": 1791332724832709100,
+        "size": 5056,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-copier-v2-preparation/handoff.md"
+      },
+      {
+        "ctime_ns": 1791332724777708627,
+        "device": 66306,
+        "inode": 5808456,
+        "mode": "0o644",
+        "mtime_ns": 1791332724777708627,
+        "size": 1153,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-copier-v2-preparation/static-checks.json"
+      },
+      {
+        "ctime_ns": 1791332724750708395,
+        "device": 66306,
+        "inode": 5808455,
+        "mode": "0o644",
+        "mtime_ns": 1791332724750708395,
+        "size": 2531,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-copier-v2-preparation/v1-v2.diff"
+      },
+      {
+        "ctime_ns": 1791334503693193243,
+        "device": 66306,
+        "inode": 5808869,
+        "mode": "0o644",
+        "mtime_ns": 1791334503693193243,
+        "size": 22335,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-preparation/build-draft-inputs.py"
+      },
+      {
+        "ctime_ns": 1791334503693268134,
+        "device": 66306,
+        "inode": 5808870,
+        "mode": "0o644",
+        "mtime_ns": 1791334503693268134,
+        "size": 686,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791334503693296194,
+        "device": 66306,
+        "inode": 5808871,
+        "mode": "0o644",
+        "mtime_ns": 1791334503693296194,
+        "size": 584,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-preparation/v2-v3.diff"
+      },
+      {
+        "ctime_ns": 1791334503693324995,
+        "device": 66306,
+        "inode": 5808873,
+        "mode": "0o644",
+        "mtime_ns": 1791334503693324995,
+        "size": 971,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791334503693345415,
+        "device": 66306,
+        "inode": 5808874,
+        "mode": "0o644",
+        "mtime_ns": 1791334503693345415,
+        "size": 1177,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791334503463007530,
+        "device": 66306,
+        "inode": 5155313,
+        "mode": "0o644",
+        "mtime_ns": 1791334503463007530,
+        "size": 1607,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791334503693419276,
+        "device": 66306,
+        "inode": 5155314,
+        "mode": "0o664",
+        "mtime_ns": 1791334503693419276,
+        "size": 1124,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-transfer-original.json"
+      },
+      {
+        "ctime_ns": 1791334339328593392,
+        "device": 66306,
+        "inode": 5155310,
+        "mode": "0o644",
+        "mtime_ns": 1791334339328593392,
+        "size": 4523,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-provenance-and-cost-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791334339548224321,
+        "device": 66306,
+        "inode": 5155311,
+        "mode": "0o664",
+        "mtime_ns": 1791334339548224321,
+        "size": 3677,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-provenance-and-cost-transfer-original.json"
+      },
+      {
+        "ctime_ns": 1791331761955433586,
+        "device": 66306,
+        "inode": 5155296,
+        "mode": "0o644",
+        "mtime_ns": 1791331761955433586,
+        "size": 3635,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-executor-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791334339547521264,
+        "device": 66306,
+        "inode": 5808727,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547521264,
+        "size": 22314,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/build-draft-inputs.py"
+      },
+      {
+        "ctime_ns": 1791334339547595925,
+        "device": 66306,
+        "inode": 5808728,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547595925,
+        "size": 1692,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/build-draft-inputs.py.diff"
+      },
+      {
+        "ctime_ns": 1791334339547625975,
+        "device": 66306,
+        "inode": 5808729,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547625975,
+        "size": 5240,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/handoff.json"
+      },
+      {
+        "ctime_ns": 1791334339547651276,
+        "device": 66306,
+        "inode": 5808730,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547651276,
+        "size": 2073,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/handoff.md"
+      },
+      {
+        "ctime_ns": 1791334339547713866,
+        "device": 66306,
+        "inode": 5808731,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547713866,
+        "size": 75851,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/original-read-only-observations.json"
+      },
+      {
+        "ctime_ns": 1791334339547791877,
+        "device": 66306,
+        "inode": 5808732,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547791877,
+        "size": 34425,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/replay-public.py"
+      },
+      {
+        "ctime_ns": 1791334339547829657,
+        "device": 66306,
+        "inode": 5808733,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547829657,
+        "size": 605,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/replay-public.py.diff"
+      },
+      {
+        "ctime_ns": 1791334339547854007,
+        "device": 66306,
+        "inode": 5808734,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547854007,
+        "size": 15652,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/root-inputs.template.json"
+      },
+      {
+        "ctime_ns": 1791334339547879528,
+        "device": 66306,
+        "inode": 5808735,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547879528,
+        "size": 590,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/root-inputs.template.json.diff"
+      },
+      {
+        "ctime_ns": 1791334339547902688,
+        "device": 66306,
+        "inode": 5808736,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547902688,
+        "size": 3242,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/static-checks.json"
+      },
+      {
+        "ctime_ns": 1791334339547934268,
+        "device": 66306,
+        "inode": 5808738,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547934268,
+        "size": 1705,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-review/handoff.json"
+      },
+      {
+        "ctime_ns": 1791334339547953078,
+        "device": 66306,
+        "inode": 5808739,
+        "mode": "0o644",
+        "mtime_ns": 1791334339547953078,
+        "size": 1232,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-review/handoff.md"
+      },
+      {
+        "ctime_ns": 1791333716636232590,
+        "device": 66306,
+        "inode": 5155304,
+        "mode": "0o644",
+        "mtime_ns": 1791333716636232590,
+        "size": 5725,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-root-A-qualification-continuation-v2.py"
+      },
+      {
+        "ctime_ns": 1791331609525125803,
+        "device": 66306,
+        "inode": 5155294,
+        "mode": "0o644",
+        "mtime_ns": 1791331609525125803,
+        "size": 8206,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-root-A-qualification.py"
+      },
+      {
+        "ctime_ns": 1791334161382060254,
+        "device": 66306,
+        "inode": 5155306,
+        "mode": "0o644",
+        "mtime_ns": 1791334161382060254,
+        "size": 8261,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-root-cost-acceptance-original.py"
+      },
+      {
+        "ctime_ns": 1791334193086333408,
+        "device": 66306,
+        "inode": 5155307,
+        "mode": "0o644",
+        "mtime_ns": 1791334193086333408,
+        "size": 8260,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-root-cost-acceptance-v2-original.py"
+      },
+      {
+        "ctime_ns": 1791334193124333735,
+        "device": 66306,
+        "inode": 5155308,
+        "mode": "0o644",
+        "mtime_ns": 1791334193124333735,
+        "size": 864,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-root-cost-operation-failure-original.json"
+      },
+      {
+        "ctime_ns": 1791332725330713380,
+        "device": 66306,
+        "inode": 5155301,
+        "mode": "0o644",
+        "mtime_ns": 1791332725330713380,
+        "size": 1287,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-root-future-publication-layout-original.json"
+      },
+      {
+        "ctime_ns": 1791330571235933613,
+        "device": 66306,
+        "inode": 5155290,
+        "mode": "0o664",
+        "mtime_ns": 1791330571235933613,
+        "size": 931,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-root-inputs-original.json"
+      },
+      {
+        "ctime_ns": 1791318930711484615,
+        "device": 66306,
+        "inode": 5154099,
+        "mode": "0o644",
+        "mtime_ns": 1791318930711484615,
+        "size": 7795,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/derive-configs.py"
+      },
+      {
+        "ctime_ns": 1791331762003433998,
+        "device": 66306,
+        "inode": 5155297,
+        "mode": "0o644",
+        "mtime_ns": 1791331762003433998,
+        "size": 2439,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/final-root-A-qualification-review.md"
+      },
+      {
+        "ctime_ns": 1791318929922477884,
+        "device": 66306,
+        "inode": 5154097,
+        "mode": "0o700",
+        "mtime_ns": 1791318929922477884,
+        "size": 12547,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/observe-A-with-environment.py"
+      },
+      {
+        "ctime_ns": 1791318929617475282,
+        "device": 66306,
+        "inode": 5154096,
+        "mode": "0o644",
+        "mtime_ns": 1791318929617475282,
+        "size": 9063,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/observe-C.py"
+      },
+      {
+        "ctime_ns": 1791318930267480827,
+        "device": 66306,
+        "inode": 5154098,
+        "mode": "0o700",
+        "mtime_ns": 1791318930267480827,
+        "size": 8856,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/observe-D.py"
+      },
+      {
+        "ctime_ns": 1791331019163739767,
+        "device": 66306,
+        "inode": 5807855,
+        "mode": "0o664",
+        "mtime_ns": 1791331019163739767,
+        "size": 110884,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/build-completed.json"
+      },
+      {
+        "ctime_ns": 1791331017875409457,
+        "device": 66306,
+        "inode": 5807853,
+        "mode": "0o664",
+        "mtime_ns": 1791331017875409457,
+        "size": 110095,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/build-start.json"
+      },
+      {
+        "ctime_ns": 1791333047475482113,
+        "device": 66306,
+        "inode": 5807852,
+        "mode": "0o664",
+        "mtime_ns": 1791333047475482113,
+        "size": 84,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/driver.log"
+      },
+      {
+        "ctime_ns": 1791331017690760509,
+        "device": 66306,
+        "inode": 5807846,
+        "mode": "0o700",
+        "mtime_ns": 1791331017690760509,
+        "size": 296,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/go"
+      },
+      {
+        "ctime_ns": 1791331017691088282,
+        "device": 66306,
+        "inode": 5807847,
+        "mode": "0o664",
+        "mtime_ns": 1791331017691088282,
+        "size": 105879,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-expected-source.json"
+      },
+      {
+        "ctime_ns": 1791333047643483557,
+        "device": 66306,
+        "inode": 5808145,
+        "mode": "0o664",
+        "mtime_ns": 1791333047643483557,
+        "size": 91,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-validation.log"
+      },
+      {
+        "ctime_ns": 1791331017690675228,
+        "device": 66306,
+        "inode": 5807844,
+        "mode": "0o664",
+        "mtime_ns": 1791331017690675228,
+        "size": 108950,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/observer-before.json"
+      },
+      {
+        "ctime_ns": 1791331017658840191,
+        "device": 66306,
+        "inode": 5807843,
+        "mode": "0o664",
+        "mtime_ns": 1791331017658840191,
+        "size": 2251,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/root-frozen-inputs.json"
+      },
+      {
+        "ctime_ns": 1791333047484314240,
+        "device": 66306,
+        "inode": 5807821,
+        "mode": "0o664",
+        "mtime_ns": 1791333047484314240,
+        "size": 140,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/run-exit.json"
+      },
+      {
+        "ctime_ns": 1791331017699050479,
+        "device": 66306,
+        "inode": 5807851,
+        "mode": "0o664",
+        "mtime_ns": 1791331017699050479,
+        "size": 1322,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/run-start.json"
+      },
+      {
+        "ctime_ns": 1791333047484228849,
+        "device": 66306,
+        "inode": 5807765,
+        "mode": "0o664",
+        "mtime_ns": 1791333047484228849,
+        "size": 1870,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/runner-after.json"
+      },
+      {
+        "ctime_ns": 1791331017699004448,
+        "device": 66306,
+        "inode": 5807850,
+        "mode": "0o664",
+        "mtime_ns": 1791331017699004448,
+        "size": 1865,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/runner-before.json"
+      },
+      {
+        "ctime_ns": 1791333047543618182,
+        "device": 66306,
+        "inode": 5807822,
+        "mode": "0o664",
+        "mtime_ns": 1791333047543618182,
+        "size": 2157,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/trusted-completed-receipt.json"
+      },
+      {
+        "ctime_ns": 1791333047741341659,
+        "device": 66306,
+        "inode": 5808146,
+        "mode": "0o664",
+        "mtime_ns": 1791333047741341659,
+        "size": 318,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-exit.json"
+      },
+      {
+        "ctime_ns": 1791333047608759101,
+        "device": 66306,
+        "inode": 5807856,
+        "mode": "0o664",
+        "mtime_ns": 1791333047608759101,
+        "size": 1303,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-start.json"
+      },
+      {
+        "ctime_ns": 1791330606951523599,
+        "device": 66306,
+        "inode": 5807836,
+        "mode": "0o664",
+        "mtime_ns": 1791330606951523599,
+        "size": 108647,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/build-completed.json"
+      },
+      {
+        "ctime_ns": 1791330585746761844,
+        "device": 66306,
+        "inode": 5807835,
+        "mode": "0o664",
+        "mtime_ns": 1791330585746761844,
+        "size": 109727,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/build-start.json"
+      },
+      {
+        "ctime_ns": 1791330983388753840,
+        "device": 66306,
+        "inode": 5807834,
+        "mode": "0o664",
+        "mtime_ns": 1791330983388753840,
+        "size": 84,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/driver.log"
+      },
+      {
+        "ctime_ns": 1791330585568421056,
+        "device": 66306,
+        "inode": 5807828,
+        "mode": "0o700",
+        "mtime_ns": 1791330585568421056,
+        "size": 279,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/go"
+      },
+      {
+        "ctime_ns": 1791330585568750719,
+        "device": 66306,
+        "inode": 5807829,
+        "mode": "0o664",
+        "mtime_ns": 1791330585568750719,
+        "size": 105879,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-expected-source.json"
+      },
+      {
+        "ctime_ns": 1791330984400762523,
+        "device": 66306,
+        "inode": 5807838,
+        "mode": "0o664",
+        "mtime_ns": 1791330984400762523,
+        "size": 77,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-validation.log"
+      },
+      {
+        "ctime_ns": 1791330585568340245,
+        "device": 66306,
+        "inode": 5807826,
+        "mode": "0o664",
+        "mtime_ns": 1791330585568340245,
+        "size": 108950,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/observer-before.json"
+      },
+      {
+        "ctime_ns": 1791330585536610240,
+        "device": 66306,
+        "inode": 5807825,
+        "mode": "0o664",
+        "mtime_ns": 1791330585536610240,
+        "size": 2251,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/root-frozen-inputs.json"
+      },
+      {
+        "ctime_ns": 1791330983389860709,
+        "device": 66306,
+        "inode": 5803179,
+        "mode": "0o664",
+        "mtime_ns": 1791330983389860709,
+        "size": 140,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/run-exit.json"
+      },
+      {
+        "ctime_ns": 1791330585568839860,
+        "device": 66306,
+        "inode": 5807831,
+        "mode": "0o664",
+        "mtime_ns": 1791330585568839860,
+        "size": 1161,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/run-start.json"
+      },
+      {
+        "ctime_ns": 1791330983444589386,
+        "device": 66306,
+        "inode": 5807746,
+        "mode": "0o664",
+        "mtime_ns": 1791330983444589386,
+        "size": 2061,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/trusted-completed-receipt.json"
+      },
+      {
+        "ctime_ns": 1791330984406790464,
+        "device": 66306,
+        "inode": 5807839,
+        "mode": "0o664",
+        "mtime_ns": 1791330984406790464,
+        "size": 49,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/validation-exit.json"
+      },
+      {
+        "ctime_ns": 1791330983444658197,
+        "device": 66306,
+        "inode": 5807837,
+        "mode": "0o664",
+        "mtime_ns": 1791330983444658197,
+        "size": 1892,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/validation-start.json"
+      },
+      {
+        "ctime_ns": 1791334242241756919,
+        "device": 66306,
+        "inode": 5808725,
+        "mode": "0o664",
+        "mtime_ns": 1791334242241756919,
+        "size": 332504,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/build-completed.json"
+      },
+      {
+        "ctime_ns": 1791334240849766841,
+        "device": 66306,
+        "inode": 5808724,
+        "mode": "0o664",
+        "mtime_ns": 1791334240849766841,
+        "size": 333157,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/build-start.json"
+      },
+      {
+        "ctime_ns": 1791334662461112277,
+        "device": 66306,
+        "inode": 5808723,
+        "mode": "0o664",
+        "mtime_ns": 1791334662461112277,
+        "size": 122,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/driver.log"
+      },
+      {
+        "ctime_ns": 1791334240527210032,
+        "device": 66306,
+        "inode": 5808721,
+        "mode": "0o700",
+        "mtime_ns": 1791334240527210032,
+        "size": 279,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/go"
+      },
+      {
+        "ctime_ns": 1791335034993763312,
+        "device": 66306,
+        "inode": 5808944,
+        "mode": "0o664",
+        "mtime_ns": 1791335034993763312,
+        "size": 325694,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/independent-expected-source.json"
+      },
+      {
+        "ctime_ns": 1791334662743379776,
+        "device": 66306,
+        "inode": 5808932,
+        "mode": "0o664",
+        "mtime_ns": 1791334662743379776,
+        "size": 8942,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/independent-validation.log"
+      },
+      {
+        "ctime_ns": 1791334240526742143,
+        "device": 66306,
+        "inode": 5808720,
+        "mode": "0o664",
+        "mtime_ns": 1791334240526742143,
+        "size": 332827,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/observer-before.json"
+      },
+      {
+        "ctime_ns": 1791334240419823114,
+        "device": 66306,
+        "inode": 5808719,
+        "mode": "0o664",
+        "mtime_ns": 1791334240419823114,
+        "size": 2251,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/root-frozen-inputs.json"
+      },
+      {
+        "ctime_ns": 1791334662467241586,
+        "device": 66306,
+        "inode": 5808929,
+        "mode": "0o664",
+        "mtime_ns": 1791334662467241586,
+        "size": 140,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/run-exit.json"
+      },
+      {
+        "ctime_ns": 1791334240527270763,
+        "device": 66306,
+        "inode": 5808722,
+        "mode": "0o664",
+        "mtime_ns": 1791334240527270763,
+        "size": 1506,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/run-start.json"
+      },
+      {
+        "ctime_ns": 1791334662615526749,
+        "device": 66306,
+        "inode": 5808930,
+        "mode": "0o664",
+        "mtime_ns": 1791334662615526749,
+        "size": 2061,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/trusted-completed-receipt.json"
+      },
+      {
+        "ctime_ns": 1791334662751109650,
+        "device": 66306,
+        "inode": 5808933,
+        "mode": "0o664",
+        "mtime_ns": 1791334662751109650,
+        "size": 49,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/validation-exit.json"
+      },
+      {
+        "ctime_ns": 1791334662615592340,
+        "device": 66306,
+        "inode": 5808931,
+        "mode": "0o664",
+        "mtime_ns": 1791334662615592340,
+        "size": 1530,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe/validation-start.json"
+      },
+      {
+        "ctime_ns": 1791330617064179745,
+        "device": 66306,
+        "inode": 5155291,
+        "mode": "0o664",
+        "mtime_ns": 1791330617064179745,
+        "size": 3417,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/E-actual-M-integration-original.json"
+      },
+      {
+        "ctime_ns": 1791333716877234661,
+        "device": 66306,
+        "inode": 5155305,
+        "mode": "0o644",
+        "mtime_ns": 1791333716877234661,
+        "size": 7200,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/M-3325dfe-A-buildinfo-provenance-root-adoption-original.json"
+      },
+      {
+        "ctime_ns": 1791330676843381811,
+        "device": 66306,
+        "inode": 5155292,
+        "mode": "0o664",
+        "mtime_ns": 1791330676843381811,
+        "size": 6198,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/M-3325dfe-A-harness-equivalence-review-original.json"
+      },
+      {
+        "ctime_ns": 1791330571235738961,
+        "device": 66306,
+        "inode": 5155266,
+        "mode": "0o664",
+        "mtime_ns": 1791330571235738961,
+        "size": 4173,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/M-3325dfe-checkout-original.json"
+      },
+      {
+        "ctime_ns": 1791331964953696258,
+        "device": 66306,
+        "inode": 5155298,
+        "mode": "0o664",
+        "mtime_ns": 1791331964953696258,
+        "size": 1067,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/M-3325dfe-new-helper-transfer-verification-original.json"
+      },
+      {
+        "ctime_ns": 1791329057484228407,
+        "device": 66306,
+        "inode": 5805911,
+        "mode": "0o644",
+        "mtime_ns": 1791329057484228407,
+        "size": 10910667,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/artifact/treedb-test.jsonl"
+      },
+      {
+        "ctime_ns": 1791329057484228407,
+        "device": 66306,
+        "inode": 5805912,
+        "mode": "0o644",
+        "mtime_ns": 1791329057484228407,
+        "size": 5916,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/artifact/treedb-test.jsonl.summary.md"
+      },
+      {
+        "ctime_ns": 1791329053531180232,
+        "device": 66306,
+        "inode": 5805909,
+        "mode": "0o664",
+        "mtime_ns": 1791329053531180232,
+        "size": 19429,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/artifacts-original.json"
+      },
+      {
+        "ctime_ns": 1791329057487373534,
+        "device": 66306,
+        "inode": 5805913,
+        "mode": "0o664",
+        "mtime_ns": 1791329057487373534,
+        "size": 361,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/download-original.json"
+      },
+      {
+        "ctime_ns": 1791329100932608480,
+        "device": 66306,
+        "inode": 5805918,
+        "mode": "0o664",
+        "mtime_ns": 1791329100932608480,
+        "size": 2553,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/normal-checkout-source-projection-original.json"
+      },
+      {
+        "ctime_ns": 1791329057574229179,
+        "device": 66306,
+        "inode": 5805914,
+        "mode": "0o664",
+        "mtime_ns": 1791329057574229179,
+        "size": 8645,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/normal-crash-root-inspection-original.json"
+      },
+      {
+        "ctime_ns": 1791329100887212793,
+        "device": 66306,
+        "inode": 5805915,
+        "mode": "0o664",
+        "mtime_ns": 1791329100887212793,
+        "size": 12250359,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/normal-job-complete-log-original.txt"
+      },
+      {
+        "ctime_ns": 1791329100888600751,
+        "device": 66306,
+        "inode": 5805916,
+        "mode": "0o664",
+        "mtime_ns": 1791329100888600751,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/normal-job-complete-log-stderr-original.txt"
+      },
+      {
+        "ctime_ns": 1791329100893567094,
+        "device": 66306,
+        "inode": 5805917,
+        "mode": "0o664",
+        "mtime_ns": 1791329100893567094,
+        "size": 636,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/normal-job-log-download-original.json"
+      },
+      {
+        "ctime_ns": 1791329053024868436,
+        "device": 66306,
+        "inode": 5805908,
+        "mode": "0o664",
+        "mtime_ns": 1791329053024868436,
+        "size": 12800,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/run-source-original.json"
+      },
+      {
+        "ctime_ns": 1791329160631113251,
+        "device": 66306,
+        "inode": 5805923,
+        "mode": "0o644",
+        "mtime_ns": 1791329160631113251,
+        "size": 6194448,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/artifact/treedb-race.jsonl"
+      },
+      {
+        "ctime_ns": 1791329160631113251,
+        "device": 66306,
+        "inode": 5805924,
+        "mode": "0o644",
+        "mtime_ns": 1791329160631113251,
+        "size": 3445,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/artifact/treedb-race.jsonl.summary.md"
+      },
+      {
+        "ctime_ns": 1791329160633113268,
+        "device": 66306,
+        "inode": 5805925,
+        "mode": "0o664",
+        "mtime_ns": 1791329160633113268,
+        "size": 351,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/download-original.json"
+      },
+      {
+        "ctime_ns": 1791329158581082909,
+        "device": 66306,
+        "inode": 5805921,
+        "mode": "0o664",
+        "mtime_ns": 1791329158581082909,
+        "size": 1656,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/head-source-original.json"
+      },
+      {
+        "ctime_ns": 1791329185403577729,
+        "device": 66306,
+        "inode": 5805930,
+        "mode": "0o664",
+        "mtime_ns": 1791329185403577729,
+        "size": 1725,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/race-checkout-source-projection-original.json"
+      },
+      {
+        "ctime_ns": 1791329160683148144,
+        "device": 66306,
+        "inode": 5805926,
+        "mode": "0o664",
+        "mtime_ns": 1791329160683148144,
+        "size": 8926,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/race-crash-root-inspection-original.json"
+      },
+      {
+        "ctime_ns": 1791329185384477665,
+        "device": 66306,
+        "inode": 5805927,
+        "mode": "0o664",
+        "mtime_ns": 1791329185384477665,
+        "size": 6980630,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/race-job-complete-log-original.txt"
+      },
+      {
+        "ctime_ns": 1791329185384477665,
+        "device": 66306,
+        "inode": 5805928,
+        "mode": "0o664",
+        "mtime_ns": 1791329185384477665,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/race-job-complete-log-stderr-original.txt"
+      },
+      {
+        "ctime_ns": 1791329185388237701,
+        "device": 66306,
+        "inode": 5805929,
+        "mode": "0o664",
+        "mtime_ns": 1791329185388237701,
+        "size": 627,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/race-job-log-download-original.json"
+      },
+      {
+        "ctime_ns": 1791329157931507233,
+        "device": 66306,
+        "inode": 5805920,
+        "mode": "0o664",
+        "mtime_ns": 1791329157931507233,
+        "size": 2887,
+        "source": "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-race4-original/tested-source-original.json"
+      },
+      {
+        "ctime_ns": 1791333112600753282,
+        "device": 66306,
+        "inode": 111693716,
+        "mode": "0o664",
+        "mtime_ns": 1791333112600753282,
+        "size": 4314,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-exit-original.json"
+      },
+      {
+        "ctime_ns": 1791333112356350485,
+        "device": 66306,
+        "inode": 111693713,
+        "mode": "0o664",
+        "mtime_ns": 1791333112356350485,
+        "size": 6002,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-start-original.json"
+      },
+      {
+        "ctime_ns": 1791333112556041384,
+        "device": 66306,
+        "inode": 111693715,
+        "mode": "0o664",
+        "mtime_ns": 1791333112556041384,
+        "size": 897,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-stderr-original.log"
+      },
+      {
+        "ctime_ns": 1791333717568787011,
+        "device": 66306,
+        "inode": 111693732,
+        "mode": "0o664",
+        "mtime_ns": 1791333717568787011,
+        "size": 6378,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-v2-exit-original.json"
+      },
+      {
+        "ctime_ns": 1791333717365149667,
+        "device": 66306,
+        "inode": 111693729,
+        "mode": "0o664",
+        "mtime_ns": 1791333717365149667,
+        "size": 8230,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-v2-start-original.json"
+      },
+      {
+        "ctime_ns": 1791333717365149667,
+        "device": 66306,
+        "inode": 111693731,
+        "mode": "0o664",
+        "mtime_ns": 1791333717365149667,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-v2-stderr-original.log"
+      },
+      {
+        "ctime_ns": 1791333717528240255,
+        "device": 66306,
+        "inode": 111693730,
+        "mode": "0o664",
+        "mtime_ns": 1791333717528240255,
+        "size": 339430,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-v2.json"
+      },
+      {
+        "ctime_ns": 1791333112356350485,
+        "device": 66306,
+        "inode": 111693714,
+        "mode": "0o664",
+        "mtime_ns": 1791333112356350485,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison.json"
+      },
+      {
+        "ctime_ns": 1791333479716324442,
+        "device": 66306,
+        "inode": 111693723,
+        "mode": "0o664",
+        "mtime_ns": 1791333479716324442,
+        "size": 898,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/descriptive-report-exit-original.json"
+      },
+      {
+        "ctime_ns": 1791333479647806441,
+        "device": 66306,
+        "inode": 111693718,
+        "mode": "0o664",
+        "mtime_ns": 1791333479647806441,
+        "size": 1204,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/descriptive-report-start-original.json"
+      },
+      {
+        "ctime_ns": 1791333479647806441,
+        "device": 66306,
+        "inode": 111693720,
+        "mode": "0o664",
+        "mtime_ns": 1791333479647806441,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/descriptive-report-stderr-original.log"
+      },
+      {
+        "ctime_ns": 1791333479647806441,
+        "device": 66306,
+        "inode": 111693719,
+        "mode": "0o664",
+        "mtime_ns": 1791333479647806441,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/descriptive-report-stdout-original.log"
+      },
+      {
+        "ctime_ns": 1791333479706828611,
+        "device": 66306,
+        "inode": 111693722,
+        "mode": "0o664",
+        "mtime_ns": 1791333479706828611,
+        "size": 24591,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/descriptive-report.md"
+      },
+      {
+        "ctime_ns": 1791333479704196499,
+        "device": 66306,
+        "inode": 111693721,
+        "mode": "0o664",
+        "mtime_ns": 1791333479704196499,
+        "size": 11149694,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/descriptive-summary.json"
+      },
+      {
+        "ctime_ns": 1791333415354444956,
+        "device": 66306,
+        "inode": 111693717,
+        "mode": "0o664",
+        "mtime_ns": 1791333415354444956,
+        "size": 16986,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/environment-mismatch-diagnostic-original.json"
+      },
+      {
+        "ctime_ns": 1791333112128349806,
+        "device": 66306,
+        "inode": 111693704,
+        "mode": "0o664",
+        "mtime_ns": 1791333112128349806,
+        "size": 669,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/frozen-source-accepted.json"
+      },
+      {
+        "ctime_ns": 1791333717225260887,
+        "device": 66306,
+        "inode": 111693728,
+        "mode": "0o664",
+        "mtime_ns": 1791333717225260887,
+        "size": 10561,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-approved-A-semantics-and-provenance-certificate-v2.json"
+      },
+      {
+        "ctime_ns": 1791333112153105844,
+        "device": 66306,
+        "inode": 111693712,
+        "mode": "0o664",
+        "mtime_ns": 1791333112153105844,
+        "size": 4417,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-approved-A-semantics-certificate.json"
+      },
+      {
+        "ctime_ns": 1791334193451772489,
+        "device": 66306,
+        "inode": 111693734,
+        "mode": "0o664",
+        "mtime_ns": 1791334193451772489,
+        "size": 5546,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-cost-acceptance-original.json"
+      },
+      {
+        "ctime_ns": 1791333717604240909,
+        "device": 66306,
+        "inode": 111693733,
+        "mode": "0o664",
+        "mtime_ns": 1791333717604240909,
+        "size": 115373,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-provenance-verification-original.json"
+      },
+      {
+        "ctime_ns": 1791333479745340252,
+        "device": 66306,
+        "inode": 111693727,
+        "mode": "0o664",
+        "mtime_ns": 1791333479745340252,
+        "size": 898,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/descriptive-report-exit-original.json"
+      },
+      {
+        "ctime_ns": 1791333479716385473,
+        "device": 66306,
+        "inode": 111693724,
+        "mode": "0o664",
+        "mtime_ns": 1791333479716385473,
+        "size": 1240,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/descriptive-report-start-original.json"
+      },
+      {
+        "ctime_ns": 1791333479716385473,
+        "device": 66306,
+        "inode": 111693726,
+        "mode": "0o664",
+        "mtime_ns": 1791333479716385473,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/descriptive-report-stderr-original.log"
+      },
+      {
+        "ctime_ns": 1791333479738196792,
+        "device": 66306,
+        "inode": 111693725,
+        "mode": "0o664",
+        "mtime_ns": 1791333479738196792,
+        "size": 11496,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/descriptive-report.md"
+      },
+      {
+        "ctime_ns": 1791334193451884600,
+        "device": 66306,
+        "inode": 111693735,
+        "mode": "0o664",
+        "mtime_ns": 1791334193451884600,
+        "size": 5782,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/root-cost-acceptance-original.json"
+      },
+      {
+        "ctime_ns": 1791331017382045485,
+        "device": 66306,
+        "inode": 111693410,
+        "mode": "0o664",
+        "mtime_ns": 1791331017382045485,
+        "size": 112400,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/root-provenance-verification-original.json"
+      },
+      {
+        "ctime_ns": 1791331017405139828,
+        "device": 66306,
+        "inode": 111693411,
+        "mode": "0o664",
+        "mtime_ns": 1791331017405139828,
+        "size": 595866,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/summary.json"
+      },
+      {
+        "ctime_ns": 1791335057294778342,
+        "device": 66306,
+        "inode": 111693780,
+        "mode": "0o664",
+        "mtime_ns": 1791335057294778342,
+        "size": 8322164,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/descriptive-projection.json"
+      },
+      {
+        "ctime_ns": 1791335057304124616,
+        "device": 66306,
+        "inode": 111693796,
+        "mode": "0o664",
+        "mtime_ns": 1791335057304124616,
+        "size": 113698,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/descriptive-report.md"
+      },
+      {
+        "ctime_ns": 1791335057378345283,
+        "device": 66306,
+        "inode": 111693803,
+        "mode": "0o664",
+        "mtime_ns": 1791335057378345283,
+        "size": 2090,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/descriptive-root-operation-original.json"
+      },
+      {
+        "ctime_ns": 1791335057303155557,
+        "device": 66306,
+        "inode": 111693794,
+        "mode": "0o664",
+        "mtime_ns": 1791335057303155557,
+        "size": 102,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/format-exit-original.json"
+      },
+      {
+        "ctime_ns": 1791335057104776707,
+        "device": 66306,
+        "inode": 111693755,
+        "mode": "0o664",
+        "mtime_ns": 1791335057104776707,
+        "size": 4873,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/format-start-original.json"
+      },
+      {
+        "ctime_ns": 1791335057104776707,
+        "device": 66306,
+        "inode": 111693767,
+        "mode": "0o664",
+        "mtime_ns": 1791335057104776707,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/format-stderr-original.log"
+      },
+      {
+        "ctime_ns": 1791335057295778351,
+        "device": 66306,
+        "inode": 111693756,
+        "mode": "0o664",
+        "mtime_ns": 1791335057295778351,
+        "size": 113698,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/format-stdout-original.log"
+      },
+      {
+        "ctime_ns": 1791335035050586842,
+        "device": 66306,
+        "inode": 111693754,
+        "mode": "0o664",
+        "mtime_ns": 1791335035050586842,
+        "size": 341099,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/root-provenance-verification-original.json"
+      },
+      {
+        "ctime_ns": 1791335057370850651,
+        "device": 66306,
+        "inode": 111693801,
+        "mode": "0o664",
+        "mtime_ns": 1791335057370850651,
+        "size": 102,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/summarize-exit-original.json"
+      },
+      {
+        "ctime_ns": 1791335057304203987,
+        "device": 66306,
+        "inode": 111693797,
+        "mode": "0o664",
+        "mtime_ns": 1791335057304203987,
+        "size": 4631,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/summarize-start-original.json"
+      },
+      {
+        "ctime_ns": 1791335057304203987,
+        "device": 66306,
+        "inode": 111693799,
+        "mode": "0o664",
+        "mtime_ns": 1791335057304203987,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/summarize-stderr-original.log"
+      },
+      {
+        "ctime_ns": 1791335057363778937,
+        "device": 66306,
+        "inode": 111693798,
+        "mode": "0o664",
+        "mtime_ns": 1791335057363778937,
+        "size": 60424,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/summarize-stdout-original.log"
+      },
+      {
+        "ctime_ns": 1791335057363778937,
+        "device": 66306,
+        "inode": 111693800,
+        "mode": "0o664",
+        "mtime_ns": 1791335057363778937,
+        "size": 524675,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/summary.json"
+      },
+      {
+        "ctime_ns": 1791335057371811280,
+        "device": 66306,
+        "inode": 111693802,
+        "mode": "0o664",
+        "mtime_ns": 1791335057371811280,
+        "size": 60424,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/summary.md"
+      },
+      {
+        "ctime_ns": 1791334951073786275,
+        "device": 66306,
+        "inode": 111693750,
+        "mode": "0o664",
+        "mtime_ns": 1791334951073786275,
+        "size": 375,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/example-exit.json"
+      },
+      {
+        "ctime_ns": 1791334950384872319,
+        "device": 66306,
+        "inode": 111693747,
+        "mode": "0o664",
+        "mtime_ns": 1791334950384872319,
+        "size": 1023,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/example-start.json"
+      },
+      {
+        "ctime_ns": 1791334950384872319,
+        "device": 66306,
+        "inode": 111693749,
+        "mode": "0o664",
+        "mtime_ns": 1791334950384872319,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/example-stderr.log"
+      },
+      {
+        "ctime_ns": 1791334951054863739,
+        "device": 66306,
+        "inode": 111693748,
+        "mode": "0o664",
+        "mtime_ns": 1791334951054863739,
+        "size": 629,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/example-stdout.log"
+      },
+      {
+        "ctime_ns": 1791334949301141949,
+        "device": 66306,
+        "inode": 111693742,
+        "mode": "0o664",
+        "mtime_ns": 1791334949301141949,
+        "size": 374,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/go-version-exit.json"
+      },
+      {
+        "ctime_ns": 1791334949289828079,
+        "device": 66306,
+        "inode": 111693739,
+        "mode": "0o664",
+        "mtime_ns": 1791334949289828079,
+        "size": 913,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/go-version-start.json"
+      },
+      {
+        "ctime_ns": 1791334949289828079,
+        "device": 66306,
+        "inode": 111693741,
+        "mode": "0o664",
+        "mtime_ns": 1791334949289828079,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/go-version-stderr.log"
+      },
+      {
+        "ctime_ns": 1791334949290848553,
+        "device": 66306,
+        "inode": 111693740,
+        "mode": "0o664",
+        "mtime_ns": 1791334949290848553,
+        "size": 32,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/go-version-stdout.log"
+      },
+      {
+        "ctime_ns": 1791334951170864738,
+        "device": 66306,
+        "inode": 111693752,
+        "mode": "0o664",
+        "mtime_ns": 1791334951170864738,
+        "size": 226393,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/root-example-verification-original.json"
+      },
+      {
+        "ctime_ns": 1791334949289732968,
+        "device": 66306,
+        "inode": 111693738,
+        "mode": "0o664",
+        "mtime_ns": 1791334949289732968,
+        "size": 114966,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/root-inputs-original.json"
+      },
+      {
+        "ctime_ns": 1791334951162864669,
+        "device": 66306,
+        "inode": 111693751,
+        "mode": "0o664",
+        "mtime_ns": 1791334951162864669,
+        "size": 108875,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/source-after-original.json"
+      },
+      {
+        "ctime_ns": 1791334950287690070,
+        "device": 66306,
+        "inode": 111693746,
+        "mode": "0o664",
+        "mtime_ns": 1791334950287690070,
+        "size": 373,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/vet-exit.json"
+      },
+      {
+        "ctime_ns": 1791334949301224079,
+        "device": 66306,
+        "inode": 111693743,
+        "mode": "0o664",
+        "mtime_ns": 1791334949301224079,
+        "size": 938,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/vet-start.json"
+      },
+      {
+        "ctime_ns": 1791334949301224079,
+        "device": 66306,
+        "inode": 111693745,
+        "mode": "0o664",
+        "mtime_ns": 1791334949301224079,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/vet-stderr.log"
+      },
+      {
+        "ctime_ns": 1791334949301224079,
+        "device": 66306,
+        "inode": 111693744,
+        "mode": "0o664",
+        "mtime_ns": 1791334949301224079,
+        "size": 0,
+        "source": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/example/vet-stdout.log"
+      },
+      {
+        "ctime_ns": 1791325074586991556,
+        "device": 66306,
+        "inode": 5155278,
+        "mode": "0o644",
+        "mtime_ns": 1791325074227449915,
+        "size": 5569,
+        "source": "/home/mikers/gomap-r1-final-observers-20261006/final-publication-relocated-base13-root-preparation.json"
+      }
+    ],
+    "stage_exists_at_final_read": false,
+    "utc": "2026-10-07T01:07:32.971932+00:00"
+  },
+  "plan_sha256": "beae5ae44c750b533530626e3241456940cbc361fa62a1a396dfb9647cf88ea0",
+  "preserved_failed_original_destinations": [
+    "observers/M-3325dfe-D-qualification-operation-failure-original.json",
+    "observers/M-3325dfe-root-cost-operation-failure-original.json",
+    "results/A/comparison-exit-original.json",
+    "results/A/comparison-start-original.json",
+    "results/A/comparison-stderr-original.log",
+    "results/A/comparison.json"
+  ],
+  "required_helper_pins": {
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-buildinfo-provenance-preparation/compare-certified-v2.py": "3c4502ebb4620ac010b615ca10bbdd45a4448f66e2c7ed663d57c32413c1c2c2",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-locale-provenance-v2-preparation/qualify.py": "648f07a3135cbd2d35ac713e944d681dd2de7b7111c76a4e0ca3b10e50717953",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-support-copier-v2-preparation/copy-support.py": "dff812a25f9cbd82fde6044b724addc6b49f63a71e3e9949312a548ec7133b42",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-input-cost-identity-v3-preparation/build-draft-inputs.py": "a79091f4ee3d7f265f8c330c60b2eb01139d658001f46de80cbc096a13d8a79f",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/replay-public.py": "1bcdfa4ebc4489b2292caeb25a3f5ffd38a1adb347a0e455e8f4d736c4a07fcc",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-provenance-v2-preparation/root-inputs.template.json": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-cost-acceptance-original.json": "d8ad4eb017813c154aa1aa00eff999cbf63e42cd87d55e227fc63929ebf3f0ed",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/root-cost-acceptance-original.json": "2930b8f63442bbbb4ac33157591f813e11a995c3e64b12b1260aecee614e2baf"
+  },
+  "scope": [
+    "Exact byte-binding plan only. No directory copying, helper invocation, numeric classification or approval.",
+    "Retains original failed A comparison, root-cost operation failure, D qualifier operation failure and v1 originals alongside reviewed v2 replacements.",
+    "All selected post-M preparation/review package text files are explicit plan rows. Private archives, example DB/compiler scratch and all older F support packages are excluded.",
+    "Current 898a normal2/race4 original text artifacts/logs are copied as support, with actual original source receipts; no same-source runtime/performance or CI equivalence inferred.",
+    "Original script/wrapper source mode may be executable; reviewed copier forces copied support bytes to0644 and no binaries are selected.",
+    "Root extends plan only with actual later decision/selection/new receipt bytes, creates a new external plan pin and independently verifies every binding before assembly."
+  ],
+  "stage": "/home/mikers/gomap-r1-publication-stage-M-3325dfe-20261006",
+  "status": "PRIVATE_SUPPORT_PLAN_READY_NO_ASSEMBLY_PUBLICATION_OR_ACCEPTANCE",
+  "total_original_text_bytes": 63467599
+}

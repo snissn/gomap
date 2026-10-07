@@ -429,3 +429,72 @@ original collector or measured harness identity. Run the corrected helper only
 against the same pinned raw packet; no new collector, active admission, workload
 replay or native oracle is implied. Generic full-role instantiation is not this
 postcapture correction. Root retains artifact acceptance and publication.
+
+The matched descriptive reporter consumes the immutable Go planned/result schema.
+For the default six-write campaign, Go omits the zero-valued `Originals` field;
+omitted or integer zero means six, matching the retained read validator. The
+reporter independently requires six contiguous `Writes`, seven contiguous
+`Prefixes`, the `changing-top10` profile, and the exact typed C1/C4 duration,
+spacing, warmup and evidence caps. It authenticates the unchanged raw reports
+and outer accounting/source joins before producing any output. Failed and
+incomplete windows remain in their declared order. This offline reporter repair
+is a separately reviewed current-source supplement; it does not alter frozen
+measurement sources, raw observations, prior acceptances or qualification status.
+
+Reporter schema controls rebind all dependent synthetic raw hashes before testing
+each malformed planned/result field and require its exact schema refusal. One
+representative input for each of the five guard predicates must succeed when
+only that predicate is bypassed in an isolated test copy. Synthetic oracle/admission identity controls likewise
+rebind dependent hashes and require the intended identity refusal. Deliberate raw
+and source substitutions remain separate controls; no measured receipt is edited.
+
+## Prospective #5068 continuation
+
+The original six-window attempt remains INCOMPLETE. Its exact profiles and
+Version1 descriptive reporting are unchanged. The accepted prospective revision
+adds only rf4matched5068r01c1, rf4matched5068r02c1 and rf4matched5068r03c4, in that
+order, with the existing six/seven/60s/5s/RPC3/420s/480s bounds and caps. Each has
+fresh stores, inputs, configuration, TLS and process identities. Source
+construction and reporting grant no admission, clock, artifact acceptance or
+retention authority.
+
+Version2 reporting requires exactly {Version, revision, decision, historical,
+windows}. Version is integer2; revision is matched5068-prospective-continuation-v1.
+decision and historical are absolute regular-file {path,sha256} references. The
+decision must hash to c3e32e7dff816e0b04aea7dad61be253391221fe391644b08bd5c3cc6d981b12.
+windows contains the fixed selection W1,W2,W3,r01,r02,r03 in order, using the
+existing {campaign,status,pins} row contract. Failed/incomplete continuation rows
+remain reportable; they cannot be replaced or counted as complete.
+
+The pinned historical JSON has exactly {Version,state,windows}, integer Version1,
+state INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT, and all six original rows in order.
+Each row has {campaign,status,pins,evidence}. W1-W3 have status complete and their
+pins must exactly equal the selected legacy rows, including original source and
+raw locators. W4 is EXPIRED_SETUP_ONLY_NOT_MEASURED; W5-W6 are
+UNISSUED_PROSPECTIVELY_RETIRED. Those three unmeasured rows have empty pins.
+evidence is a nonempty mapping of record names to exact regular-file path/SHA
+references; issued W1-W4 must include their unchanged original budget under
+budget. The reviewed reporter SOURCE fixes the original W1-W4 paths and digests
+in ORIGINAL_BUDGETS; a caller-supplied replacement or relocated copy is refused
+even when its newly calculated raw and ledger hashes match. An optional
+original_budget alias must identify that same fixed budget. ROOT assembles the
+ledger from retained actual records; the reporter retains their bytes without
+inventing interpretations of
+independent acceptance or three-copy receipts. Existing failures, deadlines and
+unissued attempts are never relabeled.
+
+The CLI remains python3 -B matched_report.py --windows ABSOLUTE_MANIFEST
+--windows-sha256 EXACT_SHA --out FRESH_OUTPUT. It protects the manifest, decision,
+ledger, historical evidence, window raw inputs and authenticated source copies
+against output overlap. selection_complete is descriptive: true requires all six
+selected windows complete and three per arm, while campaign_acceptance remains
+false. ROOT separately verifies independent acceptance and all three durable
+copies for each selected window. No pooled tails, significance, speedup, capacity
+or broader recovery claim follows from this report.
+
+The synthetic controls embed the exact public accepted SOURCE decision bytes,
+not future runtime receipts. They reuse the same constructors and actual read
+consumers for all nine matched profiles and authenticate the historical ledger
+before targeted reporter negatives. No additional per-attempt work or product
+hot-path change is introduced; profile validation happens at source binding and
+report history traversal is bounded to six rows.

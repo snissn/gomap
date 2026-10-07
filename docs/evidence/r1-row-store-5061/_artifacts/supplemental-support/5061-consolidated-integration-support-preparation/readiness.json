@@ -1,0 +1,409 @@
+{
+  "inventory_sha256": "74c5eb413337663955a2e58536409d09521c4448f142aac974ecbf98f1317bbc",
+  "limitations": [
+    "This is a private eighth support group pending root adoption. Existing seven frozen groups and assembler were unchanged; this group is not in the assembler or public selection.",
+    "No GitHub/readiness/merge/capture operation was performed. Candidate ebe is provisional on actual main3cfe; current-head required CI and hosted review/threads, protected merge, landed A/C/D captures, independent validation and E public replay/acceptance remain root gates.",
+    "Focused 8506 events retain actual tested8506 identity. TreeDB runtime/tests are byte-applicable to ebe (the TreeDB diff is the indexed-mutations spec only); additive C events actually testedebe. Neither evidence establishes performance qualification.",
+    "Initial 8506 missing-main-module failure has four actual retained files. No race/vet or source-after receipts were produced or reconstructed for that failure. Driver/SSH and failed raw log are retained; original exit1 stays failure.",
+    "8506-canonical-tests.log is the initial Python import-driver failure (ValueError: Empty module name), not PASS. Six later individual canonical logs report 58 tests on8506 and36 onebe; their independent start/exit/argv/environment receipts are not present in this selection. Root adoption records applicability, not newly invented execution receipts.",
+    "5071-user-approved-merge-comment-actual.json is an empty failed placeholder, explicitly excluded. The nonempty root-recorded user exception receipt and actual posted checkpoint are retained. The user exception concerned auxiliary M0 timing only; all original M0 failures remain unchanged.",
+    "Actual public bodies, request payloads and API response bodies match exactly at frozen copy time. Current PR edit response observesebe; it is a metadata snapshot, not proof of CI/review/merge acceptance. Earlier pre-consolidation body history remains separate.",
+    "Go executable bytes and Git bundles/full source archives are absent. Start receipts retain the original Go hash, historical argv/cwd/environment, driver hash and source manifests. Textual Python drivers are copied0644 and not executed. This packet is not an independently executed replay or binary-equivalence proof."
+  ],
+  "pair_checks": "ALL_EXACT_SIZE_SHA256_UTF8_NONSYMLINK_COPY_0644",
+  "public_body_checks": [
+    {
+      "authority": "Actual API response snapshot; no readiness or merge claim",
+      "body_exact_match": true,
+      "observed_head": null,
+      "request": "checkpoint-consolidated-payload.json",
+      "response": "checkpoint-consolidated-actual.json",
+      "updated_at": "2026-10-06T18:28:57Z",
+      "url": "https://github.com/snissn/gomap/issues/5056#issuecomment-6007281596"
+    },
+    {
+      "authority": "Actual API response snapshot; no readiness or merge claim",
+      "body_exact_match": true,
+      "observed_head": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+      "request": "5071-consolidated-pr-edit.json",
+      "response": "5071-consolidated-pr-edit-actual.json",
+      "updated_at": "2026-10-06T18:28:56Z",
+      "url": "https://github.com/snissn/gomap/pull/5071"
+    },
+    {
+      "authority": "Actual API response snapshot; no readiness or merge claim",
+      "body_exact_match": true,
+      "observed_head": null,
+      "request": "5072-incorporation-pending-payload.json",
+      "response": "5072-incorporation-pending-actual.json",
+      "updated_at": "2026-10-06T18:25:16Z",
+      "url": "https://github.com/snissn/gomap/pull/5072#issuecomment-6022763890"
+    }
+  ],
+  "raw_receipt_checks": [
+    {
+      "actual_exit": 1,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/collections",
+        "./TreeDB/db",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestR1|TestLeafManifestRevisionGC|TestManager(CloseJoinsPinnedZombieRetry5066|ConcurrentRetryAdmissionAndClose5066)|TestStablePhysicalKindSelection)",
+        "-count=1",
+        "-timeout=8m"
+      ],
+      "classification": "ORIGINAL_FAILURE",
+      "cwd": "/home/mikers/gomap-r1-5071-main-integration-8506",
+      "directory": "8506-focused-validation-failed-original",
+      "driver_sha256": "151c93eb6054d110e637232293c8bb18fe8972bfce010418a77ddbd47b3881e7",
+      "environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_utc": "2026-10-06T18:12:37.700984+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "log_sha256": "5ee4c58ed00b53e034b7d309148193b9faa2bef2b1aa0c74a458cd830beb7c00",
+      "phase": "normal",
+      "source_sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c",
+      "start_utc": "2026-10-06T18:12:37.634519+00:00",
+      "tested_source": "8506a498346d35c635bbd0f59d99a135d6c6785d"
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/collections",
+        "./TreeDB/db",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestR1|TestLeafManifestRevisionGC|TestManager(CloseJoinsPinnedZombieRetry5066|ConcurrentRetryAdmissionAndClose5066)|TestStablePhysicalKindSelection)",
+        "-count=1",
+        "-timeout=8m"
+      ],
+      "classification": "FOCUSED_CORRECTNESS_ONLY",
+      "cwd": "/home/mikers/gomap-r1-5071-main-integration-8506",
+      "directory": "8506-focused-validation-module-ready-original",
+      "driver_sha256": "833ac8e50936207ad835d0a887fbfe6c2ec659bbb5986949eb8e7d9698341a86",
+      "environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_utc": "2026-10-06T18:14:42.944350+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "log_sha256": "8508f0707a3a5112d69bd47ca6e356fcdf28bd171ca75c90e745265e1a539b01",
+      "package_pass_rows": [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/TreeDB/collections"
+      ],
+      "phase": "normal",
+      "raw_fail_rows": 0,
+      "source_sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c",
+      "start_utc": "2026-10-06T18:13:28.340973+00:00",
+      "test_pass_rows": 114,
+      "tested_source": "8506a498346d35c635bbd0f59d99a135d6c6785d"
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/collections",
+        "./TreeDB/db",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestR1|TestLeafManifestRevisionGC|TestManager(CloseJoinsPinnedZombieRetry5066|ConcurrentRetryAdmissionAndClose5066)|TestStablePhysicalKindSelection)",
+        "-count=1",
+        "-timeout=8m"
+      ],
+      "classification": "FOCUSED_CORRECTNESS_ONLY",
+      "cwd": "/home/mikers/gomap-r1-5071-main-integration-8506",
+      "directory": "8506-focused-validation-module-ready-original",
+      "driver_sha256": "833ac8e50936207ad835d0a887fbfe6c2ec659bbb5986949eb8e7d9698341a86",
+      "environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_utc": "2026-10-06T18:16:49.980789+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "log_sha256": "7c54356f9e2fc0b318b72c59bd0f47375a6b66087e0ef06ac9ff5f1afbca1e9d",
+      "package_pass_rows": [
+        "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/TreeDB/collections"
+      ],
+      "phase": "race",
+      "raw_fail_rows": 0,
+      "source_sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c",
+      "start_utc": "2026-10-06T18:14:43.027030+00:00",
+      "test_pass_rows": 114,
+      "tested_source": "8506a498346d35c635bbd0f59d99a135d6c6785d"
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/collections",
+        "./TreeDB/db",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "classification": "FOCUSED_CORRECTNESS_ONLY",
+      "cwd": "/home/mikers/gomap-r1-5071-main-integration-8506",
+      "directory": "8506-focused-validation-module-ready-original",
+      "driver_sha256": "833ac8e50936207ad835d0a887fbfe6c2ec659bbb5986949eb8e7d9698341a86",
+      "environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_utc": "2026-10-06T18:16:56.091977+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "phase": "vet",
+      "source_sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c",
+      "start_utc": "2026-10-06T18:16:50.020517+00:00",
+      "tested_source": "8506a498346d35c635bbd0f59d99a135d6c6785d"
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./cmd/collection_workload_bench",
+        "./TreeDB/db",
+        "./TreeDB/internal/valuelog",
+        "-run",
+        "^(TestR1MutationSweepSmokeAndCorruption|TestRewriteSwapPreservesWinningCurrentRevision|TestSelectedValueLogRewriteRevisionLifetime|TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle|TestCOWProducedFrameObserverMatchesEncodedFrames|TestCOWProducedFrameObserverRejectsBeforeObservation)$",
+        "-count=1",
+        "-timeout=8m"
+      ],
+      "classification": "FOCUSED_CORRECTNESS_ONLY",
+      "cwd": "/home/mikers/gomap-r1-5071-consolidated-ebe414",
+      "directory": "ebe414-additive-validation-original",
+      "driver_sha256": "1e2f99d95fe5111c030b2c9e369f0a68551be847865d1495dbf8eaa9fcddc82b",
+      "environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_utc": "2026-10-06T18:18:14.426408+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "log_sha256": "aa4d20c766a19dfe9a5576bc1a1fb2f4387ebcf665b0e0e48f523667fc024bd1",
+      "package_pass_rows": [
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db",
+        "github.com/snissn/gomap/cmd/collection_workload_bench"
+      ],
+      "phase": "normal",
+      "raw_fail_rows": 0,
+      "source_sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000",
+      "start_utc": "2026-10-06T18:17:31.967607+00:00",
+      "test_pass_rows": 51,
+      "tested_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc"
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./cmd/collection_workload_bench",
+        "./TreeDB/db",
+        "./TreeDB/internal/valuelog",
+        "-run",
+        "^(TestR1MutationSweepSmokeAndCorruption|TestRewriteSwapPreservesWinningCurrentRevision|TestSelectedValueLogRewriteRevisionLifetime|TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle|TestCOWProducedFrameObserverMatchesEncodedFrames|TestCOWProducedFrameObserverRejectsBeforeObservation)$",
+        "-count=1",
+        "-timeout=8m"
+      ],
+      "classification": "FOCUSED_CORRECTNESS_ONLY",
+      "cwd": "/home/mikers/gomap-r1-5071-consolidated-ebe414",
+      "directory": "ebe414-additive-validation-original",
+      "driver_sha256": "1e2f99d95fe5111c030b2c9e369f0a68551be847865d1495dbf8eaa9fcddc82b",
+      "environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_utc": "2026-10-06T18:19:07.722310+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "log_sha256": "569ff8f367fcec17e360706ebe38bd224a437b624fae949d1c68274dbb85d2ff",
+      "package_pass_rows": [
+        "github.com/snissn/gomap/cmd/collection_workload_bench",
+        "github.com/snissn/gomap/TreeDB/internal/valuelog",
+        "github.com/snissn/gomap/TreeDB/db"
+      ],
+      "phase": "race",
+      "raw_fail_rows": 0,
+      "source_sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000",
+      "start_utc": "2026-10-06T18:18:14.467150+00:00",
+      "test_pass_rows": 51,
+      "tested_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc"
+    },
+    {
+      "actual_exit": 0,
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./cmd/collection_workload_bench"
+      ],
+      "classification": "FOCUSED_CORRECTNESS_ONLY",
+      "cwd": "/home/mikers/gomap-r1-5071-consolidated-ebe414",
+      "directory": "ebe414-additive-validation-original",
+      "driver_sha256": "1e2f99d95fe5111c030b2c9e369f0a68551be847865d1495dbf8eaa9fcddc82b",
+      "environment": {
+        "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+        "GODEBUG": "",
+        "GOENV": "off",
+        "GOFLAGS": "",
+        "GOGC": "100",
+        "GOMAXPROCS": "12",
+        "GOMEMLIMIT": "off",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off",
+        "HOME": "/home/mikers",
+        "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+        "PYTHONDONTWRITEBYTECODE": "1"
+      },
+      "exit_utc": "2026-10-06T18:19:10.155866+00:00",
+      "go_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "phase": "vet",
+      "source_sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000",
+      "start_utc": "2026-10-06T18:19:07.767913+00:00",
+      "tested_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc"
+    }
+  ],
+  "remaining_gates": [
+    "current-head required CI",
+    "current-head hosted review and threads",
+    "normal protected merge",
+    "actual-landed A/C/D capture and independent validation",
+    "artifact-first E public replay and acceptance"
+  ],
+  "root_adoption_pin_checks": [
+    {
+      "check": "root adoption pin",
+      "path": "new-main-source-applicability-review.md",
+      "result": "MATCH"
+    },
+    {
+      "check": "root adoption pin",
+      "path": "new-main-source-applicability-review.json",
+      "result": "MATCH"
+    },
+    {
+      "check": "root adoption pin",
+      "path": "5071-consolidated-C-review.md",
+      "result": "MATCH"
+    },
+    {
+      "check": "root adoption pin",
+      "path": "5071-consolidated-C-review.json",
+      "result": "MATCH"
+    },
+    {
+      "check": "root adoption pin",
+      "path": "8506-focused-validation-root-review.json",
+      "result": "MATCH"
+    },
+    {
+      "check": "root adoption pin",
+      "path": "ebe414-additive-validation-root-review.json",
+      "result": "MATCH"
+    }
+  ],
+  "source_applicability_read_only": {
+    "TreeDB_paths_changed_8506_to_ebe": [
+      "TreeDB/docs/spec/r1-indexed-mutations.md"
+    ],
+    "actual_local_candidate": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc"
+  },
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION"
+}

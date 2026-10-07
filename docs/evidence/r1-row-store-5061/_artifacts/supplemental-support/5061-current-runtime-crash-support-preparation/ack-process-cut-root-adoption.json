@@ -1,0 +1,12 @@
+{
+  "utc": "2026-10-06T12:03:25.381146+00:00",
+  "status": "SCOPED_CURRENT_CI_SOURCE_AND_EXECUTION_ADOPTED",
+  "independent_review": {
+    "md_sha256": "d4443ea94ea5e933de7666fa3f898ee62865497d482ae509a47cf2037c68bcda",
+    "json_sha256": "08e1c198948c0f9232373fc1dc72db60d818b7f0f2d096f49f7353854a00ff17"
+  },
+  "root_independent_event_verification": "/tmp/gomap-r1-execution-20261005/3182-ci-crash-cut-root-review.json",
+  "scope": "Normal/race18mutationcuts+3supportedmaintcuts+mixedandfold; nophysicalpowerlossorperformanceclaim",
+  "actual_landing_and_retained_D_pending": true,
+  "historical_10x_provenance": "lifecycleMixedCycles/RecoveryAfterMaintenance;notasynctest"
+}

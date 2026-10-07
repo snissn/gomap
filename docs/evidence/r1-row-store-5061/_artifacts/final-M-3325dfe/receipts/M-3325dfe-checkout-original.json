@@ -1,0 +1,125 @@
+{
+  "utc": "2026-10-06T23:49:31.029947+00:00",
+  "pins": {
+    "5071-actual-M.bundle": "c584344813cf37d34c0c9aadcf7df36048eac12f179461824d567d9190359bf0",
+    "5071-actual-M-landing-original.json": "d3cd24a08f3ffadd282467984406e0a4465fe32837bcfa36df06a9eb0deb4ffe",
+    "derive-configs.py": "eda94146836c9a91f8e9f25a7148a1387e79a151c8b8a6aca547b21158711a7e",
+    "observe-C.py": "ebe05a3822f2716596831ceb464bc8c95adb340eb52f7bfa75b87183a3602efa",
+    "observe-A-with-environment.py": "f477dacf465f347afa423759cbc6f148f8e6bbb391903e333bcddc0cd323990d",
+    "observe-D.py": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68"
+  },
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "898a7bae48f02e7067318f5165501d16ce7d47ad\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "bundle",
+        "verify",
+        "/home/mikers/gomap-r1-final-observers-20261006/5071-actual-M.bundle"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "The bundle contains this ref:\n3325dfe77940fec8587d8b61b1ac4e0b2f72caca refs/r1/root-actual-M-3325dfe\nThe bundle requires these 2 refs:\n898a7bae48f02e7067318f5165501d16ce7d47ad \n462b3a98b90e1317fd16ce68dc78f03cd46ebbe9 \nThe bundle uses this hash algorithm: sha1\n",
+      "stderr": "/home/mikers/gomap-r1-final-observers-20261006/5071-actual-M.bundle is okay\n"
+    },
+    {
+      "argv": [
+        "git",
+        "fetch",
+        "/home/mikers/gomap-r1-final-observers-20261006/5071-actual-M.bundle",
+        "refs/r1/root-actual-M-3325dfe:refs/r1/root-actual-M-3325dfe"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "From /home/mikers/gomap-r1-final-observers-20261006/5071-actual-M.bundle\n * [new ref]             refs/r1/root-actual-M-3325dfe -> refs/r1/root-actual-M-3325dfe\n"
+    },
+    {
+      "argv": [
+        "git",
+        "checkout",
+        "--detach",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "Previous HEAD position was 898a7bae4 merge main physical value-log byte accounting into R1 qualification\nHEAD is now at 3325dfe77 Merge pull request #5071 from snissn/codex/5066-lifecycle-maintenance\n"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD^{tree}"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "0600b47bf0a3a609917d224d7fd06c40737bcd8e\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "show",
+        "-s",
+        "--format=%P",
+        "HEAD"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "462b3a98b90e1317fd16ce68dc78f03cd46ebbe9 898a7bae48f02e7067318f5165501d16ce7d47ad\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "uname",
+        "-a"
+      ],
+      "cwd": "/home/mikers/gomap-r1-final-source-20261006",
+      "exit_code": 0,
+      "stdout": "Linux mikers-MS-7E71 7.0.0-30-generic #30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026 x86_64 GNU/Linux\n",
+      "stderr": ""
+    }
+  ],
+  "load_average": [
+    1.201171875,
+    1.50927734375,
+    1.51904296875
+  ],
+  "host": "Linux mikers-MS-7E71 7.0.0-30-generic #30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026 x86_64 GNU/Linux",
+  "state": "ROOT_VERIFIED_ACTUAL_M_LINUX_CLEAN_CHECKOUT"
+}

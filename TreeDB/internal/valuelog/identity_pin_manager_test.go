@@ -369,11 +369,11 @@ func TestManagerRetryZombieDeleteClosesOwnHandleBeforeUnlink(t *testing.T) {
 	}
 
 	originalRemove := removeSegmentPath
-	removeSegmentPath = func(removePath string) error {
+	removeSegmentPath = func(removePath string, remove func(string) error) error {
 		if _, statErr := file.File.Stat(); statErr == nil {
 			return errors.New("unlink attempted before closing manager handle")
 		}
-		return os.Remove(removePath)
+		return remove(removePath)
 	}
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
@@ -398,14 +398,14 @@ func TestManagerStableDeletePreservesReplacementCreatedAtUnlink(t *testing.T) {
 
 	const replacement = "replacement created after quarantine rename"
 	originalRemove := removeSegmentPath
-	removeSegmentPath = func(quarantinePath string) error {
+	removeSegmentPath = func(quarantinePath string, remove func(string) error) error {
 		if filepath.Clean(quarantinePath) == filepath.Clean(path) {
 			t.Fatal("stable delete passed the original pathname to unlink")
 		}
 		if err := os.WriteFile(path, []byte(replacement), 0o600); err != nil {
 			return err
 		}
-		return os.Remove(quarantinePath)
+		return remove(quarantinePath)
 	}
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
@@ -444,6 +444,14 @@ func TestManagerZombieDeleteCommitsSuccessfulUnlinkAfterCloseError(t *testing.T)
 		handle.Close()
 		t.Fatal(err)
 	}
+	parent, parentIdentity, err := openRegisteredSegmentParent(path)
+	if err != nil {
+		handle.Close()
+		t.Fatal(err)
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := handle.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -452,12 +460,12 @@ func TestManagerZombieDeleteCommitsSuccessfulUnlinkAfterCloseError(t *testing.T)
 		t.Fatal(err)
 	}
 	file := &File{
-		ID: 1, Path: path, File: handle,
+		ID: 1, Path: path, File: handle, registeredParentIdentity: parentIdentity,
 		stableIdentity: identity, stableNamespace: namespace, stableObserved: true,
 	}
 	file.IsZombie.Store(true)
 	manager := &Manager{
-		files: map[uint32]*File{file.ID: file}, stableResourcePins: registry,
+		files: map[uint32]*File{file.ID: file}, stableResourcePins: registry, retiredCount: 1,
 	}
 	if err := manager.deleteZombieFile(file); err == nil {
 		t.Fatal("deleteZombieFile returned nil, want the already-closed handle error")
@@ -544,9 +552,9 @@ func TestManagerStableDeleteEmitsCanonicalUnlinkCutBeforeQuarantineUnlink(t *tes
 
 	originalRemove := removeSegmentPath
 	quarantineUnlinked := false
-	removeSegmentPath = func(removePath string) error {
+	removeSegmentPath = func(removePath string, remove func(string) error) error {
 		quarantineUnlinked = true
-		return originalRemove(removePath)
+		return originalRemove(removePath, remove)
 	}
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
@@ -641,7 +649,7 @@ func TestManagerStableDeleteRestoreCompensatesCanonicalUnlink(t *testing.T) {
 
 	wantErr := errors.New("injected quarantine unlink failure")
 	originalRemove := removeSegmentPath
-	removeSegmentPath = func(string) error { return wantErr }
+	removeSegmentPath = func(string, func(string) error) error { return wantErr }
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
 	var operations []durabilitycut.NamespaceOperation

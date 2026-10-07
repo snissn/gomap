@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-06T22:14:19.481151+00:00",
+  "argv": [
+    "gh",
+    "api",
+    "repos/snissn/gomap/git/ref/heads/main"
+  ],
+  "exit": 0,
+  "stdout": "{\"ref\":\"refs/heads/main\",\"node_id\":\"REF_kwDOIdn7C69yZWZzL2hlYWRzL21haW4\",\"url\":\"https://api.github.com/repos/snissn/gomap/git/refs/heads/main\",\"object\":{\"sha\":\"462b3a98b90e1317fd16ce68dc78f03cd46ebbe9\",\"type\":\"commit\",\"url\":\"https://api.github.com/repos/snissn/gomap/git/commits/462b3a98b90e1317fd16ce68dc78f03cd46ebbe9\"}}",
+  "stderr": ""
+}
