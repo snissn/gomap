@@ -58,10 +58,8 @@ func TestCOWSustainedPublicMVCCConstruction(t *testing.T) {
 								if boundary.Phase != "released" && boundary.Phase != "preclose" && boundary.Phase != "reopened" {
 									continue
 								}
-								for _, key := range []string{"treedb.cache.cow.views", "treedb.cache.cow.active_cuts", "treedb.cache.cow.external_leases"} {
-									if boundary.Stats[key] != "0" {
-										t.Fatalf("%s leaked %s=%s", boundary.Phase, key, boundary.Stats[key])
-									}
+								if err := c4QuiescentCOWOwners(boundary.Stats); err != nil {
+									t.Fatalf("%s: %v", boundary.Phase, err)
 								}
 							}
 						}
@@ -77,6 +75,50 @@ func TestCOWSustainedPublicMVCCConstruction(t *testing.T) {
 		}
 	}
 }
+
+// The open database owns its published cut and cache/basis/cut leases. With
+// side stores disabled, each current or frozen generation owns one resolver
+// lease. Quiescent boundaries must have no reader views or extra owners.
+func c4QuiescentCOWOwners(stats map[string]string) error {
+	values := make(map[string]uint64, 6)
+	for _, key := range []string{"views", "active_cuts", "generations", "current_roots", "frozen_roots", "external_leases"} {
+		value, err := strconv.ParseUint(stats["treedb.cache.cow."+key], 10, 64)
+		if err != nil {
+			return fmt.Errorf("quiescent owner counter %s: %w", key, err)
+		}
+		values[key] = value
+	}
+	if values["views"] != 0 || values["active_cuts"] != 1 || values["current_roots"] == 0 ||
+		values["generations"] < values["current_roots"] || values["generations"]-values["current_roots"] != values["frozen_roots"] ||
+		values["external_leases"] < 3 || values["external_leases"]-3 != values["generations"] {
+		return fmt.Errorf("quiescent COW owners do not match the published database cut: %v", values)
+	}
+	return nil
+}
+
+func TestCOWSustainedPublicMVCCOwnerAccounting(t *testing.T) {
+	base := map[string]string{
+		"views": "0", "active_cuts": "1", "generations": "4",
+		"current_roots": "4", "frozen_roots": "0", "external_leases": "7",
+	}
+	for _, mutation := range []struct{ key, value string }{
+		{}, {"views", "1"}, {"active_cuts", "0"}, {"active_cuts", "2"},
+		{"generations", "5"}, {"current_roots", "0"}, {"frozen_roots", "1"},
+		{"external_leases", "8"}, {"external_leases", "6"}, {"external_leases", ""},
+	} {
+		stats := make(map[string]string, len(base))
+		for key, value := range base {
+			stats["treedb.cache.cow."+key] = value
+		}
+		if mutation.key != "" {
+			stats["treedb.cache.cow."+mutation.key] = mutation.value
+		}
+		if err := c4QuiescentCOWOwners(stats); (err != nil) != (mutation.key != "") {
+			t.Fatalf("owner mutation %+v: %v", mutation, err)
+		}
+	}
+}
+
 func TestCOWSustainedPublicMVCCFiniteSchedule(t *testing.T) {
 	for _, x := range []struct{ n, e int }{{0, 1}, {512, 0}, {512, 9}, {513, 1}} {
 		if _, err := c4Run(t, treedb.ProfileNoWALFast, "cow_btree", false, x.n, x.e); err == nil {
