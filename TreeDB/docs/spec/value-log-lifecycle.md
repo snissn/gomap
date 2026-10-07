@@ -180,7 +180,12 @@ The saved parent is absence/comparison authority, never a fallback deletion path
 Initial capture requires a linked child matching the open segment. A missing
 child or empty rebound parent at that first admission fails before retirement
 publication. After capture, genuine child absence is proved through the retained
-parent even when the configured parent name has disappeared.
+parent even when the configured parent name has disappeared. On Windows, a
+child open denied through that retained parent also proves absence only when a
+successful exact-handle `FileStandardInfo` query reports both `Directory` and
+`DeletePending`. Ordinary access denial, a live parent, a regular-file handle
+or a failed query remains a refusal. This cold proof grants no additional
+certified namespace-persistence support.
 The parent survives failed attempts until successful ownership release, eviction
 or manager Close. An admitted destructive attempt keeps the exact manager owner
 and parent: `EvictSegment` returns `ErrFilePinned` until that attempt completes,
@@ -195,16 +200,16 @@ to pinned readers. Refresh, deletion and retry use that retained identity even
 without an external pin registry. Capture failure leaves ownership and zombie
 state unchanged; unsupported platforms fail explicitly. Explicit removal checks
 the pathname before admitting retirement, then retains the exact zombie owner
-and registry observation until physical deletion succeeds, unless an explicit
-`EvictSegment` call transfers lifecycle ownership to its caller. Incomplete
+and registry observation until physical deletion succeeds. Explicit eviction
+transfers lifecycle ownership only outside an admitted destructive attempt. Incomplete
 physical deletion leaves that owner excluded from new snapshots; refresh
 and explicit retries validate its captured identity rather than adopt a
 replacement. Quarantine unlink checks again after close. A successful-absence
 result before rename must prove absence through the retained
 parent. A completed canonical-name rename retains its existing completion and
 deterministic-quarantine recovery semantics, including an injected post-unlink cut.
-Successful deletion forgets only the same tracked file, so an explicitly evicted and newly registered
-owner cannot be removed by an older operation. External registry leases
+Successful deletion checks the exact tracked File pointer before forgetting
+ownership, preserving a different owner if internal state has been replaced. External registry leases
 separately enforce pin exclusion. `RemoveSegmentIfUnpinned` retains its existing
 admitted-attempt boolean when the returned error reports a failed deletion;
 callers must check that error. Force remains limited to recovery cleanup and
