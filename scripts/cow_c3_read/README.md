@@ -293,3 +293,7 @@ calls and the reopen oracle. Its emitted lifecycle is `refused`, never evidence
 of overlap. Benchmark collection still fails on that refusal, and packet
 validation still requires successful actual overlapping public-call intervals.
 No schedule retry, artificial call extension or packet exclusion is used.
+
+Canonical C4 workload, metric rules and pending native declarations use typed
+JSON identity. Copied and rehashed packet mutations must reject boolean or
+float substitutions for their literal integer fields.
