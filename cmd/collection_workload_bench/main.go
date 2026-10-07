@@ -142,6 +142,17 @@ type fixture struct {
 type phaseFunc func() (int64, int64, error)
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "r1-mutation-sweep" || os.Args[1] == "r1-mutation-sweep-validate") {
+		command := runR1SweepCommand
+		if os.Args[1] == "r1-mutation-sweep-validate" {
+			command = validateR1SweepCommand
+		}
+		if err := command(os.Stdout, os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "r1-validate" {
 		if err := validateR1Command(os.Stdout, os.Args[2:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)

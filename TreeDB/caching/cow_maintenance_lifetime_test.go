@@ -128,7 +128,11 @@ func cowMaintenanceLifetimeFixture(t *testing.T) (*DB, *cowMaintenanceLifetimeBa
 	if err != nil {
 		t.Fatal(err)
 	}
-	cached, err := Open(dir, native, Options{DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", MemtableShards: 2, FlushThreshold: 1 << 30, ValueLogPointerThreshold: 1, ValueLogCompression: uint8(vlogCompressionOff)})
+	// Exercise only the explicit maintenance/refresh transitions below. The
+	// periodic value-log worker can otherwise checkpoint after pressure is
+	// released and legitimately clear refreshRequired before the denied-write
+	// assertions observe it.
+	cached, err := Open(dir, native, Options{DisableWAL: true, AllowUnsafe: true, MemtableMode: "cow_btree", MemtableShards: 2, FlushThreshold: 1 << 30, ValueLogPointerThreshold: 1, ValueLogCompression: uint8(vlogCompressionOff), ValueLogGenerationPolicy: uint8(backenddb.ValueLogGenerationOff), JournalLanes: 3})
 	if err != nil {
 		_ = native.Close()
 		t.Fatal(err)

@@ -28,6 +28,11 @@ var c4Invocation atomic.Uint64
 const c4GroupWidth = 16
 const c4MaxEpochs = 8
 
+// A finite schedule can complete without the scheduler overlapping public
+// calls. That is a qualification refusal, distinct from a lifecycle failure.
+// Benchmarks and collectors still reject it; unit construction checks cleanup.
+var errC4NoPublicOverlap = errors.New("no actual public-call overlap observed")
+
 type c4Call struct {
 	Phase        string `json:"phase"`
 	Operation    string `json:"operation"`
@@ -427,8 +432,10 @@ func BenchmarkCOWSustainedPublicMVCC(b *testing.B) {
 						r, err := c4Run(b, p, m, ptr, n, b.N)
 						b.StopTimer()
 						if err != nil {
-							r.LifecycleOutcome = "error"
-							r.LifecycleError = err.Error()
+							if err != errC4NoPublicOverlap {
+								r.LifecycleOutcome = "error"
+								r.LifecycleError = err.Error()
+							}
 							if emitErr := c4Emit(r); emitErr != nil {
 								b.Error(emitErr)
 							}
@@ -731,9 +738,6 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	if bench != nil {
 		bench.StopTimer()
 	}
-	if r.OverlappingReaders == 0 {
-		return r, errors.New("no actual public-call overlap observed")
-	}
 	if mode == "cow_btree" {
 		before := db.Stats()
 		floor, e := s.DiscardFloor()
@@ -829,5 +833,10 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	}
 	db = nil
 	sort.Slice(r.Calls, func(i, j int) bool { return r.Calls[i].StartNS < r.Calls[j].StartNS })
+	if r.OverlappingReaders == 0 {
+		r.LifecycleOutcome = "refused"
+		r.LifecycleError = errC4NoPublicOverlap.Error()
+		return r, errC4NoPublicOverlap
+	}
 	return r, nil
 }

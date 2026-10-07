@@ -120,6 +120,7 @@ def main():
         "nowal-unexpected-command-wal":raw_mutation(lambda r:r["boundaries"][0]["stats"].update({"treedb.command_wal.enabled":"true"}),"no_wal_fast"),
         "wrong-actual-redo-route":raw_mutation(lambda r:r["boundaries"][0]["stats"].update({"treedb.cache.redo_log.mode":"journal"})),
         "reported-overlap-with-serial-public-calls":raw_mutation(serialize_public_calls),
+        "typed-unit-overlap-refusal-is-not-evidence":raw_mutation(lambda r:r.update(lifecycle_outcome="refused",lifecycle_error="no actual public-call overlap observed",overlapping_readers=0)),
         "missing-layout-stage":raw_mutation(lambda r:r["layout_proofs"].pop()),
         "partial-layout-observations":raw_mutation(lambda r:r["layout_proofs"][0].update(entries=r["keys"]-1)),
         "wrong-actual-layout-count":raw_mutation(lambda r:r["layout_proofs"][0].update(pointers=r["layout_proofs"][0]["inline"],inline=r["layout_proofs"][0]["pointers"])),

@@ -290,6 +290,12 @@ func TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC(t *testing.T) 
 		_ = db.Close()
 		t.Fatalf("raw entry flags=%02x ptr=%+v want value-log pointer", entry.Flags, entry.ValuePtr)
 	}
+	// Wait for the published roots to become durable before capturing GC reachability.
+	if err := db.Checkpoint(); err != nil {
+		_ = leafLog.Close()
+		_ = db.Close()
+		t.Fatalf("Checkpoint before ValueLogGC: %v", err)
+	}
 	gcStats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		_ = leafLog.Close()

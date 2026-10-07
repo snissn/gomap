@@ -276,3 +276,10 @@ requested control and an actual Open with generational HotWarmCold. Retain
 `-cow-c4-maintenance-output-dir` receipts separately from benchmark lifecycles.
 A controller must reparse every normal, race and maximum-epoch lifecycle before
 reporting PASS. No retained worker window or extra checkpoint is tolerated.
+
+Ordinary unit construction accepts a typed zero-overlap refusal only after the
+entire finite lifecycle completes, including old-owner release, both Close
+calls and the reopen oracle. Its emitted lifecycle is `refused`, never evidence
+of overlap. Benchmark collection still fails on that refusal, and packet
+validation still requires successful actual overlapping public-call intervals.
+No schedule retry, artificial call extension or packet exclusion is used.

@@ -11,7 +11,7 @@ import (
 
 // The diagnostic uses the fixture's same live direct backend. In particular,
 // vacuum does not measure the public cached wrapper's checkpoint/reconcile work.
-const r1LifecycleSchedule5060 = "direct-backend-fold-rewrite-vacuum-v1"
+const r1LifecycleSchedule5060 = "supported-direct-fold-rewrite-vacuum-exhaustive-fallback-gc-v1"
 
 type r1LifecycleFoldRecord5060 struct {
 	Stats          ColumnStoreCompactStats `json:"stats"`
@@ -177,16 +177,25 @@ func r1LifecycleFold5060(t testing.TB, db *backenddb.DB, col *Collection, epoch 
 		result.Vacuum, err = db.VacuumIndexOnlineWithStats(ctx)
 		return err
 	})
+	observe("before_exhaustive")
+	result.Full = r1LifecycleFull5060(t, db)
+	observe("before_final_gc")
+	result.Final = r1LifecycleFinal5060(t, db, col, candidates)
 	observe("maintenance")
 	// A sum of disjoint API timers, excluding observer/oracle/census overhead.
-	result.MaintenanceNS = result.FlushNS + result.CheckpointNS + result.BeforeFoldGCNS + result.FoldNS + result.FoldCheckpointNS + result.OverlayNS + result.OverlayCheckpointNS + result.Reclaim.PlanNS + result.Reclaim.ProbeNS + result.Reclaim.RewriteNS + result.Reclaim.CheckpointNS + result.Reclaim.GCNS + result.VlogGCNS + result.VacuumNS
+	result.MaintenanceNS = result.FlushNS + result.CheckpointNS + result.BeforeFoldGCNS + result.FoldNS + result.FoldCheckpointNS + result.OverlayNS + result.OverlayCheckpointNS + result.Reclaim.PlanNS + result.Reclaim.ProbeNS + result.Reclaim.RewriteNS + result.Reclaim.CheckpointNS + result.Reclaim.GCNS + result.VlogGCNS + result.VacuumNS + result.Full.PlanNS + result.Full.WorkNS + result.Final.RefreshNS + result.Final.TypedGCNS + result.Final.LeafGCNS
 	return result
 }
 
 func TestR1LifecycleLogicalFoldAndVacuum5060(t *testing.T) {
 	requireStandaloneColumnProductionAuthorityTest(t)
-	dir, db, col := r1MutationOpen5059(t, true)
-	defer func() { _ = db.Close() }()
+	requireLeafGenerationPackPromotionSupport(t)
+	dir, db, col, cleanup := r1LifecycleNew5060(t, true)
+	defer func() {
+		if err := cleanup(); err != nil {
+			t.Error(err)
+		}
+	}()
 	want, known := r1LifecycleSeed5060(t, col)
 	held, err := col.OpenCollectionReadView()
 	if err != nil {
@@ -246,13 +255,37 @@ func TestR1LifecycleLogicalFoldAndVacuum5060(t *testing.T) {
 	if deletedSegments == 0 {
 		t.Fatal("following generations did not reclaim any unprotected typed segments")
 	}
-	if err := db.Close(); err != nil {
+	if err := cleanup(); err != nil {
 		t.Fatal(err)
 	}
-	db = openTypedMinimaDB(t, dir)
+	db, cleanup, _ = r1LifecycleOpen5060(t, dir)
 	col, err = NewCollectionManager(db).OpenCollection("r1")
 	if err != nil {
 		t.Fatal(err)
 	}
 	r1LifecycleCurrent5060(t, col, want, known)
+}
+
+type r1LifecycleFullRecord5060 struct {
+	Owner   backenddb.CompactStorageLeafPageLogOwnerClassification `json:"owner"`
+	Options map[string]any                                         `json:"options"`
+	PlanNS  int64                                                  `json:"plan_ns"`
+	Plan    backenddb.CompactStorageStats                          `json:"plan"`
+	WorkNS  int64                                                  `json:"work_ns"`
+	Work    backenddb.CompactStorageStats                          `json:"work"`
+}
+
+func r1LifecycleFull5060(t testing.TB, db *backenddb.DB) r1LifecycleFullRecord5060 {
+	t.Helper()
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		t.Fatal(err)
+	}
+	opts := backenddb.CompactStorageOptions{Mode: backenddb.CompactStorageExhaustive, SyncEachPhase: true, ValueLogRewriteBatchSize: 32, LeafPackMaxPasses: 4, LeafPackMaxBytesToCopyPerPass: 1 << 20}
+	result := r1LifecycleFullRecord5060{Owner: db.CompactStorageLeafPageLogOwnerClassification(backenddb.CompactStorageLifecycleQuiescedMaintenance), Options: map[string]any{"mode": opts.Mode, "sync_each_phase": opts.SyncEachPhase, "value_log_rewrite_batch_size": opts.ValueLogRewriteBatchSize, "leaf_pack_max_passes": opts.LeafPackMaxPasses, "leaf_pack_max_bytes_to_copy_per_pass": opts.LeafPackMaxBytesToCopyPerPass, "unsafe_value_log_reclaim_fenced_unreferenced": opts.UnsafeValueLogReclaimFencedUnreferenced}}
+	if result.Owner.Status != backenddb.CompactStorageOwnerStatusSupportedTarget || result.Owner.OwnerClass != backenddb.CompactStorageLeafPageLogOwnerInternalHiddenByWrapper || !result.Owner.Replaceable {
+		t.Fatalf("unsupported owned exhaustive handoff: %+v", result.Owner)
+	}
+	result.PlanNS = r1LifecycleTime5060(t, func() (err error) { result.Plan, err = db.CompactStoragePlan(context.Background(), opts); return err })
+	result.WorkNS = r1LifecycleTime5060(t, func() (err error) { result.Work, err = db.CompactStorage(context.Background(), opts); return err })
+	return result
 }

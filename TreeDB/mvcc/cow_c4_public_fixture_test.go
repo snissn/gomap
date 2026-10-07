@@ -23,12 +23,47 @@ func TestCOWSustainedPublicMVCCConstruction(t *testing.T) {
 					t.Run(fmt.Sprintf("%s/%s/pointer_%t/N%d", p, m, ptr, n), func(t *testing.T) {
 						r, err := c4Run(t, p, m, ptr, n, 1)
 						if err != nil {
-							r.LifecycleOutcome = "error"
-							r.LifecycleError = err.Error()
-							if emitErr := c4Emit(r); emitErr != nil {
-								t.Error(emitErr)
+							if err != errC4NoPublicOverlap {
+								r.LifecycleOutcome = "error"
+								r.LifecycleError = err.Error()
+								if emitErr := c4Emit(r); emitErr != nil {
+									t.Error(emitErr)
+								}
+								t.Fatal(err)
 							}
-							t.Fatal(err)
+							if r.LifecycleOutcome != "refused" || r.LifecycleError != errC4NoPublicOverlap.Error() || r.OverlappingReaders != 0 {
+								t.Fatal("invalid zero-overlap refusal")
+							}
+							t.Log("complete finite lifecycle; overlap qualification refused")
+						}
+						// A zero-overlap result is admissible only as unit construction,
+						// after the same actual release, durability and reopen checks.
+						closed, released := 0, 0
+						for _, call := range r.Calls {
+							if call.Outcome != "success" {
+								t.Fatalf("lifecycle call failed: %+v", call)
+							}
+							if call.Operation == "Close" {
+								closed++
+							}
+							if call.Phase == "old_pin_release" && call.Operation == "IterateVersions.consume_close" {
+								released++
+							}
+						}
+						if closed != 2 || released != 2 || len(r.OracleReceipts) == 0 || r.OracleReceipts[len(r.OracleReceipts)-1] != "reopen:complete_point_history_payload" {
+							t.Fatal("incomplete release/Close/reopen construction")
+						}
+						if m == "cow_btree" {
+							for _, boundary := range r.Boundaries {
+								if boundary.Phase != "released" && boundary.Phase != "preclose" && boundary.Phase != "reopened" {
+									continue
+								}
+								for _, key := range []string{"treedb.cache.cow.views", "treedb.cache.cow.active_cuts", "treedb.cache.cow.external_leases"} {
+									if boundary.Stats[key] != "0" {
+										t.Fatalf("%s leaked %s=%s", boundary.Phase, key, boundary.Stats[key])
+									}
+								}
+							}
 						}
 						if len(r.Calls) > r.RecorderCapacity || r.NativeEligibility != "PENDING" || r.WholeMaintenanceCharge != "PENDING" {
 							t.Fatal("invalid bounded recorder or qualification")
