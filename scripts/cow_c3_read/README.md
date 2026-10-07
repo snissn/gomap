@@ -34,7 +34,7 @@ throughput claim.
 Run the inexpensive fixture smoke before preparing retained collection:
 
 ```sh
-GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
   -bench '^BenchmarkC3PublicReadAdmission$' -benchtime=1x -benchmem -count=1 \
   > /tmp/cow-c3-fixture.stdout 2> /tmp/cow-c3-fixture.stderr
 python3 -B scripts/cow_c3_read/parser_smoke.py \
@@ -84,9 +84,14 @@ path/device/free-space are retained separately.
 All four variant custody paths (source, binary, manifest and build receipt) must
 be canonical absolute paths. Live collection refuses leaf or ancestor symlinks
 instead of silently resolving a different invocation. Offline analysis validates
-the spelling without requiring original paths to exist. The frozen fixture must
-name `TreeDB/mvcc/cow_c3_public_bench_test.go` with a SHA256 digest matching both
-retained source manifests and actual inputs; unrelated files cannot replace it.
+the spelling without requiring original paths to exist. The frozen harness covers every selected input in `TreeDB/mvcc/cowbench/`
+and `TreeDB/internal/cowbench/`, including TestMain, admission tests and the local
+counter. SHA256 and mode identities match both full Git source manifests and
+actual pre/post compiler inputs. The ordinary mvcc dependency closure remains
+product code; all other repository compiler inputs must belong to these harness
+namespaces. Added, omitted or relocated test-only helpers fail admission.
+Every case requires exactly 128 warmup and 1024 measured iterations; changing
+either count fails configuration admission.
 C3 matched admission requires distinct production commits, Git trees, exported
 source digests and binary digests. The two variants must have disjoint source,
 binary, manifest and build-receipt paths, with separate build directories.
@@ -116,8 +121,8 @@ Freeze its canonical `toolchain_identity` digest alongside
 offline analysis require the same identity. Collection checks the actual
 inventory before and after capture. Offline analysis needs only retained bytes.
 Build receipts must report integer exit zero and exactly
-`<GOROOT>/bin/go test -c -o <declared-binary> ./TreeDB/mvcc`, plus the exact
-`go list -compiled -deps -test -json ./TreeDB/mvcc` provenance command. Custom
+`<GOROOT>/bin/go test -c -o <declared-binary> ./TreeDB/mvcc/cowbench`, plus the exact
+`go list -compiled -deps -test -json ./TreeDB/mvcc/cowbench` provenance command. Custom
 flags, package/output/launcher changes and failed builds refuse even if receipt
 hashes are rebound. Draft generation and validation share one complete literal
 workload contract; all fields and JSON types, exact logical work counts, latency
@@ -219,6 +224,13 @@ production source, correctness, allocation and current-head CI/review gates.
 These standalone artifacts are not benchprof inputs. They do not change the
 profile-dir filenames or existing native-prune validator contracts.
 
+The build producer defaults to the standalone C3 target. The closed `--suite c4`
+selector selects the dedicated `./TreeDB/mvcc/cowsustained` C4 target; receipts bind the suite
+and exact matching compiler/provenance arguments. Both suites require the complete selected-minus-product harness closure and
+bind `harness_input_identity`. C4 freezes its complete `TreeDB/mvcc/cowsustained/`
+and shared `TreeDB/internal/cowbench/` inventories through its own protocol. The C3 phase work contract is unchanged between warmup and
+measurement; iteration counts remain separately fixed at 128 and 1024.
+
 ## C4 sustained public lifecycle
 
 The closed `--suite c4-sustained` dispatch shares the C3 builder, immutable Git
@@ -235,7 +247,7 @@ controls as C3, finite epochs (1..8), noise policy and coordinator acceptance.
 Set `result_class` to `construction` for one fresh candidate process per leaf,
 or `matched-supported-evidence` for separate baseline/candidate warmups and
 three ABBA cycles (504 processes). Both classes require both frozen build
-closures, the 15-key CGO-disabled environment, all 11 build artifacts and the
+closures, the 15-key CGO-disabled environment, all 12 build artifacts and the
 retained live Go version and executable inventory. Construction may reuse one
 product for both labels; matched evidence requires distinct products and
 independent non-nested variant paths. Native requirements are typed `PENDING`, with whole public maintenance

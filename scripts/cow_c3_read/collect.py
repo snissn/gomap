@@ -151,7 +151,7 @@ def main():
             build_inputs(build, c, packages,
                          json.loads((out / (variant + "-compiled_inputs_before.raw")).read_text()),
                          json.loads((out / (variant + "-compiled_input_closure.raw")).read_text()),
-                         json.loads((out / (variant + "-generated_nonpersistent_inputs.raw")).read_text()), str(source))
+                         json.loads((out / (variant + "-generated_nonpersistent_inputs.raw")).read_text()), str(source), ident)
             verify_git_receipt(source, ident["original_manifest"], json.loads((out / (variant + "-git_source.raw")).read_text()))
             go_env = json.loads((out / (variant + "-go_env.raw")).read_text())
             validate_go_environment(go_env, env)

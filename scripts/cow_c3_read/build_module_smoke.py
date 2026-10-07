@@ -11,7 +11,7 @@ import subprocess
 from unittest.mock import patch
 
 from build import compiled_modules, objects, canonical_modules
-from protocol import process_environment, sha, write, selected_inputs, build_inputs, digest
+from protocol import process_environment, sha, write, selected_inputs, build_inputs, digest, harness_manifest, C3_PACKAGE, C3_PRODUCT, C3_HARNESS_FILES, HARNESS_FILES, HARNESS_PACKAGES
 
 def environment_smoke(out):
     """Exercise the actual environment helper and a child, without invoking Go."""
@@ -119,6 +119,83 @@ def inputs_smoke(out):
     write(out / "selected-input-construction.json", {"scope": "actual finite selected-input helper checks; no Go execution or performance claim", "checks": checks})
     return checks
 
+def harness_smoke(out, suite="c3"):
+    """Complete selected harness authority; ordinary product test deltas stay free."""
+    root = out / (suite + "-harness-inputs")
+    harness_files = HARNESS_FILES[suite]
+    package = HARNESS_PACKAGES[suite]
+    directory = package.removeprefix("github.com/snissn/gomap/")
+    source, goroot, cache = root / "source", root / "go", root / "cache"
+    names = ["TreeDB/mvcc/product.go", "go.mod", "go.sum", *harness_files]
+    for name in names:
+        path = source / name; path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("actual finite input " + name + "\n"); path.chmod(0o644)
+    std = goroot / "src/standard/standard.go"; std.parent.mkdir(parents=True); std.write_text("standard\n"); std.chmod(0o644)
+    env = {"GOROOT": str(goroot), "GOCACHE": str(cache)}
+    packages = [{"ImportPath": C3_PRODUCT, "Dir": str(source / "TreeDB/mvcc"), "GoFiles": ["product.go"], "Deps": ["standard"]},
+                {"ImportPath": "standard", "Standard": True, "Dir": str(std.parent), "GoFiles": [std.name]},
+                {"ImportPath": package + " [" + package + ".test]", "ForTest": package,
+                 "Dir": str(source / directory), "GoFiles": [Path(n).name for n in harness_files if n.startswith(directory + "/")]},
+                {"ImportPath": "github.com/snissn/gomap/TreeDB/internal/cowbench", "Dir": str(source / "TreeDB/internal/cowbench"), "GoFiles": ["admission.go"]}]
+    def inventory():
+        return {"files": [{"path": p.relative_to(source).as_posix(), "sha256": sha(p),
+                           "git_mode": "100755" if p.stat().st_mode & 0o111 else "100644"}
+                          for p in sorted(source.rglob("*")) if p.is_file()]}
+    def closure(): return selected_inputs(packages, source, env)[0]
+    original = harness_manifest(packages, closure(), inventory(), str(source), env, suite)
+    checks = [{"label": "complete-harness-positive", "passed": True}]
+    def refuse(label, operation, expected):
+        try: operation()
+        except ValueError as error:
+            assert expected in str(error), (label, str(error))
+            checks.append({"label": label, "refused": str(error)})
+        else: raise AssertionError("accepted " + label)
+    def frozen_gate():
+        inputs, generated = selected_inputs(packages, source, env)
+        observed = harness_manifest(packages, inputs, inventory(), str(source), env, suite)
+        external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")}
+                    for key, value in inputs.items() if not key.startswith("REPO/")}
+        build = {"environment": env, "suite": suite, "harness_input_identity": digest(observed),
+                 "external_input_identity": digest(external), "artifacts": {}}
+        for field, name in (("compiled_inputs_before_sha256", "compiled_inputs_before"),
+                            ("compiled_input_closure_sha256", "compiled_input_closure"),
+                            ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs")):
+            build[field] = "1" * 64
+            build["artifacts"][name] = {"sha256": build[field]}
+        frozen = {"cases": [{"package": package}], "fixtures": original, "external_input_identity": digest(external)}
+        build_inputs(build, frozen, packages, inputs, inputs, generated, str(source), inventory())
+    frozen_gate()
+    for name in harness_files:
+        path = source / name; original_bytes = path.read_bytes()
+        path.write_bytes(original_bytes + b"changed\n")
+        refuse("changed-" + Path(name).name, frozen_gate, "complete frozen")
+        path.write_bytes(original_bytes)
+    mode_path = source / harness_files[0]; mode_path.chmod(0o755)
+    refuse("harness-mode-changed", frozen_gate, "complete frozen"); mode_path.chmod(0o644)
+    omitted = copy.deepcopy(packages); omitted[2]["GoFiles"].remove("leak_test.go")
+    inputs, _ = selected_inputs(omitted, source, env)
+    refuse("testmain-not-selected", lambda: harness_manifest(omitted, inputs, inventory(), str(source), env, suite), "source/selected-input")
+    helper = source / directory / "new_helper_test.go"; helper.write_text("new helper\n"); helper.chmod(0o644)
+    refuse("extra-source-helper-not-selected", frozen_gate, "source/selected-input")
+    packages[2]["GoFiles"].append(helper.name)
+    refuse("extra-selected-helper-not-frozen", frozen_gate, "complete frozen")
+    expanded = harness_manifest(packages, closure(), inventory(), str(source), env, suite)
+    assert len(expanded) == len(original) + 1
+    checks.append({"label": "new-helper-explicit-full-freeze-positive", "passed": True})
+    packages[2]["GoFiles"].remove(helper.name); helper.unlink()
+    foreign = source / "TreeDB/testsupport/helper.go"; foreign.parent.mkdir(parents=True); foreign.write_text("foreign helper\n")
+    packages.append({"ImportPath": "testsupport", "Dir": str(foreign.parent), "GoFiles": [foreign.name]})
+    refuse("test-only-helper-outside-authority", frozen_gate, "undeclared repository test harness")
+    packages.pop(); foreign.unlink()
+    (source / "TreeDB/mvcc/product.go").write_text("candidate production change\n")
+    (source / "TreeDB/mvcc/candidate_regression_test.go").write_text("legitimate product regression test\n")
+    assert harness_manifest(packages, closure(), inventory(), str(source), env, suite) == original
+    checks.append({"label": "product-code-and-regression-test-delta-positive", "passed": True})
+    bad = copy.deepcopy(packages); bad[0].pop("Deps")
+    refuse("missing-normal-product-graph", lambda: harness_manifest(bad, closure(), inventory(), str(source), env, suite), "dependency closure missing")
+    write(out / (suite + "-harness-input-construction.json"), {"checks": checks, "scope": "finite actual files and pure metadata helpers; no Go"})
+    return checks
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--compiled-packages", type=Path, required=True)
@@ -128,6 +205,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=False)
     environment_checks = environment_smoke(args.out)
     input_checks = inputs_smoke(args.out)
+    harness_checks = {suite: harness_smoke(args.out, suite) for suite in ("c3", "c4")}
     packages = objects(args.compiled_packages.read_text())
     mains = {p["Module"]["Dir"] for p in packages if p.get("Module", {}).get("Main")}
     assert len(mains) == 1
@@ -169,11 +247,11 @@ def main():
     ]
     write(args.out / "result.json", {"scope": "real compiled-module metadata, hermetic environment construction and synthetic damaged-copy refusal only; no Go build or timing acceptance",
         "input_sha256": sha(args.compiled_packages), "packages": len(packages), "compiled_modules": canonical,
-        "checks": results, "environment_checks": environment_checks, "selected_input_checks": input_checks,
+        "checks": results, "environment_checks": environment_checks, "selected_input_checks": input_checks, "harness_checks": harness_checks,
         "script_sha256": sha(Path(__file__)), "build_script_sha256": sha(Path(__file__).parent / "build.py"),
         "protocol_script_sha256": sha(Path(__file__).parent / "protocol.py")})
     print(json.dumps({"compiled_modules": len(modules), "module_refusals": len(results),
-                      "environment_checks": len(environment_checks), "selected_input_checks": len(input_checks)}))
+                      "environment_checks": len(environment_checks), "selected_input_checks": len(input_checks), "harness_checks": {suite: len(checks) for suite, checks in harness_checks.items()}}))
 
 if __name__ == "__main__":
     main()
