@@ -126,7 +126,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 						}
 						point := func() error {
 							r, e := store.GetAt(key, 100)
-							if e == nil && (r.State != Present || r.Timestamp != 20 || !bytes.Equal(r.Value, value)) {
+							if e == nil && (r.State != mvcc.Present || r.Timestamp != 20 || !bytes.Equal(r.Value, value)) {
 								e = fmt.Errorf("wrong point: %+v", r)
 							}
 							return e
@@ -139,7 +139,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							var count uint64
 							for it.Valid() {
 								v := it.EntryView()
-								if count >= 2 || v.State != Present || v.Timestamp != 20-10*count || !bytes.Equal(v.Key, key) || !bytes.Equal(v.Value, value) {
+								if count >= 2 || v.State != mvcc.Present || v.Timestamp != 20-10*count || !bytes.Equal(v.Key, key) || !bytes.Equal(v.Value, value) {
 									e = fmt.Errorf("wrong retained history at %d: %+v", count, v)
 									break
 								}
