@@ -30,7 +30,7 @@ def sha(path):
 
 
 def source(go):
-    identity = collection_source()
+    identity = collection_source(go)
     package = json.loads(run([go, 'list', '-json', './TreeDB/collections']))
     tests = sorted('TreeDB/collections/' + name for key in ('TestGoFiles', 'XTestGoFiles')
                    for name in package.get(key, []))
