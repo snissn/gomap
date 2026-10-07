@@ -22,16 +22,20 @@ def summarize(packet):
         values = [row['ops_per_sec'] for row in rows]
         median = statistics.median(values)
         spread = (max(values) - min(values)) / median
+        latencies = [row["p50_ns"] for row in rows]
+        mean_latency = statistics.mean(latencies)
+        cv = statistics.stdev(latencies) / mean_latency if len(latencies) > 1 and mean_latency > 0 else 0.0
         summaries.append({'engine': engine, 'phase': phase, 'repetitions': len(rows),
                           'ops_per_sec_median': median, 'ops_per_sec_min': min(values),
                           'ops_per_sec_max': max(values), 'throughput_spread': spread,
-                          'noise_status': 'inconclusive' if spread > 0.15 else 'within_15pct',
+                          'p50_cv': cv,
+                          'noise_status': 'inconclusive' if spread > 0.15 or cv > 0.10 or mean_latency <= 0 else 'within_limits',
                           'ns_per_op_median': statistics.median(r['ns_per_op'] for r in rows),
                           'bytes_per_op_median': statistics.median(r['bytes_per_op'] for r in rows),
                           'allocs_per_op_median': statistics.median(r['allocs_per_op'] for r in rows)})
     return {'schema': packet['schema'], 'qualification': packet['config']['qualification'],
             'source': packet['source'], 'fixture_sha256': packet['fixture_sha256'],
-            'noise_rule': '(max-min)/median throughput > 0.15 is inconclusive; preserve all raw cells',
+            'noise_rule': 'inconclusive if throughput (max-min)/median > 0.15 or sample CV(p50) > 0.10; preserve all raw cells',
             'summaries': summaries, 'rejected_capabilities': rejected}
 
 

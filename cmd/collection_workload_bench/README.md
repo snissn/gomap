@@ -104,6 +104,8 @@ skip. The repaired runtime enables the same phase.
 Storage and engine statistics are observed at the common checkpoint before the
 separate trailing upsert phase; unsupported upsert cannot change common live rows.
 
+Source capture checks actual working bytes against committed objects before reporting a runtime identity. It discovers the command's local Go package inputs, including embedded assets, and binds every command helper. Dirty, untracked, missing, or escaping selected inputs and external local module replacements fail capture. Use a committed LF checkout and the same selected Go binary for capture and build. External modules and compiler inputs retain the recorded go.sum, build information and toolchain/environment bindings.
+
 The producer preserves `source.json`, `source-after.json`, `host.json`, `args.json`, `go-version.txt`,
 `go-env.txt`, `cc-version.txt`, `buildinfo.txt`, `binary.sha256`, `build.stderr`, `run.stderr`,
 `packet.json`, `validation.txt`, and `summary.json`. `R1_GO` selects the Go binary;
@@ -215,3 +217,7 @@ Heap is neither RSS, peak nor collection-owned retained memory. Restricted `meta
 reference preservation remains separately qualified. Original A noisy observations
 remain historical, with no current numerical reuse claim. These packets are not
 unified-bench profiles or benchprof inputs.
+
+Use -read-operations to lengthen all complete-read phases while keeping -operations mutation, deletion, and upsert counts fixed. Omission or zero preserves older packet semantics. Record both counts and freeze a matched protocol before capture; compare identical counts, address patterns and ACK modes on both sources. The summary reports both throughput spread and sample CV of process p50 latency. A group above 15% throughput spread or 10% p50 CV is inconclusive, with every raw cell retained.
+
+The opt-in TestR1ManifestWholeGC5095 and TestR1ManifestConcurrentACK5095 share explicit GOMAP_L_CONCURRENT_LAYOUT=legacy|owned and GOMAP_L_GC_REVISIONS=128|512 selectors. Owned selection fails when the measured binary lacks the public feature. Whole GC reports revision setup and complete call allocation/time plus allocator state separately. Concurrent capture charges32 public physical WriteSync requests, whole GC and at most one reported stale-root retry; it verifies current and held complete values after timing. Its bounded rendezvous proves the reported request-attempt overlap, rather than internal method entry. Legacy segment-hook fence samples exclude the revision writeMu hold and cannot supply a whole legacy fence denominator. The full collection, scaling, churn and activation qualification remains owned by #5096.
