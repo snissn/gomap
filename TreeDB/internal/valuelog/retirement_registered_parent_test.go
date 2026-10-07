@@ -58,7 +58,7 @@ func TestManagerRegisteredParentReboundBeforeRetirement(t *testing.T) {
 						t.Fatal(err)
 					}
 					saved := dir + "-original"
-					if err := os.Rename(dir, saved); err != nil {
+					if err := retirementTestRenameParent(dir, saved, []*File{file}); err != nil {
 						t.Fatal(err)
 					}
 					if err := os.Mkdir(dir, 0700); err != nil {
@@ -108,7 +108,7 @@ func TestManagerRegisteredParentReboundBeforeRetirement(t *testing.T) {
 					if err := os.Remove(dir); err != nil {
 						t.Fatal(err)
 					}
-					if err := os.Rename(saved, dir); err != nil {
+					if err := retirementTestRenameParent(saved, dir, []*File{file}); err != nil {
 						t.Fatal(err)
 					}
 					if err := call(); err != nil {
@@ -155,7 +155,7 @@ func TestManagerRegisteredParentCaptureRebound(t *testing.T) {
 					return nil, err
 				}
 				opened = file
-				if err := os.Rename(dir, saved); err != nil {
+				if err := retirementTestRenameParent(dir, saved, []*File{file}); err != nil {
 					return nil, errors.Join(err, file.Close())
 				}
 				if err := os.Mkdir(dir, 0700); err != nil {

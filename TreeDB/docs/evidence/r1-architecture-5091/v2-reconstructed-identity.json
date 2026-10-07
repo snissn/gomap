@@ -1,0 +1,8 @@
+{
+  "scope": "recovered exact added test source by rebuilding and comparing original binary",
+  "binary_hashes": {
+    "attribution-v2.test": "07c9ef584a0b65edb12efb3dac68c9abaf88e325a9ed03ea07d6d8304f2f65b4",
+    "attribution-v2-identity.test": "07c9ef584a0b65edb12efb3dac68c9abaf88e325a9ed03ea07d6d8304f2f65b4"
+  },
+  "exact_match": true
+}

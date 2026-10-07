@@ -34,6 +34,10 @@ func stableRelativeNamespaceSupported() bool { return false }
 func stableNamespaceCreationPersistsThroughChild() bool { return true }
 
 func openStableParent(path string) (*os.File, error) {
+	return openStableParentNamed(path, path)
+}
+
+func openStableParentNamed(path, diagnosticName string) (*os.File, error) {
 	name, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
@@ -50,7 +54,7 @@ func openStableParent(path string) (*os.File, error) {
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
-	file := os.NewFile(uintptr(handle), path)
+	file := os.NewFile(uintptr(handle), diagnosticName)
 	if file == nil {
 		_ = windows.CloseHandle(handle)
 		return nil, &os.PathError{Op: "open", Path: path, Err: errors.New("invalid Windows directory handle")}
