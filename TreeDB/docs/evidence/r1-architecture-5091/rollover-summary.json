@@ -1,0 +1,68 @@
+{
+  "initial_files": {
+    "dictionary": [
+      1,
+      41008
+    ],
+    "manifest": [
+      29,
+      95646
+    ],
+    "leaf_data": [
+      30,
+      1728413
+    ],
+    "leaf_sidecar": [
+      29,
+      4888
+    ],
+    "main_value": [
+      8,
+      238778
+    ]
+  },
+  "held_files": {
+    "dictionary": [
+      1,
+      41008
+    ],
+    "manifest": [
+      37,
+      156038
+    ],
+    "leaf_data": [
+      38,
+      2333337
+    ],
+    "leaf_sidecar": [
+      37,
+      7208
+    ],
+    "main_value": [
+      8,
+      246881
+    ]
+  },
+  "final_files": {
+    "dictionary": [
+      1,
+      41008
+    ],
+    "manifest": [
+      37,
+      156038
+    ],
+    "leaf_data": [
+      38,
+      2333337
+    ],
+    "leaf_sidecar": [
+      37,
+      7208
+    ],
+    "main_value": [
+      8,
+      246881
+    ]
+  }
+}

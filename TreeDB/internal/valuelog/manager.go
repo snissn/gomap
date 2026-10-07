@@ -67,9 +67,8 @@ type File struct {
 	// The physical parent is captured with retirementIdentity, independently of
 	// an optional pin registry. A missing configured alias is not absence proof.
 	retirementParentMu       sync.Mutex
-	retirementParent         *os.File
+	retirementParent         *retirementParentHandle
 	retirementParentIdentity rootpublication.StableIdentity
-	retirementParentUsers    int
 	retirementParentReleased bool
 	currentWritable          atomic.Bool
 	dictLookup               DictLookup
@@ -1307,8 +1306,10 @@ func setRetentionSizes(hint int) SetRetentionSizes {
 func (shape *SetRetentionSizes) addFile(f *File) {
 	shape.FileCount++
 	// The constructor-created path/namespace string capacities use a conservative
-	// two-times-length plus 64 bytes each rounding/header envelope.
-	shape.PathEnvelope += 2*uint64(len(f.Path)+len(f.stableNamespace)) + 128
+	// two-times-length plus 64 bytes each rounding/header envelope. Reserve
+	// future retirement metadata before snapshot/batch owner publication, even
+	// when no retirement pool exists yet. Sharing can only reduce this charge.
+	shape.PathEnvelope += 2*uint64(len(f.Path)+len(f.stableNamespace)) + 128 + retirementParentRetentionEnvelope
 }
 
 func (s *Set) ReadChecksumEnabled() bool {
@@ -1446,7 +1447,8 @@ type Manager struct {
 	currentWritableMmap         atomic.Bool
 	currentWritableReadBarrier  atomic.Value
 	stableResourcePins          *rootpublication.IdentityPinRegistry
-	retiredCount                int // tracked zombies; protected by mu
+	retiredCount                int                   // tracked zombies; protected by mu
+	retirementParents           *retirementParentPool // lazy cold ownership, protected by mu
 	recoveredStableDeleteDirs   map[string]bool
 	stableDeleteRecoveryEnabled bool
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
@@ -2615,21 +2617,24 @@ func (m *Manager) retryZombieDelete(f *File) {
 
 func (m *Manager) MarkZombie(id uint32) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closing {
+		m.mu.Unlock()
 		return nil
 	}
 	f, ok := m.files[id]
 	if !ok {
+		m.mu.Unlock()
 		return &fileNotFoundError{id: id}
 	}
-	if _, err := m.prepareRetirementIdentityLocked(f); err != nil {
-		return err
+	if _, parentToClose, err := m.prepareRetirementIdentityLocked(f); err != nil {
+		m.mu.Unlock()
+		return errors.Join(err, closeRetirementParent(parentToClose))
 	}
 	if !f.IsZombie.Load() {
 		m.retiredCount++
 		f.IsZombie.Store(true)
 	}
+	m.mu.Unlock()
 	return nil
 }
 
@@ -2640,22 +2645,25 @@ func (m *Manager) MarkZombieIfTracked(id uint32) (tracked bool, newlyMarked bool
 		return false, false, nil
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closing {
+		m.mu.Unlock()
 		return false, false, nil
 	}
 	f, ok := m.files[id]
 	if !ok {
+		m.mu.Unlock()
 		return false, false, nil
 	}
 	wasZombie := f.IsZombie.Load()
-	if _, err := m.prepareRetirementIdentityLocked(f); err != nil {
-		return true, false, err
+	if _, parentToClose, err := m.prepareRetirementIdentityLocked(f); err != nil {
+		m.mu.Unlock()
+		return true, false, errors.Join(err, closeRetirementParent(parentToClose))
 	}
 	if !wasZombie {
 		m.retiredCount++
 		f.IsZombie.Store(true)
 	}
+	m.mu.Unlock()
 	return true, !wasZombie, nil
 }
 
@@ -3049,10 +3057,10 @@ func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublicat
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "remove"}
 	}
-	identity, err := m.prepareRetirementIdentityLocked(f)
+	identity, parentToClose, err := m.prepareRetirementIdentityLocked(f)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return errors.Join(err, closeRetirementParent(parentToClose))
 	}
 	if expected != (rootpublication.StableIdentity{}) && !rootpublication.SamePhysicalIdentity(expected, identity) {
 		m.mu.Unlock()
@@ -3095,10 +3103,10 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, nil
 	}
-	identity, err := m.prepareRetirementIdentityLocked(f)
+	identity, parentToClose, err := m.prepareRetirementIdentityLocked(f)
 	if err != nil {
 		m.mu.Unlock()
-		return false, err
+		return false, errors.Join(err, closeRetirementParent(parentToClose))
 	}
 	lease, err := m.stableDeleteLease(f)
 	if errors.Is(err, ErrFilePinned) {
@@ -3137,10 +3145,10 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 		m.mu.Unlock()
 		return nil
 	}
-	identity, err := m.prepareRetirementIdentityLocked(f)
+	identity, parentToClose, err := m.prepareRetirementIdentityLocked(f)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return errors.Join(err, closeRetirementParent(parentToClose))
 	}
 	lease, err := m.stableDeleteLease(f)
 	if err != nil {
