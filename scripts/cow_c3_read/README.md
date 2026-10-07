@@ -243,14 +243,19 @@ The `gomap-c3-read-matched-v2` configuration requires the exact fixed
 cannot admit performance collection. Endpoint process censuses and a census
 inside the existing owned-child wait4 loop reject any non-zombie `go`, Go tool
 (`compile`, `link`, `asm`, `cgo`, `vet`, `cover`, `test2json`, `preprofile`), or
-`*.test` process. Configured benchmark basenames, truncated to Linux's 15-byte
+`comm` ending in `.test`. At Linux's 15-byte boundary, names ending in `.t`,
+`.te` or `.tes` are conservatively treated as potentially truncated test binaries
+and refused too, even if absent from the configuration. Other 15-byte names are
+not refused merely for their length. Configured benchmark basenames, truncated to Linux's 15-byte
 `comm` limit, are also classified as foreign regardless of filename suffix.
 Executable basenames must be ASCII and control-free; unsupported names refuse
 configuration admission. Sleeping/stopped Go work also refuses admission. Census rows
 retain PID, PPID, elapsed age, CPU, RSS, state, process-group ID and `comm` only;
 arguments and unrelated secrets are never captured. Linux `comm` is name based
-and can truncate long names; arbitrary renamed tools and jobs shorter than the
-sampling interval can escape detection. This is bounded observation, not proof
+and can truncate long names. Unconfigured test names truncated before any of
+those suffixes is visible, arbitrary renamed/unknown long tools, and jobs shorter
+than the sampling interval can escape detection. Configured names still match
+their truncated basename even without a visible suffix. This is bounded observation, not proof
 of universal host exclusivity. The coordinator should reserve or coordinate a
 quiet window. If a dedicated runner is unavailable, retain an explicit
 `INFRASTRUCTURE_UNAVAILABLE` infrastructure receipt and describe the actual

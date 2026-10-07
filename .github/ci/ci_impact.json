@@ -9,7 +9,7 @@
     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate."
   ],
-  "discovery_source_sha256": "439772a1525c09fb34bf975f634c7852ee2fffdbc829f0c332ddb0432b5e7839",
+  "discovery_source_sha256": "0ae6b89a4f4ac21c3b4cbf25a6569d82b3bceacb384125708a87c17f9eb66cd3",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -152,11 +152,11 @@
       "mode": "100644"
     },
     "scripts/cow_c3_read/host_isolation_test.py": {
-      "git_blob": "457102ebe934b614a381e668361b8565305e32f3",
+      "git_blob": "a1d623ed357995b2e1a69da6a658cc19418766d6",
       "mode": "100644"
     },
     "scripts/cow_c3_read/protocol.py": {
-      "git_blob": "0f0be0a20fae9bdea33cdf6b22d591dcad44d002",
+      "git_blob": "cafec228ab062d848c641ccb782b1d8a5320b23f",
       "mode": "100644"
     }
   },
