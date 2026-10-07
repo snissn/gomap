@@ -14,13 +14,9 @@ import stat
 import subprocess
 import time
 
-from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest, build_command, module_command, harness_manifest, repository_inputs
+from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest, build_command, module_command, harness_manifest, repository_inputs, git_object_id
 
 GIT_SOURCE_SCHEMA = "gomap-git-export-authority-v1"
-
-def git_object_id(kind, raw, object_format):
-    need(object_format in ("sha1", "sha256"), "unsupported Git object format")
-    return hashlib.new(object_format, kind.encode() + b" " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
 
 def tree_inventory(tree, tree_objects, object_format):
     """Derive paths/modes/blob IDs from hash-verified raw Git tree objects."""
@@ -58,8 +54,8 @@ def verify_git_receipt(source, manifest, receipt):
     """Verify object authority offline; source additionally proves blob bytes/modes.
 
     With source=None, raw commit/tree proof binds the manifest inventory to Git
-    blob IDs. SHA256/blob byte equivalence was checked at build admission and
-    cannot be independently recomputed without the exported source bytes.
+    blob IDs. Selected compiler inputs additionally retain blob bytes, checked
+    against these IDs and manifest SHA256/size by protocol.build_inputs.
     """
     need(receipt["schema"] == GIT_SOURCE_SCHEMA, "unexpected Git source receipt schema")
     object_format = receipt["git_object_format"]

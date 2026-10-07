@@ -1,6 +1,8 @@
 """Synthetic incomplete packets exercise provenance refusal, never timings."""
 import argparse
+import base64
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -91,7 +93,8 @@ def main():
             if key.startswith("REPO/"):
                 source_file = exported / key[5:]
                 item.update(sha256=sha(source_file), bytes=source_file.stat().st_size,
-                            mode=0o755 if source_file.stat().st_mode & 0o111 else 0o644)
+                            mode=0o755 if source_file.stat().st_mode & 0o111 else 0o644,
+                            git_blob_bytes=base64.b64encode(source_file.read_bytes()).decode("ascii"))
         external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in closure.items() if not key.startswith("REPO/")}
         config["external_input_identity"] = digest(external)
         retained, artifacts = {}, {}
@@ -259,6 +262,56 @@ def main():
         write(receipt, build)
         rebind_receipt(packet, receipt)
 
+    def damage_rebound_blob(packet, path, kind, tooling=False):
+        # Rebind every SHA/size assertion while preserving commit/tree/blob IDs.
+        raw_bytes = b"arbitrary bytes outside the declared Git tree\n"
+        if tooling:
+            script = packet / Path(path).name
+            script.write_bytes(script.read_bytes() + b"\n# rebound tooling bytes\n")
+            raw_bytes = script.read_bytes()
+            hashes = json.loads((packet / "script-identity.json").read_text())
+            hashes[script.name] = sha(script)
+            write(packet / "script-identity.json", hashes)
+        variants = ("baseline", "candidate") if tooling else ("baseline",)
+        frozen = json.loads((packet / "config.json").read_text())
+        for variant in variants:
+            manifest_path = packet / (variant + "-source-manifest.json")
+            manifest = json.loads(manifest_path.read_text())
+            entry = next(item for item in manifest["files"] if item["path"] == path)
+            if kind == "sha256": entry["sha256"] = "0" * 64
+            elif kind == "size": entry["bytes"] += 1
+            else:
+                entry.update(sha256=hashlib.sha256(raw_bytes).hexdigest(), bytes=len(raw_bytes))
+            write(manifest_path, manifest)
+            observed = identity(manifest_path)
+            write(packet / (variant + "-identity.json"), observed)
+            receipt_path = packet / (variant + "-build-receipt.json")
+            build = json.loads(receipt_path.read_text())
+            artifacts_path = packet / (variant + "-build-artifacts.json")
+            artifacts = json.loads(artifacts_path.read_text())
+            names = ["git_source"]
+            if not tooling: names += ["compiled_inputs_before", "compiled_input_closure"]
+            for name in names:
+                raw_path = packet / (variant + "-" + name + ".raw")
+                value = json.loads(raw_path.read_text())
+                if name == "git_source": value["files"] = manifest["files"]
+                else:
+                    item = value["REPO/" + path]
+                    item.update(sha256=entry["sha256"], bytes=entry["bytes"])
+                    if kind == "blob": item["git_blob_bytes"] = base64.b64encode(raw_bytes).decode("ascii")
+                write(raw_path, value)
+                artifacts[name]["sha256"] = build["artifacts"][name]["sha256"] = sha(raw_path)
+                if name != "git_source":
+                    build["compiled_inputs_before_sha256" if name == "compiled_inputs_before" else "compiled_input_closure_sha256"] = sha(raw_path)
+            build["source_tree_sha256"] = observed["tree_sha256"]
+            write(artifacts_path, artifacts); write(receipt_path, build)
+            frozen["variants"][variant].update(build_receipt_sha256=sha(receipt_path),
+                manifest_sha256=sha(manifest_path), source_tree_sha256=observed["tree_sha256"])
+        write(packet / "config.json", frozen)
+        completion = json.loads((packet / "completion.json").read_text())
+        completion.update(config_sha256=sha(packet / "config.json"), script_identity_sha256=sha(packet / "script-identity.json"))
+        write(packet / "completion.json", completion)
+
     def damage_unmanifested_input(packet):
         # Add a selected product input to both closures and the package record,
         # then rebind all artifact/receipt/config/completion hashes. It remains
@@ -348,6 +401,15 @@ def main():
                           lambda p, k=kind, name=path: damage_inputs(p, k, name),
                           "selected persistent input closure mismatch" if kind == "missing"
                           else "repository compiler input differs from Git source authority: " + path))
+    for path in ("fixture.go", "fixture.s", "fixture.txt", "go.mod", "go.sum"):
+        for kind in ("sha256", "size", "blob"):
+            cases.append(("fully-rebound-" + path + "-" + kind,
+                          lambda p, name=path, k=kind: damage_rebound_blob(p, name, k),
+                          "Git blob content differs" if kind != "blob" else "retained Git blob hash mismatch"))
+    for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
+        cases.append(("fully-rebound-tooling-" + name,
+                      lambda p, n=name: damage_rebound_blob(p, "scripts/cow_c3_read/" + n, "blob", True),
+                      "retained Git blob hash mismatch"))
     cases.append(("rehashed-unmanifested-repository-input", damage_unmanifested_input,
                   "repository compiler input missing from Git source authority: unmanifested.go"))
     for variant in ("baseline", "candidate"):

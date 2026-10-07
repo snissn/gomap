@@ -1,4 +1,5 @@
 """C3-read artifact protocol. Construction only until independently reviewed."""
+import base64
 import datetime
 import hashlib
 import itertools
@@ -77,6 +78,32 @@ def validate_harness_fixtures(fixtures, suite="c3"):
         paths.append(item["path"])
     need(paths == sorted(set(paths)) and set(HARNESS_FILES[suite]) <= set(paths), message)
 
+def git_object_id(kind, raw, object_format):
+    need(object_format in ("sha1", "sha256"), "unsupported Git object format")
+    return hashlib.new(object_format, kind.encode() + b" " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
+
+def git_file_bytes(authority, raw, object_format, path):
+    """Prove raw bytes against a receipt-verified Git blob and its manifest."""
+    width = {"sha1": 40, "sha256": 64}.get(object_format)
+    need(width is not None, "unsupported Git object format")
+    blob = authority.get("git_blob")
+    need(isinstance(blob, str) and re.fullmatch(r"[0-9a-f]{%d}" % width, blob),
+         "invalid Git file blob authority: " + path)
+    need(git_object_id("blob", raw, object_format) == blob,
+         "retained Git blob hash mismatch: " + path)
+    need(hashlib.sha256(raw).hexdigest() == authority.get("sha256") and len(raw) == authority.get("bytes"),
+         "Git blob content differs from source manifest: " + path)
+
+def retained_tooling(packet, ident, scripts):
+    """Retained scripts are already raw blob proofs; they are not Go inputs."""
+    files = {item["path"]: item for item in ident["files"]}
+    for name, value in scripts.items():
+        path = "scripts/cow_c3_read/" + name
+        need(path in files and files[path]["sha256"] == value,
+             "retained tooling differs from frozen source: " + name)
+        git_file_bytes(files[path], (Path(packet) / name).read_bytes(),
+                       ident["original_manifest"]["git_object_format"], path)
+
 def repository_inputs(closure, ident):
     """Bind every selected repository input to this product's Git authority."""
     need(isinstance(ident, dict) and isinstance(ident.get("files"), list) and ident["files"],
@@ -85,6 +112,8 @@ def repository_inputs(closure, ident):
          "invalid Git source authority paths")
     files = {item["path"]: item for item in ident["files"]}
     need(len(files) == len(ident["files"]), "duplicate Git source authority paths")
+    object_format = ident.get("original_manifest", {}).get("git_object_format")
+    need(object_format in ("sha1", "sha256"), "unsupported Git object format")
     for key, item in closure.items():
         if not key.startswith("REPO/"):
             continue
@@ -96,6 +125,15 @@ def repository_inputs(closure, ident):
              "invalid Git compiler input authority: " + path)
         expected = {"sha256": authority["sha256"], "bytes": authority["bytes"], "mode": mode}
         file_identity(expected)
+        proof = item.get("git_blob_bytes")
+        need(isinstance(proof, str), "missing retained repository Git blob proof: " + path)
+        try:
+            raw = base64.b64decode(proof, validate=True)
+        except (ValueError, TypeError):
+            raise ValueError("invalid retained repository Git blob proof: " + path) from None
+        need(base64.b64encode(raw).decode("ascii") == proof,
+             "noncanonical retained repository Git blob proof: " + path)
+        git_file_bytes(authority, raw, object_format, path)
         need({field: item[field] for field in expected} == expected,
              "repository compiler input differs from Git source authority: " + path)
 
@@ -280,8 +318,11 @@ def selected_inputs(packages, source, environment):
         path = Path(name)
         need(path.is_file() and not path.is_symlink() and path.resolve() == path,
              "missing/nonregular/noncanonical persistent compiler input: " + name)
-        result[key] = {"path": name, "sha256": sha(path), "bytes": path.stat().st_size,
+        raw = path.read_bytes()
+        result[key] = {"path": name, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw),
                        "mode": stat.S_IMODE(path.stat().st_mode)}
+        if key.startswith("REPO/"):
+            result[key]["git_blob_bytes"] = base64.b64encode(raw).decode("ascii")
     return result, generated
 
 def build_inputs(build, frozen, packages, before, after, generated, source, ident=None):
@@ -291,7 +332,11 @@ def build_inputs(build, frozen, packages, before, after, generated, source, iden
     for key, name in paths.items():
         for closure in (before, after):
             item = closure[key]
-            need(set(item) == {"path", "sha256", "bytes", "mode"} and item["path"] == name,
+            fields = {"path", "sha256", "bytes", "mode"}
+            if key.startswith("REPO/"):
+                need("git_blob_bytes" in item, "missing retained repository Git blob proof: " + key[5:])
+                fields.add("git_blob_bytes")
+            need(set(item) == fields and item["path"] == name,
                  "selected persistent input custody mismatch")
             file_identity(item)
     need(before == after, "selected persistent inputs drift during build")

@@ -164,6 +164,11 @@ before compilation, after compilation, at collection and during offline analysis
 for both C3 and C4. Repository inputs retain full Git authority;
 GOROOT and effective external-module inputs use relative normalized identities,
 so repository product changes and source/cache relocation remain admissible.
+Each selected `REPO/` record retains canonical base64 `git_blob_bytes` in both
+input inventories. Offline checks recompute the receipt-proven Git blob ID and
+derive SHA256/size from these bytes before comparing manifest and closure fields.
+Missing, invalid or noncanonical proofs refuse; older proofless inventories
+require fresh builds. External records keep their existing fields and identities.
 Freeze the actual `external_input_identity` in configuration. Both builds,
 collection and offline analysis require identical external input identities,
 beyond module version/checksum labels. Offline checks reconstruct the exact
@@ -202,6 +207,8 @@ refuse before Go. A retained object proof binds commit to tree to the complete
 manifest; collection rechecks actual source bytes, while offline analysis verifies
 that object proof without requiring the original repository. The proof does not
 replace the retained source-byte and compiled-input audit.
+Offline analysis also verifies retained Python script bytes against their
+receipt-proven Git blob IDs and manifest SHA256/size using the same byte verifier.
 Invoke Python tools with `-B`, as shown, so importing them does not create
 bytecode files in immutable source exports. Its output stays outside source
 and retains full source manifests, actual

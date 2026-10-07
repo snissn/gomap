@@ -11,6 +11,7 @@ import subprocess
 import tarfile
 
 from build import admit_tmpdir, git_source_authority, verify_git_receipt
+from protocol import repository_inputs
 from protocol import write
 
 def git(repository, *args):
@@ -55,6 +56,38 @@ def main():
             results.append({"case": name, "status": "refused", "reason": str(error)})
         else:
             raise AssertionError("invalid Git source accepted: " + name)
+    def compiler_blob_checks(source, manifest, receipt):
+        closure = {"REPO/" + item["path"]: {
+            "path": str(source / item["path"]), "sha256": item["sha256"], "bytes": item["bytes"],
+            "mode": 0o755 if item["git_mode"] == "100755" else 0o644,
+            "git_blob_bytes": base64.b64encode((source / item["path"]).read_bytes()).decode()}
+            for item in manifest["files"]}
+        ident = {"files": manifest["files"], "original_manifest": manifest}
+        repository_inputs(closure, ident)
+        prefix = manifest["git_object_format"] + "-compiler-blob-"
+        results.append({"case": prefix + "valid", "status": "accepted"})
+        path = manifest["files"][0]["path"]
+        key = "REPO/" + path
+        for field, replacement in (("sha256", "0" * 64), ("bytes", closure[key]["bytes"] + 1)):
+            changed = copy.deepcopy(closure)
+            changed[key][field] = replacement
+            changed_manifest = copy.deepcopy(manifest)
+            changed_manifest["files"][0][field] = replacement
+            changed_receipt = copy.deepcopy(receipt)
+            changed_receipt["files"] = changed_manifest["files"]
+            # This remains a valid path/mode/blob proof. The compiler guard
+            # must independently bridge that Git blob ID to SHA256 and size.
+            verify_git_receipt(None, changed_manifest, changed_receipt)
+            refusal(prefix + "coherent-" + field, lambda: repository_inputs(changed,
+                    {"files": changed_manifest["files"], "original_manifest": changed_manifest}))
+        for label, value in (("tampered-blob", base64.b64encode(b"arbitrary compiler bytes").decode()),
+                             ("invalid-base64", "!"), ("noncanonical-base64", "YR==")):
+            changed = copy.deepcopy(closure)
+            changed[key]["git_blob_bytes"] = value
+            refusal(prefix + label, lambda: repository_inputs(changed, ident))
+        changed = copy.deepcopy(closure)
+        changed[key].pop("git_blob_bytes")
+        refusal(prefix + "missing-proof", lambda: repository_inputs(changed, ident))
     # Retain the actual object repository, detached sources and proof packet.
     try:
         repository, source, head, tree = fixture(root)
@@ -65,6 +98,7 @@ def main():
         verify_git_receipt(source, manifest, receipt)
         verify_git_receipt(None, manifest, receipt)
         results.append({"case": "valid-detached-export-live-and-offline", "status": "accepted", "files": len(manifest["files"])})
+        compiler_blob_checks(source, manifest, receipt)
         (repository / "nested" / "fixture.go").write_bytes(b"package newer\n")
         git(repository, "add", ".")
         git(repository, "-c", "user.name=Git admission smoke", "-c", "user.email=smoke@example.invalid", "commit", "-qm", "second")
@@ -127,6 +161,7 @@ def main():
         manifest256, receipt256 = git_source_authority(source256, repository256, head256, tree256)
         verify_git_receipt(source256, manifest256, receipt256)
         verify_git_receipt(None, manifest256, receipt256)
+        compiler_blob_checks(source256, manifest256, receipt256)
         write(sha256_root / "source-manifest.json", manifest256)
         write(sha256_root / "git-source-authority.json", receipt256)
         from protocol import variant_git_ids
