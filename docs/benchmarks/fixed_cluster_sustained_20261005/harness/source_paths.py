@@ -4,7 +4,7 @@ import sys
 sys.dont_write_bytecode=True
 from pathlib import Path
 import hashlib,importlib.util
-WORKLOAD_SHA='55bfcf3156faa277ba5db32c68627d88442141bd4e2c6b3785a9525d412ab6f5'
+WORKLOAD_SHA='37bbbf979b31c39ee694e3498f025547db3aa8870bae9121b2efe98fc70a78e4'
 def load_workload():
  path=Path(__file__).resolve().parent/'workload_profile.py'
  if not path.is_file() or path.is_symlink() or path.stat().st_size>16384:raise ValueError('bounded immutable workload source')
