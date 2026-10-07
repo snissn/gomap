@@ -1286,7 +1286,60 @@ func (a *replayInlineAppender) registerProducedPointerLocked(ptr page.ValuePtr) 
 	if err := a.db.RegisterValueLogSegment(valuelog.SegmentPath(dir, ptr.FileID), ptr.FileID); err != nil {
 		return fmt.Errorf("register produced replay value-log file %d: %w", ptr.FileID, err)
 	}
+	a.retireRegisteredCreationMetadataLocked(ptr.FileID)
 	return nil
+}
+
+// The native adapter hands every produced segment to the manager immediately.
+// Unlike a short-lived rewrite writer, it has no created-history consumer. Keep
+// unsuccessful or ambiguous handoffs, but release exact completed handoffs so
+// this long-lived writer does not retain one record per historical rotation.
+// The caller holds a.mu.
+func (a *replayInlineAppender) retireRegisteredCreationMetadataLocked(fileID uint32) {
+	w := a.writer
+	if w == nil || len(w.createdSegments) == 0 {
+		return
+	}
+	identity, ok := a.db.valueLogManager.StableSegmentIdentity(fileID)
+	if !ok {
+		return
+	}
+	path := a.db.valueLogManager.SegmentPath(fileID)
+	found := false
+	for _, segment := range w.createdSegments {
+		if segment.fileID != fileID {
+			continue
+		}
+		if segment.path != path || !rootpublication.SamePhysicalIdentity(segment.identity, identity) {
+			return
+		}
+		found = true
+	}
+	if !found || w.createdSegmentsPublishIdx != 0 {
+		return
+	}
+	segments := w.createdSegments[:0]
+	for _, segment := range w.createdSegments {
+		if segment.fileID != fileID {
+			segments = append(segments, segment)
+		}
+	}
+	clear(w.createdSegments[len(segments):])
+	w.createdSegments = segments
+	ids := w.createdIDs[:0]
+	for _, id := range w.createdIDs {
+		if id != fileID {
+			ids = append(ids, id)
+		}
+	}
+	clear(w.createdIDs[len(ids):])
+	w.createdIDs = ids
+	if len(w.createdSegments) == 0 {
+		w.createdSegments = nil
+	}
+	if len(w.createdIDs) == 0 {
+		w.createdIDs = nil
+	}
 }
 
 func (a *replayInlineAppender) LastLeafPageRecordLength() uint32 {

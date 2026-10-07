@@ -120,6 +120,15 @@ canonical name is never selected for cleanup. An interrupted quarantine is
 durable recovery state: read-write open reconciles it before scanning segments,
 while read-only open returns `ErrRecoveryRequired` without mutation.
 
+### Manager-owned deletion retries
+
+A manager owns every deferred zombie-deletion worker it admits. Admission and
+worker registration occur under the same manager lock that closes admission.
+`Manager.Close` cancels retry backoff and joins those workers outside the lock
+before closing tracked resources. Concurrent and repeated closes observe the
+same completion and error. Stable identity pins still prohibit deletion;
+shutdown does not bypass the gate or reclaim a pinned segment.
+
 ### 2.2 External-version logical pruning is not segment GC
 
 `TreeDB/mvcc.PruneVersions` deletes obsolete physical index keys only after its
@@ -765,6 +774,24 @@ leaf segments are registered before each root publication captures their
 identity, and their pending registration inventory is consumed before later
 pack/GC phases can retire them.
 
+For the rebuilt current index, inherited immutable packed-leaf dependencies
+are selected by the existing exact candidate-root scan whenever the source
+closure contains packs. Selection retains the original producer tokens, exact
+identities, namespace obligations, digest and frontier; it does not reclassify a
+pack as a raw leaf log. Canonical packed file IDs and producer generations must
+agree, and the producer physical identity must match the manager's registered
+exact handle (whose identity does not carry that logical generation). Missing,
+malformed, mismatched or physically aliased packed identities fail publication.
+Non-packed dependencies retain their existing ownership rules. The independently
+recovery-selectable older root retains its whole packed closure, including on an
+exact-scan fallback. Only lawful fallback convergence and release of held views
+or prepared publication members can remove the remaining physical pins.
+`ExactCandidateScan` and durable resource capture work/timing report the current
+maintenance cost. Sources without packed dependencies keep the existing
+projection path. Subsequent leaf GC still reports logical `BytesDeleted`
+separately from actual `FilesDeleted`; pruning a current closure does not itself
+unlink a pack or its record-length index.
+
 A successful phase sequence can still leave resources retained by an older
 durable slot or another recoverable root. Report that remaining debt and the
 completion flags from the final audit; a successful call alone does not establish
@@ -918,3 +945,36 @@ existing validation and ownership; dictionary generation fences remain separate
 from token-local snapshot readers. The optimization removes raw-only child
 Freeze, physical-descriptor copies and child-set Merge topology. It adds no
 persistent cache, generation lease union, durability shortcut or format change.
+
+## Immutable split-leaf manifest revision reclamation
+
+`LeafGenerationGC` also reclaims committed immutable manifest revision files
+through the existing physical identity registry and retained directory. This
+phase obtains fresh recovery authority after the segment phase's publications;
+it protects both recovery slots, current compatibility state, prepared and
+published resources, and held snapshot generation pins. Snapshot admission is
+excluded while checking held-generation protection. The regular foreground
+snapshot and read routes acquire no new identity token or lookup map.
+
+Revision inventory and bytes obey `LeafGenerationMaintenanceLimits` independently
+of the preceding segment scan. Cancellation is checked during inventory and
+before each candidate; already completed deletions remain reported. Malformed
+or rebound files, unsupported strict capabilities, and ambiguous namespace sync
+fail closed. Dry-run performs no revision unlink. Separate manifest counters and
+`ManifestRevisionGCUnsupported` distinguish this work from leaf segments.
+Compatibility-only stores retain their segment behavior and explicitly report
+revision GC unsupported. See the precise
+[storage contract](storage-format.md#split-leaf-generation-manifest).
+
+## Native appender creation metadata ownership
+
+The command-WAL replay-inline appender registers each produced primary or leaf
+segment with the value-log manager before returning its pointer. After that
+handoff succeeds and the registered physical identity matches the creation
+witness, the native appender releases that file's creation metadata, including
+its backing storage when empty. Failed or ambiguous handoffs retain their
+records. This bounds successful creation bookkeeping across natural rotations;
+current-segment reporting, pending-pointer protection, root resource closures,
+and segment retirement still use their existing owners. Standalone rewrite
+writers retain their complete created-file history for publication and cleanup.
+This bookkeeping bound does not establish a whole-database physical-space bound.

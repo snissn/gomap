@@ -35,6 +35,15 @@ type LeafGenerationGCStats struct {
 	FilesDeleted        int
 	BytesEligible       int64
 	BytesDeleted        int64
+
+	// Immutable manifest revisions are accounted separately from leaf segments.
+	ManifestRevisionGCUnsupported bool
+	ManifestRevisionsTotal        int
+	ManifestRevisionsProtected    int
+	ManifestRevisionsEligible     int
+	ManifestRevisionsDeleted      int
+	ManifestRevisionBytesEligible int64
+	ManifestRevisionBytesDeleted  int64
 }
 
 func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, error) {
@@ -76,7 +85,15 @@ func (db *DB) leafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions
 			return stats, err
 		}
 		if !stale {
-			return stats, nil
+			if err := db.gcLeafManifestRevisions(ctx, opts, &stats); err != nil {
+				// Inspection has the same bounded stale-authority retry contract
+				// in both phases. Apply failures remain errors, never deletion permission.
+				if !opts.DryRun || !errors.Is(err, ErrRecoverableRootSetStale) {
+					return stats, err
+				}
+			} else {
+				return stats, nil
+			}
 		}
 		if err := ctx.Err(); err != nil {
 			return LeafGenerationGCStats{}, err

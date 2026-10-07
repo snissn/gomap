@@ -1321,6 +1321,7 @@ func rebuiltOlderRootIndexAuthorityV1(source *rootpublication.StableResourceSet,
 func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
 	source *rootpublication.StableResourceSet,
 	sourceExact bool,
+	projectCurrentPacked bool,
 	projectionBlockedReason string,
 	sourceIndex *indexGen,
 	sourceIndexID uint64,
@@ -1329,6 +1330,14 @@ func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
 	meta page.MetaPageBody,
 ) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
 	var work rebuiltDurableResourceWorkV1
+	if projectCurrentPacked {
+		for _, descriptor := range source.PhysicalDescriptors() {
+			if descriptor.Kind == rootpublication.ResourceOuterLeafPack {
+				projectionBlockedReason = "current-packed-reachability"
+				break
+			}
+		}
+	}
 	if projectionBlockedReason != "" {
 		work.ProjectionFallbackReason = projectionBlockedReason
 	} else if sourceExact && sourceIndex != nil && sourceIndex.pager != nil {
@@ -1367,7 +1376,7 @@ func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
 		work.ProjectionFallbackReason = rebuiltDurableResourceFallbackMissingSource
 	}
 	fallbackReason := work.ProjectionFallbackReason
-	resources, exactWork, err := db.captureRebuiltIndexDurableResourcesWithWorkV1(rebuiltPager, meta, source)
+	resources, exactWork, err := db.captureRebuiltIndexDurableResourcesWithPackedSelectionV1(rebuiltPager, meta, source, projectCurrentPacked)
 	if fallbackReason == "" {
 		fallbackReason = rebuiltDurableResourceFallbackPolicy
 	}
@@ -1376,6 +1385,10 @@ func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
 }
 
 func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
+	return db.captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p, meta, source, true)
+}
+
+func (db *DB) captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet, projectCurrentPacked bool) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
 	var work rebuiltDurableResourceWorkV1
 	if db == nil || db.valueLogManager == nil || p == nil || meta.UserRootPageID < 2 || meta.SystemRootPageID < 2 {
 		return nil, work, fmt.Errorf("%w: rebuilt index dependency scanner unavailable", rootpublication.ErrUnresolvedResource)
@@ -1399,20 +1412,56 @@ func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta
 	}
 	work.ExactCandidateScan = true
 	work.UniqueScannedExternalSegments = uint64(len(references))
-	exactPackedFileIDs := make(map[uint32]struct{})
+	// Packed resources retain their immutable producer token, not a raw-log
+	// token reconstructed from a registered file. Validate every inherited pack
+	// before consuming any scanner references, including obsolete entries.
+	exactPackedFileIDs := make(map[uint32]rootpublication.StableIdentity)
+	exactPackedIdentities := make(map[rootpublication.StableIdentity]struct{})
+	var reachablePacks []rootpublication.StableIdentity
 	for _, descriptor := range source.PhysicalDescriptors() {
-		if descriptor.Kind == rootpublication.ResourceOuterLeafPack && descriptor.Generation <= uint64(^uint32(0)) {
-			exactPackedFileIDs[uint32(descriptor.Generation)] = struct{}{}
+		if descriptor.Kind != rootpublication.ResourceOuterLeafPack {
+			continue
+		}
+		generation := descriptor.Generation
+		if generation == 0 || generation > uint64(^uint32(0)) || descriptor.ResourceID() != strconv.FormatUint(generation, 10) ||
+			descriptor.Identity().Generation != generation || !page.IsValueLogFileID(uint32(generation)) {
+			return nil, work, fmt.Errorf("%w: malformed inherited packed identity", rootpublication.ErrUnresolvedResource)
+		}
+		fileID := uint32(generation)
+		if _, duplicate := exactPackedFileIDs[fileID]; duplicate {
+			return nil, work, fmt.Errorf("%w: ambiguous inherited packed file %d", rootpublication.ErrResourceConflict, fileID)
+		}
+		physicalIdentity := descriptor.Identity()
+		physicalIdentity.Generation = 0
+		if _, alias := exactPackedIdentities[physicalIdentity]; alias {
+			return nil, work, fmt.Errorf("%w: inherited packed file %d aliases another packed identity", rootpublication.ErrResourceConflict, fileID)
+		}
+		exactPackedIdentities[physicalIdentity] = struct{}{}
+		managerIdentity, registered := db.valueLogManager.StableSegmentIdentity(fileID)
+		// Manager identities bind the opened file, not the producer's logical
+		// generation. The canonical generation was checked separately above.
+		if !registered || !rootpublication.SamePhysicalIdentity(managerIdentity, descriptor.Identity()) {
+			return nil, work, fmt.Errorf("%w: inherited packed file %d lacks exact registered authority", rootpublication.ErrUnresolvedResource, fileID)
+		}
+		exactPackedFileIDs[fileID] = descriptor.Identity()
+		if _, reachable := references[fileID]; reachable {
+			reachablePacks = append(reachablePacks, descriptor.Identity())
 		}
 	}
 	for fileID := range exactPackedFileIDs {
 		delete(references, fileID)
 	}
-	inherited, err := rootpublication.CloneStableResourceSetExcludingKinds(
-		source,
-		rootpublication.ResourceValueLog,
-		rootpublication.ResourceOuterLeafLog,
-	)
+	var inherited *rootpublication.StableResourceSet
+	var err error
+	if projectCurrentPacked && len(exactPackedFileIDs) != 0 {
+		inherited, err = rootpublication.CloneStableResourceSetSelectingPhysicalKind(source, rootpublication.ResourceOuterLeafPack, reachablePacks,
+			rootpublication.ResourceValueLog, rootpublication.ResourceOuterLeafLog)
+	} else {
+		// An independently selectable older recovery root keeps its inherited
+		// packed closure even when its raw-log fallback requires an exact scan.
+		inherited, err = rootpublication.CloneStableResourceSetExcludingKinds(source,
+			rootpublication.ResourceValueLog, rootpublication.ResourceOuterLeafLog)
+	}
 	if err != nil {
 		return nil, work, fmt.Errorf("clone rebuilt-index durable resources: %w", err)
 	}
