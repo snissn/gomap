@@ -31,6 +31,14 @@ Retirement state tests balance repeated marking, ownership removal, eviction and
 Close, preserve successful absence when the parent directory disappears, and race
 pinned registry-identity reads against retirement publication. Nil-registry special-
 path tests retain FIFO and symlink refusal without a blocking open.
+`TestManagerRetirementSymlinkParentSupported` covers primary/additional symlink
+segment directories with and without the pin registry: final Release closes the
+handle, failed unlink restores it, unchanged Refresh succeeds, and retry deletes
+it. Direct removal covers all four APIs. Child-refusal and alias-rebound tests
+preserve regular, directory, symlink and FIFO replacements, original resources,
+zombie ownership and lock release; FIFO failure paths unblock and join. Matching
+quarantine recovery also works through a configured parent alias. These Unix
+fixtures retain exact-child no-follow validation rather than resolving child links.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 
