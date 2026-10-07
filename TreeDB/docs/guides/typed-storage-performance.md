@@ -867,3 +867,24 @@ target was missed. Its mapped lifetime was subsequently corrected to owned
 ranges. No qualifying improvement is established by those timings; the owned
 source requires a fresh complete matched campaign on the reviewed public
 harness, with all original failures retained. Go B/op remains unadjusted.
+
+The [#5091 architecture decision](../design/r1-row-execution-architecture.md)
+and [source-bound diagnostic packet](../evidence/r1-architecture-5091/README.md)
+separate population-dependent ordinary manifest preparation from warm captured
+reader/emitter work. They select future changes; their rehearsal and short
+characterizations do not establish a runtime speedup. Charge per-view decoded
+blocks and held offsets separately from the shared offset memo and physical LRU.
+
+Collection `CurrentRead` currently ends before generic typed reconstruction;
+`Publish` encloses nested WAL/sync timing. Do not sum these into exclusive CPU
+or wait partitions, or interpret zero-filled unavailable ordinary-read counters
+as zero work. Enabled diagnostic overhead, oracle-retained heap and SQLite C
+allocation omissions are part of the measurement interpretation. The 64-update
+and 16-update checkpoint characterizations are different state schedules.
+
+Manifest-GC descriptor limits do not bound cumulative validation or writer pause.
+Parent-directory identity does not certify child content/inventory. The selected
+near-linear capability is unsupported on the diagnostic host; full corruption
+validation remains charged. Main-value GC and native collection leaf retention
+are distinct domains, and a reduced rollover target does not qualify default
+segment economics. Product gates remain with #5095, #5098 and #5099.

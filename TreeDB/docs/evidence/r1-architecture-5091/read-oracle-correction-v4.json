@@ -1,0 +1,42 @@
+{
+  "scope": "corrected source smoke, not historical profile source or performance qualification",
+  "runtime_sha": "797d783b21b36e7a0e540cd8190b4ec5921711fe",
+  "source": {
+    "sha256": "e9c8f0482e226a2207bd5b96ca644e94494750a0029eb503d9679c306da7f0e9",
+    "bytes": 14871
+  },
+  "binary": {
+    "sha256": "42f245f6e17f8018e9e70c8a2d30961fbcf6bb5c00d6ab0ed7fc53b08d22db92",
+    "bytes": 43632376
+  },
+  "tests": "wrong same-count fields/IDs/order rejected for all three read routes",
+  "runs": {
+    "point": {
+      "calls": 32,
+      "oracle": true,
+      "oracle_scope": "full_row_fields_ids_and_order_post_timing",
+      "raw_report": {
+        "sha256": "539d648b1ee358d6e2436530a7b831923209aa09d99fe1b4700224deacf04907",
+        "bytes": 446902
+      }
+    },
+    "range": {
+      "calls": 32,
+      "oracle": true,
+      "oracle_scope": "full_row_fields_ids_and_order_post_timing",
+      "raw_report": {
+        "sha256": "0b811f18148cf599bebc54c425386dddc8dd37b27a555625194ed3b5b79396b7",
+        "bytes": 446902
+      }
+    },
+    "prepared": {
+      "calls": 32,
+      "oracle": true,
+      "oracle_scope": "full_row_fields_ids_and_order_post_timing",
+      "raw_report": {
+        "sha256": "10c5fc6e9d464071fb3cc1f3f9026059534faf767a5e3bdd5a7bb1256f14fe08",
+        "bytes": 446957
+      }
+    }
+  }
+}
