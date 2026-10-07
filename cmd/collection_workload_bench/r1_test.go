@@ -44,7 +44,7 @@ func TestR1StorageSeparatesPersistentWALAndTransientFiles(t *testing.T) {
 	}
 }
 func TestR1PublicPathRehearsalAndRejectPackets(t *testing.T) {
-	c := r1Config{Documents: 16, Batch: 4, Operations: 3, Repetitions: 1, Durability: "durable", State: "buffered", Engines: r1Engines, Qualification: "rehearsal"}
+	c := r1Config{Documents: 16, Batch: 4, Operations: 3, ReadOperations: 7, Repetitions: 1, Durability: "durable", State: "buffered", Engines: r1Engines, Qualification: "rehearsal"}
 	p, e := runR1(c, r1TestSource())
 	if e != nil {
 		t.Fatal(e)
@@ -104,6 +104,9 @@ func TestR1PublicPathRehearsalAndRejectPackets(t *testing.T) {
 		name   string
 		mutate func(*r1Packet)
 	}{
+		{"wrong read count", func(p *r1Packet) { p.Config.ReadOperations++ }},
+		{"negative read count", func(p *r1Packet) { p.Config.ReadOperations = -1 }},
+		{"mutation count cannot follow reads", func(p *r1Packet) { p.Cells[0].Phases[6].Operations = p.Config.ReadOperations }},
 		{"missing setup denominator", func(p *r1Packet) { p.Cells[0].Setup.Operations = 2 }},
 		{"wrong full batch denominator", func(p *r1Packet) { p.Cells[0].Phases[3].Rows++ }},
 		{"fixture mismatch", func(p *r1Packet) { p.FixtureSHA256 = strings.Repeat("d", 64) }},
@@ -185,7 +188,7 @@ func TestR1FixtureOwnershipAndNullMissing(t *testing.T) {
 	}
 }
 func TestR1RejectConfiguration(t *testing.T) {
-	for _, args := range [][]string{{"-durability", "NORMAL"}, {"-engines", "json,json"}, {"-engines", "IDs"}, {"-read-state", "cold"}, {"-batch-size", "0"}, {"-qualification", "qualified"}} {
+	for _, args := range [][]string{{"-durability", "NORMAL"}, {"-engines", "json,json"}, {"-engines", "IDs"}, {"-read-state", "cold"}, {"-batch-size", "0"}, {"-qualification", "qualified"}, {"-read-operations", "-1"}} {
 		if _, e := parseR1Config(args); e == nil {
 			t.Fatalf("accepted %v", args)
 		}
@@ -251,6 +254,22 @@ func TestR1EmailIndexOracleRejectsStaleAndWrongMappings(t *testing.T) {
 			return nil, nil
 		}) == nil {
 			t.Fatal("accepted missing/wrong/nonunique current mapping")
+		}
+	}
+}
+
+func TestR1SeparateReadCountConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		args             []string
+		reads, mutations int
+	}{
+		{[]string{"-operations", "3"}, 3, 3},
+		{[]string{"-operations", "3", "-read-operations", "7"}, 7, 3},
+		{[]string{"-operations", "3", "-read-operations", "0"}, 3, 3},
+	} {
+		c, err := parseR1Config(tc.args)
+		if err != nil || c.readOperations() != tc.reads || c.Operations != tc.mutations {
+			t.Fatalf("counts for %v: %+v %v", tc.args, c, err)
 		}
 	}
 }
