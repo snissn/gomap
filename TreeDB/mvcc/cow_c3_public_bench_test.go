@@ -246,13 +246,15 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 						var overlapping atomic.Uint64
 						var writerActive atomic.Bool
 						b.ReportAllocs()
-						b.ResetTimer()
-						started := time.Now()
+						b.StopTimer()
+						var started time.Time
 						if workload == "concurrent" {
 							start := make(chan struct{})
+							ready := make(chan struct{}, 3)
 							results := make(chan error, 3)
 							var phaseStarted time.Time
 							go func() {
+								ready <- struct{}{}
 								<-start
 								for n := 0; n < b.N; n++ {
 									writerActive.Store(true)
@@ -268,6 +270,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 								results <- nil
 							}()
 							go func() {
+								ready <- struct{}{}
 								<-start
 								for n := 0; n < b.N; n++ {
 									begin := time.Now()
@@ -286,6 +289,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 								results <- nil
 							}()
 							go func() {
+								ready <- struct{}{}
 								<-start
 								for n := 0; n < b.N; n++ {
 									begin := time.Now()
@@ -304,7 +308,13 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 								scanPhase = time.Since(phaseStarted)
 								results <- nil
 							}()
-							phaseStarted = time.Now()
+							for n := 0; n < 3; n++ {
+								<-ready
+							}
+							b.ResetTimer()
+							b.StartTimer()
+							started = time.Now()
+							phaseStarted = started
 							close(start)
 							for n := 0; n < 3; n++ {
 								if e := <-results; e != nil {
@@ -312,6 +322,9 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 								}
 							}
 						} else {
+							b.ResetTimer()
+							b.StartTimer()
+							started = time.Now()
 							for n := 0; n < b.N; n++ {
 								begin := time.Now()
 								if workload == "point" {
