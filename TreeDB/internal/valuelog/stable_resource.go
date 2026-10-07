@@ -637,10 +637,20 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 // retainSegmentForDeletionLocked excludes a destructive admission from new
 // snapshots while retaining its exact owner through close and physical unlink.
 func (m *Manager) retainSegmentForDeletionLocked(file *File) {
+	file.deletionAdmissions++
 	if !file.IsZombie.Load() {
 		m.retiredCount++
 		file.IsZombie.Store(true)
 	}
+}
+
+// finishDeletionAdmission releases the eviction guard without holding mu
+// during Close, unlink, or retry backoff. Successful deletion may already have
+// forgotten this exact File; its admission is still balanced here.
+func (m *Manager) finishDeletionAdmission(file *File) {
+	m.mu.Lock()
+	file.deletionAdmissions--
+	m.mu.Unlock()
 }
 
 // finishDirectSegmentDeletion runs after admission releases mu. Incomplete
@@ -649,6 +659,7 @@ func (m *Manager) retainSegmentForDeletionLocked(file *File) {
 // physical deletion releases ownership; Force deliberately has no refcount gate.
 func (m *Manager) finishDirectSegmentDeletion(file *File, identity rootpublication.StableIdentity, lease *rootpublication.IdentityDeleteLease) error {
 	defer m.retryWorkers.Done()
+	defer m.finishDeletionAdmission(file)
 	if m.directDeleteAdmissionHook != nil {
 		m.directDeleteAdmissionHook()
 	}
@@ -1340,7 +1351,12 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		m.mu.Unlock()
 		return err
 	}
+	file.deletionAdmissions++
 	m.mu.Unlock()
+	defer m.finishDeletionAdmission(file)
+	if m.directDeleteAdmissionHook != nil {
+		m.directDeleteAdmissionHook()
+	}
 
 	deleted, unlinkErr := closeAndRemoveStableSegmentFileResult(file, identity)
 	if !deleted {
