@@ -747,7 +747,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 			return r, e
 		}
 		err = call("unsupported_prune", "PruneVersions", 0, func() (uint64, error) {
-			_, x := s.PruneVersions(PruneOptions{Mode: CommitDurable})
+			_, x := s.PruneVersions(mvcc.PruneOptions{Mode: mvcc.CommitDurable})
 			if !errors.Is(x, caching.ErrCOWUnsupported) {
 				return 0, fmt.Errorf("unsupported prune: %v", x)
 			}

@@ -409,7 +409,7 @@ func TestCOWSustainedPublicMVCCWriteRefusalRecovery(t *testing.T) {
 				for _, group := range groups {
 					for _, mutation := range group.Mutations {
 						got, x := store.GetAt(mutation.Key, 1000)
-						if x != nil || got.State != Absent {
+						if x != nil || got.State != mvcc.Absent {
 							t.Fatalf("denied mutation became visible: %+v %v", got, x)
 						}
 					}
