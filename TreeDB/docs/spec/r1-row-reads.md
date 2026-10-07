@@ -51,13 +51,88 @@ Source-directory V2 retains its existing point-routing path. A legacy manifest
 without a persisted locator retains its visibility-scan reconstruction fallback.
 Retained full-document collections continue returning their existing payload
 format; BSON and template-v1 callers still use their existing JSON materializer.
-The R1 change does not introduce a new locator, cache or physical index format.
+No persistent locator or row/index format changes. Derived read metadata and
+worker scratch follow the captured-reader contract below.
 
 Shared materialization work counters describe the eligible public route; prepared
 fetch diagnostics separate locator lookups, point decodes, reconstruction and
-visibility fallback work. Complete owned output still needs output allocation or
-caller-buffer copies. Performance qualification must include those costs and
+visibility fallback work. Complete owned output still needs output allocation. Eligible `GetInto` emits
+straight into the final caller destination; fallback copies remain charged. Performance qualification must include those costs and
 report acquisition/flush separately from prepared fetches.
+
+## Captured executor and immutable metadata (#5092)
+
+The classic persisted locator route has one executor for ordinary points,
+complete-document ranges and captured-view batches. A successful preparation
+validates the **entire** classic manifest, including unrelated entries, before
+memoizing immutable scan metadata on the exact captured `collectionCatalog`.
+The catalog already carries root/schema/manifest/verification authority; a root
+number alone is not certification. New catalog construction and every catalog
+clone start with no certification. Corrupt or incomplete preparation is never
+memoized. Source-directory V2, absent-locator and unsupported layouts preserve
+their established routing and validation.
+
+Shared metadata owns decoded immutable manifest references/configuration only;
+it never retains a snapshot, request context, asset handle or decoded row. Each
+operation binds those references to its existing captured snapshot and catalog.
+A held view retains its original cut through later schema, index and document
+publications. It releases its own caches and snapshot ownership on close; closing
+one view does not invalidate another. Ordinary ranges continue using the index,
+primary and locator from one cut without a public-view flush inside the scan.
+
+`GetInto` protects retained input from output aliasing, resolves and validates
+coordinates before emission, then appends directly into `dst[:0]`. Sufficient
+capacity is reused, including an ID borrowed from the destination; insufficient
+capacity grows under Go's ordinary append rules. Missing and error results have
+zero length and `found=false`. A failed emission may have changed destination
+backing bytes; callers must use only a successful returned slice. Owned `Get`,
+batch and range documents remain independent of mapped assets, decoder scratch,
+subsequent fetches and view close. Batch/range slices cap each individual document
+span; `GetInto` retains caller-buffer capacity for reuse.
+
+The existing mapped-resource manager owns each exact range mapping or heap-copy
+fallback. Reads and checksum identity use the same already opened descriptor.
+That descriptor remains open until every associated handle releases, and handles
+release before file close. A path replacement cannot retarget a held descriptor.
+Serving-authorized assets retain their existing exact holder/pool authority;
+private readers cannot bypass it. Forced read-at and checksum modes retain their
+current contracts.
+
+Each view admits at most **32** borrowed row blocks, **32** resource handles and
+**32** private asset descriptors, independently. Admission precedes load/open.
+Between synchronous emissions it reserves room for a metadata row, its preserved
+full row and a typed-column part; eviction clears row/typed caches only after no
+borrowed row escapes. The byte credit is `32 * maximum captured asset credit +
+workspace credit`, using checked arithmetic. Asset credit charges encoded range
+backing plus page alignment, actual offset-capacity allowance, cloned header,
+descriptor/handle metadata, and schema/row-count-derived typed decode backing.
+Workspace charges the declared arrays, fixed 64-descriptor existing JSON cursor,
+map descriptors, vector capacities and variable-payload scratch. Header/typed
+row counts must match manifest counts before index/decode growth. This is a
+schema/extent admission bound, not a fixed MiB limit or process RSS claim.
+Shared immutable manifest metadata scales with the actual captured manifest and
+is charged separately from per-view blocks. Engine serving-pool base residency,
+snapshot retention and caller-owned results remain separate owners.
+
+Representability overflow is an explicit eligibility failure: the existing
+owned visibility reconstruction validates the same snapshot, locator and physical
+row, emits with the same writer, and charges fallback scans/bytes. It has no
+bounded-route performance claim. Invalid dimensions/corruption fail closed.
+Any failed load/decode releases reservations, descriptors and borrowed scratch
+before returning, so a retry cannot accumulate failed pins. Reusable scalar/JSON
+scratch clears raw, string, map and buffer aliases after every emission and on
+close. The optional flat residual-object cursor uses the existing parser's fixed
+64-descriptor arena; nested, escaped, oversized and unsupported objects retain
+the existing `UseNumber` decoder.
+
+The adopted [#1887](https://github.com/snissn/gomap/issues/1887) shared-emitter
+slice covers field names and declared scalar/string values. It preserves standard
+JSON HTML escaping, invalid UTF-8 replacement, U+2028/U+2029, signed/unsigned
+integer precision, float32/float64 formatting, negative zero, nonfinite errors,
+null and missing distinctions. Arbitrary retained values, nested paths,
+vector/list values, BSON and template fallbacks retain the existing common
+writer/conversion contracts. Broad projected/vector/list optimization remains
+owned by #1887.
 
 ## Verification and evidence
 
@@ -68,6 +143,12 @@ publication. Existing read-view suites cover mapped-resource ownership, forced
 read-at fallback, schema/cache invalidation, missing/deleted results and public
 caller buffers. The original residual-only range regression is retained in the
 execution evidence rather than accepted as a full-row performance result.
+
+`r1_captured_reader_test.go` adds public manifest-reuse, direct destination,
+block/handle/descriptor/backing admission, failed-load cleanup and alias ownership
+witnesses. Shared-emitter differential tests compare standard JSON bytes and
+retained-object decoder behavior, including invalid inputs. The existing
+mapped-resource descriptor-lease tests cover path replacement and closed handles.
 
 The R1 contract/baseline and final integrated evidence own measured comparison,
 noise and conditional index-format decisions. This spec defines semantics and

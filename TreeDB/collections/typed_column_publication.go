@@ -604,6 +604,12 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCachePr
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
+		if part.Part.Descriptor.RowCount != ref.Rows || ref.Rows < 0 {
+			if closeReadCache {
+				_ = readCache.close()
+			}
+			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column row count disagrees with captured manifest")
+		}
 		// Only mapped payloads remain stable across read-cache calls. A serving
 		// mapped payload remains protected because the read view clears this
 		// decoded cache and its logical handles before releasing its holder/pool.

@@ -35,6 +35,22 @@ ordering in both default and `treedb_safe` builds. `BenchmarkCOWLargeKeyLookup`
 reports the safe-build rank-search cost and zero key-conversion allocations;
 [build-tag commands and scope](cow-memtable-ownership.md) bind the comparator.
 
+Captured R1 readers: `TestR1CapturedReaderSharesValidatedMetadata` checks public
+reuse without shared snapshot pins. `TestR1CapturedReaderBoundsBorrowedBlocks`
+checks complete rows, independent block/handle/descriptor caps, backing credit,
+eviction and owned output after close. `TestR1CapturedReaderFailedLoadReleasesAdmission`
+checks corruption refusal, reservation/descriptor cleanup and same-view retry.
+`TestR1CapturedReaderOversizeOwnedFallback` checks explicit owned fallback and
+stale-reference refusal. `TestR1GetIntoDoesNotAllocateWholeIntermediateDocument`
+and `TestR1GetIntoAliasesReallocationAndErrorOwnership` cover public final-buffer
+emission, aliases, growth and missing/error ownership. Existing `TestR1TypedRow*`,
+`TestCollectionReadView*` and serving-materializer suites remain the held-cut,
+reopen, projection, integrity and concurrent-publication oracle.
+`TestColumnSharedJSONEmitterParity1887`, `TestColumnSharedDeclaredScalarJSONParity1887`
+and `TestColumnRetainedEmissionCursorParity1887`
+compare JSON byte/decoder parity. `TestAcquireOpenFileRangeDescriptorLease` binds
+range mapping/read-at lifetime to the stable open descriptor through path replacement.
+
 ## Immutable COW cache qualification
 
 The [COW publication contract](cow-cache-publication.md) requires evidence from

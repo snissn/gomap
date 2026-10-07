@@ -595,3 +595,50 @@ func TestFakeColumnPartSectionAcquireReleaseAndMaintenancePins(t *testing.T) {
 		t.Fatalf("pins after release=%d want 0", got)
 	}
 }
+
+func TestAcquireOpenFileRangeDescriptorLease(t *testing.T) {
+	for _, mapped := range []bool{false, true} {
+		t.Run(fmt.Sprint(mapped), func(t *testing.T) {
+			dir := t.TempDir()
+			path := dir + "/asset"
+			if err := os.WriteFile(path, []byte("0123456789abcdef"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			if err := os.Rename(path, path+"-old"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("xxxxxxxxxxxxxxxx"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			m := NewManager()
+			h, err := m.AcquireOpenFileRange(testKey(), testScope(), file, AcquireOptions{PreferMapped: mapped, AllowHeapCopy: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(h.Bytes()) != "0123456789abcdef" {
+				t.Fatal("range rebound to replacement pathname")
+			}
+			if err := h.Release(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := file.Stat(); err != nil {
+				t.Fatal("handle closed borrowed descriptor")
+			}
+			if m.Stats().ActiveHandles != 0 || m.Stats().Opens != 0 || m.Stats().Closes != 0 {
+				t.Fatal("borrowed descriptor accounting mismatch")
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if h, err := m.AcquireOpenFileRange(testKey(), testScope(), file, AcquireOptions{PreferMapped: mapped, AllowHeapCopy: true}); err == nil {
+				_ = h.Release()
+				t.Fatal("closed descriptor admitted")
+			}
+		})
+	}
+}

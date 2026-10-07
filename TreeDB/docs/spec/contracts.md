@@ -25,6 +25,11 @@ captured prepared-view lifetime are specified in
 [r1-row-reads.md](r1-row-reads.md). The benchmark contract retains the historical
 residual-only range rejection as starting-source evidence.
 
+Captured classic-row execution shares fully validated immutable metadata only on
+the exact catalog and emits eligible `GetInto` output directly into caller storage.
+The read contract specifies independent 32-block/handle/descriptor limits,
+schema-derived backing credit, checked oversize fallback and shared JSON parity.
+
 ## 1. Key Model
 
 - Raw KV keys and values are byte strings.

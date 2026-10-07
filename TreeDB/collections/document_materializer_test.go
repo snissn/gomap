@@ -1266,15 +1266,12 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef: %v", err)
 	}
-	if view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+	if view.columnSnapshotView == nil || view.preparedMaterializer == nil || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be populated before integrity change")
 	}
 	cfg := view.columnSnapshotView.Config
 	if err := view.ensureAssetReadCaches(cfg, ColumnAssetReadIntegritySkipChecksums); err != nil {
 		t.Fatalf("ensureAssetReadCaches: %v", err)
-	}
-	if view.rowLocator != nil {
-		t.Fatalf("rowLocator=%v want nil after row asset cache rebuild", view.rowLocator)
 	}
 	if view.columnSnapshotView != nil {
 		t.Fatalf("columnSnapshotView=%v want nil after row asset cache rebuild", view.columnSnapshotView)
@@ -1295,26 +1292,14 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef after rebuild: %v", err)
 	}
-	if view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+	if view.columnSnapshotView == nil || view.preparedMaterializer == nil || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be repopulated before close")
 	}
 	if err := view.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if view.rowLocator != nil || view.columnSnapshotView != nil || view.pointRowRefs != nil || view.pointRowProjection != nil || view.pointRowBlocks != nil {
-		t.Fatalf("derived caches retained after Close: rowLocator=%v columnSnapshotView=%v pointRowRefs=%v pointRowProjection=%v pointRowBlocks=%v", view.rowLocator, view.columnSnapshotView, view.pointRowRefs, view.pointRowProjection, view.pointRowBlocks)
-	}
-}
-
-func TestDocumentRowLocatorCandidateNewerUsesOrdinalTieBreaker1874(t *testing.T) {
-	base := DocumentRowRef{Generation: 2, PartID: 7, RowIndex: 11, AppliedCommandLSN: 42}
-	older := documentRowLocatorCandidate{ref: base, ordinal: 3}
-	newer := documentRowLocatorCandidate{ref: base, ordinal: 4}
-	if !documentRowLocatorCandidateNewer(newer, older) {
-		t.Fatalf("higher ordinal should win exact row-ref ties")
-	}
-	if documentRowLocatorCandidateNewer(older, newer) {
-		t.Fatalf("lower ordinal should not win exact row-ref ties")
+	if view.columnSnapshotView != nil || view.pointRowRefs != nil || view.pointRowProjection != nil || view.pointRowBlocks != nil {
+		t.Fatalf("derived caches retained after Close: columnSnapshotView=%v pointRowRefs=%v pointRowProjection=%v pointRowBlocks=%v", view.columnSnapshotView, view.pointRowRefs, view.pointRowProjection, view.pointRowBlocks)
 	}
 }
 

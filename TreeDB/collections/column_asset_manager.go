@@ -2690,6 +2690,9 @@ type columnPhysicalAssetReadCache struct {
 	files                  map[uint32]*columnPhysicalAssetSegmentReader
 	scratch                []byte
 	returnViews            bool
+	boundedRangeViews      bool
+	admitResource          func(ColumnAssetRef) error
+	admitFile              func() error
 	forceReadAtFallback    bool
 	lastView               bool
 	verifiedRowIndexRef    ColumnAssetRef
@@ -2937,6 +2940,9 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	if err != nil {
 		return nil, err
 	}
+	if c.boundedRangeViews && c.resourceManager != nil {
+		return c.readBoundedRange(ref, reader)
+	}
 	if c.returnViews {
 		if raw, ok, err := reader.readView(ref); err != nil {
 			return nil, err
@@ -2981,6 +2987,46 @@ func (c *columnPhysicalAssetReadCache) read(ref ColumnAssetRef, dst []byte) ([]b
 	return raw, nil
 }
 
+// readBoundedRange uses the existing resource manager's range lifetime. The
+// complete segment is not mmap-backed by a point reader. Mapping and checksum
+// identity use the same opened descriptor. Handles release before file close.
+func (c *columnPhysicalAssetReadCache) readBoundedRange(ref ColumnAssetRef, reader *columnPhysicalAssetSegmentReader) ([]byte, error) {
+	key := mappedResourceKeyForColumnAssetRef(ref)
+	for _, h := range c.resourceHandles {
+		if h != nil && !h.Released() && h.Key().Equal(key) {
+			c.lastView = true
+			c.rememberVerifiedRowIndexRead(ref, reader)
+			return h.Bytes(), nil
+		}
+	}
+	if c.resourceManager.ActiveHandles() >= documentPointRowMaxBorrowedBlocks {
+		return nil, errors.New("collections: document asset handle admission exhausted before load")
+	}
+	if c.admitResource != nil {
+		if err := c.admitResource(ref); err != nil {
+			return nil, err
+		}
+	}
+	h, err := c.resourceManager.AcquireOpenFileRange(key, c.resourceScope, reader.file, mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), PreferMapped: !c.forceReadAtFallback, AllowHeapCopy: true, ResourceRoot: c.rootDir})
+	if err != nil {
+		return nil, err
+	}
+	raw := h.Bytes()
+	if err := c.verifyReadChecksum(raw, ref, reader); err != nil {
+		_ = h.Release()
+		return nil, err
+	}
+	c.resourceHandles = append(c.resourceHandles, h)
+	if h.Source() == mappedresource.SourceMapped {
+		c.mmapHits++
+	} else {
+		c.readAtFallbacks++
+	}
+	c.lastView = true
+	c.rememberVerifiedRowIndexRead(ref, reader)
+	return raw, nil
+}
+
 func (c *columnPhysicalAssetReadCache) shouldBorrowServingAsset(ref ColumnAssetRef) (bool, error) {
 	if c == nil || c.servingSourceAccess == nil || c.forceReadAtFallback {
 		return false, nil
@@ -2991,6 +3037,26 @@ func (c *columnPhysicalAssetReadCache) shouldBorrowServingAsset(ref ColumnAssetR
 func (c *columnPhysicalAssetReadCache) readServingAsset(ref ColumnAssetRef, dst []byte) ([]byte, error) {
 	if c == nil || c.servingSourceAccess == nil {
 		return nil, ErrVectorIndexSnapshotMismatch
+	}
+	if c.boundedRangeViews {
+		key := mappedResourceKeyForColumnAssetRef(ref)
+		found := false
+		for _, h := range c.resourceHandles {
+			if h != nil && !h.Released() && h.Key().Equal(key) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			if c.resourceManager.ActiveHandles() >= documentPointRowMaxBorrowedBlocks {
+				return nil, errors.New("collections: document asset handle admission exhausted before borrow")
+			}
+			if c.admitResource != nil {
+				if err := c.admitResource(ref); err != nil {
+					return nil, err
+				}
+			}
+		}
 	}
 	// The logical handle keeps its existing request scope. The ephemeral
 	// physical borrow scope names the exact parent's generation for the pool's
@@ -3361,6 +3427,11 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPh
 			return reader, nil
 		}
 	}
+	if c.admitFile != nil {
+		if err := c.admitFile(); err != nil {
+			return nil, err
+		}
+	}
 	c.misses++
 	if c.resourceManager != nil {
 		c.resourceManager.RecordMiss()
@@ -3374,7 +3445,7 @@ func (c *columnPhysicalAssetReadCache) fileForRef(ref ColumnAssetRef) (*columnPh
 		file:     file,
 		identity: columnAssetVerifiedChecksumFileIdentityFromFile(file),
 	}
-	if c.returnViews && !c.forceReadAtFallback {
+	if c.returnViews && !c.forceReadAtFallback && !c.boundedRangeViews {
 		if mapped, err := mmapColumnPhysicalAssetFile(file); err == nil {
 			reader.mmap = mapped
 		}
