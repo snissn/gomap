@@ -1913,6 +1913,12 @@ func (m *Manager) Refresh() error {
 				// Retirement owns this entry until deletion (including any retry)
 				// completes. Its handle may already be closed before unlink, so
 				// refresh must neither stat it nor resurrect it as a live segment.
+				if existing.stableIdentity != (rootpublication.StableIdentity{}) {
+					if err := validateStableDeletePathIdentity(seg.path, existing.stableIdentity); err != nil {
+						m.mu.Unlock()
+						return err
+					}
+				}
 				continue
 			}
 			if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
