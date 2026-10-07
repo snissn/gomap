@@ -105,7 +105,7 @@ func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
 	}
 }
 
-func (db *DB) closeAllIndexes() error {
+func (db *DB) closeAllIndexes() ([]*indexGen, error) {
 	db.idxMu.Lock()
 	var gens []*indexGen
 	for _, g := range db.idxAll {
@@ -117,9 +117,9 @@ func (db *DB) closeAllIndexes() error {
 
 	var errs []error
 	for _, g := range gens {
-		if err := g.close(); err != nil {
+		if err := g.closeForShutdownV1(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	return errors.Join(errs...)
+	return gens, errors.Join(errs...)
 }

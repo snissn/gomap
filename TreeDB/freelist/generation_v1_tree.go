@@ -21,7 +21,11 @@ const (
 	freelistChunkShift = 8
 	freelistChunkSize  = 1 << freelistChunkShift
 	chunkTrieDepth     = (64 - freelistChunkShift) / 4
-	freelistRegionSize = 8192
+	// Conservative allocation-class capacities; structural tests cover their
+	// field-layout bounds. Ownership needs no map, token, or per-node field.
+	stateNodeCopyCapacityV1  = 208
+	stateChunkCopyCapacityV1 = 2304
+	freelistRegionSize       = 8192
 )
 
 type retiredPage struct {
@@ -29,21 +33,21 @@ type retiredPage struct {
 }
 
 type stateChunk struct {
-	pageID   uint64
-	checksum uint32
-	chunkNo  uint64
-	free     [4]uint64
-	retired  [freelistChunkSize]uint64
+	ownedRefs uint64
+	creator   *allocationCreditLeaseV1
+	pageID    uint64
+	checksum  uint32
+	chunkNo   uint64
+	free      [4]uint64
+	retired   [freelistChunkSize]uint64
 }
 
 func (c *stateChunk) clone() *stateChunk {
-	if c == nil {
-		return &stateChunk{}
+	out, err := cloneStateChunkOwnedV1(c, false, nil)
+	if err != nil {
+		panic(err)
 	}
-	out := *c
-	out.pageID = 0
-	out.checksum = 0
-	return &out
+	return out
 }
 
 func (c *stateChunk) freeCount() uint64 {
@@ -113,6 +117,8 @@ func (c *stateChunk) highestFreeUnreserved(ledger *ReservationLedger) (uint64, b
 }
 
 type stateNode struct {
+	ownedRefs                         uint64
+	creator                           *allocationCreditLeaseV1
 	pageID                            uint64
 	checksum                          uint32
 	child                             [16]*stateNode
@@ -122,33 +128,62 @@ type stateNode struct {
 }
 
 func cloneStateNode(n *stateNode) *stateNode {
-	out := &stateNode{}
-	if n != nil {
-		*out = *n
+	out, err := cloneStateNodeOwnedV1(n, false, nil)
+	if err != nil {
+		panic(err)
 	}
-	out.pageID = 0
-	out.checksum = 0
 	return out
 }
 
 // detachUnmaterialized clones only nodes that do not yet have durable page
-// identities. Nodes with identities are immutable and safe to share.
+// identities. Durable nodes may hide zero-ID descendants; sharing remains
+// safe only while they are immutable. A private first copy isolates those
+// descendants before exposing the copied node for mutation.
 func detachUnmaterialized(n *stateNode, depth int) *stateNode {
-	if n == nil || n.pageID != 0 {
-		return n
+	return detachUnmaterializedWithStats(n, depth, nil)
+}
+
+// Count the work of isolating aliases before giving a preparation exclusive
+// ownership of reachable unmaterialized objects. Durable identities stop this
+// traversal; each later durable-to-private first copy repeats isolation at its
+// child boundary. No ownership flag enters the resulting generation tree.
+func detachUnmaterializedWithStats(n *stateNode, depth int, stats *FreelistTxnStats) *stateNode {
+	plan := dirtyStateBirthPlanV1(n, depth)
+	operation, err := admitAllocationOperationV1(nil, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	if err != nil {
+		panic(err)
 	}
-	out := *n
+	defer operation.close()
+	out, err := detachStateOwnedOperationV1(n, depth, stats, &operation)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
+// A shallow copy of a durable node still shares its zero-ID descendants.
+// Isolate immediate-child subtrees through the next durable boundary, even
+// when an empty summary caused emission to skip assigning their identities.
+// The same rule covers a zero-ID chunk retained under a durable leaf.
+func detachStateNodeChildrenWithStats(out *stateNode, depth int, stats *FreelistTxnStats) {
+	plan := stateBirthPlanV1{}
 	if depth == chunkTrieDepth {
-		if n.chunk != nil && n.chunk.pageID == 0 {
-			chunk := *n.chunk
-			out.chunk = &chunk
+		if out.chunk != nil && out.chunk.pageID == 0 {
+			plan.chunks++
 		}
-		return &out
+	} else {
+		for _, child := range out.child {
+			plan.add(dirtyStateBirthPlanV1(child, depth+1))
+		}
 	}
-	for i, child := range n.child {
-		out.child[i] = detachUnmaterialized(child, depth+1)
+	operation, err := admitAllocationOperationV1(nil, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	if err != nil {
+		panic(err)
 	}
-	return &out
+	defer operation.close()
+	if err = detachChildrenOwnedOperationV1(out, depth, stats, &operation); err != nil {
+		panic(err)
+	}
 }
 
 func chunkNibble(chunkNo uint64, depth int) int {
@@ -187,27 +222,26 @@ func recomputeStateNode(n *stateNode, depth int) {
 	}
 }
 
+// mutateChunk retains the persistent mutation semantics for ordinary callers
+// and the preparation reference oracle.
 func mutateChunk(n *stateNode, chunkNo uint64, depth int, f func(*stateChunk)) *stateNode {
-	out := cloneStateNode(n)
-	if depth == chunkTrieDepth {
-		chunk := out.chunk.clone()
-		chunk.chunkNo = chunkNo
-		f(chunk)
-		if chunk.freeCount() == 0 {
-			retired, _ := chunk.retiredSummary()
-			if retired == 0 {
-				out.chunk = nil
-				recomputeStateNode(out, depth)
-				return out
-			}
-		}
-		out.chunk = chunk
-		recomputeStateNode(out, depth)
-		return out
+	return mutateChunkForPreparation(n, chunkNo, depth, f, false, nil)
+}
+
+// private permits in-place edits only after isolation at the staging boundary
+// or the nearest durable-to-private first copy. Zero identity alone is not
+// proof: durable nodes can retain shared, empty zero-ID descendants.
+func mutateChunkForPreparation(n *stateNode, chunkNo uint64, depth int, f func(*stateChunk), private bool, stats *FreelistTxnStats) *stateNode {
+	plan := mutationStateBirthPlanV1(n, chunkNo, depth, private, false, false)
+	operation, err := admitAllocationOperationV1(nil, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	if err != nil {
+		panic(err)
 	}
-	i := chunkNibble(chunkNo, depth)
-	out.child[i] = mutateChunk(out.child[i], chunkNo, depth+1, f)
-	recomputeStateNode(out, depth)
+	defer operation.close()
+	out, err := mutateStateOwnedOperationV1(n, chunkNo, depth, f, private, stats, &operation)
+	if err != nil {
+		panic(err)
+	}
 	return out
 }
 

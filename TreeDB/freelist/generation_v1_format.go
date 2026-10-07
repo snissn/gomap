@@ -43,7 +43,7 @@ type indexPagePlanV1 struct {
 
 // CandidatePageViewV1 is a read-only view of one candidate-owned page. Index
 // pages retain an immutable encoding plan; other pages retain owned bytes.
-// Writers may retain either representation indefinitely.
+// Ordinary views may be retained indefinitely. Finite generic exports refuse.
 type CandidatePageViewV1 struct {
 	data  []byte
 	index *indexPagePlanV1
@@ -100,7 +100,7 @@ func WriteCandidatePageToPagerV1(dst *pager.Pager, pageID uint64, view Candidate
 }
 
 // CandidatePageWriterV1 receives an opaque read-only page view. It may retain
-// the view, but cannot mutate or alias candidate-owned bytes through this API.
+// an ordinary view. Finite candidates use the concrete synchronous pager bridge.
 type CandidatePageWriterV1 interface {
 	WriteCandidatePageV1(pageID uint64, view CandidatePageViewV1) error
 }
@@ -132,11 +132,11 @@ func NewMemoryPageStoreV1() *MemoryPageStoreV1 {
 // freshly encoded non-index page or immutable index plan instead of making a
 // validation-store copy.
 type CandidatePageSinkV1 struct {
-	pageIDs map[uint64]struct{}
+	pageIDs *numericRadixV1[uint64, struct{}]
 }
 
 func NewCandidatePageSinkV1() *CandidatePageSinkV1 {
-	return &CandidatePageSinkV1{pageIDs: make(map[uint64]struct{})}
+	return &CandidatePageSinkV1{pageIDs: newPageRadixV1[struct{}]()}
 }
 
 func (s *CandidatePageSinkV1) WritePage(id uint64, data []byte) error {
@@ -144,12 +144,12 @@ func (s *CandidatePageSinkV1) WritePage(id uint64, data []byte) error {
 		return fmt.Errorf("%w: invalid candidate page write", ErrGenerationFormat)
 	}
 	if s.pageIDs == nil {
-		s.pageIDs = make(map[uint64]struct{})
+		s.pageIDs = newPageRadixV1[struct{}]()
 	}
-	if _, exists := s.pageIDs[id]; exists {
+	if _, exists := s.pageIDs.Get(id); exists {
 		return fmt.Errorf("%w: page %d rewritten", ErrGenerationFormat, id)
 	}
-	s.pageIDs[id] = struct{}{}
+	s.pageIDs.Set(id, struct{}{})
 	return nil
 }
 
@@ -250,7 +250,7 @@ func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk
 		return nil, ErrGenerationFormat
 	}
 	h := page.DecodeHeader(b)
-	c := &stateChunk{pageID: h.PageID, checksum: h.Checksum, chunkNo: chunkNo}
+	c := &stateChunk{ownedRefs: 1, pageID: h.PageID, checksum: h.Checksum, chunkNo: chunkNo}
 	for i := range c.free {
 		c.free[i] = binary.LittleEndian.Uint64(b[64+i*8:])
 	}
@@ -378,6 +378,14 @@ func generationDigest(b []byte) [32]byte {
 }
 
 func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV1, error) {
+	g, err := loadGenerationOwnedV1(src, ref)
+	if err == nil {
+		g.markOrdinaryEscapeV1()
+	}
+	return g, err
+}
+
+func loadGenerationOwnedV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV1, error) {
 	if ref.HeaderPageID < 2 || ref.HighWater <= ref.HeaderPageID {
 		return nil, ErrGenerationFormat
 	}
@@ -393,12 +401,19 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 		return nil, ErrGenerationDigest
 	}
 	g := &FreelistGenerationV1{
+		ownedRefs:          1,
 		generationID:       binary.LittleEndian.Uint64(b[32:40]),
 		commitSeq:          binary.LittleEndian.Uint64(b[40:48]),
 		parentGenerationID: binary.LittleEndian.Uint64(b[48:56]),
 		parentCommitSeq:    binary.LittleEndian.Uint64(b[56:64]),
 		highWater:          binary.LittleEndian.Uint64(b[72:80]),
 	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			releaseGenerationV1(g)
+		}
+	}()
 	if g.generationID != ref.GenerationID || g.commitSeq != ref.CommitSeq || g.highWater != ref.HighWater {
 		return nil, ErrGenerationFormat
 	}
@@ -414,7 +429,8 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 	if record.GenerationID != g.generationID || record.BaseID != g.parentGenerationID || uint32(len(record.metadataPages())) != binary.LittleEndian.Uint32(b[104:108]) || uint32(len(record.pendingMetadata())) != binary.LittleEndian.Uint32(b[108:112]) {
 		return nil, ErrGenerationFormat
 	}
-	seen := make(map[uint64]struct{})
+	seen := newPageRadixV1[struct{}]()
+	defer seen.Clear()
 	rootID := binary.LittleEndian.Uint64(b[64:72])
 	g.root, err = loadStateNode(src, rootID, 0, 0, g.generationID, true, g.highWater, seen)
 	if err != nil {
@@ -432,17 +448,18 @@ func LoadGenerationV1(src PageSource, ref GenerationRefV1) (*FreelistGenerationV
 	if err := g.Validate(); err != nil {
 		return nil, err
 	}
+	accepted = true
 	return g, nil
 }
 
-func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration uint64, exactGeneration bool, highWater uint64, seen map[uint64]struct{}) (*stateNode, error) {
+func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration uint64, exactGeneration bool, highWater uint64, seen *numericRadixV1[uint64, struct{}]) (*stateNode, error) {
 	if depth > chunkTrieDepth {
 		return nil, ErrGenerationFormat
 	}
-	if _, duplicate := seen[id]; duplicate {
+	if _, duplicate := seen.Get(id); duplicate {
 		return nil, fmt.Errorf("%w: duplicate or cyclic page %d", ErrGenerationFormat, id)
 	}
-	seen[id] = struct{}{}
+	seen.Set(id, struct{}{})
 	b, err := readTypedPage(src, id, page.PageTypeFreelistIndex, highWater)
 	if err != nil {
 		return nil, err
@@ -452,7 +469,13 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration u
 	if !bytes.Equal(b[16:24], indexMagic[:]) || binary.LittleEndian.Uint16(b[24:26]) != 1 || binary.LittleEndian.Uint16(b[26:28]) != indexHeaderSize || int(b[28]) != depth || b[29] != 0 || binary.LittleEndian.Uint16(b[30:32]) != indexEntrySize || pageGeneration == 0 || pageGeneration > maxGeneration || (exactGeneration && pageGeneration != maxGeneration) || int(h.Count) > 16 || !zeroTail(b, indexHeaderSize+int(h.Count)*indexEntrySize) {
 		return nil, ErrGenerationFormat
 	}
-	n := &stateNode{pageID: id, checksum: h.Checksum}
+	n := &stateNode{pageID: id, checksum: h.Checksum, ownedRefs: 1}
+	accepted := false
+	defer func() {
+		if !accepted {
+			releaseStateNodeV1(n)
+		}
+	}()
 	lastSlot := -1
 	for i := 0; i < int(h.Count); i++ {
 		o := indexHeaderSize + i*indexEntrySize
@@ -478,10 +501,10 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration u
 			if err != nil {
 				return nil, err
 			}
-			if _, duplicate := seen[childID]; duplicate {
+			if _, duplicate := seen.Get(childID); duplicate {
 				return nil, ErrGenerationFormat
 			}
-			seen[childID] = struct{}{}
+			seen.Set(childID, struct{}{})
 			if page.DecodeHeader(chunkPage).Checksum != entryChecksum {
 				return nil, ErrGenerationDigest
 			}
@@ -514,6 +537,7 @@ func loadStateNode(src PageSource, id uint64, depth int, prefix, maxGeneration u
 	if n.freeCount != binary.LittleEndian.Uint64(b[40:48]) || n.retiredCount != binary.LittleEndian.Uint64(b[48:56]) || n.minRetiredSeq != binary.LittleEndian.Uint64(b[56:64]) {
 		return nil, ErrGenerationFormat
 	}
+	accepted = true
 	return n, nil
 }
 

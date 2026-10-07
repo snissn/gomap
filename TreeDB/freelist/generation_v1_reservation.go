@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -50,7 +51,12 @@ func (r ReservationRecordV1) Entries() []ReservationExtentV1 {
 }
 
 func normalizeExtents(extents []ReservationExtentV1) ([]ReservationExtentV1, error) {
-	out := append([]ReservationExtentV1(nil), extents...)
+	return normalizeOwnedExtentsV1(append([]ReservationExtentV1(nil), extents...))
+}
+
+// normalizeOwnedExtentsV1 consumes private scratch; public normalization keeps
+// its ordinary copy contract.
+func normalizeOwnedExtentsV1(out []ReservationExtentV1) ([]ReservationExtentV1, error) {
 	slices.SortFunc(out, func(a, b ReservationExtentV1) int {
 		if a.StartPageID != b.StartPageID {
 			return cmp.Compare(a.StartPageID, b.StartPageID)
@@ -275,14 +281,15 @@ const (
 )
 
 type reservation struct {
-	state              CandidateState
-	ids                []uint64
-	tailReserved       bool
-	tailWriteAttempted bool
-	reusedMetadata     bool // interval is recovery-safe free space, not appended tail
-	tailStart          uint64
-	tailCount          uint64
-	abandonedCoverage  []reservationInterval
+	creator, idsCreator, coverageCreator *allocationCreditLeaseV1
+	state                                CandidateState
+	ids                                  []uint64
+	tailReserved                         bool
+	tailWriteAttempted                   bool
+	reusedMetadata                       bool // interval is recovery-safe free space, not appended tail
+	tailStart                            uint64
+	tailCount                            uint64
+	abandonedCoverage                    []reservationInterval
 }
 
 type reservationInterval struct {
@@ -291,16 +298,26 @@ type reservationInterval struct {
 }
 
 type ReservationLedger struct {
-	mu          sync.Mutex
-	owners      map[uint64]CandidateIDV1
-	candidates  map[CandidateIDV1]*reservation
-	burnedTails []reservationInterval
+	mu                     sync.Mutex
+	ownedRefs              uint64
+	creator, burnedCreator *allocationCreditLeaseV1
+	rawEscaped             bool // permanent: an ordinary public caller may retain/mutate this ledger
+	owners                 *numericRadixV1[uint64, CandidateIDV1]
+	candidates             *numericRadixV1[CandidateIDV1, *reservation]
+	burnedTails            []reservationInterval
 	// Placement hint only; free bits and atomic claims remain authority.
 	nextReuseChunk uint64
 }
 
 func NewReservationLedger() *ReservationLedger {
-	return &ReservationLedger{owners: map[uint64]CandidateIDV1{}, candidates: map[CandidateIDV1]*reservation{}}
+	ledger := newReservationLedgerOwnedV1()
+	ledger.rawEscaped = true
+	return ledger
+}
+
+// Internal constructors lend no raw ledger pointer outside the managed engine.
+func newReservationLedgerOwnedV1() *ReservationLedger {
+	return &ReservationLedger{owners: newPageRadixV1[CandidateIDV1](), candidates: newCandidateRadixV1[*reservation]()}
 }
 
 func (l *ReservationLedger) Reserved(id uint64) bool {
@@ -310,7 +327,7 @@ func (l *ReservationLedger) Reserved(id uint64) bool {
 }
 
 func (l *ReservationLedger) reservedLocked(id uint64) bool {
-	if _, ok := l.owners[id]; ok {
+	if _, ok := l.owners.Get(id); ok {
 		return true
 	}
 	for _, burned := range l.burnedTails {
@@ -318,16 +335,16 @@ func (l *ReservationLedger) reservedLocked(id uint64) bool {
 			return true
 		}
 	}
-	for _, candidate := range l.candidates {
-		if candidate.tailReserved && id >= candidate.tailStart && id-candidate.tailStart < candidate.tailCount {
-			return true
-		}
-	}
-	return false
+	reserved := false
+	l.candidates.Range(func(_ CandidateIDV1, candidate *reservation) bool {
+		reserved = candidate.tailReserved && id >= candidate.tailStart && id-candidate.tailStart < candidate.tailCount
+		return !reserved
+	})
+	return reserved
 }
 
 func (l *ReservationLedger) reservedByOtherLocked(candidate CandidateIDV1, id uint64) bool {
-	if owner, ok := l.owners[id]; ok && owner != candidate {
+	if owner, ok := l.owners.Get(id); ok && owner != candidate {
 		return true
 	}
 	for _, burned := range l.burnedTails {
@@ -335,21 +352,21 @@ func (l *ReservationLedger) reservedByOtherLocked(candidate CandidateIDV1, id ui
 			return true
 		}
 	}
-	for idCandidate, reservation := range l.candidates {
-		if idCandidate != candidate && reservation.tailReserved && id >= reservation.tailStart && id-reservation.tailStart < reservation.tailCount {
-			return true
-		}
-	}
-	return false
+	reserved := false
+	l.candidates.Range(func(idCandidate CandidateIDV1, reservation *reservation) bool {
+		reserved = idCandidate != candidate && reservation.tailReserved && id >= reservation.tailStart && id-reservation.tailStart < reservation.tailCount
+		return !reserved
+	})
+	return reserved
 }
 
-func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64) error {
+func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64, creators ...*allocationCreditLeaseV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if candidate == (CandidateIDV1{}) {
 		return ErrGenerationFormat
 	}
-	if _, exists := l.candidates[candidate]; exists {
+	if _, exists := l.candidates.Get(candidate); exists {
 		return fmt.Errorf("candidate %x exists", candidate)
 	}
 	for _, id := range ids {
@@ -357,11 +374,29 @@ func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64) error
 			return ErrPageReserved
 		}
 	}
-	r := &reservation{state: CandidatePreVisible, ids: append([]uint64(nil), ids...)}
-	for _, id := range ids {
-		l.owners[id] = candidate
+	var creator *allocationCreditLeaseV1
+	if len(creators) != 0 {
+		creator = creators[0]
 	}
-	l.candidates[candidate] = r
+	plan, err := l.admitReservationV1(candidate, nil, len(ids), len(ids), 0, creator)
+	if err != nil {
+		return err
+	}
+	defer plan.operation.close()
+	r, err := plan.prepare(nil)
+	if err != nil {
+		return err
+	}
+	r.ids = append(r.ids, ids...)
+	for _, id := range ids {
+		if err := l.owners.putAdmittedV1(id, candidate, creator, &plan.operation); err != nil {
+			return err
+		}
+	}
+	if err := l.candidates.putAdmittedV1(candidate, r, creator, &plan.operation); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -389,13 +424,13 @@ func reservationPagesForEntries(entries uint64) uint64 {
 // reserveTail atomically chooses and owns a contiguous metadata range. The
 // range may move above another candidate's reservation; callers persist the
 // skipped prefix as abandoned append space in their reservation record.
-func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1) (uint64, uint64, error) {
+func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1, creators ...*allocationCreditLeaseV1) (uint64, uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if candidate == (CandidateIDV1{}) || minimumStart < 2 {
 		return 0, 0, ErrGenerationFormat
 	}
-	r := l.candidates[candidate]
+	r := l.candidates.Value(candidate)
 	if r != nil && r.state != CandidatePreVisible {
 		return 0, 0, fmt.Errorf("candidate %x is already visible", candidate)
 	}
@@ -448,18 +483,49 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		}
 		start = conflictID + 1
 	}
-	if r == nil {
-		r = &reservation{state: CandidatePreVisible, ids: make([]uint64, 0, len(dataIDs))}
-		l.candidates[candidate] = r
+	var creator *allocationCreditLeaseV1
+	if len(creators) != 0 {
+		creator = creators[0]
 	}
+	newOwners := 0
 	for _, id := range dataIDs {
-		if owner, exists := l.owners[id]; !exists {
-			l.owners[id] = candidate
-			r.ids = append(r.ids, id)
-		} else if owner != candidate || l.reservedByOtherLocked(candidate, id) {
-			return 0, 0, ErrPageReserved
+		if _, exists := l.owners.Get(id); !exists {
+			newOwners++
 		}
 	}
+	oldIDs, oldCoverage := 0, 0
+	if r != nil {
+		oldIDs, oldCoverage = len(r.ids), len(r.abandonedCoverage)
+	}
+	coverage := 0
+	for _, extent := range baseExtents {
+		if extent.Kind == ReservationAbandonedAppend {
+			coverage++
+		}
+	}
+	plan, err := l.admitReservationV1(candidate, r, oldIDs+newOwners, newOwners, oldCoverage+coverage, creator)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer plan.operation.close()
+	r, err = plan.prepare(r)
+	if err != nil {
+		return 0, 0, err
+	}
+	if plan.newReservation {
+		if err = l.candidates.putAdmittedV1(candidate, r, creator, &plan.operation); err != nil {
+			return 0, 0, err
+		}
+	}
+	for _, id := range dataIDs {
+		if _, exists := l.owners.Get(id); !exists {
+			if err = l.owners.putAdmittedV1(id, candidate, creator, &plan.operation); err != nil {
+				return 0, 0, err
+			}
+			r.ids = append(r.ids, id)
+		}
+	}
+
 	r.tailReserved = true
 	r.tailStart = start
 	r.tailCount = count
@@ -477,7 +543,7 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 func (l *ReservationLedger) markTailWriteAttempted(candidate CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r := l.candidates[candidate]
+	r := l.candidates.Value(candidate)
 	if r == nil || r.state != CandidatePreVisible || !r.tailReserved {
 		return fmt.Errorf("candidate %x has no pre-visible metadata tail", candidate)
 	}
@@ -501,7 +567,7 @@ func (l *ReservationLedger) firstUnreservedAtOrAfter(start uint64) (uint64, bool
 func (l *ReservationLedger) transition(candidate CandidateIDV1, to CandidateState) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r := l.candidates[candidate]
+	r := l.candidates.Value(candidate)
 	if r == nil {
 		return fmt.Errorf("unknown candidate %x", candidate)
 	}
@@ -533,17 +599,25 @@ func (l *ReservationLedger) Shutdown(c CandidateIDV1) error {
 func (l *ReservationLedger) Supersede(old, next CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r := l.candidates[old]
+	r := l.candidates.Value(old)
 	if r == nil || next == (CandidateIDV1{}) {
 		return fmt.Errorf("unknown candidate %x", old)
 	}
-	if _, exists := l.candidates[next]; exists {
+	if _, exists := l.candidates.Get(next); exists {
 		return fmt.Errorf("candidate %x exists", next)
 	}
-	l.candidates[next] = r
-	delete(l.candidates, old)
+	bytes, refs := l.candidates.insertionCapacityV1(1)
+	operation, err := admitAllocationOperationV1(r.creator, bytes, refs)
+	if err != nil {
+		return err
+	}
+	defer operation.close()
+	if err = l.candidates.putAdmittedV1(next, r, r.creator, &operation); err != nil {
+		return err
+	}
+	l.candidates.Delete(old)
 	for _, id := range r.ids {
-		l.owners[id] = next
+		l.owners.Set(id, next)
 	}
 	return nil
 }
@@ -551,7 +625,7 @@ func (l *ReservationLedger) Supersede(old, next CandidateIDV1) error {
 func (l *ReservationLedger) release(candidate CandidateIDV1, preVisibleOnly bool) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r := l.candidates[candidate]
+	r := l.candidates.Value(candidate)
 	if r == nil {
 		return fmt.Errorf("unknown candidate %x", candidate)
 	}
@@ -562,9 +636,10 @@ func (l *ReservationLedger) release(candidate CandidateIDV1, preVisibleOnly bool
 		return fmt.Errorf("candidate %x attempted metadata writes; use Fail", candidate)
 	}
 	for _, id := range r.ids {
-		delete(l.owners, id)
+		l.owners.Delete(id)
 	}
-	delete(l.candidates, candidate)
+	l.candidates.Delete(candidate)
+	releaseReservationBackingV1(r)
 	return nil
 }
 
@@ -572,20 +647,27 @@ func (l *ReservationLedger) Abandon(c CandidateIDV1) error { return l.release(c,
 func (l *ReservationLedger) Fail(c CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r := l.candidates[c]
+	r := l.candidates.Value(c)
 	if r == nil {
 		return fmt.Errorf("unknown candidate %x", c)
 	}
 	if r.state != CandidatePreVisible {
 		return fmt.Errorf("candidate %x is visible", c)
 	}
+	// Growth is admitted before deleting the first reservation or owner.
+	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
+		if err := l.growBurnedTailsLockedV1(r.creator); err != nil {
+			return err
+		}
+	}
 	for _, id := range r.ids {
-		delete(l.owners, id)
+		l.owners.Delete(id)
 	}
 	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
 		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
 	}
-	delete(l.candidates, c)
+	l.candidates.Delete(c)
+	releaseReservationBackingV1(r)
 	return nil
 }
 
@@ -596,20 +678,27 @@ func (l *ReservationLedger) Fail(c CandidateIDV1) error {
 func (l *ReservationLedger) RollbackPreVisible(c CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	r := l.candidates[c]
+	r := l.candidates.Value(c)
 	if r == nil {
 		return nil
 	}
 	if r.state != CandidatePreVisible {
 		return fmt.Errorf("candidate %x is visible", c)
 	}
+	// Growth is admitted before deleting the first reservation or owner.
+	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
+		if err := l.growBurnedTailsLockedV1(r.creator); err != nil {
+			return err
+		}
+	}
 	for _, id := range r.ids {
-		delete(l.owners, id)
+		l.owners.Delete(id)
 	}
 	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
 		l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
 	}
-	delete(l.candidates, c)
+	l.candidates.Delete(c)
+	releaseReservationBackingV1(r)
 	return nil
 }
 
@@ -624,23 +713,23 @@ func (l *ReservationLedger) Publish(c CandidateIDV1) error {
 func (l *ReservationLedger) PublishBatch(candidates []CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	seen := make(map[CandidateIDV1]struct{}, len(candidates))
+	seen := newCandidateRadixV1[struct{}]()
 	for _, candidate := range candidates {
 		if candidate == (CandidateIDV1{}) {
 			return ErrGenerationFormat
 		}
-		if _, duplicate := seen[candidate]; duplicate {
+		if _, duplicate := seen.Get(candidate); duplicate {
 			return fmt.Errorf("duplicate candidate %x", candidate)
 		}
-		seen[candidate] = struct{}{}
-		if l.candidates[candidate] == nil {
+		seen.Set(candidate, struct{}{})
+		if l.candidates.Value(candidate) == nil {
 			return fmt.Errorf("unknown candidate %x", candidate)
 		}
 	}
 	for _, candidate := range candidates {
-		r := l.candidates[candidate]
+		r := l.candidates.Value(candidate)
 		for _, id := range r.ids {
-			delete(l.owners, id)
+			l.owners.Delete(id)
 		}
 		if len(r.abandonedCoverage) != 0 {
 			kept := l.burnedTails[:0]
@@ -659,7 +748,8 @@ func (l *ReservationLedger) PublishBatch(candidates []CandidateIDV1) error {
 			}
 			l.burnedTails = kept
 		}
-		delete(l.candidates, candidate)
+		l.candidates.Delete(candidate)
+		releaseReservationBackingV1(r)
 	}
 	return nil
 }
@@ -667,18 +757,41 @@ func (l *ReservationLedger) PublishBatch(candidates []CandidateIDV1) error {
 func (l *ReservationLedger) Reservations() uint64 {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	count := uint64(len(l.owners))
+	count := uint64(l.owners.Len())
 	for _, burned := range l.burnedTails {
 		if ^uint64(0)-count < burned.count {
 			return ^uint64(0)
 		}
 		count += burned.count
 	}
-	for _, candidate := range l.candidates {
-		if ^uint64(0)-count < candidate.tailCount {
-			return ^uint64(0)
-		}
-		count += candidate.tailCount
-	}
+	l.candidates.Range(func(_ CandidateIDV1, candidate *reservation) bool {
+		count = cowSaturatingAddV1(count, candidate.tailCount)
+		return count != ^uint64(0)
+	})
 	return count
+}
+
+// growBurnedTailsLockedV1 preserves creating ownership of the actual buffer,
+// independently of the historical ledger header or deleted reservations.
+func (l *ReservationLedger) growBurnedTailsLockedV1(creator *allocationCreditLeaseV1) error {
+	if len(l.burnedTails) < cap(l.burnedTails) {
+		return nil
+	}
+	capacity := grownCapacityV1(cap(l.burnedTails), len(l.burnedTails)+1)
+	bytes := allocationClassV1(uint64(capacity)*uint64(unsafe.Sizeof(reservationInterval{})), false)
+	operation, err := admitAllocationOperationV1(creator, bytes, 1)
+	if err != nil {
+		return err
+	}
+	defer operation.close()
+	if err = operation.take(bytes, 1); err != nil {
+		return err
+	}
+	next := make([]reservationInterval, len(l.burnedTails), capacity)
+	copy(next, l.burnedTails)
+	oldCreator := l.burnedCreator
+	clear(l.burnedTails[:cap(l.burnedTails)])
+	l.burnedTails, l.burnedCreator = next, creator
+	oldCreator.release()
+	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"sort"
 	"sync"
 	"time"
@@ -3991,6 +3992,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 }
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder, opts orderedRootCommandWALPublishOptions) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if opts.preparedLimits != nil && opts.preparedLimits.FreelistCOW.AllocationCredit != nil {
+		return 0, nil, freelist.ErrAllocationCertificateIncompleteV1
+	}
 	if buildSystemDeltaIter == nil {
 		return 0, nil, ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder
 	}

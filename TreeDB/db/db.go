@@ -3220,7 +3220,8 @@ func (db *DB) closeAfterHooks() error {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
 	db.releaseDurableRootResourcesV1()
-	if err := db.closeAllIndexes(); err != nil {
+	closedIndexes, indexCloseErr := db.closeAllIndexes()
+	if err := indexCloseErr; err != nil {
 		errs = append(errs, err)
 	}
 	if group, ok := leafPageLog.(*leafPageLogLaneGroup); ok {
@@ -3247,6 +3248,13 @@ func (db *DB) closeAfterHooks() error {
 	}
 	if rootHandoff != nil {
 		rootHandoff.Release()
+	}
+	// Exact runtime and recovery callbacks have finished. Close the actual
+	// allocator owners now; independent physical-cut generation edges survive.
+	for _, index := range closedIndexes {
+		if index != nil {
+			index.detachAllocatorWriterV1(true)
+		}
 	}
 	// Namespace sync proofs are valid only for this DB lifetime. Stable
 	// publication closures retain exact handles independently and remain usable
@@ -3358,8 +3366,9 @@ func (db *DB) recover() error {
 			return fmt.Errorf("%w: dependency_directory_v2 feature and persisted root disagree; rebuild required", ErrLegacyFormatRebuildRequired)
 		}
 	}
+	defer selected.closeOwnedFreelistV1()
 	p.SetPageCount(selected.Record.TotalPages)
-	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
+	if err := selected.enableFreelistV1(idx.allocator, nil); err != nil {
 		return fmt.Errorf("enable recovered COW freelist: %w", err)
 	}
 	if db.ownedLeafManifests {
@@ -4478,6 +4487,11 @@ func (db *DB) Prune() {
 	}
 	idx.acquire()
 	defer db.releaseIndex(idx)
+	idx.writerMu.RLock()
+	defer idx.writerMu.RUnlock()
+	if idx.allocator == nil {
+		return
+	}
 
 	min := db.MinPinnedSnapshotCommitSeq()
 	state := db.state.Load()
@@ -4614,6 +4628,11 @@ func (db *DB) Zipper() *zipper.Zipper {
 	if idx == nil {
 		return nil
 	}
+	idx.writerMu.RLock()
+	defer idx.writerMu.RUnlock()
+	if idx.zipper == nil || idx.allocator == nil || !idx.allocator.MarkOrdinaryWriterEscapeV1() {
+		return nil
+	}
 	return idx.zipper
 }
 
@@ -4625,8 +4644,12 @@ func (db *DB) SetZipperParallelMergePressureSource(src zipper.ParallelMergePress
 	}
 	db.idxMu.Lock()
 	db.zipperParallelMergeSource = src
-	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
-		idx.zipper.SetParallelMergePressureSource(src)
+	if idx := db.idx.Load(); idx != nil {
+		idx.writerMu.RLock()
+		if idx.zipper != nil {
+			idx.zipper.SetParallelMergePressureSource(src)
+		}
+		idx.writerMu.RUnlock()
 	}
 	db.idxMu.Unlock()
 }

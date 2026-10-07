@@ -221,16 +221,28 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxRes
 }
 
 func (seal *rootPublicationSealV1) release() {
-	if seal == nil || seal.released {
+	if seal == nil {
 		return
 	}
-	seal.released = true
-	seal.resources.Release()
-	seal.resources = nil
-	if seal.token != nil {
-		seal.token.Release()
-		seal.token = nil
+	if !seal.released {
+		seal.released = true
+		if seal.resources != nil {
+			seal.resources.Release()
+		}
+		if seal.token != nil {
+			seal.token.Release()
+		}
 	}
+	seal.resources, seal.token = nil, nil
+	seal.clearTerminalBacking()
+}
+
+// Called only after exact publication/retirement work no longer uses the seal.
+// Ambiguous seals remain in the existing recovery owner and are not scrubbed.
+func (seal *rootPublicationSealV1) clearTerminalBacking() {
+	seal.idx, seal.manifest, seal.prepared, seal.prefix = nil, nil, nil, nil
+	seal.base.ambiguous = nil
+	seal.base.slotResources = [2]*rootpublication.StableResourceSet{}
 }
 
 func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {
@@ -574,8 +586,8 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if err != nil {
 		return nil, err
 	}
-	liveGeneration := runtime.idx.allocator.COWGenerationV1()
-	if liveGeneration == nil || liveGeneration.GenerationID() == ^uint64(0) {
+	liveGeneration, generationErr := runtime.idx.allocator.COWGenerationInfoV1()
+	if generationErr != nil || liveGeneration.GenerationID() == ^uint64(0) {
 		return nil, errors.New("missing live COW generation for visible root")
 	}
 	generationID := liveGeneration.GenerationID() + 1
@@ -590,7 +602,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if limits != nil {
 		cowLimits = &limits.FreelistCOW
 	}
-	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+	prepared, err := runtime.idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(
 		generationID,
 		next.CommitSeq,
 		rootPublicationLogicalCandidateIDV1(runtime.lineage, generationID, next),
@@ -616,18 +628,20 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 					cause = errors.Join(cause, fmt.Errorf("fail visible root COW candidate: %w", failErr))
 				}
 				err = cause
+			} else if clearErr := prepared.ClearTerminalBackingV1(); clearErr != nil {
+				err = errors.Join(err, fmt.Errorf("clear aborted visible root COW candidate: %w", clearErr))
 			}
 		}
 	}()
 	if runtime.db.testFailDurableRootAfterCOWPrepare.Load() {
 		return nil, errTestDurableRootAfterCOWPrepareFailpoint
 	}
-	generation := prepared.Candidate().Generation()
-	if generation == nil {
+	generation, generationErr := prepared.InfoV1()
+	if generationErr != nil {
 		return nil, errors.New("visible root COW candidate has no generation")
 	}
 	if indexBytes == 0 {
-		pageCount := uint64(prepared.Candidate().PageCount())
+		pageCount := uint64(generation.PageCount)
 		if pageCount > ^uint64(0)/page.PageSize {
 			indexBytes = ^uint64(0)
 		} else {
@@ -677,8 +691,12 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			if input.PreparedCOW != member.prepared || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
+			if err := member.prepared.ClearTerminalBackingV1(); err != nil {
+				return err
+			}
 			runtime.mu.Lock()
 			delete(runtime.visibleMembers, member.sequence)
+			member.prepared, member.install, member.resources, member.preparedLimits = nil, nil, nil, nil
 			runtime.mu.Unlock()
 			return nil
 		},
@@ -691,7 +709,14 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 				member.resources.Release()
 				member.resources = nil
 			}
-			return runtime.idx.allocator.AbortCOWCandidateV1(member.prepared)
+			if err := runtime.idx.allocator.AbortCOWCandidateV1(member.prepared); err != nil {
+				return err
+			}
+			if err := member.prepared.ClearTerminalBackingV1(); err != nil {
+				return err
+			}
+			member.prepared, member.install, member.resources, member.preparedLimits = nil, nil, nil, nil
+			return nil
 		},
 		Fail: func(input rootpublication.DurableRootCallbackInput, cause error) error {
 			if input.PreparedCOW != member.prepared || input.Sequence != member.sequence {
@@ -1110,7 +1135,15 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		})
 	}
 	if previous := runtime.activeSeal; previous != nil {
-		if auxiliary := previous.prepared.AuxiliaryPageIDs(); len(auxiliary) != 0 {
+		info, infoErr := previous.prepared.InfoV1()
+		if infoErr != nil {
+			return infoErr
+		}
+		if info.AuxiliaryCount != 0 {
+			auxiliary := make([]uint64, info.AuxiliaryCount)
+			if _, copyErr := previous.prepared.CopyAuxiliaryPageIDsV1(auxiliary); copyErr != nil {
+				return copyErr
+			}
 			retirements = append(retirements, freelist.COWRetirementV1{
 				PageIDs: auxiliary, LastReachableCommitSeq: base.record.CommitSeq,
 			})
@@ -1120,8 +1153,8 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if err != nil {
 		return err
 	}
-	liveGeneration := runtime.idx.allocator.COWGenerationV1()
-	if liveGeneration == nil || liveGeneration.GenerationID() == ^uint64(0) {
+	liveGeneration, generationErr := runtime.idx.allocator.COWGenerationInfoV1()
+	if generationErr != nil || liveGeneration.GenerationID() == ^uint64(0) {
 		return errors.New("missing live COW generation for root-publication seal")
 	}
 	generationID := liveGeneration.GenerationID() + 1
@@ -1133,7 +1166,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if limits != nil {
 		cowLimits = &limits.FreelistCOW
 	}
-	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+	prepared, err := runtime.idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(
 		generationID,
 		member.next.CommitSeq,
 		rootPublicationSealCandidateIDV1(base, member.next, generationID),
@@ -1157,12 +1190,13 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			runtime.poison = cause
 			_ = runtime.idx.allocator.FailCOWCandidateV1(prepared, cause)
 			err = cause
+		} else if clearErr := prepared.ClearTerminalBackingV1(); clearErr != nil {
+			err = errors.Join(err, fmt.Errorf("clear aborted root-publication seal: %w", clearErr))
 		}
 	}()
 
-	generation := prepared.Candidate().Generation()
-	auxiliary := prepared.AuxiliaryPageIDs()
-	if generation == nil || len(auxiliary) != auxiliaryCount {
+	generation, generationErr := prepared.InfoV1()
+	if generationErr != nil || generation.AuxiliaryCount != auxiliaryCount {
 		return errors.New("incomplete root-publication seal generation")
 	}
 	next := member.next
@@ -1170,12 +1204,12 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	next.FreelistHeadID = 0
 	var manifestRef rootpublication.DependencyManifestRefV1
 	if manifest != nil {
-		manifestRef, err = manifest.Reference(auxiliary[0])
+		manifestRef, err = manifest.Reference(mustAuxiliaryPageIDV1(prepared, 0))
 		if err != nil {
 			return err
 		}
 	}
-	recordPageID := auxiliary[len(auxiliary)-1]
+	recordPageID := mustAuxiliaryPageIDV1(prepared, generation.AuxiliaryCount-1)
 	if base.record.DurableSeq == ^uint64(0) {
 		return errors.New("durable root publication sequence overflow")
 	}
@@ -1235,8 +1269,8 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 	if seal.materialized {
 		return nil
 	}
-	generation := seal.prepared.Candidate().Generation()
-	if generation == nil {
+	generation, generationErr := seal.prepared.InfoV1()
+	if generationErr != nil {
 		return errors.New("missing root-publication seal generation")
 	}
 	if err := seal.idx.pager.GrowTo(generation.HighWater()); err != nil {
@@ -1246,27 +1280,26 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		return fmt.Errorf("validate root-publication physical tail: %w", err)
 	}
 	for _, prepared := range seal.prefix {
-		if prepared == nil || prepared.Candidate() == nil {
+		if prepared == nil {
 			return errors.New("root-publication prefix contains no COW candidate")
 		}
-		if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+		if err := prepared.WritePagesToPagerV1(seal.idx.pager); err != nil {
 			return fmt.Errorf("write root-publication COW pages: %w", err)
 		}
 	}
-	auxiliary := seal.prepared.AuxiliaryPageIDs()
 	expectedAuxiliary := 1
 	if seal.manifest != nil {
 		expectedAuxiliary += int(seal.manifest.PageCount())
 	}
-	if len(auxiliary) != expectedAuxiliary {
+	if generation.AuxiliaryCount != expectedAuxiliary {
 		return errors.New("root-publication seal auxiliary inventory changed")
 	}
 	if seal.manifest != nil {
-		if _, err := seal.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+		if _, err := seal.manifest.Materialize(mustAuxiliaryPageIDV1(seal.prepared, 0), durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
 			return err
 		}
 	}
-	recordPageID := auxiliary[len(auxiliary)-1]
+	recordPageID := mustAuxiliaryPageIDV1(seal.prepared, generation.AuxiliaryCount-1)
 	recordImage, recordDigest, err := seal.record.EncodePage(recordPageID)
 	if err != nil {
 		return err
@@ -1452,6 +1485,7 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	for _, retired := range retiredSeals {
 		retired.release()
 	}
+	seal.clearTerminalBacking()
 	return oldest, nil
 }
 
@@ -1484,4 +1518,13 @@ func (runtime *rootPublicationRuntimeV1) release() {
 	for _, seal := range seals {
 		seal.release()
 	}
+}
+
+// Preparation verifies this exact inventory before exposing the immutable seal.
+func mustAuxiliaryPageIDV1(prepared *freelist.PreparedCOWCandidateV1, index int) uint64 {
+	id, err := prepared.AuxiliaryPageIDV1(index)
+	if err != nil {
+		panic("treedb: prepared auxiliary inventory changed")
+	}
+	return id
 }

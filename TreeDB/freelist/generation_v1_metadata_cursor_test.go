@@ -2,7 +2,6 @@ package freelist
 
 import (
 	"fmt"
-	"maps"
 	"math"
 	"math/rand"
 	"slices"
@@ -45,8 +44,8 @@ func TestMetadataChunkRunMatchesReservationOracle4627(t *testing.T) {
 					start = base - 64
 				}
 				count := []uint64{0, 1, 63, 64, 65, 255, 300, math.MaxUint64}[i]
-				ledger.candidates[id] = &reservation{state: CandidateState(i % 5), tailReserved: i%3 != 0, tailStart: start, tailCount: count}
-				ledger.owners[base+uint64(rng.Intn(256))] = id
+				ledger.candidates.Set(id, &reservation{state: CandidateState(i % 5), tailReserved: i%3 != 0, tailStart: start, tailCount: count})
+				ledger.owners.Set(base+uint64(rng.Intn(256)), id)
 				if i%2 == 0 {
 					ledger.burnedTails = append(ledger.burnedTails, reservationInterval{start, count})
 				}
@@ -111,10 +110,10 @@ func TestMetadataLosingClaimPreservesTransaction4627(t *testing.T) {
 	if _, _, _, ok := txn.tryReusedMetadata(id); ok {
 		t.Fatal("accepted conflicting data ownership")
 	}
-	if txn.root != before.root || !maps.Equal(txn.replacedMetadata, before.replacedMetadata) || !maps.Equal(txn.changedChunks, before.changedChunks) || !slices.Equal(txn.allocated, before.allocated) || !slices.Equal(txn.abandonedAppends, before.abandonedAppends) {
+	if txn.root != before.root || !txn.replacedMetadata.Equal(before.replacedMetadata) || !txn.changedChunks.Equal(before.changedChunks) || !slices.Equal(txn.allocated, before.allocated) || !slices.Equal(txn.abandonedAppends, before.abandonedAppends) {
 		t.Fatal("losing claim changed staged transaction")
 	}
-	if ledger.candidates[id] != nil || ledger.owners[190] != blocker {
+	if ledger.candidates.Value(id) != nil || ledger.owners.Value(190) != blocker {
 		t.Fatal("losing claim changed ownership")
 	}
 }
@@ -132,7 +131,7 @@ func TestMetadataImpossibleRunDoesNotAllocate4627(t *testing.T) {
 	if allocs != 0 {
 		t.Fatalf("impossible placement allocated %g times, want zero", allocs)
 	}
-	if txn.root != root || len(ledger.candidates) != 0 || len(ledger.owners) != 0 {
+	if txn.root != root || ledger.candidates.Len() != 0 || ledger.owners.Len() != 0 {
 		t.Fatal("impossible placement changed transaction or ownership")
 	}
 }

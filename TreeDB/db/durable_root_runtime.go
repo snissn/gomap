@@ -193,6 +193,11 @@ func (candidate *durableRootPublishCandidateV1) release() {
 		return
 	}
 	candidate.released = true
+	if candidate.prepared != nil {
+		if err := candidate.prepared.ClearTerminalBackingV1(); err == nil {
+			candidate.prepared = nil
+		}
+	}
 	candidate.resources.Release()
 	if candidate.token != nil {
 		candidate.token.Release()
@@ -1471,7 +1476,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if manifest != nil {
 		auxiliaryCount += int(manifest.PageCount())
 	}
-	prepared, err := idx.allocator.PrepareCOWCandidateRetiringV1(
+	prepared, err := idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(
 		current.record.Freelist.GenerationID+1,
 		next.CommitSeq,
 		durableRootCandidateIDV1(current, next),
@@ -1482,6 +1487,7 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 		},
 		auxiliaryCount,
 		freelist.NewCandidatePageSinkV1(),
+		nil,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("prepare COW generation: %w", err)
@@ -1498,14 +1504,16 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 				cause = errors.Join(cause, fmt.Errorf("fail incomplete COW generation: %w", failErr))
 			}
 			err = cause
+		} else if clearErr := prepared.ClearTerminalBackingV1(); clearErr != nil {
+			err = errors.Join(err, clearErr)
 		}
 	}()
 	if db.testFailDurableRootAfterCOWPrepare.Load() {
 		return nil, errTestDurableRootAfterCOWPrepareFailpoint
 	}
-	generation := prepared.Candidate().Generation()
+	generation, generationErr := prepared.InfoV1()
 	auxiliary := prepared.AuxiliaryPageIDs()
-	if generation == nil || len(auxiliary) != auxiliaryCount {
+	if generationErr != nil || len(auxiliary) != auxiliaryCount {
 		return nil, errors.New("incomplete durable-root COW candidate")
 	}
 
@@ -1596,14 +1604,14 @@ func (db *DB) materializeDurableRootCandidateV1(candidate *durableRootPublishCan
 	if candidate.materialized {
 		return nil
 	}
-	generation := candidate.prepared.Candidate().Generation()
-	if generation == nil {
+	generation, generationErr := candidate.prepared.InfoV1()
+	if generationErr != nil {
 		return errors.New("missing durable-root COW generation")
 	}
 	if err := candidate.idx.pager.Truncate(generation.HighWater()); err != nil {
 		return fmt.Errorf("extend durable index: %w", err)
 	}
-	if err := candidate.prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: candidate.idx.pager}); err != nil {
+	if err := candidate.prepared.WritePagesToPagerV1(candidate.idx.pager); err != nil {
 		return fmt.Errorf("write durable-root COW pages: %w", err)
 	}
 	auxiliary := candidate.prepared.AuxiliaryPageIDs()
@@ -2089,12 +2097,7 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 		}
 		directoryRef = directory.Reference()
 	}
-	base, err := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
-	if err != nil {
-		return err
-	}
-	ledger := freelist.NewReservationLedger()
-	if err := idx.allocator.EnableCOWV1(base, ledger); err != nil {
+	if err := idx.allocator.EnableNewCOWGenerationV1(1, p.PageCount(), nil); err != nil {
 		return err
 	}
 	if db.ownedLeafManifests {
@@ -2115,7 +2118,7 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	}
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], 1)
-	prepared, err := idx.allocator.PrepareCOWCandidateV1(2, 1, candidateID, capability, auxiliaryCount, freelist.NewCandidatePageSinkV1())
+	prepared, err := idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, 1, candidateID, capability, nil, auxiliaryCount, freelist.NewCandidatePageSinkV1(), nil)
 	if err != nil {
 		return err
 	}
@@ -2123,11 +2126,14 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if len(auxiliary) != auxiliaryCount {
 		return errors.New("durable-root initializer did not reserve manifest and record pages")
 	}
-	generation := prepared.Candidate().Generation()
+	generation, generationErr := prepared.InfoV1()
+	if generationErr != nil {
+		return generationErr
+	}
 	if err := p.Truncate(generation.HighWater()); err != nil {
 		return err
 	}
-	if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: p}); err != nil {
+	if err := prepared.WritePagesToPagerV1(p); err != nil {
 		return fmt.Errorf("write initial COW freelist pages: %w", err)
 	}
 	sink := durablePagerSinkV1{pager: p}
@@ -2173,6 +2179,9 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	if err := idx.allocator.PublishCOWCandidateV1(prepared, capability); err != nil {
 		return err
 	}
+	if err := prepared.ClearTerminalBackingV1(); err != nil {
+		return err
+	}
 	if resources != nil {
 		resources, err = rootpublication.CloneStableResourceSetExcludingKinds(resources)
 		if err != nil {
@@ -2180,7 +2189,7 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 		}
 	}
 	db.installDurableRootSelectionV1(durableRootSelectionV1{
-		Slot: MetaPage0ID, Meta: meta, Record: record, Freelist: generation, Manifest: manifest,
+		Slot: MetaPage0ID, Meta: meta, Record: record, Manifest: manifest,
 		SlotResources: [2]*rootpublication.StableResourceSet{resources, nil},
 		SlotCommits:   [2]uint64{1, 0},
 		SlotMetas:     [2]page.DurableMetaV1{meta, {}},
@@ -2213,6 +2222,9 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 		return errors.New("invalid rebuilt durable-root input")
 	}
 	allocator := freelist.New(p, 0)
+	// This local allocator is never transferred to a DB/runtime/recovery owner.
+	// All ordered storage calls finish before return; disk recovery reloads.
+	defer allocator.CloseCOWOwnersAfterShutdownV1()
 	directory, err := rebuildDependencyDirectoryV2(p, allocator, resources)
 	if err != nil {
 		return err
@@ -2226,12 +2238,7 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 		}
 		auxiliaryCount += int(manifest.PageCount())
 	}
-	base, err := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
-	if err != nil {
-		return err
-	}
-	ledger := freelist.NewReservationLedger()
-	if err := allocator.EnableCOWV1(base, ledger); err != nil {
+	if err := allocator.EnableNewCOWGenerationV1(1, p.PageCount(), nil); err != nil {
 		return err
 	}
 	capability, err := freelist.NewReuseCapability(meta.CommitSeq, meta.CommitSeq, 0)
@@ -2241,19 +2248,19 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], meta.CommitSeq)
 	binary.LittleEndian.PutUint64(candidateID[8:], meta.UserRootPageID^meta.SystemRootPageID)
-	prepared, err := allocator.PrepareCOWCandidateV1(2, meta.CommitSeq, candidateID, capability, auxiliaryCount, freelist.NewCandidatePageSinkV1())
+	prepared, err := allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, meta.CommitSeq, candidateID, capability, nil, auxiliaryCount, freelist.NewCandidatePageSinkV1(), nil)
 	if err != nil {
 		return err
 	}
-	generation := prepared.Candidate().Generation()
+	generation, generationErr := prepared.InfoV1()
 	auxiliary := prepared.AuxiliaryPageIDs()
-	if generation == nil || len(auxiliary) != auxiliaryCount {
+	if generationErr != nil || len(auxiliary) != auxiliaryCount {
 		return errors.New("incomplete rebuilt durable-root COW generation")
 	}
 	if err := p.Truncate(generation.HighWater()); err != nil {
 		return err
 	}
-	if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: p}); err != nil {
+	if err := prepared.WritePagesToPagerV1(p); err != nil {
 		return fmt.Errorf("write rebuilt COW pages: %w", err)
 	}
 	sink := durablePagerSinkV1{pager: p}
@@ -2334,7 +2341,10 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 		return errors.New("invalid rebuilt durable-root successor")
 	}
 	allocator := freelist.New(p, 0)
-	if err := allocator.EnableCOWV1(current.Freelist, freelist.NewReservationLedger()); err != nil {
+	// This local allocator is never transferred to a DB/runtime/recovery owner.
+	// All ordered storage calls finish before return; disk recovery reloads.
+	defer allocator.CloseCOWOwnersAfterShutdownV1()
+	if err := current.enableFreelistV1(allocator, nil); err != nil {
 		return err
 	}
 	directory, err := rebuildDependencyDirectoryV2(p, allocator, next.resources)
@@ -2357,30 +2367,31 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], meta.CommitSeq)
 	binary.LittleEndian.PutUint64(candidateID[8:], meta.UserRootPageID^meta.SystemRootPageID^uint64(MetaPage1ID))
-	prepared, err := allocator.PrepareCOWCandidateV1(
-		current.Freelist.GenerationID()+1,
+	prepared, err := allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(
+		current.Record.Freelist.GenerationID+1,
 		meta.CommitSeq,
 		candidateID,
 		capability,
+		nil,
 		auxiliaryCount,
 		freelist.NewMemoryPageStoreV1(),
+		nil,
 	)
 	if err != nil {
 		return err
 	}
-	generation := prepared.Candidate().Generation()
+	generation, generationErr := prepared.InfoV1()
 	auxiliary := prepared.AuxiliaryPageIDs()
-	if generation == nil || len(auxiliary) != auxiliaryCount {
+	if generationErr != nil || len(auxiliary) != auxiliaryCount {
 		return errors.New("incomplete rebuilt durable-root successor COW generation")
 	}
 	if err := p.Truncate(generation.HighWater()); err != nil {
 		return err
 	}
-	for _, image := range prepared.Candidate().Pages() {
-		if err := p.Write(image.PageID, image.Data); err != nil {
-			return fmt.Errorf("write rebuilt successor COW page %d: %w", image.PageID, err)
-		}
+	if err := prepared.WritePagesToPagerV1(p); err != nil {
+		return fmt.Errorf("write rebuilt successor COW pages: %w", err)
 	}
+
 	sink := durablePagerSinkV1{pager: p}
 	var manifestRef rootpublication.DependencyManifestRefV1
 	if manifest != nil {

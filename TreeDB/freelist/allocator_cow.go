@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 var ErrCOWCandidatePrepared = errors.New("COW freelist candidate publication pending")
@@ -23,15 +24,26 @@ var TestHookCOWWaitBeforeSleep func()
 var TestHookAbortCOWCandidateFailure func() error
 
 type allocatorCOWStateV1 struct {
-	generation   *FreelistGenerationV1
-	txn          *FreelistTxn
-	ledger       *ReservationLedger
-	prepared     *PreparedCOWCandidateV1
-	activated    []*PreparedCOWCandidateV1
-	waitErr      error
-	boundedPrune bool
-	pruneWork    BoundedPruneStats
-	ready        *sync.Cond
+	generation               *FreelistGenerationV1
+	txn                      *FreelistTxn
+	ledger                   *ReservationLedger
+	prepared                 *PreparedCOWCandidateV1
+	activated                []*PreparedCOWCandidateV1
+	creator                  *allocationCreditLeaseV1 // resident allocator/state/condition owner
+	activatedCreator         *allocationCreditLeaseV1 // actual activated-vector backing
+	ownedCandidates          *PreparedCOWCandidateV1  // actual backing owners through physical terminal
+	residentAdmissionEpoch   uint64
+	residentAdmissionBytes   uint64
+	residentAdmissionCreator *allocationCreditLeaseV1 // nonowning: txn.buildCreator owns the active edge
+	waitErr                  error
+	boundedPrune             bool
+	pruneWork                BoundedPruneStats
+	preparationCopyWork      FreelistStateCopyWorkV1
+	ready                    *sync.Cond
+	generationLeases         *PublishedGenerationLeaseV1
+	rawGenerationEscaped     bool
+	closed                   bool
+	readyWaiters             uint64 // actual Cond.Wait borrows, including wake/reacquire
 }
 
 // COWPrepareProfileV1 is an allocation-free census of the live transaction
@@ -39,7 +51,10 @@ type allocatorCOWStateV1 struct {
 // It is a snapshot, not an admission limit: callers must also account for
 // retirements, pruning, and pages produced after the census.
 type COWPrepareProfileV1 struct {
-	BoundedPruneWork         BoundedPruneStats
+	BoundedPruneWork BoundedPruneStats
+	// Cumulative actual preparation work, including failed/aborted attempts.
+	// Observation only; neither reuse authority nor a credit exemption.
+	PreparationCopyWork      FreelistStateCopyWorkV1
 	Valid                    bool
 	HighWater                uint64
 	RetiredPages             uint64
@@ -60,6 +75,9 @@ type COWPrepareProfileV1 struct {
 // materialization. Zero-valued limits are strict; callers that do not need a
 // prepared admission guard must pass nil.
 type COWPrepareLimitsV1 struct {
+	// AllocationCredit is the allocator facet of the same request owner.
+	// Non-nil requires a complete joint pre-WAL certificate.
+	AllocationCredit            AllocationCreditV1
 	MaxHighWater                uint64
 	MaxRetiredPages             uint64
 	MaxAllocatedPages           uint64
@@ -83,6 +101,9 @@ func (a *Allocator) COWPrepareProfileV1() COWPrepareProfileV1 {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return profile
+	}
 	return a.cowPrepareProfileLockedV1()
 }
 
@@ -93,38 +114,41 @@ func (a *Allocator) cowPrepareProfileLockedV1() COWPrepareProfileV1 {
 	}
 	transaction, base := a.cow.txn, a.cow.generation
 	profile.BoundedPruneWork = a.cow.pruneWork
+	profile.PreparationCopyWork = a.cow.preparationCopyWork
 	profile.Valid = true
 	profile.HighWater = transaction.highWater
 	profile.RetiredPages = transaction.root.retiredCount
 	profile.FreePages = transaction.root.freeCount
 	profile.AllocatedPages = uint64(len(transaction.allocated))
 	profile.AbandonedAppendExtents = uint64(len(transaction.abandonedAppends))
-	profile.ChangedChunks = uint64(len(transaction.changedChunks))
-	profile.ReplacedMetadataPages = uint64(len(transaction.replacedMetadata))
+	profile.ChangedChunks = uint64(transaction.changedChunks.Len())
+	profile.ReplacedMetadataPages = uint64(transaction.replacedMetadata.Len())
 	profile.BaseReservationExtents = uint64(len(base.record.Extents))
 	profile.BaseMetadataPages = uint64(len(base.metadataPages))
 	if ledger := a.cow.ledger; ledger != nil {
 		// COW preparation enters the ledger while holding a.mu. Keep the
 		// same lock order so the census sees the reservation state it uses.
 		ledger.mu.Lock()
-		profile.LedgerOwners = uint64(len(ledger.owners))
-		profile.LedgerCandidates = uint64(len(ledger.candidates))
+		profile.LedgerOwners = uint64(ledger.owners.Len())
+		profile.LedgerCandidates = uint64(ledger.candidates.Len())
 		profile.LedgerBurnedTailRanges = uint64(len(ledger.burnedTails))
-		for id := range ledger.owners {
+		ledger.owners.Range(func(id uint64, _ CandidateIDV1) bool {
 			if id == ^uint64(0) {
 				profile.LedgerHighestReservedEnd = ^uint64(0)
 			} else {
 				profile.LedgerHighestReservedEnd = max(profile.LedgerHighestReservedEnd, id+1)
 			}
-		}
+			return true
+		})
 		for _, burned := range ledger.burnedTails {
 			profile.LedgerHighestReservedEnd = max(profile.LedgerHighestReservedEnd, reservationIntervalEndSaturated(burned))
 		}
-		for _, reservation := range ledger.candidates {
+		ledger.candidates.Range(func(_ CandidateIDV1, reservation *reservation) bool {
 			if reservation != nil && reservation.tailReserved {
 				profile.LedgerHighestReservedEnd = max(profile.LedgerHighestReservedEnd, reservationIntervalEndSaturated(reservationInterval{start: reservation.tailStart, count: reservation.tailCount}))
 			}
-		}
+			return true
+		})
 		ledger.mu.Unlock()
 	}
 	return profile
@@ -184,6 +208,11 @@ type COWRetirementV1 struct {
 // pages in the same generation so manifest and root-record pages cannot race
 // allocator metadata or later index allocation.
 type PreparedCOWCandidateV1 struct {
+	backingMu     sync.RWMutex
+	ownedNext     *PreparedCOWCandidateV1
+	ownedBacking  bool
+	creator       *allocationCreditLeaseV1
+	allocator     *Allocator
 	candidate     *FreelistCandidateV1
 	candidateID   CandidateIDV1
 	auxiliary     []uint64
@@ -196,6 +225,19 @@ type PreparedCOWCandidateV1 struct {
 func (prepared *PreparedCOWCandidateV1) Candidate() *FreelistCandidateV1 {
 	if prepared == nil {
 		return nil
+	}
+	if prepared.allocator != nil {
+		prepared.allocator.mu.Lock()
+		defer prepared.allocator.mu.Unlock()
+	}
+	prepared.backingMu.RLock()
+	defer prepared.backingMu.RUnlock()
+	if prepared == nil || prepared.candidate == nil || prepared.candidate.hasFiniteBackingV1() {
+		return nil
+	}
+	prepared.candidate.markOrdinaryEscapeV1()
+	if prepared.allocator != nil && prepared.allocator.cow != nil {
+		prepared.allocator.cow.rawGenerationEscaped = true
 	}
 	return prepared.candidate
 }
@@ -211,12 +253,33 @@ func (prepared *PreparedCOWCandidateV1) AuxiliaryPageIDs() []uint64 {
 	if prepared == nil {
 		return nil
 	}
+	prepared.backingMu.RLock()
+	defer prepared.backingMu.RUnlock()
+	if prepared == nil || prepared.candidate == nil || prepared.candidate.hasFiniteBackingV1() {
+		return nil
+	}
+
 	return append([]uint64(nil), prepared.auxiliary...)
 }
 
 func (a *Allocator) EnableCOWV1(generation *FreelistGenerationV1, ledger *ReservationLedger) error {
+	if generation != nil {
+		generation.markOrdinaryEscapeV1()
+	}
+	return a.enableCOWOwnedV1(generation, ledger)
+}
+
+func (a *Allocator) enableCOWOwnedV1(generation *FreelistGenerationV1, ledger *ReservationLedger) error {
 	if a == nil || a.pager == nil || generation == nil {
 		return ErrGenerationFormat
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
+	if a.cow != nil {
+		return fmt.Errorf("%w: allocator already uses COW freelist", ErrGenerationFormat)
 	}
 	if err := generation.Validate(); err != nil {
 		return err
@@ -225,18 +288,14 @@ func (a *Allocator) EnableCOWV1(generation *FreelistGenerationV1, ledger *Reserv
 		return fmt.Errorf("%w: pager pages %d do not match generation high-water %d", ErrGenerationFormat, a.pager.PageCount(), generation.HighWater())
 	}
 	if ledger == nil {
-		ledger = NewReservationLedger()
+		ledger = newReservationLedgerOwnedV1()
 	}
-	txn, err := BeginCandidateV1(generation, generation.GenerationRef(), ledger)
+	txn, err := beginCandidateOwnedV1(generation, generation.GenerationRef(), ledger)
 	if err != nil {
 		return err
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.cow != nil {
-		return fmt.Errorf("%w: allocator already uses COW freelist", ErrGenerationFormat)
-	}
-	state := &allocatorCOWStateV1{generation: generation, txn: txn, ledger: ledger}
+	retainReservationLedgerV1(ledger)
+	state := &allocatorCOWStateV1{generation: retainGenerationV1(generation), txn: txn, ledger: ledger, rawGenerationEscaped: atomic.LoadUint32(&generation.escaped) != 0}
 	state.ready = sync.NewCond(&a.mu)
 	a.cow = state
 	a.head = 0
@@ -246,14 +305,28 @@ func (a *Allocator) EnableCOWV1(generation *FreelistGenerationV1, ledger *Reserv
 }
 
 func (a *Allocator) waitCOWReadyLocked() error {
-	for a.cow != nil && a.cow.prepared != nil && a.cow.waitErr == nil {
+	if a.closed {
+		return ErrCandidateConsumed
+	}
+	state := a.cow
+	for state != nil && state.prepared != nil && state.waitErr == nil {
 		if TestHookCOWWaitBeforeSleep != nil {
 			TestHookCOWWaitBeforeSleep()
 		}
-		a.cow.ready.Wait()
+		// This exact Cond borrow survives Wait's release/reacquire of a.mu.
+		state.readyWaiters++
+		state.ready.Wait()
+		state.readyWaiters--
+		if a.closed {
+			a.releaseClosedCOWStateCreatorLockedV1()
+			return ErrCandidateConsumed
+		}
 	}
-	if a.cow != nil && a.cow.waitErr != nil {
-		return a.cow.waitErr
+	if a.closed {
+		return ErrCandidateConsumed
+	}
+	if state != nil && state.waitErr != nil {
+		return state.waitErr
 	}
 	return nil
 }
@@ -299,6 +372,9 @@ func (a *Allocator) AllocAppend() (uint64, error) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return 0, ErrCandidateConsumed
+	}
 	if a.cow == nil {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
@@ -358,6 +434,9 @@ func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64)
 		}
 		a.cow.txn.retireMany(retired)
 	}
+	if err := a.cow.txn.valid(); err != nil {
+		return err
+	}
 	a.stats.FreePages += uint64(len(ids))
 	if TestHookRetireCOWBeforeUnlock != nil {
 		TestHookRetireCOWBeforeUnlock()
@@ -371,6 +450,9 @@ func (a *Allocator) RetireCOWV1(ids []uint64, lastReachableCommitSeq uint64) err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow == nil {
 		return ErrGenerationFormat
 	}
@@ -391,23 +473,58 @@ func (a *Allocator) PrepareCOWCandidateRetiringV1(generationID, commitSeq uint64
 // PrepareCOWCandidateRetiringWithLimitsV1 checks the prepared allocation
 // profile while holding the same allocator lock used by the subsequent clone.
 // This prevents concurrent allocator growth between admission and allocation.
+// Private preparation adds no ownership collection. Before its dirty-tree
+// isolation allocates, the same profile bounds HighWater and ChangedChunks.
+// A valid tree has at most ceil(HighWater/256) chunks and 15 nodes per chunk
+// (plus an empty root); each dirty node/chunk is detached at most once.
+// Durable first copies also detach hidden zero-ID child subtrees. All such
+// copies and nonnil node visits are attributed; no node is detached twice in
+// one exclusive builder. Old and private trees overlap until activation/abort.
+// Existing count admission is not a complete caller byte-reservation proof.
 func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1) (*PreparedCOWCandidateV1, error) {
+	return a.prepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, false)
+}
+
+// PrepareOwnedCOWCandidateRetiringWithLimitsV1 transfers sole backing ownership
+// to a trusted DB publication control. The caller must invoke the exact terminal
+// clear after Consume/Abort, or retain it through ambiguous recovery to shutdown.
+// Scalars and the concrete pager are borrows; raw exports permanently taint
+// resident admission. This uses the ordinary allocator engine.
+func (a *Allocator) PrepareOwnedCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1) (*PreparedCOWCandidateV1, error) {
+	return a.prepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, true)
+}
+
+func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1, owned bool) (*PreparedCOWCandidateV1, error) {
 	if auxiliaryPageCount < 0 || sink == nil {
 		return nil, ErrGenerationFormat
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return nil, ErrCandidateConsumed
+	}
 	if a.cow == nil || a.cow.txn == nil {
 		return nil, ErrGenerationFormat
 	}
 	if a.cow.waitErr != nil {
 		return nil, a.cow.waitErr
 	}
+	if limits != nil && limits.AllocationCredit != nil {
+		// A different request facet cannot borrow an ordinary cached candidate.
+		// Keep the complete caller/resident certificate closed before every retry.
+		return nil, ErrAllocationCertificateIncompleteV1
+	}
 	if a.cow.prepared != nil {
-		generation := a.cow.prepared.candidate.Generation()
+		generation := a.cow.prepared.candidate.generation
 		if generation == nil || generation.GenerationID() != generationID || generation.CommitSeq() != commitSeq ||
 			a.cow.prepared.candidateID != candidateID || len(a.cow.prepared.auxiliary) != auxiliaryPageCount {
 			return nil, ErrCOWCandidatePrepared
+		}
+		if owned && !a.cow.prepared.ownedBacking {
+			return nil, ErrFiniteAllocationExportV1
+		}
+		if !owned {
+			a.cow.rawGenerationEscaped = true
 		}
 		return a.cow.prepared, nil
 	}
@@ -416,13 +533,25 @@ func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 	}
 	rollbackTxn := a.cow.txn
 	rollbackStats := a.stats
-	staged, err := rollbackTxn.cloneForAllocatorPrepare()
+	beforeCopyWork := rollbackTxn.stats.FreelistStateCopyWorkV1
+	staged, err := rollbackTxn.cloneForPrivateAllocatorPrepare()
 	if err != nil {
 		return nil, err
 	}
+	// Retain actual work even when logical allocator state is rolled back or
+	// an already-produced candidate is later aborted. Activation cannot erase
+	// this attribution when it begins the next immutable-generation transaction.
+	defer func() {
+		work := staged.stats.FreelistStateCopyWorkV1
+		a.cow.preparationCopyWork.StateNodeCopies += work.StateNodeCopies - beforeCopyWork.StateNodeCopies
+		a.cow.preparationCopyWork.StateChunkCopies += work.StateChunkCopies - beforeCopyWork.StateChunkCopies
+		a.cow.preparationCopyWork.StateCopyBytes += work.StateCopyBytes - beforeCopyWork.StateCopyBytes
+		a.cow.preparationCopyWork.StateIsolationVisits += work.StateIsolationVisits - beforeCopyWork.StateIsolationVisits
+	}()
 	a.cow.txn = staged
 	rollback := func(cause error) (*PreparedCOWCandidateV1, error) {
 		a.cow.txn = rollbackTxn
+		releaseTxnV1(staged)
 		a.stats = rollbackStats
 		if rollbackErr := a.cow.ledger.RollbackPreVisible(candidateID); rollbackErr != nil {
 			return nil, errors.Join(cause, fmt.Errorf("rollback COW reservation: %w", rollbackErr))
@@ -446,13 +575,19 @@ func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 	if err != nil {
 		return rollback(err)
 	}
-	candidate, err := a.cow.txn.MaterializeCandidate(generationID, commitSeq, candidateID, sink)
+	candidate, err := a.cow.txn.materializeCandidateOwnedV1(generationID, commitSeq, candidateID, sink)
 	if err != nil {
 		return rollback(err)
 	}
 	prepared := &PreparedCOWCandidateV1{
-		candidate: candidate, candidateID: candidateID, auxiliary: auxiliary,
+		allocator: a, candidate: candidate, candidateID: candidateID, auxiliary: auxiliary, ownedBacking: owned,
 		rollbackTxn: rollbackTxn, rollbackStats: rollbackStats,
+	}
+	if owned {
+		prepared.ownedNext = a.cow.ownedCandidates
+		a.cow.ownedCandidates = prepared
+	} else {
+		a.cow.rawGenerationEscaped = true
 	}
 	a.cow.prepared = prepared
 	return prepared, nil
@@ -472,6 +607,9 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow == nil || a.cow.prepared != prepared {
 		return ErrCandidateConsumed
 	}
@@ -481,7 +619,11 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 	if err := a.cow.ledger.RollbackPreVisible(prepared.candidateID); err != nil {
 		return err
 	}
+	stage := a.cow.txn
 	a.cow.txn = prepared.rollbackTxn
+	releaseTxnV1(stage)
+	replaceStateNodeV1(&a.cow.txn.root, detachUnmaterializedWithStats(a.cow.txn.root, 0, &a.cow.txn.stats))
+	a.cow.txn.privatePreparation = true
 	a.stats = prepared.rollbackStats
 	a.cow.prepared = nil
 	prepared.rollbackTxn = nil
@@ -495,30 +637,41 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 // consumes it. This split is what permits several visible COW generations to
 // accumulate behind one dependency-closed durable-root publication.
 func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) error {
-	if a == nil || prepared == nil || prepared.candidate == nil || prepared.candidate.Generation() == nil {
+	if a == nil || prepared == nil || prepared.candidate == nil || prepared.candidate.generation == nil {
 		return ErrGenerationFormat
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow == nil || a.cow.prepared != prepared || prepared.activated || prepared.published {
 		return ErrCandidateConsumed
 	}
 	if a.cow.waitErr != nil {
 		return a.cow.waitErr
 	}
-	generation := prepared.candidate.Generation()
-	next, err := BeginCandidateV1(generation, generation.GenerationRef(), a.cow.ledger)
+	generation := prepared.candidate.generation
+	if err := a.growActivatedBackingLockedV1(prepared.creator); err != nil {
+		return err
+	}
+	next, err := beginCandidateOwnedV1(generation, generation.GenerationRef(), a.cow.ledger)
 	if err != nil {
 		return err
 	}
 	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
+		releaseTxnV1(next)
 		return err
 	}
 	next.pruneCursor = a.cow.txn.pruneCursor
-	a.cow.generation = generation
+	oldGeneration, oldTxn := a.cow.generation, a.cow.txn
+	a.cow.generation = retainGenerationV1(generation)
 	a.cow.txn = next
+	releaseGenerationV1(oldGeneration)
+	releaseTxnV1(oldTxn)
 	a.cow.prepared = nil
 	a.cow.activated = append(a.cow.activated, prepared)
+	releaseTxnV1(prepared.rollbackTxn)
 	prepared.rollbackTxn = nil
 	prepared.activated = true
 	a.stats.FreeIDs = generation.FreeCount()
@@ -536,6 +689,9 @@ func (a *Allocator) PublishActivatedCOWPrefixV1(prefix []*PreparedCOWCandidateV1
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	return a.publishActivatedCOWPrefixLockedV1(prefix, nextCapability)
 }
 
@@ -558,7 +714,7 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 		}
 	}
 	prepared := prefix[len(prefix)-1]
-	generation := prepared.candidate.Generation()
+	generation := prepared.candidate.generation
 	if generation == nil {
 		return ErrGenerationFormat
 	}
@@ -596,6 +752,9 @@ func (a *Allocator) ValidateCOWPhysicalTailV1(requiredHighWater uint64) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	return a.validateCOWPhysicalTailLockedV1(requiredHighWater)
 }
 
@@ -622,6 +781,9 @@ func (a *Allocator) PublishActivatedCOWThroughV1(prepared *PreparedCOWCandidateV
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow == nil {
 		return ErrCandidateConsumed
 	}
@@ -648,6 +810,9 @@ func (a *Allocator) FailCOWCandidateV1(prepared *PreparedCOWCandidateV1, cause e
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow == nil {
 		return ErrCandidateConsumed
 	}
@@ -671,18 +836,21 @@ func (a *Allocator) FailCOWCandidateV1(prepared *PreparedCOWCandidateV1, cause e
 }
 
 func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
-	if prepared == nil || prepared.candidate == nil || prepared.candidate.Generation() == nil {
+	if prepared == nil || prepared.candidate == nil || prepared.candidate.generation == nil {
 		return ErrGenerationFormat
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow == nil || a.cow.prepared != prepared || prepared.activated || prepared.published {
 		return ErrCandidateConsumed
 	}
 	if a.cow.waitErr != nil {
 		return a.cow.waitErr
 	}
-	generation := prepared.candidate.Generation()
+	generation := prepared.candidate.generation
 	if pageCount := a.pager.PageCount(); pageCount != generation.HighWater() {
 		return fmt.Errorf("%w: pager pages %d do not match prepared generation high-water %d", ErrGenerationFormat, pageCount, generation.HighWater())
 	}
@@ -692,15 +860,19 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	if err := a.cow.ledger.Publish(prepared.candidateID); err != nil {
 		return err
 	}
-	next, err := BeginCandidateV1(generation, prepared.candidate.GenerationRef(), a.cow.ledger)
+	next, err := beginCandidateOwnedV1(generation, prepared.candidate.GenerationRef(), a.cow.ledger)
 	if err != nil {
 		return err
 	}
 	next.pruneCursor = a.cow.txn.pruneCursor
 	a.pruneCOWLockedV1(next, nextCapability)
-	a.cow.generation = generation
+	oldGeneration, oldTxn := a.cow.generation, a.cow.txn
+	a.cow.generation = retainGenerationV1(generation)
 	a.cow.txn = next
+	releaseGenerationV1(oldGeneration)
+	releaseTxnV1(oldTxn)
 	a.cow.prepared = nil
+	releaseTxnV1(prepared.rollbackTxn)
 	prepared.rollbackTxn = nil
 	prepared.activated = true
 	prepared.published = true
@@ -716,9 +888,17 @@ func (a *Allocator) COWGenerationV1() *FreelistGenerationV1 {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return nil
+	}
 	if a.cow == nil {
 		return nil
 	}
+	if a.cow.generation.hasFiniteBackingV1() {
+		return nil
+	}
+	a.cow.generation.markOrdinaryEscapeV1()
+	a.cow.rawGenerationEscaped = true
 	return a.cow.generation
 }
 
@@ -727,6 +907,9 @@ func (a *Allocator) COWGenerationV1() *FreelistGenerationV1 {
 func (a *Allocator) EnableBoundedPruneV1() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return
+	}
 	if a.cow != nil {
 		a.cow.boundedPrune = true
 	}
@@ -749,6 +932,9 @@ func (a *Allocator) pruneCOWLockedV1(txn *FreelistTxn, cap ReuseCapability) {
 func (a *Allocator) PruneCOWBoundedStepV1(cap ReuseCapability) (BoundedPruneStats, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return BoundedPruneStats{}, ErrCandidateConsumed
+	}
 	if a.cow == nil || !a.cow.boundedPrune {
 		return BoundedPruneStats{}, ErrGenerationFormat
 	}

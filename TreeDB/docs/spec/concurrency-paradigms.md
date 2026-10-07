@@ -620,3 +620,36 @@ buffer and all samples remain within both layouts' measured windows.
 Standalone segment-hook duration excludes the legacy revision-GC hold, so it
 cannot be presented as the complete legacy fence. Preserve separate setup,
 first/final GC, whole-call and ACK p95/p99 attribution.
+
+### Transaction-private COW allocator preparation (#5105)
+
+Under the existing allocator mutex, preparation first admits the live profile,
+copies mutable transaction collections, and detaches dirty rollback aliases.
+Only then does a transaction-local private flag permit reuse of unmaterialized
+nodes for subsequent edits. Durable nodes can retain shared zero-ID descendants
+whose empty summaries prevented emission. Their first private copies isolate
+all zero-ID immediate-child subtrees through the next durable child, including
+zero-ID chunks at durable leaves; that child repeats isolation on its own first
+copy. Immutable page identities are never edited. Sharing
+a private root through the persistent clone helper revokes the original's
+permission before exposing the alias; a new private clone must isolate again.
+Metadata reuse sizing borrows the tree read-only within one call and returns
+fresh extent values rather than a tree/owner alias.
+
+Materialization consumes and clears the builder permission before exposing
+candidate bytes. Retained opaque page views and generic sink isolation keep
+their existing immutable lifetime. Visible activation and durable sealing stay
+separate; this preparation change supplies no new reuse authority or shortcut
+around dependency/index/meta durability.
+
+FreelistTxnStats attributes StateNodeCopies, StateChunkCopies, StateCopyBytes
+(conservative allocation-class capacity), and StateIsolationVisits.
+COWPrepareProfileV1.PreparationCopyWork accumulates those costs incurred inside
+preparation, including failed and aborted attempts, initial isolation and
+hidden-subtree isolation at durable first-copy boundaries. Isolation visits
+count every nonnil node checked, including durable stop nodes.
+It is observational; reads consume no credits and cannot authorize reuse.
+It excludes ordinary allocation and next-generation bootstrap outside that
+preparation boundary, which remain charged by whole-call/setup costs and their
+existing mutation/visit/output accounting. It is not total allocator work or an
+exemption for intrinsic publication, resource capture, pruning or held roots.

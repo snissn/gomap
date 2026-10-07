@@ -111,11 +111,10 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 
 func validateDurableRootTransactionSpec(spec DurableRootTransactionSpec) error {
 	prepared := spec.PreparedCOW
-	candidate := prepared.Candidate()
-	if candidate == nil || candidate.Generation() == nil || prepared.CandidateID() == (freelist.CandidateIDV1{}) {
+	generation, generationErr := prepared.InfoV1()
+	if generationErr != nil || prepared.CandidateID() == (freelist.CandidateIDV1{}) {
 		return errors.New("missing exact prepared COW generation")
 	}
-	generation := candidate.Generation()
 	if generation.CommitSeq() != spec.Sequence {
 		return errors.New("prepared COW generation does not match the lineage sequence")
 	}
@@ -179,6 +178,8 @@ func (transaction *DurableRootTransaction) PreparedCOW() *freelist.PreparedCOWCa
 	if transaction == nil {
 		return nil
 	}
+	transaction.mu.Lock()
+	defer transaction.mu.Unlock()
 	return transaction.input.PreparedCOW
 }
 
@@ -218,6 +219,7 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 		return err
 	}
 	transaction.owner = ResourceOwnerReleased
+	transaction.clearTerminalBackingLocked()
 	return nil
 }
 
@@ -251,6 +253,7 @@ func (transaction *DurableRootTransaction) consumeFromCoordinator() error {
 	}
 	transaction.phase = durableRootConsumed
 	transaction.owner = ResourceOwnerReleased
+	transaction.clearTerminalBackingLocked()
 	return nil
 }
 
@@ -287,6 +290,7 @@ func (transaction *DurableRootTransaction) releaseFromRecovery() {
 	defer transaction.mu.Unlock()
 	if transaction.owner == ResourceOwnerRecovery {
 		transaction.owner = ResourceOwnerReleased
+		transaction.clearTerminalBackingLocked()
 	}
 }
 
@@ -360,4 +364,9 @@ func (group DurableRootGroup) Latest() *DurableRootTransaction {
 		return nil
 	}
 	return group.members[len(group.members)-1]
+}
+
+func (transaction *DurableRootTransaction) clearTerminalBackingLocked() {
+	transaction.input.PreparedCOW = nil
+	transaction.activate, transaction.consume, transaction.abort, transaction.fail = nil, nil, nil, nil
 }

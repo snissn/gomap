@@ -5,7 +5,6 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 	"math"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
@@ -30,7 +29,9 @@ func TestMetadataEmissionPreservesSharedDirtyBranches4627(t *testing.T) {
 			}
 			// A rollback snapshot can retain both unmaterialized branches.
 			held := txn.root
-			before := detachUnmaterialized(held, 0)
+			before := retainPrivateGraph5105(t, held)
+			// This explicit alias producer revokes private mutation before exposure.
+			txn.privatePreparation = false
 			var sink AppendPageSink = store
 			if fail {
 				// The selected chunk and leaf write first; fail while emitting
@@ -41,9 +42,7 @@ func TestMetadataEmissionPreservesSharedDirtyBranches4627(t *testing.T) {
 			if (err != nil) != fail {
 				t.Fatalf("materialize error=%v want failure=%v", err, fail)
 			}
-			if !reflect.DeepEqual(held, before) {
-				t.Fatal("emission changed retained selected/sibling identities, checksums or state")
-			}
+			before.assertUnchanged(t)
 			if lookupChunk(held, 0).pageID != 0 || lookupChunk(held, 2).pageID != 0 {
 				t.Fatal("fixture must retain both dirty branches")
 			}
@@ -506,7 +505,7 @@ func TestFreelistMetadataReuseAuxiliaryClaimConflict4627(t *testing.T) {
 		t.Fatal("allocator rollback lost original state")
 	}
 	for _, id := range aux {
-		if ledger.owners[id] != other {
+		if ledger.owners.Value(id) != other {
 			t.Fatal("loser rollback released winner")
 		}
 	}
@@ -535,7 +534,7 @@ func TestFreelistMetadataTailPlacementAfterBurn4627(t *testing.T) {
 		if err := ledger.RollbackPreVisible(second); err != nil {
 			t.Fatal(err)
 		}
-		if !ledger.Reserved(start) || ledger.candidates[first] == nil {
+		if !ledger.Reserved(start) || ledger.candidates.Value(first) == nil {
 			t.Fatal("lost live ownership")
 		}
 	})
@@ -546,7 +545,7 @@ func TestFreelistMetadataTailPlacementAfterBurn4627(t *testing.T) {
 		if _, _, err := ledger.reserveTail(id, 512, 16, nil, nil); !errors.Is(err, ErrNoAllocatablePage) {
 			t.Fatalf("overflow=%v", err)
 		}
-		if ledger.candidates[id] != nil {
+		if ledger.candidates.Value(id) != nil {
 			t.Fatal("invalid interval claimed candidate")
 		}
 	})

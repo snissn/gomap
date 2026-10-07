@@ -58,8 +58,8 @@ func TestAllocatorCOWPrepareProfileCountsLiveTransaction(t *testing.T) {
 	var candidate CandidateIDV1
 	candidate[0] = 1
 	ledger.mu.Lock()
-	ledger.owners[1<<39] = candidate
-	ledger.candidates[candidate] = &reservation{tailReserved: true, tailStart: 1 << 38, tailCount: 2}
+	ledger.owners.Set(1<<39, candidate)
+	ledger.candidates.Set(candidate, &reservation{tailReserved: true, tailStart: 1 << 38, tailCount: 2})
 	ledger.burnedTails = append(ledger.burnedTails, reservationInterval{start: 1 << 40, count: 3})
 	ledger.mu.Unlock()
 	profile = allocator.COWPrepareProfileV1()
@@ -812,5 +812,40 @@ func TestAllocatorCOWCandidateEncodesSealedReuseCapability(t *testing.T) {
 	generation := prepared.Candidate().Generation()
 	if generation.RetiredCount() != 0 || !generation.Allocatable(4) {
 		t.Fatalf("candidate retired=%d allocatable(4)=%v, want capability-pruned durable state", generation.RetiredCount(), generation.Allocatable(4))
+	}
+}
+
+// A matching ordinary candidate is not finite authority for a new request.
+func TestAllocatorFiniteRetryRefusesBeforeCachedOrdinaryCandidate5105(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if _, err := p.Alloc(4); err != nil {
+		t.Fatal(err)
+	}
+	a := New(p, 0)
+	if err := a.EnableNewCOWGenerationV1(1, 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	id := candidateIDFromString("cached-ordinary")
+	prepared, err := a.PrepareCOWCandidateRetiringWithLimitsV1(2, 2, id, ReuseCapability{}, nil, 0, NewCandidatePageSinkV1(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txn, stats, highWater := a.cow.txn, a.stats, p.PageCount()
+	ledgerOwners, ledgerCandidates := a.cow.ledger.owners.Len(), a.cow.ledger.candidates.Len()
+	account := &radixCredit5105{limit: ^uint64(0)}
+	retry, err := a.PrepareCOWCandidateRetiringWithLimitsV1(2, 2, id, ReuseCapability{}, nil, 0, failingPageSinkV1{}, &COWPrepareLimitsV1{AllocationCredit: account})
+	if retry != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
+		t.Fatalf("retry=%v error=%v", retry, err)
+	}
+	if a.cow.txn != txn || a.cow.prepared != prepared || a.stats != stats || p.PageCount() != highWater || a.cow.ledger.owners.Len() != ledgerOwners || a.cow.ledger.candidates.Len() != ledgerCandidates || account.bytes != 0 || account.retained != 0 || account.released != 0 {
+		t.Fatal("finite exact-retry refusal changed backing, accounting, ledger or pager")
+	}
+	retry, err = a.PrepareCOWCandidateRetiringWithLimitsV1(2, 2, id, ReuseCapability{}, nil, 0, failingPageSinkV1{}, nil)
+	if err != nil || retry != prepared {
+		t.Fatal("ordinary exact retry changed")
 	}
 }

@@ -1071,7 +1071,7 @@ func TestFreelistGenerationV1_LoadStateNodeAcceptsZeroChildChecksum(t *testing.T
 	store := NewMemoryPageStoreV1()
 	store.Pages[chunk.pageID] = chunkPage
 	store.Pages[root.pageID] = rootPage
-	loaded, err := loadStateNode(store, root.pageID, chunkTrieDepth, 0, 1, true, 128, make(map[uint64]struct{}))
+	loaded, err := loadStateNode(store, root.pageID, chunkTrieDepth, 0, 1, true, 128, newPageRadixV1[struct{}]())
 	if err != nil {
 		t.Fatalf("load zero-checksum child: %v", err)
 	}

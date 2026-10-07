@@ -5,6 +5,7 @@ package freelist
 import (
 	"sync"
 
+	"github.com/snissn/gomap/TreeDB/internal/allocatorownership"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
@@ -23,8 +24,12 @@ type Allocator struct {
 	// preferAppend makes Alloc ignore the freelist and allocate new pages by
 	// extending the file. This improves locality at the cost of reclaiming space
 	// later via vacuum.
-	preferAppend bool
-	cow          *allocatorCOWStateV1
+	preferAppend     bool
+	cow              *allocatorCOWStateV1
+	closed           bool // permanent: terminal cow detachment never restores legacy dispatch
+	writerAuthority  *allocatorownership.ManagedWriter
+	writerDetached   bool
+	rawWriterEscaped bool
 }
 
 func (a *Allocator) batchGetForWrite(pageID uint64) ([]byte, error) {

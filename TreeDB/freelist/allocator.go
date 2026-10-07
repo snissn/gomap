@@ -196,6 +196,9 @@ func New(p *pager.Pager, head uint64) *Allocator {
 func (a *Allocator) Head() uint64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return 0
+	}
 	if a.cow != nil {
 		return a.cow.generation.GenerationRef().HeaderPageID
 	}
@@ -205,6 +208,9 @@ func (a *Allocator) Head() uint64 {
 func (a *Allocator) SetHead(h uint64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return
+	}
 	a.head = h
 	a.stats.Pages = 0
 	a.stats.FreeIDs = 0
@@ -216,6 +222,9 @@ func (a *Allocator) SetHead(h uint64) {
 func (a *Allocator) RefreshStats(pageLimit uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	out, err := readStatsLocked(a.pager, a.head, pageLimit)
 	if err != nil {
 		return err
@@ -228,12 +237,18 @@ func (a *Allocator) RefreshStats(pageLimit uint64) error {
 func (a *Allocator) SetPreferAppend(prefer bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return
+	}
 	a.preferAppend = prefer
 }
 
 func (a *Allocator) SetFreelistRegion(pages uint64, radius int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return
+	}
 	if pages == 0 || radius <= 0 {
 		a.regionPages = 0
 		a.regionRadius = 0
@@ -252,6 +267,9 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return nil, ErrCandidateConsumed
+	}
 	if a.cow != nil {
 		ids := make([]uint64, 0, count)
 		for len(ids) < count {
@@ -792,6 +810,9 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return 0, ErrCandidateConsumed
+	}
 	if a.cow != nil {
 		return a.allocCOWLocked(hint)
 	}
@@ -803,6 +824,9 @@ func (a *Allocator) Alloc(hint uint64) (uint64, error) {
 func (a *Allocator) Free(id uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow != nil {
 		return a.retireCOWLocked([]uint64{id}, a.cow.generation.CommitSeq()+1)
 	}
@@ -878,6 +902,9 @@ func (a *Allocator) FreeMany(ids []uint64) error {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return ErrCandidateConsumed
+	}
 	if a.cow != nil {
 		return a.retireCOWLocked(ids, a.cow.generation.CommitSeq()+1)
 	}
@@ -996,6 +1023,9 @@ func (a *Allocator) initHead(id, next uint64) error {
 func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return Stats{}, ErrCandidateConsumed
+	}
 	if a.cow != nil {
 		return Stats{Head: a.cow.generation.GenerationRef().HeaderPageID, FreeIDs: a.cow.generation.FreeCount(), AllocPages: a.stats.AllocPages, AppendAllocPages: a.stats.AppendAllocPages, ReuseAllocPages: a.stats.ReuseAllocPages, FreePages: a.stats.FreePages}, nil
 	}
@@ -1016,6 +1046,9 @@ func (a *Allocator) Stats(pageLimit uint64) (Stats, error) {
 func (a *Allocator) Counters() Stats {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.closed {
+		return a.stats
+	}
 	if a.cow != nil {
 		return Stats{Head: a.cow.generation.GenerationRef().HeaderPageID, FreeIDs: a.cow.generation.FreeCount(), AllocPages: a.stats.AllocPages, AppendAllocPages: a.stats.AppendAllocPages, ReuseAllocPages: a.stats.ReuseAllocPages, FreePages: a.stats.FreePages}
 	}

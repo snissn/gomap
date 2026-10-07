@@ -26,6 +26,7 @@ type PreparedRootPublicationBaseProfile struct {
 	Seals                            uint64
 	SealPrefixEntries                uint64
 	FreelistCOW                      freelist.COWPrepareProfileV1
+	FreelistResident                 freelist.ResidentGenerationProfileV1
 	ValueLogRead                     valuelog.PreparedReadProfile
 }
 
@@ -124,6 +125,7 @@ func (db *DB) PreparedRootPublicationBaseProfile() PreparedRootPublicationBasePr
 		profile.PagerPages = idx.pager.PageCount()
 		if idx.allocator != nil {
 			profile.FreelistCOW = idx.allocator.COWPrepareProfileV1()
+			profile.FreelistResident = idx.allocator.ResidentGenerationProfileV1()
 		}
 	}
 	if db.valueLogManager != nil {

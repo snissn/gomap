@@ -1406,7 +1406,8 @@ func (db *DB) vacuumIndexOnlineRebuildV1(ctx context.Context, lockMaintenance bo
 			cleanupNewPager()
 			return selectionErr
 		}
-		if err := newAlloc.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
+		defer selected.closeOwnedFreelistV1()
+		if err := selected.enableFreelistV1(newAlloc, nil); err != nil {
 			for _, resources := range selected.SlotResources {
 				resources.Release()
 			}
