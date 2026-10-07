@@ -35,9 +35,9 @@ def config_mutation(key,value):
         c=load(packet/"config.json");c[key]=value;replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
     return run
 
-def raw_mutation(change,profile=None,mode=None):
+def raw_mutation(change,profile=None,mode=None,layout=None):
     def run(packet):
-        receipts=load(packet/"receipts.json");r=next(r for r in receipts if (profile is None or r["case"].startswith(profile+"-")) and (mode is None or "-"+mode+"-" in r["case"]));entry=r["raw_lifecycles"][-1];path=packet/(r["label"]+"-lifecycle")/entry["path"]
+        receipts=load(packet/"receipts.json");r=next(r for r in receipts if (profile is None or r["case"].startswith(profile+"-")) and (mode is None or "-"+mode+"-" in r["case"]) and (layout is None or "-"+layout+"-" in r["case"]));entry=r["raw_lifecycles"][-1];path=packet/(r["label"]+"-lifecycle")/entry["path"]
         raw=load(path);change(raw);replace_json(path,raw);entry["sha256"]=sha(path);replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
     return run
 
@@ -158,6 +158,12 @@ def main():
         "unfrozen-config":config_mutation("status","draft-unfrozen"),
         "wrong-resolved-mode":raw_mutation(lambda r:r.update(mode="append_only" if r["mode"]=="cow_btree" else "cow_btree")),
         "wrong-resolved-ack":raw_mutation(lambda r:r.update(ordinary_ack="unsafe")),
+        "float-cycles":config_mutation("cycles",3.0),
+        "overflow-layout-owner":raw_mutation(lambda r:[r["layout_proofs"][0][side].update({"treedb.cache.cow.views":str(1<<64)}) for side in ("owners_before","owners_after")],mode="cow_btree"),
+        "overflow-pointer-bytes":raw_mutation(lambda r:next(b for b in r["boundaries"] if b["phase"]=="pinned_checkpoint")["stats"].update({"treedb.cache.vlog_payload_kind.raw_bytes.single_value":str(1<<64)}),mode="append_only",layout="forced_pointer"),
+        "overflow-call-time":raw_mutation(lambda r:[c.update(start_ns=c["start_ns"]+(1<<63),completion_ns=c["completion_ns"]+(1<<63)) for c in r["calls"]]),
+        "float-finite-limit":raw_mutation(lambda r:r["limits"].update(MaxViews=256.0)),
+        "overflow-backend-counter":raw_mutation(lambda r:[b["stats"].update({"treedb.commit_seq":str(1<<64)}) for b in r["boundaries"] if b["stats"]],mode="append_only"),
         "zero-finite-limit":raw_mutation(lambda r:r["limits"].update(MaxTotalBytes=0)),
         "missing-close":raw_mutation(missing_close),
         "close-before-seed":raw_mutation(lambda r:retime_call(r,"final_close",0)),

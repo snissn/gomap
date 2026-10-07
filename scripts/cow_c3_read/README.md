@@ -356,7 +356,17 @@ No schedule retry, artificial call extension or packet exclusion is used.
 
 Canonical C4 workload, metric rules and pending native declarations use typed
 JSON identity. Copied and rehashed packet mutations must reject boolean or
-float substitutions for their literal integer fields.
+float substitutions for their literal integer fields. Raw COW limits also require
+exact fields and integer values. Every required boundary counter, layout-owner
+observation and persistent single-value byte counter must fit the producer's
+uint64 domain; raw call times must fit nonnegative int64. The serialized receipt
+check below uses retained actual raw lifecycles and tests the upper-bound values
+as well as copied overflow and float substitutions:
+
+```sh
+python3 -B scripts/cow_c3_read/c4_integer_domain_smoke.py \
+  --positive /retained/positive-c4-packet --out /new/integer-domain-check
+```
 
 The frozen Linux host includes `cpu_count` and `cpu_affinity`. The latter is the
 sorted actual `os.sched_getaffinity(0)` mask: at least four distinct nonnegative
