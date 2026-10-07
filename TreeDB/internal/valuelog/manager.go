@@ -67,9 +67,8 @@ type File struct {
 	// The physical parent is captured with retirementIdentity, independently of
 	// an optional pin registry. A missing configured alias is not absence proof.
 	retirementParentMu       sync.Mutex
-	retirementParent         *os.File
+	retirementParent         *retirementParentHandle
 	retirementParentIdentity rootpublication.StableIdentity
-	retirementParentUsers    int
 	retirementParentReleased bool
 	currentWritable          atomic.Bool
 	dictLookup               DictLookup
@@ -1307,8 +1306,10 @@ func setRetentionSizes(hint int) SetRetentionSizes {
 func (shape *SetRetentionSizes) addFile(f *File) {
 	shape.FileCount++
 	// The constructor-created path/namespace string capacities use a conservative
-	// two-times-length plus 64 bytes each rounding/header envelope.
-	shape.PathEnvelope += 2*uint64(len(f.Path)+len(f.stableNamespace)) + 128
+	// two-times-length plus 64 bytes each rounding/header envelope. Reserve
+	// future retirement metadata before snapshot/batch owner publication, even
+	// when no retirement pool exists yet. Sharing can only reduce this charge.
+	shape.PathEnvelope += 2*uint64(len(f.Path)+len(f.stableNamespace)) + 128 + retirementParentRetentionEnvelope
 }
 
 func (s *Set) ReadChecksumEnabled() bool {
@@ -1446,7 +1447,8 @@ type Manager struct {
 	currentWritableMmap         atomic.Bool
 	currentWritableReadBarrier  atomic.Value
 	stableResourcePins          *rootpublication.IdentityPinRegistry
-	retiredCount                int // tracked zombies; protected by mu
+	retiredCount                int                   // tracked zombies; protected by mu
+	retirementParents           *retirementParentPool // lazy cold ownership, protected by mu
 	recoveredStableDeleteDirs   map[string]bool
 	stableDeleteRecoveryEnabled bool
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error

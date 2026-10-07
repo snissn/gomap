@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
@@ -677,7 +678,7 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	if err != nil {
 		return rootpublication.StableIdentity{}, err
 	}
-	parent, err := rootpublication.OpenStableParent(parentPath)
+	parent, err := rootpublication.OpenStableParentForRetention(parentPath)
 	if err != nil {
 		return rootpublication.StableIdentity{}, err
 	}
@@ -704,8 +705,19 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 		_ = parent.Close()
 		return rootpublication.StableIdentity{}, fmt.Errorf("%w: retirement parent does not name captured segment", rootpublication.ErrResourceConflict)
 	}
+	if m.retirementParents == nil {
+		m.retirementParents = &retirementParentPool{}
+	}
+	retained, temporary := m.retirementParents.acquire(parent, parentIdentity)
+	if temporary != nil {
+		if err := temporary.Close(); err != nil {
+			// Admission failed; balance the acquired owner before publishing anything.
+			_ = closeRetirementParent(retained.drop(true))
+			return rootpublication.StableIdentity{}, err
+		}
+	}
 	file.retirementParentMu.Lock()
-	file.retirementParent = parent
+	file.retirementParent = retained
 	file.retirementParentIdentity = parentIdentity
 	file.retirementParentMu.Unlock()
 	file.retirementIdentity = identity
@@ -788,7 +800,8 @@ func validateStableDeletePathIdentity(path string, identity rootpublication.Stab
 }
 
 // borrowRetirementParent keeps an admitted operation valid through explicit
-// eviction. Ownership release never waits under manager.mu for a deleter.
+// eviction. File membership prevents new borrows after owner release; the pool
+// keeps existing borrows indexed even after the final owner disappears.
 func borrowRetirementParent(file *File) (*os.File, func() error, error) {
 	file.retirementParentMu.Lock()
 	defer file.retirementParentMu.Unlock()
@@ -796,36 +809,28 @@ func borrowRetirementParent(file *File) (*os.File, func() error, error) {
 		return nil, nil, fmt.Errorf("%w: missing value-log retirement parent", rootpublication.ErrUnresolvedResource)
 	}
 	parent := file.retirementParent
-	file.retirementParentUsers++
-	return parent, func() error {
-		file.retirementParentMu.Lock()
-		file.retirementParentUsers--
-		closeParent := file.retirementParentReleased && file.retirementParentUsers == 0
-		if closeParent {
-			file.retirementParent = nil
-		}
-		file.retirementParentMu.Unlock()
-		if closeParent {
-			return parent.Close()
-		}
-		return nil
+	parent.pool.mu.Lock()
+	parent.borrowers++
+	parent.pool.mu.Unlock()
+	var once sync.Once
+	var releaseErr error
+	return parent.file, func() error {
+		once.Do(func() { releaseErr = closeRetirementParent(parent.drop(false)) })
+		return releaseErr
 	}, nil
 }
 
-// releaseRetirementParent relinquishes ownership without closing under mu.
-// The caller closes the returned handle after unlocking; an active borrower
-// instead closes it when the last operation joins.
+// releaseRetirementParent drops one File's membership exactly once. Final
+// shared Close belongs to the caller after manager.mu is unlocked, or to the
+// last active borrow callback; no pool callback enters manager.mu.
 func releaseRetirementParent(file *File) *os.File {
 	file.retirementParentMu.Lock()
-	file.retirementParentReleased = true
 	parent := file.retirementParent
-	closeParent := parent != nil && file.retirementParentUsers == 0
-	if closeParent {
-		file.retirementParent = nil
-	}
+	file.retirementParent = nil
+	file.retirementParentReleased = true
 	file.retirementParentMu.Unlock()
-	if closeParent {
-		return parent
+	if parent != nil {
+		return parent.drop(true)
 	}
 	return nil
 }

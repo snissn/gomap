@@ -169,8 +169,31 @@ parent, even when a replacement directory contains a hard link to the same inode
 Capture is shared by initial scanning, additional scan directories and explicit
 RegisterSegment; it adds no point-read or zero-zombie Refresh work. Registration
 closes its temporary parent handle, retaining only typed identity until retirement.
-Existing SetRetentionSizes uses unsafe.Sizeof(File{}) to charge the added field;
-nil-registry files acquire no namespace string. An unsupported stable-identity
+The manager lazily shares one retirement parent handle per exact physical directory,
+keyed by platform, volume and object identity rather than path or child identity.
+Each File retains one owner membership; operation borrows have independent counts.
+An entry stays indexed while either count is nonzero, including borrower-only
+intervals, so a new sibling admission reuses that same handle. Every pool hit still
+opens and validates the configured parent and exact child against registration;
+sharing cannot authorize a rebound alias, even with a hardlinked original child.
+Final owner/borrow release removes the exact entry and closes once outside manager
+and pool locks. Other siblings and active operations retain their authority.
+The retained handle has a fixed diagnostic Name; exact opening still uses the
+resolved physical path, and all namespace operations use its handle and identities.
+Ordinary OpenStableParent behavior is unchanged. Empty pool maps are cleared, and
+maps are rebuilt when live entries fall below half their historical high-water
+count, bounding retained map capacity after disjoint populations retire.
+SetRetentionSizes uses unsafe.Sizeof(File{}) for the File wrapper and reserves an
+additional conservative 2 KiB per selected File in PathEnvelope for future shared
+pool/map/entry/os.File/internal state/fixed-name metadata. This reservation exists
+before snapshot and prepared-batch publication, even before a pool is allocated;
+sharing reduces actual metadata without reducing the frozen worst-case charge.
+It excludes kernel descriptor state and transient operation scratch, and does not
+claim a measured sizeof(os.File) accounts for the OS handle. On the admitted Go
+1.26 layout, eight-slot groups for the 48-byte identity plus pointer fit within
+512 bytes; geometric capacity, bounded high-water slack and shrink overlap plus
+pool/entry/file wrappers fit within that per-owner allocation envelope.
+Registered nil-registry files acquire no namespace string. An unsupported stable-identity
 platform can retain its existing nil-registry read-only opening behavior, but
 missing original authority never authorizes retirement or registry admission.
 A vanished alias or renamed physical directory cannot

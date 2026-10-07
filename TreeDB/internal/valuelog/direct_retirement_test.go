@@ -259,10 +259,11 @@ func TestManagerDirectRetirementParentLifetime(t *testing.T) {
 			if err := manager.MarkZombie(file.ID); err != nil {
 				t.Fatal(err)
 			}
-			parent := file.retirementParent
-			if parent == nil {
+			retained := file.retirementParent
+			if retained == nil {
 				t.Fatal("retirement did not retain its physical parent")
 			}
+			parent := retained.file
 			var release func() error
 			if mode == "borrowed-EvictSegment" {
 				borrowed, done, err := borrowRetirementParent(file)
@@ -302,7 +303,7 @@ func TestManagerDirectRetirementParentLifetime(t *testing.T) {
 				t.Fatal("joined retirement parent still has a valid descriptor")
 			}
 			file.retirementParentMu.Lock()
-			released := file.retirementParentReleased && file.retirementParent == nil && file.retirementParentUsers == 0
+			released := file.retirementParentReleased && file.retirementParent == nil
 			file.retirementParentMu.Unlock()
 			if !released {
 				t.Fatal("released retirement parent remains owned or borrowed")
