@@ -109,7 +109,7 @@ def validate_config(c):
     need(set(c["environment"]) == CONTROLS and all(type(v) is str for v in c["environment"].values()), "explicit environment controls")
     need(c["environment"]["GOWORK"] == "off" and c["environment"]["GOMAXPROCS"] == "4" and c["environment"]["GOFLAGS"] == "", "runtime controls mismatch")
     need(c["go_binary"] == str(Path(c["environment"]["GOROOT"]) / "bin/go"), "unbound Go launcher path")
-    need(c["go_version"].startswith("go version go1.26.3 "), "pinned Go 1.26.3 required")
+    need(isinstance(c["go_version"], str) and c["go_version"], "missing frozen Go version")
     for key in ("go_binary_sha256","toolchain_identity","external_input_identity"):
         need(re.fullmatch(r"[0-9a-f]{64}",c[key] or ""), "toolchain hash required")
     for name in ("GOROOT","GOCACHE","GOMODCACHE","TMPDIR"):

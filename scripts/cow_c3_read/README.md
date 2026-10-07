@@ -129,6 +129,12 @@ Freeze its canonical `toolchain_identity` digest alongside
 `go_version` and `go_binary_sha256`; both build receipts, live collection and
 offline analysis require the same identity. Collection checks the actual
 inventory before and after capture. Offline analysis needs only retained bytes.
+C4 uses the same nonempty frozen Go-version contract as C3. The version is
+selected and pinned by the evidence policy, rather than a second hardcoded
+patch version in the C4 schema. Both builds and the retained live-toolchain
+record must match that exact frozen version, launcher hash and inventory
+identity. A newly approved official toolchain requires fresh binaries and
+receipts; older packets keep their original toolchain identities.
 Build receipts must report integer exit zero and exactly
 `<GOROOT>/bin/go test -c -o <declared-binary> ./TreeDB/mvcc/cowbench`, plus the exact
 `go list -compiled -deps -test -json ./TreeDB/mvcc/cowbench` provenance command. Custom
