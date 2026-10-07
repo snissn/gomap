@@ -437,7 +437,7 @@ func TestQuicksilverReaderTimerExcludesWriterDrain(t *testing.T) {
 }
 
 func TestQuicksilverCheckpointNanosecondRoundTrip(t *testing.T) {
-	for _, elapsed := range []time.Duration{1, 32259, 1633660, 100001} {
+	for _, elapsed := range []time.Duration{1, 249, 32259, 1633660, 100001} {
 		t.Run(elapsed.String(), func(t *testing.T) {
 			// The measured duration travels through milliseconds in the suite JSON
 			// before the canonical exporter reconstructs a nanosecond duration.
