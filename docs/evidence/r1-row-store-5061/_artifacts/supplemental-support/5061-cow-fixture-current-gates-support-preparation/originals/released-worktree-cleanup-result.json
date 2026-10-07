@@ -1,0 +1,2495 @@
+{
+  "all_explicit_protected_filesystem_identities_match": true,
+  "all_protected_existing_paths_present": true,
+  "all_released_commits_preserved_in_shared_git": true,
+  "all_released_preservation_refs_unchanged": true,
+  "all_removed_paths_absent_unregistered": true,
+  "authorization": "Root released exact11 clean worktrees for graph5056 under executor disk-cleanup protocol; no broader cleanup authorized",
+  "common_git": "/Users/michaelseiler/dev/snissn/gomap/.git",
+  "deletion_method": "git worktree remove exact-path WITHOUT force; no branch deletion, clean or prune",
+  "final_verification_note": "Initial strict global registration equality assertion detected an unrelated Quicksilver branch advance. Read-only reconciliation found protected path set unchanged, all11 released preservation refs exact, explicit protected identities intact; no broader cleanup occurred. Space delta is an observation, not attributed exclusively to cleaner because other filesystem activity can occur.",
+  "finish_utc": "2026-10-06T18:41:19.973044+00:00",
+  "free_space_after": {
+    "available_KiB": 6618488,
+    "filesystem": "/dev/disk3s5",
+    "raw": "Filesystem   1024-blocks      Used Available Capacity iused    ifree %iused  Mounted on\n/dev/disk3s5   482797652 437649936   6618488    99% 7108574 66184880   10%   /System/Volumes/Data\n"
+  },
+  "free_space_before": {
+    "available_KiB": 4139140,
+    "filesystem": "/dev/disk3s5",
+    "raw": "Filesystem   1024-blocks      Used Available Capacity iused    ifree %iused  Mounted on\n/dev/disk3s5   482797652 440129284   4139140   100% 7149240 41391400   15%   /System/Volumes/Data\n"
+  },
+  "global_all_named_refs_unchanged_claim": false,
+  "kept": [],
+  "observed_available_change_KiB": 2479348,
+  "protected_after": [
+    {
+      "dev": 16777231,
+      "existed_before": true,
+      "exists_after": true,
+      "filesystem_identity_match": true,
+      "inode": 114306919,
+      "mode": 16877,
+      "path": "/Users/michaelseiler/dev/snissn/gomap"
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-d1-content-proof",
+      "registration_after": {
+        "HEAD": "e96b46e637946c07fa410072e5dc23b2b9abe551",
+        "branch": "refs/heads/codex/issue-4728-content-proof-20260927",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-content-proof"
+      },
+      "registration_before": {
+        "HEAD": "e96b46e637946c07fa410072e5dc23b2b9abe551",
+        "branch": "refs/heads/codex/issue-4728-content-proof-20260927",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-content-proof"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-d1-drain-340179",
+      "registration_after": {
+        "HEAD": "4022e13d54f34381d23739bbc6ac04fbe1935c98",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-drain-340179"
+      },
+      "registration_before": {
+        "HEAD": "4022e13d54f34381d23739bbc6ac04fbe1935c98",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-drain-340179"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-d1-forward-size-7dc",
+      "registration_after": {
+        "HEAD": "7dc10c88b5e1ac05e91d67ff9d982ca645359f47",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-forward-size-7dc"
+      },
+      "registration_before": {
+        "HEAD": "7dc10c88b5e1ac05e91d67ff9d982ca645359f47",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-forward-size-7dc"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-hash-tournament",
+      "registration_after": {
+        "HEAD": "efcd32cd96b2435ee77caded376ed2e514f78bb4",
+        "branch": "refs/heads/codex/hash-tournament-experiment",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-hash-tournament"
+      },
+      "registration_before": {
+        "HEAD": "efcd32cd96b2435ee77caded376ed2e514f78bb4",
+        "branch": "refs/heads/codex/hash-tournament-experiment",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-hash-tournament"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4728",
+      "registration_after": {
+        "HEAD": "dea3fb9d972eb9d45ba992de3fee44d9bd73d6a3",
+        "branch": "refs/heads/codex/issue-4728-fix-ambiguity",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4728"
+      },
+      "registration_before": {
+        "HEAD": "dea3fb9d972eb9d45ba992de3fee44d9bd73d6a3",
+        "branch": "refs/heads/codex/issue-4728-fix-ambiguity",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4728"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-comparison-packet",
+      "registration_after": {
+        "HEAD": "3e3ca283c9c52f8f9c1ac7ebcabd44cc22bf5a54",
+        "branch": "refs/heads/codex/issue-4753-final-evidence",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-comparison-packet"
+      },
+      "registration_before": {
+        "HEAD": "3e3ca283c9c52f8f9c1ac7ebcabd44cc22bf5a54",
+        "branch": "refs/heads/codex/issue-4753-final-evidence",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-comparison-packet"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-evidence",
+      "registration_after": {
+        "HEAD": "4497cbe955ba5757a605a56039467629fe6c7537",
+        "branch": "refs/heads/codex/issue-4753-integrated-packing-no-go",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-evidence"
+      },
+      "registration_before": {
+        "HEAD": "4497cbe955ba5757a605a56039467629fe6c7537",
+        "branch": "refs/heads/codex/issue-4753-integrated-packing-no-go",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-evidence"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-completion",
+      "registration_after": {
+        "HEAD": "59442c79024d4e880d75dbb1846e58ac12e9ac85",
+        "branch": "refs/heads/codex/issue-4753-resource-completion",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-completion"
+      },
+      "registration_before": {
+        "HEAD": "59442c79024d4e880d75dbb1846e58ac12e9ac85",
+        "branch": "refs/heads/codex/issue-4753-resource-completion",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-completion"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-topology",
+      "registration_after": {
+        "HEAD": "cad3620b3312df0f20c0eb7c478ab4066ef439da",
+        "branch": "refs/heads/codex/issue-4753-resource-topology",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-topology"
+      },
+      "registration_before": {
+        "HEAD": "cad3620b3312df0f20c0eb7c478ab4066ef439da",
+        "branch": "refs/heads/codex/issue-4753-resource-topology",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-topology"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-retained-source-binding",
+      "registration_after": {
+        "HEAD": "498f8f31faae6a780e40f929dde83170e2d68adb",
+        "branch": "refs/heads/codex/issue-4753-retained-source-binding",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-retained-source-binding"
+      },
+      "registration_before": {
+        "HEAD": "498f8f31faae6a780e40f929dde83170e2d68adb",
+        "branch": "refs/heads/codex/issue-4753-retained-source-binding",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-retained-source-binding"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-selected-lifecycle",
+      "registration_after": {
+        "HEAD": "000f104c2482f81b18bceb55613b3324c6e304c6",
+        "branch": "refs/heads/codex/issue-4753-retained-mutation-schema",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-selected-lifecycle"
+      },
+      "registration_before": {
+        "HEAD": "000f104c2482f81b18bceb55613b3324c6e304c6",
+        "branch": "refs/heads/codex/issue-4753-retained-mutation-schema",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-selected-lifecycle"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4773-hier-route",
+      "registration_after": {
+        "HEAD": "cf0ba091e98e40dacd76eb0ec0c47cd986fed02f",
+        "branch": "refs/heads/codex/issue-4773-hierarchical-route",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4773-hier-route"
+      },
+      "registration_before": {
+        "HEAD": "cf0ba091e98e40dacd76eb0ec0c47cd986fed02f",
+        "branch": "refs/heads/codex/issue-4773-hierarchical-route",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4773-hier-route"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-domain-chunks",
+      "registration_after": {
+        "HEAD": "5525c577d1717909b9ba74ade07ffe44a4db5988",
+        "branch": "refs/heads/codex/issue-4775-domain-chunks",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-domain-chunks"
+      },
+      "registration_before": {
+        "HEAD": "5525c577d1717909b9ba74ade07ffe44a4db5988",
+        "branch": "refs/heads/codex/issue-4775-domain-chunks",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-domain-chunks"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-graph-home-packing",
+      "registration_after": {
+        "HEAD": "04e6a9a2d7c3298e527db667b0097c10b303120b",
+        "branch": "refs/heads/codex/issue-4775-graph-home-packing",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-graph-home-packing"
+      },
+      "registration_before": {
+        "HEAD": "04e6a9a2d7c3298e527db667b0097c10b303120b",
+        "branch": "refs/heads/codex/issue-4775-graph-home-packing",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-graph-home-packing"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-post-v-scratch",
+      "registration_after": {
+        "HEAD": "768879501c90644aaeac8709680a6c2728217175",
+        "branch": "refs/heads/codex/issue-4775-post-v-scratch",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-post-v-scratch"
+      },
+      "registration_before": {
+        "HEAD": "768879501c90644aaeac8709680a6c2728217175",
+        "branch": "refs/heads/codex/issue-4775-post-v-scratch",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-post-v-scratch"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-routing-compatibility",
+      "registration_after": {
+        "HEAD": "9865fa7ef43527ee721dc6d86252e59698793469",
+        "branch": "refs/heads/codex/issue-4775-routing-compatibility",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-routing-compatibility"
+      },
+      "registration_before": {
+        "HEAD": "9865fa7ef43527ee721dc6d86252e59698793469",
+        "branch": "refs/heads/codex/issue-4775-routing-compatibility",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-routing-compatibility"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-v-restack",
+      "registration_after": {
+        "HEAD": "9baaec4d2eab3f07f1d81292ffc21d619bcce264",
+        "branch": "refs/heads/codex/issue-4775-v-restack",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-v-restack"
+      },
+      "registration_before": {
+        "HEAD": "9baaec4d2eab3f07f1d81292ffc21d619bcce264",
+        "branch": "refs/heads/codex/issue-4775-v-restack",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-v-restack"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-accepted-disjoint-retained-20260930",
+      "registration_after": {
+        "HEAD": "15542751bc11a0ab964b66a44bb93aa96576093b",
+        "branch": "refs/heads/issue-4809-accepted-disjoint-retained-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-accepted-disjoint-retained-20260930"
+      },
+      "registration_before": {
+        "HEAD": "15542751bc11a0ab964b66a44bb93aa96576093b",
+        "branch": "refs/heads/issue-4809-accepted-disjoint-retained-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-accepted-disjoint-retained-20260930"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-auth-shard",
+      "registration_after": {
+        "HEAD": "9e781558939079b883c9accc4c383fdc6968d1a9",
+        "branch": "refs/heads/codex/issue-4809-auth-shard-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-auth-shard"
+      },
+      "registration_before": {
+        "HEAD": "9e781558939079b883c9accc4c383fdc6968d1a9",
+        "branch": "refs/heads/codex/issue-4809-auth-shard-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-auth-shard"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-config-capacity-20260929",
+      "registration_after": {
+        "HEAD": "7fca6ebb7614b073529286da06ffad74c6a64bc7",
+        "branch": "refs/heads/codex/issue-4809-config-capacity-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-config-capacity-20260929"
+      },
+      "registration_before": {
+        "HEAD": "7fca6ebb7614b073529286da06ffad74c6a64bc7",
+        "branch": "refs/heads/codex/issue-4809-config-capacity-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-config-capacity-20260929"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-m3-index-epoch-20260930",
+      "registration_after": {
+        "HEAD": "fbc24bcdfcd43b8c887c0b4b1f92b875195f9237",
+        "branch": "refs/heads/issue-4809-m3-index-epoch-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-m3-index-epoch-20260930"
+      },
+      "registration_before": {
+        "HEAD": "fbc24bcdfcd43b8c887c0b4b1f92b875195f9237",
+        "branch": "refs/heads/issue-4809-m3-index-epoch-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-m3-index-epoch-20260930"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-asset-corruption",
+      "registration_after": {
+        "HEAD": "50411593e88784ae2338479fac5f5d7cc45bce76",
+        "branch": "refs/heads/codex/issue-4809-owner-asset-corruption-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-asset-corruption"
+      },
+      "registration_before": {
+        "HEAD": "50411593e88784ae2338479fac5f5d7cc45bce76",
+        "branch": "refs/heads/codex/issue-4809-owner-asset-corruption-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-asset-corruption"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-inventory",
+      "registration_after": {
+        "HEAD": "8c994a3941c6c5f627492f5d9eccff18256bc26e",
+        "branch": "refs/heads/codex/issue-4809-immutable-authority-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-inventory"
+      },
+      "registration_before": {
+        "HEAD": "8c994a3941c6c5f627492f5d9eccff18256bc26e",
+        "branch": "refs/heads/codex/issue-4809-immutable-authority-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-inventory"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-segments",
+      "registration_after": {
+        "HEAD": "6594361a834925f2d7a92df0d87abe46846b1ad0",
+        "branch": "refs/heads/codex/issue-4809-owner-segments-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-segments"
+      },
+      "registration_before": {
+        "HEAD": "6594361a834925f2d7a92df0d87abe46846b1ad0",
+        "branch": "refs/heads/codex/issue-4809-owner-segments-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-segments"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-ownerlocal-runtime",
+      "registration_after": {
+        "HEAD": "4728e6cb112c5f3d51441a71c6a9f2dcb4cc0d8e",
+        "branch": "refs/heads/codex/issue-4809-ownerlocal-merged-support-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-ownerlocal-runtime"
+      },
+      "registration_before": {
+        "HEAD": "4728e6cb112c5f3d51441a71c6a9f2dcb4cc0d8e",
+        "branch": "refs/heads/codex/issue-4809-ownerlocal-merged-support-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-ownerlocal-runtime"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-provisional",
+      "registration_after": {
+        "HEAD": "333dca0f9c79126f1fe0ae7244c686dd23db3f8c",
+        "branch": "refs/heads/codex/issue-4809-provisional-20260927",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-provisional"
+      },
+      "registration_before": {
+        "HEAD": "333dca0f9c79126f1fe0ae7244c686dd23db3f8c",
+        "branch": "refs/heads/codex/issue-4809-provisional-20260927",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-provisional"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-compatible-model-20260929",
+      "registration_after": {
+        "HEAD": "2bc19ed971f089d8f7d0a25870fb2aa4ec7c30ac",
+        "branch": "refs/heads/issue-4809-public-compatible-model-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-compatible-model-20260929"
+      },
+      "registration_before": {
+        "HEAD": "2bc19ed971f089d8f7d0a25870fb2aa4ec7c30ac",
+        "branch": "refs/heads/issue-4809-public-compatible-model-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-compatible-model-20260929"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-scaled-correctness-20260930",
+      "registration_after": {
+        "HEAD": "06c9d4fbcc41acb08f97265cac99b25b6e734258",
+        "branch": "refs/heads/issue-4809-public-scaled-correctness-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-scaled-correctness-20260930"
+      },
+      "registration_before": {
+        "HEAD": "06c9d4fbcc41acb08f97265cac99b25b6e734258",
+        "branch": "refs/heads/issue-4809-public-scaled-correctness-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-scaled-correctness-20260930"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-representative-2owner-20260929",
+      "registration_after": {
+        "HEAD": "49c4fd543586aa6dff349bf98405dc7f68c8a048",
+        "branch": "refs/heads/codex/issue-4809-representative-2owner-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-representative-2owner-20260929"
+      },
+      "registration_before": {
+        "HEAD": "49c4fd543586aa6dff349bf98405dc7f68c8a048",
+        "branch": "refs/heads/codex/issue-4809-representative-2owner-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-representative-2owner-20260929"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-retained-snapshot-install-v1",
+      "registration_after": {
+        "HEAD": "d6c2b9a6e6930785f0be3e71596726c2c1d07a89",
+        "branch": "refs/heads/issue-4809-retained-snapshot-install-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-retained-snapshot-install-v1"
+      },
+      "registration_before": {
+        "HEAD": "d6c2b9a6e6930785f0be3e71596726c2c1d07a89",
+        "branch": "refs/heads/issue-4809-retained-snapshot-install-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-retained-snapshot-install-v1"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-scoped-stage",
+      "registration_after": {
+        "HEAD": "2a4f645456f0c39680b7dad42da3b12308e7fa21",
+        "branch": "refs/heads/codex/issue-4809-scoped-stage-merge-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-scoped-stage"
+      },
+      "registration_before": {
+        "HEAD": "2a4f645456f0c39680b7dad42da3b12308e7fa21",
+        "branch": "refs/heads/codex/issue-4809-scoped-stage-merge-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-scoped-stage"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader",
+      "registration_after": {
+        "HEAD": "bae8646fb6f0c49f143581b0431bdd8020b8de05",
+        "branch": "refs/heads/codex/issue-4809-separate-leader",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader"
+      },
+      "registration_before": {
+        "HEAD": "bae8646fb6f0c49f143581b0431bdd8020b8de05",
+        "branch": "refs/heads/codex/issue-4809-separate-leader",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-merge-v1",
+      "registration_after": {
+        "HEAD": "1b4d2294a18b2576ee39920e81590ce8ac7af177",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-merge-v1"
+      },
+      "registration_before": {
+        "HEAD": "1b4d2294a18b2576ee39920e81590ce8ac7af177",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-merge-v1"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-v2",
+      "registration_after": {
+        "HEAD": "228039fa27bfe9a3efd41f9d36dde695e6301114",
+        "branch": "refs/heads/codex/issue-4809-separate-leader-v2-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-v2"
+      },
+      "registration_before": {
+        "HEAD": "228039fa27bfe9a3efd41f9d36dde695e6301114",
+        "branch": "refs/heads/codex/issue-4809-separate-leader-v2-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-v2"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-stale-active-red-20260929",
+      "registration_after": {
+        "HEAD": "3ba1674d7a3ffcb2880b0a7b264aba00a0bcd235",
+        "branch": "refs/heads/codex/issue-4809-stale-active-red-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-stale-active-red-20260929"
+      },
+      "registration_before": {
+        "HEAD": "3ba1674d7a3ffcb2880b0a7b264aba00a0bcd235",
+        "branch": "refs/heads/codex/issue-4809-stale-active-red-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-stale-active-red-20260929"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811",
+      "registration_after": {
+        "HEAD": "c1c9c80deaf7019a8656c5b65e6acf751a756967",
+        "branch": "refs/heads/codex/issue-4811-bounded-replica-replacement",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811"
+      },
+      "registration_before": {
+        "HEAD": "c1c9c80deaf7019a8656c5b65e6acf751a756967",
+        "branch": "refs/heads/codex/issue-4811-bounded-replica-replacement",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-authority",
+      "registration_after": {
+        "HEAD": "ee06c9eed72fea59829f5ec068a6e6882d35e0bf",
+        "branch": "refs/heads/codex/issue-4811-active-authority-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-authority"
+      },
+      "registration_before": {
+        "HEAD": "ee06c9eed72fea59829f5ec068a6e6882d35e0bf",
+        "branch": "refs/heads/codex/issue-4811-active-authority-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-authority"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-owner-replacement-red",
+      "registration_after": {
+        "HEAD": "ee7b8b9043986e84fb50482cd709d666ac09afaf",
+        "branch": "refs/heads/codex/issue-4811-active-owner-replacement-red-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-owner-replacement-red"
+      },
+      "registration_before": {
+        "HEAD": "ee7b8b9043986e84fb50482cd709d666ac09afaf",
+        "branch": "refs/heads/codex/issue-4811-active-owner-replacement-red-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-owner-replacement-red"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-cold-read-gap",
+      "registration_after": {
+        "HEAD": "946cf619c472104ba06b08862f44f4e7226e0ffa",
+        "branch": "refs/heads/codex/issue-4811-cold-read-gap-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-cold-read-gap"
+      },
+      "registration_before": {
+        "HEAD": "946cf619c472104ba06b08862f44f4e7226e0ffa",
+        "branch": "refs/heads/codex/issue-4811-cold-read-gap-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-cold-read-gap"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-immutable-standby",
+      "registration_after": {
+        "HEAD": "30fc478f5779dfaa045de96a607cee1adb857618",
+        "branch": "refs/heads/codex/issue-4811-immutable-standby-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-immutable-standby"
+      },
+      "registration_before": {
+        "HEAD": "30fc478f5779dfaa045de96a607cee1adb857618",
+        "branch": "refs/heads/codex/issue-4811-immutable-standby-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-immutable-standby"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-next",
+      "registration_after": {
+        "HEAD": "6fffc25441e150b97bc8dbbcb2ebd0c4e5d5e362",
+        "branch": "refs/heads/codex/issue-4811-next-recovery-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-next"
+      },
+      "registration_before": {
+        "HEAD": "6fffc25441e150b97bc8dbbcb2ebd0c4e5d5e362",
+        "branch": "refs/heads/codex/issue-4811-next-recovery-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-next"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-noncatalog-owner-runtime",
+      "registration_after": {
+        "HEAD": "feaa244b79487c515d930b66e83e99a8df8d4518",
+        "branch": "refs/heads/codex/issue-4811-noncatalog-owner-runtime",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-noncatalog-owner-runtime"
+      },
+      "registration_before": {
+        "HEAD": "feaa244b79487c515d930b66e83e99a8df8d4518",
+        "branch": "refs/heads/codex/issue-4811-noncatalog-owner-runtime",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-noncatalog-owner-runtime"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-owner-preparation-v1",
+      "registration_after": {
+        "HEAD": "1ac892033b6dd4f9f5ebac149ff46b4ab6e20212",
+        "branch": "refs/heads/codex/issue-4811-owner-preparation-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-owner-preparation-v1"
+      },
+      "registration_before": {
+        "HEAD": "1ac892033b6dd4f9f5ebac149ff46b4ab6e20212",
+        "branch": "refs/heads/codex/issue-4811-owner-preparation-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-owner-preparation-v1"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-postmerge-snapshot-admission",
+      "registration_after": {
+        "HEAD": "c5a0754dbed1d1d113c7238f25a2fdc77f9ea211",
+        "branch": "refs/heads/codex/issue-4811-postmerge-snapshot-admission",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-postmerge-snapshot-admission"
+      },
+      "registration_before": {
+        "HEAD": "c5a0754dbed1d1d113c7238f25a2fdc77f9ea211",
+        "branch": "refs/heads/codex/issue-4811-postmerge-snapshot-admission",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-postmerge-snapshot-admission"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-sequential",
+      "registration_after": {
+        "HEAD": "f71642dd73d5094c4340be3e11a91761e7fc0276",
+        "branch": "refs/heads/codex/issue-4811-close-revocation-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-sequential"
+      },
+      "registration_before": {
+        "HEAD": "f71642dd73d5094c4340be3e11a91761e7fc0276",
+        "branch": "refs/heads/codex/issue-4811-close-revocation-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-sequential"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-issue-4819-base",
+      "registration_after": {
+        "HEAD": "1271d2ed425a67d18474ea076e53cf0e9d3f18a2",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4819-base"
+      },
+      "registration_before": {
+        "HEAD": "1271d2ed425a67d18474ea076e53cf0e9d3f18a2",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4819-base"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-p3-landed-043072e16-full100k",
+      "registration_after": {
+        "HEAD": "043072e16daf37cf2d0187a2077ac4d0c1d9945a",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-p3-landed-043072e16-full100k"
+      },
+      "registration_before": {
+        "HEAD": "043072e16daf37cf2d0187a2077ac4d0c1d9945a",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-p3-landed-043072e16-full100k"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap-p5-substrate-evidence",
+      "registration_after": {
+        "HEAD": "ac7030d5d44cc8391bd344c2abfc1256204b8fb8",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-p5-substrate-evidence"
+      },
+      "registration_before": {
+        "HEAD": "ac7030d5d44cc8391bd344c2abfc1256204b8fb8",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-p5-substrate-evidence"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/2665-compact-storage-flake",
+      "registration_after": {
+        "HEAD": "129109f9f956f759c2e9b747da52beb93f29d9d6",
+        "branch": "refs/heads/codex/2665-compact-storage-flake",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/2665-compact-storage-flake"
+      },
+      "registration_before": {
+        "HEAD": "129109f9f956f759c2e9b747da52beb93f29d9d6",
+        "branch": "refs/heads/codex/2665-compact-storage-flake",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/2665-compact-storage-flake"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3535-append-only-entry-backing",
+      "registration_after": {
+        "HEAD": "3b02ccc02be50c4c9d45afbd9f670fa7479cf08d",
+        "branch": "refs/heads/codex/3535-appendonly-entry-backing",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3535-append-only-entry-backing"
+      },
+      "registration_before": {
+        "HEAD": "3b02ccc02be50c4c9d45afbd9f670fa7479cf08d",
+        "branch": "refs/heads/codex/3535-appendonly-entry-backing",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3535-append-only-entry-backing"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3536-batch-scratch",
+      "registration_after": {
+        "HEAD": "bc991740d52f80eecc77057ce0ede6ad9974048b",
+        "branch": "refs/heads/codex/issue-3536-batch-scratch",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3536-batch-scratch"
+      },
+      "registration_before": {
+        "HEAD": "bc991740d52f80eecc77057ce0ede6ad9974048b",
+        "branch": "refs/heads/codex/issue-3536-batch-scratch",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3536-batch-scratch"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3556-batch-helper-allocs",
+      "registration_after": {
+        "HEAD": "924af9a857f21eeb3eedd4015aea08859b74a376",
+        "branch": "refs/heads/codex/3556-batch-helper-allocs",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3556-batch-helper-allocs"
+      },
+      "registration_before": {
+        "HEAD": "924af9a857f21eeb3eedd4015aea08859b74a376",
+        "branch": "refs/heads/codex/3556-batch-helper-allocs",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3556-batch-helper-allocs"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3677-outer-leaf-raw",
+      "registration_after": {
+        "HEAD": "a302c37443404f4548756e32659361c7c7da749a",
+        "branch": "refs/heads/codex/3677-outer-leaf-raw-authority",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3677-outer-leaf-raw"
+      },
+      "registration_before": {
+        "HEAD": "a302c37443404f4548756e32659361c7c7da749a",
+        "branch": "refs/heads/codex/3677-outer-leaf-raw-authority",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3677-outer-leaf-raw"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/fix-zipper-split-race",
+      "registration_after": {
+        "HEAD": "52755b459d141ab6c728b76a82ff9908bc353ffe",
+        "branch": "refs/heads/codex/fix-zipper-split-race",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/fix-zipper-split-race"
+      },
+      "registration_before": {
+        "HEAD": "52755b459d141ab6c728b76a82ff9908bc353ffe",
+        "branch": "refs/heads/codex/fix-zipper-split-race",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/fix-zipper-split-race"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-adaptive-4864",
+      "registration_after": {
+        "HEAD": "b622aa09bb27a27c897261ed32e072f92292d0ca",
+        "branch": "refs/heads/codex/4864-adaptive-sampling",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-adaptive-4864"
+      },
+      "registration_before": {
+        "HEAD": "b622aa09bb27a27c897261ed32e072f92292d0ca",
+        "branch": "refs/heads/codex/4864-adaptive-sampling",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-adaptive-4864"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-optimization-preflight-20261001",
+      "registration_after": {
+        "HEAD": "751688ada972ea48a2b5a8c0fd5d795e87406f5d",
+        "branch": "refs/heads/codex/4863-mvcc-durable-singleton",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-optimization-preflight-20261001"
+      },
+      "registration_before": {
+        "HEAD": "751688ada972ea48a2b5a8c0fd5d795e87406f5d",
+        "branch": "refs/heads/codex/4863-mvcc-durable-singleton",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-optimization-preflight-20261001"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-after-head-to-head-20261002T231911Z/source",
+      "registration_after": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-after-head-to-head-20261002T231911Z/source"
+      },
+      "registration_before": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-after-head-to-head-20261002T231911Z/source"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-concurrency-aneifqlv/source",
+      "registration_after": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-concurrency-aneifqlv/source"
+      },
+      "registration_before": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-concurrency-aneifqlv/source"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-largevalue-profile-co6r1u9z/source",
+      "registration_after": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-largevalue-profile-co6r1u9z/source"
+      },
+      "registration_before": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-largevalue-profile-co6r1u9z/source"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-layout-matrix-20261003T021231Z/source",
+      "registration_after": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-layout-matrix-20261003T021231Z/source"
+      },
+      "registration_before": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-layout-matrix-20261003T021231Z/source"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-onevalue-f143xjfw/source",
+      "registration_after": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-onevalue-f143xjfw/source"
+      },
+      "registration_before": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-onevalue-f143xjfw/source"
+      }
+    },
+    {
+      "existed_before": false,
+      "exists_after": false,
+      "path": "/private/tmp/gomap-adaptive-schedule-4864-baseline",
+      "registration_after": {
+        "HEAD": "47f0f2c662415d3c6b3fcd76d874b49cb6acdbed",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-adaptive-schedule-4864-baseline"
+      },
+      "registration_before": {
+        "HEAD": "47f0f2c662415d3c6b3fcd76d874b49cb6acdbed",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-adaptive-schedule-4864-baseline"
+      }
+    },
+    {
+      "existed_before": false,
+      "exists_after": false,
+      "path": "/private/tmp/gomap-adaptive-schedule-4864-candidate",
+      "registration_after": {
+        "HEAD": "f3ba055cb44d11422e544c0860fc92d72cd49f0b",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-adaptive-schedule-4864-candidate"
+      },
+      "registration_before": {
+        "HEAD": "f3ba055cb44d11422e544c0860fc92d72cd49f0b",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-adaptive-schedule-4864-candidate"
+      }
+    },
+    {
+      "existed_before": false,
+      "exists_after": false,
+      "path": "/private/tmp/gomap-ci-control-repair",
+      "registration_after": {
+        "HEAD": "82f6c89eda9ac88ade450fe001cfcea057c195b6",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-ci-control-repair"
+      },
+      "registration_before": {
+        "HEAD": "82f6c89eda9ac88ade450fe001cfcea057c195b6",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-ci-control-repair"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-default-path-repair",
+      "registration_after": {
+        "HEAD": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+        "detached": "",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-default-path-repair"
+      },
+      "registration_before": {
+        "HEAD": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+        "detached": "",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-default-path-repair"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-windows-contract-repair",
+      "registration_after": {
+        "HEAD": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+        "detached": "",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-windows-contract-repair"
+      },
+      "registration_before": {
+        "HEAD": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+        "detached": "",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-windows-contract-repair"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/c1",
+      "registration_after": {
+        "HEAD": "9cfb399a7ed17ca6cc6e43cdcdb42d07fd3c45fe",
+        "branch": "refs/heads/codex/cow-c1-immutable-roots",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c1"
+      },
+      "registration_before": {
+        "HEAD": "9cfb399a7ed17ca6cc6e43cdcdb42d07fd3c45fe",
+        "branch": "refs/heads/codex/cow-c1-immutable-roots",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c1"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/c2",
+      "registration_after": {
+        "HEAD": "e81d6f6d41fddfad22858b31a4233aa83dc1fb80",
+        "branch": "refs/heads/codex/cow-c2-cache-publication",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c2"
+      },
+      "registration_before": {
+        "HEAD": "e81d6f6d41fddfad22858b31a4233aa83dc1fb80",
+        "branch": "refs/heads/codex/cow-c2-cache-publication",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c2"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-cow-execution-o2nauuzm/c3",
+      "registration_after": {
+        "HEAD": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+        "branch": "refs/heads/codex/cow-c3-mvcc-views",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c3"
+      },
+      "registration_before": {
+        "HEAD": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+        "branch": "refs/heads/codex/cow-c3-mvcc-views",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c3"
+      }
+    },
+    {
+      "existed_before": false,
+      "exists_after": false,
+      "path": "/private/tmp/gomap-issue-342-negative",
+      "registration_after": {
+        "HEAD": "741fa0ca0c6a2ea79ca98a1d58808f2ba2ab9754",
+        "branch": "refs/heads/codex/issue-342-negative",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-issue-342-negative"
+      },
+      "registration_before": {
+        "HEAD": "741fa0ca0c6a2ea79ca98a1d58808f2ba2ab9754",
+        "branch": "refs/heads/codex/issue-342-negative",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-issue-342-negative"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-qs-5015",
+      "registration_after": {
+        "HEAD": "5ac100883f5c02ab41230d55fdcdfb3a7118a873",
+        "branch": "refs/heads/codex/5015-rewrite-exact-closure",
+        "worktree": "/private/tmp/gomap-qs-5015"
+      },
+      "registration_before": {
+        "HEAD": "5ac100883f5c02ab41230d55fdcdfb3a7118a873",
+        "branch": "refs/heads/codex/5015-rewrite-exact-closure",
+        "worktree": "/private/tmp/gomap-qs-5015"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-qs-5016",
+      "registration_after": {
+        "HEAD": "6c3859e02d0e71c54ca9ef7258884024b10fb2a7",
+        "branch": "refs/heads/codex/5016-certified-prune",
+        "worktree": "/private/tmp/gomap-qs-5016"
+      },
+      "registration_before": {
+        "HEAD": "130979993704af3215767ca496da78e6d9a155e0",
+        "branch": "refs/heads/codex/5016-certified-prune",
+        "worktree": "/private/tmp/gomap-qs-5016"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-qs-5028",
+      "registration_after": {
+        "HEAD": "9905d553658c3c80924c2def2479d2c6a77c47f9",
+        "branch": "refs/heads/codex/5028-maintenance-source",
+        "worktree": "/private/tmp/gomap-qs-5028"
+      },
+      "registration_before": {
+        "HEAD": "9905d553658c3c80924c2def2479d2c6a77c47f9",
+        "branch": "refs/heads/codex/5028-maintenance-source",
+        "worktree": "/private/tmp/gomap-qs-5028"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-qs-5031-harness",
+      "registration_after": {
+        "HEAD": "f8074c2da3acc36bde66f8486d866fd4c9015e48",
+        "branch": "refs/heads/codex/5031-quicksilver-qualification",
+        "worktree": "/private/tmp/gomap-qs-5031-harness"
+      },
+      "registration_before": {
+        "HEAD": "f8074c2da3acc36bde66f8486d866fd4c9015e48",
+        "branch": "refs/heads/codex/5031-quicksilver-qualification",
+        "worktree": "/private/tmp/gomap-qs-5031-harness"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-qs-5035-maintenance-harness",
+      "registration_after": {
+        "HEAD": "fce29837c61d022dc0f9cc6620747313f0ae3b55",
+        "branch": "refs/heads/codex/5035-matched-maintenance",
+        "worktree": "/private/tmp/gomap-qs-5035-maintenance-harness"
+      },
+      "registration_before": {
+        "HEAD": "fce29837c61d022dc0f9cc6620747313f0ae3b55",
+        "branch": "refs/heads/codex/5035-matched-maintenance",
+        "worktree": "/private/tmp/gomap-qs-5035-maintenance-harness"
+      }
+    },
+    {
+      "dev": 16777231,
+      "existed_before": true,
+      "exists_after": true,
+      "filesystem_identity_match": true,
+      "inode": 485355630,
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5059-sweep"
+    },
+    {
+      "dev": 16777231,
+      "existed_before": true,
+      "exists_after": true,
+      "filesystem_identity_match": true,
+      "inode": 484048775,
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5060"
+    },
+    {
+      "dev": 16777231,
+      "existed_before": true,
+      "exists_after": true,
+      "filesystem_identity_match": true,
+      "inode": 484975052,
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5061-final"
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-r1-5065-retained-receipt",
+      "registration_after": {
+        "HEAD": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+        "branch": "refs/heads/codex/5065-retained-receipt",
+        "worktree": "/private/tmp/gomap-r1-5065-retained-receipt"
+      },
+      "registration_before": {
+        "HEAD": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+        "branch": "refs/heads/codex/5065-retained-receipt",
+        "worktree": "/private/tmp/gomap-r1-5065-retained-receipt"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-r1-5066",
+      "registration_after": {
+        "HEAD": "604df52aee0a4ab7b3c9a2b85905ab492be0ce46",
+        "branch": "refs/heads/codex/5066-maintenance-lifetimes",
+        "worktree": "/private/tmp/gomap-r1-5066"
+      },
+      "registration_before": {
+        "HEAD": "604df52aee0a4ab7b3c9a2b85905ab492be0ce46",
+        "branch": "refs/heads/codex/5066-maintenance-lifetimes",
+        "worktree": "/private/tmp/gomap-r1-5066"
+      }
+    },
+    {
+      "dev": 16777231,
+      "existed_before": true,
+      "exists_after": true,
+      "filesystem_identity_match": true,
+      "inode": 484389598,
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5067"
+    },
+    {
+      "dev": 16777231,
+      "existed_before": true,
+      "exists_after": true,
+      "filesystem_identity_match": true,
+      "inode": 484007765,
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-execution-20261005"
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-r1-growth-probe",
+      "registration_after": {
+        "HEAD": "7adf81c2afcf2f6de2f9d76303f6b09bba5b4db4",
+        "branch": "refs/heads/codex/r1-growth-probe",
+        "worktree": "/private/tmp/gomap-r1-growth-probe"
+      },
+      "registration_before": {
+        "HEAD": "7adf81c2afcf2f6de2f9d76303f6b09bba5b4db4",
+        "branch": "refs/heads/codex/r1-growth-probe",
+        "worktree": "/private/tmp/gomap-r1-growth-probe"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-r1-leaf-owner-probe",
+      "registration_after": {
+        "HEAD": "51aa345b107d25084d75aa09231b9ccaf08d5249",
+        "branch": "refs/heads/codex/r1-leaf-owner-probe",
+        "worktree": "/private/tmp/gomap-r1-leaf-owner-probe"
+      },
+      "registration_before": {
+        "HEAD": "51aa345b107d25084d75aa09231b9ccaf08d5249",
+        "branch": "refs/heads/codex/r1-leaf-owner-probe",
+        "worktree": "/private/tmp/gomap-r1-leaf-owner-probe"
+      }
+    },
+    {
+      "existed_before": true,
+      "exists_after": true,
+      "path": "/private/tmp/gomap-r1-vlog-rotation-boundary",
+      "registration_after": {
+        "HEAD": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+        "branch": "refs/heads/codex/5066-vlog-rotation-boundary",
+        "worktree": "/private/tmp/gomap-r1-vlog-rotation-boundary"
+      },
+      "registration_before": {
+        "HEAD": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+        "branch": "refs/heads/codex/5066-vlog-rotation-boundary",
+        "worktree": "/private/tmp/gomap-r1-vlog-rotation-boundary"
+      }
+    },
+    {
+      "existed_before": false,
+      "exists_after": false,
+      "path": "/private/tmp/gomap-seekge-4867-review-817",
+      "registration_after": {
+        "HEAD": "81786a469d1a9db3f03eea9ee8cd509d1b149fb3",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-seekge-4867-review-817"
+      },
+      "registration_before": {
+        "HEAD": "81786a469d1a9db3f03eea9ee8cd509d1b149fb3",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-seekge-4867-review-817"
+      }
+    },
+    {
+      "existed_before": false,
+      "exists_after": false,
+      "path": "/private/tmp/gomap-seekge-4867-review-aa7",
+      "registration_after": {
+        "HEAD": "aa7fca5d8a30f21b2530bb3839d17ff003bf0dcc",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-seekge-4867-review-aa7"
+      },
+      "registration_before": {
+        "HEAD": "aa7fca5d8a30f21b2530bb3839d17ff003bf0dcc",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-seekge-4867-review-aa7"
+      }
+    },
+    {
+      "existed_before": false,
+      "exists_after": false,
+      "path": "/private/var/folders/v0/pbplq_x54gg1bjh38mw1m0600000gn/T/TestManualProfileWrapperGuards45464013220969/001/clean-checkout",
+      "registration_after": {
+        "HEAD": "2355c2d5de58776a7e9b62c21e976ce9f538741a",
+        "detached": "",
+        "locked": "initializing",
+        "worktree": "/private/var/folders/v0/pbplq_x54gg1bjh38mw1m0600000gn/T/TestManualProfileWrapperGuards45464013220969/001/clean-checkout"
+      },
+      "registration_before": {
+        "HEAD": "2355c2d5de58776a7e9b62c21e976ce9f538741a",
+        "detached": "",
+        "locked": "initializing",
+        "worktree": "/private/var/folders/v0/pbplq_x54gg1bjh38mw1m0600000gn/T/TestManualProfileWrapperGuards45464013220969/001/clean-checkout"
+      }
+    }
+  ],
+  "protected_before": {
+    "/Users/michaelseiler/dev/snissn/gomap": {
+      "dev": 16777231,
+      "exists": true,
+      "inode": 114306919,
+      "mode": 16877
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-d1-content-proof": {
+      "exists": true,
+      "registration": {
+        "HEAD": "e96b46e637946c07fa410072e5dc23b2b9abe551",
+        "branch": "refs/heads/codex/issue-4728-content-proof-20260927",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-content-proof"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-d1-drain-340179": {
+      "exists": true,
+      "registration": {
+        "HEAD": "4022e13d54f34381d23739bbc6ac04fbe1935c98",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-drain-340179"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-d1-forward-size-7dc": {
+      "exists": true,
+      "registration": {
+        "HEAD": "7dc10c88b5e1ac05e91d67ff9d982ca645359f47",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-d1-forward-size-7dc"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-hash-tournament": {
+      "exists": true,
+      "registration": {
+        "HEAD": "efcd32cd96b2435ee77caded376ed2e514f78bb4",
+        "branch": "refs/heads/codex/hash-tournament-experiment",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-hash-tournament"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4728": {
+      "exists": true,
+      "registration": {
+        "HEAD": "dea3fb9d972eb9d45ba992de3fee44d9bd73d6a3",
+        "branch": "refs/heads/codex/issue-4728-fix-ambiguity",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4728"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4753-comparison-packet": {
+      "exists": true,
+      "registration": {
+        "HEAD": "3e3ca283c9c52f8f9c1ac7ebcabd44cc22bf5a54",
+        "branch": "refs/heads/codex/issue-4753-final-evidence",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-comparison-packet"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4753-evidence": {
+      "exists": true,
+      "registration": {
+        "HEAD": "4497cbe955ba5757a605a56039467629fe6c7537",
+        "branch": "refs/heads/codex/issue-4753-integrated-packing-no-go",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-evidence"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-completion": {
+      "exists": true,
+      "registration": {
+        "HEAD": "59442c79024d4e880d75dbb1846e58ac12e9ac85",
+        "branch": "refs/heads/codex/issue-4753-resource-completion",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-completion"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-topology": {
+      "exists": true,
+      "registration": {
+        "HEAD": "cad3620b3312df0f20c0eb7c478ab4066ef439da",
+        "branch": "refs/heads/codex/issue-4753-resource-topology",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-resource-topology"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4753-retained-source-binding": {
+      "exists": true,
+      "registration": {
+        "HEAD": "498f8f31faae6a780e40f929dde83170e2d68adb",
+        "branch": "refs/heads/codex/issue-4753-retained-source-binding",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-retained-source-binding"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4753-selected-lifecycle": {
+      "exists": true,
+      "registration": {
+        "HEAD": "000f104c2482f81b18bceb55613b3324c6e304c6",
+        "branch": "refs/heads/codex/issue-4753-retained-mutation-schema",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4753-selected-lifecycle"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4773-hier-route": {
+      "exists": true,
+      "registration": {
+        "HEAD": "cf0ba091e98e40dacd76eb0ec0c47cd986fed02f",
+        "branch": "refs/heads/codex/issue-4773-hierarchical-route",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4773-hier-route"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4775-domain-chunks": {
+      "exists": true,
+      "registration": {
+        "HEAD": "5525c577d1717909b9ba74ade07ffe44a4db5988",
+        "branch": "refs/heads/codex/issue-4775-domain-chunks",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-domain-chunks"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4775-graph-home-packing": {
+      "exists": true,
+      "registration": {
+        "HEAD": "04e6a9a2d7c3298e527db667b0097c10b303120b",
+        "branch": "refs/heads/codex/issue-4775-graph-home-packing",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-graph-home-packing"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4775-post-v-scratch": {
+      "exists": true,
+      "registration": {
+        "HEAD": "768879501c90644aaeac8709680a6c2728217175",
+        "branch": "refs/heads/codex/issue-4775-post-v-scratch",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-post-v-scratch"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4775-routing-compatibility": {
+      "exists": true,
+      "registration": {
+        "HEAD": "9865fa7ef43527ee721dc6d86252e59698793469",
+        "branch": "refs/heads/codex/issue-4775-routing-compatibility",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-routing-compatibility"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4775-v-restack": {
+      "exists": true,
+      "registration": {
+        "HEAD": "9baaec4d2eab3f07f1d81292ffc21d619bcce264",
+        "branch": "refs/heads/codex/issue-4775-v-restack",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4775-v-restack"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-accepted-disjoint-retained-20260930": {
+      "exists": true,
+      "registration": {
+        "HEAD": "15542751bc11a0ab964b66a44bb93aa96576093b",
+        "branch": "refs/heads/issue-4809-accepted-disjoint-retained-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-accepted-disjoint-retained-20260930"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-auth-shard": {
+      "exists": true,
+      "registration": {
+        "HEAD": "9e781558939079b883c9accc4c383fdc6968d1a9",
+        "branch": "refs/heads/codex/issue-4809-auth-shard-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-auth-shard"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-config-capacity-20260929": {
+      "exists": true,
+      "registration": {
+        "HEAD": "7fca6ebb7614b073529286da06ffad74c6a64bc7",
+        "branch": "refs/heads/codex/issue-4809-config-capacity-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-config-capacity-20260929"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-m3-index-epoch-20260930": {
+      "exists": true,
+      "registration": {
+        "HEAD": "fbc24bcdfcd43b8c887c0b4b1f92b875195f9237",
+        "branch": "refs/heads/issue-4809-m3-index-epoch-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-m3-index-epoch-20260930"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-asset-corruption": {
+      "exists": true,
+      "registration": {
+        "HEAD": "50411593e88784ae2338479fac5f5d7cc45bce76",
+        "branch": "refs/heads/codex/issue-4809-owner-asset-corruption-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-asset-corruption"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-inventory": {
+      "exists": true,
+      "registration": {
+        "HEAD": "8c994a3941c6c5f627492f5d9eccff18256bc26e",
+        "branch": "refs/heads/codex/issue-4809-immutable-authority-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-inventory"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-segments": {
+      "exists": true,
+      "registration": {
+        "HEAD": "6594361a834925f2d7a92df0d87abe46846b1ad0",
+        "branch": "refs/heads/codex/issue-4809-owner-segments-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-owner-segments"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-ownerlocal-runtime": {
+      "exists": true,
+      "registration": {
+        "HEAD": "4728e6cb112c5f3d51441a71c6a9f2dcb4cc0d8e",
+        "branch": "refs/heads/codex/issue-4809-ownerlocal-merged-support-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-ownerlocal-runtime"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-provisional": {
+      "exists": true,
+      "registration": {
+        "HEAD": "333dca0f9c79126f1fe0ae7244c686dd23db3f8c",
+        "branch": "refs/heads/codex/issue-4809-provisional-20260927",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-provisional"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-compatible-model-20260929": {
+      "exists": true,
+      "registration": {
+        "HEAD": "2bc19ed971f089d8f7d0a25870fb2aa4ec7c30ac",
+        "branch": "refs/heads/issue-4809-public-compatible-model-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-compatible-model-20260929"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-scaled-correctness-20260930": {
+      "exists": true,
+      "registration": {
+        "HEAD": "06c9d4fbcc41acb08f97265cac99b25b6e734258",
+        "branch": "refs/heads/issue-4809-public-scaled-correctness-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-public-scaled-correctness-20260930"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-representative-2owner-20260929": {
+      "exists": true,
+      "registration": {
+        "HEAD": "49c4fd543586aa6dff349bf98405dc7f68c8a048",
+        "branch": "refs/heads/codex/issue-4809-representative-2owner-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-representative-2owner-20260929"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-retained-snapshot-install-v1": {
+      "exists": true,
+      "registration": {
+        "HEAD": "d6c2b9a6e6930785f0be3e71596726c2c1d07a89",
+        "branch": "refs/heads/issue-4809-retained-snapshot-install-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-retained-snapshot-install-v1"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-scoped-stage": {
+      "exists": true,
+      "registration": {
+        "HEAD": "2a4f645456f0c39680b7dad42da3b12308e7fa21",
+        "branch": "refs/heads/codex/issue-4809-scoped-stage-merge-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-scoped-stage"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader": {
+      "exists": true,
+      "registration": {
+        "HEAD": "bae8646fb6f0c49f143581b0431bdd8020b8de05",
+        "branch": "refs/heads/codex/issue-4809-separate-leader",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-merge-v1": {
+      "exists": true,
+      "registration": {
+        "HEAD": "1b4d2294a18b2576ee39920e81590ce8ac7af177",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-merge-v1"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-v2": {
+      "exists": true,
+      "registration": {
+        "HEAD": "228039fa27bfe9a3efd41f9d36dde695e6301114",
+        "branch": "refs/heads/codex/issue-4809-separate-leader-v2-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-v2"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4809-stale-active-red-20260929": {
+      "exists": true,
+      "registration": {
+        "HEAD": "3ba1674d7a3ffcb2880b0a7b264aba00a0bcd235",
+        "branch": "refs/heads/codex/issue-4809-stale-active-red-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4809-stale-active-red-20260929"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811": {
+      "exists": true,
+      "registration": {
+        "HEAD": "c1c9c80deaf7019a8656c5b65e6acf751a756967",
+        "branch": "refs/heads/codex/issue-4811-bounded-replica-replacement",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-authority": {
+      "exists": true,
+      "registration": {
+        "HEAD": "ee06c9eed72fea59829f5ec068a6e6882d35e0bf",
+        "branch": "refs/heads/codex/issue-4811-active-authority-20260929",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-authority"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-owner-replacement-red": {
+      "exists": true,
+      "registration": {
+        "HEAD": "ee7b8b9043986e84fb50482cd709d666ac09afaf",
+        "branch": "refs/heads/codex/issue-4811-active-owner-replacement-red-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-active-owner-replacement-red"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-cold-read-gap": {
+      "exists": true,
+      "registration": {
+        "HEAD": "946cf619c472104ba06b08862f44f4e7226e0ffa",
+        "branch": "refs/heads/codex/issue-4811-cold-read-gap-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-cold-read-gap"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-immutable-standby": {
+      "exists": true,
+      "registration": {
+        "HEAD": "30fc478f5779dfaa045de96a607cee1adb857618",
+        "branch": "refs/heads/codex/issue-4811-immutable-standby-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-immutable-standby"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-next": {
+      "exists": true,
+      "registration": {
+        "HEAD": "6fffc25441e150b97bc8dbbcb2ebd0c4e5d5e362",
+        "branch": "refs/heads/codex/issue-4811-next-recovery-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-next"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-noncatalog-owner-runtime": {
+      "exists": true,
+      "registration": {
+        "HEAD": "feaa244b79487c515d930b66e83e99a8df8d4518",
+        "branch": "refs/heads/codex/issue-4811-noncatalog-owner-runtime",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-noncatalog-owner-runtime"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-owner-preparation-v1": {
+      "exists": true,
+      "registration": {
+        "HEAD": "1ac892033b6dd4f9f5ebac149ff46b4ab6e20212",
+        "branch": "refs/heads/codex/issue-4811-owner-preparation-v1",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-owner-preparation-v1"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-postmerge-snapshot-admission": {
+      "exists": true,
+      "registration": {
+        "HEAD": "c5a0754dbed1d1d113c7238f25a2fdc77f9ea211",
+        "branch": "refs/heads/codex/issue-4811-postmerge-snapshot-admission",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-postmerge-snapshot-admission"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4811-sequential": {
+      "exists": true,
+      "registration": {
+        "HEAD": "f71642dd73d5094c4340be3e11a91761e7fc0276",
+        "branch": "refs/heads/codex/issue-4811-close-revocation-20260928",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4811-sequential"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-issue-4819-base": {
+      "exists": true,
+      "registration": {
+        "HEAD": "1271d2ed425a67d18474ea076e53cf0e9d3f18a2",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-issue-4819-base"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-p3-landed-043072e16-full100k": {
+      "exists": true,
+      "registration": {
+        "HEAD": "043072e16daf37cf2d0187a2077ac4d0c1d9945a",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-p3-landed-043072e16-full100k"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap-p5-substrate-evidence": {
+      "exists": true,
+      "registration": {
+        "HEAD": "ac7030d5d44cc8391bd344c2abfc1256204b8fb8",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap-p5-substrate-evidence"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/.worktrees/2665-compact-storage-flake": {
+      "exists": true,
+      "registration": {
+        "HEAD": "129109f9f956f759c2e9b747da52beb93f29d9d6",
+        "branch": "refs/heads/codex/2665-compact-storage-flake",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/2665-compact-storage-flake"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3535-append-only-entry-backing": {
+      "exists": true,
+      "registration": {
+        "HEAD": "3b02ccc02be50c4c9d45afbd9f670fa7479cf08d",
+        "branch": "refs/heads/codex/3535-appendonly-entry-backing",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3535-append-only-entry-backing"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3536-batch-scratch": {
+      "exists": true,
+      "registration": {
+        "HEAD": "bc991740d52f80eecc77057ce0ede6ad9974048b",
+        "branch": "refs/heads/codex/issue-3536-batch-scratch",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3536-batch-scratch"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3556-batch-helper-allocs": {
+      "exists": true,
+      "registration": {
+        "HEAD": "924af9a857f21eeb3eedd4015aea08859b74a376",
+        "branch": "refs/heads/codex/3556-batch-helper-allocs",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3556-batch-helper-allocs"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3677-outer-leaf-raw": {
+      "exists": true,
+      "registration": {
+        "HEAD": "a302c37443404f4548756e32659361c7c7da749a",
+        "branch": "refs/heads/codex/3677-outer-leaf-raw-authority",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/3677-outer-leaf-raw"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/.worktrees/fix-zipper-split-race": {
+      "exists": true,
+      "registration": {
+        "HEAD": "52755b459d141ab6c728b76a82ff9908bc353ffe",
+        "branch": "refs/heads/codex/fix-zipper-split-race",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/.worktrees/fix-zipper-split-race"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-adaptive-4864": {
+      "exists": true,
+      "registration": {
+        "HEAD": "b622aa09bb27a27c897261ed32e072f92292d0ca",
+        "branch": "refs/heads/codex/4864-adaptive-sampling",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-adaptive-4864"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-optimization-preflight-20261001": {
+      "exists": true,
+      "registration": {
+        "HEAD": "751688ada972ea48a2b5a8c0fd5d795e87406f5d",
+        "branch": "refs/heads/codex/4863-mvcc-durable-singleton",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/dgraph-optimization-preflight-20261001"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-after-head-to-head-20261002T231911Z/source": {
+      "exists": true,
+      "registration": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-after-head-to-head-20261002T231911Z/source"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-concurrency-aneifqlv/source": {
+      "exists": true,
+      "registration": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-concurrency-aneifqlv/source"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-largevalue-profile-co6r1u9z/source": {
+      "exists": true,
+      "registration": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-largevalue-profile-co6r1u9z/source"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-layout-matrix-20261003T021231Z/source": {
+      "exists": true,
+      "registration": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-layout-matrix-20261003T021231Z/source"
+      }
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-onevalue-f143xjfw/source": {
+      "exists": true,
+      "registration": {
+        "HEAD": "fe37428e6c03c09a62f3f1946f01b17bd145dd34",
+        "detached": "",
+        "worktree": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-onevalue-f143xjfw/source"
+      }
+    },
+    "/private/tmp/gomap-adaptive-schedule-4864-baseline": {
+      "exists": false,
+      "registration": {
+        "HEAD": "47f0f2c662415d3c6b3fcd76d874b49cb6acdbed",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-adaptive-schedule-4864-baseline"
+      }
+    },
+    "/private/tmp/gomap-adaptive-schedule-4864-candidate": {
+      "exists": false,
+      "registration": {
+        "HEAD": "f3ba055cb44d11422e544c0860fc92d72cd49f0b",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-adaptive-schedule-4864-candidate"
+      }
+    },
+    "/private/tmp/gomap-ci-control-repair": {
+      "exists": false,
+      "registration": {
+        "HEAD": "82f6c89eda9ac88ade450fe001cfcea057c195b6",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-ci-control-repair"
+      }
+    },
+    "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-default-path-repair": {
+      "exists": true,
+      "registration": {
+        "HEAD": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+        "detached": "",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-default-path-repair"
+      }
+    },
+    "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-windows-contract-repair": {
+      "exists": true,
+      "registration": {
+        "HEAD": "8a159dc1a2aeea02611421ecc3216b8ee84a1516",
+        "detached": "",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/OWNED/c2-windows-contract-repair"
+      }
+    },
+    "/private/tmp/gomap-cow-execution-o2nauuzm/c1": {
+      "exists": true,
+      "registration": {
+        "HEAD": "9cfb399a7ed17ca6cc6e43cdcdb42d07fd3c45fe",
+        "branch": "refs/heads/codex/cow-c1-immutable-roots",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c1"
+      }
+    },
+    "/private/tmp/gomap-cow-execution-o2nauuzm/c2": {
+      "exists": true,
+      "registration": {
+        "HEAD": "e81d6f6d41fddfad22858b31a4233aa83dc1fb80",
+        "branch": "refs/heads/codex/cow-c2-cache-publication",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c2"
+      }
+    },
+    "/private/tmp/gomap-cow-execution-o2nauuzm/c3": {
+      "exists": true,
+      "registration": {
+        "HEAD": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+        "branch": "refs/heads/codex/cow-c3-mvcc-views",
+        "worktree": "/private/tmp/gomap-cow-execution-o2nauuzm/c3"
+      }
+    },
+    "/private/tmp/gomap-issue-342-negative": {
+      "exists": false,
+      "registration": {
+        "HEAD": "741fa0ca0c6a2ea79ca98a1d58808f2ba2ab9754",
+        "branch": "refs/heads/codex/issue-342-negative",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-issue-342-negative"
+      }
+    },
+    "/private/tmp/gomap-qs-5015": {
+      "exists": true,
+      "registration": {
+        "HEAD": "5ac100883f5c02ab41230d55fdcdfb3a7118a873",
+        "branch": "refs/heads/codex/5015-rewrite-exact-closure",
+        "worktree": "/private/tmp/gomap-qs-5015"
+      }
+    },
+    "/private/tmp/gomap-qs-5016": {
+      "exists": true,
+      "registration": {
+        "HEAD": "130979993704af3215767ca496da78e6d9a155e0",
+        "branch": "refs/heads/codex/5016-certified-prune",
+        "worktree": "/private/tmp/gomap-qs-5016"
+      }
+    },
+    "/private/tmp/gomap-qs-5028": {
+      "exists": true,
+      "registration": {
+        "HEAD": "9905d553658c3c80924c2def2479d2c6a77c47f9",
+        "branch": "refs/heads/codex/5028-maintenance-source",
+        "worktree": "/private/tmp/gomap-qs-5028"
+      }
+    },
+    "/private/tmp/gomap-qs-5031-harness": {
+      "exists": true,
+      "registration": {
+        "HEAD": "f8074c2da3acc36bde66f8486d866fd4c9015e48",
+        "branch": "refs/heads/codex/5031-quicksilver-qualification",
+        "worktree": "/private/tmp/gomap-qs-5031-harness"
+      }
+    },
+    "/private/tmp/gomap-qs-5035-maintenance-harness": {
+      "exists": true,
+      "registration": {
+        "HEAD": "fce29837c61d022dc0f9cc6620747313f0ae3b55",
+        "branch": "refs/heads/codex/5035-matched-maintenance",
+        "worktree": "/private/tmp/gomap-qs-5035-maintenance-harness"
+      }
+    },
+    "/private/tmp/gomap-r1-5059-sweep": {
+      "dev": 16777231,
+      "exists": true,
+      "inode": 485355630,
+      "mode": 16877
+    },
+    "/private/tmp/gomap-r1-5060": {
+      "dev": 16777231,
+      "exists": true,
+      "inode": 484048775,
+      "mode": 16877
+    },
+    "/private/tmp/gomap-r1-5061-final": {
+      "dev": 16777231,
+      "exists": true,
+      "inode": 484975052,
+      "mode": 16877
+    },
+    "/private/tmp/gomap-r1-5065-retained-receipt": {
+      "exists": true,
+      "registration": {
+        "HEAD": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+        "branch": "refs/heads/codex/5065-retained-receipt",
+        "worktree": "/private/tmp/gomap-r1-5065-retained-receipt"
+      }
+    },
+    "/private/tmp/gomap-r1-5066": {
+      "exists": true,
+      "registration": {
+        "HEAD": "604df52aee0a4ab7b3c9a2b85905ab492be0ce46",
+        "branch": "refs/heads/codex/5066-maintenance-lifetimes",
+        "worktree": "/private/tmp/gomap-r1-5066"
+      }
+    },
+    "/private/tmp/gomap-r1-5067": {
+      "dev": 16777231,
+      "exists": true,
+      "inode": 484389598,
+      "mode": 16877
+    },
+    "/private/tmp/gomap-r1-execution-20261005": {
+      "dev": 16777231,
+      "exists": true,
+      "inode": 484007765,
+      "mode": 16877
+    },
+    "/private/tmp/gomap-r1-growth-probe": {
+      "exists": true,
+      "registration": {
+        "HEAD": "7adf81c2afcf2f6de2f9d76303f6b09bba5b4db4",
+        "branch": "refs/heads/codex/r1-growth-probe",
+        "worktree": "/private/tmp/gomap-r1-growth-probe"
+      }
+    },
+    "/private/tmp/gomap-r1-leaf-owner-probe": {
+      "exists": true,
+      "registration": {
+        "HEAD": "51aa345b107d25084d75aa09231b9ccaf08d5249",
+        "branch": "refs/heads/codex/r1-leaf-owner-probe",
+        "worktree": "/private/tmp/gomap-r1-leaf-owner-probe"
+      }
+    },
+    "/private/tmp/gomap-r1-vlog-rotation-boundary": {
+      "exists": true,
+      "registration": {
+        "HEAD": "702ef2cc523a85964a7434037a8ef3a486f0eeca",
+        "branch": "refs/heads/codex/5066-vlog-rotation-boundary",
+        "worktree": "/private/tmp/gomap-r1-vlog-rotation-boundary"
+      }
+    },
+    "/private/tmp/gomap-seekge-4867-review-817": {
+      "exists": false,
+      "registration": {
+        "HEAD": "81786a469d1a9db3f03eea9ee8cd509d1b149fb3",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-seekge-4867-review-817"
+      }
+    },
+    "/private/tmp/gomap-seekge-4867-review-aa7": {
+      "exists": false,
+      "registration": {
+        "HEAD": "aa7fca5d8a30f21b2530bb3839d17ff003bf0dcc",
+        "detached": "",
+        "prunable": "gitdir file points to non-existent location",
+        "worktree": "/private/tmp/gomap-seekge-4867-review-aa7"
+      }
+    },
+    "/private/var/folders/v0/pbplq_x54gg1bjh38mw1m0600000gn/T/TestManualProfileWrapperGuards45464013220969/001/clean-checkout": {
+      "exists": false,
+      "registration": {
+        "HEAD": "2355c2d5de58776a7e9b62c21e976ce9f538741a",
+        "detached": "",
+        "locked": "initializing",
+        "worktree": "/private/var/folders/v0/pbplq_x54gg1bjh38mw1m0600000gn/T/TestManualProfileWrapperGuards45464013220969/001/clean-checkout"
+      }
+    }
+  },
+  "release_snapshots": [
+    {
+      "branch": "refs/heads/codex/5057-row-contract",
+      "dev": 16777231,
+      "entry_count": 3016,
+      "head": "0ef92b8bd76075a926a42383c3649e7f7c858e90",
+      "inode": 483998747,
+      "metadata_sha256": "568b9ff09cac1c0c9060a8f6ae4e6ba873634c3eb900d626435758821cdfb617",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5057",
+      "released_estimate_KiB": 103424
+    },
+    {
+      "branch": "refs/heads/codex/5058-row-reads",
+      "dev": 16777231,
+      "entry_count": 1105,
+      "head": "610cada456d5d6f4e3094cf4e977b06beee7df02",
+      "inode": 484007871,
+      "metadata_sha256": "1114ab7efdd64ca60b56167773aa946557c75ab69eaf83b6399dae414c049b57",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5058",
+      "released_estimate_KiB": 48952
+    },
+    {
+      "branch": "refs/heads/codex/5059-row-mutations",
+      "dev": 16777231,
+      "entry_count": 1091,
+      "head": "2e390d1d6725e366826b7bde75a8ce0813d00871",
+      "inode": 484009422,
+      "metadata_sha256": "448ead7d46b91fe3d4d16230290f7fd8339a438d7e4437bb66f23a039f012b75",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5059",
+      "released_estimate_KiB": 48724
+    },
+    {
+      "branch": "refs/heads/codex/5060-supported-profile",
+      "dev": 16777231,
+      "entry_count": 2538,
+      "head": "ecc925154bdc949e4680be6e16354865547647aa",
+      "inode": 484350234,
+      "metadata_sha256": "ad2f614084221cfae4faae3b93f3bab3365600b2ce344192184ca4a8c6abc14e",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5060-profile",
+      "released_estimate_KiB": 71008
+    },
+    {
+      "branch": "refs/heads/codex/5061-row-example",
+      "dev": 16777231,
+      "entry_count": 3284,
+      "head": "0ac471c217ea4469ab7710a4d772a4ca568960d4",
+      "inode": 484054508,
+      "metadata_sha256": "d6c50cbb2874758451515aaf6d505b042b9ad260de10325216175ec1922c6bc6",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5061",
+      "released_estimate_KiB": 92308
+    },
+    {
+      "branch": "refs/heads/codex/5065-lifecycle-fallback-ci",
+      "dev": 16777231,
+      "entry_count": 7116,
+      "head": "e2355fe4b5c3629c99478b3c81baef724833b155",
+      "inode": 484461831,
+      "metadata_sha256": "5130d0b977d1fdef8358388bf8457f99ff25aafed6f4e431bada05039a1c21ee",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5065-ci-fix",
+      "released_estimate_KiB": 503968
+    },
+    {
+      "branch": "refs/heads/codex/5065-range-part-lookup",
+      "dev": 16777231,
+      "entry_count": 3239,
+      "head": "380057f556ae528d2574efcb0e4a0bfd23bfb872",
+      "inode": 484441757,
+      "metadata_sha256": "eeca6702407e6b8ac06e0ffa2cc4e93feaa36a99fee7a50fc2dad44defbf6bf7",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5065-range-fix",
+      "released_estimate_KiB": 107600
+    },
+    {
+      "branch": "refs/heads/codex/5065-review-tooling-repair",
+      "dev": 16777231,
+      "entry_count": 3244,
+      "head": "3ab3d78d0b69c1573940256719c082f7df66812d",
+      "inode": 484588196,
+      "metadata_sha256": "667ed428a51e328045e2aca253cdba85859aa9314761510e14a57529006a1636",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5065-review-tooling-repair",
+      "released_estimate_KiB": 107632
+    },
+    {
+      "branch": "refs/heads/codex/5065-scalar-resource-stats",
+      "dev": 16777231,
+      "entry_count": 7116,
+      "head": "35232ba55393483a4b2380b7d96a6e67f75552b8",
+      "inode": 484473893,
+      "metadata_sha256": "dcb5aaa737076169915f34e76a07cb822bf0fff864ab88dd9f7f06fe0775ac46",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5065-scalar-stats",
+      "released_estimate_KiB": 503964
+    },
+    {
+      "branch": "refs/heads/codex/5066-rebuilt-pack-projection",
+      "dev": 16777231,
+      "entry_count": 4686,
+      "head": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+      "inode": 484531938,
+      "metadata_sha256": "fb9d03fb56b05bd4dfb674474eca6ff4a55956e04d718674beda9a0003ccbe51",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-5066-pack-projection",
+      "released_estimate_KiB": 456012
+    },
+    {
+      "branch": "refs/heads/codex/5066-native-appender-metadata",
+      "dev": 16777231,
+      "entry_count": 4130,
+      "head": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "inode": 484808420,
+      "metadata_sha256": "cb0fcef03029646b7d1e97e7a865ab811db71e085a0443d1b325116d6f5d4f30",
+      "mode": 16877,
+      "path": "/private/tmp/gomap-r1-native-appender-metadata",
+      "released_estimate_KiB": 422064
+    }
+  ],
+  "released_estimate_total_KiB": 2465656,
+  "removed": [
+    "/private/tmp/gomap-r1-5057",
+    "/private/tmp/gomap-r1-5058",
+    "/private/tmp/gomap-r1-5059",
+    "/private/tmp/gomap-r1-5060-profile",
+    "/private/tmp/gomap-r1-5061",
+    "/private/tmp/gomap-r1-5065-ci-fix",
+    "/private/tmp/gomap-r1-5065-range-fix",
+    "/private/tmp/gomap-r1-5065-review-tooling-repair",
+    "/private/tmp/gomap-r1-5065-scalar-stats",
+    "/private/tmp/gomap-r1-5066-pack-projection",
+    "/private/tmp/gomap-r1-native-appender-metadata"
+  ],
+  "removed_estimate_total_KiB": 2465656,
+  "results": [
+    {
+      "branch": "refs/heads/codex/5057-row-contract",
+      "head": "0ef92b8bd76075a926a42383c3649e7f7c858e90",
+      "immediate_recheck": {
+        "entry_count": 3016,
+        "ignored_empty": true,
+        "metadata_sha256": "568b9ff09cac1c0c9060a8f6ae4e6ba873634c3eb900d626435758821cdfb617",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 483998747,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5057",
+      "released_estimate_KiB": 103424,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5058-row-reads",
+      "head": "610cada456d5d6f4e3094cf4e977b06beee7df02",
+      "immediate_recheck": {
+        "entry_count": 1105,
+        "ignored_empty": true,
+        "metadata_sha256": "1114ab7efdd64ca60b56167773aa946557c75ab69eaf83b6399dae414c049b57",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484007871,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5058",
+      "released_estimate_KiB": 48952,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5059-row-mutations",
+      "head": "2e390d1d6725e366826b7bde75a8ce0813d00871",
+      "immediate_recheck": {
+        "entry_count": 1091,
+        "ignored_empty": true,
+        "metadata_sha256": "448ead7d46b91fe3d4d16230290f7fd8339a438d7e4437bb66f23a039f012b75",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484009422,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5059",
+      "released_estimate_KiB": 48724,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5060-supported-profile",
+      "head": "ecc925154bdc949e4680be6e16354865547647aa",
+      "immediate_recheck": {
+        "entry_count": 2538,
+        "ignored_empty": true,
+        "metadata_sha256": "ad2f614084221cfae4faae3b93f3bab3365600b2ce344192184ca4a8c6abc14e",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484350234,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5060-profile",
+      "released_estimate_KiB": 71008,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5061-row-example",
+      "head": "0ac471c217ea4469ab7710a4d772a4ca568960d4",
+      "immediate_recheck": {
+        "entry_count": 3284,
+        "ignored_empty": true,
+        "metadata_sha256": "d6c50cbb2874758451515aaf6d505b042b9ad260de10325216175ec1922c6bc6",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484054508,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5061",
+      "released_estimate_KiB": 92308,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5065-lifecycle-fallback-ci",
+      "head": "e2355fe4b5c3629c99478b3c81baef724833b155",
+      "immediate_recheck": {
+        "entry_count": 7116,
+        "ignored_empty": true,
+        "metadata_sha256": "5130d0b977d1fdef8358388bf8457f99ff25aafed6f4e431bada05039a1c21ee",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484461831,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5065-ci-fix",
+      "released_estimate_KiB": 503968,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5065-range-part-lookup",
+      "head": "380057f556ae528d2574efcb0e4a0bfd23bfb872",
+      "immediate_recheck": {
+        "entry_count": 3239,
+        "ignored_empty": true,
+        "metadata_sha256": "eeca6702407e6b8ac06e0ffa2cc4e93feaa36a99fee7a50fc2dad44defbf6bf7",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484441757,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5065-range-fix",
+      "released_estimate_KiB": 107600,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5065-review-tooling-repair",
+      "head": "3ab3d78d0b69c1573940256719c082f7df66812d",
+      "immediate_recheck": {
+        "entry_count": 3244,
+        "ignored_empty": true,
+        "metadata_sha256": "667ed428a51e328045e2aca253cdba85859aa9314761510e14a57529006a1636",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484588196,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5065-review-tooling-repair",
+      "released_estimate_KiB": 107632,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5065-scalar-resource-stats",
+      "head": "35232ba55393483a4b2380b7d96a6e67f75552b8",
+      "immediate_recheck": {
+        "entry_count": 7116,
+        "ignored_empty": true,
+        "metadata_sha256": "dcb5aaa737076169915f34e76a07cb822bf0fff864ab88dd9f7f06fe0775ac46",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484473893,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5065-scalar-stats",
+      "released_estimate_KiB": 503964,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5066-rebuilt-pack-projection",
+      "head": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+      "immediate_recheck": {
+        "entry_count": 4686,
+        "ignored_empty": true,
+        "metadata_sha256": "fb9d03fb56b05bd4dfb674474eca6ff4a55956e04d718674beda9a0003ccbe51",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484531938,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-5066-pack-projection",
+      "released_estimate_KiB": 456012,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    },
+    {
+      "branch": "refs/heads/codex/5066-native-appender-metadata",
+      "head": "62e77ce23a7d6b690ebe9d5df09a788ed2bf0f11",
+      "immediate_recheck": {
+        "entry_count": 4130,
+        "ignored_empty": true,
+        "metadata_sha256": "cb0fcef03029646b7d1e97e7a865ab811db71e085a0443d1b325116d6f5d4f30",
+        "preserved_ref_matches": true,
+        "registered_unlocked": true,
+        "root_dev": 16777231,
+        "root_inode": 484808420,
+        "root_mode": 16877,
+        "status_empty": true,
+        "symlinks_not_traversed": []
+      },
+      "live_use": {
+        "matches": [],
+        "process_cwd_and_open_files": "lsof full local snapshot"
+      },
+      "path": "/private/tmp/gomap-r1-native-appender-metadata",
+      "released_estimate_KiB": 422064,
+      "remove_exit": 0,
+      "remove_stderr": "",
+      "remove_stdout": "",
+      "status": "REMOVED"
+    }
+  ],
+  "retention": "Required raw/capture evidence retained under /tmp/gomap-r1-execution-20261005; branch refs retained in primary common Git",
+  "start_utc": "2026-10-06T18:39:27.360208+00:00",
+  "status": "COMPLETE_REMOVED_11_KEPT_0_WITH_UNRELATED_REF_ADVANCE_OBSERVED",
+  "unrelated_registration_changes_observed": [
+    {
+      "after": {
+        "HEAD": "6c3859e02d0e71c54ca9ef7258884024b10fb2a7",
+        "branch": "refs/heads/codex/5016-certified-prune",
+        "worktree": "/private/tmp/gomap-qs-5016"
+      },
+      "before": {
+        "HEAD": "130979993704af3215767ca496da78e6d9a155e0",
+        "branch": "refs/heads/codex/5016-certified-prune",
+        "worktree": "/private/tmp/gomap-qs-5016"
+      },
+      "classification": "OBSERVED_UNRELATED_REFERENCE_CHANGE_NOT_PERFORMED_BY_CLEANER",
+      "path": "/private/tmp/gomap-qs-5016"
+    }
+  ],
+  "unrelated_worktree_registration_path_set_unchanged": true
+}

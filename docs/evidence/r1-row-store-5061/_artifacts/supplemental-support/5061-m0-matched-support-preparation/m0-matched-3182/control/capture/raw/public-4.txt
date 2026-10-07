@@ -1,0 +1,7 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD Ryzen 7 9700X 8-Core Processor             
+BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x-2         	       1	  71763339 ns/op	         0 foreground-exposure-misses/op	        14.00 foreground-overlap-samples/op	   1179391 foreground-p95-ns	   1452564 foreground-p99-ns	        80.00 foreground-points/op	        80.00 foreground-ranges/op	       160.0 foreground-samples/op	         1.000 vacuum-concurrent-retries/op	         0 vacuum-unexpected-errors/op	         0 vacuum-unsupported/op	32515440 B/op	   43319 allocs/op
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.087s

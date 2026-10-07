@@ -1,0 +1,29 @@
+Cloning into '/home/mikers/gomap-r1-5071-cow-repair-a645'...
+done.
+Note: switching to 'ebe414b6d6a22a7f616c108157a01f8ed109e7cc'.
+
+You are in 'detached HEAD' state. You can look around, make experimental
+changes and commit them, and you can discard any commits you make in this
+state without impacting any branches by switching back to a branch.
+
+If you want to create a new branch to retain commits you create, you may
+do so (now or later) by using -c with the switch command. Example:
+
+  git switch -c <new-branch-name>
+
+Or undo this operation with:
+
+  git switch -
+
+Turn off this advice by setting config variable advice.detachedHead to false
+
+Updating files:  58% (4816/8226)Updating files:  59% (4854/8226)Updating files:  60% (4936/8226)Updating files:  61% (5018/8226)Updating files:  62% (5101/8226)Updating files:  63% (5183/8226)Updating files:  64% (5265/8226)Updating files:  65% (5347/8226)Updating files:  66% (5430/8226)Updating files:  67% (5512/8226)Updating files:  68% (5594/8226)Updating files:  69% (5676/8226)Updating files:  70% (5759/8226)Updating files:  71% (5841/8226)Updating files:  72% (5923/8226)Updating files:  73% (6005/8226)Updating files:  74% (6088/8226)Updating files:  75% (6170/8226)Updating files:  76% (6252/8226)Updating files:  77% (6335/8226)Updating files:  78% (6417/8226)Updating files:  79% (6499/8226)Updating files:  80% (6581/8226)Updating files:  81% (6664/8226)Updating files:  82% (6746/8226)Updating files:  83% (6828/8226)Updating files:  84% (6910/8226)Updating files:  85% (6993/8226)Updating files:  86% (7075/8226)Updating files:  87% (7157/8226)Updating files:  88% (7239/8226)Updating files:  89% (7322/8226)Updating files:  90% (7404/8226)Updating files:  91% (7486/8226)Updating files:  92% (7568/8226)Updating files:  93% (7651/8226)Updating files:  94% (7733/8226)Updating files:  95% (7815/8226)Updating files:  96% (7897/8226)Updating files:  97% (7980/8226)Updating files:  98% (8062/8226)Updating files:  99% (8144/8226)Updating files: 100% (8226/8226)Updating files: 100% (8226/8226), done.
+From /home/mikers/gomap-r1-evidence-20261005/5071-a645-cow-repair.bundle
+ * branch                  HEAD       -> FETCH_HEAD
+Previous HEAD position was ebe414b6d6 Integrate reviewed R1 mutation cost harness into unified landing
+HEAD is now at a64560e86f Refresh advisory inventory for current main and isolated COW fixture
+format exit 0
+normal exit 0
+race exit 0
+vet exit 0
+FOCUSED_VALIDATION_PASS a64560e86f45bf28162a8ed99d0fa984e051fd02

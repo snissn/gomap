@@ -1,0 +1,7 @@
+# Independent D locale provenance v2 static review
+
+**CLEAN** at `648f07a3135cbd2d35ac713e944d681dd2de7b7111c76a4e0ca3b10e50717953` against original `82f2cbbc8288898a481edcdc099c6d5009cdf1bc77af0560ac31fa44818e81c5`. Reversing the one guard replacement restores exact original bytes and AST. Frozen original receipt texts were independently hash-checked and their environment fields read directly.
+
+Driver and validator launch environments exactly equal the original explicit effective dictionary. The compiler-wrapper build receipt exactly equals that dictionary plus only `LC_CTYPE=C.UTF-8`. The new check requires that precise value and full dictionary equality: missing/wrong locale, extra variables and changed flags remain rejected. The original observer records actual inner wrapper `os.environ`, then launches real Go with that environment; parent run/validator records and uses the explicit dictionary. This supports the narrow provenance distinction without asserting traced startup or compiler-code equivalence.
+
+Every other source/config, actual tool/argv, original ELF/packet byte, independent six-pin validator, original exit and chronology/repetition guard is byte unchanged. No capture or receipt rewrite; original qualifier failure retained. Root still owns actual qualification execution and separate numeric/cost acceptance. No arbitrary locale or environment normalization, execution, tests, Go, capture, external action or future approval occurred. Role released.

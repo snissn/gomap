@@ -1,0 +1,43 @@
+{
+  "utc": "2026-10-07T01:03:53.856950+00:00",
+  "scope": "Root adopts exact compiler-only locale guard after original source/receipt inspection and independent exact-byte CLEAN; no numeric acceptance",
+  "qualifier_sha256": "648f07a3135cbd2d35ac713e944d681dd2de7b7111c76a4e0ca3b10e50717953",
+  "pins": {
+    "M-3325dfe-D-locale-provenance-v2-preparation/handoff.json": {
+      "sha256": "9e6e3817bbde4b285fa04463c9978016110f001e44a415c5990c0f6f55eaa0aa",
+      "bytes": 1129826
+    },
+    "M-3325dfe-D-locale-provenance-v2-preparation/handoff.md": {
+      "sha256": "ea58733e15acbdb9f8ff418a36ddaab998c7488bc92f90b1d3472eab9b4b1b64",
+      "bytes": 2323
+    },
+    "M-3325dfe-D-locale-provenance-v2-preparation/qualify.py": {
+      "sha256": "648f07a3135cbd2d35ac713e944d681dd2de7b7111c76a4e0ca3b10e50717953",
+      "bytes": 17456
+    },
+    "M-3325dfe-D-locale-provenance-v2-preparation/qualify.py.diff": {
+      "sha256": "e131de0009400d810ecb9fa03a5a3b60852fdbcb198730cb13207d16af65ace5",
+      "bytes": 1153
+    },
+    "M-3325dfe-D-locale-provenance-v2-preparation/staticchecks.json": {
+      "sha256": "65c17dab37b51b1cb055e3dbe9cbbd8b8bec9e11f115987364e6ff8b7380944e",
+      "bytes": 2236
+    },
+    "M-3325dfe-D-locale-provenance-v2-review/handoff.json": {
+      "sha256": "470e70241a34776c690b7336d8d9b878f3ffb40c6a8e93ed710da7692c3e5d99",
+      "bytes": 1892
+    },
+    "M-3325dfe-D-locale-provenance-v2-review/handoff.md": {
+      "sha256": "a11b7d0d824c86b835880d58fa0137dfa084e0f5b664066cba31d68ecdd00df0",
+      "bytes": 1485
+    },
+    "M-3325dfe-D-qualification-operation-failure-original.json": {
+      "sha256": "fc8c212f64fb5e805c110cccffebb5b51e3a676ccbcb72645e1264fd19c85d6d",
+      "bytes": 576
+    },
+    "M-3325dfe-D-descriptive-root-runner-original.py": {
+      "sha256": "0e0e17da7e96c09378e531f9de0de585ec42acdc355fba754c6f4a60e27f79ff",
+      "bytes": 3699
+    }
+  }
+}

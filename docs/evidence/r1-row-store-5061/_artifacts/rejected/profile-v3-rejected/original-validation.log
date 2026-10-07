@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/home/mikers/gomap-r1-5060-profile/scripts/r1_lifecycle_validate.py", line 556, in <module>
+    rows = validate(args.packet, args.expected_runtime, args.expected_harness, args.expected_commit)
+  File "/home/mikers/gomap-r1-5060-profile/scripts/r1_lifecycle_validate.py", line 496, in validate
+    results.append(raw_results(raw.decode(), config, record['pid']))
+  File "/home/mikers/gomap-r1-5060-profile/scripts/r1_lifecycle_validate.py", line 404, in raw_results
+    result_valid(result, config)
+  File "/home/mikers/gomap-r1-5060-profile/scripts/r1_lifecycle_validate.py", line 393, in result_valid
+    maintenance_valid(row, config['documents'])
+  File "/home/mikers/gomap-r1-5060-profile/scripts/r1_lifecycle_validate.py", line 306, in maintenance_valid
+    final_valid(row['final'])
+  File "/home/mikers/gomap-r1-5060-profile/scripts/r1_lifecycle_validate.py", line 238, in final_valid
+    require(leaf['ManifestRevisionGCUnsupported'] is False and type(leaf['ManifestRevisionGCUnsupported']) is bool,
+KeyError: 'ManifestRevisionGCUnsupported'

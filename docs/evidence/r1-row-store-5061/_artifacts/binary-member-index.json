@@ -1,0 +1,47 @@
+[
+  {
+    "path": "comparator/baseline/0216e2e/collection_workload_bench",
+    "sha256": "898457b63c4ba9a3897150b4c9cacf09222830f87cf3616dfe73f479e7596812",
+    "size": 41922408
+  },
+  {
+    "path": "comparator/final-actual-M/3325dfe/collection_workload_bench",
+    "sha256": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+    "size": 42822640
+  },
+  {
+    "path": "comparator/final-typed-scope/00d2c370/collection_workload_bench",
+    "sha256": "1e52f91f7e1d2ed92e49c3ac7c103ee28cb67ec568bd2d5990ab33fd1d97e6be",
+    "size": 41942752
+  },
+  {
+    "path": "comparator/historical-candidate/f95ea1a/collection_workload_bench",
+    "sha256": "a9d73bb046077433ab9ab2f292655276ef823212f39d463090b5cf73c7213108",
+    "size": 41933392
+  },
+  {
+    "path": "lifecycle/final-actual-M/3325dfe/collections.test",
+    "sha256": "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+    "size": 88480296
+  },
+  {
+    "path": "mutation-sweep/final-actual-M/3325dfe/collection_workload_bench",
+    "sha256": "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+    "size": 42822640
+  },
+  {
+    "path": "rejected/actual-size-b53e3ae-physical-growth/collections.test",
+    "sha256": "b5090c031ef4aa5c7927e11962f039905c4069917381269ede2e0edfc3102b4f",
+    "size": 87658808
+  },
+  {
+    "path": "rejected/profile-postgc-7adf81c2/collections.test",
+    "sha256": "56d03d528ccefc2bce6758a2dbed63b3f3ef526cca2b7b5548a48e52ed5879d4",
+    "size": 87672863
+  },
+  {
+    "path": "rejected/profile-v3-rejected/collections.test",
+    "sha256": "4cb210605fe13f5e2134af6c6575ea3a9c7cd01c4304c74556c598be054d1e0d",
+    "size": 87603545
+  }
+]

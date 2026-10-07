@@ -1,0 +1,23 @@
+{
+  "utc": "2026-10-06T10:49:03.187212+00:00",
+  "mature_head": "46aa32fd8c8ed1de83f783d07b30b8d0433feff6",
+  "actual_tested_head": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+  "actual_main": "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c",
+  "clean": true,
+  "main_delta_paths": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/mvcc/native_prune_foreground_test.go",
+    "TreeDB/mvcc/native_prune_memory_test.go",
+    "cmd/benchprof/README.md",
+    "cmd/unified_bench/README.md",
+    "scripts/native_prune_foreground.py",
+    "scripts/native_prune_memory.py"
+  ],
+  "runtime_sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873",
+  "runtime_inputs_count": 1098,
+  "runtime_inputs_equal_to_tested": true,
+  "exact_cleanup_and_test_and_docs_blobs_equal_to_tested": true,
+  "canonical_refresh_check": "PASS14workflows56members",
+  "sparse_git_add_warning": "Merged main-added sparse paths already in index; actual commit parents, exact path set and source blobs independently verified",
+  "focused_test_applicability": "Actual final52 receipts retained under originalsource; same relevant DB production/tests/dependencies at mature46; no source rebound/no binary/performance equivalence claim"
+}

@@ -1,0 +1,1039 @@
+{
+  "schema_version": 1,
+  "scope": "Read-only exact-source/raw-packet diagnosis; no tests, captures, reruns, code/GitHub writes, or waived gates. Only private review artifacts were written.",
+  "conclusion": "Exact 852 remains RED: all 20 timed samples completed, no legacy aborts, and public status is explicit/available; the legacy within-head sample CV gate fails vacuum-total (12.7294588%) and foreground-p99 (78.0581047%). Max-writer-pause passes at9.9083721%. This is observed timing instability, not a cross-head regression test. No infrastructure-flake proof or proof excluding all regressions.",
+  "current_ci": {
+    "sha": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "run_id": 37447383111,
+    "job_id": 112215377747,
+    "artifact_id": 11404352211,
+    "run_url": "https://github.com/snissn/gomap/actions/runs/37447383111",
+    "artifact_url": "https://github.com/snissn/gomap/actions/runs/37447383111/artifacts/11404352211",
+    "exit_code": 1,
+    "log_evidence": "Capture finished all 20 samples. Deterministic fixture tests and analyzer six unit tests passed; analyzer wrote complete results and exited1. Complete red packet uploaded afterward."
+  },
+  "contract": {
+    "repetitions": 10,
+    "each_group": "Ten fresh -benchtime1x -count1 benchmark processes interleaved legacy/public, N=1 each, setup excluded. All raw rows retained.",
+    "required_cv_metrics": [
+      "vacuum-total-ns/op",
+      "max-writer-pause-ns",
+      "foreground-p99-ns/op"
+    ],
+    "cv": "Sample standard deviation / arithmetic mean of 10 raw samples; limit <=0.10 independently for all three legacy metrics.",
+    "legacy_abort_count_required": 0,
+    "public_status_required": "Explicit classification, available or unavailable; actual packet available. Public timing CV is not a gate.",
+    "gate_and_capture_source_unchanged_095_to_852": true,
+    "outlier_removal": false
+  },
+  "current": {
+    "git_sha": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "cpu_models": [
+      "AMD EPYC 9V74 80-Core Processor"
+    ],
+    "gates": {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": false,
+      "public_status_explicit": true
+    },
+    "public_status": "production-index-vacuum-available",
+    "gated_metrics": {
+      "vacuum-total-ns/op": {
+        "mean": 29201587624.6,
+        "median": 28046554591.0,
+        "cv": 0.12729458807664798,
+        "min": 25826811091.0,
+        "max": 38064216136.0,
+        "limit_cv": 0.1,
+        "pass": false
+      },
+      "max-writer-pause-ns": {
+        "mean": 90492428.0,
+        "median": 88159482.5,
+        "cv": 0.0990837207310864,
+        "min": 84560740.0,
+        "max": 115663452.0,
+        "limit_cv": 0.1,
+        "pass": true
+      },
+      "foreground-p99-ns/op": {
+        "mean": 41655934.8,
+        "median": 29198703.5,
+        "cv": 0.7805810471896165,
+        "min": 15238239.0,
+        "max": 110909846.0,
+        "limit_cv": 0.1,
+        "pass": false
+      }
+    },
+    "supporting_legacy_metrics": {
+      "B/op": {
+        "mean": 702879996.8,
+        "median": 702858440.0,
+        "cv": 0.0001717670746648423,
+        "min": 702724064.0,
+        "max": 703139456.0
+      },
+      "allocs/op": {
+        "mean": 1192189.5,
+        "median": 1192188.0,
+        "cv": 1.4340114064083855e-05,
+        "min": 1192167.0,
+        "max": 1192221.0
+      },
+      "cutover-ns/op": {
+        "mean": 48933756.9,
+        "median": 48942883.5,
+        "cv": 0.01663714960542146,
+        "min": 47638876.0,
+        "max": 50285602.0
+      },
+      "system-tree-ns/op": {
+        "mean": 38586341.1,
+        "median": 38750514.0,
+        "cv": 0.020221782599723015,
+        "min": 37143638.0,
+        "max": 39854077.0
+      },
+      "final-pager-sync-ns/op": {
+        "mean": 41557511.2,
+        "median": 39216276.0,
+        "cv": 0.20777615801709148,
+        "min": 36920632.0,
+        "max": 65891226.0
+      },
+      "foreground-p95-ns/op": {
+        "mean": 10727804.9,
+        "median": 9997220.0,
+        "cv": 0.20940370086912838,
+        "min": 9978189.0,
+        "max": 17118892.0
+      }
+    },
+    "public_metric_observations": {
+      "foreground-samples/op": [
+        160.0
+      ],
+      "foreground-overlap-samples/op": [
+        81.0,
+        111.0,
+        160.0
+      ],
+      "vacuum-unsupported/op": [
+        0.0
+      ],
+      "vacuum-concurrent-retries/op": [
+        0.0,
+        1.0
+      ],
+      "vacuum-unexpected-errors/op": [
+        0.0
+      ],
+      "foreground-exposure-misses/op": [
+        0.0
+      ]
+    },
+    "pause_minus_cutover_and_finalsync_ns": {
+      "samples": [
+        1022.0,
+        1913.0,
+        1232.0,
+        1102.0,
+        982.0,
+        1083.0,
+        690.0,
+        932.0,
+        1341.0,
+        1302.0
+      ],
+      "min": 690.0,
+      "max": 1913.0
+    },
+    "receipt_sha256s": {
+      "files": [
+        {
+          "path": "commands.txt",
+          "bytes": 383,
+          "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+        },
+        {
+          "path": "fixture.json",
+          "bytes": 1215,
+          "sha256": "92b1f6469730d68e43f3ce0d059c466a3d73ecb3df677418317f3076cfa50fc3"
+        },
+        {
+          "path": "legacy-benchstat-input.txt",
+          "bytes": 11130,
+          "sha256": "bddafef2824f4bb79c947f6045d97d237c4adc3a238546cbe7ed2d59a57365cc"
+        },
+        {
+          "path": "raw/legacy-1.txt",
+          "bytes": 1113,
+          "sha256": "6912117d1cc38d198a3e8455c12f7dd489cb43db746a090a4548a9f4a4cb42d2"
+        },
+        {
+          "path": "raw/legacy-10.txt",
+          "bytes": 1113,
+          "sha256": "d60b32942a20004089bdfe17dcc36567a0abfb5d144041854bf04d696fbae586"
+        },
+        {
+          "path": "raw/legacy-2.txt",
+          "bytes": 1113,
+          "sha256": "ed2001c425bb9116f341d980373ea4787ee27a6eb7f3f59f94b22ff94f46f5e6"
+        },
+        {
+          "path": "raw/legacy-3.txt",
+          "bytes": 1113,
+          "sha256": "e55c7aa84d743a43dc15ba8cb10e385d66bf9364943718c0f9b2e4732aeb7ddb"
+        },
+        {
+          "path": "raw/legacy-4.txt",
+          "bytes": 1113,
+          "sha256": "80347637a223b2e62fc108dc993e8686a1253de4eb9c1fe2e2532f3f2fa0e30e"
+        },
+        {
+          "path": "raw/legacy-5.txt",
+          "bytes": 1113,
+          "sha256": "aa56a0fbb3724002d322c52d892791223bd4512f47a8c8f3d3b17a94b480927b"
+        },
+        {
+          "path": "raw/legacy-6.txt",
+          "bytes": 1113,
+          "sha256": "37baa2f6e044c5f107fc84a712c7ea516ae56cc6bd98c2fa38874d402eeb215a"
+        },
+        {
+          "path": "raw/legacy-7.txt",
+          "bytes": 1113,
+          "sha256": "c5a51300d9eda5c648ea1caf8ab2576863c2fc8868545ce26f8b152a7e687b74"
+        },
+        {
+          "path": "raw/legacy-8.txt",
+          "bytes": 1113,
+          "sha256": "a1ca0e9f33714f7ca175e8b59aeebe6041a1f39558adf14f413e56a92e1500f9"
+        },
+        {
+          "path": "raw/legacy-9.txt",
+          "bytes": 1113,
+          "sha256": "721c7e4c3170b77876fea5e8b231cb497fddaa6b991afc7f1b99892922380c6f"
+        },
+        {
+          "path": "raw/public-1.txt",
+          "bytes": 661,
+          "sha256": "10a00afc7f0568551c775c6e337b6804aba22751ea1cbafeaff20a55337ae447"
+        },
+        {
+          "path": "raw/public-10.txt",
+          "bytes": 661,
+          "sha256": "342e1b52724a5deabf01e468a31a70b07d5b65f5f55a8b0199394cde0bfd9c76"
+        },
+        {
+          "path": "raw/public-2.txt",
+          "bytes": 661,
+          "sha256": "11bdf06cd42ecbc15026d68f65e52fd9de1736524f8bb3f4b6740e0d0303b0ed"
+        },
+        {
+          "path": "raw/public-3.txt",
+          "bytes": 661,
+          "sha256": "4580f0b4fd2b8c02e2e280f7a66db1e5d2a4557c32e8dc44e89cd4c9a662d28a"
+        },
+        {
+          "path": "raw/public-4.txt",
+          "bytes": 661,
+          "sha256": "119a4df7a4a28e6e94b311d9489663daf7d1ab06c640af2cdd5a3422af09779e"
+        },
+        {
+          "path": "raw/public-5.txt",
+          "bytes": 666,
+          "sha256": "754585e566b166e4f6d613945da00e068eaec27e52a9d1e644a5c889aefcbc27"
+        },
+        {
+          "path": "raw/public-6.txt",
+          "bytes": 661,
+          "sha256": "476eaa8a7c3fd61b55818a6c6cd956f10795124dc6fdb14c8300450ea764a25d"
+        },
+        {
+          "path": "raw/public-7.txt",
+          "bytes": 661,
+          "sha256": "e5dc9f10450563c74d5f7fbe7038c8c46df9e54680af15bbf65069f5c86e2f88"
+        },
+        {
+          "path": "raw/public-8.txt",
+          "bytes": 661,
+          "sha256": "52b3f0309be47d0728f05e0bf76b46682e7270ac86675fc506396235c3191f25"
+        },
+        {
+          "path": "raw/public-9.txt",
+          "bytes": 665,
+          "sha256": "6d62e469730ba194ce458ade963f7afa8ccd343fe52308a4d349e2392b7f088a"
+        },
+        {
+          "path": "results.json",
+          "bytes": 16750,
+          "sha256": "42ef9b74b27dceff3ed2508468337f2f4aef16873d8046b05ddbf6a3a5160804"
+        },
+        {
+          "path": "summary.md",
+          "bytes": 2024,
+          "sha256": "6a0ed135bbd3dce32893a3c2b587dc5b7ef850e2e041d220b0dcee13c9195e9b"
+        }
+      ],
+      "zip": {
+        "path": "/tmp/gomap-r1-execution-20261005/852-vacuum-artifact.zip",
+        "bytes": 18242,
+        "sha256": "f0334fd3e05c4ffb0844bcc8c2c5eefb3aefafdb15191503996cc2870f084c7d"
+      },
+      "job_log": {
+        "path": "/tmp/gomap-r1-execution-20261005/852-stable-legacy-failed.log",
+        "sha256": "9c56e319ce0bd78d1a3bd6775f93b233aceb0e4f095ea12fa6af0102811d242f"
+      }
+    }
+  },
+  "observed_green_control": {
+    "run_id": 37443503169,
+    "artifact_id": 11402113032,
+    "git_sha": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+    "cpu_models": [
+      "AMD EPYC 7763 64-Core Processor"
+    ],
+    "gates": {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": true,
+      "public_status_explicit": true
+    },
+    "public_status": "production-index-vacuum-available",
+    "gated_metrics": {
+      "vacuum-total-ns/op": {
+        "mean": 16459806562.9,
+        "median": 16441623088.5,
+        "cv": 0.0037438077617348024,
+        "min": 16424965715.0,
+        "max": 16632336077.0,
+        "limit_cv": 0.1,
+        "pass": true
+      },
+      "max-writer-pause-ns": {
+        "mean": 64360452.8,
+        "median": 64708494.5,
+        "cv": 0.02208716839538686,
+        "min": 61090636.0,
+        "max": 65947903.0,
+        "limit_cv": 0.1,
+        "pass": true
+      },
+      "foreground-p99-ns/op": {
+        "mean": 39955981.2,
+        "median": 39977545.5,
+        "cv": 0.016005452732528142,
+        "min": 38860657.0,
+        "max": 41004064.0,
+        "limit_cv": 0.1,
+        "pass": true
+      }
+    },
+    "supporting_legacy_metrics": {
+      "B/op": {
+        "mean": 703053554.4,
+        "median": 703051360.0,
+        "cv": 0.00024710381658140046,
+        "min": 702820360.0,
+        "max": 703362072.0
+      },
+      "allocs/op": {
+        "mean": 1192122.2,
+        "median": 1192120.5,
+        "cv": 2.345354738919034e-05,
+        "min": 1192080.0,
+        "max": 1192169.0
+      },
+      "cutover-ns/op": {
+        "mean": 58391223.2,
+        "median": 58793784.0,
+        "cv": 0.03095005615320877,
+        "min": 55270771.0,
+        "max": 60927194.0
+      },
+      "system-tree-ns/op": {
+        "mean": 44547744.3,
+        "median": 43743583.5,
+        "cv": 0.03467058971101972,
+        "min": 42953940.0,
+        "max": 46923409.0
+      },
+      "final-pager-sync-ns/op": {
+        "mean": 5968066.2,
+        "median": 5260656.0,
+        "cv": 0.26725563507471717,
+        "min": 4626215.0,
+        "max": 9051498.0
+      },
+      "foreground-p95-ns/op": {
+        "mean": 26604209.0,
+        "median": 26554654.5,
+        "cv": 0.009982298853215258,
+        "min": 26249438.0,
+        "max": 27095726.0
+      }
+    },
+    "public_metric_observations": {
+      "foreground-samples/op": [
+        160.0
+      ],
+      "foreground-overlap-samples/op": [
+        50.0,
+        121.0,
+        160.0
+      ],
+      "vacuum-unsupported/op": [
+        0.0
+      ],
+      "vacuum-concurrent-retries/op": [
+        0.0,
+        1.0
+      ],
+      "vacuum-unexpected-errors/op": [
+        0.0
+      ],
+      "foreground-exposure-misses/op": [
+        0.0
+      ]
+    },
+    "pause_minus_cutover_and_finalsync_ns": {
+      "samples": [
+        1264.0,
+        841.0,
+        1183.0,
+        1081.0,
+        1513.0,
+        1083.0,
+        1132.0,
+        791.0,
+        1373.0,
+        1373.0
+      ],
+      "min": 791.0,
+      "max": 1513.0
+    },
+    "receipt_sha256s": {
+      "files": [
+        {
+          "path": "commands.txt",
+          "bytes": 383,
+          "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+        },
+        {
+          "path": "fixture.json",
+          "bytes": 1215,
+          "sha256": "c1f209d58b1023dbc38d7cafb7f17d5eb3a382e3da8640000093c7fe40b6d82b"
+        },
+        {
+          "path": "legacy-benchstat-input.txt",
+          "bytes": 11130,
+          "sha256": "2e11becdcb70ffb1ea5a61d4c41631458da46a829717870713e8e906106c2aee"
+        },
+        {
+          "path": "raw/legacy-1.txt",
+          "bytes": 1113,
+          "sha256": "64aaec1291a74702518c51ec622ea4fe8c9b4af6b6fe26d0380142e562d1d8d9"
+        },
+        {
+          "path": "raw/legacy-10.txt",
+          "bytes": 1113,
+          "sha256": "c61cccaa5d4d9d76e1fe13a1c7fbe8d4686a7c9c0cc09e5d5571373a0b09f2ed"
+        },
+        {
+          "path": "raw/legacy-2.txt",
+          "bytes": 1113,
+          "sha256": "6fd82a26893f2b001313b4e1bf4ceb9dad2222357c30dcd31c687e49c707ad1d"
+        },
+        {
+          "path": "raw/legacy-3.txt",
+          "bytes": 1113,
+          "sha256": "dc36533a0f0317e9bc81e9acb60a25bfb7f0726308cb654e468e8509c1fc3a19"
+        },
+        {
+          "path": "raw/legacy-4.txt",
+          "bytes": 1113,
+          "sha256": "0589b33b6304188cf5bb0644553822244b6740f46a379f8c39e40a4a16c448b7"
+        },
+        {
+          "path": "raw/legacy-5.txt",
+          "bytes": 1113,
+          "sha256": "9b52d30374bcd709824e9fba4edfd3aeb50590533c8e7fc2d0b7258fd8aeb36c"
+        },
+        {
+          "path": "raw/legacy-6.txt",
+          "bytes": 1113,
+          "sha256": "e616f2bd91e461b8a056ebf7c06a2c5ff8d3306a16978058804d4cfb7c40a4f0"
+        },
+        {
+          "path": "raw/legacy-7.txt",
+          "bytes": 1113,
+          "sha256": "c2c5787009662dd98a7a8cae2378f5bd68f1d46eef8c53b184c170698024cfaf"
+        },
+        {
+          "path": "raw/legacy-8.txt",
+          "bytes": 1113,
+          "sha256": "9d3f8e6c39aae561d7f97a12a9e7b13081d6bec43cf78b1483b0ffff994eaacc"
+        },
+        {
+          "path": "raw/legacy-9.txt",
+          "bytes": 1113,
+          "sha256": "9f25f1ad7530a4f4988aaeb08b5ef20926bf4ae98dca4786d2a739a63f0853b2"
+        },
+        {
+          "path": "raw/public-1.txt",
+          "bytes": 666,
+          "sha256": "7343d8a6b9eebf32220d8d0864a413b564be482f88165a4504c55f9c7579ca8e"
+        },
+        {
+          "path": "raw/public-10.txt",
+          "bytes": 661,
+          "sha256": "a045871675bb550ec410e9792b10130606e442809abae760ae6cfa09d84c6768"
+        },
+        {
+          "path": "raw/public-2.txt",
+          "bytes": 661,
+          "sha256": "f41606fa68d0f310700310831f9961dc7105f30a4dfcfd3dc883a77a0a4ab3b4"
+        },
+        {
+          "path": "raw/public-3.txt",
+          "bytes": 661,
+          "sha256": "d297071f100d530e323a1faa6b5055709b1683975d7092912455a3a35f2047e1"
+        },
+        {
+          "path": "raw/public-4.txt",
+          "bytes": 661,
+          "sha256": "956d7d2a85b518cf898413ab0681a57b677dd369ef5318c94dada801a4d84341"
+        },
+        {
+          "path": "raw/public-5.txt",
+          "bytes": 661,
+          "sha256": "9dbd19f50d0fcc355ff8e3ec0b2dc3ef6e208468da1323f5fb085147556dec7d"
+        },
+        {
+          "path": "raw/public-6.txt",
+          "bytes": 661,
+          "sha256": "b8f412ff0fdfc711369e2de806404c2c098bc96b40bcf538c0886f7ed3670d80"
+        },
+        {
+          "path": "raw/public-7.txt",
+          "bytes": 665,
+          "sha256": "24df4e62761a2e24ab10e3ab8f25ca33691232eff907af3eeb44ad8c516492aa"
+        },
+        {
+          "path": "raw/public-8.txt",
+          "bytes": 661,
+          "sha256": "20488268da93b780cea4e0640485c33249509b47371830a6cd40d7a936c847ea"
+        },
+        {
+          "path": "raw/public-9.txt",
+          "bytes": 665,
+          "sha256": "6cb6cf2cd6ea6e84b230affb6ba2ee5b60c379c944f395007bd3f17aa5e90cfc"
+        },
+        {
+          "path": "results.json",
+          "bytes": 16729,
+          "sha256": "c594b56308d4dbe3c36cf8a10433540061e7f5b45d54d8593f9f2da7de6b83bd"
+        },
+        {
+          "path": "summary.md",
+          "bytes": 2024,
+          "sha256": "b5d4d59c96c8b5ec345601beeec7a521a0764076208e37871959d48e7a0f8de1"
+        }
+      ],
+      "zip": {
+        "path": "/tmp/gomap-r1-execution-20261005/095-vacuum-artifact.zip",
+        "bytes": 18137,
+        "sha256": "8846e5a96112d579958f8f858135e63cbd0e875a4023003205fc2f663dc03325"
+      }
+    }
+  },
+  "historical_red": {
+    "run_id": 37440823246,
+    "job_id": 112193867883,
+    "artifact_id": 11401223897,
+    "git_sha": "1567a8a0a8b496d90e310c24b2cee53c2a169366",
+    "cpu_models": [
+      "AMD EPYC 9V74 80-Core Processor"
+    ],
+    "gates": {
+      "legacy_completed_without_abort": true,
+      "legacy_cv_at_most_10_percent": false,
+      "public_status_explicit": true
+    },
+    "public_status": "production-index-vacuum-available",
+    "gated_metrics": {
+      "vacuum-total-ns/op": {
+        "mean": 43631893962.7,
+        "median": 41709185249.5,
+        "cv": 0.22505228515706435,
+        "min": 30534381144.0,
+        "max": 61146400471.0,
+        "limit_cv": 0.1,
+        "pass": false
+      },
+      "max-writer-pause-ns": {
+        "mean": 109561935.1,
+        "median": 102434530.5,
+        "cv": 0.1704833277124989,
+        "min": 98571602.0,
+        "max": 159753100.0,
+        "limit_cv": 0.1,
+        "pass": false
+      },
+      "foreground-p99-ns/op": {
+        "mean": 121017720.3,
+        "median": 129057147.5,
+        "cv": 0.46683548959434745,
+        "min": 48617886.0,
+        "max": 212013166.0,
+        "limit_cv": 0.1,
+        "pass": false
+      }
+    },
+    "supporting_legacy_metrics": {
+      "B/op": {
+        "mean": 702956214.4,
+        "median": 702928140.0,
+        "cv": 0.0002516770362938401,
+        "min": 702767040.0,
+        "max": 703340224.0
+      },
+      "allocs/op": {
+        "mean": 1192163.4,
+        "median": 1192161.0,
+        "cv": 2.4446385870904022e-05,
+        "min": 1192125.0,
+        "max": 1192216.0
+      },
+      "cutover-ns/op": {
+        "mean": 62426139.7,
+        "median": 62348409.5,
+        "cv": 0.02562479564388112,
+        "min": 60275291.0,
+        "max": 64896903.0
+      },
+      "system-tree-ns/op": {
+        "mean": 49098669.8,
+        "median": 48760535.5,
+        "cv": 0.022488927220501144,
+        "min": 47961286.0,
+        "max": 51315130.0
+      },
+      "final-pager-sync-ns/op": {
+        "mean": 47134085.6,
+        "median": 39134095.0,
+        "cv": 0.4078076557725267,
+        "min": 36997697.0,
+        "max": 99009455.0
+      },
+      "foreground-p95-ns/op": {
+        "mean": 24421972.6,
+        "median": 15025519.5,
+        "cv": 0.831255942008544,
+        "min": 9986891.0,
+        "max": 68004799.0
+      }
+    },
+    "public_metric_observations": {
+      "foreground-samples/op": [
+        160.0
+      ],
+      "foreground-overlap-samples/op": [
+        160.0
+      ],
+      "vacuum-unsupported/op": [
+        0.0
+      ],
+      "vacuum-concurrent-retries/op": [
+        0.0
+      ],
+      "vacuum-unexpected-errors/op": [
+        0.0
+      ],
+      "foreground-exposure-misses/op": [
+        0.0
+      ]
+    },
+    "pause_minus_cutover_and_finalsync_ns": {
+      "samples": [
+        1903.0,
+        1402.0,
+        1773.0,
+        1703.0,
+        1543.0,
+        1753.0,
+        2333.0,
+        1783.0,
+        1503.0,
+        1402.0
+      ],
+      "min": 1402.0,
+      "max": 2333.0
+    },
+    "receipt_sha256s": {
+      "files": [
+        {
+          "path": "commands.txt",
+          "bytes": 383,
+          "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c"
+        },
+        {
+          "path": "fixture.json",
+          "bytes": 1215,
+          "sha256": "ad7fefe11335eabe72bd38395eef666efd89be9f4050722adf8609b5eb2d52c1"
+        },
+        {
+          "path": "legacy-benchstat-input.txt",
+          "bytes": 11130,
+          "sha256": "d427ceb3a0e50e81d1989a54a26f64787d4b3b5f85c8f49268343370285229c6"
+        },
+        {
+          "path": "raw/legacy-1.txt",
+          "bytes": 1113,
+          "sha256": "8d60ecd7e3147265a9f68ec42e4e3d4865a0f5510845ceb03de30a040e9b3382"
+        },
+        {
+          "path": "raw/legacy-10.txt",
+          "bytes": 1113,
+          "sha256": "d8490bb1df30d6f3cf9469c628c4da70e856a713c82fef16ca57af5bf8961757"
+        },
+        {
+          "path": "raw/legacy-2.txt",
+          "bytes": 1113,
+          "sha256": "5ab8f782f93d391e698f014f9a9beb2802066c61aa4aaa5a6c4e61ef6e1acb56"
+        },
+        {
+          "path": "raw/legacy-3.txt",
+          "bytes": 1113,
+          "sha256": "55fe21c82397cf6484936b9b254c47f8a05782a63859d11158ff5609d0fc336b"
+        },
+        {
+          "path": "raw/legacy-4.txt",
+          "bytes": 1113,
+          "sha256": "ebdaa12602653535b3f3c757803905cf7b9fb23bca52022ea1eda7c69ea1078d"
+        },
+        {
+          "path": "raw/legacy-5.txt",
+          "bytes": 1113,
+          "sha256": "49b435786adfa4d09c91062443cd6c1ec94e5d80f141c0e339457c01700fea85"
+        },
+        {
+          "path": "raw/legacy-6.txt",
+          "bytes": 1113,
+          "sha256": "fe5da431b89dc38458198627615e5954a9473f645e677625022230843bdb5313"
+        },
+        {
+          "path": "raw/legacy-7.txt",
+          "bytes": 1113,
+          "sha256": "2a108ba53e18a17d9b69abc2a9bed1589397b92a15e7d5ced5aa509bb1f0194a"
+        },
+        {
+          "path": "raw/legacy-8.txt",
+          "bytes": 1113,
+          "sha256": "1d7c9993af131280babcba32b790e581cd50bbd704ce393585cf1dd1313e06af"
+        },
+        {
+          "path": "raw/legacy-9.txt",
+          "bytes": 1113,
+          "sha256": "a61e73525f65e529fd5cb1daf0850623e440e66e7854d106f11ef4177422309e"
+        },
+        {
+          "path": "raw/public-1.txt",
+          "bytes": 661,
+          "sha256": "55c107024512baae4598c69e4cccc07c59cac77df28598d9a67e047d0642b9a9"
+        },
+        {
+          "path": "raw/public-10.txt",
+          "bytes": 661,
+          "sha256": "1f938db0e988bde6f983d9e1d2c39684082e36b77b68ea3b1b4f8cba5f59d05b"
+        },
+        {
+          "path": "raw/public-2.txt",
+          "bytes": 661,
+          "sha256": "4e18ab903204d3122c61b353eb70c9556a204743687cc71a817e675acb7e1996"
+        },
+        {
+          "path": "raw/public-3.txt",
+          "bytes": 661,
+          "sha256": "bc6c5d6b22402064ae4cb08700a7c65ff061c3d21a4d6e235dd053f3376bc7b3"
+        },
+        {
+          "path": "raw/public-4.txt",
+          "bytes": 661,
+          "sha256": "d64a30e9f98736a21bed4b4c64473c3a324a57fd090e670cddb48c5a6d3fb238"
+        },
+        {
+          "path": "raw/public-5.txt",
+          "bytes": 661,
+          "sha256": "253153eaf404d0ed93b288b9f5106d86d6a887d1513c7cce197f130bc4331aa0"
+        },
+        {
+          "path": "raw/public-6.txt",
+          "bytes": 661,
+          "sha256": "2ca445ad95e155d272038f99ce84829d95e5bb121e06f56ef58f25445cb2bb5c"
+        },
+        {
+          "path": "raw/public-7.txt",
+          "bytes": 661,
+          "sha256": "6ec148e2bdef0023f2a335dff8c87430819f207e6f1562c496e4ded8ca0f40db"
+        },
+        {
+          "path": "raw/public-8.txt",
+          "bytes": 661,
+          "sha256": "0a94b537b00383dadaa069897f7f79144d9c578b663baf7bc4602b3533f83fcb"
+        },
+        {
+          "path": "raw/public-9.txt",
+          "bytes": 661,
+          "sha256": "d2104f4413837b4105fd068a2f5c825ab9320bb24708c3096d44e43b0a3d5605"
+        },
+        {
+          "path": "results.json",
+          "bytes": 16723,
+          "sha256": "1d399a59fd282bf0398db419c349344a8bba109ebee42b7e59c9b4ca56a038b8"
+        },
+        {
+          "path": "summary.md",
+          "bytes": 2026,
+          "sha256": "03a2ed5462dd978b264ec109f964f78745f519dff970713acf53434f18cd77af"
+        }
+      ],
+      "job_log": {
+        "path": "/tmp/gomap-r1-execution-20261005/1567-stable-legacy-failed.log",
+        "sha256": "fb3e79184c1d233a7d18ac56b1bbee893f383675d708cd51a8b9b076837a2153"
+      }
+    }
+  },
+  "independent_arithmetic": {
+    "path": "/tmp/gomap-r1-execution-20261005/852-vacuum-independent-arithmetic.json",
+    "sha256": "aa5c8970718b2875d09cee85a838b98c213b8990a8772d2f5e76e53cd11e4919",
+    "all_three_packets": true,
+    "all20_raw_rows_per_packet_one_N1_benchmark_and_PASS": true,
+    "every_advertised_mean_median_sample_cv_matches_within_1e_13": true,
+    "numeric_raw_order_retained": "1 through10; analyzer lexical file sorting does not alter math.",
+    "constant_legacy_work_equal_across_all_three_packets": {
+      "concurrent-aborts/op": [
+        0.0
+      ],
+      "cutover-clone-pages/op": [
+        0.0
+      ],
+      "deferred-cutovers/op": [
+        0.0
+      ],
+      "dirty-descriptors/op": [
+        0.0
+      ],
+      "foreground-exposure-misses/op": [
+        0.0
+      ],
+      "foreground-overlap-samples/op": [
+        4096.0
+      ],
+      "foreground-points/op": [
+        2048.0
+      ],
+      "foreground-ranges/op": [
+        2048.0
+      ],
+      "preclone-pages/op": [
+        345.0
+      ],
+      "reclone-pages/op": [
+        0.0
+      ],
+      "tail-mutations/op": [
+        2176.0
+      ],
+      "tail-points/op": [
+        128.0
+      ],
+      "tail-ranges/op": [
+        2048.0
+      ],
+      "vacuum-errors/op": [
+        0.0
+      ]
+    }
+  },
+  "timing_attribution": {
+    "legacy_setup": "Selected bytes_64x legacy fixture opens new TempDir, PointerThreshold4096, creates1024 inline1024-bytevalues, publishes PagerLeaves and the 131072-entry catalog, and drains/disables root publication before ResetTimer. Closing and exposure verification occur after StopTimer.",
+    "legacy_timed_work": "One vacuum call; pre-cutover hook waits for exactly 4096 foreground operations, alternating2048 Set and2048 DeleteRange+Batch.Write. This warmup is inside total vacuum duration. Foreground p99 is the percentile of those operation times, including API writes and waiting, not a pure tree CPU measurement.",
+    "public_timed_work": "One public VacuumIndexOnline plus four concurrent workers x40 operations=160 samples; all three packets retain160 samples each. Public retries (0 or1) are allowed by the unchanged classifier; all current runs have positive overlap and zero exposure misses/unexpected errors.",
+    "raw_observation": "852 has almost invariant work/allocations, cutover CV 1.6637%, system-tree CV2.0222%, but final-sync CV20.7776% and foreground-p99 CV78.0581%. Pause equals cutover+finalsync within 690..1913ns. Late samples9/10 have longer total/p99 times; all 10 are included.",
+    "limit": "Duration attribution is consistent with variable write/wait/sync conditions, but no I/O, scheduler, CPU steal, contention, or actual host trace exists to identify the cause. Same work does not prove same latency or exclude indirect binary/layout/runtime effects."
+  },
+  "source_applicability": {
+    "base": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+    "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "all_changed_paths": [
+      {
+        "path": ".github/ci/ci_impact.json",
+        "status": "M",
+        "base_blob": "b081ee51424232c8d08d3f50601c204e9d3555ad",
+        "head_blob": "a0e602ce1ae2d2baec8198dfbde7722344888a2c",
+        "diff_sha256": "fce5a53cc321d8bb2921bd224e4e2bca67c2c49ccea7a2cb578ac7ff70003f04"
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+        "status": "M",
+        "base_blob": "0ff598428898bc445d995c1fb8204f4e2ea359f5",
+        "head_blob": "6b62b35cff8e2ede152ea092bff4cb53b8e6ba01",
+        "diff_sha256": "71d6179806c4a40f13eaced14aeb9402ea03c595430df3c855efc3774b220023"
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go",
+        "status": "A",
+        "base_blob": null,
+        "head_blob": "3d0f589a95ab6ef6063fb4df6d72dfe7676d932e",
+        "diff_sha256": "61e049fc03e182eecd2421a60ddfcf42026edd06eb55edf279ea8455014ac9bf"
+      }
+    ],
+    "full_diff_sha256": "887d407b4602bcf19c85531ed37b5b4fcb3363d620638d3478831b8cad1a2522",
+    "unchanged_relevant_source_paths": [
+      {
+        "path": ".github/workflows/treedb-vacuum-m0.yml",
+        "base_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+        "head_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+        "sha256": "9026cc7e16f7bb0cbbac8c380368e4fcce5a6d6016d333c7a9b276420b6c8235",
+        "equal": true
+      },
+      {
+        "path": "scripts/treedb_vacuum_m0_capture.sh",
+        "base_blob": "99e5a145e1a7ecf748b87ed957484b8214f6f8d9",
+        "head_blob": "99e5a145e1a7ecf748b87ed957484b8214f6f8d9",
+        "sha256": "60a42f57efda47c52320a88f6a87a033ae99fe0e727c7f89193987c415a9b607",
+        "equal": true
+      },
+      {
+        "path": "scripts/treedb_vacuum_m0_summarize.py",
+        "base_blob": "431d8add7518e2195e5c5c73d2475d5862d2cf3f",
+        "head_blob": "431d8add7518e2195e5c5c73d2475d5862d2cf3f",
+        "sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef",
+        "equal": true
+      },
+      {
+        "path": "scripts/treedb_vacuum_m0_summarize_test.py",
+        "base_blob": "7a00d325f5eb035ad97670112457ee0c525de47e",
+        "head_blob": "7a00d325f5eb035ad97670112457ee0c525de47e",
+        "sha256": "1bb88ca37e7faeb18ceacd68cb1518dc756dcf93a54f4ccb38ed2d8880355d8d",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_collection_bench_test.go",
+        "base_blob": "c5347bb64a3900d1a051576b93fc395db8912039",
+        "head_blob": "c5347bb64a3900d1a051576b93fc395db8912039",
+        "sha256": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_collection_latency_external_bench_test.go",
+        "base_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53",
+        "head_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53",
+        "sha256": "5324dc8d5254db831be6f60a6fbbc1473277591064414fc52db2fe141ee5bec0",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_m0_fixture_test.go",
+        "base_blob": "9c16343a393f95943e17f124f6d6c9ad7be4a7bb",
+        "head_blob": "9c16343a393f95943e17f124f6d6c9ad7be4a7bb",
+        "sha256": "39f464862b644b29a71f945602d4c3e27e90784df23c8d20fdb50264076fd78b",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vacuum_online.go",
+        "base_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+        "head_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+        "sha256": "8e9d828ba099ec6ab2ef736d93bc42e327549c6ee66c07d734253ea8d7e4d41b",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/leaf_generation_gc.go",
+        "base_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+        "head_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+        "sha256": "c56131db852cb71150e41e007a9a8165f7b9bfe7ee7367e0e8a2e92331bd89fb",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/db.go",
+        "base_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "head_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/durable_root_runtime.go",
+        "base_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+        "head_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+        "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/recoverable_root_set.go",
+        "base_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "head_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/compact_storage.go",
+        "base_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e",
+        "head_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e",
+        "sha256": "59d57c87ce42abbdc32ecd168eeae26ce4a377ef8ad6b05cf0607a7c826d6e21",
+        "equal": true
+      },
+      {
+        "path": "TreeDB/db/vlog_rewrite.go",
+        "base_blob": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "head_blob": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "sha256": "c4624e593d029a7117aa240a991cc66618c3a2935cf00ce767fc0ff47b1ea5ab",
+        "equal": true
+      }
+    ],
+    "new_test_file_no_init": true,
+    "new_test_file_top_level_declarations": [
+      "func TestLeafManifestRevisionGCBoundedDescriptors(t *testing.T) {",
+      "func revisionFDCount(t *testing.T) int {",
+      "func TestLeafManifestRevisionGCPartialCancellation(t *testing.T) {",
+      "func TestLeafManifestRevisionGCLaterInventoryFailure(t *testing.T) {",
+      "func TestLeafManifestRevisionGCFreshHeldProtection(t *testing.T) {"
+    ],
+    "runtime_applicability": "Only changed production source is leaf_manifest_revision_gc.go. Both selected timing fixtures call db.Open with new TempDir, IndexOuterLeavesInValueLog false, PointerThreshold4096. Legacy explicitly publishes PagerLeaves. gcLeafManifestRevisions is reached only from leafGenerationGC after the !indexOuterLeavesInValueLog early return; selected bench/vacuum sources do not call these GC entrypoints. Explicit compaction/rewrite GC callers also retain that early return. New Linux test functions are excluded by -run ^$; no new init. ci_impact.json is inventory metadata. Therefore the changed FD GC path is not exercised by the selected M0 benchmark; this is source-path applicability, not binary equivalence or proof against all indirect build/layout effects."
+  },
+  "environment_constraints": {
+    "common_recorded_fields": {
+      "go_version": "go version go1.26.8 linux/amd64",
+      "goos": "linux",
+      "goarch": "amd64",
+      "cpu_set": "0,1",
+      "gomaxprocs": "2",
+      "gomemlimit": "8GiB",
+      "filesystem": "ext4",
+      "device": "/dev/root",
+      "repetitions": 10,
+      "commands": [
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkVacuumIndexOnlineCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem",
+        "GOWORK=off GOMAXPROCS=2 GOMEMLIMIT=8GiB taskset -c 0,1 go test ./TreeDB/db -run '^$' -bench '^BenchmarkPL06ExternalVacuumCollectionForegroundChurn/bytes_64x$' -benchtime=1x -count=1 -benchmem"
+      ],
+      "dirty_state": "clean"
+    },
+    "matched_host_or_environment": false,
+    "cpu_model_disagreement": "Green095 rawCPU=AMD EPYC 7763 64-Core; failed852 and 1567 rawCPU=AMD EPYC 9V74 80-Core. Same /dev/root/ext4 label does not bind physical storage. CPU model equality for 852/1567 does not bind host identity.",
+    "control_use": "095 confirms unchanged source-path contract can pass on an observed CI execution, and constrains direct FD-fix attribution. It does not establish a matched-host baseline or justify cross-head slowdown/improvement inference.",
+    "historical_use": "1567 preserved RED also shows unstable timing under the same recorded 9V74 CPU model. Its earlier runtime changes were reached, so older attribution is not imported as proof. No packets are pooled."
+  },
+  "selected_next_action": {
+    "action": "One bounded rerun of the exact current852 failed M0 job, with the existing unmodified 10-repetition/10% gate and source; root must preserve original run/artifact/attempt evidence.",
+    "why": "Changed FD GC path is not exercised, constant work is validated, gate/source are unchanged, and a green095 observation exists; this supports one discriminating repeat while retaining uncertainty. CPU mismatch prevents declaring the green control matched or the red observation an infrastructure flake.",
+    "if_repeat_red": "Stop retries. Before further action, obtain bounded serial matched same-host control/head executions with the unchanged capture contract and record actual CPU/storage/load/competing work, plus targeted write/sync/scheduler timing attribution as needed. Diagnose before runtime repair or any gate proposal.",
+    "forbidden_inferences_or_actions": [
+      "Retry until green",
+      "Drop/trim samples or pool packets",
+      "Change10samples/10% thresholds",
+      "Treat historical/current durations as a cross-head performance comparison",
+      "Claim binary equivalence from unchanged reachable source",
+      "Claim proved infrastructure flake or no regression"
+    ]
+  }
+}

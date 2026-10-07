@@ -1,0 +1,3 @@
+#!/usr/bin/python3
+import os
+os.execv('/usr/bin/python3', ['/usr/bin/python3', '/home/mikers/gomap-r1-final-observers-20261006/observe-A-with-environment.py', '--wrapper', '/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/root-frozen-inputs.json'] + __import__("sys").argv[1:])

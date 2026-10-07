@@ -1,0 +1,80 @@
+{
+  "verdict": "COPIER_PREFLIGHT_FINDINGS_REPORT_LAYOUT_CLEAN",
+  "role": "independent read-only gpt-6.1-sol/high",
+  "utc": "2026-10-07T00:24:52.098339+00:00",
+  "files": {
+    "M-3325dfe-final-support-copier-v2-preparation/copy-support.py": {
+      "sha256": "dff812a25f9cbd82fde6044b724addc6b49f63a71e3e9949312a548ec7133b42",
+      "bytes": 11202
+    },
+    "M-3325dfe-final-support-copier-v2-preparation/handoff.md": {
+      "sha256": "3c03a67ed94d046bba61acd83492c3ed0c1edb038c101d7972bb0f49d3c7c421",
+      "bytes": 5056
+    },
+    "M-3325dfe-final-support-copier-v2-preparation/handoff.json": {
+      "sha256": "452c753242b2b23f9a6602011febb2df1502defaa36efd47bd9cf0e835012912",
+      "bytes": 2387
+    },
+    "M-3325dfe-final-support-copier-v2-preparation/v1-v2.diff": {
+      "sha256": "cee49086b2edf1f6d685a0f6ee3c75878684ad86f1922d9984fbe93249660830",
+      "bytes": 2531
+    },
+    "M-3325dfe-E-final-report-public-proof-layout-preparation/assemble.py": {
+      "sha256": "fe81e26e777e49c78fd2e7b81e2a556e0fd4b8be2facfb8be64f945278372a5f",
+      "bytes": 6859
+    },
+    "M-3325dfe-E-final-report-public-proof-layout-preparation/handoff.json": {
+      "sha256": "08a6f83ee05619077000a4798f29791018aea9721666d7ae8d481590f5a28cdf",
+      "bytes": 1183
+    },
+    "M-3325dfe-E-final-report-public-proof-layout-preparation/report-template.md": {
+      "sha256": "ab4a4802c80b6c433736dba7ab9871b93ab04e978893c6ea17a8607f76d259bc",
+      "bytes": 1880
+    },
+    "M-3325dfe-E-final-report-public-proof-layout-preparation/manifest-template.json": {
+      "sha256": "fbbef4a5e78bf0e9b88708749e2ae5a9e17f36486c46d2b9daaff06ab4c2451c",
+      "bytes": 2493
+    },
+    "final-E-report-assembly-preparation/assemble.py": {
+      "sha256": "ab1a24e399b34490293b54c2511dd9ccdbccae2b908f0106647c60804b105925",
+      "bytes": 6666
+    },
+    "final-E-report-assembly-preparation/report-template.md": {
+      "sha256": "ab4a4802c80b6c433736dba7ab9871b93ab04e978893c6ea17a8607f76d259bc",
+      "bytes": 1880
+    },
+    "final-E-report-assembly-preparation/manifest-template.json": {
+      "sha256": "fbbef4a5e78bf0e9b88708749e2ae5a9e17f36486c46d2b9daaff06ab4c2451c",
+      "bytes": 2493
+    }
+  },
+  "findings": [
+    {
+      "severity": "P2",
+      "file": "M-3325dfe-final-support-copier-v2-preparation/copy-support.py",
+      "line": 71,
+      "mechanism": "destination() accepts canonical component names containing spaces/Unicode/punctuation that replay-public.py rel() rejects. Example reports/final note.md is copied and emitted into SUPPORT_SHA256SUMS, then original public executor cannot parse that ledger.",
+      "fix": "Require every destination component to match the executor [A-Za-z0-9_.-]+ and reject dot/dotdot; or independently fail-closed preflight the actual frozen plan against that exact consumer grammar before invoking this helper."
+    },
+    {
+      "severity": "P2",
+      "file": "M-3325dfe-final-support-copier-v2-preparation/copy-support.py",
+      "line": 71,
+      "mechanism": "Only an exact LEDGER destination is reserved. SUPPORT_SHA256SUMS/child passes preflight and causes copied files to create a directory at generated ledger path, then fails late at ledger creation after outputs exist.",
+      "fix": "Reject any destination whose first component is LEDGER, in addition to repeated NAMESPACE; verify actual plan before activation."
+    }
+  ],
+  "report_diff_sha256": "0d38f215c8ed6f7132ad2b5d98c8e232b7f39a22f89f7d524b213714266f7cf4",
+  "checks": [
+    "V2 SUPPORT entries are relative to target namespace/ledger parent, matching ledger(parent/name) lookup in public executor. Receipt stage_relative stays full-stage-relative.",
+    "Explicit source SHA/size, duplicate JSON keys, UTF8/noNUL regular nonsymlink reads and parent checks, before/immediate/after copies, destination mode0644/exclusive writes, original program/plan/core final hashes and outside-stage private receipt checked. No original replacement, recursive copier, subprocess or acceptance operation.",
+    "Report helper diff adds one fixed PUBLIC_PROOF_PREFIX and optional receipt selector, and applies it only to public_replay_receipt. All other receipt links and history/fragment verification remain unchanged. Report/manifest templates byte-identical to frozen originals.",
+    "Sibling proof directory avoids appending fresh replay outputs within previously ledger-frozen artifact subtree. Actual staging/link correctness remains root-owned."
+  ],
+  "limits": [
+    "Neither helper executed; no synthetic tests/plan exercise, SSH/network/Go/build/capture/GitHub/source/E mutation.",
+    "No actual root plan/stage or acceptance record inspected; findings apply to allowed source input surface, not evidence that a current actual plan contains offending paths.",
+    "Root may repair guard or independently prove the complete frozen actual destination plan obeys consumer grammar and excludes reserved subtree before activation.",
+    "All support copying/report assembly remains byte presentation only, not evidence or numeric acceptance."
+  ]
+}

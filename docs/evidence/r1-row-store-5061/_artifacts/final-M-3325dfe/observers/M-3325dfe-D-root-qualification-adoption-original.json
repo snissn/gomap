@@ -1,0 +1,14 @@
+{
+  "M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "execution_occurred": false,
+  "independently_verified_local_pins": {
+    "M-3325dfe-D-root-qualification-preparation/handoff.md": "a8e4f68f7586eb5f271fed297e3259ac6916cda644aad1d066f800763fc2863f",
+    "M-3325dfe-D-root-qualification-preparation/qualify.py": "82f2cbbc8288898a481edcdc099c6d5009cdf1bc77af0560ac31fa44818e81c5",
+    "M-3325dfe-D-root-qualification-review/handoff.json": "7aad2f08e678ae310056d7694c1e38d777d722403f39cb8d7a1f6604b76c1ca7",
+    "M-3325dfe-D-root-qualification-review/handoff.md": "c33c59145de3205b8c968e36c2da3e55df2a385a7fce8d3717bcbb647dbeaf92"
+  },
+  "numeric_acceptance": false,
+  "root_source_review": "Reviewed complete helper and independent clean review; helper checks actual pinned config, independent pre-D manifest and Git/file source bytes, original observer/build/run/six-pin validator chain and original logs without remeasurement; original exit retained. Exact manifest bytecopy is later replay preparation, not rewritten original observation. External canonical flock remains mandatory.",
+  "state": "ROOT_ADOPTED_PRIVATE_D_PROVENANCE_HELPER_PREPARATION_ONLY_ACTUAL_D_NOT_STARTED",
+  "utc": "2026-10-07T00:20:08.591590+00:00"
+}

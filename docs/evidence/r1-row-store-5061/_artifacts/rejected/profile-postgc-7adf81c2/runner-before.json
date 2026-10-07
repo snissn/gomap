@@ -1,0 +1,29 @@
+{
+  "utc": "2026-10-06T05:00:17Z",
+  "loadavg": [
+    1.0341796875,
+    1.8115234375,
+    2.19677734375
+  ],
+  "cpu_count": 12,
+  "uname": {
+    "system": "Linux",
+    "node": "mikers-B560-DS3H-AC-Y1",
+    "release": "6.8.0-138-generic",
+    "version": "#138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC ",
+    "machine": "x86_64",
+    "processor": "x86_64"
+  },
+  "environment": {
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-growth-probe-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "16",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off",
+    "GOFLAGS": "",
+    "TMPDIR": "/home/mikers/gomap-r1-growth-evidence-20261005/profile-postgc-7adf81c2/benchmark-tmp"
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "utc": "2026-10-06T20:08:21.146796+00:00",
+  "formatter": "/tmp/gomap-r1-execution-20261005/final-C-report-preparation/format.py",
+  "formatter_sha256": "52d94e91dcfd696c1d8aaa29f3a39ff0da010e5d238bf10818d802832a66323d",
+  "reviewed_upstream_summarizer_sha256": "cdede02aa3be5a0769649c539d497963f7f1db0214b2089b469fac5f423d5749",
+  "input_schema": "gomap-r1-mutation-sweep-summary-v1",
+  "example_source_commit": "8848da3d7122ac8505c8b42f78850d2464b2f350",
+  "historical_diagnostic_packet": "/tmp/gomap-r1-execution-20261005/5059-sweep/review-repair-2572/rehearsal-8848da3d7/packet.json",
+  "original_packet_sha256": "c569b9da03f7c5aea8c5d667d5854afd961376300fa29239ac72a8c95d08617c",
+  "validation": "Actual historical32row/2request/1repetition packet-derived summary;16 primary rows +64 counter rows;8 malformed presentation refusals; exact integer formatting. No current numeric evidence or acceptance.",
+  "counter_scope": "Unnormalized supplied medians of aggregate per-repetition deltas; ACK and Flush separate. No per-call allocation of async counter work.",
+  "invocation": "python3 format.py /path/to/summary.json --summary-link ./summary.json --packet-link ./packet.json > report.md",
+  "limits": "Format only, generic UpdateBatch costs. No semantic packet/receipt validation, numerical acceptance, optimization ratio, native partial setter/metareference cost, larger population/concurrency/storage capacity claim. Coordinator independently validates/freezes actual packets/receipts and verifies summary derivation.",
+  "files_sha256": {
+    "README.md": "0ec3cf3fd09075cbf3d9e2424d2b142dd0e6145935b3cd1748a20542947d73ab",
+    "diagnostic-format-smoke-summary.json": "fd12df963864a265ad460740b22c5e5dc0a0007a437f170677922be22f5b7419",
+    "diagnostic-format-smoke.md": "56c50b0697b3bdc8e4361a9ba46fe72f5cd2547e7135b2f85219f155c4e6e2e0",
+    "format.py": "52d94e91dcfd696c1d8aaa29f3a39ff0da010e5d238bf10818d802832a66323d",
+    "validation.txt": "f3fa4c4934fbea5f62e3d9beb8ea3c8d974a7f24ae2be062f7afbce96da0b3d0"
+  },
+  "status": "Ready for coordinator review/invocation after actual current80cell capture; no current result invented."
+}

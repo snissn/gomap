@@ -1,0 +1,67 @@
+[
+  {
+    "path": "/private/tmp/gomap-r1-5061-final/TreeDB/docs/evidence/r1-row-store-5061/README.md",
+    "sha256": "e636404bed9bb61be7543428dbc97504bc8511228467cdfab07c21701acfde8b",
+    "bytes": 15419
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/README.md",
+    "sha256": "10c917668c9fc61103a3fa4881384873463677614a98b2a7b836d10793ea15c4",
+    "bytes": 2995
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/report-a.py",
+    "sha256": "b2e386b4ec939978b9de1759ff6a2b564abf2afc0ecd136171823302b1fdefa4",
+    "bytes": 13140
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/handoff.json",
+    "sha256": "d5c05fa39e0448c6be6e992dc1f9097dc7d7613cbcf549dcfb347e7ac35fa2b2",
+    "bytes": 4074
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/README.md",
+    "sha256": "0ec3cf3fd09075cbf3d9e2424d2b142dd0e6145935b3cd1748a20542947d73ab",
+    "bytes": 2962
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/format.py",
+    "sha256": "52d94e91dcfd696c1d8aaa29f3a39ff0da010e5d238bf10818d802832a66323d",
+    "bytes": 10218
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/handoff.json",
+    "sha256": "9066665f6d1d24fe0c92193a88e7a1bbafb2b07335cb20d9d057d77f67e1585b",
+    "bytes": 2150
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/README.md",
+    "sha256": "e97286c077371dbedcb46e5bfd4d940ae52be2ebcb1d21bba9efba29d02071d6",
+    "bytes": 3910
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/format.py",
+    "sha256": "022c45de44e96014de9ef343b639be4abd92189152efd411314b829b54c4da58",
+    "bytes": 18047
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/frozen-r1_lifecycle_validate.py",
+    "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+    "bytes": 61009
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/handoff.json",
+    "sha256": "ebae51cc139b76ce83fa5ba9607c20fa77fb18add5e1e00d59f8271295ff75cb",
+    "bytes": 2221
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/audit.md",
+    "sha256": "2e7fc374d878380ff072e3cea5d4cd5712420976aef8cf3225969d64e3dd8f62",
+    "bytes": 13986
+  },
+  {
+    "path": "/private/tmp/gomap-r1-execution-20261005/5061-final-closure-audit-preparation/audit.json",
+    "sha256": "1903042ce757ddfc67d201add970053d2f94a700b264b1759ba275663c88966c",
+    "bytes": 5217
+  }
+]

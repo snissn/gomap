@@ -1,0 +1,569 @@
+{
+  "schema_version": 1,
+  "created_utc": "2026-10-06T11:27:53.062575+00:00",
+  "verdict": "SOURCE_APPLICABILITY_ONLY; M0 PERFORMANCE INCONCLUSIVE",
+  "scope": "Durable persistence of the completed read-only audit. No new Go execution, build, test, capture, rerun, hosted query/action or source edit; original evidence unchanged. Git object byte bindings are recorded here, not a new performance assessment.",
+  "repository_object_source": "/tmp/gomap-r1-5067",
+  "comparison": {
+    "control_source": "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c",
+    "candidate_source": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "local_worktree_head_observed": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "previous_14_binding_scope": {
+      "base": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+      "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "applicability_warning": "All14-unchanged result in old852 diagnosis must not transfer to this new comparison."
+    },
+    "same_blobs": 11,
+    "different_blobs": 3,
+    "whole_delta_paths": [
+      ".github/ci/ci_impact.json",
+      "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+      "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+      "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+      "TreeDB/collections/r1_lifecycle_5060_test.go",
+      "TreeDB/db/durable_root_runtime.go",
+      "TreeDB/db/leaf_generation_gc.go",
+      "TreeDB/db/leaf_manifest_revision_gc.go",
+      "TreeDB/db/leaf_manifest_revision_gc_5066_bench_test.go",
+      "TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+      "TreeDB/db/leaf_manifest_revision_gc_compatibility_5066_test.go",
+      "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go",
+      "TreeDB/db/r1_native_appender_metadata_test.go",
+      "TreeDB/db/r1_rebuilt_pack_projection_test.go",
+      "TreeDB/db/vacuum_online.go",
+      "TreeDB/db/wal_recovery.go",
+      "TreeDB/docs/guides/typed-row-store.md",
+      "TreeDB/docs/spec/r1-row-lifecycle.md",
+      "TreeDB/docs/spec/recovery.md",
+      "TreeDB/docs/spec/storage-format.md",
+      "TreeDB/docs/spec/value-log-lifecycle.md",
+      "TreeDB/internal/rootpublication/resource_physical_selection_test.go",
+      "TreeDB/internal/rootpublication/resource_selector.go",
+      "TreeDB/internal/valuelog/manager.go",
+      "TreeDB/internal/valuelog/retry_close_5066_test.go",
+      "TreeDB/internal/valuelog/stable_resource.go",
+      "cmd/benchprof/README.md",
+      "cmd/unified_bench/README.md",
+      "docs/contracts/CONCURRENCY.md",
+      "scripts/r1_lifecycle_capture.py",
+      "scripts/r1_lifecycle_validate.py",
+      "scripts/r1_lifecycle_validate_test.py"
+    ],
+    "whole_delta_diff_sha256": "1a8090784e3ce4aacd4d3342ca79bdc7657e715578bf6a87a421972785e4f756"
+  },
+  "fourteen_before_after_bindings": [
+    {
+      "path": ".github/workflows/treedb-vacuum-m0.yml",
+      "before": {
+        "git_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+        "bytes": 1804,
+        "sha256": "9026cc7e16f7bb0cbbac8c380368e4fcce5a6d6016d333c7a9b276420b6c8235"
+      },
+      "after": {
+        "git_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+        "bytes": 1804,
+        "sha256": "9026cc7e16f7bb0cbbac8c380368e4fcce5a6d6016d333c7a9b276420b6c8235"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "scripts/treedb_vacuum_m0_capture.sh",
+      "before": {
+        "git_blob": "99e5a145e1a7ecf748b87ed957484b8214f6f8d9",
+        "bytes": 3258,
+        "sha256": "60a42f57efda47c52320a88f6a87a033ae99fe0e727c7f89193987c415a9b607"
+      },
+      "after": {
+        "git_blob": "99e5a145e1a7ecf748b87ed957484b8214f6f8d9",
+        "bytes": 3258,
+        "sha256": "60a42f57efda47c52320a88f6a87a033ae99fe0e727c7f89193987c415a9b607"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "scripts/treedb_vacuum_m0_summarize.py",
+      "before": {
+        "git_blob": "431d8add7518e2195e5c5c73d2475d5862d2cf3f",
+        "bytes": 9052,
+        "sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef"
+      },
+      "after": {
+        "git_blob": "431d8add7518e2195e5c5c73d2475d5862d2cf3f",
+        "bytes": 9052,
+        "sha256": "329897315d2db6959dabe3a2bf24d66b153bf58de4113a264c9f11c7c99cdbef"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "scripts/treedb_vacuum_m0_summarize_test.py",
+      "before": {
+        "git_blob": "7a00d325f5eb035ad97670112457ee0c525de47e",
+        "bytes": 5960,
+        "sha256": "1bb88ca37e7faeb18ceacd68cb1518dc756dcf93a54f4ccb38ed2d8880355d8d"
+      },
+      "after": {
+        "git_blob": "7a00d325f5eb035ad97670112457ee0c525de47e",
+        "bytes": 5960,
+        "sha256": "1bb88ca37e7faeb18ceacd68cb1518dc756dcf93a54f4ccb38ed2d8880355d8d"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_bench_test.go",
+      "before": {
+        "git_blob": "c5347bb64a3900d1a051576b93fc395db8912039",
+        "bytes": 15507,
+        "sha256": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6"
+      },
+      "after": {
+        "git_blob": "c5347bb64a3900d1a051576b93fc395db8912039",
+        "bytes": 15507,
+        "sha256": "86365555acec7e0f11ff9f90913a6bd07c1998fd4c07341c1dd1feaab21ec6a6"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_latency_external_bench_test.go",
+      "before": {
+        "git_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53",
+        "bytes": 8732,
+        "sha256": "5324dc8d5254db831be6f60a6fbbc1473277591064414fc52db2fe141ee5bec0"
+      },
+      "after": {
+        "git_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53",
+        "bytes": 8732,
+        "sha256": "5324dc8d5254db831be6f60a6fbbc1473277591064414fc52db2fe141ee5bec0"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "TreeDB/db/vacuum_m0_fixture_test.go",
+      "before": {
+        "git_blob": "9c16343a393f95943e17f124f6d6c9ad7be4a7bb",
+        "bytes": 21767,
+        "sha256": "39f464862b644b29a71f945602d4c3e27e90784df23c8d20fdb50264076fd78b"
+      },
+      "after": {
+        "git_blob": "9c16343a393f95943e17f124f6d6c9ad7be4a7bb",
+        "bytes": 21767,
+        "sha256": "39f464862b644b29a71f945602d4c3e27e90784df23c8d20fdb50264076fd78b"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "TreeDB/db/vacuum_online.go",
+      "before": {
+        "git_blob": "70d30583f9354b8284cf0303a90fa7627e92bd06",
+        "bytes": 75334,
+        "sha256": "4f24ad829975a9c74b2d9f976e2a17e523da7964f2720eb77c6c15487bc34993"
+      },
+      "after": {
+        "git_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+        "bytes": 75347,
+        "sha256": "8e9d828ba099ec6ab2ef736d93bc42e327549c6ee66c07d734253ea8d7e4d41b"
+      },
+      "same_blob": false,
+      "diff_sha256": "bbfceec31069bb518a8542da93626289b30c3eca3c8adda4c5e0450e0b895daa",
+      "diff_bytes": 1397
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_gc.go",
+      "before": {
+        "git_blob": "4559626cfefcacf4ead036eec69e98df49ea0c0a",
+        "bytes": 26958,
+        "sha256": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969"
+      },
+      "after": {
+        "git_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+        "bytes": 27626,
+        "sha256": "c56131db852cb71150e41e007a9a8165f7b9bfe7ee7367e0e8a2e92331bd89fb"
+      },
+      "same_blob": false,
+      "diff_sha256": "b2a28466a1f1820fa9f5bc12064331d7387c50c7473879b09d01cc2e166f51d8",
+      "diff_bytes": 1400
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "before": {
+        "git_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "bytes": 185753,
+        "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f"
+      },
+      "after": {
+        "git_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "bytes": 185753,
+        "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "before": {
+        "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+        "bytes": 114319,
+        "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d"
+      },
+      "after": {
+        "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+        "bytes": 117323,
+        "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39"
+      },
+      "same_blob": false,
+      "diff_sha256": "42cdab05aa62d6b767364db0ede18370ea083cf529451a4895222f4d8883e7d5",
+      "diff_bytes": 6370
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "before": {
+        "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "bytes": 25147,
+        "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29"
+      },
+      "after": {
+        "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "bytes": 25147,
+        "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "TreeDB/db/compact_storage.go",
+      "before": {
+        "git_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e",
+        "bytes": 89957,
+        "sha256": "59d57c87ce42abbdc32ecd168eeae26ce4a377ef8ad6b05cf0607a7c826d6e21"
+      },
+      "after": {
+        "git_blob": "e3b6328291b63e026d9bf68449cb067ce7b0b69e",
+        "bytes": 89957,
+        "sha256": "59d57c87ce42abbdc32ecd168eeae26ce4a377ef8ad6b05cf0607a7c826d6e21"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "before": {
+        "git_blob": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "bytes": 179415,
+        "sha256": "c4624e593d029a7117aa240a991cc66618c3a2935cf00ce767fc0ff47b1ea5ab"
+      },
+      "after": {
+        "git_blob": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "bytes": 179415,
+        "sha256": "c4624e593d029a7117aa240a991cc66618c3a2935cf00ce767fc0ff47b1ea5ab"
+      },
+      "same_blob": true,
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "diff_bytes": 0
+    }
+  ],
+  "additional_changed_production_go_inputs": [
+    {
+      "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+      "before": null,
+      "after": {
+        "git_blob": "eddde48dbd47b1f548a5c442b50dc27559ed0ee5",
+        "bytes": 13733,
+        "sha256": "f28cd5029b92c547a3e1942d27cd70139ce5314af831d598aa8c7c4aee01d9bc"
+      },
+      "diff_sha256": "bbadad47fb9bb25fc84e1ad72a99ec7c8a7f509dcf7a41da929c8a71e4a8d157"
+    },
+    {
+      "path": "TreeDB/db/wal_recovery.go",
+      "before": {
+        "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+        "bytes": 45904,
+        "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d"
+      },
+      "after": {
+        "git_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+        "bytes": 47414,
+        "sha256": "6bb969fd95fa17294d53ba49530d9e3fa30a79256ec6267d6b560d3611457e41"
+      },
+      "diff_sha256": "d1f0bb2703cc69457571f98a177585b42dd512d774cb236738f037fae28e2e8b"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_selector.go",
+      "before": {
+        "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+        "bytes": 2683,
+        "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24"
+      },
+      "after": {
+        "git_blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca",
+        "bytes": 4899,
+        "sha256": "39935124f1a9859b45984e4132faf6a871fb6b2ecb849a7017ebfda0c0e8d0d4"
+      },
+      "diff_sha256": "4274bc82bbeb963785d18127535ff4f8ef1fe2c258b64cd30aef8f08821b7dfe"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "before": {
+        "git_blob": "1a613731464df0c8a8ef3d0036fb71232ca141ac",
+        "bytes": 88040,
+        "sha256": "766fb14d572daa93e368f9a694e9e8e1f44895d59650e177a2933c079e193ecf"
+      },
+      "after": {
+        "git_blob": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5",
+        "bytes": 89734,
+        "sha256": "fdea6bc5d50a58a6e64f630bc622f15c5f3a4fe6ae513b432ae8d12b62e5e6fe"
+      },
+      "diff_sha256": "5347b9efe7db7d9874843c0f4283abf1c5a553493ac6c0703d641a9efb6b5992"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "before": {
+        "git_blob": "d9dd7c01fd6965d3e47cf33e04a56da9d2e20534",
+        "bytes": 53986,
+        "sha256": "dd8be52da3d2305308c0031335a92c4bcd0d66afed62bfcb1d2bf93e4f019a9f"
+      },
+      "after": {
+        "git_blob": "8cff8dea2fa0e48531775552a8782eb079cb2113",
+        "bytes": 53859,
+        "sha256": "a42f0dfcf171e4aee7b08cbea7229683451e331389b813e4c7284b9e1dd70968"
+      },
+      "diff_sha256": "a40b21f3e3b411926e0539c2be81ee8635ed6840741a9412a25b9339b24ff648"
+    }
+  ],
+  "fixture_and_branch_anchors": [
+    {
+      "path": "scripts/treedb_vacuum_m0_capture.sh",
+      "line": 44,
+      "claim": "Selected legacy and external public bytes_64x benchmarks; each sample fresh Go process, -benchtime=1x -count=1; ten interleaved pairs at line70.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/scripts/treedb_vacuum_m0_capture.sh#L44",
+      "head_blob": "99e5a145e1a7ecf748b87ed957484b8214f6f8d9"
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_bench_test.go",
+      "line": 352,
+      "claim": "Legacy fixture opens fresh TempDir with PointerThreshold4096 and no outer-leaf option; seeds1024 values and publishes OrderedRootStoragePagerLeaves.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_collection_bench_test.go#L352",
+      "head_blob": "c5347bb64a3900d1a051576b93fc395db8912039"
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_bench_test.go",
+      "line": 210,
+      "claim": "Legacy fixture explicitly drains/stops root-publication coordinator and releases recovery handoff before the benchmark timer.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_collection_bench_test.go#L210",
+      "head_blob": "c5347bb64a3900d1a051576b93fc395db8912039"
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_bench_test.go",
+      "line": 112,
+      "claim": "Legacy foreground timer starts after setup; b.StopTimer at177 precedes deferred DB.Close; small foreground Set values at260 are below threshold.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_collection_bench_test.go#L112",
+      "head_blob": "c5347bb64a3900d1a051576b93fc395db8912039"
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_latency_external_bench_test.go",
+      "line": 106,
+      "claim": "Public fixture opens fresh TempDir with PointerThreshold4096 and no outer-leaf option; seeds1024 JSON rows of selected valueSize1024.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_collection_latency_external_bench_test.go#L106",
+      "head_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53"
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_latency_external_bench_test.go",
+      "line": 29,
+      "claim": "Public timer starts after setup; b.StopTimer at55 precedes deferred DB.Close; public foreground Set values at218 are below threshold.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_collection_latency_external_bench_test.go#L29",
+      "head_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53"
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_latency_external_bench_test.go",
+      "line": 176,
+      "claim": "Timed public worker calls DB.VacuumIndexOnline;160 fixed foreground operations per round.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_collection_latency_external_bench_test.go#L176",
+      "head_blob": "62aa1ac379bbf2d20a0b83e5df9c0333bf68de53"
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "line": 1324,
+      "claim": "IndexOuterLeavesInValueLog bool defaults false when omitted; assigned directly to db at2283, and zipper at2344.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/db.go#L1324",
+      "head_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_gc.go",
+      "line": 61,
+      "claim": "False indexOuterLeavesInValueLog returns before any leaf-generation/revision GC scan; gcLeafManifestRevisions call is later at88.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/leaf_generation_gc.go#L61",
+      "head_blob": "5c961ae4f23666e519b08307c2869adbb148df7a"
+    },
+    {
+      "path": "TreeDB/db/vacuum_online.go",
+      "line": 1309,
+      "claim": "Public current-root capture calls changed projection/fallback helper with projectCurrentPacked=true; timer records capture duration.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_online.go#L1309",
+      "head_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "line": 1220,
+      "claim": "Current public capture executes new source.PhysicalDescriptors() pack check even for a no-pack source; cannot label all changed code unexercised.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/durable_root_runtime.go#L1220",
+      "head_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c"
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "line": 1305,
+      "claim": "If exact fallback is selected, new identity maps and all inherited packed-descriptor validation are reached. No-pack fixtures do not enter pack-selection branch at1343.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/durable_root_runtime.go#L1305",
+      "head_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c"
+    },
+    {
+      "path": "TreeDB/db/vacuum_online.go",
+      "line": 1737,
+      "claim": "Older recovery-root reconstruction, if needed, calls changed helper with projectCurrentPacked=false; additional pack scan condition is skipped there.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_online.go#L1737",
+      "head_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380"
+    },
+    {
+      "path": "TreeDB/db/wal_recovery.go",
+      "line": 1256,
+      "claim": "New retireRegisteredCreationMetadataLocked is called only after successful produced-pointer registration; fixtures use inline seed/churn sizes and pager leaves, excluding the identified large-value/outer-leaf hot path, not proving universal appender nonexecution.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/wal_recovery.go#L1256",
+      "head_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "line": 1758,
+      "claim": "Changed Manager.Close now stops/joins retry workers; DB teardown calls vm.Close at db.go:3028. Fixture teardown follows StopTimer; source changes can still affect binary/layout or scheduling.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/internal/valuelog/manager.go#L1758",
+      "head_blob": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_selector.go",
+      "line": 1,
+      "claim": "New exact physical-kind selector is consumed only by the pack-containing branch described at durable_root_runtime.go:1343; no packed resources configured in these fixtures.",
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "source_url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/internal/rootpublication/resource_selector.go#L1",
+      "head_blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca"
+    }
+  ],
+  "branch_classification": {
+    "physical_revision_gc": "Excluded by defaultfalse outer-leaf flag before any scan; no M0 conclusion about FD-GC capacity/cost.",
+    "public_current_root_capture": "Reachable changed code; unconditional current packed-descriptor census check executes. Exact-fallback additions remain possible if fallback selected; packed-specific selector is excluded for no-pack fixture.",
+    "public_older_recovery_root_capture": "Changed call reachable if older selectable root reconstruction occurs; projectCurrentPacked=false.",
+    "legacy_coordinator": "Drained and removed before timed legacy work, so changed durable public capture helper does not belong to its selected legacy swap path.",
+    "large_value_or_outer_leaf_produced_pointer_retirement": "Fixture inline values and pager leaves exclude identified large-value/outer-leaf hot path; no universal proof every appender branch is unexecuted.",
+    "manager_close": "Changed code reached in deferred teardown outside the selected benchmark timing, not binary/scheduling equivalence."
+  },
+  "matched_existing_packet_observations": {
+    "control": {
+      "source_commit": "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c",
+      "existing_packet_gates": {
+        "legacy_completed_without_abort": true,
+        "legacy_cv_at_most_10_percent": false,
+        "public_status_explicit": true
+      },
+      "existing_packet_public_status": "production-index-vacuum-available",
+      "existing_packet_legacy_cv": {
+        "vacuum-total-ns/op": 0.11140594836196407,
+        "max-writer-pause-ns": 0.17745597928509316,
+        "foreground-p99-ns/op": 0.42732487211829906
+      },
+      "status": "FAIL / timing qualification INCONCLUSIVE",
+      "no_cross_head_ratio_accepted": true
+    },
+    "candidate": {
+      "source_commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "existing_packet_gates": {
+        "legacy_completed_without_abort": true,
+        "legacy_cv_at_most_10_percent": false,
+        "public_status_explicit": true
+      },
+      "existing_packet_public_status": "production-index-vacuum-available",
+      "existing_packet_legacy_cv": {
+        "vacuum-total-ns/op": 0.10267833826181559,
+        "max-writer-pause-ns": 0.05064185143084359,
+        "foreground-p99-ns/op": 0.43985115318475154
+      },
+      "status": "FAIL / timing qualification INCONCLUSIVE",
+      "no_cross_head_ratio_accepted": true
+    }
+  },
+  "root_policy_disposition": {
+    "reported_comment": "https://github.com/snissn/gomap/pull/5071#issuecomment-6015235219",
+    "authority": "Root reports explicit auxiliary INCONCLUSIVE/nonblocking disposition and unchanged actual required code gates; no GitHub query performed by this agent.",
+    "conceptual_assessment": "Consistent with auxiliary M0 policy if FAILs remain explicit and unchanged, actual TreeDB required gate and formal PR gates remain satisfied, and D/E finite-cost qualification remains open.",
+    "waiver": false,
+    "threshold_change": false,
+    "new_retry_recommendation": false,
+    "all_ci_green_claim": false
+  },
+  "conclusion": "The new physical manifest-revision GC and its bounded-FD repeated-directory-scan schedule are excluded by the selected M0 fixture options. The broader f2c-to3182 production delta is not excluded: public vacuum reaches changed current-root resource capture. Eleven of the14 prior M0 bindings match and three differ. Source applicability alone proves neither binary equivalence nor stable performance. The one matched control and one candidate packet both failed unchanged noise qualification, so no cross-head ratio or causal regression/infrastructure attribution is accepted.",
+  "limits": [
+    "No source-path equality statement for all reachable M0 code.",
+    "No identical binary/layout/scheduling assertion.",
+    "No accepted median ratio, performance equivalence, capacity qualification, regression exclusion, or causal infrastructure-flake attribution.",
+    "No promotion of unchanged raw correctness PASS to noise-gate PASS.",
+    "No fresh measurements or alteration of original FAILED results; ten samples/10percent contract and outliers preserved."
+  ],
+  "original_evidence_bindings": [
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/852-vacuum-diagnosis.json",
+      "bytes": 37018,
+      "sha256": "bafc091af010f2f8c42e1a36815576cbe5196ac72e2f36b4fcab71be1dbc9177"
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/m0-matched-3182/intent.json",
+      "bytes": 1133,
+      "sha256": "84990123418e8094f67258f0af1e452bbed7826a11404488bb45e693a58dc73f"
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/m0-matched-3182/completed.json",
+      "bytes": 487,
+      "sha256": "b0c4d24067e9cb1145fe375bee0a43e6cca5238d874cf619ad146c478b69f267"
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/m0-matched-3182/control/capture/results.json",
+      "bytes": 16566,
+      "sha256": "405e12cadc06e7549b61077ece21157d75e152f81619a5e44f415c45d9779cdd"
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/m0-matched-3182/candidate/capture/results.json",
+      "bytes": 16560,
+      "sha256": "199d953e216a02ba1fde5ff8b1cfefabf39c1a7a234baf1c0beeb4bf29884df0"
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/main-rules-3182.json",
+      "bytes": 1163,
+      "sha256": "6ef337306ac9d319062b25affe6713264d9fca4803dd250735b3b4a58e14c0a1"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+{
+  "utc": "2026-10-06T20:24:51.559858+00:00",
+  "reviewer": "/root",
+  "head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+  "tree": "ecb6d1ff66ad826e36364298b8bc08b864fd3fda",
+  "status": "Pushed exacte4e7 andGitHubbodybyteverified; hostedrequestedonce; requiredCI37526268804pending",
+  "inputs": {
+    "0245-prepared-vector-ci-diagnosis.md": {
+      "bytes": 7043,
+      "sha256": "9037b32aa40514f64845dfa7a84ba49b42da345b6364bb7b4bff25a9a77ddbb4"
+    },
+    "0245-prepared-vector-ci-diagnosis.json": {
+      "bytes": 43088,
+      "sha256": "0034348666cb89b982357212aa1abe10e2aec082eab9c31c2d69426d4cd30d86"
+    },
+    "0245-catalog-tail-fixture-repair-review.md": {
+      "bytes": 2027,
+      "sha256": "b75231a07fa2676e21b749abfb5302c568c76b60533c15ae4111b6a26fcdcf0d"
+    },
+    "0245-catalog-tail-fixture-repair-review.json": {
+      "bytes": 4792,
+      "sha256": "f9c6191d21256e677e31400b0850c3eb14695b7e35cc43b598252eaad673cb43"
+    },
+    "0245-linux-race2-failure-rest-original.log": {
+      "bytes": 4593655,
+      "sha256": "4d093c2fb9fae041fc0ca787b315040160b27294a2508e82338914d71df82b26"
+    },
+    "main3cfe-linux-race2-rest-original.log": {
+      "bytes": 4577864,
+      "sha256": "7e7f8e22d8ff5c51939213a6ea39b694c78bb93ad9c968d4040899e3d65ed7ce"
+    },
+    "0245-nativewire-recovery-focused-validation-root-review.json": {
+      "bytes": 4096,
+      "sha256": "5429337b14ee91ceffbccf623e90d93d71c1049e3242a544d5834fb1cae1f3dd"
+    },
+    "e4e7-catalog-tail-fixture-validation-root-review.json": {
+      "bytes": 5761,
+      "sha256": "c16432a89c3cb9bf1a978b11b1d8c9847c2576423ef42c68787bc884d2ff2155"
+    },
+    "5071-e4e7-final-source-original.json": {
+      "bytes": 105879,
+      "sha256": "98f986ed5943939b0e5af3260eef2db2bfe1cc7c0a63a4457eb4cc0873627e88"
+    },
+    "e4e7-test_inventory-uv-original.log": {
+      "bytes": 115,
+      "sha256": "66d7f95dfdec610b9e194ee1d1df37fcebd16c2b497a63b0d8aeb7af61d487ee"
+    },
+    "e4e7-test_impact-uv-original.log": {
+      "bytes": 121,
+      "sha256": "7191cfae2fb14b1d838ecde29b7403fbc1f9d9d8f66f0d7a4de8b2b296bc6f8c"
+    },
+    "5071-catalog-tail-repaired-pr-body.md": {
+      "bytes": 9543,
+      "sha256": "2d0560a6b89e21803305a4262720b768010835a65947c25639bcee8d48aaf37c"
+    },
+    "5071-catalog-tail-fixture-repair-0245/repair.patch": {
+      "bytes": 2054,
+      "sha256": "1cb8a8eb9f50d13627bb26ea328a4f6429b70873824632fd76d54f1bfe054181"
+    },
+    "e4e7-postpush-and-body-original.json": {
+      "bytes": 15755,
+      "sha256": "ee7d7f3db167d96c7257addf99e438dab0fda4cf6b6064cf421c2c1bac57ea6e"
+    },
+    "e4e7-hosted-review-request-actual.json": {
+      "bytes": 1991,
+      "sha256": "858bd9d0c5dabec5f63915dccd5cb353d6965bad737194503507c93444696a54"
+    }
+  },
+  "runtime": "1122inputsunchangedcb5b0d7b; A/C harnessdigestunchanged706b71f1; no new performanceclaims",
+  "Python": "Actual childexit0 bothsessions65959/92311;15tests34.017s/21tests34.489s",
+  "limits": "Original0245Linuxracefailure remains; actualfalsecomponent untraced; sharedlowerlayersmayaffectschedule; no waiver/retry",
+  "postpush_verified": "e4e7-postpush-and-body-original.json",
+  "hosted_request": "https://github.com/snissn/gomap/pull/5071#issuecomment-6024804942"
+}

@@ -1,0 +1,32 @@
+{
+  "status": "support-preparation-complete-writer-released-not-published",
+  "directory": "/tmp/gomap-r1-execution-20261005/5061-final-support-preparation",
+  "selection": "selection.json",
+  "classification_summary": "README.md",
+  "original_files": 105,
+  "original_bytes": 4864986,
+  "groups": 16,
+  "checks": [
+    "Original regular UTF8-only explicit file allowlist",
+    "No duplicate destination paths",
+    "Copied bytes SHA256 and size exactly equal originals; rehashed again at finalization",
+    "No .go/binary/archive/DB/profile/symlink files",
+    "Original process exit or exact command unavailable explicitly recorded",
+    "No original source rebinding; d078 remains pre-hardening, red working source unknown where unavailable",
+    "83 association derived state, not argv/exit receipt",
+    "Future receipt preparation and tiny8epoch prelanding diagnostic do not become retained proof"
+  ],
+  "prior_selection_unchanged": {
+    "path": "/tmp/gomap-r1-execution-20261005/publication-selection-with-final-typed-scope.json",
+    "sha256": "2644dd233d9d9391b1d53725004a887c3ffe9c188be03f633cfe5390e03ce1fb"
+  },
+  "E_worktree_head": "8acaa272c97b910de5932fd2883b0f3557a60723",
+  "no_repo_writes": true,
+  "no_Go_capture_archives_push_publication_status_polling": true,
+  "actual_D_and_sweep_excluded_pending": true,
+  "remaining": [
+    "Coordinator reviews support classifications and unavailable evidence",
+    "Actual D/sweep proof and receipt later appended separately",
+    "Final public byte tree, binary overlay and fresh replay remain coordinator-owned"
+  ]
+}

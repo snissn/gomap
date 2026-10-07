@@ -1,0 +1,29 @@
+{
+  "M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "actual_capture_paths": {
+    "A": "comparator/final-actual-M/3325dfe",
+    "C": "mutation-sweep/final-actual-M/3325dfe",
+    "D": "lifecycle/final-actual-M/3325dfe"
+  },
+  "actual_namespace": "final-M-3325dfe",
+  "artifact_git_path": "docs/evidence/r1-row-store-5061/_artifacts",
+  "proof_layout_reason": "The immutable artifact PUBLICATION_SHA256SUMS remains complete for the frozen artifact tree. Actual public replay proof and final report are later descendant files outside that tree; do not append proof to or rewrite original artifact ledgers.",
+  "public_replay_proof_git_path": "docs/evidence/r1-row-store-5061/public-replay-M-3325dfe",
+  "receipts": {
+    "A": "final-M-3325dfe/receipts/A",
+    "C": "final-M-3325dfe/receipts/C",
+    "D": "final-M-3325dfe/receipts/D"
+  },
+  "results": {
+    "A": "final-M-3325dfe/results/A",
+    "C": "final-M-3325dfe/results/C",
+    "D": "final-M-3325dfe/results/D"
+  },
+  "selection": {
+    "base13": "final-M-3325dfe/selection/base13.json",
+    "final16": "final-M-3325dfe/selection/final16.json"
+  },
+  "stage": "/home/mikers/gomap-r1-publication-stage-M-3325dfe-20261006",
+  "state": "ROOT_SELECTED_FUTURE_LAYOUT_ONLY_NO_STAGE_CREATED",
+  "utc": "2026-10-07T00:21:55.739934+00:00"
+}

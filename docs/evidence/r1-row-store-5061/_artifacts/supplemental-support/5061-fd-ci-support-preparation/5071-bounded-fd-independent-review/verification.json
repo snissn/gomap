@@ -1,0 +1,318 @@
+{
+  "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "source_clean": true,
+  "sources": {
+    ".github/ci/ci_impact.json": {
+      "git_blob": "a0e602ce1ae2d2baec8198dfbde7722344888a2c",
+      "sha256": "a8d668bcb579163961cfc4a00a8a3e35f446b733cdf83cba7c4473169ba96be5",
+      "worktree_matches_commit": true
+    },
+    "TreeDB/db/leaf_manifest_revision_gc.go": {
+      "git_blob": "6b62b35cff8e2ede152ea092bff4cb53b8e6ba01",
+      "sha256": "d6f6786283be1460ba37d304dd9df88cc61ee35983cd3b87ad7b5c4d66509276",
+      "worktree_matches_commit": true
+    },
+    "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go": {
+      "git_blob": "3d0f589a95ab6ef6063fb4df6d72dfe7676d932e",
+      "sha256": "5ecfbe10af899e9456e705a545b0313294efcfc6d9e3bf692b94bffc248163cc",
+      "worktree_matches_commit": true
+    }
+  },
+  "artifacts": {
+    "final-checks.py": {
+      "sha256": "e91bf7bf6a7480ddad753541c6c33874eb0d05f28fb152f01a5e055dd2decad5",
+      "size": 2098
+    },
+    "benchmark-final.log": {
+      "sha256": "155ad566dbcaa123b78006852fd418d2074f69b280cfdd88fdb3891a5839f59d",
+      "size": 297
+    },
+    "red.log": {
+      "sha256": "8d4e68613c27f3204ca2c3e29096412c83d4984366d2e043fcade26c31724552",
+      "size": 590
+    },
+    "fresh-protection-normal.log": {
+      "sha256": "c3c9e452562b4615523703326fe1f5d6c6051aed7b7c17f501084f7597787ced",
+      "size": 171
+    },
+    "race-334571.log": {
+      "sha256": "a4bc11eddb51bfb073ba11796a91705f672a35d9aa79a27d28caccf6dd92703f",
+      "size": 14671
+    },
+    "normal-334571.log": {
+      "sha256": "c48f362027f047d18b365f27187685486f1203902676102721a41bf9fc9d44fb",
+      "size": 14660
+    },
+    "final-checks.json": {
+      "sha256": "2e226c73c9ca72b048f3f3f3f3b52e9382cd285119f1a055c7391ba3b46b1a64",
+      "size": 3074
+    },
+    "fresh-protection-race.log": {
+      "sha256": "c826fb35d9fe7509bba686a08ccf0e241c49c488019ffd3f17fb908caca32ebc",
+      "size": 171
+    },
+    "vet-final.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    }
+  },
+  "final_steps": [
+    {
+      "name": "fresh-protection-normal",
+      "exit_code": 0,
+      "log_sha256": "c3c9e452562b4615523703326fe1f5d6c6051aed7b7c17f501084f7597787ced",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "^TestLeafManifestRevisionGCFreshHeldProtection$",
+        "-count=1",
+        "-timeout=3m",
+        "-v"
+      ]
+    },
+    {
+      "name": "fresh-protection-race",
+      "exit_code": 0,
+      "log_sha256": "c826fb35d9fe7509bba686a08ccf0e241c49c488019ffd3f17fb908caca32ebc",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "./TreeDB/db",
+        "-run",
+        "^TestLeafManifestRevisionGCFreshHeldProtection$",
+        "-count=1",
+        "-timeout=3m",
+        "-v"
+      ]
+    },
+    {
+      "name": "vet-final",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/db"
+      ]
+    },
+    {
+      "name": "benchmark-final",
+      "exit_code": 0,
+      "log_sha256": "155ad566dbcaa123b78006852fd418d2074f69b280cfdd88fdb3891a5839f59d",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "^$",
+        "-bench",
+        "^BenchmarkLeafManifestRevisionGC5066$",
+        "-benchtime=1x",
+        "-count=1",
+        "-timeout=3m"
+      ]
+    }
+  ],
+  "runtime_identical_334571_final": true,
+  "final_delta_from_334571": [
+    ".github/ci/ci_impact.json",
+    "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go"
+  ],
+  "normal-334571.log": {
+    "pass_tests": 82,
+    "package_pass": true,
+    "low_fd_actual_census": {
+      "limit": 64,
+      "total": 257,
+      "deleted": 255,
+      "protected": 2,
+      "baseline_fd": 12,
+      "rename_sampled_fd": 28,
+      "remaining_after_release": 1
+    },
+    "passed_tests": [
+      "TestLeafGenerationGCBenchmarkPercentile",
+      "TestLeafGenerationGC_LiveScanDoesNotBlockForegroundWrite",
+      "TestLeafGenerationGC_QueuedCheckpointDoesNotGateLaterWrite",
+      "TestLeafGenerationGC_LifetimeGateLockOrderStress",
+      "TestLeafGenerationGC_RevalidationFailureSkipsStalePublish",
+      "TestLeafGenerationGC_DryRunLiveScanDoesNotBlockForegroundWrite",
+      "TestLeafGenerationGC_DryRunRetriesInvalidatedScan",
+      "TestLeafGenerationGC_DryRunRetryExhaustionReturnsStale",
+      "TestLeafGenerationGC_CloseWaitsForUnlockedScan",
+      "TestLeafGenerationGC_DeletesFullyDeadGeneration",
+      "TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration",
+      "TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment",
+      "TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen",
+      "TestLeafGenerationGC_DoesNotZombieSharedActiveFileID",
+      "TestLeafGenerationGC_PrunePreservesPublishedManifest",
+      "TestLeafGenerationGC_RetriesDeletedGenerationFileAfterReopen",
+      "TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive",
+      "TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive",
+      "TestLeafGenerationGC_IgnoresStaleReachabilityCache",
+      "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses",
+      "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=false",
+      "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=true",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/entries",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/bytes",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/pages",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/partial",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/entries",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/bytes",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/pages",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/partial",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/entries",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/bytes",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/pages",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/partial",
+      "TestLeafGenerationMaintenanceLimitsDirectoryBoundary",
+      "TestLeafGenerationMaintenanceLimitsManifestBeforeClone",
+      "TestLeafGenerationMaintenanceLimitsCapturedFiles",
+      "TestLeafGenerationMaintenanceLimitsPackRechecksRewriteSnapshot",
+      "TestLeafGenerationMaintenanceLimitsRecoverableSnapshot",
+      "TestLeafGenerationMaintenanceLimitsAdmittedPackAndGC",
+      "TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken",
+      "TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind",
+      "TestStableLeafGenerationManifestCrashModelRetainsParentAcrossPathRebind",
+      "TestStableLeafGenerationManifestStoreLoadsOnlyRetainedParentAfterPathRebind",
+      "TestStableLeafGenerationManifestReplacementSkipsUnknownStaleTempCollision",
+      "TestStableLeafGenerationManifestReplacementIncrementsSameGenerationRevision",
+      "TestStableLeafGenerationManifestReplacementRevisionSurvivesStoreReopen",
+      "TestStableLeafGenerationManifestReplacementPreservesPersistedSyntaxError",
+      "TestStableLeafGenerationManifestReplacementRetainsPinnedOlderRevision",
+      "TestStableLeafGenerationManifestCapabilityFailsBeforeTempVisibility",
+      "TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp",
+      "TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence",
+      "TestStableLeafGenerationManifestDestinationRebindFailsClosed",
+      "TestStableLeafGenerationManifestParentSyncFailurePoisons",
+      "TestStableLeafGenerationManifestAmbiguityRejectsLoadAndBootstrapScan",
+      "TestStableLeafGenerationManifestReleaseReturnsResourcesToBaseline",
+      "TestLeafGenerationGCReclaimsReleasedManifestRevisions5066",
+      "TestLeafManifestRevisionGCGates5066",
+      "TestLeafManifestRevisionGCGates5066/pins",
+      "TestLeafManifestRevisionGCGates5066/dry",
+      "TestLeafManifestRevisionGCGates5066/canceled",
+      "TestLeafManifestRevisionGCGates5066/limits",
+      "TestLeafManifestRevisionGCGates5066/malformed",
+      "TestLeafManifestRevisionGCGates5066/unsupported",
+      "TestLeafManifestRevisionGCGates5066/syncfailure",
+      "TestLeafManifestRevisionGCGates5066/retainedparent",
+      "TestLeafManifestRevisionGCReboundChild5066",
+      "TestLeafManifestRevisionGCHeldAndRecovery5066",
+      "TestLeafManifestRevisionGCReadOnly5066",
+      "TestLeafManifestRevisionGCCompatibility5066",
+      "TestLeafManifestRevisionGCBoundedDescriptors",
+      "TestLeafManifestRevisionGCBoundedDescriptors",
+      "TestLeafManifestRevisionGCPartialCancellation",
+      "TestLeafManifestRevisionGCLaterInventoryFailure",
+      "TestR1RebuiltCurrentRootDropsUnreachablePackedDependency",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id",
+      "TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs"
+    ]
+  },
+  "race-334571.log": {
+    "pass_tests": 82,
+    "package_pass": true,
+    "low_fd_actual_census": {
+      "limit": 64,
+      "total": 257,
+      "deleted": 255,
+      "protected": 2,
+      "baseline_fd": 12,
+      "rename_sampled_fd": 28,
+      "remaining_after_release": 1
+    },
+    "passed_tests": [
+      "TestLeafGenerationGCBenchmarkPercentile",
+      "TestLeafGenerationGC_LiveScanDoesNotBlockForegroundWrite",
+      "TestLeafGenerationGC_QueuedCheckpointDoesNotGateLaterWrite",
+      "TestLeafGenerationGC_LifetimeGateLockOrderStress",
+      "TestLeafGenerationGC_RevalidationFailureSkipsStalePublish",
+      "TestLeafGenerationGC_DryRunLiveScanDoesNotBlockForegroundWrite",
+      "TestLeafGenerationGC_DryRunRetriesInvalidatedScan",
+      "TestLeafGenerationGC_DryRunRetryExhaustionReturnsStale",
+      "TestLeafGenerationGC_CloseWaitsForUnlockedScan",
+      "TestLeafGenerationGC_DeletesFullyDeadGeneration",
+      "TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration",
+      "TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment",
+      "TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen",
+      "TestLeafGenerationGC_DoesNotZombieSharedActiveFileID",
+      "TestLeafGenerationGC_PrunePreservesPublishedManifest",
+      "TestLeafGenerationGC_RetriesDeletedGenerationFileAfterReopen",
+      "TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive",
+      "TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive",
+      "TestLeafGenerationGC_IgnoresStaleReachabilityCache",
+      "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses",
+      "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=false",
+      "TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=true",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/entries",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/bytes",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/pages",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/partial",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/entries",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/bytes",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/pages",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/partial",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/entries",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/bytes",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/pages",
+      "TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/partial",
+      "TestLeafGenerationMaintenanceLimitsDirectoryBoundary",
+      "TestLeafGenerationMaintenanceLimitsManifestBeforeClone",
+      "TestLeafGenerationMaintenanceLimitsCapturedFiles",
+      "TestLeafGenerationMaintenanceLimitsPackRechecksRewriteSnapshot",
+      "TestLeafGenerationMaintenanceLimitsRecoverableSnapshot",
+      "TestLeafGenerationMaintenanceLimitsAdmittedPackAndGC",
+      "TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken",
+      "TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind",
+      "TestStableLeafGenerationManifestCrashModelRetainsParentAcrossPathRebind",
+      "TestStableLeafGenerationManifestStoreLoadsOnlyRetainedParentAfterPathRebind",
+      "TestStableLeafGenerationManifestReplacementSkipsUnknownStaleTempCollision",
+      "TestStableLeafGenerationManifestReplacementIncrementsSameGenerationRevision",
+      "TestStableLeafGenerationManifestReplacementRevisionSurvivesStoreReopen",
+      "TestStableLeafGenerationManifestReplacementPreservesPersistedSyntaxError",
+      "TestStableLeafGenerationManifestReplacementRetainsPinnedOlderRevision",
+      "TestStableLeafGenerationManifestCapabilityFailsBeforeTempVisibility",
+      "TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp",
+      "TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence",
+      "TestStableLeafGenerationManifestDestinationRebindFailsClosed",
+      "TestStableLeafGenerationManifestParentSyncFailurePoisons",
+      "TestStableLeafGenerationManifestAmbiguityRejectsLoadAndBootstrapScan",
+      "TestStableLeafGenerationManifestReleaseReturnsResourcesToBaseline",
+      "TestLeafGenerationGCReclaimsReleasedManifestRevisions5066",
+      "TestLeafManifestRevisionGCGates5066",
+      "TestLeafManifestRevisionGCGates5066/pins",
+      "TestLeafManifestRevisionGCGates5066/dry",
+      "TestLeafManifestRevisionGCGates5066/canceled",
+      "TestLeafManifestRevisionGCGates5066/limits",
+      "TestLeafManifestRevisionGCGates5066/malformed",
+      "TestLeafManifestRevisionGCGates5066/unsupported",
+      "TestLeafManifestRevisionGCGates5066/syncfailure",
+      "TestLeafManifestRevisionGCGates5066/retainedparent",
+      "TestLeafManifestRevisionGCReboundChild5066",
+      "TestLeafManifestRevisionGCHeldAndRecovery5066",
+      "TestLeafManifestRevisionGCReadOnly5066",
+      "TestLeafManifestRevisionGCCompatibility5066",
+      "TestLeafManifestRevisionGCBoundedDescriptors",
+      "TestLeafManifestRevisionGCBoundedDescriptors",
+      "TestLeafManifestRevisionGCPartialCancellation",
+      "TestLeafManifestRevisionGCLaterInventoryFailure",
+      "TestR1RebuiltCurrentRootDropsUnreachablePackedDependency",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id",
+      "TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs"
+    ]
+  }
+}

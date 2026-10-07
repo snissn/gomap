@@ -1,0 +1,26 @@
+{
+  "utc": "2026-10-06T19:52:59.074995+00:00",
+  "head": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "runtime": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "harness": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "root_adopted": "six-line checked fixture checkpoint and canonical discovery refresh; no production delta; source review clean; two focused cases normal/race/vet/format and36PythonPASS",
+  "original_windows_fail_retained": true,
+  "current_required_ci": "pending37521995513",
+  "current_hosted": "one request current head; no hard churn cap",
+  "files": {
+    "5071-0245-final-source-original.json": "1aad15e78c86b7d72116541f738476819a84cd630776815ae7ed0be5b0dfff2b",
+    "aa8614-root-capture-ci-diagnosis.md": "de3bbcf1b1761a0e088aafc46027c1d60d6b0f28f0ffbf3da14950f01440b066",
+    "aa8614-root-capture-ci-diagnosis.json": "ea4e39f94e2a2103a0221c9f9e09a927e098358a7ca19b1b70bccd4cdeacce7d",
+    "aa8614-root-capture-fixture-repair-review.md": "f12bc5421895b06b4e74484283679a66d5555f3415e32ccc4f81ca3d1cd8319f",
+    "aa8614-root-capture-fixture-repair-review.json": "78193ac5c513eb53e327c84a5c8d87a01f8f195456551e5f5cc6076c6c184b46",
+    "0245-root-capture-fixture-validation-root-review.json": "98ec8f52cb55202f7a94fd32fcc2ebb92809e195593d92035f59f62a3e120891",
+    "aa8614-rootset-failure-focused-validation-root-review.json": "3c3820dcc6bb481b82343313350c1a78503caffc6b3b6379030f6cbfc2ac6569",
+    "root-capture-ci-refresh-original.log": "db37900fc1e4aa00706df4c1ef305a3f263329f3d9fdd2fe845a068b1a2f14ef",
+    "root-capture-ci-refresh-check-original.log": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+    "root-capture-test_inventory-uv-original.log": "da48dea47094d9f14f51895f81220e05f2a0fde7048426c387dbbbeef3d7f23c",
+    "root-capture-test_impact-uv-original.log": "b6a8d8c5f777a70e44a7b446a658626245b9012f0efd934e210df0f14a61133a",
+    "0245-post-body-original.json": "06599cb3f6dde21fccc96842425004783600782c1796d02ff49ca1fc1e1b3795",
+    "5071-root-capture-repaired-pr-body.md": "67245ea57ed2be03c56a378df9f19f7ef8b9ff499a6807645bedd38c5b1f6209",
+    "0245-hosted-request-original.log": "8d49257f20a2a09949719fed6086df003214f5843e0371f3ae175acf1f8293ab"
+  }
+}

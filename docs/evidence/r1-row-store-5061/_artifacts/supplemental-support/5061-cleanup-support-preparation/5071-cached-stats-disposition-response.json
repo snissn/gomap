@@ -1,0 +1,70 @@
+{
+  "url": "https://api.github.com/repos/snissn/gomap/pulls/comments/4194233479",
+  "pull_request_review_id": 5427088877,
+  "id": 4194233479,
+  "node_id": "PRRC_kwDOIdn7C875_uyH",
+  "diff_hunk": "@@ -0,0 +1,282 @@\n+package db\n+\n+import (\n+\t\"bytes\"\n+\t\"context\"\n+\t\"errors\"\n+\t\"fmt\"\n+\t\"io\"\n+\t\"os\"\n+\t\"path/filepath\"\n+\t\"strings\"\n+\n+\t\"github.com/snissn/gomap/TreeDB/internal/durabilitycut\"\n+\t\"github.com/snissn/gomap/TreeDB/internal/rootpublication\"\n+)\n+\n+// The segment phase can publish new manifests. Its old recovery capture is\n+// deliberately not reused: pin both durable slots and all publication resources\n+// again before admitting any immutable revision deletion.\n+func (db *DB) gcLeafManifestRevisions(ctx context.Context, opts LeafGenerationGCOptions, stats *LeafGenerationGCStats) error {\n+\tdb.teardownMu.RLock()\n+\tdefer db.teardownMu.RUnlock()\n+\tif db.closing.Load() {\n+\t\treturn ErrClosed\n+\t}\n+\tif err := db.admitLeafGenerationMaintenance(ctx, opts.MaintenanceLimits); err != nil {\n+\t\treturn err\n+\t}\n+\t// Compatibility stores cannot mint immutable revision authority. Preserve\n+\t// the lawful segment phase without requiring a stable revision capture.\n+\tif db.leafGenerationManifestStore == nil {\n+\t\treturn rootpublication.ErrUnresolvedResource\n+\t}\n+\tif db.leafGenerationManifestStore.mode == leafGenerationManifestCompatibility {\n+\t\tstats.ManifestRevisionGCUnsupported = true\n+\t\treturn nil\n+\t}\n+\tvar roots *RecoverableRootSet\n+\tvar err error\n+\tif opts.DryRun {\n+\t\troots, err = db.captureRecoverableRootSetForInspectionWithMaintenanceLockHeld(ctx)\n+\t} else {\n+\t\troots, err = db.captureRecoverableRootSetWithMaintenanceLockHeld(ctx)\n+\t}\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tdefer roots.Release()\n+\tdb.writeMu.Lock()\n+\tdefer db.writeMu.Unlock()\n+\tif err := roots.Revalidate(); err != nil {\n+\t\treturn err\n+\t}\n+\t// Freeze snapshot admission while consulting existing stale-view generation\n+\t// pins. Ordinary snapshots retain these pins, not a manifest token.\n+\tdb.rootReuseMu.Lock()\n+\tdefer db.rootReuseMu.Unlock()\n+\treturn db.leafGenerationManifestStore.gcRevisionsWithHeldViews(ctx, opts, stats, func(m *leafGenerationManifest) bool {\n+\t\tfor _, gen := range m.Generations {\n+\t\t\tif db.leafGenerationPins.count(gen.GenerationID) > 0 {\n+\t\t\t\treturn true\n+\t\t\t}\n+\t\t}\n+\t\treturn false\n+\t})\n+}\n+\n+type leafManifestRevisionGCFile struct {\n+\tname     string\n+\tfile     *os.File\n+\tidentity rootpublication.StableIdentity\n+\tsize     int64\n+\tmanifest *leafGenerationManifest\n+}\n+\n+func (s *leafGenerationManifestStore) gcRevisions(ctx context.Context, opts LeafGenerationGCOptions, stats *LeafGenerationGCStats) error {\n+\treturn s.gcRevisionsWithHeldViews(ctx, opts, stats, nil)\n+}\n+\n+func (s *leafGenerationManifestStore) gcRevisionsWithHeldViews(ctx context.Context, opts LeafGenerationGCOptions, stats *LeafGenerationGCStats, held func(*leafGenerationManifest) bool) error {\n+\ts.mu.Lock()\n+\tdefer s.mu.Unlock()\n+\tif s.closed {\n+\t\treturn ErrClosed\n+\t}\n+\tif s.poisoned {\n+\t\treturn ErrRecoveryRequired\n+\t}\n+\tif s.mode != leafGenerationManifestStable || s.parent == nil || s.registry == nil || s.stableCapability == nil || !s.stableCapability() {\n+\t\treturn rootpublication.ErrNamespacePersistenceUnsupported\n+\t}\n+\tparentID, err := rootpublication.StableIdentityFromFile(s.parent)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tview, err := s.readStableCompatibilityViewLocked()\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tcurrent, err := decodeLeafGenerationManifest(view, leafGenerationManifestFileName)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tcurrentName := leafGenerationDurableManifestFileName(current.ManifestRevision)\n+\t// Enumerate the retained directory, never its possibly rebound diagnostic\n+\t// pathname. Seek resets the directory cursor while the store lock excludes\n+\t// replacement and other revision scans.\n+\tif _, err := s.parent.Seek(0, io.SeekStart); err != nil {\n+\t\treturn err\n+\t}\n+\tvar files []leafManifestRevisionGCFile\n+\tdefer func() {\n+\t\tfor _, f := range files {\n+\t\t\t_ = f.file.Close()\n+\t\t}\n+\t}()\n+\tentries, scannedBytes := 0, int64(0)\n+\tcurrentFound := false\n+\tfor {\n+\t\tif err := ctx.Err(); err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t\tbatch, readErr := s.parent.ReadDir(64)\n+\t\tfor _, entry := range batch {\n+\t\t\tentries++\n+\t\t\tif opts.MaintenanceLimits.enabled() && entries > opts.MaintenanceLimits.NativeEntries {\n+\t\t\t\treturn ErrLeafGenerationMaintenanceLimit\n+\t\t\t}\n+\t\t\tname := entry.Name()\n+\t\t\tif strings.HasPrefix(name, \"manifest.gc.\") {\n+\t\t\t\treturn ErrRecoveryRequired\n+\t\t\t}\n+\t\t\tif !strings.HasPrefix(name, \"manifest.durable.\") {\n+\t\t\t\tcontinue\n+\t\t\t}\n+\t\t\tfile, err := rootpublication.OpenStableChildFile(s.parent, name, os.O_RDONLY, 0)\n+\t\t\tif err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\tinfo, err := file.Stat()\n+\t\t\tif err != nil {\n+\t\t\t\t_ = file.Close()\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\tif !info.Mode().IsRegular() || info.Size() < 0 {\n+\t\t\t\t_ = file.Close()\n+\t\t\t\treturn rootpublication.ErrResourceConflict\n+\t\t\t}\n+\t\t\tscannedBytes += info.Size()\n+\t\t\tif opts.MaintenanceLimits.enabled() && scannedBytes > opts.MaintenanceLimits.NativeBytes {\n+\t\t\t\t_ = file.Close()\n+\t\t\t\treturn ErrLeafGenerationMaintenanceLimit\n+\t\t\t}\n+\t\t\tidentity, err := rootpublication.StableIdentityFromFile(file)\n+\t\t\tif err != nil {\n+\t\t\t\t_ = file.Close()\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\tf := leafManifestRevisionGCFile{name: name, file: file, identity: identity, size: info.Size()}\n+\t\t\tfiles = append(files, f)\n+\t\t\tdata, err := io.ReadAll(file)\n+\t\t\tif err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\tif name == currentName {\n+\t\t\t\tif !bytes.Equal(data, view) {\n+\t\t\t\t\treturn rootpublication.ErrResourceConflict\n+\t\t\t\t}\n+\t\t\t\tcurrentFound = true\n+\t\t\t}\n+\t\t\tmanifest, err := decodeLeafGenerationManifest(data, name)\n+\t\t\tif err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t\tfiles[len(files)-1].manifest = manifest\n+\t\t\tif name != leafGenerationDurableManifestFileName(manifest.ManifestRevision) {\n+\t\t\t\treturn rootpublication.ErrResourceConflict\n+\t\t\t}\n+\t\t\tif err := rootpublication.ValidateStableChildLink(s.parent, file, name); err != nil {\n+\t\t\t\treturn err\n+\t\t\t}\n+\t\t}\n+\t\tif errors.Is(readErr, io.EOF) {\n+\t\t\tbreak\n+\t\t}\n+\t\tif readErr != nil {\n+\t\t\treturn readErr\n+\t\t}\n+\t}\n+\tif !currentFound {\n+\t\treturn rootpublication.ErrUnresolvedResource\n+\t}\n+\t// Validate the complete candidate inventory before the first unlink.\n+\tfor _, f := range files {\n+\t\tif err := ctx.Err(); err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t\tstats.ManifestRevisionsTotal++\n+\t\tif f.name == currentName || (held != nil && held(f.manifest)) {\n+\t\t\tstats.ManifestRevisionsProtected++\n+\t\t\tcontinue\n+\t\t}\n+\t\tnamespace := fmt.Sprintf(\"%s:%d:%x/%s\", parentID.Platform, parentID.VolumeID, parentID.ObjectID, f.name)\n+\t\tlease, err := s.registry.BeginDeleteAt(f.identity, namespace)\n+\t\tif errors.Is(err, rootpublication.ErrResourcePinned) {\n+\t\t\tstats.ManifestRevisionsProtected++\n+\t\t\tcontinue\n+\t\t}\n+\t\tif err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t\tstats.ManifestRevisionsEligible++\n+\t\tstats.ManifestRevisionBytesEligible += f.size\n+\t\tif opts.DryRun {\n+\t\t\tlease.Abort()\n+\t\t\tcontinue\n+\t\t}\n+\t\tif err := s.deleteRevisionLocked(f, lease); err != nil {\n+\t\t\treturn err\n+\t\t}\n+\t\tstats.ManifestRevisionsDeleted++\n+\t\tstats.ManifestRevisionBytesDeleted += f.size",
+  "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+  "commit_id": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+  "original_commit_id": "cb09ffe33b10a8a623cd335a43780d4997524f82",
+  "user": {
+    "login": "snissn",
+    "id": 1981537,
+    "node_id": "MDQ6VXNlcjE5ODE1Mzc=",
+    "avatar_url": "https://avatars.githubusercontent.com/u/1981537?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/snissn",
+    "html_url": "https://github.com/snissn",
+    "followers_url": "https://api.github.com/users/snissn/followers",
+    "following_url": "https://api.github.com/users/snissn/following{/other_user}",
+    "gists_url": "https://api.github.com/users/snissn/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/snissn/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/snissn/subscriptions",
+    "organizations_url": "https://api.github.com/users/snissn/orgs",
+    "repos_url": "https://api.github.com/users/snissn/repos",
+    "events_url": "https://api.github.com/users/snissn/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/snissn/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "Disposition after checking the current caller: `ReclaimObservedValueLogSources` returns `ValueLogGCStats`, whose counters describe the observed primary value-log sources. It has always discarded the separate leaf-GC result on both success and failure; that caller and return type are unchanged by this PR. Combining immutable manifest or leaf-segment counters into the observed-vlog counters would change their meaning, and exposing the separate result requires an API change.\n\nThe direct backend `LeafGenerationGC` API retains and returns its actual completed revision deletions with an error; the new cancellation/late-inventory regression receipts exercise that behavior. The lifecycle harness reports that separate result directly. I am declining the suggested cached-caller API expansion in this focused prerequisite; cached observed-vlog stats are not claimed to be a combined leaf/revision report.\n\nCurrent source: [observed-source return type](https://github.com/snissn/gomap/blob/852aa29e1eed3511f93aba244aef917c89d033e8/TreeDB/caching/db.go#L5558), [separate leaf side call](https://github.com/snissn/gomap/blob/852aa29e1eed3511f93aba244aef917c89d033e8/TreeDB/caching/db.go#L5650), [direct backend partial-stats return](https://github.com/snissn/gomap/blob/852aa29e1eed3511f93aba244aef917c89d033e8/TreeDB/db/leaf_generation_gc.go#L92).",
+  "created_at": "2026-10-06T10:34:12Z",
+  "updated_at": "2026-10-06T10:34:12Z",
+  "html_url": "https://github.com/snissn/gomap/pull/5071#discussion_r4194233479",
+  "pull_request_url": "https://api.github.com/repos/snissn/gomap/pulls/5071",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/snissn/gomap/pulls/comments/4194233479"
+    },
+    "html": {
+      "href": "https://github.com/snissn/gomap/pull/5071#discussion_r4194233479"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/snissn/gomap/pulls/5071"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/snissn/gomap/pulls/comments/4194233479/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": 214,
+  "start_side": "RIGHT",
+  "line": null,
+  "original_line": 222,
+  "side": "RIGHT",
+  "in_reply_to_id": 4193303562,
+  "author_association": "OWNER",
+  "original_position": 222,
+  "position": 1,
+  "subject_type": "line"
+}

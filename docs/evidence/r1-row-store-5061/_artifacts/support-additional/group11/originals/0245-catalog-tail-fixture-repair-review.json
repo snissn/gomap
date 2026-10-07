@@ -1,0 +1,95 @@
+{
+  "verdict": "CLEAN",
+  "review_role": "independent read-only source review, gpt-6.1-sol/high",
+  "utc": "2026-10-06T20:23:41.933589+00:00",
+  "head": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+  "base": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "tree": "ecb6d1ff66ad826e36364298b8bc08b864fd3fda",
+  "files": {
+    ".github/ci/ci_impact.json": {
+      "base_blob": "5469510424af9fca495200669bd8e87153a3e908",
+      "reviewed_blob": "b7f50c8ca6bd99c677040865bb77b9cec309a435",
+      "sha256": "28e0ffca6160a65173abb05c1b2d6f31668547d5c8070f9eae77da2ded0480fb",
+      "bytes": 100563
+    },
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go": {
+      "base_blob": "bc3a9030a2c64aea423871c08fc3f41855544c68",
+      "reviewed_blob": "7b43cf502fb5aad3ba24fff565bb2abf32665013",
+      "sha256": "4cd1d1680234c08581f7e8114efe240c2aa9f8d12996d221cb724edd15dc6e24",
+      "bytes": 57606
+    }
+  },
+  "patch": {
+    "path": "/tmp/gomap-r1-execution-20261005/5071-catalog-tail-fixture-repair-0245/repair.patch",
+    "sha256": "1cb8a8eb9f50d13627bb26ea328a4f6429b70873824632fd76d54f1bfe054181",
+    "bytes": 2054
+  },
+  "findings": [],
+  "rationale": [
+    "CATALOG and DATA use distinct Raft providers. DATA waitInsertPrefix and durable preparation completion do not establish ACTIVE lifecycle replay on each voter.",
+    "New bounded wait observes existing prepared serving state and exact authority lifecycle ACTIVE; phase accessor also verifies current DB and catalog identity. Pointers initialize before Open returns, and authority reads use RLock.",
+    "Same existing 120-second context and 20-ms wait helper remain; no timer extension, state mutation, or swallowed error.",
+    "Existing negative startup initializing-health check, current-DB/catalog checks, strict searches, exact retry root/document/result checks, reopened row/result checks, and later provider-health assertions remain unchanged.",
+    "Only canonical CI discovery_source_sha256 changed; ownership and workflow/member sets remain identical."
+  ],
+  "references": [
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go:868",
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go:1011",
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go:1095",
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go:1111",
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go:1122",
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1.go:63",
+    "TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go:570",
+    "TreeDB/nativewire/fixed_peer_tcp_runtime_v1.go:617",
+    "TreeDB/nativewire/fixed_peer_tcp_runtime_v1_test.go:95",
+    "TreeDB/internal/raftplacement/catalog_meta.go:404",
+    "TreeDB/internal/raftplacement/catalog_meta_lifecycle.go:1833"
+  ],
+  "ci": {
+    "discovery_before": "a6113bbf2d313340b58e11b2094b7274de555402ffa5e19ba232baf7dfef994b",
+    "discovery_after": "7b7289c82c874ab7c3aafeafc255d6fce00f1d326e58b4d6bef28543785e7c65",
+    "workflows": 14,
+    "members": 56,
+    "other_fields_equal": true
+  },
+  "original_evidence": {
+    "0245-linux-race2-failure-rest-original.log": {
+      "sha256": "4d093c2fb9fae041fc0ca787b315040160b27294a2508e82338914d71df82b26",
+      "bytes": 4593655,
+      "events": [
+        {
+          "Time": "2026-10-06T20:12:56.055093158Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Output": "    fixed_peer_vector_prepare_v1_test.go:1113: voter owner-2 did not recover prepared serving state\n"
+        },
+        {
+          "Time": "2026-10-06T20:12:56.083441225Z",
+          "Action": "fail",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Elapsed": 4.88
+        }
+      ]
+    },
+    "main3cfe-linux-race2-rest-original.log": {
+      "sha256": "7e7f8e22d8ff5c51939213a6ea39b694c78bb93ad9c968d4040899e3d65ed7ce",
+      "bytes": 4577864,
+      "events": [
+        {
+          "Time": "2026-10-06T17:00:40.545890111Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/nativewire",
+          "Test": "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1",
+          "Elapsed": 5.01
+        }
+      ]
+    }
+  },
+  "limits": [
+    "Source review only; no Go execution, remote action, GitHub action, source edit, or CI polling.",
+    "Original failure remains retained. Main same-case PASS is control evidence, not proof that the failure is unrelated to integration scheduling.",
+    "Repaired shared fixture variants require coordinator focused normal/race/vet and latest-head required CI; review does not waive those gates."
+  ]
+}
