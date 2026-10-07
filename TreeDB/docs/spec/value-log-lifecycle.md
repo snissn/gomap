@@ -160,15 +160,40 @@ safe identity lookup. The check does not access the retired handle.
 The manager captures a separate immutable retirement identity from its owned
 open handle before publishing a zombie or admitting explicit removal. At that
 cold admission it also retains an exact physical-parent handle, independently
-of pin registration. A vanished alias or renamed physical directory cannot
+of pin registration. Every real segment File already carries an immutable typed
+physical-parent identity captured before its initial child open. Constructor
+checks bind that parent to the opened regular child, and registration publication
+checks the same authority again. Registry namespace keys derive from that capture,
+not a later parent lookup. First retirement must match the original registered
+parent, even when a replacement directory contains a hard link to the same inode.
+Capture is shared by initial scanning, additional scan directories and explicit
+RegisterSegment; it adds no point-read or zero-zombie Refresh work. Registration
+closes its temporary parent handle, retaining only typed identity until retirement.
+Existing SetRetentionSizes uses unsafe.Sizeof(File{}) to charge the added field;
+nil-registry files acquire no namespace string. An unsupported stable-identity
+platform can retain its existing nil-registry read-only opening behavior, but
+missing original authority never authorizes retirement or registry admission.
+A vanished alias or renamed physical directory cannot
 make the still-present target count as deleted. After actual File.Close completes,
 each physical attempt opens the configured parent again and verifies it against that retained physical identity. The checked
 operation root anchors quarantine creation and retains a checked nested quarantine
 root and directory handle through identity lookup, rollback, unlink and recovery.
 Private basename-only cross-parent rename/link operations use the retained parent
 handles; child removal uses the nested root rather than re-resolving its outer name.
+Recovery and rollback share one retained-parent no-replace restoration: link the
+quarantined child to the absent canonical name, unlink the exact quarantine child,
+then emit the compensation NamespaceCreate and check directory-only cleanup.
+A canonical successor makes the link fail with joined conflict and collision
+errors; both successor and quarantine remain intact. There is no replacing rename
+fallback. A crash between link and unlink leaves two names for the same inode.
+Recovery reconciles that same-inode partial restoration before consulting the
+quarantine encoded identity, preserving canonical bytes even for an unexpected
+quarantined inode. Expected quarantine plus a distinct canonical successor still
+completes deletion of the quarantine; unexpected distinct identities still refuse.
+The existing post-NamespaceUnlink cut retains its private quarantine and deletion
+completion behavior. Compensation events add no namespace-persistence claim.
 Ordinary Windows visibility is preserved without adding namespace-durability
-certification. Alias loss or a different parent before this capture refuses
+certification. Alias loss or a different parent since registration refuses
 while the target remains. Later alias changes cannot redirect the captured root
 operations; the check does not promise an atomic alias-and-rename predicate.
 Quarantine-directory rebinding cannot redirect child removal or rollback.
@@ -216,6 +241,24 @@ callers must check that error. Force remains limited to recovery cleanup and
 continues to bypass logical refcount checks. A
 manager-locked count skips the retirement scan when no tracked zombies exist;
 marking, ownership removal, eviction and Close balance that count.
+
+The additive public regressions `TestManagerRetirementQuarantinePartialRestore`,
+`TestManagerRegisteredParentReboundBeforeRetirement` and
+`TestManagerRegisteredParentCaptureRebound` compile against the previous source
+and distinguish behavioral refusal from compilation failure. Current helper and
+caller collision coverage is in `TestRetirementRestoreNoReplace` and
+`TestManagerRetirementRollbackPreservesSuccessor`.
+
+`BenchmarkManagerRetirementBoundaries` separately reports live Refresh, a pinned
+zombie Refresh, a closed retired owner retained after failed unlink, and cold
+single-segment manager registration plus Close, each with and without registry.
+Writer setup, zombie admission, failure injection and final reclamation are outside
+all timed Refresh loops. Cold registration intentionally includes complete open,
+scan, authority validation and manager Close; it is not a point-read measurement.
+Report matched `ns/op`, `B/op` and `allocs/op` for each boundary. The unchanged warm
+zero-retired route cannot establish the cost of either retired identity checks or
+new registration proof. These fixtures do not establish an improvement or waive
+public raw-path performance gates.
 
 ### 2.2 External-version logical pruning is not segment GC
 

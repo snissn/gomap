@@ -501,6 +501,77 @@ func (m *Manager) stableExistingPhysicalNamespaceToken(file *File, diagnosticPat
 	return namespace, nil
 }
 
+// openRegisteredSegmentParent captures namespace authority before the child
+// open. Unsupported identity platforms may open for reads, but have no proof
+// authorizing retirement or registry observation.
+func openRegisteredSegmentParent(path string) (*os.File, rootpublication.StableIdentity, error) {
+	resolved, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, err
+	}
+	parent, err := rootpublication.OpenStableParent(resolved)
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, err
+	}
+	identity, err := rootpublication.StableIdentityFromFile(parent)
+	if err != nil {
+		return nil, rootpublication.StableIdentity{}, errors.Join(err, parent.Close())
+	}
+	return parent, identity, nil
+}
+
+func validateRegisteredSegmentParent(path string, file, parent *os.File, identity rootpublication.StableIdentity) error {
+	owned, err := rootpublication.StableIdentityFromFile(file)
+	if err != nil {
+		return err
+	}
+	linked, err := stableIdentityAtChild(parent, filepath.Base(path))
+	if err != nil {
+		return err
+	}
+	if !rootpublication.SamePhysicalIdentity(owned, linked) {
+		return fmt.Errorf("%w: registered parent does not name opened segment", rootpublication.ErrResourceConflict)
+	}
+	// Detect an alias rebound during the open, including one containing a hard
+	// link to the same child. This is a checked capture, not an atomic alias API.
+	current, currentIdentity, err := openRegisteredSegmentParent(path)
+	if err != nil {
+		return err
+	}
+	defer current.Close()
+	if !rootpublication.SamePhysicalIdentity(identity, currentIdentity) {
+		return fmt.Errorf("%w: segment parent changed during registration", rootpublication.ErrResourceConflict)
+	}
+	return nil
+}
+
+// Registration publication checks the constructor's original parent proof;
+// it never adopts a later parent, even when both parents link the same inode.
+func validateRegisteredSegmentAuthority(file *File) error {
+	owned, err := rootpublication.StableIdentityFromFile(file.File)
+	if err != nil {
+		return err
+	}
+	if file.registeredParentIdentity == (rootpublication.StableIdentity{}) {
+		return fmt.Errorf("%w: missing original registered segment parent", rootpublication.ErrUnresolvedResource)
+	}
+	linked, err := stableIdentityAtPath(file.Path, file.registeredParentIdentity)
+	if err != nil {
+		return err
+	}
+	if !rootpublication.SamePhysicalIdentity(owned, linked) {
+		return fmt.Errorf("%w: registered segment child was rebound", rootpublication.ErrResourceConflict)
+	}
+	return nil
+}
+
+func stableSegmentNamespace(parent rootpublication.StableIdentity, base string) (string, error) {
+	if parent == (rootpublication.StableIdentity{}) {
+		return "", fmt.Errorf("%w: missing registered segment parent", rootpublication.ErrUnresolvedResource)
+	}
+	return fmt.Sprintf("%s:%d:%x/%s", parent.Platform, parent.VolumeID, parent.ObjectID, base), nil
+}
+
 func (m *Manager) observeStableFileLocked(file *File) error {
 	if m == nil || m.stableResourcePins == nil {
 		return nil
@@ -519,7 +590,7 @@ func (m *Manager) observeStableFileWithRegistryLocked(file *File, registry *root
 	if err := registry.Observe(identity); err != nil {
 		return err
 	}
-	namespace, err := stableDeleteNamespace(file.Path)
+	namespace, err := stableSegmentNamespace(file.registeredParentIdentity, filepath.Base(file.Path))
 	if err != nil {
 		_ = registry.Unobserve(identity)
 		return err
@@ -553,7 +624,7 @@ func (m *Manager) stableDeleteLease(file *File) (*rootpublication.IdentityDelete
 	namespace := file.stableNamespace
 	if namespace == "" {
 		var err error
-		namespace, err = stableDeleteNamespace(file.Path)
+		namespace, err = stableSegmentNamespace(file.registeredParentIdentity, filepath.Base(file.Path))
 		if err != nil {
 			return nil, err
 		}
@@ -591,6 +662,9 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	if file.retirementIdentity != (rootpublication.StableIdentity{}) {
 		return file.retirementIdentity, nil
 	}
+	if file.registeredParentIdentity == (rootpublication.StableIdentity{}) {
+		return rootpublication.StableIdentity{}, fmt.Errorf("%w: missing original registered parent proof", rootpublication.ErrUnresolvedResource)
+	}
 	identity := file.stableIdentity
 	if identity == (rootpublication.StableIdentity{}) {
 		var err error
@@ -611,6 +685,10 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	if err != nil {
 		_ = parent.Close()
 		return rootpublication.StableIdentity{}, err
+	}
+	if !rootpublication.SamePhysicalIdentity(file.registeredParentIdentity, parentIdentity) {
+		_ = parent.Close()
+		return rootpublication.StableIdentity{}, fmt.Errorf("%w: original registered segment parent was rebound", rootpublication.ErrResourceConflict)
 	}
 	// Verify the exact opened parent still names this handle. Resolving an alias
 	// and reopening its target must not combine two different namespaces.
@@ -1133,6 +1211,24 @@ func (q *retirementQuarantine) removeDirectory(root *os.Root, parent *os.File, n
 	return retirementRemoveDirectory(parent, q.parent, name)
 }
 
+// restoreRetirementQuarantine restores visibility without replacing a successor.
+// A crash after link and before unlink leaves two names for one inode; recovery
+// reconciles that state with alreadyLinked=true. Create follows exact q unlink.
+func restoreRetirementQuarantine(q *retirementQuarantine, parent *os.File, base, parentPath, path string, alreadyLinked bool) error {
+	if !alreadyLinked {
+		if err := retirementLinkChild(q.parent, base, parent, base); err != nil {
+			if os.IsExist(err) {
+				return errors.Join(fmt.Errorf("%w: canonical segment appeared during restoration", rootpublication.ErrResourceConflict), err)
+			}
+			return err
+		}
+	}
+	if err := q.root.Remove(base); err != nil {
+		return err
+	}
+	return durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(path), parentPath, "", path)
+}
+
 func recoverStableDeleteQuarantine(root *os.Root, parent, quarantineName, base string, expected rootpublication.StableIdentity) (bool, error) {
 	quarantineDir := filepath.Join(parent, quarantineName)
 	quarantinePath := filepath.Join(quarantineDir, base)
@@ -1169,6 +1265,12 @@ func recoverStableDeleteQuarantine(root *os.Root, parent, quarantineName, base s
 	if originalErr != nil && !os.IsNotExist(originalErr) {
 		return false, originalErr
 	}
+	if originalExists && rootpublication.SamePhysicalIdentity(originalIdentity, quarantinedIdentity) {
+		if err := restoreRetirementQuarantine(q, parentHandle, base, parent, originalPath, true); err != nil {
+			return false, err
+		}
+		return false, q.removeDirectory(root, parentHandle, quarantineName)
+	}
 	if rootpublication.SamePhysicalIdentity(quarantinedIdentity, expected) {
 		if err := q.root.Remove(base); err != nil && !os.IsNotExist(err) {
 			return false, err
@@ -1180,10 +1282,7 @@ func recoverStableDeleteQuarantine(root *os.Root, parent, quarantineName, base s
 	if originalExists {
 		return false, fmt.Errorf("%w: stable delete quarantine %q and canonical path %q name different unexpected identities", rootpublication.ErrResourceConflict, quarantinePath, originalPath)
 	}
-	if err := retirementRenameChild(q.parent, base, parentHandle, base); err != nil {
-		return false, err
-	}
-	if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(originalPath), parent, "", originalPath); err != nil {
+	if err := restoreRetirementQuarantine(q, parentHandle, base, parent, originalPath, false); err != nil {
 		return false, err
 	}
 	return false, q.removeDirectory(root, parentHandle, quarantineName)
@@ -1292,13 +1391,7 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		return true, err
 	}
 	restore := func() error {
-		if err := retirementLinkChild(q.parent, baseName, parentHandle, baseName); err != nil {
-			return err
-		}
-		if err := q.root.Remove(baseName); err != nil {
-			return err
-		}
-		return durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, resource, parent, "", path)
+		return restoreRetirementQuarantine(q, parentHandle, baseName, parent, path, false)
 	}
 	quarantinedIdentity, validationErr := stableIdentityAtChild(q.parent, baseName)
 	if validationErr == nil && !rootpublication.SamePhysicalIdentity(identity, quarantinedIdentity) {
@@ -1319,10 +1412,9 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 	})
 	if removeErr != nil && !os.IsNotExist(removeErr) {
 		if restoreErr := restore(); restoreErr != nil {
-			return false, fmt.Errorf("%w: stable delete failed (%v) and quarantine restore failed: %v", rootpublication.ErrResourceConflict, removeErr, restoreErr)
+			return false, errors.Join(fmt.Errorf("%w: stable delete and quarantine restore failed", rootpublication.ErrResourceConflict), removeErr, restoreErr)
 		}
-		_ = q.removeDirectory(root, parentHandle, quarantineName)
-		return false, removeErr
+		return false, errors.Join(removeErr, q.removeDirectory(root, parentHandle, quarantineName))
 	}
 	cleanupErr := q.removeDirectory(root, parentHandle, quarantineName)
 	return true, cleanupErr
