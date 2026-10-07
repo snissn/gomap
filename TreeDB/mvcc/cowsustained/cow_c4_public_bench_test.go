@@ -430,7 +430,6 @@ func BenchmarkCOWSustainedPublicMVCC(b *testing.B) {
 							b.Fatal("use fixed -benchtime=1x..8x")
 						}
 						b.ReportAllocs()
-						b.ResetTimer()
 						r, err := c4Run(b, p, m, ptr, n, b.N)
 						b.StopTimer()
 						if err != nil {
@@ -456,6 +455,10 @@ func BenchmarkCOWSustainedPublicMVCC(b *testing.B) {
 	}
 }
 func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int) (*c4Record, error) {
+	bench, _ := t.(*testing.B)
+	if bench != nil {
+		bench.StopTimer()
+	}
 	if (n != 512 && n != 1024) || epochs < 1 || epochs > c4MaxEpochs {
 		return nil, errors.New("unsupported finite schedule")
 	}
@@ -471,10 +474,6 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 	}
 	var db *treedb.DB
 	var pins []*mvcc.VersionIterator
-	bench, _ := t.(*testing.B)
-	if bench != nil {
-		bench.StopTimer()
-	}
 	defer func() {
 		for _, it := range pins {
 			if x := it.Close(); x != nil {
@@ -612,6 +611,7 @@ func c4Run(t testing.TB, p treedb.Profile, mode string, ptr bool, n, epochs int)
 		return r, err
 	}
 	if bench != nil {
+		bench.ResetTimer()
 		bench.StartTimer()
 	}
 	for e := 1; e <= epochs; e++ {
