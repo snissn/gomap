@@ -11,7 +11,7 @@ fi
 mkdir -p "$R1_OUT"
 R1_OUT=$(cd "$R1_OUT" && pwd)
 export GOWORK=off
-R1_GO=${R1_GO:-go}
+export R1_GO=${R1_GO:-go}
 R1_MODE=${R1_MODE:-r1}
 case "$R1_MODE" in
   r1|r1-mutation-sweep) ;;
@@ -25,7 +25,7 @@ metadata={'capture_class':'nonqualifying_rehearsal_unless_reviewed_landed_frozen
 pathlib.Path(sys.argv[1]).write_text(json.dumps(metadata,indent=2)+'\n')
 PYMETA
 "$R1_GO" version > "$R1_OUT/go-version.txt"
-"$R1_GO" env GOOS GOARCH CGO_ENABLED GOROOT GOCACHE GOMODCACHE GOWORK GOTOOLCHAIN CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS > "$R1_OUT/go-env.txt"
+"$R1_GO" env GOOS GOARCH GOFLAGS CGO_ENABLED GOROOT GOCACHE GOMODCACHE GOWORK GOTOOLCHAIN CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS > "$R1_OUT/go-env.txt"
 R1_CC=$("$R1_GO" env CC)
 "$R1_CC" --version > "$R1_OUT/cc-version.txt"
 "$R1_GO" build -o "$R1_OUT/collection_workload_bench" ./cmd/collection_workload_bench 2> "$R1_OUT/build.stderr"

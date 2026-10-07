@@ -35,6 +35,7 @@ type r1Config struct {
 	Documents      int      `json:"documents"`
 	Batch          int      `json:"batch_size"`
 	Operations     int      `json:"operations"`
+	ReadOperations int      `json:"read_operations,omitempty"`
 	Repetitions    int      `json:"repetitions"`
 	Durability     string   `json:"durability"`
 	State          string   `json:"read_state"`
@@ -132,12 +133,21 @@ func r1FixtureHash(rows []r1Document) string {
 }
 func r1SHA(s string, n int) bool { b, e := hex.DecodeString(s); return e == nil && len(b) == n }
 
+// Zero preserves the operation count and packet semantics of older captures.
+func (c r1Config) readOperations() int {
+	if c.ReadOperations > 0 {
+		return c.ReadOperations
+	}
+	return c.Operations
+}
+
 func parseR1Config(args []string) (r1Config, error) {
 	c := r1Config{Documents: 4096, Batch: 32, Operations: 1000, Repetitions: 5, Durability: "durable", State: "flushed", Qualification: "rehearsal"}
 	f := flag.NewFlagSet("collection_workload_bench r1", flag.ContinueOnError)
 	f.IntVar(&c.Documents, "documents", c.Documents, "fixture documents (at least 16)")
 	f.IntVar(&c.Batch, "batch-size", c.Batch, "rows per atomic load batch / complete batch read")
-	f.IntVar(&c.Operations, "operations", c.Operations, "calls per timed read/mutation phase")
+	f.IntVar(&c.Operations, "operations", c.Operations, "calls per timed mutation phase and default read count")
+	f.IntVar(&c.ReadOperations, "read-operations", 0, "calls per timed read phase (0 inherits operations; mutations unchanged)")
 	f.IntVar(&c.Repetitions, "repetitions", c.Repetitions, "independent fresh database repetitions")
 	f.StringVar(&c.Durability, "durability", c.Durability, "durable or relaxed (separate comparisons)")
 	f.StringVar(&c.State, "read-state", c.State, "buffered, flushed, or checkpointed; opening the read view drains pending writes")
@@ -152,7 +162,7 @@ func parseR1Config(args []string) (r1Config, error) {
 		return c, errors.New("unexpected positional arguments")
 	}
 	c.Engines = splitCSV(engines)
-	if c.Documents < 16 || c.Batch < 1 || c.Batch > c.Documents || c.Operations < 1 || c.Repetitions < 1 {
+	if c.Documents < 16 || c.Batch < 1 || c.Batch > c.Documents || c.Operations < 1 || c.ReadOperations < 0 || c.Repetitions < 1 {
 		return c, errors.New("invalid R1 dimensions")
 	}
 	if c.Durability != "durable" && c.Durability != "relaxed" {
@@ -362,7 +372,7 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 	if err != nil {
 		return cell, err
 	}
-	if err = add("point_get_into_complete", c.Operations, func(op int) (int, collections.DocumentMaterializationStats, error) {
+	if err = add("point_get_into_complete", c.readOperations(), func(op int) (int, collections.DocumentMaterializationStats, error) {
 		i := benchmarkDocumentOrdinal(op, 37, len(fixture))
 		doc, e := b.point([]byte(fixture[i].ID))
 		if e != nil {
@@ -412,7 +422,7 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 		return cell, err
 	}
 	for _, phase := range []string{"point_complete", "batch_complete", "range_complete"} {
-		err = add(phase, c.Operations, func(op int) (int, collections.DocumentMaterializationStats, error) {
+		err = add(phase, c.readOperations(), func(op int) (int, collections.DocumentMaterializationStats, error) {
 			i := benchmarkDocumentOrdinal(op, 37, len(fixture))
 			ids := [][]byte{[]byte(fixture[i].ID)}
 			if phase == "batch_complete" {
@@ -482,7 +492,7 @@ func runR1Cell(c r1Config, engine string, rep int, fixture []r1Document) (cell r
 	if cell.Capabilities["ordinary_range"] == "rejected_residual_only_full_row_parity_gap" {
 		cell.Phases = append(cell.Phases, r1Measurement{Name: "range_public_complete", Skipped: "ordinary typed range returns residual only"})
 	} else {
-		if err = add("range_public_complete", c.Operations, func(op int) (int, collections.DocumentMaterializationStats, error) {
+		if err = add("range_public_complete", c.readOperations(), func(op int) (int, collections.DocumentMaterializationStats, error) {
 			docs, e := b.rangeDocuments(fmt.Sprintf("city-%02d", op%8), 10)
 			return len(docs), collections.DocumentMaterializationStats{}, e
 		}); err != nil {
@@ -919,7 +929,7 @@ func validateR1Packet(p r1Packet) error {
 		return errors.New("invalid R1 schema/source binding")
 	}
 	c := p.Config
-	if c.Documents < 16 || c.Batch < 1 || c.Batch > c.Documents || c.Operations < 1 || c.Repetitions < 1 || len(c.Engines) == 0 {
+	if c.Documents < 16 || c.Batch < 1 || c.Batch > c.Documents || c.Operations < 1 || c.ReadOperations < 0 || c.Repetitions < 1 || len(c.Engines) == 0 {
 		return errors.New("invalid packet dimensions")
 	}
 	if c.Durability != "durable" && c.Durability != "relaxed" {
@@ -1008,11 +1018,15 @@ func validateR1Packet(p r1Packet) error {
 			case "load":
 				expectedOps = (c.Documents + c.Batch - 1) / c.Batch
 				expectedRows = c.Documents
+			case "point_get_into_complete", "point_complete":
+				expectedOps, expectedRows = c.readOperations(), c.readOperations()
 			case "batch_complete":
-				expectedRows = c.Operations * c.Batch
+				expectedOps = c.readOperations()
+				expectedRows = c.readOperations() * c.Batch
 			case "range_complete", "range_public_complete":
+				expectedOps = c.readOperations()
 				expectedRows = 0
-				for op := 0; op < c.Operations; op++ {
+				for op := 0; op < c.readOperations(); op++ {
 					count := (c.Documents + 7 - op%8) / 8
 					expectedRows += min(10, count)
 				}
