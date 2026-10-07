@@ -55,6 +55,9 @@ type File struct {
 	stableIdentity     rootpublication.StableIdentity
 	stableNamespace    string
 	stableObserved     bool
+	// retirementIdentity is captured under manager.mu before retirement or
+	// destructive admission. It survives Close and is independent of pins.
+	retirementIdentity rootpublication.StableIdentity
 	currentWritable    atomic.Bool
 	dictLookup         DictLookup
 	templateLookup     TemplateLookup
@@ -1405,6 +1408,7 @@ type Manager struct {
 	currentWritableMmap         atomic.Bool
 	currentWritableReadBarrier  atomic.Value
 	stableResourcePins          *rootpublication.IdentityPinRegistry
+	retiredCount                int // tracked zombies; protected by mu
 	recoveredStableDeleteDirs   map[string]bool
 	stableDeleteRecoveryEnabled bool
 	deferredDeletionSync        func(dir string, resource durabilitycut.Resource) error
@@ -1829,6 +1833,7 @@ func (m *Manager) Close() error {
 		}
 	}
 	m.files = nil
+	m.retiredCount = 0
 	m.closeErr = err
 	close(m.closeDone)
 	m.mu.Unlock()
@@ -1908,15 +1913,15 @@ func (m *Manager) Refresh() error {
 			return err
 		}
 		m.mu.Lock()
-		if m.stableResourcePins != nil {
+		if m.retiredCount != 0 {
 			// Retirement owns these paths independently of live discovery,
 			// which can omit directories, missing names, or other entry types.
 			// Use the cached identity; the retired handle may already be closed.
 			for _, existing := range m.files {
-				if !existing.IsZombie.Load() || existing.stableIdentity == (rootpublication.StableIdentity{}) || filepath.Clean(filepath.Dir(existing.Path)) != filepath.Clean(dir) {
+				if !existing.IsZombie.Load() || filepath.Clean(filepath.Dir(existing.Path)) != filepath.Clean(dir) {
 					continue
 				}
-				if err := validateStableDeletePathIdentity(existing.Path, existing.stableIdentity); err != nil {
+				if err := validateStableDeletePathIdentity(existing.Path, existing.retirementIdentity); err != nil {
 					m.mu.Unlock()
 					return err
 				}
@@ -2481,6 +2486,7 @@ func (m *Manager) retryZombieDelete(f *File) {
 		m.mu.RLock()
 		cur, exists := m.files[f.ID]
 		keepRetrying := !m.closing && exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load()
+		identity := f.retirementIdentity
 		m.mu.RUnlock()
 		if !keepRetrying {
 			return
@@ -2502,22 +2508,20 @@ func (m *Manager) retryZombieDelete(f *File) {
 			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, leaseErr)
 			return
 		}
-		if lease != nil {
-			if err := validateStableDeletePathIdentity(f.Path, f.stableIdentity); err != nil {
-				abortStableDeleteLease(lease)
-				log.Printf("valuelog: retry zombie delete path validation failed for %s: %v", f.Path, err)
-				return
-			}
+		if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+			abortStableDeleteLease(lease)
+			log.Printf("valuelog: retry zombie delete path validation failed for %s: %v", f.Path, err)
+			return
 		}
 
-		deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+		deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
 		if deleted {
 			syncErr := m.syncDeferredDeletion(f.Path)
 			commitStableDeleteLease(lease)
 			m.mu.Lock()
 			var unobserveErr error
 			if cur, exists := m.files[f.ID]; exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load() {
-				delete(m.files, f.ID)
+				m.forgetSegmentLocked(f)
 				unobserveErr = m.unobserveStableFileLocked(f)
 			}
 			m.mu.Unlock()
@@ -2548,7 +2552,13 @@ func (m *Manager) MarkZombie(id uint32) error {
 	if !ok {
 		return &fileNotFoundError{id: id}
 	}
-	f.IsZombie.Store(true)
+	if _, err := m.prepareRetirementIdentityLocked(f); err != nil {
+		return err
+	}
+	if !f.IsZombie.Load() {
+		m.retiredCount++
+		f.IsZombie.Store(true)
+	}
 	return nil
 }
 
@@ -2565,7 +2575,13 @@ func (m *Manager) MarkZombieIfTracked(id uint32) (tracked bool, newlyMarked bool
 		return false, false, nil
 	}
 	wasZombie := f.IsZombie.Load()
-	f.IsZombie.Store(true)
+	if _, err := m.prepareRetirementIdentityLocked(f); err != nil {
+		return true, false, err
+	}
+	if !wasZombie {
+		m.retiredCount++
+		f.IsZombie.Store(true)
+	}
 	return true, !wasZombie, nil
 }
 
@@ -2582,7 +2598,7 @@ func (m *Manager) EvictSegment(id uint32) error {
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "evict"}
 	}
-	delete(m.files, id)
+	m.forgetSegmentLocked(f)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
 	return errors.Join(unobserveErr, f.Close())
@@ -2946,38 +2962,30 @@ func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublicat
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "remove"}
 	}
-	if expected != (rootpublication.StableIdentity{}) {
-		actual := f.stableIdentity
-		if actual == (rootpublication.StableIdentity{}) {
-			var err error
-			actual, err = rootpublication.StableIdentityFromFile(f.File)
-			if err != nil {
-				m.mu.Unlock()
-				return err
-			}
-		}
-		if !rootpublication.SamePhysicalIdentity(expected, actual) {
-			m.mu.Unlock()
-			return fmt.Errorf("%w: value-log file id %d identity changed", rootpublication.ErrResourceConflict, id)
-		}
+	identity, err := m.prepareRetirementIdentityLocked(f)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if expected != (rootpublication.StableIdentity{}) && !rootpublication.SamePhysicalIdentity(expected, identity) {
+		m.mu.Unlock()
+		return fmt.Errorf("%w: value-log file id %d identity changed", rootpublication.ErrResourceConflict, id)
 	}
 	lease, err := m.stableDeleteLease(f)
 	if err != nil {
 		m.mu.Unlock()
 		return err
 	}
-	if lease != nil {
-		if err := validateStableDeletePath(f); err != nil {
-			abortStableDeleteLease(lease)
-			m.mu.Unlock()
-			return err
-		}
+	if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+		abortStableDeleteLease(lease)
+		m.mu.Unlock()
+		return err
 	}
-	delete(m.files, id)
+	m.forgetSegmentLocked(f)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
 
-	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
 	finishStableDeleteLease(lease, deleted)
 	return errors.Join(unobserveErr, removeErr)
 }
@@ -2999,6 +3007,11 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, nil
 	}
+	identity, err := m.prepareRetirementIdentityLocked(f)
+	if err != nil {
+		m.mu.Unlock()
+		return false, err
+	}
 	lease, err := m.stableDeleteLease(f)
 	if errors.Is(err, ErrFilePinned) {
 		m.mu.Unlock()
@@ -3011,18 +3024,16 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, err
 	}
-	if lease != nil {
-		if err := validateStableDeletePath(f); err != nil {
-			abortStableDeleteLease(lease)
-			m.mu.Unlock()
-			return false, err
-		}
+	if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+		abortStableDeleteLease(lease)
+		m.mu.Unlock()
+		return false, err
 	}
-	delete(m.files, id)
+	m.forgetSegmentLocked(f)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
 
-	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
 	finishStableDeleteLease(lease, deleted)
 	return true, errors.Join(unobserveErr, removeErr)
 }
@@ -3036,23 +3047,26 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 		m.mu.Unlock()
 		return nil
 	}
+	identity, err := m.prepareRetirementIdentityLocked(f)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
 	lease, err := m.stableDeleteLease(f)
 	if err != nil {
 		m.mu.Unlock()
 		return err
 	}
-	if lease != nil {
-		if err := validateStableDeletePath(f); err != nil {
-			abortStableDeleteLease(lease)
-			m.mu.Unlock()
-			return err
-		}
+	if err := validateStableDeletePathIdentity(f.Path, identity); err != nil {
+		abortStableDeleteLease(lease)
+		m.mu.Unlock()
+		return err
 	}
-	delete(m.files, id)
+	m.forgetSegmentLocked(f)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
 
-	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, lease != nil)
+	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
 	finishStableDeleteLease(lease, deleted)
 	return errors.Join(unobserveErr, removeErr)
 }

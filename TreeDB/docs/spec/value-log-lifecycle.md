@@ -134,7 +134,7 @@ retirement owner's control. The handle may already be closed while unlink or
 an owned retry is pending; refresh neither inspects that closed handle nor
 reopens the segment. Current snapshots continue to exclude the zombie, while
 new live segments are still discovered. A conflicting path for the same file
-ID remains an error. Identity-gated managers also validate the current pathname
+ID remains an error. Every manager validates the current pathname
 against the captured retired identity independently of live-segment discovery,
 including entries that discovery filters out, such as directories. A replacement
 regular-file inode is a resource conflict; non-regular entries are refused, and a
@@ -144,7 +144,16 @@ file. The Unix child open is nonblocking, so a replacement FIFO cannot stall
 refresh or reclamation while the manager lock is held. Links are refused,
 including links back to the original inode. Quarantine recovery uses the same
 safe identity lookup. The check does not access the retired handle.
-Managers without an identity registry retain their existing refresh semantics.
+The manager captures a separate immutable retirement identity from its owned
+open handle before publishing a zombie or admitting explicit removal. It reuses
+the registered identity when available, without modifying the identity exposed
+to pinned readers. Refresh, deletion and retry use that retained identity even
+without an external pin registry. Capture failure leaves ownership and zombie
+state unchanged; unsupported platforms fail explicitly. Explicit removal checks
+the pathname before forgetting ownership, and quarantine unlink checks again
+after close. External registry leases separately enforce pin exclusion. A
+manager-locked count skips the retirement scan when no tracked zombies exist;
+marking, ownership removal, eviction and Close balance that count.
 
 ### 2.2 External-version logical pruning is not segment GC
 

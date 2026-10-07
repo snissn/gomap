@@ -457,7 +457,7 @@ func TestManagerZombieDeleteCommitsSuccessfulUnlinkAfterCloseError(t *testing.T)
 	}
 	file.IsZombie.Store(true)
 	manager := &Manager{
-		files: map[uint32]*File{file.ID: file}, stableResourcePins: registry,
+		files: map[uint32]*File{file.ID: file}, stableResourcePins: registry, retiredCount: 1,
 	}
 	if err := manager.deleteZombieFile(file); err == nil {
 		t.Fatal("deleteZombieFile returned nil, want the already-closed handle error")

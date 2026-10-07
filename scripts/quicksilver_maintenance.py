@@ -166,12 +166,24 @@ def validate_measurement(raw, cell):
     gc = raw.get('leaf_gc')
     require(isinstance(gc, dict), 'missing leaf GC receipt')
     require(gc['status'] == 'succeeded', 'incomplete leaf GC')
-    fields = {'GenerationsTotal', 'GenerationsWritable', 'GenerationsLive', 'GenerationsRetiring',
-              'GenerationsEligible', 'GenerationsDeleted', 'FilesDeleted', 'BytesEligible', 'BytesDeleted'}
-    require(isinstance(gc['stats'], dict) and set(gc['stats']) == fields, 'invalid leaf GC counters')
+    generation_fields = {'GenerationsTotal', 'GenerationsWritable', 'GenerationsLive', 'GenerationsRetiring',
+                         'GenerationsEligible', 'GenerationsDeleted', 'FilesDeleted', 'BytesEligible', 'BytesDeleted'}
+    revision_fields = {'ManifestRevisionsTotal', 'ManifestRevisionsProtected', 'ManifestRevisionsEligible',
+                       'ManifestRevisionsDeleted', 'ManifestRevisionBytesEligible', 'ManifestRevisionBytesDeleted'}
+    require(isinstance(gc['stats'], dict) and
+            set(gc['stats']) == generation_fields | revision_fields | {'ManifestRevisionGCUnsupported'},
+            'invalid leaf GC counters')
     stats = gc['stats']
-    for name in fields:
+    for name in generation_fields | revision_fields:
         integer(stats[name], 'leaf GC '+name)
+    require(type(stats['ManifestRevisionGCUnsupported']) is bool, 'invalid manifest GC unsupported flag')
+    if stats['ManifestRevisionGCUnsupported']:
+        require(not any(stats[name] for name in revision_fields), 'unsupported manifest GC census')
+    else:
+        require(stats['ManifestRevisionsTotal'] == stats['ManifestRevisionsProtected'] + stats['ManifestRevisionsEligible'] and
+                stats['ManifestRevisionsDeleted'] <= stats['ManifestRevisionsEligible'] and
+                stats['ManifestRevisionBytesDeleted'] <= stats['ManifestRevisionBytesEligible'],
+                'leaf GC manifest revision accounting')
     require(sum(stats[name] for name in ('GenerationsWritable', 'GenerationsLive', 'GenerationsRetiring',
             'GenerationsEligible')) <= stats['GenerationsTotal'] and
             stats['GenerationsDeleted'] <= stats['GenerationsTotal'], 'leaf GC generation accounting')
@@ -208,7 +220,7 @@ def validate_measurement(raw, cell):
     # separate view while execution eligibility uses the applied initial phases.
     # Deferred/unsupported dispositions in either view remain nonqualifying.
     return dict(final, endpoint=endpoint, before=initial['before'], phases=initial['phases'],
-                audit_phases=final['phases'], initial_report=initial, final_audit=final)
+                audit_phases=final['phases'], initial_report=initial, final_audit=final, leaf_gc=gc)
 
 
 class Deadline:
@@ -388,8 +400,11 @@ def contract(run):
 
 
 def policy_complete(report):
-    return report['policy_fully_compacted'] and all(phase.get('status', '') not in ('deferred', 'unsupported')
-                                                   for phase in report['phases']+report.get('audit_phases', []))
+    return (report['policy_fully_compacted'] and
+            (report.get('endpoint') != COMMAND_WAL_SETTLE_ENDPOINT or
+             not report['leaf_gc']['stats']['ManifestRevisionGCUnsupported']) and
+            all(phase.get('status', '') not in ('deferred', 'unsupported')
+                for phase in report['phases']+report.get('audit_phases', [])))
 
 
 def metric(run, name):
