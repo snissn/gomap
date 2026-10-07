@@ -15,6 +15,11 @@ rollback followed by a FIFO, a link to the original inode, and a link to a FIFO.
 Refresh and retirement retry must refuse promptly while retaining the special
 entry and zombie ownership; the failed-test path unblocks and joins a legacy
 FIFO open before reporting the regression.
+`TestManagerRefreshRetiredSegmentRejectsDirectoryPath` exercises directory
+rebounds in the primary and additional scan directories. Refresh and retirement
+retry must refuse without changing the directory or its sentinel, retain zombie
+ownership, and release the manager lock. Removing the replacement restores benign
+missing-path refresh; restoring the original file permits retirement to complete.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 

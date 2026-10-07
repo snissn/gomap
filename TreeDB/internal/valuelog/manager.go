@@ -1908,17 +1908,25 @@ func (m *Manager) Refresh() error {
 			return err
 		}
 		m.mu.Lock()
+		if m.stableResourcePins != nil {
+			// Retirement owns these paths independently of live discovery,
+			// which can omit directories, missing names, or other entry types.
+			// Use the cached identity; the retired handle may already be closed.
+			for _, existing := range m.files {
+				if !existing.IsZombie.Load() || existing.stableIdentity == (rootpublication.StableIdentity{}) || filepath.Clean(filepath.Dir(existing.Path)) != filepath.Clean(dir) {
+					continue
+				}
+				if err := validateStableDeletePathIdentity(existing.Path, existing.stableIdentity); err != nil {
+					m.mu.Unlock()
+					return err
+				}
+			}
+		}
 		for _, seg := range segments {
 			if existing := m.files[seg.id]; existing != nil && existing.IsZombie.Load() && filepath.Clean(existing.Path) == filepath.Clean(seg.path) {
 				// Retirement owns this entry until deletion (including any retry)
 				// completes. Its handle may already be closed before unlink, so
 				// refresh must neither stat it nor resurrect it as a live segment.
-				if existing.stableIdentity != (rootpublication.StableIdentity{}) {
-					if err := validateStableDeletePathIdentity(seg.path, existing.stableIdentity); err != nil {
-						m.mu.Unlock()
-						return err
-					}
-				}
 				continue
 			}
 			if err := m.registerSegmentLocked(seg.path, seg.id); err != nil {
