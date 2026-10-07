@@ -56,6 +56,14 @@ def mutate_config(change):
         c=load(packet/"config.json");change(c);replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
     return run
 
+def host_affinity_mutation(direction, mask):
+    def run(packet):
+        receipts=load(packet/"receipts.json");receipt=receipts[0]
+        captured=receipt[direction];captured["cpu_affinity"]=[cpu+1 for cpu in captured["cpu_affinity"]] if mask=="shift" else captured["cpu_affinity"][:3]
+        replace_json(packet/(receipt["label"]+"-"+direction+"-host.json"),captured)
+        replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
+    return run
+
 def artifact_corruption(name):
     def run(packet):
         path=packet/name;temp=path.with_name(path.name+".smoke-replacement");temp.write_bytes(path.read_bytes()+b"\ncorrupted copied evidence\n");os.replace(temp,path)
@@ -127,6 +135,12 @@ def main():
         "missing-frozen-go-version":config_mutation("go_version",""),
         "typed-frozen-go-version":config_mutation("go_version",True),
         "rebound-frozen-go-version":mutate_config(lambda c:c.update(go_version=c["go_version"]+" unbound-copied-version")),
+        "missing-frozen-cpu-affinity":mutate_config(lambda c:c["host"].pop("cpu_affinity")),
+        "narrowed-frozen-cpu-affinity":mutate_config(lambda c:c["host"].update(cpu_affinity=c["host"]["cpu_affinity"][:3])),
+        "malformed-frozen-cpu-affinity":mutate_config(lambda c:c["host"].update(cpu_affinity=[False,1,2,3])),
+        "rehashed-frozen-cpu-affinity":mutate_config(lambda c:c["host"].update(cpu_affinity=[cpu+1 for cpu in c["host"]["cpu_affinity"]])),
+        "rehashed-before-cpu-affinity":host_affinity_mutation("before","shift"),
+        "narrowed-after-cpu-affinity":host_affinity_mutation("after","narrow"),
         "rehashed-custom-build-flags":build_mutation(lambda b:b["command"].insert(2,"-gcflags=all=-N -l")),
         "rehashed-failed-build":build_mutation(lambda b:b.update(exit_code=1)),
         "rehashed-bool-build-exit":build_mutation(lambda b:b.update(exit_code=False)),

@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import re
 
-from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products, validate_harness_fixtures, C4_PACKAGE
+from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products, validate_harness_fixtures, C4_PACKAGE, validate_cpu_affinity
 
 SCHEMA = "gomap-cow-sustained-public-v2"
 COMPLETION_CLAIM = "Supported sustained construction/evidence only; native/product/C4 qualification pending"
@@ -114,8 +114,9 @@ def validate_config(c):
         need(re.fullmatch(r"[0-9a-f]{64}",c[key] or ""), "toolchain hash required")
     for name in ("GOROOT","GOCACHE","GOMODCACHE","TMPDIR"):
         p=Path(c["environment"][name]);need(p.is_absolute() and str(p)==c["environment"][name] and ".." not in p.parts, "resolved environment path " + name)
-    h=c["host"];exact(h,("system","node","machine","release","cpu_count","max_load1","max_load5","min_free_bytes","tmpdir","tmpdir_device"),"host")
+    h=c["host"];exact(h,("system","node","machine","release","cpu_count","cpu_affinity","max_load1","max_load5","min_free_bytes","tmpdir","tmpdir_device"),"host")
     need(h["system"]=="Linux" and h["machine"]=="x86_64" and type(h["cpu_count"]) is int and h["cpu_count"]>=4,"host platform")
+    validate_cpu_affinity(h["cpu_affinity"])
     need(h["tmpdir"]==c["environment"]["TMPDIR"],"unbound DB filesystem")
     finite(h["tmpdir_device"],"TMPDIR device",integer=True)
     for k in ("max_load1","max_load5","min_free_bytes"):finite(h[k],k,True)

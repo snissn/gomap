@@ -158,3 +158,11 @@ roots, exact generation/frozen-root balance and exact external-lease balance.
 The completion record has a closed schema and preserves the pending native
 qualification claim. Copied-positive mutation checks refuse changes to any of
 these observations even when dependent artifact hashes are recomputed.
+
+C4 shares the frozen Linux `cpu_affinity` host authority with C3. The coordinator
+records sorted actual `os.sched_getaffinity(0)` CPU IDs, at least four distinct
+nonnegative integers. Every pre/post collector record and offline analyzer
+requires exactly that mask, independently of system `cpu_count`. Missing
+observation, narrowed masks and mismatches refuse, including consistently
+rehashed copied packets. The construction draft leaves the mask unresolved;
+this adds no CPU quota policy or qualification claim.
