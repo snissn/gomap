@@ -706,7 +706,13 @@ func stableIdentityAtPath(path string) (rootpublication.StableIdentity, error) {
 	// A rebound pathname can name a link or FIFO. Use the existing exact-parent,
 	// no-follow child primitive, which is nonblocking on Unix, before inspecting
 	// identity. This also protects quarantine recovery from special-file opens.
-	parent, err := rootpublication.OpenStableParent(filepath.Dir(path))
+	// Segment directories may be configured through symlinks. Resolve only the
+	// parent; the child name must still be opened without following links.
+	parentPath, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	parent, err := rootpublication.OpenStableParent(parentPath)
 	if err != nil {
 		return rootpublication.StableIdentity{}, err
 	}

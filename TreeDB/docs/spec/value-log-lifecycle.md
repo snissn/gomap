@@ -139,9 +139,12 @@ against the captured retired identity independently of live-segment discovery,
 including entries that discovery filters out, such as directories. A replacement
 regular-file inode is a resource conflict; non-regular entries are refused, and a
 disappeared pathname is a benign deletion race. This
-check opens a no-follow child of an exact parent handle and requires a regular
-file. The Unix child open is nonblocking, so a replacement FIFO cannot stall
-refresh or reclamation while the manager lock is held. Links are refused,
+check resolves only the parent directory's symlinks, preserving configured
+symlink segment directories, then opens a no-follow child of an exact parent
+handle and requires a regular file. It never resolves the segment child itself.
+A changed parent alias still has to yield the captured physical file identity;
+a conflicting replacement is refused and preserved. The Unix child open is
+nonblocking, so a replacement FIFO cannot stall refresh or reclamation while the manager lock is held. Links are refused,
 including links back to the original inode. Quarantine recovery uses the same
 safe identity lookup. The check does not access the retired handle.
 The manager captures a separate immutable retirement identity from its owned
