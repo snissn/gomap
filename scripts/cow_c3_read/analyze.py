@@ -6,6 +6,7 @@ import statistics
 from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, retained_tooling
 from collect import host_gate
 from build import verify_git_receipt, objects
+from protocol import validate_run_processes, benchmark_comms
 
 def summary(values):
     low, high = min(values), max(values)
@@ -20,6 +21,7 @@ def main():
     packet = args.packet.resolve()
     need(not (packet / "failure.json").exists(), "failed capture retained; no graceful analysis fallback")
     c = config(packet / "config.json")
+    configured_comms = benchmark_comms(c)
     env = process_environment(c["environment"])
     need(json.loads((packet / "environment.json").read_text()) ==
          {"effective_controls": c["environment"], "effective_process_environment": env}, "captured process environment mismatch")
@@ -79,6 +81,7 @@ def main():
         name = label(expected)
         need(r["label"] == name and all(r[k] == v for k, v in expected.items()), "schedule/order mismatch")
         need(r["exit_code"] == 0 and not r["timed_out"] and not r["validation_error"] and not any(r["source_drift_after"].values()), "failed/drifted run")
+        validate_run_processes(packet, name, r, configured_comms)
         need(r["binary_sha256"] == c["variants"][r["variant"]]["binary_sha256"], "binary hash mismatch")
         for suffix, key in ((".stdout", "stdout_sha256"), (".stderr", "stderr_sha256")):
             need(sha(packet / (name + suffix)) == r[key], "raw stream drift")
@@ -128,6 +131,7 @@ def main():
     write(packet / "matched-summary.json", results)
     write(packet / "analysis-validation.json", {"runs": len(rows), "measured_runs": len(c["cases"]) * 12,
           "warmup_runs": len(c["cases"]) * 2, "cases": len(c["cases"]), "raw_rows_and_hashes_verified": True,
+          "sampled_host_isolation_verified": True, "universal_host_exclusivity_claimed": False,
           "scope": "C3-read only; descriptive six samples/variant and three cycle ratios; no statistical significance or automatic acceptance",
           "claim": "Every flagged regression/inconclusive case requires coordinator disposition; no C4/M7/parent qualification"})
     print(json.dumps({"runs": len(rows), "cases": len(results)}))

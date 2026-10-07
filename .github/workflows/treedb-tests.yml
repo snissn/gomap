@@ -230,6 +230,7 @@ jobs:
           python3 .github/scripts/test_ci_impact.py
           python3 scripts/r1_collection_source_test.py
           python3 scripts/r1_collection_summary_test.py
+          python3 -B scripts/cow_c3_read/host_isolation_test.py
 
       - name: Vet
         working-directory: TreeDB
