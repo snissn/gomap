@@ -56,6 +56,17 @@ def artifact_corruption(name):
         path=packet/name;temp=path.with_name(path.name+".smoke-replacement");temp.write_bytes(path.read_bytes()+b"\ncorrupted copied evidence\n");os.replace(temp,path)
     return run
 
+def build_mutation(change):
+    def run(packet):
+        path=packet/"baseline-build-receipt.json";build=load(path);change(build);replace_json(path,build)
+        c=load(packet/"config.json");c["variants"]["baseline"]["build_receipt_sha256"]=sha(path)
+        replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
+    return run
+
+def live_go_env_mutation(packet):
+    path=packet/"live-toolchain.json";value=load(path);value["inventory"]["go_env"]["sha256"]="0"*64
+    replace_json(path,value)
+
 def missing_close(raw):raw["calls"]=[call for call in raw["calls"] if call["phase"]!="final_close"]
 def partial_history(raw):
     call=next(c for c in raw["calls"] if c["operation"]=="IterateVersions.full");call["output"]-=1
@@ -103,6 +114,11 @@ def main():
         "product-result-class":config_mutation("result_class","product-qualified"),
         "matched-same-product":config_mutation("result_class","matched-supported-evidence"),
         "missing-toolchain-identity":config_mutation("toolchain_identity",None),
+        "rehashed-custom-build-flags":build_mutation(lambda b:b["command"].insert(2,"-gcflags=all=-N -l")),
+        "rehashed-failed-build":build_mutation(lambda b:b.update(exit_code=1)),
+        "rehashed-bool-build-exit":build_mutation(lambda b:b.update(exit_code=False)),
+        "rehashed-wrong-module-producer":build_mutation(lambda b:b["module_producer_command"].remove("-compiled")),
+        "changed-live-go-env":live_go_env_mutation,
         "unbound-go-launcher":config_mutation("go_binary","/synthetic/unbound/go"),
         "unknown-parameter":mutate_config(lambda c:c.update(unlimited=True)),
         "unfrozen-config":config_mutation("status","draft-unfrozen"),

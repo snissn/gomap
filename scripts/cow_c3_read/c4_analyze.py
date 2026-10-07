@@ -22,7 +22,6 @@ def analyze(packet,emit=True):
     module_identities=[]
     for variant in ("baseline","candidate"):
         build=load(packet/(variant+"-build-receipt.json"))
-        need(build["exit_code"]==0 and build["command"] and build["go_version"]==c["go_version"] and build["go_binary_sha256"]==c["go_binary_sha256"],"unbound successful build/toolchain")
         module_hash=sha(packet/(variant+"-effective_module_graph.raw"))
         need(build["effective_module_identity"]==module_hash,"unbound effective compiled module identity")
         module_identities.append(module_hash)

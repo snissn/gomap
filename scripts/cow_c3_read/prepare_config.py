@@ -2,7 +2,7 @@
 import argparse
 import itertools
 from pathlib import Path
-from protocol import SCHEMA, write
+from protocol import SCHEMA, write, workload_contract, workload_metrics, ACK_CONTRACT, TIMED_SCOPE
 
 def draft():
     cases = []
@@ -12,17 +12,14 @@ def draft():
             ("cow_btree", "append_only", "btree")):
         shape = "forced_pointer" if layout == "pointer" else "inline"
         leaf = "group_versions" if workload == "group_all_versions" else workload
-        point = 0 if workload == "group_all_versions" else 1
-        scan = 0 if workload == "point" else 1
-        latency = ["writer"] + (["point"] if point else []) + (["scan"] if scan else [])
+        work, latency = workload_metrics(workload)
         rules = {"ns/op": {"min": 1}, "B/op": {"min": 1}, "allocs/op": {"min": 1},
                  "writer_ops/s": {"min": 0.000001}, "reader_ops/s": {"min": 0.000001},
-                 "point_calls/op": {"eq": point}, "scan_calls/op": {"eq": scan},
-                 "visited/op": {"eq": 2 * scan}, "output/op": {"eq": point + 2 * scan},
                  "readers_while_writer_active/op": {"min": 0, "max": 2} if workload == "concurrent" else {"eq": 0},
                  "wal_appends/op": {"eq": 0 if profile == "no_wal_fast" else 1},
                  "wal_syncs/op": {"eq": 1 if profile == "command_wal_durable" else 0},
                  "close_ok": {"eq": 1}}
+        rules.update({unit: {"eq": count} for unit, count in work.items()})
         rules.update({"layout_expected_records": {"eq": 4},
                       "ack_routing_before_ok": {"eq": 1}, "ack_routing_after_ok": {"eq": 1}})
         for phase in ("before", "after"):
@@ -59,15 +56,8 @@ def draft():
             "latency_groups": latency, "rules": {"baseline": rules, "candidate": rules},
             "comparable_metrics": ["point_calls/op", "scan_calls/op", "visited/op", "output/op", "wal_appends/op", "wal_syncs/op"],
             "comparison_metrics": comparisons,
-            "ack_contract": "CommitRelaxed; durable WAL append/sync=1/1, relaxed=1/0, NoWAL=0/0; exact profile counts required",
-            "timed_scope": "actual calls, owned point output, borrowed complete EntryView scan, validation, clocks; seed/physical layout probes/stats/Close excluded",
-            "workload_contract": {"keys": ["c3-a", "c3-ab"], "seed_timestamps": [10, 20], "read_timestamp": 100,
-                "value_bytes": 256, "value_byte": 99, "history_growth": False,
-                "writers": 1, "point_readers": point, "scan_readers": scan,
-                "writer_records_per_call": 1 if workload == "point" else 4,
-                "concurrency": workload == "concurrent", "clock_calls_retained": True,
-                "read_overlap_is_internal_preparation_proof": False, "physical_layout_records": 4,
-                "layout_probes_outside_counter_boundaries": True}})
+            "ack_contract": ACK_CONTRACT, "timed_scope": TIMED_SCOPE,
+            "workload_contract": workload_contract(workload)})
     variants = {v: {"production_commit": None, "production_git_tree": None, "source": None, "manifest": None, "manifest_sha256": None,
         "source_tree_sha256": None, "binary": None, "binary_sha256": None,
         "build_receipt": None, "build_receipt_sha256": None} for v in ("baseline", "candidate")}

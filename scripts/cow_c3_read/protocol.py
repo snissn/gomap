@@ -59,7 +59,7 @@ def matched_products(variants):
     need(not a.is_relative_to(b) and not b.is_relative_to(a), "matched products must have independent build custody")
 
 def validate_toolchain(value):
-    need(set(value) == {"go_binary_sha256", "executables", "headers"}
+    need(set(value) == {"go_binary_sha256", "executables", "headers", "go_env"}
          and isinstance(value["go_binary_sha256"], str)
          and re.fullmatch(r"[0-9a-f]{64}", value["go_binary_sha256"]), "invalid Go toolchain inventory")
     records = value["executables"]
@@ -91,6 +91,10 @@ def validate_toolchain(value):
         paths.append(item["path"])
     need(paths == sorted(set(paths)) and {"pkg/include/textflag.h", "pkg/include/funcdata.h"} <= set(paths),
          "incomplete/duplicate Go assembler header inventory")
+    go_env = value["go_env"]
+    need(isinstance(go_env, dict) and set(go_env) == {"path", "sha256", "bytes", "mode"}
+         and go_env["path"] == "go.env", "invalid GOROOT go.env inventory")
+    file_identity(go_env)
     return digest(value)
 
 def toolchain_inventory(goroot):
@@ -124,7 +128,12 @@ def toolchain_inventory(goroot):
         need(stat.S_ISREG(mode), "nonregular Go assembler header")
         headers.append({"path": path.relative_to(root).as_posix(), "sha256": sha(path),
                         "bytes": path.stat().st_size, "mode": stat.S_IMODE(mode)})
-    value = {"go_binary_sha256": sha(go), "executables": records, "headers": headers}
+    go_env = root / "go.env"
+    need(go_env.is_file() and not go_env.is_symlink() and go_env.resolve() == go_env,
+         "invalid GOROOT go.env custody")
+    value = {"go_binary_sha256": sha(go), "executables": records, "headers": headers,
+             "go_env": {"path": "go.env", "sha256": sha(go_env), "bytes": go_env.stat().st_size,
+                        "mode": stat.S_IMODE(go_env.stat().st_mode)}}
     validate_toolchain(value)
     return value
 
@@ -241,15 +250,47 @@ def process_environment(controls):
     need(cache.is_absolute() and str(cache) == controls["GOMODCACHE"] and ".." not in cache.parts
          and cache.parent.parent != Path("/"), "unresolved GOMODCACHE/GOPATH")
     return dict(controls, PATH=os.defpath, GOENV="off", GOTOOLCHAIN="local",
-                GOPATH=str(cache.parent.parent), LC_ALL="C", CGO_ENABLED="0")
+                GOPATH=str(cache.parent.parent), LC_ALL="C", CGO_ENABLED="0",
+                GOAMD64="v1", GOEXPERIMENT="")
 
 def validate_go_environment(observed, env):
     # Go's cfg.EnvFile reports the disabled GOENV=off setting as an empty
     # filename in `go env -json`; the actual process environment still is off.
-    for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH", "CGO_ENABLED"):
+    for key in ("GOROOT", "GOFLAGS", "GOWORK", "GOCACHE", "GOMODCACHE", "GOENV", "GOTOOLCHAIN", "GOPATH", "CGO_ENABLED", "GOAMD64", "GOEXPERIMENT"):
         expected = "" if key == "GOENV" else env[key]
         need(observed[key] == expected, "actual go env mismatch " + key)
     need(observed["GOOS"] == "linux" and observed["GOARCH"] == "amd64", "actual build platform mismatch")
+
+def build_command(go, binary):
+    return [str(go), "test", "-c", "-o", str(binary), "./TreeDB/mvcc"]
+
+def module_command(go):
+    return [str(go), "list", "-compiled", "-deps", "-test", "-json", "./TreeDB/mvcc"]
+
+def validate_build_command(build, go, binary):
+    need(type(build.get("exit_code")) is int and build["exit_code"] == 0
+         and build.get("command") == build_command(go, binary), "actual ordinary build invocation mismatch")
+    need(build.get("module_producer_command") == module_command(go), "actual module producer invocation mismatch")
+
+ACK_CONTRACT = "CommitRelaxed; durable WAL append/sync=1/1, relaxed=1/0, NoWAL=0/0; exact profile counts required"
+TIMED_SCOPE = "actual calls, owned point output, borrowed complete EntryView scan, validation, clocks; seed/physical layout probes/stats/Close excluded"
+
+def workload_contract(workload):
+    need(workload in WORKLOADS, "unknown workload")
+    return {"keys": ["c3-a", "c3-ab"], "seed_timestamps": [10, 20], "read_timestamp": 100,
+            "value_bytes": 256, "value_byte": 99, "history_growth": False,
+            "writers": 1, "point_readers": 0 if workload == "group_all_versions" else 1,
+            "scan_readers": 0 if workload == "point" else 1,
+            "writer_records_per_call": 1 if workload == "point" else 4,
+            "concurrency": workload == "concurrent", "clock_calls_retained": True,
+            "read_overlap_is_internal_preparation_proof": False, "physical_layout_records": 4,
+            "layout_probes_outside_counter_boundaries": True}
+
+def workload_metrics(workload):
+    contract = workload_contract(workload)
+    point, scan = contract["point_readers"], contract["scan_readers"]
+    return {"point_calls/op": point, "scan_calls/op": scan, "visited/op": 2 * scan,
+            "output/op": point + 2 * scan}, ["writer"] + (["point"] if point else []) + (["scan"] if scan else [])
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -355,9 +396,20 @@ def config(path):
                 rule = x["rules"][variant].get(unit)
                 need(isinstance(rule, dict) and set(rule) == {"eq"} and type(rule["eq"]) is int
                      and rule["eq"] == expected, "profile WAL exact rule mismatch")
-        need(x["workload_contract"].get("physical_layout_records") == 4
-             and x["workload_contract"].get("layout_probes_outside_counter_boundaries") is True,
-             "physical layout work contract mismatch")
+        # Canonical JSON equality is type-sensitive (True must not equal 1),
+        # recursively binds list elements, and rejects missing/extra fields.
+        need(digest(x["workload_contract"]) == digest(workload_contract(x["workload"])),
+             "literal workload contract mismatch")
+        expected_work, expected_latency = workload_metrics(x["workload"])
+        need(x["latency_groups"] == expected_latency, "literal workload latency groups mismatch")
+        need(x["ack_contract"] == ACK_CONTRACT and x["timed_scope"] == TIMED_SCOPE,
+             "literal workload ACK/timed scope mismatch")
+        need(set(expected_work) <= set(x["comparable_metrics"]), "work-count comparability missing")
+        for variant in ("baseline", "candidate"):
+            for unit, expected in expected_work.items():
+                rule = x["rules"][variant].get(unit)
+                need(isinstance(rule, dict) and set(rule) == {"eq"} and type(rule["eq"]) is int
+                     and rule["eq"] == expected, "literal workload count rule mismatch")
         for variant in ("baseline", "candidate"):
             expected_layout = {"layout_expected_records": 4, "ack_routing_before_ok": 1, "ack_routing_after_ok": 1}
             for phase in ("before", "after"):

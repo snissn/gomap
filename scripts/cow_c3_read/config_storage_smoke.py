@@ -119,6 +119,8 @@ def main():
     go = goroot / "bin/go"
     go.parent.mkdir(parents=True)
     go.write_text("synthetic launcher\n"); go.chmod(0o755)
+    go_env = goroot / "go.env"
+    go_env.write_text("GOTOOLCHAIN=local\n"); go_env.chmod(0o644)
     tools = goroot / "pkg/tool/linux_amd64"
     tools.mkdir(parents=True)
     for name in ("compile", "link", "asm", "cgo"):
@@ -166,6 +168,62 @@ def main():
         results.append({"label": "tool-symlink", "refused": str(error)})
     else:
         raise AssertionError("tool symlink accepted")
+    link.unlink()
+    for label, mutate, expected in (
+            ("go-env-bytes", lambda: go_env.write_text("GOAMD64=v3\n"), "Go toolchain inventory mismatch"),
+            ("go-env-mode", lambda: go_env.chmod(0o600), "Go toolchain inventory mismatch"),
+            ("go-env-missing", lambda: go_env.unlink(), "invalid GOROOT go.env custody"),
+            ("go-env-symlink", lambda: (go_env.unlink(), go_env.symlink_to(go)), "invalid GOROOT go.env custody")):
+        for name in ("textflag.h", "funcdata.h"):
+            (include / name).write_text("synthetic header " + name + "\n")
+            (include / name).chmod(0o644)
+        if go_env.is_symlink():
+            go_env.unlink()
+        go_env.write_text("GOTOOLCHAIN=local\n"); go_env.chmod(0o644)
+        mutate()
+        try:
+            build_toolchain(frozen, frozen, toolchain_inventory(goroot))
+        except ValueError as error:
+            assert expected in str(error), (label, str(error))
+            results.append({"label": label, "refused": str(error)})
+        else:
+            raise AssertionError("changed go.env accepted")
+    # Every literal workload field is claim-bearing. Cover missing/changed and
+    # wrong-type values, including bool/int and nested list element equality.
+    for workload in ("point", "group_all_versions", "concurrent"):
+        cell_index = next(i for i, cell in enumerate(value["cases"]) if cell["workload"] == workload)
+        contract = value["cases"][cell_index]["workload_contract"]
+        for field, original in contract.items():
+            if type(original) is bool:
+                changed, wrong_type = not original, int(original)
+            elif type(original) is int:
+                changed, wrong_type = original + 1, float(original)
+            else:
+                changed = [*original]
+                changed[0] = changed[0] + 1 if type(changed[0]) is int else changed[0] + "wrong"
+                wrong_type = "wrong-type"
+            for kind, replacement in (("changed", changed), ("type", wrong_type)):
+                refuse(workload + "-" + field + "-" + kind,
+                       lambda c, i=cell_index, k=field, v=replacement: c["cases"][i]["workload_contract"].update({k: v}),
+                       "literal workload contract mismatch")
+            refuse(workload + "-" + field + "-missing",
+                   lambda c, i=cell_index, k=field: c["cases"][i]["workload_contract"].pop(k),
+                   "literal workload contract mismatch")
+        refuse(workload + "-extra-workload-field",
+               lambda c, i=cell_index: c["cases"][i]["workload_contract"].update(extra=True), "literal workload contract mismatch")
+        refuse(workload + "-nested-timestamp-type",
+               lambda c, i=cell_index: c["cases"][i]["workload_contract"].update(seed_timestamps=[10.0, 20]), "literal workload contract mismatch")
+        refuse(workload + "-latency-groups",
+               lambda c, i=cell_index: c["cases"][i].update(latency_groups=["writer"] if workload != "point" else ["scan"]),
+               "literal workload latency groups mismatch")
+        for field in ("ack_contract", "timed_scope"):
+            refuse(workload + "-" + field, lambda c, i=cell_index, k=field: c["cases"][i].update({k: "false claim"}),
+                   "literal workload ACK/timed scope mismatch")
+        for variant in ("baseline", "candidate"):
+            for unit in ("point_calls/op", "scan_calls/op", "visited/op", "output/op"):
+                refuse(workload + "-" + variant + "-" + unit,
+                       lambda c, i=cell_index, v=variant, u=unit: c["cases"][i]["rules"][v].update({u: {"min": 0}}),
+                       "literal workload count rule mismatch")
     # ACK authority is mandatory in the frozen protocol, even if someone edits
     # the non-runnable draft before freezing it. Exercise both binary variants.
     for variant_name in ("baseline", "candidate"):

@@ -56,7 +56,7 @@ benchmark packets. Output directories must be new.
 The module smoke also poisons ambient build/runtime settings and a persisted
 GOENV file, then verifies the shared environment helper and an actual env
 child receive only the fixed policy. This construction check runs no Go;
-ordinary Go build/runtime smoke must verify the actual toolchain defaults.
+ordinary Go build/runtime smoke must verify the actual toolchain settings.
 
 `prepare_config.py --out <draft.json>` produces a deliberately non-runnable
 draft. Each exact leaf and case ID is derived from its profile/mode/layout/workload;
@@ -88,7 +88,7 @@ This matched-product rule does not apply to candidate-only construction smokes.
 Build and benchmark processes inherit no ambient environment variables.
 One shared derivation passes exactly those nine controls plus PATH=os.defpath,
 GOENV=off, GOTOOLCHAIN=local, LC_ALL=C and GOPATH equal to GOMODCACHE's
-parent's parent, and fixed CGO_ENABLED=0. These fifteen fields are identical for
+parent's parent, fixed CGO_ENABLED=0, GOAMD64=v1 and GOEXPERIMENT empty. These seventeen fields are identical for
 build and collection. Thus persisted Go settings, ambient compiler/build flags and
 runtime GODEBUG settings cannot enter either variant. The full effective
 process environment is retained in both build receipts and the collection
@@ -102,10 +102,20 @@ symlinks and an incomplete compiler/linker/assembler inventory. It retains one
 `toolchain.json` artifact with relative paths, file sizes, executable modes and
 SHA256 hashes. The same inventory includes every regular file below
 `GOROOT/pkg/include`, including assembler textflag/funcdata headers and their
-permission modes; header changes or missing/extra/symlink inputs refuse. Freeze its canonical `toolchain_identity` digest alongside
+permission modes. It also binds the canonical regular `GOROOT/go.env` file's
+bytes, hash and mode: `GOENV=off` disables the user file but Go still reads this
+toolchain file. Header or go.env changes and missing/extra/symlink inputs refuse.
+Freeze its canonical `toolchain_identity` digest alongside
 `go_version` and `go_binary_sha256`; both build receipts, live collection and
 offline analysis require the same identity. Collection checks the actual
 inventory before and after capture. Offline analysis needs only retained bytes.
+Build receipts must report integer exit zero and exactly
+`<GOROOT>/bin/go test -c -o <declared-binary> ./TreeDB/mvcc`, plus the exact
+`go list -compiled -deps -test -json ./TreeDB/mvcc` provenance command. Custom
+flags, package/output/launcher changes and failed builds refuse even if receipt
+hashes are rebound. Draft generation and validation share one complete literal
+workload contract; all fields and JSON types, exact logical work counts, latency
+groups and ACK/timed-scope descriptions must match the public fixture.
 Actual Goenv must report CGO_ENABLED=0, and build, collection and offline
 analysis refuse any compiled CgoFiles. The public MVCC fixture uses no CGO or
 network-specific behavior. Earlier CGO-enabled construction evidence is retained

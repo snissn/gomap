@@ -28,7 +28,7 @@ def environment_smoke(out):
               "PATH": "/ambient/bin", "HOME": "/ambient/home",
               "LD_PRELOAD": "/ambient/injection", "UNDECLARED_SENTINEL": "ambient"}
     expected = dict(controls, PATH=os.defpath, GOENV="off", GOTOOLCHAIN="local",
-                    GOPATH=str(out / "gopath"), LC_ALL="C", CGO_ENABLED="0")
+                    GOPATH=str(out / "gopath"), LC_ALL="C", CGO_ENABLED="0", GOAMD64="v1", GOEXPERIMENT="")
     argv = ["/usr/bin/env"]
     with patch.dict(os.environ, poison, clear=True):
         env = process_environment(controls)
