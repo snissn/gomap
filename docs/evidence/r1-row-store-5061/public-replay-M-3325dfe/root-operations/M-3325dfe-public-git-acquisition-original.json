@@ -1,0 +1,89 @@
+{
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "init",
+        "--quiet"
+      ],
+      "cwd": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+      "start_utc": "2026-10-07T01:19:29.442775+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-07T01:19:29.450147+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "git",
+        "remote",
+        "add",
+        "origin",
+        "https://github.com/snissn/gomap.git"
+      ],
+      "cwd": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+      "start_utc": "2026-10-07T01:19:29.450220+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-07T01:19:29.452243+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "git",
+        "-c",
+        "credential.helper=",
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--depth=1",
+        "origin",
+        "24ac6866992dd89ab222b8bf03d60e6c0c49a2d5"
+      ],
+      "cwd": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+      "start_utc": "2026-10-07T01:19:29.452280+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-07T01:19:54.549827+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "git",
+        "sparse-checkout",
+        "init",
+        "--cone"
+      ],
+      "cwd": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+      "start_utc": "2026-10-07T01:19:54.549969+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-07T01:19:54.550788+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "git",
+        "sparse-checkout",
+        "set",
+        "docs/evidence/r1-row-store-5061/_artifacts"
+      ],
+      "cwd": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+      "start_utc": "2026-10-07T01:19:54.550847+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-07T01:19:54.551822+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "argv": [
+        "git",
+        "checkout",
+        "--quiet",
+        "--detach",
+        "24ac6866992dd89ab222b8bf03d60e6c0c49a2d5"
+      ],
+      "cwd": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006",
+      "start_utc": "2026-10-07T01:19:54.551847+00:00",
+      "exit": 0,
+      "end_utc": "2026-10-07T01:19:54.821947+00:00",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "private_source_used": false
+}
