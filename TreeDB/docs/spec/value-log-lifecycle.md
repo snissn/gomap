@@ -163,10 +163,19 @@ cold admission it also retains an exact physical-parent handle, independently
 of pin registration. A vanished alias or renamed physical directory cannot
 make the still-present target count as deleted. After actual File.Close completes,
 each physical attempt opens the configured parent again and verifies it against that retained physical identity. The checked
-operation root anchors quarantine creation, rename, identity lookup, rollback,
-unlink and recovery. Alias loss or a different parent before this capture refuses
+operation root anchors quarantine creation and retains a checked nested quarantine
+root and directory handle through identity lookup, rollback, unlink and recovery.
+Private basename-only cross-parent rename/link operations use the retained parent
+handles; child removal uses the nested root rather than re-resolving its outer name.
+Ordinary Windows visibility is preserved without adding namespace-durability
+certification. Alias loss or a different parent before this capture refuses
 while the target remains. Later alias changes cannot redirect the captured root
 operations; the check does not promise an atomic alias-and-rename predicate.
+Quarantine-directory rebinding cannot redirect child removal or rollback.
+Empty-directory cleanup refuses a detected replacement and removes directories
+only; Unix does not supply an atomic arbitrary directory-identity-and-unlink
+predicate, and this contract does not claim one. Physical target removal remains
+completed when only the final directory cleanup refuses.
 The saved parent is absence/comparison authority, never a fallback deletion path.
 Initial capture requires a linked child matching the open segment. A missing
 child or empty rebound parent at that first admission fails before retirement

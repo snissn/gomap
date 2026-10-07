@@ -1055,83 +1055,118 @@ func requireNoStableDeleteQuarantines(parent string) error {
 	return nil
 }
 
+// retirementQuarantine retains both the directory root and its exact file
+// handle until every child operation and rollback has finished.
+type retirementQuarantine struct {
+	root   *os.Root
+	parent *os.File
+}
+
+func openRetirementQuarantine(root *os.Root, name string) (*retirementQuarantine, error) {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%w: stable quarantine is not a directory", rootpublication.ErrResourceConflict)
+	}
+	nested, err := root.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	parent, err := nested.Open(".")
+	if err != nil {
+		_ = nested.Close()
+		return nil, err
+	}
+	opened, err := parent.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		_ = parent.Close()
+		_ = nested.Close()
+		if err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: stable quarantine changed during capture", rootpublication.ErrResourceConflict)
+	}
+	return &retirementQuarantine{root: nested, parent: parent}, nil
+}
+
+func (q *retirementQuarantine) close() error {
+	return errors.Join(q.parent.Close(), q.root.Close())
+}
+
+func (q *retirementQuarantine) removeDirectory(root *os.Root, parent *os.File, name string) error {
+	info, err := root.Lstat(name)
+	if err != nil {
+		return err
+	}
+	captured, err := q.parent.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !os.SameFile(info, captured) {
+		return fmt.Errorf("%w: stable quarantine directory link changed", rootpublication.ErrResourceConflict)
+	}
+	// Directory-only removal refuses a detected replacement/link. Unix does not
+	// expose an atomic directory-identity-and-unlink predicate; no such broader
+	// attacker guarantee is claimed. Child operations never re-resolve this name.
+	return retirementRemoveDirectory(parent, q.parent, name)
+}
+
 func recoverStableDeleteQuarantine(root *os.Root, parent, quarantineName, base string, expected rootpublication.StableIdentity) (bool, error) {
 	quarantineDir := filepath.Join(parent, quarantineName)
 	quarantinePath := filepath.Join(quarantineDir, base)
-	info, err := root.Lstat(quarantineName)
+	q, err := openRetirementQuarantine(root, quarantineName)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return false, fmt.Errorf("%w: stable quarantine is not a directory", rootpublication.ErrResourceConflict)
-	}
+	defer q.close()
 	parentHandle, err := root.Open(".")
 	if err != nil {
 		return false, err
 	}
 	defer parentHandle.Close()
-	dir, err := rootpublication.OpenStableChildFile(parentHandle, quarantineName, os.O_RDONLY, 0)
-	if err != nil {
-		return false, err
-	}
-	defer dir.Close()
-	openedInfo, err := dir.Stat()
-	if err != nil {
-		return false, err
-	}
-	if !os.SameFile(info, openedInfo) {
-		return false, fmt.Errorf("%w: stable quarantine changed", rootpublication.ErrResourceConflict)
-	}
-	entries, err := dir.ReadDir(-1)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
+	entries, err := q.parent.ReadDir(-1)
 	if err != nil {
 		return false, err
 	}
 	if len(entries) == 0 {
-		return false, root.Remove(quarantineName)
+		return false, q.removeDirectory(root, parentHandle, quarantineName)
 	}
 	if len(entries) != 1 || entries[0].Name() != base || entries[0].IsDir() {
 		return false, fmt.Errorf("%w: stable delete quarantine %q contains unexpected entries", rootpublication.ErrResourceConflict, quarantineDir)
 	}
-	quarantinedIdentity, err := stableIdentityInRoot(root, filepath.Join(quarantineName, base))
+	quarantinedIdentity, err := stableIdentityAtChild(q.parent, base)
 	if err != nil {
 		return false, err
 	}
 	originalPath := filepath.Join(parent, base)
-	originalIdentity, originalErr := stableIdentityInRoot(root, base)
+	originalIdentity, originalErr := stableIdentityAtChild(parentHandle, base)
 	originalExists := originalErr == nil
 	if originalErr != nil && !os.IsNotExist(originalErr) {
 		return false, originalErr
 	}
-
 	if rootpublication.SamePhysicalIdentity(quarantinedIdentity, expected) {
-		if err := root.Remove(filepath.Join(quarantineName, base)); err != nil && !os.IsNotExist(err) {
+		if err := q.root.Remove(base); err != nil && !os.IsNotExist(err) {
 			return false, err
 		}
-		if err := root.Remove(quarantineName); err != nil && !os.IsNotExist(err) {
-			return false, err
-		}
-		// If originalExists names the same inode, this merely removes a partial
-		// rollback hard link. If it names a replacement, the replacement remains.
+		cleanupErr := q.removeDirectory(root, parentHandle, quarantineName)
 		completed := !originalExists || !rootpublication.SamePhysicalIdentity(originalIdentity, quarantinedIdentity)
-		return completed, nil
+		return completed, cleanupErr
 	}
-
 	if originalExists {
 		return false, fmt.Errorf("%w: stable delete quarantine %q and canonical path %q name different unexpected identities", rootpublication.ErrResourceConflict, quarantinePath, originalPath)
 	}
-	if err := root.Rename(filepath.Join(quarantineName, base), base); err != nil {
+	if err := retirementRenameChild(q.parent, base, parentHandle, base); err != nil {
 		return false, err
 	}
 	if err := durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, segmentNamespaceResource(originalPath), parent, "", originalPath); err != nil {
 		return false, err
 	}
-	return false, root.Remove(quarantineName)
+	return false, q.removeDirectory(root, parentHandle, quarantineName)
 }
 
 // removeStableSegmentFileOnce first moves the linked name into a private
@@ -1155,6 +1190,12 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		return false, err
 	}
 	defer root.Close()
+	parentHandle, err := root.Open(".")
+	if err != nil {
+		return false, err
+	}
+	defer parentHandle.Close()
+
 	resource := segmentNamespaceResource(path)
 	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
 	if err != nil {
@@ -1162,7 +1203,6 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 	}
 	baseName := filepath.Base(path)
 	quarantineName := filepath.Base(quarantineDir)
-	quarantineChild := filepath.Join(quarantineName, baseName)
 	// Production deletion supplies its retained physical parent. A pathname
 	// ENOENT is successful only if that exact namespace has no canonical child.
 	absent := func() (bool, error) {
@@ -1199,11 +1239,11 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 			return false, fmt.Errorf("%w: invalid existing stable delete quarantine %q", rootpublication.ErrResourceConflict, quarantineDir)
 		}
 		completed, err := recoverStableDeleteQuarantine(root, parent, quarantineName, base, expected)
+		if completed {
+			return true, err
+		}
 		if err != nil {
 			return false, err
-		}
-		if completed {
-			return true, nil
 		}
 		if _, err := root.Lstat(baseName); os.IsNotExist(err) {
 			return absent()
@@ -1214,8 +1254,13 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 			return false, err
 		}
 	}
-	if err := root.Rename(baseName, quarantineChild); err != nil {
-		_ = root.Remove(quarantineName)
+	q, err := openRetirementQuarantine(root, quarantineName)
+	if err != nil {
+		return false, err
+	}
+	defer q.close()
+	if err := retirementRenameChild(parentHandle, baseName, q.parent, baseName); err != nil {
+		_ = q.removeDirectory(root, parentHandle, quarantineName)
 		if os.IsNotExist(err) {
 			return absent()
 		}
@@ -1227,22 +1272,22 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		return true, err
 	}
 	restore := func() error {
-		if err := root.Link(quarantineChild, baseName); err != nil {
+		if err := retirementLinkChild(q.parent, baseName, parentHandle, baseName); err != nil {
 			return err
 		}
-		if err := root.Remove(quarantineChild); err != nil {
+		if err := q.root.Remove(baseName); err != nil {
 			return err
 		}
 		return durabilitycut.EmitNamespace(durabilitycut.NamespaceCreate, resource, parent, "", path)
 	}
-	quarantinedIdentity, validationErr := stableIdentityInRoot(root, quarantineChild)
+	quarantinedIdentity, validationErr := stableIdentityAtChild(q.parent, baseName)
 	if validationErr == nil && !rootpublication.SamePhysicalIdentity(identity, quarantinedIdentity) {
 		validationErr = fmt.Errorf("%w: quarantine no longer names captured identity", rootpublication.ErrResourceConflict)
 	}
 	if err := validationErr; err != nil {
 		restoreErr := restore()
 		if restoreErr == nil {
-			restoreErr = root.Remove(quarantineName)
+			restoreErr = q.removeDirectory(root, parentHandle, quarantineName)
 		}
 		return false, errors.Join(err, restoreErr)
 	}
@@ -1250,16 +1295,16 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 		if diagnostic != quarantinePath {
 			return fmt.Errorf("%w: stable removal target changed", rootpublication.ErrResourceConflict)
 		}
-		return root.Remove(quarantineChild)
+		return q.root.Remove(baseName)
 	})
 	if removeErr != nil && !os.IsNotExist(removeErr) {
 		if restoreErr := restore(); restoreErr != nil {
 			return false, fmt.Errorf("%w: stable delete failed (%v) and quarantine restore failed: %v", rootpublication.ErrResourceConflict, removeErr, restoreErr)
 		}
-		_ = root.Remove(quarantineName)
+		_ = q.removeDirectory(root, parentHandle, quarantineName)
 		return false, removeErr
 	}
-	cleanupErr := root.Remove(quarantineName)
+	cleanupErr := q.removeDirectory(root, parentHandle, quarantineName)
 	return true, cleanupErr
 }
 
