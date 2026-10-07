@@ -3,6 +3,7 @@
 package valuelog
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"unsafe"
@@ -144,4 +145,31 @@ func retirementRemoveDirectory(parent, expected *os.File, name string) error {
 	native := struct{ DeleteFile byte }{1}
 	return windows.SetFileInformationByHandle(windows.Handle(file.Fd()), windows.FileDispositionInfo,
 		(*byte)(unsafe.Pointer(&native)), uint32(unsafe.Sizeof(native)))
+}
+
+// retirementParentDeleted is only a cold absence proof for a denied child open.
+// FILE_STANDARD_INFO uses byte BOOLEAN fields; Directory and DeletePending must
+// both be true on the successfully queried exact borrowed parent handle.
+func retirementParentDeleted(parent *os.File, childErr error) (bool, error) {
+	if !errors.Is(childErr, windows.ERROR_ACCESS_DENIED) {
+		return false, nil
+	}
+	if parent == nil {
+		return false, os.ErrInvalid
+	}
+	info := struct {
+		AllocationSize int64
+		EndOfFile      int64
+		NumberOfLinks  uint32
+		DeletePending  byte
+		Directory      byte
+		_              [2]byte
+	}{}
+	err := windows.GetFileInformationByHandleEx(windows.Handle(parent.Fd()), windows.FileStandardInfo,
+		(*byte)(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info)))
+	runtime.KeepAlive(parent)
+	if err != nil {
+		return false, err
+	}
+	return info.Directory != 0 && info.DeletePending != 0, nil
 }
