@@ -290,16 +290,21 @@ func ownedLeafManifestDelta(m *leafGenerationManifest, oldChunks int) (*batch.Ba
 		return nil, err
 	}
 	delta := batch.New(nil, math.MaxInt)
-	if err := delta.Set(ownedLeafManifestHeaderKey, header); err != nil {
+	// The encoding owns fresh immutable bytes through synchronous publication.
+	// Borrow those bytes instead of copying small revisions into a 64 KiB arena.
+	if err := delta.SetView(ownedLeafManifestHeaderKey, header); err != nil {
+		_ = delta.Close()
 		return nil, err
 	}
 	for i, c := range chunks {
-		if err := delta.Set(ownedLeafManifestChunkKey(i), c); err != nil {
+		if err := delta.SetView(ownedLeafManifestChunkKey(i), c); err != nil {
+			_ = delta.Close()
 			return nil, err
 		}
 	}
 	for i := len(chunks); i < oldChunks; i++ {
 		if err := delta.Delete(ownedLeafManifestChunkKey(i)); err != nil {
+			_ = delta.Close()
 			return nil, err
 		}
 	}
@@ -507,6 +512,7 @@ func (db *DB) stageOwnedLeafManifestForCommit(idx *indexGen, root uint64, candid
 	if err != nil {
 		return 0, nil, nil, nil, err
 	}
+	defer delta.Close()
 	for _, entry := range delta.SortedEntries() {
 		publicationWork.EncodedBytes += uint64(len(entry.Value))
 	}
@@ -599,6 +605,7 @@ func stageRebuiltOwnedLeafManifest(p *pager.Pager, root uint64, m *leafGeneratio
 	if err != nil {
 		return 0, err
 	}
+	defer delta.Close()
 	z := zipper.New(p, freelist.New(p, 0))
 	z.SetOutputPageLimit(uint64(2 * (delta.Len() + 1) * ownedLeafManifestMaxDepth))
 	next, _, _, err := z.Apply(root, delta)
