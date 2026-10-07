@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from collect import host_gate, host_snapshot
 from prepare_config import draft
-from protocol import config, process_environment, sha, write, variant_paths, toolchain_inventory, validate_toolchain, build_toolchain
+from protocol import config, process_environment, sha, write, variant_paths, toolchain_inventory, validate_toolchain, build_toolchain, cpu_affinity
 
 def main():
     parser = argparse.ArgumentParser()
@@ -22,7 +22,7 @@ def main():
     value = json.loads(json.dumps(draft()))
     value.update(status="frozen-approved", coordinator_acceptance="configuration/storage smoke only")
     value["environment"].update(GOROOT="/synthetic/go", GOCACHE="/synthetic/cache", GOMODCACHE="/synthetic/gopath/pkg/mod", TMPDIR=str(out))
-    value["host"].update(node="synthetic", release="synthetic", cpu_count=4, max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(out), tmpdir_device=out.stat().st_dev)
+    value["host"].update(node="synthetic", release="synthetic", cpu_count=4, cpu_affinity=[0, 2, 4, 6], max_load1=1, max_load5=1, min_free_bytes=1, tmpdir=str(out), tmpdir_device=out.stat().st_dev)
     value["noise_policy"].update(max_spread_fraction=.3, material_regression_fraction=.05, minimum_effect_fraction=.1)
     value.update(go_binary="/synthetic/go/bin/go", go_binary_sha256="4" * 64,
                  go_version="synthetic Go version", toolchain_identity="5" * 64, external_input_identity="6" * 64)
@@ -61,6 +61,12 @@ def main():
             for label, replacement in (("true", True), ("string", "0.3"), ("null", None), ("list", [])):
                 refuse("noise-" + field + "-" + label,
                        lambda c, k=field, v=replacement: c["noise_policy"].update({k: v}), "predeclare noise/regression bounds")
+    for label, mask in (("missing", None), ("empty", []), ("narrow", [0, 2, 4]),
+                        ("duplicate", [0, 2, 4, 4]), ("unsorted", [2, 0, 4, 6]),
+                        ("negative", [-1, 0, 2, 4]), ("bool", [False, 2, 4, 6]),
+                        ("float", [0.0, 2, 4, 6]), ("string", "0,2,4,6")):
+        refuse("cpu-affinity-" + label, lambda c, v=mask: c["host"].update(cpu_affinity=v), "CPU affinity")
+    refuse("cpu-affinity-absent", lambda c: c["host"].pop("cpu_affinity"), "CPU affinity")
     refuse("fractional-cpu-count", lambda c: c["host"].update(cpu_count=4.5), "Linux host contract")
     refuse("float-cycles", lambda c: c.update(cycles=3.0), "requires three ABBA cycles")
     for label, replacement in (("boolean", True), ("float", 300.0), ("zero", 0), ("string", "300")):
@@ -299,6 +305,39 @@ def main():
         def damage_nowal(c, variant=variant_name):
             next(case for case in c["cases"] if case["profile"] == "no_wal_fast")["rules"][variant]["wal_appends_before"] = {"min": 0}
         refuse("nowal-absolute-" + variant_name, damage_nowal, "actual WAL boundary")
+    with patch("protocol.os.sched_getaffinity", return_value={6, 0, 4, 2}, create=True):
+        assert cpu_affinity() == [0, 2, 4, 6]
+    for replacement in (None,):
+        with patch("protocol.os.sched_getaffinity", replacement, create=True):
+            try:
+                cpu_affinity()
+            except ValueError as error:
+                assert "observation unavailable" in str(error)
+            else:
+                raise AssertionError("missing affinity observation accepted")
+    with patch("protocol.os.sched_getaffinity", side_effect=OSError("unavailable"), create=True):
+        try:
+            cpu_affinity()
+        except ValueError as error:
+            assert "observation unavailable" in str(error)
+        else:
+            raise AssertionError("failed affinity observation accepted")
+    host = {"uname": {key: value["host"][key] for key in ("system", "node", "machine", "release")},
+            "cpu_count": 4, "cpu_affinity": [0, 2, 4, 6], "load": [0, 0, 0],
+            "free_bytes": 1, "storage_path": str(out), "storage_device": out.stat().st_dev}
+    host_gate(host, value["host"])
+    for label, mask in (("missing", None), ("narrowed", [0, 2, 4]), ("same-size-mismatch", [0, 2, 4, 8])):
+        captured = dict(host, cpu_affinity=mask)
+        # A self-consistent rewritten host JSON/hash cannot authorize a different frozen mask.
+        write(out / ("rehashed-host-" + label + ".json"), captured)
+        captured = json.loads((out / ("rehashed-host-" + label + ".json")).read_text())
+        try:
+            host_gate(captured, value["host"])
+        except ValueError as error:
+            assert "CPU affinity" in str(error)
+            results.append({"label": "rehashed-host-" + label, "refused": str(error)})
+        else:
+            raise AssertionError(label + " affinity accepted")
     if args.protocol_only:
         write(out / "result.json", {"scope": "portable config/toolchain protocol refusals only; no Linux host or timing acceptance",
                                    "valid_cases": 54, "refusals": results, "script_sha256": sha(Path(__file__))})
@@ -310,7 +349,7 @@ def main():
     storage.mkdir(); source.mkdir()
     child_env = process_environment(value["environment"])
     real_snapshot = host_snapshot(out, "actual", storage, source, child_env)
-    policy = dict(real_snapshot["uname"], cpu_count=real_snapshot["cpu_count"], max_load1=1000000, max_load5=1000000,
+    policy = dict(real_snapshot["uname"], cpu_count=real_snapshot["cpu_count"], cpu_affinity=real_snapshot["cpu_affinity"], max_load1=1000000, max_load5=1000000,
                   min_free_bytes=100, tmpdir=str(storage), tmpdir_device=storage.stat().st_dev)
     host_gate(real_snapshot, dict(policy, min_free_bytes=1))
     from collections import namedtuple

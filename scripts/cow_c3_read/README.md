@@ -243,3 +243,11 @@ and exact matching compiler/provenance arguments. Both suites require the comple
 bind `harness_input_identity`. C4 freezes its complete `TreeDB/mvcc/cowsustained/`
 and shared `TreeDB/internal/cowbench/` inventories through its own protocol. The C3 phase work contract is unchanged between warmup and
 measurement; iteration counts remain separately fixed at 128 and 1024.
+
+The frozen Linux host includes `cpu_count` and `cpu_affinity`. The latter is the
+sorted actual `os.sched_getaffinity(0)` mask: at least four distinct nonnegative
+integer CPU IDs. Missing/unsupported affinity observation refuses admission.
+Coordinator freeze records this actual mask; every collector pre/post snapshot
+and both offline analyzers require its exact equality to the frozen mask, even
+when copied host records and receipts are rehashed consistently. A large system
+CPU count does not substitute for available CPUs. No CPU quota policy is inferred.

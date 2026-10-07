@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo, build_inputs, validate_build_command
+from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, cpu_affinity, validate_cpu_affinity
 from build import verify_git_receipt, objects
 
 def wait_child(child, timeout, grace=3.0):
@@ -40,7 +40,7 @@ def wait_child(child, timeout, grace=3.0):
         raise
 
 def host_snapshot(out, name, storage, source, env):
-    data = {"at": now(), "uname": platform.uname()._asdict(), "cpu_count": os.cpu_count(),
+    data = {"at": now(), "uname": platform.uname()._asdict(), "cpu_count": os.cpu_count(), "cpu_affinity": cpu_affinity(),
             "load": list(os.getloadavg()), "storage_path": str(storage),
             "storage_device": Path(storage).stat().st_dev,
             "free_bytes": shutil.disk_usage(storage).free,
@@ -59,6 +59,7 @@ def host_snapshot(out, name, storage, source, env):
 
 def host_gate(snapshot, policy):
     need(snapshot["uname"]["system"] == policy["system"] and snapshot["cpu_count"] == policy["cpu_count"], "host identity changed")
+    need(validate_cpu_affinity(snapshot.get("cpu_affinity")) == validate_cpu_affinity(policy.get("cpu_affinity")), "CPU affinity changed")
     for key in ("node", "machine", "release"):
         need(snapshot["uname"][key] == policy[key], "host " + key + " mismatch")
     need(snapshot["load"][0] <= policy["max_load1"] and snapshot["load"][1] <= policy["max_load5"], "host contention exceeds predeclared bound")
