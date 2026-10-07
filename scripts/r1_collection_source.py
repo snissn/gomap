@@ -43,12 +43,16 @@ def compiled_local_files(go=None):
     root = pathlib.Path(git('rev-parse', '--show-toplevel')).resolve()
     selected_go = go or os.environ.get('R1_GO', 'go')
     build_environment = json.loads(subprocess.check_output(
-        [selected_go, 'env', '-json', 'GOFLAGS', 'GOWORK'], text=True))
+        [selected_go, 'env', '-json', 'GOFLAGS', 'GOWORK', 'GOMOD', 'GO111MODULE'], text=True))
     if build_environment.get('GOWORK') not in ('', 'off'):
         raise ValueError('unbound active Go workspace')
     for flag in shlex.split(build_environment.get('GOFLAGS', '')):
         if flag.split('=', 1)[0] in ('-overlay', '-modfile'):
             raise ValueError('unbound Go build input substitution: ' + flag)
+    module_file = build_environment.get('GOMOD', '')
+    if (build_environment.get('GO111MODULE') == 'off' or not module_file
+            or pathlib.Path(module_file).resolve() != root / 'go.mod'):
+        raise ValueError('build is not in the checkout main module')
     raw = subprocess.check_output(
         [selected_go, 'list', '-deps', '-json',
          './cmd/collection_workload_bench'], text=True)
@@ -65,12 +69,20 @@ def compiled_local_files(go=None):
         directory = listed_directory.resolve()
         if listed_directory.is_relative_to(root) and not directory.is_relative_to(root):
             raise ValueError('local package escapes checkout: ' + str(listed_directory))
+        module = package.get('Module', {})
+        if module.get('Main') and pathlib.Path(module.get('Dir', '')).resolve() != root:
+            raise ValueError('main module directory differs from checkout')
+        if directory == root / 'cmd/collection_workload_bench':
+            if not module.get('Main') or pathlib.Path(module.get('Dir', '')).resolve() != root:
+                raise ValueError('benchmark command does not belong to the checkout main module')
         replacement = package.get('Module', {}).get('Replace', {})
         if replacement and not replacement.get('Version'):
             replacement_dir = pathlib.Path(replacement.get('Dir', directory)).resolve()
             if not replacement_dir.is_relative_to(root):
                 raise ValueError('unbound external local module replacement: ' + str(replacement_dir))
         if not directory.is_relative_to(root):
+            if not package.get('Standard') and not module.get('Version'):
+                raise ValueError('unbound external non-module package: ' + str(directory))
             continue
         for key in BUILD_FILE_FIELDS:
             for name in package.get(key, []):
