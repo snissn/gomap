@@ -14,7 +14,7 @@ import stat
 import subprocess
 import time
 
-from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest, build_command, module_command, harness_manifest
+from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest, build_command, module_command, harness_manifest, repository_inputs
 
 GIT_SOURCE_SCHEMA = "gomap-git-export-authority-v1"
 
@@ -289,6 +289,7 @@ def main():
         validate_no_cgo(before_packages)
         compiled_modules(before_packages, source)
         before, generated_before = selected_inputs(before_packages, source, controls)
+        repository_inputs(before, ident)
         write(out / "compiled-inputs-before.json", before)
         run("build", argv)
         packages = objects(run("compiled-dependencies", module_command(go, args.suite)))

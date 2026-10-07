@@ -48,6 +48,8 @@ def main():
     (repository / "fixture.go").write_text("synthetic protocol input\n")
     (exported / "fixture.go").write_text("synthetic protocol input\n")
     for tree in (repository, exported):
+        for name in ("go.mod", "go.sum", "fixture.s", "fixture.txt"):
+            (tree / name).write_text("synthetic selected repository input " + name + "\n")
         for name in C3_HARNESS_FILES:
             fixture = tree / name
             fixture.parent.mkdir(parents=True, exist_ok=True)
@@ -77,15 +79,19 @@ def main():
         write(original / (variant + "-source-before.json"), {"drift": []})
         write(original / (variant + "-build-source-after.json"), {"drift": []})
         required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
-        packages = [{"ImportPath": C3_PRODUCT, "Dir": declaration["source"], "GoFiles": ["fixture.go"], "Deps": ["synthetic/standard"]},
+        packages = [{"ImportPath": C3_PRODUCT, "Dir": declaration["source"], "GoFiles": ["fixture.go"],
+                     "SFiles": ["fixture.s"], "EmbedFiles": ["fixture.txt"], "Deps": ["synthetic/standard"]},
                     {"ImportPath": "synthetic/standard", "Standard": True, "Dir": "/synthetic/go/src/standard", "GoFiles": ["standard.go"]},
                     {"ImportPath": C3_PACKAGE, "Dir": declaration["source"] + "/TreeDB/mvcc/cowbench",
                      "GoFiles": [Path(name).name for name in C3_HARNESS_FILES if name.startswith("TreeDB/mvcc/cowbench/")]},
                     {"ImportPath": "github.com/snissn/gomap/TreeDB/internal/cowbench", "Dir": declaration["source"] + "/TreeDB/internal/cowbench", "GoFiles": ["admission.go"]}]
         selected, generated = selected_input_paths(packages, declaration["source"], config["environment"])
         closure = {key: {"path": value, "sha256": "7" * 64, "bytes": 1, "mode": 0o644} for key, value in selected.items()}
-        for name in C3_HARNESS_FILES:
-            closure["REPO/" + name].update(sha256=sha(exported / name), bytes=(exported / name).stat().st_size)
+        for key, item in closure.items():
+            if key.startswith("REPO/"):
+                source_file = exported / key[5:]
+                item.update(sha256=sha(source_file), bytes=source_file.stat().st_size,
+                            mode=0o755 if source_file.stat().st_mode & 0o111 else 0o644)
         external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in closure.items() if not key.startswith("REPO/")}
         config["external_input_identity"] = digest(external)
         retained, artifacts = {}, {}
@@ -226,7 +232,7 @@ def main():
             value["inventory"]["executables"][1]["sha256"] = "6" * 64
         write(path, value)
 
-    def damage_inputs(packet, kind):
+    def damage_inputs(packet, kind, repo_path=None):
         receipt = packet / "baseline-build-receipt.json"
         build = json.loads(receipt.read_text())
         artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
@@ -234,19 +240,46 @@ def main():
         for name in names:
             raw = packet / ("baseline-" + name + ".raw")
             value = json.loads(raw.read_text())
-            key = next(key for key in value if key.startswith("GOROOT/"))
+            key = "REPO/" + repo_path if repo_path else next(key for key in value if key.startswith("GOROOT/"))
             if kind == "missing":
                 del value[key]
             elif kind == "mode":
                 value[key]["mode"] = 0o600
+            elif kind == "size":
+                value[key]["bytes"] += 1
             else:
                 value[key]["sha256"] = "8" * 64
             write(raw, value)
             artifacts[name]["sha256"] = build["artifacts"][name]["sha256"] = sha(raw)
             build["compiled_inputs_before_sha256" if name == "compiled_inputs_before" else "compiled_input_closure_sha256"] = sha(raw)
-        if kind in ("mode", "bytes"):
+        if repo_path is None and kind in ("mode", "bytes"):
             external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in value.items() if not key.startswith("REPO/")}
             build["external_input_identity"] = digest(external)
+        write(packet / "baseline-build-artifacts.json", artifacts)
+        write(receipt, build)
+        rebind_receipt(packet, receipt)
+
+    def damage_unmanifested_input(packet):
+        # Add a selected product input to both closures and the package record,
+        # then rebind all artifact/receipt/config/completion hashes. It remains
+        # absent from the unchanged Git-authoritative source manifest.
+        receipt = packet / "baseline-build-receipt.json"
+        build = json.loads(receipt.read_text())
+        artifacts = json.loads((packet / "baseline-build-artifacts.json").read_text())
+        for name in ("compiled_inputs_before", "compiled_input_closure", "compiled_dependencies"):
+            raw = packet / ("baseline-" + name + ".raw")
+            if name == "compiled_dependencies":
+                records = [json.loads(line) for line in raw.read_text().splitlines()]
+                records[0]["GoFiles"].append("unmanifested.go")
+                raw.write_text("\n".join(json.dumps(item) for item in records) + "\n")
+            else:
+                value = json.loads(raw.read_text())
+                item = value["REPO/fixture.go"]
+                value["REPO/unmanifested.go"] = dict(item, path="/synthetic/baseline/unmanifested.go")
+                write(raw, value)
+                field = "compiled_inputs_before_sha256" if name == "compiled_inputs_before" else "compiled_input_closure_sha256"
+                build[field] = sha(raw)
+            artifacts[name]["sha256"] = build["artifacts"][name]["sha256"] = sha(raw)
         write(packet / "baseline-build-artifacts.json", artifacts)
         write(receipt, build)
         rebind_receipt(packet, receipt)
@@ -309,6 +342,14 @@ def main():
         ("changed-live-go-env", lambda p: damage_live_toolchain(p, "go-env"), "Go toolchain inventory mismatch"),
         ("changed-live-compiler", lambda p: damage_live_toolchain(p, "compiler"), "Go toolchain inventory mismatch"),
     ]
+    for path in ("fixture.go", "fixture.s", "fixture.txt", "go.mod", "go.sum"):
+        for kind in ("bytes", "size", "mode", "missing"):
+            cases.append(("rehashed-repository-" + path + "-" + kind,
+                          lambda p, k=kind, name=path: damage_inputs(p, k, name),
+                          "selected persistent input closure mismatch" if kind == "missing"
+                          else "repository compiler input differs from Git source authority: " + path))
+    cases.append(("rehashed-unmanifested-repository-input", damage_unmanifested_input,
+                  "repository compiler input missing from Git source authority: unmanifested.go"))
     for variant in ("baseline", "candidate"):
         for label, missing in (("missing", True), ("unbound", False)):
             cases.append((variant + "-module-identity-" + label,

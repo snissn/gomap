@@ -156,7 +156,12 @@ syso, embed and selected external module-metadata bytes and permission modes.
 The builder derives this finite closure with `go list -compiled -deps -test`
 before compilation and observes it again afterward, refusing drift or disappearance.
 Its 12 artifact bindings include `compiled_inputs_before` and the existing
-post-build `compiled_input_closure`. Repository inputs retain full Git authority;
+post-build `compiled_input_closure`. Every selected repository input, including
+product Go/assembly/embed files and root go.mod/go.sum, must match its own
+Git-authoritative manifest SHA256, byte size and exact Git-derived mode (0644
+or 0755). Missing or duplicate authority paths refuse. The shared check runs
+before compilation, after compilation, at collection and during offline analysis
+for both C3 and C4. Repository inputs retain full Git authority;
 GOROOT and effective external-module inputs use relative normalized identities,
 so repository product changes and source/cache relocation remain admissible.
 Freeze the actual `external_input_identity` in configuration. Both builds,
