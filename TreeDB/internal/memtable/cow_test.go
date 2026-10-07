@@ -39,6 +39,20 @@ func cowTestPublish(t testing.TB, w *COWWriter, entries []COWMutation) *COWRoot 
 }
 func cowTestRelease(r *COWRoot) { d := r.Release(); d.Drain() }
 func cowTestClose(w *COWWriter) { d := w.Close(); d.Drain() }
+
+func cowTestIsolateAllocationWitness(t testing.TB) {
+	t.Helper()
+	// TotalAlloc is process-wide. Like testing.AllocsPerRun, keep these short,
+	// uncontended byte-budget brackets on one P and prevent automatic GC from
+	// entering them. Each witness completes explicit GC before its bracket.
+	previousProcs := runtime.GOMAXPROCS(1)
+	previousGC := debug.SetGCPercent(-1)
+	t.Cleanup(func() {
+		debug.SetGCPercent(previousGC)
+		runtime.GOMAXPROCS(previousProcs)
+	})
+}
+
 func cowTestEntries(n int) []COWMutation {
 	e := make([]COWMutation, n)
 	for i := range e {
@@ -433,6 +447,7 @@ func TestCOWDependencyLayoutContract(t *testing.T) {
 }
 
 func TestCOWDependencyReserveWitness(t *testing.T) {
+	cowTestIsolateAllocationWitness(t)
 	for _, n := range []int{1, 31, 63, 64, 1024, 2046, 2047, 4096} {
 		for _, kind := range []string{"insert", "replace", "delete"} {
 			t.Run(fmt.Sprintf("%d/%s", n, kind), func(t *testing.T) {
@@ -473,6 +488,7 @@ func TestCOWDependencyReserveWitness(t *testing.T) {
 }
 
 func TestCOWBatchReserveWitness(t *testing.T) {
+	cowTestIsolateAllocationWitness(t)
 	for _, kind := range []string{"insert", "replace", "delete", "mixed"} {
 		for _, n := range []int{63, 1024, 4096} {
 			t.Run(fmt.Sprintf("%s/%d", kind, n), func(t *testing.T) {
@@ -542,6 +558,7 @@ func TestCOWMixedDeletionDoesNotUseDeleteOnlyBound(t *testing.T) {
 }
 
 func TestCOWRebalanceCapacityHistoryWitness(t *testing.T) {
+	cowTestIsolateAllocationWitness(t)
 	l := DefaultCOWLimits()
 	l.MaxGenerationBytes = 256 << 20
 	l.MaxInFlightBytes = 256 << 20
@@ -558,6 +575,7 @@ func TestCOWRebalanceCapacityHistoryWitness(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		runtime.GC()
 		var a, z runtime.MemStats
 		runtime.ReadMemStats(&a)
 		p, e := w.Prepare(entries, COWPrepareOptions{})
@@ -703,6 +721,7 @@ func TestCOWBudgetCloseKeepsExistingViews(t *testing.T) {
 }
 
 func TestCOWPointerAllocationCharge(t *testing.T) {
+	cowTestIsolateAllocationWitness(t)
 	for _, count := range []int{64, 128, 256, 512, 1024, 4096} {
 		runtime.GC()
 		var before, after runtime.MemStats
@@ -915,13 +934,7 @@ func TestCOWFreezeCloseRace(t *testing.T) {
 }
 
 func TestCOWCursorGeometricStackWitness(t *testing.T) {
-	// TotalAlloc is process-wide. Like testing.AllocsPerRun, isolate these
-	// short, uncontended allocation brackets to one P. Complete explicit GC
-	// before each bracket and prevent automatic GC from entering it.
-	previousProcs := runtime.GOMAXPROCS(1)
-	defer runtime.GOMAXPROCS(previousProcs)
-	previousGC := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(previousGC)
+	cowTestIsolateAllocationWitness(t)
 	for _, count := range []int{64, 256, 1024, 4096} {
 		b, w := cowTestWriter(t, DefaultCOWLimits())
 		// Only this immutable iterator fixture uses degree2 to reach heights
@@ -1110,6 +1123,7 @@ func TestCOWDeferredCleanupRemainsChargedAndCopiesDrainOnce(t *testing.T) {
 // Large inputs exceed the runtime's small conversion buffer and expose safe-
 // build copies that short literal keys can hide through compiler elision.
 func TestCOWLargeKeyAdmissionAndReadAllocations(t *testing.T) {
+	cowTestIsolateAllocationWitness(t)
 	b, w := cowTestWriter(t, DefaultCOWLimits())
 	key := make([]byte, 1<<20)
 	for i := range key {
@@ -1185,6 +1199,7 @@ func TestCOWLargeKeyAdmissionAndReadAllocations(t *testing.T) {
 		t.Errorf("large-key cursor Seek allocated %g", a)
 	}
 	// After admission, replacement reuses the existing owned large key.
+	runtime.GC()
 	var beforeAlloc, afterAlloc runtime.MemStats
 	runtime.ReadMemStats(&beforeAlloc)
 	p, e := w.Prepare(entries, COWPrepareOptions{})
