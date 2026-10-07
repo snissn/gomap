@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 from prepare_config import draft
-from protocol import C3_FIXTURE, identity, process_environment, sha, write, validate_toolchain, selected_input_paths, digest, build_command, module_command
+from protocol import C3_FIXTURE, C3_HARNESS_FILES, C3_PACKAGE, C3_PRODUCT, identity, process_environment, sha, write, validate_toolchain, selected_input_paths, digest, build_command, module_command
 from build import git_source_authority
 
 def main():
@@ -48,15 +48,17 @@ def main():
     (repository / "fixture.go").write_text("synthetic protocol input\n")
     (exported / "fixture.go").write_text("synthetic protocol input\n")
     for tree in (repository, exported):
-        fixture = tree / C3_FIXTURE
-        fixture.parent.mkdir(parents=True)
-        fixture.write_text("synthetic canonical workload input\n")
+        for name in C3_HARNESS_FILES:
+            fixture = tree / name
+            fixture.parent.mkdir(parents=True, exist_ok=True)
+            fixture.write_text("synthetic canonical workload input " + name + "\n")
         target = tree / "scripts" / "cow_c3_read"
         target.mkdir(parents=True)
         for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
             shutil.copyfile(scripts / name, target / name)
     git("add", "."); git("commit", "-qm", "Protocol refusal input")
-    config["fixtures"][0]["sha256"] = sha(exported / C3_FIXTURE)
+    for fixture in config["fixtures"]:
+        fixture["sha256"] = sha(exported / fixture["path"])
     for index, variant in enumerate(("baseline", "candidate"), 1):
         if variant == "candidate":
             for source in (repository, exported):
@@ -75,10 +77,15 @@ def main():
         write(original / (variant + "-source-before.json"), {"drift": []})
         write(original / (variant + "-build-source-after.json"), {"drift": []})
         required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
-        packages = [{"ImportPath": "synthetic/no-cgo", "Dir": declaration["source"], "GoFiles": ["fixture.go"]},
-                    {"ImportPath": "synthetic/standard", "Standard": True, "Dir": "/synthetic/go/src/standard", "GoFiles": ["standard.go"]}]
+        packages = [{"ImportPath": C3_PRODUCT, "Dir": declaration["source"], "GoFiles": ["fixture.go"], "Deps": ["synthetic/standard"]},
+                    {"ImportPath": "synthetic/standard", "Standard": True, "Dir": "/synthetic/go/src/standard", "GoFiles": ["standard.go"]},
+                    {"ImportPath": C3_PACKAGE, "Dir": declaration["source"] + "/TreeDB/mvcc/cowbench",
+                     "GoFiles": [Path(name).name for name in C3_HARNESS_FILES if name.startswith("TreeDB/mvcc/cowbench/")]},
+                    {"ImportPath": "github.com/snissn/gomap/TreeDB/internal/cowbench", "Dir": declaration["source"] + "/TreeDB/internal/cowbench", "GoFiles": ["admission.go"]}]
         selected, generated = selected_input_paths(packages, declaration["source"], config["environment"])
         closure = {key: {"path": value, "sha256": "7" * 64, "bytes": 1, "mode": 0o644} for key, value in selected.items()}
+        for name in C3_HARNESS_FILES:
+            closure["REPO/" + name].update(sha256=sha(exported / name), bytes=(exported / name).stat().st_size)
         external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in closure.items() if not key.startswith("REPO/")}
         config["external_input_identity"] = digest(external)
         retained, artifacts = {}, {}
@@ -106,10 +113,10 @@ def main():
         write(receipt, {"binary_sha256": declaration["binary_sha256"], "source_tree_sha256": declaration["source_tree_sha256"],
                         "environment": config["environment"], "effective_process_environment": process_environment(config["environment"]),
                         "go_version": config["go_version"], "go_binary_sha256": config["go_binary_sha256"], "toolchain_identity": config["toolchain_identity"],
-                        "race": False, "build_tags": [], "artifacts": artifacts,
+                        "suite": "c3", "race": False, "build_tags": [], "artifacts": artifacts,
                         "exit_code": 0, "command": build_command(config["go_binary"], declaration["binary"]),
                         "module_producer_command": module_command(config["go_binary"]),
-                        "external_input_identity": config["external_input_identity"],
+                        "harness_input_identity": digest(config["fixtures"]), "external_input_identity": config["external_input_identity"],
                         **{field: artifacts[name]["sha256"] for field, name in (("compiled_inputs_before_sha256", "compiled_inputs_before"),
                         ("compiled_input_closure_sha256", "compiled_input_closure"), ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs"))}})
         declaration.update(build_receipt="/synthetic/" + variant + "-build/build-receipt.json", build_receipt_sha256=sha(receipt))

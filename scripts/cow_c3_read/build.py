@@ -14,7 +14,7 @@ import stat
 import subprocess
 import time
 
-from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest, build_command, module_command
+from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest, build_command, module_command, harness_manifest
 
 GIT_SOURCE_SCHEMA = "gomap-git-export-authority-v1"
 
@@ -249,6 +249,7 @@ def main():
     parser.add_argument("--git-repository", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--controls", type=Path, required=True)
+    parser.add_argument("--suite", choices=("c3", "c4"), default="c3")
     args = parser.parse_args()
     need(not args.source.is_symlink(), "source must be a real exported directory")
     source, out = args.source.resolve(), args.out.resolve()
@@ -282,15 +283,15 @@ def main():
         version = run("go-version", [str(go), "version"]).strip()
         go_env = json.loads(run("go-env", [str(go), "env", "-json"]))
         validate_go_environment(go_env, env)
-        binary = out / "mvcc-normal.test"
-        argv = build_command(go, binary)
-        before_packages = objects(run("compiled-dependencies-before", module_command(go)))
+        binary = out / ("cowbench-normal.test" if args.suite == "c3" else "cowsustained-normal.test")
+        argv = build_command(go, binary, args.suite)
+        before_packages = objects(run("compiled-dependencies-before", module_command(go, args.suite)))
         validate_no_cgo(before_packages)
         compiled_modules(before_packages, source)
         before, generated_before = selected_inputs(before_packages, source, controls)
         write(out / "compiled-inputs-before.json", before)
         run("build", argv)
-        packages = objects(run("compiled-dependencies", module_command(go)))
+        packages = objects(run("compiled-dependencies", module_command(go, args.suite)))
         validate_no_cgo(packages)
         modules = compiled_modules(packages, source)
         write(out / "module-graph.stdout", modules)
@@ -301,6 +302,7 @@ def main():
                     for key, value in closure.items() if not key.startswith("REPO/")}
         write(out / "compiled-input-closure.json", closure)
         write(out / "generated-nonpersistent-inputs.json", generated_missing)
+        harness = harness_manifest(packages, closure, ident, str(source), controls, args.suite)
         run("binary-buildinfo", [str(go), "version", "-m", str(binary)])
         need(toolchain_inventory(controls["GOROOT"]) == toolchain, "Go toolchain drift during build")
         write(out / "toolchain.json", toolchain)
@@ -322,11 +324,11 @@ def main():
         verify_git_receipt(source, manifest, git_receipt)
         write(out / "build-receipt.json", {"binary_sha256": sha(binary), "source_tree_sha256": ident["tree_sha256"],
             "environment": controls, "effective_process_environment": env,
-            "race": False, "build_tags": [], "go_version": version, "go_binary_sha256": toolchain["go_binary_sha256"],
+            "suite": args.suite, "race": False, "build_tags": [], "go_version": version, "go_binary_sha256": toolchain["go_binary_sha256"],
             "toolchain_identity": validate_toolchain(toolchain),
             "command": argv, "exit_code": 0, "module_scope": "actual compiled package/test dependency Module records; all declared go.mod/go.sum retained separately",
             "module_producer_command": next(item["command"] for item in commands if item["name"] == "compiled-dependencies"), "effective_module_identity": sha(out / "effective-module-graph.json"),
-            "external_input_identity": digest(external), "compiled_inputs_before_sha256": sha(out / "compiled-inputs-before.json"),
+            "harness_input_identity": digest(harness), "external_input_identity": digest(external), "compiled_inputs_before_sha256": sha(out / "compiled-inputs-before.json"),
             "artifacts": artifacts, "compiled_input_closure_sha256": sha(out / "compiled-input-closure.json"),
             "generated_nonpersistent_inputs_sha256": sha(out / "generated-nonpersistent-inputs.json")})
         print(json.dumps({"binary": str(binary), "sha256": sha(binary), "source_tree_sha256": ident["tree_sha256"]}), flush=True)

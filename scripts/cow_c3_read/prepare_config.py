@@ -2,7 +2,7 @@
 import argparse
 import itertools
 from pathlib import Path
-from protocol import SCHEMA, write, workload_contract, workload_metrics, metric_contract, ACK_CONTRACT, TIMED_SCOPE
+from protocol import SCHEMA, write, workload_contract, workload_metrics, metric_contract, ACK_CONTRACT, TIMED_SCOPE, C3_PACKAGE, C3_HARNESS_FILES, C3_ITERATIONS, C3_WARMUP_ITERATIONS
 
 def draft():
     cases = []
@@ -17,7 +17,7 @@ def draft():
         cases.append({"id": "-".join((profile, mode, shape, leaf)), "profile": profile,
             "layout": layout, "workload": workload, "mode": mode,
             "benchmark": "/".join(("BenchmarkC3PublicReadAdmission", profile, mode, shape, leaf)),
-            "package": "github.com/snissn/gomap/TreeDB/mvcc", "iterations": 1024, "warmup_iterations": 128,
+            "package": C3_PACKAGE, "iterations": C3_ITERATIONS, "warmup_iterations": C3_WARMUP_ITERATIONS,
             "latency_groups": latency, "rules": {"baseline": rules, "candidate": rules},
             "comparable_metrics": ["point_calls/op", "scan_calls/op", "visited/op", "output/op", "wal_appends/op", "wal_syncs/op"],
             "comparison_metrics": comparisons,
@@ -37,7 +37,7 @@ def draft():
         "noise_policy": {"max_spread_fraction": None, "material_regression_fraction": None,
             "minimum_effect_fraction": None, "exclusions": "none; retain and stop on contamination"},
         "comparison_metrics": ["ns/op", "B/op", "allocs/op", "writer_ops/s", "reader_ops/s"],
-        "fixtures": [{"path": "TreeDB/mvcc/cow_c3_public_bench_test.go", "sha256": None}],
+        "fixtures": [{"path": path, "sha256": None, "mode": 0o644} for path in sorted(C3_HARNESS_FILES)],
         "variants": variants, "cases": cases}
 
 if __name__ == "__main__":

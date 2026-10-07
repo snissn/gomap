@@ -2,7 +2,7 @@
 
 The fixed-history public Store benchmark and retained evidence validators are
 documented in [scripts/cow_c3_read](../../../scripts/cow_c3_read/README.md).
-Run the 54-leaf 1x correctness/schema smoke before freezing expensive matched
+Run the 54-leaf 128x correctness/schema smoke before freezing expensive matched
 collection. This tooling is instrumentation only; no measured improvement,
 bounded pruning, C4 or parent completion follows from landing it.
 
@@ -23,3 +23,10 @@ dimensions. Freeze an owned absolute TMPDIR and filesystem device for actual
 benchmark databases; admission checks that filesystem's free space separately
 from the source filesystem. The retained Git object proof supports offline
 inventory verification; verifying source bytes still requires the frozen export.
+
+The standalone target is `./TreeDB/mvcc/cowbench`, importing ordinary exported
+MVCC APIs. Its complete selected harness closure includes all dedicated package
+files, shared admission helpers and TestMain, with bytes and Git modes frozen
+identically across products. Ordinary MVCC product sources and regression tests
+may differ; those changes cannot alter the frozen benchmark harness. Matched
+configuration refuses counts other than 128 warmup and 1024 measured iterations.

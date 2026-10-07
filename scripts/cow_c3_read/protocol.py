@@ -15,7 +15,21 @@ MODES = {"append_only", "btree", "cow_btree"}
 LAYOUTS = {"inline", "pointer"}
 WORKLOADS = {"point", "group_all_versions", "concurrent"}
 CONTROLS = {"GOROOT", "GOCACHE", "GOMODCACHE", "GOWORK", "GOMAXPROCS", "GOGC", "GOMEMLIMIT", "GOFLAGS", "TMPDIR"}
-C3_FIXTURE = "TreeDB/mvcc/cow_c3_public_bench_test.go"
+C3_PACKAGE = "github.com/snissn/gomap/TreeDB/mvcc/cowbench"
+C3_PRODUCT = "github.com/snissn/gomap/TreeDB/mvcc"
+C3_HARNESS_ROOTS = ("TreeDB/mvcc/cowbench/", "TreeDB/internal/cowbench/")
+C3_FIXTURE = "TreeDB/mvcc/cowbench/cow_c3_public_bench_test.go"
+C3_HARNESS_FILES = (C3_FIXTURE, "TreeDB/mvcc/cowbench/cow_public_admission_test.go",
+                    "TreeDB/mvcc/cowbench/leak_test.go", "TreeDB/internal/cowbench/admission.go")
+C4_PACKAGE = "github.com/snissn/gomap/TreeDB/mvcc/cowsustained"
+HARNESS_PACKAGES = {"c3": C3_PACKAGE, "c4": C4_PACKAGE}
+HARNESS_ROOTS = {"c3": C3_HARNESS_ROOTS,
+                 "c4": ("TreeDB/mvcc/cowsustained/", "TreeDB/internal/cowbench/")}
+HARNESS_FILES = {"c3": C3_HARNESS_FILES,
+                 "c4": ("TreeDB/mvcc/cowsustained/cow_c4_public_bench_test.go",
+                        "TreeDB/mvcc/cowsustained/cow_c4_public_fixture_test.go",
+                        "TreeDB/mvcc/cowsustained/leak_test.go", "TreeDB/internal/cowbench/admission.go")}
+C3_ITERATIONS, C3_WARMUP_ITERATIONS = 1024, 128
 
 def variant_paths(variant, *, live=False):
     """Keep declared custody paths verbatim; offline packets need no live paths."""
@@ -45,6 +59,48 @@ def fixture_manifest(fixtures, ident):
     for fixture in fixtures:
         need(files.get(fixture["path"]) == fixture["sha256"],
              "fixture differs from frozen source: " + fixture["path"])
+
+def validate_harness_fixtures(fixtures, suite="c3"):
+    need(suite in HARNESS_ROOTS, "unknown ordinary build suite")
+    message = "canonical " + suite.upper() + " fixture required"
+    need(type(fixtures) is list and fixtures, message)
+    paths = []
+    for item in fixtures:
+        need(type(item) is dict and set(item) == {"path", "sha256", "mode"}
+             and type(item["path"]) is str
+             and any(item["path"].startswith(root) for root in HARNESS_ROOTS[suite])
+             and ".." not in Path(item["path"]).parts
+             and str(Path(item["path"])) == item["path"]
+             and type(item["sha256"]) is str and re.fullmatch(r"[0-9a-f]{64}", item["sha256"])
+             and type(item["mode"]) is int and item["mode"] in (0o644, 0o755),
+             message)
+        paths.append(item["path"])
+    need(paths == sorted(set(paths)) and set(HARNESS_FILES[suite]) <= set(paths), message)
+
+def harness_manifest(packages, closure, ident, source, environment, suite="c3"):
+    """Bind all standalone harness inputs while allowing ordinary product deltas."""
+    need(suite in HARNESS_ROOTS, "unknown ordinary build suite")
+    roots = [p for p in packages if p.get("ImportPath") == C3_PRODUCT and not p.get("ForTest")]
+    need(len(roots) == 1 and type(roots[0].get("Deps")) is list, "ordinary product dependency closure missing")
+    products = set(roots[0]["Deps"]) | {C3_PRODUCT}
+    product_packages = [p for p in packages if p.get("ImportPath") in products and not p.get("ForTest")]
+    need({p["ImportPath"] for p in product_packages} == products, "incomplete ordinary product dependency closure")
+    product_paths, _ = selected_input_paths(product_packages, source, environment)
+    repo = {key[5:] for key in set(closure) - set(product_paths) if key.startswith("REPO/")}
+    need(repo and all(any(path.startswith(root) for root in HARNESS_ROOTS[suite]) for path in repo),
+         "undeclared repository test harness input")
+    files = {f["path"]: f for f in ident["files"]}
+    inventory = {path for path in files if any(path.startswith(root) for root in HARNESS_ROOTS[suite])}
+    need(repo == inventory, "complete " + suite.upper() + " harness source/selected-input closure mismatch")
+    result = []
+    for path in sorted(inventory):
+        item = closure["REPO/" + path]
+        need(item["sha256"] == files[path]["sha256"] and item["mode"] in (0o644, 0o755)
+             and ("100755" if item["mode"] & 0o111 else "100644") == files[path]["git_mode"],
+             "harness input differs from Git source authority")
+        result.append({"path": path, "sha256": item["sha256"], "mode": item["mode"]})
+    validate_harness_fixtures(result, suite)
+    return result
 
 def matched_products(variants):
     """C3 compares two products; candidate-only construction has no such rule."""
@@ -210,7 +266,7 @@ def selected_inputs(packages, source, environment):
                        "mode": stat.S_IMODE(path.stat().st_mode)}
     return result, generated
 
-def build_inputs(build, frozen, packages, before, after, generated, source):
+def build_inputs(build, frozen, packages, before, after, generated, source, ident=None):
     """Validate retained actual inputs offline, without reading original host paths."""
     paths, expected_generated = selected_input_paths(packages, source, build["environment"])
     need(set(before) == set(after) == set(paths), "selected persistent input closure mismatch")
@@ -230,6 +286,15 @@ def build_inputs(build, frozen, packages, before, after, generated, source):
                             ("compiled_input_closure_sha256", "compiled_input_closure"),
                             ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs")):
         need(build[field] == build["artifacts"][artifact]["sha256"], "unbound selected compiler input artifact")
+    package = frozen.get("cases", [{}])[0].get("package")
+    suites = {name: suite for suite, name in HARNESS_PACKAGES.items()}
+    if package in suites:
+        suite = suites[package]
+        need(ident is not None, suite.upper() + " harness source authority missing")
+        need(build.get("suite") == suite, "build/harness suite mismatch")
+        harness = harness_manifest(packages, after, ident, source, build["environment"], suite)
+        need(harness == frozen["fixtures"] and build.get("harness_input_identity") == digest(harness),
+             "complete frozen " + suite.upper() + " harness mismatch")
     return external
 
 def case_names(case):
@@ -261,16 +326,20 @@ def validate_go_environment(observed, env):
         need(observed[key] == expected, "actual go env mismatch " + key)
     need(observed["GOOS"] == "linux" and observed["GOARCH"] == "amd64", "actual build platform mismatch")
 
-def build_command(go, binary):
-    return [str(go), "test", "-c", "-o", str(binary), "./TreeDB/mvcc"]
+def build_target(suite="c3"):
+    need(suite in ("c3", "c4"), "unknown ordinary build suite")
+    return "./" + HARNESS_PACKAGES[suite].removeprefix("github.com/snissn/gomap/")
 
-def module_command(go):
-    return [str(go), "list", "-compiled", "-deps", "-test", "-json", "./TreeDB/mvcc"]
+def build_command(go, binary, suite="c3"):
+    return [str(go), "test", "-c", "-o", str(binary), build_target(suite)]
 
-def validate_build_command(build, go, binary):
+def module_command(go, suite="c3"):
+    return [str(go), "list", "-compiled", "-deps", "-test", "-json", build_target(suite)]
+
+def validate_build_command(build, go, binary, suite="c3"):
     need(type(build.get("exit_code")) is int and build["exit_code"] == 0
-         and build.get("command") == build_command(go, binary), "actual ordinary build invocation mismatch")
-    need(build.get("module_producer_command") == module_command(go), "actual module producer invocation mismatch")
+         and build.get("suite") == suite and build.get("command") == build_command(go, binary, suite), "actual ordinary build invocation mismatch")
+    need(build.get("module_producer_command") == module_command(go, suite), "actual module producer invocation mismatch")
 
 ACK_CONTRACT = "CommitRelaxed; durable WAL append/sync=1/1, relaxed=1/0, NoWAL=0/0; exact profile counts required"
 TIMED_SCOPE = "actual calls, owned point output, borrowed complete EntryView scan, validation, clocks; seed/physical layout probes/stats/Close excluded"
@@ -285,6 +354,10 @@ def workload_contract(workload):
             "concurrency": workload == "concurrent", "clock_calls_retained": True,
             "read_overlap_is_internal_preparation_proof": False, "physical_layout_records": 4,
             "layout_probes_outside_counter_boundaries": True}
+
+def work_contract(case, phase):
+    need(phase in ("warmup", "measured"), "unknown workload phase")
+    return case["workload_contract"]
 
 def workload_metrics(workload):
     contract = workload_contract(workload)
@@ -402,11 +475,7 @@ def config(path):
         need(math.isfinite(noise[key]) and 0 < noise[key] < 1, "predeclare noise/regression bounds")
     need(noise["exclusions"] == "none; retain and stop on contamination", "no post-hoc exclusions")
     need(c["fixtures"] and c["comparison_metrics"] and c["cases"], "missing frozen fixture/metric/cases")
-    need(isinstance(c["fixtures"], list) and len(c["fixtures"]) == 1
-         and set(c["fixtures"][0]) == {"path", "sha256"}
-         and c["fixtures"][0]["path"] == C3_FIXTURE
-         and isinstance(c["fixtures"][0]["sha256"], str)
-         and re.fullmatch(r"[0-9a-f]{64}", c["fixtures"][0]["sha256"]), "canonical C3 fixture required")
+    validate_harness_fixtures(c["fixtures"])
     need(set(c["variants"]) == {"baseline", "candidate"}, "two exact variants required")
     for variant in c["variants"].values():
         variant_git_ids(variant)
@@ -425,9 +494,9 @@ def config(path):
         need(re.fullmatch(r"[A-Za-z0-9_.-]+", x["id"]), "unsafe case id")
         expected_id, expected_benchmark = case_names(x)
         need(x["id"] == expected_id and x["benchmark"] == expected_benchmark, "benchmark/id does not match case dimensions")
-        need(x["package"] == "github.com/snissn/gomap/TreeDB/mvcc", "unexpected benchmark package")
-        need(type(x["iterations"]) is int and x["iterations"] > 0, "fixed iterations required")
-        need(type(x["warmup_iterations"]) is int and x["warmup_iterations"] > 0, "separate warmup required")
+        need(x["package"] == C3_PACKAGE, "unexpected benchmark package")
+        need(type(x["iterations"]) is int and x["iterations"] == C3_ITERATIONS, "canonical measured iterations required")
+        need(type(x["warmup_iterations"]) is int and x["warmup_iterations"] == C3_WARMUP_ITERATIONS, "canonical warmup iterations required")
         need(x["workload_contract"] and x["comparable_metrics"] and x["timed_scope"] and x["ack_contract"], "missing work/ACK comparability")
         need(set(x["rules"]) == {"baseline", "candidate"}, "variant metric rules missing")
         need({"wal_appends/op", "wal_syncs/op"} <= set(x["comparable_metrics"]), "WAL comparability missing")

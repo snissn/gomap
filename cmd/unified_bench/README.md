@@ -1568,7 +1568,7 @@ JSON/log packets are not benchprof inputs.
 
 ### Standalone external MVCC COW read admission fixture
 
-`BenchmarkC3PublicReadAdmission` in `TreeDB/mvcc` measures bounded public
+`BenchmarkC3PublicReadAdmission` in `TreeDB/mvcc/cowbench` measures bounded public
 CommitAt+GetAt, CommitGroupAt+actual exact-key all-version iteration, and ordinary
 concurrent Store calls across three profiles and inline/forced-pointer values.
 Use a fresh process per leaf with fixed `-benchtime=128x` for smoke or `1024x` for
@@ -1579,10 +1579,15 @@ are fixed. Reproduction and allocation ownership are documented in
 These Go package benchmark logs/profiles are not benchprof inputs.
 
 ```sh
-GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
   -bench '^BenchmarkC3PublicReadAdmission/command_wal_relaxed/cow_btree/inline/point$' \
   -benchtime=1024x -count=1 -benchmem
 ```
 
 The C3-read capability and allocation audit are documented in
 [the production source guide](../../TreeDB/docs/benchmarks/cow-c3-read-5076/README.md).
+
+The dedicated test package imports the ordinary MVCC product. Frozen fixtures
+bind every selected harness file and helper, including TestMain and file modes;
+product regression tests are outside that harness closure. Canonical matched
+counts remain 128 warmup and 1024 measured iterations per fresh process.

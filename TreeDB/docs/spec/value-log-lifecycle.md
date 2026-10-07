@@ -135,8 +135,10 @@ an owned retry is pending; refresh neither inspects that closed handle nor
 reopens the segment. Current snapshots continue to exclude the zombie, while
 new live segments are still discovered. A conflicting path for the same file
 ID remains an error. Identity-gated managers also validate the current pathname
-against the captured retired identity before skipping it. A replacement inode
-is a resource conflict; a disappeared pathname is a benign deletion race. This
+against the captured retired identity independently of live-segment discovery,
+including entries that discovery filters out, such as directories. A replacement
+regular-file inode is a resource conflict; non-regular entries are refused, and a
+disappeared pathname is a benign deletion race. This
 check opens a no-follow child of an exact parent handle and requires a regular
 file. The Unix child open is nonblocking, so a replacement FIFO cannot stall
 refresh or reclamation while the manager lock is held. Links are refused,

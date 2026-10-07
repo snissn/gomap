@@ -1,9 +1,11 @@
-package mvcc
+package cowbench
 
 import (
 	"bytes"
 	"errors"
 	"fmt"
+	cowhelpers "github.com/snissn/gomap/TreeDB/internal/cowbench"
+	mvcc "github.com/snissn/gomap/TreeDB/mvcc"
 	"sort"
 	"strconv"
 	"sync/atomic"
@@ -13,81 +15,13 @@ import (
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
 	"github.com/snissn/gomap/TreeDB/node"
-	"github.com/snissn/gomap/TreeDB/page"
 )
-
-// cowPublicACKRouting validates observed routing without acquiring resources.
-// Shared by the C3/C4 public fixtures; disabled WAL does not disable the vlog.
-func cowPublicACKRouting(profile treedb.Profile, stats map[string]string) error {
-	enabled, mode := "true", "external_command_wal"
-	switch profile {
-	case treedb.ProfileCommandWALDurable, treedb.ProfileCommandWALRelaxed:
-	case treedb.ProfileNoWALFast:
-		enabled, mode = "false", "disabled_unsafe"
-	default:
-		return fmt.Errorf("unknown ACK profile %q", profile)
-	}
-	for key, expected := range map[string]string{
-		"treedb.command_wal.enabled":                   enabled,
-		"treedb.cache.command_wal.external_durability": enabled,
-		"treedb.cache.redo_log.enabled":                "false",
-		"treedb.cache.redo_log.mode":                   mode,
-	} {
-		if stats[key] != expected {
-			return fmt.Errorf("actual ACK routing %s=%q, want %q", key, stats[key], expected)
-		}
-	}
-	return nil
-}
-
-// cowPublicValueLayout checks the physical entry, without calls or ownership.
-// A zero length hint is valid for persistent vlog pointers.
-func cowPublicValueLayout(entry node.LeafEntry, pointers bool) error {
-	if entry.Flags&node.FlagTombstone != 0 {
-		return fmt.Errorf("physical tombstone in value layout proof")
-	}
-	actual := entry.Flags&node.FlagPointer != 0
-	if actual != pointers {
-		return fmt.Errorf("actual pointer=%v, requested=%v", actual, pointers)
-	}
-	if actual {
-		if entry.ValuePtr == (page.ValuePtr{}) || !page.IsValueLogFileID(entry.ValuePtr.FileID) {
-			return fmt.Errorf("invalid persistent value pointer")
-		}
-	} else if entry.ValuePtr != (page.ValuePtr{}) {
-		return fmt.Errorf("inline entry has value pointer")
-	}
-	return nil
-}
-
-// cowPublicWALCounters requires actual boundary observations even in NoWAL.
-func cowPublicWALCounters(profile treedb.Profile, before, after map[string]string, key string) (uint64, uint64, error) {
-	values := [2]uint64{}
-	for i, stats := range []map[string]string{before, after} {
-		raw, ok := stats[key]
-		if !ok {
-			return 0, 0, fmt.Errorf("missing actual counter %s", key)
-		}
-		value, err := strconv.ParseUint(raw, 10, 64)
-		if err != nil {
-			return 0, 0, fmt.Errorf("counter %s: %w", key, err)
-		}
-		values[i] = value
-	}
-	if values[1] < values[0] {
-		return 0, 0, fmt.Errorf("WAL counter regression")
-	}
-	if profile == treedb.ProfileNoWALFast && (values[0] != 0 || values[1] != 0) {
-		return 0, 0, fmt.Errorf("actual NoWAL counter nonzero: %s", key)
-	}
-	return values[0], values[1], nil
-}
 
 // cowC3ValueLayout owns one public snapshot and probes every seeded physical
 // record. Its callers put setup before the counter baseline and teardown after
 // the endpoint. Non-COW snapshots can rotate pending memtables; COW captures
 // affect lifetime residency high-water marks, but Close releases their leases.
-func cowC3ValueLayout(db *treedb.DB, groups []CommitGroup, pointers, cow bool) (inline, pointer uint64, err error) {
+func cowC3ValueLayout(db *treedb.DB, groups []mvcc.CommitGroup, pointers, cow bool) (inline, pointer uint64, err error) {
 	before := db.Stats()
 	snapshot := db.AcquireSnapshot()
 	if snapshot == nil {
@@ -118,7 +52,7 @@ func cowC3ValueLayout(db *treedb.DB, groups []CommitGroup, pointers, cow bool) (
 			if !bytes.Equal(entry.Key, physical) {
 				return inline, pointer, fmt.Errorf("missing/wrong physical layout entry")
 			}
-			if e := cowPublicValueLayout(entry, pointers); e != nil {
+			if e := cowhelpers.ValueLayout(entry, pointers); e != nil {
 				return inline, pointer, e
 			}
 			if entry.Flags&node.FlagPointer != 0 {
@@ -177,17 +111,17 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 						if receipt["treedb.profile.resolved"] != string(profile) || receipt["treedb.cache.memtable_mode"] != mode || receipt["treedb.profile.ordinary_ack_class"] != profile.OrdinaryAckClass() {
 							b.Fatal("resolved fixture mismatch")
 						}
-						if err := cowPublicACKRouting(profile, receipt); err != nil {
+						if err := cowhelpers.ACKRouting(profile, receipt); err != nil {
 							b.Fatal(err)
 						}
-						store := New(db)
+						store := mvcc.New(db)
 						key := []byte("c3-a")
 						other := []byte("c3-ab")
 						value := bytes.Repeat([]byte{0x63}, 256)
 						// Both histories always contain exactly two retained records. Replacements
 						// are equal, so every concurrent cut has the same logical output.
-						groups := []CommitGroup{{Timestamp: 10, Mutations: []Mutation{{Key: key, Value: value}, {Key: other, Value: value}}}, {Timestamp: 20, Mutations: []Mutation{{Key: key, Value: value}, {Key: other, Value: value}}}}
-						if err := store.CommitGroupAt(groups, CommitRelaxed); err != nil {
+						groups := []mvcc.CommitGroup{{Timestamp: 10, Mutations: []mvcc.Mutation{{Key: key, Value: value}, {Key: other, Value: value}}}, {Timestamp: 20, Mutations: []mvcc.Mutation{{Key: key, Value: value}, {Key: other, Value: value}}}}
+						if err := store.CommitGroupAt(groups, mvcc.CommitRelaxed); err != nil {
 							b.Fatal(err)
 						}
 						point := func() error {
@@ -197,10 +131,10 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							}
 							return e
 						}
-						history := func() (VersionIteratorStats, error) {
-							it, e := store.IterateVersions(VersionIteratorOptions{ExactKey: key, ReadTimestamp: 100})
+						history := func() (mvcc.VersionIteratorStats, error) {
+							it, e := store.IterateVersions(mvcc.VersionIteratorOptions{ExactKey: key, ReadTimestamp: 100})
 							if e != nil {
-								return VersionIteratorStats{}, e
+								return mvcc.VersionIteratorStats{}, e
 							}
 							var count uint64
 							for it.Valid() {
@@ -234,7 +168,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							b.Fatalf("seed physical layout: %d/%d: %v", preInline, prePointer, e)
 						}
 						before := db.Stats()
-						if err := cowPublicACKRouting(profile, before); err != nil {
+						if err := cowhelpers.ACKRouting(profile, before); err != nil {
 							b.Fatal(err)
 						}
 
@@ -259,7 +193,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 								for n := 0; n < b.N; n++ {
 									writerActive.Store(true)
 									begin := time.Now()
-									e := store.CommitGroupAt(groups, CommitRelaxed)
+									e := store.CommitGroupAt(groups, mvcc.CommitRelaxed)
 									writerTimes[n] = time.Since(begin).Nanoseconds()
 									writerActive.Store(false)
 									if e != nil {
@@ -328,9 +262,9 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							for n := 0; n < b.N; n++ {
 								begin := time.Now()
 								if workload == "point" {
-									err = store.CommitAt(20, []Mutation{{Key: key, Value: value}}, CommitRelaxed)
+									err = store.CommitAt(20, []mvcc.Mutation{{Key: key, Value: value}}, mvcc.CommitRelaxed)
 								} else {
-									err = store.CommitGroupAt(groups, CommitRelaxed)
+									err = store.CommitGroupAt(groups, mvcc.CommitRelaxed)
 								}
 								writerTimes[n] = time.Since(begin).Nanoseconds()
 								if err != nil {
@@ -342,7 +276,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 									pointTimes[n] = time.Since(begin).Nanoseconds()
 									pointCount++
 								} else {
-									var stats VersionIteratorStats
+									var stats mvcc.VersionIteratorStats
 									stats, err = history()
 									scanTimes[n] = time.Since(begin).Nanoseconds()
 									scanCount++
@@ -359,7 +293,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							b.Fatal(err)
 						}
 						after := db.Stats()
-						if err := cowPublicACKRouting(profile, after); err != nil {
+						if err := cowhelpers.ACKRouting(profile, after); err != nil {
 							b.Fatal(err)
 						}
 						for _, stats := range []map[string]string{before, after} {
@@ -408,7 +342,7 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 							}
 						}
 						for _, counter := range []struct{ metric, key, absolute string }{{"wal_appends/op", "treedb.command_wal.append.count_total", "wal_appends"}, {"wal_syncs/op", "treedb.command_wal.file_sync.calls_total", "wal_syncs"}} {
-							x, y, e := cowPublicWALCounters(profile, before, after, counter.key)
+							x, y, e := cowhelpers.WALCounters(profile, before, after, counter.key)
 							if e != nil {
 								b.Fatal(e)
 							}
@@ -447,4 +381,17 @@ func BenchmarkC3PublicReadAdmission(b *testing.B) {
 			}
 		}
 	}
+}
+
+func cowIntegrationCounter(b *testing.B, stats map[string]string, key string) uint64 {
+	b.Helper()
+	value, ok := stats[key]
+	if !ok {
+		b.Fatalf("missing actual counter %s", key)
+	}
+	n, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		b.Fatalf("counter %s: %v", key, err)
+	}
+	return n
 }

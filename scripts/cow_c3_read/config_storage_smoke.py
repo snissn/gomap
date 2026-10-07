@@ -30,7 +30,8 @@ def main():
         variant.update(production_commit=str(index) * 40, production_git_tree=str(index + 2) * 40)
         variant.update(binary_sha256=str(index) * 64, source_tree_sha256=str(index + 2) * 64)
         variant.update({key: "/synthetic/absent/" + name + "/" + key for key in ("source", "binary", "manifest", "build_receipt")})
-    value["fixtures"][0]["sha256"] = "3" * 64
+    for fixture in value["fixtures"]:
+        fixture["sha256"] = "3" * 64
     path = out / "config.json"
     write(path, value)
     assert len(config(path)["cases"]) == 54
@@ -46,6 +47,12 @@ def main():
             results.append({"label": label, "refused": str(error)})
         else:
             raise AssertionError(label + " was accepted")
+    for index in range(54):
+        for field, canonical in (("iterations", 1024), ("warmup_iterations", 128)):
+            for label, replacement in (("reduced", 1), ("zero", 0), ("boolean", True), ("float", float(canonical))):
+                refuse(f"cell-{index}-{field}-{label}",
+                       lambda c, i=index, k=field, v=replacement: c["cases"][i].update({k: v}),
+                       "canonical measured iterations" if field == "iterations" else "canonical warmup iterations")
     for component, replacement in ((1, "no_wal_fast"), (2, "append_only"), (3, "forced_pointer"), (4, "concurrent")):
         def mutate(c, index=component, name=replacement):
             parts = c["cases"][0]["benchmark"].split("/")

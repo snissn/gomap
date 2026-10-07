@@ -1,7 +1,9 @@
-package mvcc
+package cowbench
 
 import (
 	treedb "github.com/snissn/gomap/TreeDB"
+	cowhelpers "github.com/snissn/gomap/TreeDB/internal/cowbench"
+	mvcc "github.com/snissn/gomap/TreeDB/mvcc"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"testing"
@@ -15,16 +17,16 @@ func TestCOWPublicACKAdmission(t *testing.T) {
 		}
 		stats := map[string]string{"treedb.command_wal.enabled": enabled, "treedb.cache.command_wal.external_durability": enabled,
 			"treedb.cache.redo_log.enabled": "false", "treedb.cache.redo_log.mode": mode}
-		if err := cowPublicACKRouting(profile, stats); err != nil {
+		if err := cowhelpers.ACKRouting(profile, stats); err != nil {
 			t.Fatal(err)
 		}
 		for key, value := range stats {
 			delete(stats, key)
-			if err := cowPublicACKRouting(profile, stats); err == nil {
+			if err := cowhelpers.ACKRouting(profile, stats); err == nil {
 				t.Fatalf("accepted missing route %s", key)
 			}
 			stats[key] = "wrong"
-			if err := cowPublicACKRouting(profile, stats); err == nil {
+			if err := cowhelpers.ACKRouting(profile, stats); err == nil {
 				t.Fatalf("accepted wrong route %s", key)
 			}
 			stats[key] = value
@@ -50,7 +52,7 @@ func TestCOWPublicACKAdmission(t *testing.T) {
 			if test.missing {
 				delete(before, key)
 			}
-			_, _, err := cowPublicWALCounters(test.profile, before, after, key)
+			_, _, err := cowhelpers.WALCounters(test.profile, before, after, key)
 			if (err == nil) != test.accepted {
 				t.Fatalf("accepted=%v, error=%v", test.accepted, err)
 			}
@@ -75,7 +77,7 @@ func TestCOWPublicPhysicalValueLayout(t *testing.T) {
 		{name: "physical-tombstone", entry: node.LeafEntry{Flags: node.FlagTombstone}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			err := cowPublicValueLayout(test.entry, test.pointers)
+			err := cowhelpers.ValueLayout(test.entry, test.pointers)
 			if (err == nil) != test.accepted {
 				t.Fatalf("accepted=%v, error=%v", test.accepted, err)
 			}
@@ -95,9 +97,9 @@ func TestCOWPublicPhysicalProbeClosesOnRefusal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		store := New(db)
-		groups := []CommitGroup{{Timestamp: 10, Mutations: []Mutation{{Key: []byte("probe"), Value: []byte("inline")}}}}
-		if err := store.CommitGroupAt(groups, CommitRelaxed); err != nil {
+		store := mvcc.New(db)
+		groups := []mvcc.CommitGroup{{Timestamp: 10, Mutations: []mvcc.Mutation{{Key: []byte("probe"), Value: []byte("inline")}}}}
+		if err := store.CommitGroupAt(groups, mvcc.CommitRelaxed); err != nil {
 			_ = db.Close()
 			t.Fatal(err)
 		}
