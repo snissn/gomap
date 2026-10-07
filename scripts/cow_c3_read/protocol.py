@@ -331,7 +331,7 @@ def build_target(suite="c3"):
     return "./" + HARNESS_PACKAGES[suite].removeprefix("github.com/snissn/gomap/")
 
 def build_command(go, binary, suite="c3"):
-    return [str(go), "test", "-c", "-o", str(binary), build_target(suite)]
+    return [str(go), "test", "-c", "-trimpath", "-o", str(binary), build_target(suite)]
 
 def module_command(go, suite="c3"):
     return [str(go), "list", "-compiled", "-deps", "-test", "-json", build_target(suite)]

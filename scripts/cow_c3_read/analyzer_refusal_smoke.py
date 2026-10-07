@@ -321,10 +321,11 @@ def main():
             ("gcflags", argv[:2] + ["-gcflags=all=-N -l"] + argv[2:]),
             ("ldflags", argv[:2] + ["-ldflags=-s -w"] + argv[2:]),
             ("race", argv[:2] + ["-race"] + argv[2:]),
-            ("output", argv[:4] + ["/synthetic/other-binary"] + argv[5:]),
+            ("missing-trimpath", [arg for arg in argv if arg != "-trimpath"]),
+            ("output", argv[:5] + ["/synthetic/other-binary"] + argv[6:]),
             ("package", argv[:-1] + ["./TreeDB"]),
             ("launcher", ["/synthetic/other-go"] + argv[1:]),
-            ("order", argv[:2] + argv[3:5] + [argv[2], argv[5]]),
+            ("order", argv[:2] + [argv[3], argv[2]] + argv[4:]),
             ("empty", [])):
         cases.append(("rehashed-build-" + label,
                       lambda p, a=command_value: damage_build_toolchain(p, "command", a), "actual ordinary build invocation mismatch"))
