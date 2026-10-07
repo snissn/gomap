@@ -60,9 +60,15 @@ ordinary Go build/runtime smoke must verify the actual toolchain settings.
 
 `prepare_config.py --out <draft.json>` produces a deliberately non-runnable
 draft. Each exact leaf and case ID is derived from its profile/mode/layout/workload;
-mislabeled, duplicate, missing or extra cells refuse. Freeze counters, workload, timeout, environment,
-toolchain, host admission and spread/regression/effect thresholds before
-seeing matched timings. Default scheduling is separate 128x warmups and three
+mislabeled, duplicate, missing or extra cells refuse. Freeze counters, workload,
+timeout, environment, toolchain, host admission and spread/regression/effect
+thresholds before seeing matched timings.
+Canonical rules bind every operational counter and effect direction, including
+COW capture/publication/ownership, legacy rotation, latency and concurrent phase
+metrics. Changed, missing or extra rules refuse even when their schema is valid;
+numeric and boolean values remain distinct. The producer and validators use the
+same literal rule definitions.
+Default scheduling is separate 128x warmups and three
 ABBA cycles at 1024x: 108 warmups and 648 measurements, 756 fresh processes.
 No post-hoc exclusions are allowed. Every noisy or adverse result needs a
 source/workload-aware disposition; the analyzer cannot accept a change.

@@ -224,6 +224,33 @@ def main():
                 refuse(workload + "-" + variant + "-" + unit,
                        lambda c, i=cell_index, v=variant, u=unit: c["cases"][i]["rules"][v].update({u: {"min": 0}}),
                        "literal workload count rule mismatch")
+    # Rehashed valid-schema declarations must not invert an effect or turn a
+    # required production path/ownership counter into a permissive zero rule.
+    for workload in ("point", "group_all_versions", "concurrent"):
+        index = next(i for i, case in enumerate(value["cases"]) if case["workload"] == workload)
+        for unit, direction in value["cases"][index]["comparison_metrics"].items():
+            refuse(workload + "-inverted-effect-" + unit,
+                   lambda c, i=index, u=unit, d=direction: c["cases"][i]["comparison_metrics"].update({u: "higher" if d == "lower" else "lower"}),
+                   "canonical effect directions mismatch")
+            if unit not in value["comparison_metrics"]:
+                refuse(workload + "-omitted-effect-" + unit,
+                       lambda c, i=index, u=unit: c["cases"][i]["comparison_metrics"].pop(u),
+                       "canonical effect directions mismatch")
+        refuse(workload + "-extra-effect",
+               lambda c, i=index: c["cases"][i]["comparison_metrics"].update({"wal_appends/op": "higher"}),
+               "canonical effect directions mismatch")
+        for mode in ("cow_btree", "append_only", "btree"):
+            index = next(i for i, case in enumerate(value["cases"]) if case["workload"] == workload and case["mode"] == mode)
+            rules = value["cases"][index]["rules"]["baseline"]
+            units = [u for u in rules if u.startswith(("cow_", "snapshot_rotations", "rotated_shards", "enqueued_records"))
+                     or u in ("ns/op", "B/op", "allocs/op", "writer_ops/s", "reader_ops/s", "readers_while_writer_active/op")
+                     or "_phase_" in u or "_p50_" in u or "_p95_" in u or "_p99_" in u]
+            for variant in ("baseline", "candidate"):
+                for unit in units:
+                    changed = {"min": 0, "max": 999999} if rules[unit] == {"min": 0} else {"min": 0}
+                    refuse(workload + "-" + mode + "-" + variant + "-weakened-" + unit,
+                           lambda c, i=index, v=variant, u=unit, r=changed: c["cases"][i]["rules"][v].update({u: r}),
+                           "canonical operational rules mismatch")
     # ACK authority is mandatory in the frozen protocol, even if someone edits
     # the non-runnable draft before freezing it. Exercise both binary variants.
     for variant_name in ("baseline", "candidate"):
