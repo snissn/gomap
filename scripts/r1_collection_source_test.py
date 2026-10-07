@@ -82,10 +82,23 @@ class SourceBindingTests(unittest.TestCase):
         Path('cmd/collection_workload_bench/generated.go').symlink_to('main.go')
         package = {'Dir': root + '/cmd/collection_workload_bench',
                    'GoFiles': ['main.go', 'generated.go']}
-        with patch.object(SOURCE.subprocess, 'check_output', return_value=SOURCE.json.dumps(package)):
+        with patch.object(SOURCE.subprocess, 'check_output', side_effect=[SOURCE.json.dumps({'GOWORK': 'off', 'GOFLAGS': ''}), SOURCE.json.dumps(package)]):
             with patch.object(SOURCE, 'git', return_value=root):
                 with self.assertRaisesRegex(ValueError, 'symlink'):
                     SOURCE.compiled_local_files('frozen-go')
+
+    def test_overlay_modfile_and_active_workspace_cannot_claim_head(self):
+        environments = [
+            ({'GOWORK': 'off', 'GOFLAGS': '-overlay=/outside/overlay.json'}, 'input substitution'),
+            ({'GOWORK': 'off', 'GOFLAGS': '-modfile outside.mod'}, 'input substitution'),
+            ({'GOWORK': '/outside/go.work', 'GOFLAGS': ''}, 'active Go workspace'),
+        ]
+        for environment, message in environments:
+            with self.subTest(environment=environment):
+                with patch.object(SOURCE.subprocess, 'check_output', return_value=SOURCE.json.dumps(environment)):
+                    with patch.object(SOURCE, 'git', return_value=str(Path.cwd())):
+                        with self.assertRaisesRegex(ValueError, message):
+                            SOURCE.compiled_local_files('frozen-go')
 
     def test_external_local_replace_and_escaping_input_fail_closed(self):
         root = str(Path.cwd())
@@ -93,12 +106,12 @@ class SourceBindingTests(unittest.TestCase):
             {'Dir': root + '/cmd/collection_workload_bench', 'GoFiles': ['main.go']},
             {'Dir': '/outside/replaced', 'Module': {'Replace': {'Dir': '/outside/replaced'}}},
         ]
-        with patch.object(SOURCE.subprocess, 'check_output', return_value=SOURCE.json.dumps(packages[0]) + SOURCE.json.dumps(packages[1])):
+        with patch.object(SOURCE.subprocess, 'check_output', side_effect=[SOURCE.json.dumps({'GOWORK': 'off', 'GOFLAGS': ''}), SOURCE.json.dumps(packages[0]) + SOURCE.json.dumps(packages[1])]):
             with patch.object(SOURCE, 'git', return_value=root):
                 with self.assertRaisesRegex(ValueError, 'unbound external local'):
                     SOURCE.compiled_local_files('frozen-go')
         packages = [{'Dir': root + '/cmd/collection_workload_bench', 'GoFiles': ['../../../../outside.go']}]
-        with patch.object(SOURCE.subprocess, 'check_output', return_value=SOURCE.json.dumps(packages[0])):
+        with patch.object(SOURCE.subprocess, 'check_output', side_effect=[SOURCE.json.dumps({'GOWORK': 'off', 'GOFLAGS': ''}), SOURCE.json.dumps(packages[0])]):
             with patch.object(SOURCE, 'git', return_value=root):
                 with self.assertRaisesRegex(ValueError, 'escapes checkout'):
                     SOURCE.compiled_local_files('frozen-go')

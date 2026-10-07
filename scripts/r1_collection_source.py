@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shlex
 import subprocess
 
 BUILD_FILE_FIELDS = ('GoFiles', 'CgoFiles', 'CFiles', 'CXXFiles', 'MFiles',
@@ -40,8 +41,16 @@ def require_committed_bytes(path, files):
 
 def compiled_local_files(go=None):
     root = pathlib.Path(git('rev-parse', '--show-toplevel')).resolve()
+    selected_go = go or os.environ.get('R1_GO', 'go')
+    build_environment = json.loads(subprocess.check_output(
+        [selected_go, 'env', '-json', 'GOFLAGS', 'GOWORK'], text=True))
+    if build_environment.get('GOWORK') not in ('', 'off'):
+        raise ValueError('unbound active Go workspace')
+    for flag in shlex.split(build_environment.get('GOFLAGS', '')):
+        if flag.split('=', 1)[0] in ('-overlay', '-modfile'):
+            raise ValueError('unbound Go build input substitution: ' + flag)
     raw = subprocess.check_output(
-        [go or os.environ.get('R1_GO', 'go'), 'list', '-deps', '-json',
+        [selected_go, 'list', '-deps', '-json',
          './cmd/collection_workload_bench'], text=True)
     decoder = json.JSONDecoder()
     pos = 0
