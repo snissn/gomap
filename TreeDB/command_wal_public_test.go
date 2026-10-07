@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2374,6 +2375,20 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	// Keep both benchmark epochs intact through fixture construction. The empty
 	// checkpoint below is the first checkpoint allowed to run production cleanup.
 	db.cached.SetCommandWALCheckpointCleanupHook(func(bool) error { return nil })
+	// Backend checkpoints also reclaim covered command WAL generations, before
+	// the cached cleanup hook runs. Stop that route at its existing pre-unlink
+	// cut while building the fixture; durability publication still completes.
+	var withheldUnlinks atomic.Int64
+	restoreCleanup := sync.OnceFunc(durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Resource == durabilitycut.ResourceCommandWAL &&
+			event.Point == durabilitycut.BeforeWALOrAssetUnlink &&
+			filepath.Dir(event.Path) == backenddb.WALDirPath(dir) {
+			withheldUnlinks.Add(1)
+			return backenddb.ErrDurableWALCleanupProofStale
+		}
+		return nil
+	}))
+	defer restoreCleanup()
 
 	for _, epoch := range []string{"first", "second"} {
 		batch := db.NewBatch()
@@ -2396,6 +2411,15 @@ func TestPublicCommandWALEmptyCheckpointReclaimsCoveredBenchmarkEpochs(t *testin
 	if len(before) < 2 {
 		t.Fatalf("segments after two checkpointed epochs=%v, want closed command WAL generations", before)
 	}
+	// Exercise the gate explicitly so its coverage does not depend on whether a
+	// setup checkpoint happened to attempt backend reclamation on this platform.
+	if err := db.backend.CleanupCommandWALCoveredSegments(false); !errors.Is(err, backenddb.ErrDurableWALCleanupProofStale) {
+		t.Fatalf("fixture cleanup gate: %v, want stale cleanup proof", err)
+	}
+	if withheldUnlinks.Load() == 0 {
+		t.Fatal("fixture cleanup gate did not observe a covered generation")
+	}
+	restoreCleanup()
 	db.cached.SetCommandWALCheckpointCleanupHook(db.cleanupPublicCommandWALCheckpoint)
 	stateBefore := db.backend.State()
 	nextLSNBefore := db.backend.CommandWALNextLSN()
