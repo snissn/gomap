@@ -1,0 +1,44 @@
+{
+  "action": "stop requesting Codex reviews for this head",
+  "clean": true,
+  "exact_head_artifact_count": 1,
+  "finding_head_count": 1,
+  "head": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b",
+  "latest_artifact": {
+    "kind": "clean_comment",
+    "state": "",
+    "summary": "Codex Review: Didn't find any major issues. Breezy!",
+    "timestamp": "2026-10-06T19:37:05Z",
+    "url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6024023697"
+  },
+  "latest_clean_artifact": {
+    "kind": "clean_comment",
+    "state": "",
+    "summary": "Codex Review: Didn't find any major issues. Breezy!",
+    "timestamp": "2026-10-06T19:37:05Z",
+    "url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6024023697"
+  },
+  "latest_request": {
+    "timestamp": "2026-10-06T19:32:24Z",
+    "url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6023947311"
+  },
+  "request_count_for_head": 1,
+  "review_churn_exhausted": false,
+  "review_churn_limits": {
+    "max_finding_heads": 0,
+    "max_total_requests": 0,
+    "warn_finding_heads": 3,
+    "warn_total_requests": 6
+  },
+  "review_churn_override_applied": false,
+  "review_churn_reasons": [],
+  "review_churn_warning": true,
+  "review_churn_warning_reasons": [
+    "total review requests 9 reached warning 6"
+  ],
+  "should_request": false,
+  "state": "clean",
+  "total_codex_thread_count": 1,
+  "total_request_count": 9,
+  "unresolved_codex_threads": []
+}

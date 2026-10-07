@@ -1,0 +1,16 @@
+{
+  "repo": "/home/mikers/gomap-r1-retained-final-f796",
+  "out": "/home/mikers/gomap-r1-evidence-20261005/retained-lifecycle-final",
+  "receipt_dir": "/home/mikers/gomap-r1-evidence-20261005/retained-lifecycle-final-root-receipt",
+  "real_go": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+  "goroot": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+  "gocache": "/home/mikers/.cache/gomap-r1-go1264",
+  "gomodcache": "/home/mikers/go/pkg/mod",
+  "lock": "/home/mikers/gomap-r1-evidence-20261005/timed-capture.lock",
+  "source_commit": "f79616f2aeb99b43af81877f26d646cca51177b9",
+  "runtime_sha256": "a451e5366ade3a2ee2b6f07e8994f7a6ecba9a83900c79e1a05935b2f2c6d849",
+  "harness_sha256": "125bc5ef6f0190f1ef3f57bd079a67b48efc5ad7e4b5c91a29a8f182fb649693",
+  "landed_tooling_commit": "",
+  "review_url": "",
+  "landing_observation": ""
+}

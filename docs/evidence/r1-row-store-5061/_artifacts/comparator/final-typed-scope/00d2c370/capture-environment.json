@@ -1,0 +1,71 @@
+{
+  "coordinator_wrapper_sha256": "07302e55e65e03854870764078290be0572b540ef2e58f4badeeacad6c42126b",
+  "worktree": "/home/mikers/gomap-r1-5065-final-00d2c370",
+  "frozen_source": "00d2c370a5907225ff36f82bb92ca3ee0679ea08",
+  "output": "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370",
+  "capture_args": [
+    "-qualification",
+    "retained",
+    "-engines",
+    "typed-row"
+  ],
+  "utc": "2026-10-06T06:18:04Z",
+  "cpu_count": 16,
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64"
+  ],
+  "go_build_environment": {
+    "CC": "gcc",
+    "CGO_CFLAGS": "-O2 -g",
+    "CGO_CPPFLAGS": "",
+    "CGO_CXXFLAGS": "-O2 -g",
+    "CGO_ENABLED": "1",
+    "CGO_LDFLAGS": "-O2 -g",
+    "CXX": "g++",
+    "GOARCH": "amd64",
+    "GOFLAGS": "",
+    "GOOS": "linux",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local"
+  },
+  "environment": {
+    "TMPDIR": "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370-db-temp",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "16",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off",
+    "GODEBUG": "",
+    "R1_GO": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go"
+  },
+  "temp_device": 66306,
+  "output_parent_device": 66306,
+  "temp_filesystem": "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme1n1p2  1920641288 1263875632 559128692      70% /\n",
+  "output_filesystem": "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme1n1p2  1920641288 1263875632 559128692      70% /\n",
+  "loadavg": [
+    0.44189453125,
+    0.5849609375,
+    1.0458984375
+  ],
+  "top_processes": [
+    "%CPU %MEM COMMAND",
+    " 100  0.0 python3",
+    " 0.5  0.3 codex",
+    " 0.4  1.0 gnome-shell",
+    " 0.3  0.9 codex",
+    " 0.3  5.1 tmux: server",
+    " 0.2  0.3 codex",
+    " 0.2  0.3 codex",
+    " 0.1  0.0 napi/phy0-0",
+    " 0.0  0.1 containerd",
+    " 0.0  0.0 napi/phy0-0",
+    " 0.0  0.0 dbus-daemon"
+  ]
+}

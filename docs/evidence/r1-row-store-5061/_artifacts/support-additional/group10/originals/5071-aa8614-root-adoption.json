@@ -1,0 +1,19 @@
+{
+  "utc": "2026-10-06T19:33:59.160763+00:00",
+  "head": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b",
+  "decision": "ROOT_ADOPTED_MATURE_FIXTURE_ONLY_REPAIR; hostedreviewandrequiredCIpending",
+  "independent_review": "CLEAN exact two-file successor, narrow actual post-write meta classification, all other cause/recovery/group oracles retained",
+  "bindings": {
+    "a645-cow-power-loss-ci-diagnosis.md": "fae5510d359834440b958d45e87885e55fb9951f308b17c375f208427eecb94a",
+    "a645-cow-power-loss-ci-diagnosis.json": "d7e7340b7d0290e9c4e52243233b089ce7da2463ac06994b462a32ab65a2082b",
+    "aa8614-postmeta-fixture-validation-root-review.json": "2e63f65e7be2e36ff61943a12ba817573bbd0bbb246fbed77314567cb86cc984",
+    "5071-aa8614-postmeta-final-source-original.json": "0df2d81af6fbc4cffa8808f12a43d341cd617dbb2a7ff5cc221e31c12c89fb42",
+    "aa8614-postpush-original.json": "85a19646e2e1e6ed7855f80ad350a1424233fbf8f65b7d9ea2a9feecc3bf9291",
+    "5071-postmeta-repaired-pr-body.md": "39020e70cdcf939466dd2823ec03feb3759f153400eca069d410946ad87fb107"
+  },
+  "runtime": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "harness": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "reused_proof": "original8506 114 and ebe414 51 normal/race/vet source bindings unchanged; original identities preserved",
+  "original_FAIL": "Windows112443391460 a645 preserved; no waiver",
+  "capture": "actual5071 merge still required before C/A/D"
+}

@@ -1,0 +1,148 @@
+{
+  "ast_parse": "PASS for eight inspected Python helpers; no runtime or semantic validation performed",
+  "baseline_adjacent_files_locally_observed": [
+    {
+      "bytes": 5393347,
+      "relative": "captures/r1-baseline-landed-0216e2e/packet.json",
+      "sha256": "d3bcec0a4924267afeee67a13ec1e5f83c8ef930a12d1b46538c3cd71746013f"
+    },
+    {
+      "bytes": 103667,
+      "relative": "captures/r1-baseline-landed-0216e2e/source.json",
+      "sha256": "b3c8b44f5961fac1e679a19b40bcb4cd7f1c6084fbf54fe81cacea33fa24c190"
+    },
+    {
+      "bytes": 103667,
+      "relative": "captures/r1-baseline-landed-0216e2e/source-after.json",
+      "sha256": "b3c8b44f5961fac1e679a19b40bcb4cd7f1c6084fbf54fe81cacea33fa24c190"
+    },
+    {
+      "bytes": 2452,
+      "relative": "captures/r1-baseline-landed-0216e2e/capture-environment.json",
+      "sha256": "f5315d27b097a3a4561673b6ff4748b5ecf72bcafa583598bd2db5c6d586da4f"
+    },
+    {
+      "bytes": 255,
+      "relative": "captures/r1-baseline-landed-0216e2e/frozen-source-accepted.json",
+      "sha256": "a37004b6faf86562acdc93122adfefb6719c89f74e0fd7ece8a3e3ac52a6c0df"
+    },
+    {
+      "bytes": 41922408,
+      "relative": "captures/r1-baseline-landed-0216e2e/collection_workload_bench",
+      "sha256": "898457b63c4ba9a3897150b4c9cacf09222830f87cf3616dfe73f479e7596812"
+    },
+    {
+      "bytes": 91,
+      "relative": "captures/r1-baseline-landed-0216e2e/binary.sha256",
+      "sha256": "d9ae84f4e9be6c36face65c1bf09e65538f0f7ea9f4b69d129e9024eb9aa6c5c"
+    }
+  ],
+  "blockers": [
+    "Actual merged source and actual A/C/D accepted captures/receipts/final certificate remain future coordinator gates.",
+    "No NEW sixteen-record selection was found at execution-root top level; its construction remains future, not historical input mutation.",
+    "Rejected records lacking original binaries remain unavailable for executable replay; do not substitute a later binary."
+  ],
+  "existing_selection_records": 13,
+  "linux_copy_independently_verified": false,
+  "linux_preservation_root_reported_by_coordinator": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006",
+  "local_root": "/private/tmp/gomap-r1-execution-20261005",
+  "new_selection_expected_records_after_actual_A_C_D": 16,
+  "pinned_inputs": [
+    {
+      "bytes": 13555,
+      "mode": "0o644",
+      "relative": "prepare-evidence-publication.py",
+      "sha256": "133df999853aaf8a2d536325bcbff691633d4430b8fb721995c4476b0d39628a"
+    },
+    {
+      "bytes": 13842,
+      "mode": "0o644",
+      "relative": "prepare-evidence-publication-final.py",
+      "sha256": "d03f6fe489ae7bd0296cd31dcff1785cbd25d855acb714afe1191ea73a0b426a"
+    },
+    {
+      "bytes": 4299,
+      "mode": "0o644",
+      "relative": "verify-publication-replay.py",
+      "sha256": "66f6c4096014322e3407b3efc5959751f534307ebe9a3e272b6148eba2f40ea6"
+    },
+    {
+      "bytes": 5984,
+      "mode": "0o644",
+      "relative": "compare_r1_packets.py",
+      "sha256": "1a54cac528e5c8acc2501ec67b13d9a185b011e1467856741ada320a8bfdcfc8"
+    },
+    {
+      "bytes": 14568,
+      "mode": "0o644",
+      "relative": "final-A-semantic-equivalence-preparation/compare-certified.py",
+      "sha256": "5bc6c7eb0c00b8f78860e31769ac4731f1d1aed2f91013e2a9b1ed7633065c75"
+    },
+    {
+      "bytes": 5749,
+      "mode": "0o644",
+      "relative": "5061-support-assembly-preparation/assemble-support.py",
+      "sha256": "608e16a1c4070211ad5c765a5bdc138ed82fef4f3ff95562b4f783e7315652c0"
+    },
+    {
+      "bytes": 778137,
+      "mode": "0o644",
+      "relative": "5061-support-assembly-preparation/assembly-plan.json",
+      "sha256": "92ce1e34a36df398f00b3959b41dd070f04dd3f5a9d83d04210c8b1cf287a9e9"
+    },
+    {
+      "bytes": 6947,
+      "mode": "0o644",
+      "relative": "5061-support-assembly-complete-preparation/assemble-support-complete.py",
+      "sha256": "d154e36e2d1ae0a472e0dbacca9e490a498f09c9dd7d681e08550e4c18881ae1"
+    },
+    {
+      "bytes": 1022472,
+      "mode": "0o644",
+      "relative": "5061-support-assembly-complete-preparation/assembly-plan.json",
+      "sha256": "97ea29fa5d67b3d15449d3bfebdc59faaa78c1f0bbfd11008e055a4789e92144"
+    },
+    {
+      "bytes": 13014,
+      "mode": "0o644",
+      "relative": "supplemental-10-11-assembly-preparation/assemble-additional-support.py",
+      "sha256": "f153b0098e416ca1632e059065b2feb5606db6158e318b3a8ed67ede4450b70a"
+    },
+    {
+      "bytes": 84451,
+      "mode": "0o644",
+      "relative": "supplemental-10-11-assembly-preparation/assembly-plan.json",
+      "sha256": "9ffdb5e269b17435e5e97624c9aaf35f2cd546e188fa0e3b856491214a9dd394"
+    },
+    {
+      "bytes": 5361,
+      "mode": "0o644",
+      "relative": "publication-selection-with-final-typed-scope.json",
+      "sha256": "2644dd233d9d9391b1d53725004a887c3ffe9c188be03f633cfe5390e03ce1fb"
+    },
+    {
+      "bytes": 1363,
+      "mode": "0o644",
+      "relative": "5061-final-publication-preparation/root-publication-sequence.md",
+      "sha256": "6298cb2085697df34227ea1984bd5f6a35f7f98c0a80439fc03521e297044d27"
+    },
+    {
+      "bytes": 13729,
+      "mode": "0o644",
+      "relative": "5061-final-publication-preparation/publication-plan.md",
+      "sha256": "7a089777cf82d69d487cea4d61ad3e36b86e37e502511213366ac1c9224ab098"
+    }
+  ],
+  "recommendations": [
+    "Override both support assemblers source-base with actual Linux preservation root.",
+    "Use complete nine-group assembler instead of original six-group assembler; both target supplemental-support and refuse overwrite.",
+    "Run additional10/11 assembler separately at support-additional with independently supplied helper and core-ledger hashes.",
+    "Create a new selection relocating only original record root fields; retain all metadata, validation argv, classification and expected source pins. Append final A/C/D only after actual coordinator qualification.",
+    "Keep baseline binary, freeze, source and environment adjacent to original baseline packet for certified comparison; do not rewrite historical recorded paths.",
+    "Use repo containing actual baseline/selected Git objects and final approved SHA-pinned certificate. Preservation root alone is not that repo.",
+    "Verify supplemental/publication ledgers separately: original core restorer verifies only core SHA256SUMS/archive members and does not copy supplemental files.",
+    "Verify Linux mirror exact hashes and modes before invoking frozen helpers; copy statements are not independent local verification."
+  ],
+  "scope": "Local source/text inspection and Python AST parsing only; no helper executed, remote inspected, Go, capture, GitHub or original writes.",
+  "status": "PREPARATION_ONLY_NO_STAGING_OR_QUALIFICATION"
+}

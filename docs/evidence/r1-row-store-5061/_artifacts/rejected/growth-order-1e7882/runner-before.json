@@ -1,0 +1,29 @@
+{
+  "utc": "2026-10-06T04:33:31Z",
+  "loadavg": [
+    0.38525390625,
+    1.41943359375,
+    1.720703125
+  ],
+  "cpu_count": 16,
+  "uname": {
+    "system": "Linux",
+    "node": "mikers-MS-7E71",
+    "release": "7.0.0-30-generic",
+    "version": "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "machine": "x86_64",
+    "processor": ""
+  },
+  "environment": {
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "16",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off",
+    "GOFLAGS": "",
+    "TMPDIR": "/home/mikers/gomap-r1-evidence-20261005/r1-growth-order-1e7882bb/benchmark-tmp"
+  }
+}

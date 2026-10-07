@@ -1,0 +1,35 @@
+{
+  "argv": [
+    "bash",
+    "/home/mikers/gomap-r1-final-source-20261006/scripts/r1_collection_capture.sh",
+    "-qualification",
+    "retained",
+    "-documents",
+    "4096",
+    "-operations",
+    "100",
+    "-repetitions",
+    "5"
+  ],
+  "environment": {
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "16",
+    "GOMEMLIMIT": "off",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "HOME": "/home/mikers",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "R1_GO": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/go",
+    "R1_MODE": "r1-mutation-sweep",
+    "R1_OUT": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe",
+    "TMPDIR": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/temporary-db-roots"
+  },
+  "utc": "2026-10-06T23:49:45Z"
+}

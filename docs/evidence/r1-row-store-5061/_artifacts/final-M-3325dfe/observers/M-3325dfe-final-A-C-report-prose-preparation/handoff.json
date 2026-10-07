@@ -1,0 +1,452 @@
+{
+  "A_counts": {
+    "descriptive_matched": 20,
+    "inconclusive": 72,
+    "newly_enabled": 1
+  },
+  "A_selected_stable_rows": [
+    {
+      "after": {
+        "allocs_per_op_median": 150.723,
+        "bytes_per_op_median": 91750.352,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 59896.839,
+        "ops_per_sec_median": 16695.371854264296,
+        "p50_ns_median": 56940,
+        "p95_ns_median": 66421,
+        "p99_ns_median": 111611,
+        "repetitions": 5,
+        "throughput_spread": 0.014909982896741754
+      },
+      "allocs_per_op_delta": -0.7769999999999868,
+      "before": {
+        "allocs_per_op_median": 151.5,
+        "bytes_per_op_median": 89175.104,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 349538.202,
+        "ops_per_sec_median": 2860.9176172394455,
+        "p50_ns_median": 327113,
+        "p95_ns_median": 422824,
+        "p99_ns_median": 461865,
+        "repetitions": 5,
+        "throughput_spread": 0.02830597817029052
+      },
+      "bytes_per_op_delta": 2575.2479999999923,
+      "comparison": "descriptive_matched",
+      "engine": "typed-row",
+      "phase": "point_get_into_complete",
+      "throughput_ratio": 5.835670259660948
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 2005.847,
+        "bytes_per_op_median": 128677.848,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 138815.522,
+        "ops_per_sec_median": 7203.805349663995,
+        "p50_ns_median": 136081,
+        "p95_ns_median": 143522,
+        "p99_ns_median": 177891,
+        "repetitions": 5,
+        "throughput_spread": 0.03643281637244741
+      },
+      "allocs_per_op_delta": -12.000999999999976,
+      "before": {
+        "allocs_per_op_median": 2017.848,
+        "bytes_per_op_median": 130214.112,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 135202.92,
+        "ops_per_sec_median": 7396.289961784849,
+        "p50_ns_median": 133211,
+        "p95_ns_median": 140632,
+        "p99_ns_median": 149262,
+        "repetitions": 5,
+        "throughput_spread": 0.014764132926795221
+      },
+      "bytes_per_op_delta": -1536.2639999999956,
+      "comparison": "descriptive_matched",
+      "engine": "typed-row",
+      "phase": "batch_complete",
+      "throughput_ratio": 0.9739755183861931
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 677.645,
+        "bytes_per_op_median": 43493.848,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 48619.047,
+        "ops_per_sec_median": 20568.07078098425,
+        "p50_ns_median": 47931,
+        "p95_ns_median": 53360,
+        "p99_ns_median": 57841,
+        "repetitions": 5,
+        "throughput_spread": 0.0986133648221217
+      },
+      "allocs_per_op_delta": -11.986999999999966,
+      "before": {
+        "allocs_per_op_median": 689.632,
+        "bytes_per_op_median": 45011.744,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 48151.921,
+        "ops_per_sec_median": 20767.603435800618,
+        "p50_ns_median": 47330,
+        "p95_ns_median": 52001,
+        "p99_ns_median": 55571,
+        "repetitions": 5,
+        "throughput_spread": 0.03391110159210441
+      },
+      "bytes_per_op_delta": -1517.8960000000006,
+      "comparison": "descriptive_matched",
+      "engine": "typed-row",
+      "phase": "range_complete",
+      "throughput_ratio": 0.9903921193683619
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 84.491,
+        "bytes_per_op_median": 5231.256,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 4725.424,
+        "ops_per_sec_median": 211621.22171470753,
+        "p50_ns_median": 4460,
+        "p95_ns_median": 5670,
+        "p99_ns_median": 10640,
+        "repetitions": 5,
+        "throughput_spread": 0.05105463114076824
+      },
+      "allocs_per_op_delta": 0.0040000000000048885,
+      "before": {
+        "allocs_per_op_median": 84.487,
+        "bytes_per_op_median": 5216,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 5676.644,
+        "ops_per_sec_median": 176160.42154484233,
+        "p50_ns_median": 5450,
+        "p95_ns_median": 6710,
+        "p99_ns_median": 11660,
+        "repetitions": 5,
+        "throughput_spread": 0.10991064186033715
+      },
+      "bytes_per_op_delta": 15.256000000000313,
+      "comparison": "descriptive_matched",
+      "engine": "template-v1",
+      "phase": "point_get_into_complete",
+      "throughput_ratio": 1.2012983385194642
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 1591.641,
+        "bytes_per_op_median": 98447.84,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 68102.335,
+        "ops_per_sec_median": 14683.78433720371,
+        "p50_ns_median": 65940,
+        "p95_ns_median": 73641,
+        "p99_ns_median": 81750,
+        "repetitions": 5,
+        "throughput_spread": 0.02459373484198478
+      },
+      "allocs_per_op_delta": -0.08999999999991815,
+      "before": {
+        "allocs_per_op_median": 1591.731,
+        "bytes_per_op_median": 98504.944,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 70005.74,
+        "ops_per_sec_median": 14284.542953192125,
+        "p50_ns_median": 66841,
+        "p95_ns_median": 83150,
+        "p99_ns_median": 86341,
+        "repetitions": 5,
+        "throughput_spread": 0.06267814092204954
+      },
+      "bytes_per_op_delta": -57.104000000006636,
+      "comparison": "descriptive_matched",
+      "engine": "template-v1",
+      "phase": "batch_complete",
+      "throughput_ratio": 1.0279491885263552
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 86.498,
+        "bytes_per_op_median": 3568,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 4398.912,
+        "ops_per_sec_median": 227328.93951959032,
+        "p50_ns_median": 4300,
+        "p95_ns_median": 5050,
+        "p99_ns_median": 6060,
+        "repetitions": 5,
+        "throughput_spread": 0.02750129092058437
+      },
+      "allocs_per_op_delta": -0.006999999999990791,
+      "before": {
+        "allocs_per_op_median": 86.505,
+        "bytes_per_op_median": 3572.784,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 4416.584,
+        "ops_per_sec_median": 226419.33222599185,
+        "p50_ns_median": 4300,
+        "p95_ns_median": 5440,
+        "p99_ns_median": 7130,
+        "repetitions": 5,
+        "throughput_spread": 0.1372406261681657
+      },
+      "bytes_per_op_delta": -4.7840000000001055,
+      "comparison": "descriptive_matched",
+      "engine": "bson",
+      "phase": "point_complete",
+      "throughput_ratio": 1.0040173570191904
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 2504.215,
+        "bytes_per_op_median": 129944.464,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 118882.55,
+        "ops_per_sec_median": 8411.663444298596,
+        "p50_ns_median": 116421,
+        "p95_ns_median": 124831,
+        "p99_ns_median": 145821,
+        "repetitions": 5,
+        "throughput_spread": 0.01579110056684091
+      },
+      "allocs_per_op_delta": 0.21700000000009823,
+      "before": {
+        "allocs_per_op_median": 2503.998,
+        "bytes_per_op_median": 129806.104,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 117363.667,
+        "ops_per_sec_median": 8520.524499289886,
+        "p50_ns_median": 115261,
+        "p95_ns_median": 122671,
+        "p99_ns_median": 140191,
+        "repetitions": 5,
+        "throughput_spread": 0.02874276316303137
+      },
+      "bytes_per_op_delta": 138.36000000000058,
+      "comparison": "descriptive_matched",
+      "engine": "bson",
+      "phase": "batch_complete",
+      "throughput_ratio": 0.9872236673927336
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 215.01,
+        "bytes_per_op_median": 15296.672,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 18288.827,
+        "ops_per_sec_median": 54678.192319277776,
+        "p50_ns_median": 17791,
+        "p95_ns_median": 19891,
+        "p99_ns_median": 24510,
+        "repetitions": 5,
+        "throughput_spread": 0.025644950837359785
+      },
+      "allocs_per_op_delta": -0.004000000000019099,
+      "before": {
+        "allocs_per_op_median": 215.014,
+        "bytes_per_op_median": 15299.192,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 17556.189,
+        "ops_per_sec_median": 56959.97007095333,
+        "p50_ns_median": 17341,
+        "p95_ns_median": 18900,
+        "p99_ns_median": 21160,
+        "repetitions": 5,
+        "throughput_spread": 0.053093460185196256
+      },
+      "bytes_per_op_delta": -2.5199999999986176,
+      "comparison": "descriptive_matched",
+      "engine": "sqlite-json",
+      "phase": "range_complete",
+      "throughput_ratio": 0.959940678535589
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 3545.045,
+        "bytes_per_op_median": 209242.112,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 219618.316,
+        "ops_per_sec_median": 4553.354283984219,
+        "p50_ns_median": 216282,
+        "p95_ns_median": 226193,
+        "p99_ns_median": 246473,
+        "repetitions": 5,
+        "throughput_spread": 0.013300684337797741
+      },
+      "allocs_per_op_delta": 0.005999999999858119,
+      "before": {
+        "allocs_per_op_median": 3545.039,
+        "bytes_per_op_median": 209241.656,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 212162.663,
+        "ops_per_sec_median": 4713.364669635581,
+        "p50_ns_median": 208632,
+        "p95_ns_median": 216943,
+        "p99_ns_median": 276753,
+        "repetitions": 5,
+        "throughput_spread": 0.015724433698169015
+      },
+      "bytes_per_op_delta": 0.45600000000558794,
+      "comparison": "descriptive_matched",
+      "engine": "sqlite-row",
+      "phase": "batch_complete",
+      "throughput_ratio": 0.9660517704725502
+    },
+    {
+      "after": {
+        "allocs_per_op_median": 1182.046,
+        "bytes_per_op_median": 66581.488,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 77778.805,
+        "ops_per_sec_median": 12856.973053263031,
+        "p50_ns_median": 76750,
+        "p95_ns_median": 82400,
+        "p99_ns_median": 90911,
+        "repetitions": 5,
+        "throughput_spread": 0.029587441138118467
+      },
+      "allocs_per_op_delta": 0.015000000000100044,
+      "before": {
+        "allocs_per_op_median": 1182.031,
+        "bytes_per_op_median": 66579.72,
+        "noise_status": "within_15pct",
+        "ns_per_op_median": 76118.431,
+        "ops_per_sec_median": 13137.422656544248,
+        "p50_ns_median": 74841,
+        "p95_ns_median": 78761,
+        "p99_ns_median": 82731,
+        "repetitions": 5,
+        "throughput_spread": 0.0302375700492813
+      },
+      "bytes_per_op_delta": 1.7679999999963911,
+      "comparison": "descriptive_matched",
+      "engine": "sqlite-row",
+      "phase": "range_complete",
+      "throughput_ratio": 0.9786526162236613
+    }
+  ],
+  "C_counts": {
+    "ACK_inconclusive": 4,
+    "ACK_within_15_percent": 12,
+    "Flush_inconclusive": 15,
+    "all_cell_actual_physical_sync_calls": 100,
+    "all_oracles_pass": true,
+    "cells": 80,
+    "groups": 16
+  },
+  "actions": "Read-only SSH of three pinned originals; read existing local cost interpretations; only three new private prose/handoff files written. No code/helper, Go/build/tests/captures/measurement/GitHub or original source/report edits.",
+  "actual_main": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "allowed_artifact_targets": [
+    "A/comparison-v2.json",
+    "A/descriptive-report.md",
+    "A/root-approved-A-semantics-and-provenance-certificate-v2.json",
+    "A/root-cost-acceptance-original.json",
+    "C/descriptive-report.md",
+    "C/root-cost-acceptance-original.json",
+    "C/summary.json"
+  ],
+  "artifact_relative_prefix": "../../../../docs/evidence/r1-row-store-5061/_artifacts/",
+  "input_pins": {
+    "A_acceptance": {
+      "bytes": 5546,
+      "path": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-cost-acceptance-original.json",
+      "sha256": "d8ad4eb017813c154aa1aa00eff999cbf63e42cd87d55e227fc63929ebf3f0ed"
+    },
+    "A_comparison": {
+      "bytes": 339430,
+      "path": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-v2.json",
+      "sha256": "a7c55ffc991c8630b31dcf7fcfb08e9c63c867f635615325978dfad62f343fde"
+    },
+    "A_cost_review": {
+      "bytes": 5270,
+      "path": "/private/tmp/gomap-r1-execution-20261005/M-3325dfe-A-cost-interpretation-review/handoff.json",
+      "sha256": "b1c9cb693bc0b9968dfb157fcc52a04f04db72e6b646bb984bce7f9984a990d9"
+    },
+    "A_independent_advisory": {
+      "bytes": 4138,
+      "path": "/private/tmp/gomap-r1-execution-20261005/M-3325dfe-A-cost-interpretation-review/gate-advisory.json",
+      "sha256": "76ce3a67e4b68f40c2491547a7c082ab947767772977887f5d137a832ae64868"
+    },
+    "C_acceptance": {
+      "bytes": 5782,
+      "path": "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/C/root-cost-acceptance-original.json",
+      "sha256": "2930b8f63442bbbb4ac33157591f813e11a995c3e64b12b1260aecee614e2baf"
+    },
+    "C_cost_interpretation": {
+      "bytes": 59830,
+      "path": "/private/tmp/gomap-r1-execution-20261005/M-3325dfe-C-cost-interpretation-preparation/handoff.json",
+      "sha256": "c1e02fcf67c1b1cae90761f7f7c4a37324f058109eca2c2bcd3d5d28a28cd0df"
+    }
+  },
+  "minimum_stable_throughput_ratio": 0.959940678535589,
+  "observed_coordinator_acceptance": {
+    "A": "Full frozen 4096-row/32-row-batch/1000-call/5-fresh-repetition six-engine read/mutation profile; stable old-path guard and enabled ordinary typed full-row range cost.",
+    "C": "Selected #5059 criterion6: bio96/4096 bytes x actual request rows1/32 x absent/email+city indexes x bio/email+city UpdateBatch changes;4096live rows,100serial requests,5freshDB reps,16groups80cells.",
+    "authority": "Existing pinned original /root coordinator decisions; no new acceptance by this prose task"
+  },
+  "prose_files": [
+    {
+      "bytes": 3131,
+      "path": "A-comparison.md",
+      "sha256": "6b71d475271e25a9e87a9e587c572cdb1799c58adf6421e6f3c5fc048cd409d3"
+    },
+    {
+      "bytes": 3506,
+      "path": "A-C-interpretation.md",
+      "sha256": "3686dc25985bb25488a2c9cb51d5b57a4c51a035188e089116537373fa1c1501"
+    }
+  ],
+  "reported_unresolved_costs": {
+    "BSON_setup": {
+      "baseline_median_allocations": 12,
+      "baseline_median_bytes": 1264,
+      "candidate_median_allocations": 11,
+      "candidate_median_bytes": 3512,
+      "delta_bytes": 2248,
+      "timing": "INCONCLUSIVE"
+    },
+    "typed_checkpoint": {
+      "baseline_max_bytes": 3935272,
+      "baseline_median_allocations": 5849,
+      "baseline_median_bytes": 1110120,
+      "candidate_max_bytes": 3886368,
+      "candidate_median_allocations": 6534,
+      "candidate_median_bytes": 3829760,
+      "causal_attribution": "UNRESOLVED",
+      "delta_allocations": 685,
+      "delta_bytes": 2719640,
+      "timing": "INCONCLUSIVE in both captures"
+    }
+  },
+  "schema": "gomap-r1-M-final-A-C-prose-preparation-v1",
+  "scope_preserved": [
+    "Original 15% noise/math guards and all samples",
+    "72 A inconclusive groups; typed public range enabled cost without ratio",
+    "Checkpoint +2.71964MB/+685alloc cost accepted with causal attribution UNRESOLVED",
+    "C generic full-row costs; no metadata/native-partial performance claim",
+    "Four wide C ACK and fifteen C Flush groups inconclusive",
+    "Larger-population/concurrency deferral and separate broader transactions",
+    "No D values/acceptance, public replay proof, E acceptance or parent completion claim"
+  ],
+  "status": "PRIVATE_PROSE_DRAFT_ONLY_ROOT_OWNS_FINAL_COMPOSITION",
+  "typed_public_range_enabled_cost": {
+    "after": {
+      "allocs_per_op_median": 891.178,
+      "bytes_per_op_median": 150486.968,
+      "noise_status": "within_15pct",
+      "ns_per_op_median": 118762.47,
+      "ops_per_sec_median": 8420.168425260943,
+      "p50_ns_median": 116001,
+      "p95_ns_median": 125831,
+      "p99_ns_median": 145022,
+      "repetitions": 5,
+      "throughput_spread": 0.024108212707818454
+    },
+    "before": null,
+    "comparison": "newly_enabled",
+    "engine": "typed-row",
+    "phase": "range_public_complete"
+  },
+  "utc": "2026-10-07T00:54:29.519582+00:00"
+}

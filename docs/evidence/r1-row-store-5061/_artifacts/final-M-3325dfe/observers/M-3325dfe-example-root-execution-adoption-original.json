@@ -1,0 +1,12 @@
+{
+  "M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "execution_prerequisites": "Root actual D completed; externally held canonical111 flock. Explicit root source and compiler applicability check to original capture compiler before acceptance.",
+  "pins": {
+    "M-3325dfe-example-root-execution-preparation/run-example.py": "4f48ca71d65c058e3fe2cb071120af1707a1b6332c6a4f41597267ec5669ce77",
+    "M-3325dfe-example-root-execution-review/handoff.json": "7ea65d3dd62ef31468f25008fdf8b67aaae83e1ff4b30e9543156f57e94fc1d1",
+    "M-3325dfe-example-root-execution-review/handoff.md": "1e33c11b2bb045da41b973220d67320438ea1bcab829b3181a865f50185b0727"
+  },
+  "source_review": "Root reviewed complete source, exact current CLI/source identities and independent clean review. Real version/vet/run original argv, env, logs/exits and meaningful verification are retained; NEW private DB never publishes; numeric acceptance separate.",
+  "state": "ROOT_ADOPTED_PRIVATE_EXAMPLE_PREPARATION_ONLY_AFTER_D_EXECUTION_PENDING",
+  "utc": "2026-10-07T00:31:42.783933+00:00"
+}

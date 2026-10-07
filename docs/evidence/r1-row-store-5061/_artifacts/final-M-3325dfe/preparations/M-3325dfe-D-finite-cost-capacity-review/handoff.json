@@ -1,0 +1,118 @@
+{
+  "verdict": "NO_MATERIAL_MEASURED_INVARIANT_BREACH_IDENTIFIED; FINITE_SCOPE_ADVISORY_ONLY",
+  "source": {
+    "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+    "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+    "harness_sha256": "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13"
+  },
+  "original_pins": {
+    "summary.json": "f93ee51b1924df0dd25dde001e5ad45c6c8ce7c07ae8276b2cd782ed0c0e4a9f",
+    "descriptive-projection.json": "adb797d2d8837e02b1d623c26db33d3029e6ffdf3e9a8368261c792293047fe5",
+    "descriptive-report.md": "37b055a03d816d0da38a8d74e9785908ed37a5b8db960d86b97f5536fe69f438",
+    "packet.json": "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc"
+  },
+  "criteria_sha256": "b1c13686983a0d59664999a7d655dd16a647adbfc7457d8320711531b2f2bbfc",
+  "extract_sha256": "fdf3f368fcde46aa562153ff98f8e7ed27c6a51ac78fd60ef7f4000e52aa4069",
+  "checks": {
+    "five_zero_exit_original_processes": true,
+    "original_projection_packet_equals_raw": true,
+    "same_lsn_both_durable_roots_converged": true,
+    "actual_held_release_deletion": true
+  },
+  "total_timed_calls": 25600,
+  "metrics": {
+    "Go_B_per_epoch_reported": {
+      "max": 831378244.0,
+      "median": 830358054.0,
+      "min": 829375350.0,
+      "spread_max_minus_min": 2002894.0
+    },
+    "Go_loop_B_per_call": {
+      "max": 811892.8171875,
+      "median": 810896.5375,
+      "min": 809936.865625,
+      "spread_max_minus_min": 1955.9515624999767
+    },
+    "Go_loop_objects_per_call": {
+      "max": 5988.7990234375,
+      "median": 5988.6666015625,
+      "min": 5988.075,
+      "spread_max_minus_min": 0.7240234375003638
+    },
+    "Go_ns_per_epoch_reported": {
+      "max": 7044360794.0,
+      "median": 6897375514.0,
+      "min": 6797145503.0,
+      "spread_max_minus_min": 247215291.0
+    },
+    "Go_objects_per_epoch_reported": {
+      "max": 6132530.0,
+      "median": 6132394.0,
+      "min": 6131788.0,
+      "spread_max_minus_min": 742.0
+    },
+    "mixed_call_ns_total": {
+      "max": 35216603437,
+      "median": 34481012342,
+      "min": 33980563082,
+      "spread_max_minus_min": 1236040355
+    },
+    "mixed_calls_per_s": {
+      "max": 150.67437192387607,
+      "median": 148.4875197171495,
+      "min": 145.3859685576809,
+      "spread_max_minus_min": 5.288403366195155
+    },
+    "mixed_calls_total": {
+      "max": 5120,
+      "median": 5120,
+      "min": 5120,
+      "spread_max_minus_min": 0
+    },
+    "mixed_mean_ns_per_call": {
+      "max": 6878242.858789062,
+      "median": 6734572.723046875,
+      "min": 6636828.726953125,
+      "spread_max_minus_min": 241414.1318359375
+    },
+    "mixed_p95_ns_per_call": {
+      "max": 14914685,
+      "median": 13617892,
+      "min": 13402570,
+      "spread_max_minus_min": 1512115
+    },
+    "mixed_p99_ns_per_call": {
+      "max": 21275046,
+      "median": 18148105,
+      "min": 17620530,
+      "spread_max_minus_min": 3654516
+    },
+    "observed_process_elapsed_ns": {
+      "max": 84551984820,
+      "median": 83908298992,
+      "min": 83439921057,
+      "spread_max_minus_min": 1112063763
+    },
+    "post_GC_retained_heap_B": {
+      "max": 80641256,
+      "median": 79684480,
+      "min": 79678448,
+      "spread_max_minus_min": 962808
+    },
+    "sampled_heap_high_B": {
+      "max": 179945128,
+      "median": 175874240,
+      "min": 168690776,
+      "spread_max_minus_min": 11254352
+    }
+  },
+  "acceptance_authority": "Root coordinator only; no acceptance granted here",
+  "limits": [
+    "Real primary value-log growth within one segment; no total storage plateau or measured cap crossing.",
+    "Full CompactStorage flags remain false; later separate GC completes selected leaf debt, without a fresh global zero-debt proof.",
+    "Single fixed population and five epochs do not establish unlimited bounds/scaling.",
+    "High absolute allocation/memory/maintenance costs are explicit; no comparative D baseline.",
+    "Existing success of six-pin validator/locale qualification is root-provided and not rerun."
+  ],
+  "findings": []
+}

@@ -1,0 +1,47 @@
+{
+  "accepted_performance_or_original_binary_replay_claim": false,
+  "all_61_diagnosis_bindings_and_54_exit_bindings_match": true,
+  "all_6_source_review_evidence_bindings_match": true,
+  "all_original_copy_hash_size_nonsymlink_checks_pass": true,
+  "copied_bytes": 450568,
+  "copied_original_files": 69,
+  "external_review_context_not_copied": [
+    {
+      "actual_original": {
+        "bytes": 37018,
+        "path": "/tmp/gomap-r1-execution-20261005/852-vacuum-diagnosis.json",
+        "regular_nonsymlink": true,
+        "sha256": "bafc091af010f2f8c42e1a36815576cbe5196ac72e2f36b4fcab71be1dbc9177"
+      },
+      "copied_in_this_group": false,
+      "reviewed_binding": {
+        "bytes": 37018,
+        "path": "/tmp/gomap-r1-execution-20261005/852-vacuum-diagnosis.json",
+        "sha256": "bafc091af010f2f8c42e1a36815576cbe5196ac72e2f36b4fcab71be1dbc9177"
+      },
+      "size_SHA256_match": true
+    }
+  ],
+  "group": "/tmp/gomap-r1-execution-20261005/5061-m0-matched-support-preparation",
+  "inventory_path": "/tmp/gomap-r1-execution-20261005/5061-m0-matched-support-preparation/inventory.json",
+  "inventory_sha256": "be42a590b100e73b299a4bdfe4f9fb4eceedf5d50f69a33034f7398d3d7c1c8d",
+  "limitations": [
+    "Both original matched captures remain FAIL/exit1 with unchanged CV gates. Hosted original 3182 FAIL remains preserved in prior support group.",
+    "60 raw correctness sample PASSes are not capacity or stable performance acceptance; no ratios, causal infrastructure attribution, binary equivalence or changed thresholds.",
+    "Original Go-test benchmark executables were not retained; none are rebuilt or reconstructed. No original-binary replay claim or accepted performance replay is made.",
+    "The observer .py is retained nonexecutable source text only. Current retained source bytes do not independently prove original process binary identity.",
+    "Source review excludes the selected manifest-revision GC fixture branch, but broader production changes remain exercised; preserve that qualified source-applicability assessment.",
+    "The actual posted coordinator disposition is auxiliary INCONCLUSIVE/nonblocking policy evidence, not a PASS result, CI gate waiver or R1 completion.",
+    "Exact-head required TreeDB gate and other applicable review/merge gates remain separate from this staging; their success is not established here.",
+    "Fresh actual fullA/C/D on the landed integration source and final E qualification/publication remain required.",
+    "Original historical absolute argv/cwd paths and receipt bytes are preserved. Future restored paths may differ; no replay command is run or promised by this preparation."
+  ],
+  "missing_benchmark_executables": true,
+  "observer_source_text_only_mode": "0644",
+  "posted_body_exact_MD_match": true,
+  "posted_comment": "https://github.com/snissn/gomap/pull/5071#issuecomment-6015235219",
+  "preserved_originals_and_five_prior_groups_byte_exact": true,
+  "schema_version": 1,
+  "status": "UNPROMOTED",
+  "utc": "2026-10-06T11:35:18.054204+00:00"
+}

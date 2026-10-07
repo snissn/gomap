@@ -1,0 +1,14 @@
+{
+  "utc": "2026-10-07T01:18:27.388702+00:00",
+  "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.43",
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64",
+    ""
+  ],
+  "hostname": "mikers-MS-7E71",
+  "purpose": "actual public replay host"
+}

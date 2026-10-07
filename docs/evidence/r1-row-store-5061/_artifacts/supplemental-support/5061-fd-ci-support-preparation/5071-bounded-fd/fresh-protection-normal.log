@@ -1,0 +1,4 @@
+=== RUN   TestLeafManifestRevisionGCFreshHeldProtection
+--- PASS: TestLeafManifestRevisionGCFreshHeldProtection (1.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	1.040s

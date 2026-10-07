@@ -1,0 +1,21 @@
+{
+  "verdict": "CLEAN",
+  "scope": "One additional explicit identity alias in private draft-input builder only",
+  "checks": {
+    "exact_original_pin": "df71ce652147f3a55522e6c00f2a168f57266b66eb454060ce90eb792108c341",
+    "exact_new_pin": "a79091f4ee3d7f265f8c330c60b2eb01139d658001f46de80cbc096a13d8a79f",
+    "inverse_bytes_equal": true,
+    "inverse_ast_equal": true,
+    "mandatory_nonempty_identity_preserved": true,
+    "all_present_source_aliases_checked": true,
+    "duplicate_keys_and_nonfinite_json_rejected": true,
+    "original_ledger_hashed_read_unchanged": true,
+    "executor_and_template_not_modified_by_delta": true
+  },
+  "findings": [],
+  "limits": [
+    "Identity validation establishes selected-source applicability, not approval or numeric acceptance.",
+    "Original root-cost record bytes must remain ledger tracked and hash checked by unchanged read path.",
+    "No helper execution, test, Go, capture, activation or future acceptance."
+  ]
+}

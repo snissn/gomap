@@ -1,0 +1,27 @@
+{
+  "draft_sha256": "3ab4b7c15f2a0749f57a2272bb462413ee57e27d0da35406f31e9bee6f1cfc8e",
+  "lock_owner": "Reviewed executor acquires canonical flock itself; no conflicting outer flock.",
+  "original_finite_cost_gates": {
+    "A": {
+      "sha256": "d8ad4eb017813c154aa1aa00eff999cbf63e42cd87d55e227fc63929ebf3f0ed",
+      "status": "ORIGINAL_ROOT_FINITE_COST_ACCEPTANCE_REVIEWED"
+    },
+    "C": {
+      "sha256": "2930b8f63442bbbb4ac33157591f813e11a995c3e64b12b1260aecee614e2baf",
+      "status": "ORIGINAL_ROOT_FINITE_COST_ACCEPTANCE_REVIEWED"
+    },
+    "D": {
+      "sha256": "1171386166b648684ae70091178ccd135416ff64a9d13179a7f6695267212c12",
+      "status": "ORIGINAL_ROOT_FINITE_COST_ACCEPTANCE_REVIEWED"
+    }
+  },
+  "owner": "/root",
+  "public_artifact_commit": "24ac6866992dd89ab222b8bf03d60e6c0c49a2d5",
+  "public_git_acquisition_sha256": "2d21b6cbfc18ffc7a74f2a00e3c060d583c53b0e4cf186b2e93bb6451b1eb18e",
+  "public_replay_completed": false,
+  "release_actual_receipt_sha256": "f6edc257afe37b9afeeb2ecd21e2c922a7523ca091dc769fde890f52ed70bf90",
+  "root_acceptance_authority": "Original coordinator decisions, independent structural review and actual public landing; no approval inferred from the builder.",
+  "root_approved_inputs_sha256": "a4166c3fe81dff988f689e69ebb44bece9cdd1047e0d69a95be7b2f3f854631c",
+  "structural_review_sha256": "e05ac737f5fced266783983eef67cfcdd74d1073ad27a9495480341f04a90494",
+  "utc": "2026-10-07T01:23:35.514121+00:00"
+}

@@ -1,0 +1,3580 @@
+{
+  "schema": "r1-ack-process-cut-source-applicability-review-v1",
+  "verdict": "CURRENT_SCOPED_PROCESS_CUT_VALIDATED_FROM_EXISTING_CI",
+  "reviewed_scope": "Read-only original receipt verification, Git object source/diff/slice comparison, and locally retained original normal/race JSONL inspection. No Go/build/test/capture/GitHub/polling/delegation.",
+  "source": {
+    "repository": "/tmp/gomap-r1-5059-sweep",
+    "heads": {
+      "original_C": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+      "historical_D_10x": "e2355fe4b5c3629c99478b3c81baef724833b155",
+      "integrated_read": "00d2c370a5907225ff36f82bb92ca3ee0679ea08",
+      "reviewed_runtime": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "reviewed_C": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+      "cleanup_tested": "52bc214704bfd1bad946ad9e88989b8a52f12dc2"
+    },
+    "trees": {
+      "original_C": "06499e822aa9f270848360bc0247099ce9f9c833",
+      "historical_D_10x": "1955e97a2ba2106112e288e1f9f495a7a5953118",
+      "integrated_read": "2fa936b8aad1d0f215203e537d63833b5748f1a6",
+      "reviewed_runtime": "96bd466b509cefe22b2623acc7b03374d7668be5",
+      "reviewed_C": "e8e506c2a0aa73b550df0136c75dfb341d4d3070",
+      "cleanup_tested": "aea2a1c6fe7de35badb05b067a5f7dd9f8bece5b"
+    },
+    "canonical_scope": "go.mod/go.sum OR prefixes TreeDB/ and cmd/internal/treedbstats/ with suffix .go/.s/.S/.c/.h/.syso; exclude *_test.go; digest SHA256(sorted(path+NUL+GitBlob+NUL)).",
+    "canonical_runtime": {
+      "original_C": {
+        "blob_count": 1096,
+        "sha256": "ed3a6b4fb69daf4f0f7b7cc9584a67fa87162373e27ba7a37d3e926d013ae789"
+      },
+      "historical_D_10x": {
+        "blob_count": 1097,
+        "sha256": "5ef1bd611c0dcbc856b434c2993803213d6b998a937edddd17e72a8013b5894c"
+      },
+      "integrated_read": {
+        "blob_count": 1097,
+        "sha256": "53f92a2a08ddb0496e51734686b851790f79027df93e7d5a83d7f1258360248c"
+      },
+      "reviewed_runtime": {
+        "blob_count": 1098,
+        "sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873"
+      },
+      "reviewed_C": {
+        "blob_count": 1098,
+        "sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873"
+      },
+      "cleanup_tested": {
+        "blob_count": 1098,
+        "sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873"
+      }
+    },
+    "reviewed_runtime_equals_reviewed_C_equals_cleanup_tested": true,
+    "semantic_limit": "These are exact source-input bindings only; no binary/performance equivalence or future landing claim."
+  },
+  "historical_C": {
+    "source_commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+    "execution_receipt_note": "Original runner was base5f85 plus exact new candidate test blob, not a clean c791 checkout. This PR changed test/docs only; relevant runtime byte equality to c791 follows Git objects and its retained manifest/handoff. Do not relabel source-before metadata.",
+    "test_blob": "59ec6b4c3c6aec499106fb6d5bab2d7257425ac6",
+    "fixture": "Four non-null native string columns email/city/name/bio plus retained fields; unique email and city indexes; durable CommandWAL; buffered indexed async flush explicitly disabled.",
+    "actual_argv_from_retained_handoff": [
+      "go test ./TreeDB/collections -run ^TestR1Mutation -count=1 -v -timeout=3m",
+      "go test -race ./TreeDB/collections -run ^(TestR1Mutation|TestTypedMinimaInFlightPublicationMutation|TestTypedUpsertOverlappingBatches) -count=1 -timeout=5m"
+    ],
+    "runner": "Linux111, Go1.26.4; GOWORK=off,GOTOOLCHAIN=local; exact export paths in original handoff.",
+    "normal_all_18_subcases_observed_pass": true,
+    "final_normal_package_seconds": 0.305,
+    "final_race_package_seconds": 20.376,
+    "raw_receipts": [
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5059/raw-logs/focused-final.log",
+        "sha256": "3406c9d7f3434fa8782d5b491aeda833cfc6f7961809c7c8f6d5252fca5b314d",
+        "bytes": 5436
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5059/raw-logs/race-final.log",
+        "sha256": "0fa72f8a1d2e0a8c27cd1dc4e8878f8f75f79ed6f81bc204758fd2189f282c52",
+        "bytes": 56
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5059/raw-logs/race.log",
+        "sha256": "5ad908569a53410c8bd5e382f0617eb39a17609b971d6abede08909620ac1aad",
+        "bytes": 900
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5059/raw-logs/reused-invariants.log",
+        "sha256": "ef3963e752eaabc9409a17538962b19409120a4374c98186e8ecd481458438f5",
+        "bytes": 55
+      }
+    ],
+    "manifest": {
+      "path": "/tmp/gomap-r1-execution-20261005/5059/source-and-log-manifest.json",
+      "sha256": "a7ff7b52e913e8432817a4c1d183f924bf2d8f4a17eae1b1fb76815e7f379972",
+      "bytes": 1434
+    },
+    "handoff": {
+      "path": "/tmp/gomap-r1-execution-20261005/5059/handoff.md",
+      "sha256": "6b85c525978257504e17a88910b981b4122279dc0768a409ba4a5eaf361d3a49",
+      "bytes": 5266
+    },
+    "retained_first_race_red": "Original race.log retains an overstrict test assumption that ACK must leave an unapplied frame; final oracle permits completed publication at ACK. Preserved as historical test correction, not erased or promoted.",
+    "actual_base_runtime_binding": {
+      "base": "5f85c2fc5e5c332c2f57c6ac19ba3805e443b29b",
+      "candidate": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+      "complete_changed_paths": [
+        "TreeDB/collections/r1_mutation_5059_test.go",
+        "TreeDB/docs/spec/r1-indexed-mutations.md"
+      ],
+      "all_canonical_runtime_inputs_equal": true,
+      "canonical_blob_count": 1096,
+      "canonical_runtime_sha256": "ed3a6b4fb69daf4f0f7b7cc9584a67fa87162373e27ba7a37d3e926d013ae789",
+      "shared_typed_DB_helper_test_file": {
+        "path": "TreeDB/collections/typed_batch_test.go",
+        "base_and_candidate_git_blob": "34c59bb1ebac4a42bd46efaa7a9cfabc45b1d8b5"
+      },
+      "limit": "Runner candidate test file was applied as exact uncommitted new blob on this runtime base; this preserves actual source provenance instead of fabricating a clean candidate checkout."
+    }
+  },
+  "historical_D_10x": {
+    "source_commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+    "before_after_clean_source_receipts_match": true,
+    "actual_argv": [
+      "go test ./TreeDB/collections -run ^TestR1Lifecycle(MixedCycles|RecoveryAfterMaintenance)5060$ -count=10 -timeout=5m -v",
+      "go test -race ./TreeDB/collections -run ^TestR1Lifecycle(MixedCycles|RecoveryAfterMaintenance)5060$ -count=10 -timeout=5m -v"
+    ],
+    "runner": "Linux185, Go1.26.4; owned correctness lock; exact environment/argv in retained run-5065-ci-lifecycle-fix-185.sh.",
+    "counts": {
+      "normal.log": {
+        "TestR1LifecycleMixedCycles5060": 10,
+        "TestR1LifecycleRecoveryAfterMaintenance5060": 10,
+        "cuts": {
+          "before_append": 10,
+          "after_sync": 10,
+          "ack": 10
+        },
+        "footer": [
+          "PASS",
+          "ok  \tgithub.com/snissn/gomap/TreeDB/collections\t52.570s"
+        ]
+      },
+      "race.log": {
+        "TestR1LifecycleMixedCycles5060": 10,
+        "TestR1LifecycleRecoveryAfterMaintenance5060": 10,
+        "cuts": {
+          "before_append": 10,
+          "after_sync": 10,
+          "ack": 10
+        },
+        "footer": [
+          "PASS",
+          "ok  \tgithub.com/snissn/gomap/TreeDB/collections\t109.299s"
+        ]
+      }
+    },
+    "receipts": [
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/handoff.md",
+        "sha256": "2833476935fc0c668dd17d6a98d5600d8e44b72121141a63125c7a47590f155d",
+        "bytes": 3380
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/source.json",
+        "sha256": "89e00c84b4bf6e55a95533ad8351146a7de8fe3d2de105098957e35ecefd5795",
+        "bytes": 1190
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/source-before.txt",
+        "sha256": "33ac481552ce9de22a755afbf6a6bd61c657ee8a50169c54af402aecfdfb0b0b",
+        "bytes": 41
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/source-after.txt",
+        "sha256": "33ac481552ce9de22a755afbf6a6bd61c657ee8a50169c54af402aecfdfb0b0b",
+        "bytes": 41
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/normal.log",
+        "sha256": "7086fec10db88998b84167364f851a9a60c986172f511d783ff40a8ead125d2e",
+        "bytes": 38531
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/race.log",
+        "sha256": "50671deb21947c48e0380941dc187a2803921b2c2749fc175a1aee00af77d568",
+        "bytes": 38532
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/vet.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "bytes": 0
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/results.txt",
+        "sha256": "0c74a7a0d8455d66619066b5f8e275c458292872c90fad4da90449a76dc44621",
+        "bytes": 22
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/toolchain.txt",
+        "sha256": "f01464b65e7e8f199c905fb53845c28fd860a214958b6019360b3c6556bbeb97",
+        "bytes": 184
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/5065-ci-lifecycle-fix/original-ci-failure-excerpt.log",
+        "sha256": "468b32a1bdad96dc213fb1fb2de58409ffc70a83ec3e76bbef7ce2c865d587ae",
+        "bytes": 4219
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/run-5065-ci-lifecycle-fix-185.sh",
+        "sha256": "dd907386f816f03aa9791cf0037bf77f880f5bb6139309a572e876440c5efe47",
+        "bytes": 1302
+      }
+    ],
+    "tested_lifecycle_blob": "d3ecb5ec68215be8d5705f4170b4496168b02100",
+    "disposition": "Valid original ten repeated lifecycle/recovery runs, three cuts each; not an async-specific suite. Current D test/profile/opener/maintenance paths materially changed; use newly observed current-source CI below rather than claim complete source identity."
+  },
+  "current_source_binding": {
+    "unchanged_whole_file_paths": [
+      {
+        "path": "go.mod",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "9c50190970e42029aebab51af84002c17341053e",
+            "sha256": "a5ee500cad24e42459629bc5027fafb1b106996b0639473c920d19a2062e7d6f",
+            "bytes": 5176
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "9c50190970e42029aebab51af84002c17341053e",
+            "sha256": "a5ee500cad24e42459629bc5027fafb1b106996b0639473c920d19a2062e7d6f",
+            "bytes": 5176
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "9c50190970e42029aebab51af84002c17341053e",
+            "sha256": "a5ee500cad24e42459629bc5027fafb1b106996b0639473c920d19a2062e7d6f",
+            "bytes": 5176
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "9c50190970e42029aebab51af84002c17341053e",
+            "sha256": "a5ee500cad24e42459629bc5027fafb1b106996b0639473c920d19a2062e7d6f",
+            "bytes": 5176
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "go.sum",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a",
+            "sha256": "a30a307fe909899878ba84375642b735cdeae7f7076a78d139b88e6cf296be37",
+            "bytes": 44511
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a",
+            "sha256": "a30a307fe909899878ba84375642b735cdeae7f7076a78d139b88e6cf296be37",
+            "bytes": 44511
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a",
+            "sha256": "a30a307fe909899878ba84375642b735cdeae7f7076a78d139b88e6cf296be37",
+            "bytes": 44511
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a",
+            "sha256": "a30a307fe909899878ba84375642b735cdeae7f7076a78d139b88e6cf296be37",
+            "bytes": 44511
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/open_backend.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "a5e3e4894f1aa3b40adfa55c7c4f7e585ab4007b",
+            "sha256": "08648dc0d86b921c23a980d38ae7a45eb2f18aaf099dc0b5316450d4934ff57e",
+            "bytes": 3947
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "a5e3e4894f1aa3b40adfa55c7c4f7e585ab4007b",
+            "sha256": "08648dc0d86b921c23a980d38ae7a45eb2f18aaf099dc0b5316450d4934ff57e",
+            "bytes": 3947
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "a5e3e4894f1aa3b40adfa55c7c4f7e585ab4007b",
+            "sha256": "08648dc0d86b921c23a980d38ae7a45eb2f18aaf099dc0b5316450d4934ff57e",
+            "bytes": 3947
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "a5e3e4894f1aa3b40adfa55c7c4f7e585ab4007b",
+            "sha256": "08648dc0d86b921c23a980d38ae7a45eb2f18aaf099dc0b5316450d4934ff57e",
+            "bytes": 3947
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/profiles.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "52be94175674fefbabd61f0ba4a6a4d3f81c1d89",
+            "sha256": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+            "bytes": 16706
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "52be94175674fefbabd61f0ba4a6a4d3f81c1d89",
+            "sha256": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+            "bytes": 16706
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "52be94175674fefbabd61f0ba4a6a4d3f81c1d89",
+            "sha256": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+            "bytes": 16706
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "52be94175674fefbabd61f0ba4a6a4d3f81c1d89",
+            "sha256": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+            "bytes": 16706
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/db.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+            "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f",
+            "bytes": 185753
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+            "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f",
+            "bytes": 185753
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+            "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f",
+            "bytes": 185753
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+            "sha256": "b4edf9c3cdbea44b84e4b0571242b0fb1f2563ad50b24f41703dcadf70033b3f",
+            "bytes": 185753
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/value_log_appender.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "74a392295bfcd80a0175d4cb6b36d2f59d3fd5f0",
+            "sha256": "03be5e9d82a12804d7bc75ecf300dcd2bdd1086c976db8ac8845eb0cbdc831f8",
+            "bytes": 16754
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "74a392295bfcd80a0175d4cb6b36d2f59d3fd5f0",
+            "sha256": "03be5e9d82a12804d7bc75ecf300dcd2bdd1086c976db8ac8845eb0cbdc831f8",
+            "bytes": 16754
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "74a392295bfcd80a0175d4cb6b36d2f59d3fd5f0",
+            "sha256": "03be5e9d82a12804d7bc75ecf300dcd2bdd1086c976db8ac8845eb0cbdc831f8",
+            "bytes": 16754
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "74a392295bfcd80a0175d4cb6b36d2f59d3fd5f0",
+            "sha256": "03be5e9d82a12804d7bc75ecf300dcd2bdd1086c976db8ac8845eb0cbdc831f8",
+            "bytes": 16754
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/command_wal_publish.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "e5f5ab2994939bcc20ce82608c264f653756a641",
+            "sha256": "ff1da1fca549186f5fce90a574ee258377044ea2aeb03bfdfaa4aff09121f2cb",
+            "bytes": 35049
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "e5f5ab2994939bcc20ce82608c264f653756a641",
+            "sha256": "ff1da1fca549186f5fce90a574ee258377044ea2aeb03bfdfaa4aff09121f2cb",
+            "bytes": 35049
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "e5f5ab2994939bcc20ce82608c264f653756a641",
+            "sha256": "ff1da1fca549186f5fce90a574ee258377044ea2aeb03bfdfaa4aff09121f2cb",
+            "bytes": 35049
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "e5f5ab2994939bcc20ce82608c264f653756a641",
+            "sha256": "ff1da1fca549186f5fce90a574ee258377044ea2aeb03bfdfaa4aff09121f2cb",
+            "bytes": 35049
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/command_wal_v2_recovery.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "76d0373d14c97d41ae554b1976ffa9e3d14ad3b3",
+            "sha256": "b5cc386645591c9170b50613fdbe0d03cd5a5af46b1e538c9f077ea6203fa5c3",
+            "bytes": 23382
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "76d0373d14c97d41ae554b1976ffa9e3d14ad3b3",
+            "sha256": "b5cc386645591c9170b50613fdbe0d03cd5a5af46b1e538c9f077ea6203fa5c3",
+            "bytes": 23382
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "76d0373d14c97d41ae554b1976ffa9e3d14ad3b3",
+            "sha256": "b5cc386645591c9170b50613fdbe0d03cd5a5af46b1e538c9f077ea6203fa5c3",
+            "bytes": 23382
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "76d0373d14c97d41ae554b1976ffa9e3d14ad3b3",
+            "sha256": "b5cc386645591c9170b50613fdbe0d03cd5a5af46b1e538c9f077ea6203fa5c3",
+            "bytes": 23382
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/command_wal_replay_registry.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "006c2546d8fad998c5d585bdd5504274526c5daa",
+            "sha256": "6e6301f01b2e01f542c45b54e04be81e7b62be9a4951786cf5749e206116dd15",
+            "bytes": 3238
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "006c2546d8fad998c5d585bdd5504274526c5daa",
+            "sha256": "6e6301f01b2e01f542c45b54e04be81e7b62be9a4951786cf5749e206116dd15",
+            "bytes": 3238
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "006c2546d8fad998c5d585bdd5504274526c5daa",
+            "sha256": "6e6301f01b2e01f542c45b54e04be81e7b62be9a4951786cf5749e206116dd15",
+            "bytes": 3238
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "006c2546d8fad998c5d585bdd5504274526c5daa",
+            "sha256": "6e6301f01b2e01f542c45b54e04be81e7b62be9a4951786cf5749e206116dd15",
+            "bytes": 3238
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/command_wal_raw.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "83ffc2d21603516f05470048ef08123f024a637c",
+            "sha256": "9bb1f61eef75826a402145eb56c1e11d025de553e10c8c9732ecf616da4acaa6",
+            "bytes": 111871
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "83ffc2d21603516f05470048ef08123f024a637c",
+            "sha256": "9bb1f61eef75826a402145eb56c1e11d025de553e10c8c9732ecf616da4acaa6",
+            "bytes": 111871
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "83ffc2d21603516f05470048ef08123f024a637c",
+            "sha256": "9bb1f61eef75826a402145eb56c1e11d025de553e10c8c9732ecf616da4acaa6",
+            "bytes": 111871
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "83ffc2d21603516f05470048ef08123f024a637c",
+            "sha256": "9bb1f61eef75826a402145eb56c1e11d025de553e10c8c9732ecf616da4acaa6",
+            "bytes": 111871
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/command_wal_gate.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "50512587d1ecc75c6233e71a49ee42bca6c5f1e0",
+            "sha256": "bd171627496fc3e31623608e9e728c7a5b4e575fc706a80f5cf8dda5ccf9591d",
+            "bytes": 945
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "50512587d1ecc75c6233e71a49ee42bca6c5f1e0",
+            "sha256": "bd171627496fc3e31623608e9e728c7a5b4e575fc706a80f5cf8dda5ccf9591d",
+            "bytes": 945
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "50512587d1ecc75c6233e71a49ee42bca6c5f1e0",
+            "sha256": "bd171627496fc3e31623608e9e728c7a5b4e575fc706a80f5cf8dda5ccf9591d",
+            "bytes": 945
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "50512587d1ecc75c6233e71a49ee42bca6c5f1e0",
+            "sha256": "bd171627496fc3e31623608e9e728c7a5b4e575fc706a80f5cf8dda5ccf9591d",
+            "bytes": 945
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/db/command_wal_barrier.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "436ac2994f15ed00abd89cd5d29d9dbeb0a6b080",
+            "sha256": "1572d7a7170f4365d607201123b40e6332cf36da8fde268a4ee4ea82aeffb55a",
+            "bytes": 15381
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "436ac2994f15ed00abd89cd5d29d9dbeb0a6b080",
+            "sha256": "1572d7a7170f4365d607201123b40e6332cf36da8fde268a4ee4ea82aeffb55a",
+            "bytes": 15381
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "436ac2994f15ed00abd89cd5d29d9dbeb0a6b080",
+            "sha256": "1572d7a7170f4365d607201123b40e6332cf36da8fde268a4ee4ea82aeffb55a",
+            "bytes": 15381
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "436ac2994f15ed00abd89cd5d29d9dbeb0a6b080",
+            "sha256": "1572d7a7170f4365d607201123b40e6332cf36da8fde268a4ee4ea82aeffb55a",
+            "bytes": 15381
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/caching/db.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "0c051875a6899caec5d2e059a05a6034da2e6835",
+            "sha256": "1cd808f8fd010646a51b3dfc9f9dc3f79100f56e052e84abd142aa055c6a3d12",
+            "bytes": 1385147
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "0c051875a6899caec5d2e059a05a6034da2e6835",
+            "sha256": "1cd808f8fd010646a51b3dfc9f9dc3f79100f56e052e84abd142aa055c6a3d12",
+            "bytes": 1385147
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "0c051875a6899caec5d2e059a05a6034da2e6835",
+            "sha256": "1cd808f8fd010646a51b3dfc9f9dc3f79100f56e052e84abd142aa055c6a3d12",
+            "bytes": 1385147
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "0c051875a6899caec5d2e059a05a6034da2e6835",
+            "sha256": "1cd808f8fd010646a51b3dfc9f9dc3f79100f56e052e84abd142aa055c6a3d12",
+            "bytes": 1385147
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/collections/command_wal.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "fd5fce0d7e29c7f9680deaac94bd3a38dbe700d2",
+            "sha256": "6ceaa983443ba50924f6c0a0ca96e70fb25f2267fe7bd6f705c40ebc3067c729",
+            "bytes": 23926
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "fd5fce0d7e29c7f9680deaac94bd3a38dbe700d2",
+            "sha256": "6ceaa983443ba50924f6c0a0ca96e70fb25f2267fe7bd6f705c40ebc3067c729",
+            "bytes": 23926
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "fd5fce0d7e29c7f9680deaac94bd3a38dbe700d2",
+            "sha256": "6ceaa983443ba50924f6c0a0ca96e70fb25f2267fe7bd6f705c40ebc3067c729",
+            "bytes": 23926
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "fd5fce0d7e29c7f9680deaac94bd3a38dbe700d2",
+            "sha256": "6ceaa983443ba50924f6c0a0ca96e70fb25f2267fe7bd6f705c40ebc3067c729",
+            "bytes": 23926
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/collections/command_wal_admission.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "89ad552166f357d5dd369464efcc38dc4ebe4f26",
+            "sha256": "c5d7cc5c065f0e2ee48e7dd5455e250e6bd5622e8b134cc3129231e9af9e0623",
+            "bytes": 8335
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "89ad552166f357d5dd369464efcc38dc4ebe4f26",
+            "sha256": "c5d7cc5c065f0e2ee48e7dd5455e250e6bd5622e8b134cc3129231e9af9e0623",
+            "bytes": 8335
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "89ad552166f357d5dd369464efcc38dc4ebe4f26",
+            "sha256": "c5d7cc5c065f0e2ee48e7dd5455e250e6bd5622e8b134cc3129231e9af9e0623",
+            "bytes": 8335
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "89ad552166f357d5dd369464efcc38dc4ebe4f26",
+            "sha256": "c5d7cc5c065f0e2ee48e7dd5455e250e6bd5622e8b134cc3129231e9af9e0623",
+            "bytes": 8335
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/collections/command_wal_pending.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "d72dd6440742c620e88fefe7a72f16508b491867",
+            "sha256": "77f47b863bff131f78d0a62fd3e9e515797f6da7f2748251f14c9be5a5a32d85",
+            "bytes": 26288
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "d72dd6440742c620e88fefe7a72f16508b491867",
+            "sha256": "77f47b863bff131f78d0a62fd3e9e515797f6da7f2748251f14c9be5a5a32d85",
+            "bytes": 26288
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "d72dd6440742c620e88fefe7a72f16508b491867",
+            "sha256": "77f47b863bff131f78d0a62fd3e9e515797f6da7f2748251f14c9be5a5a32d85",
+            "bytes": 26288
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "d72dd6440742c620e88fefe7a72f16508b491867",
+            "sha256": "77f47b863bff131f78d0a62fd3e9e515797f6da7f2748251f14c9be5a5a32d85",
+            "bytes": 26288
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/collections/command_wal_prepared_owner.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "24c83a85a42e2619dab9442119eeccb77a24fef5",
+            "sha256": "a6a327a47c91871cca3ac8c8541733e8e6cf5512a59b4c73c0f813e5725dd118",
+            "bytes": 13463
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "24c83a85a42e2619dab9442119eeccb77a24fef5",
+            "sha256": "a6a327a47c91871cca3ac8c8541733e8e6cf5512a59b4c73c0f813e5725dd118",
+            "bytes": 13463
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "24c83a85a42e2619dab9442119eeccb77a24fef5",
+            "sha256": "a6a327a47c91871cca3ac8c8541733e8e6cf5512a59b4c73c0f813e5725dd118",
+            "bytes": 13463
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "24c83a85a42e2619dab9442119eeccb77a24fef5",
+            "sha256": "a6a327a47c91871cca3ac8c8541733e8e6cf5512a59b4c73c0f813e5725dd118",
+            "bytes": 13463
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/collections/typed_batch.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "07a19ec68409e328d6e773bb208e57ff94eccea0",
+            "sha256": "13d6639fd495645a1896b89c614b8f32f81766282c6bfd7cab36fd9d512565f0",
+            "bytes": 26085
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "07a19ec68409e328d6e773bb208e57ff94eccea0",
+            "sha256": "13d6639fd495645a1896b89c614b8f32f81766282c6bfd7cab36fd9d512565f0",
+            "bytes": 26085
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "07a19ec68409e328d6e773bb208e57ff94eccea0",
+            "sha256": "13d6639fd495645a1896b89c614b8f32f81766282c6bfd7cab36fd9d512565f0",
+            "bytes": 26085
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "07a19ec68409e328d6e773bb208e57ff94eccea0",
+            "sha256": "13d6639fd495645a1896b89c614b8f32f81766282c6bfd7cab36fd9d512565f0",
+            "bytes": 26085
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/commandwalapply/apply.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "58ad19d97b24744fe292da6e40709962342a1a38",
+            "sha256": "717e1fc77f0bff301789156e70468fbc2822a27115b3ce16e540dade4594506e",
+            "bytes": 20651
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "58ad19d97b24744fe292da6e40709962342a1a38",
+            "sha256": "717e1fc77f0bff301789156e70468fbc2822a27115b3ce16e540dade4594506e",
+            "bytes": 20651
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "58ad19d97b24744fe292da6e40709962342a1a38",
+            "sha256": "717e1fc77f0bff301789156e70468fbc2822a27115b3ce16e540dade4594506e",
+            "bytes": 20651
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "58ad19d97b24744fe292da6e40709962342a1a38",
+            "sha256": "717e1fc77f0bff301789156e70468fbc2822a27115b3ce16e540dade4594506e",
+            "bytes": 20651
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/commitlog/writer.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "9bfdcda5ca821946739d53a4feaab7b67ea13b7f",
+            "sha256": "050fb3479b21966bf25959b1634a38943705dc75b1f5afe56a5689f8be722e02",
+            "bytes": 51891
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "9bfdcda5ca821946739d53a4feaab7b67ea13b7f",
+            "sha256": "050fb3479b21966bf25959b1634a38943705dc75b1f5afe56a5689f8be722e02",
+            "bytes": 51891
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "9bfdcda5ca821946739d53a4feaab7b67ea13b7f",
+            "sha256": "050fb3479b21966bf25959b1634a38943705dc75b1f5afe56a5689f8be722e02",
+            "bytes": 51891
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "9bfdcda5ca821946739d53a4feaab7b67ea13b7f",
+            "sha256": "050fb3479b21966bf25959b1634a38943705dc75b1f5afe56a5689f8be722e02",
+            "bytes": 51891
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/commitlog/command_frame.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "9e33c58244586a1b061d2193e5ea1f32e9ddf3df",
+            "sha256": "e03e9759623e675921c8b5afd1d64f64261409b079229ab646e802881cf08488",
+            "bytes": 123449
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "9e33c58244586a1b061d2193e5ea1f32e9ddf3df",
+            "sha256": "e03e9759623e675921c8b5afd1d64f64261409b079229ab646e802881cf08488",
+            "bytes": 123449
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "9e33c58244586a1b061d2193e5ea1f32e9ddf3df",
+            "sha256": "e03e9759623e675921c8b5afd1d64f64261409b079229ab646e802881cf08488",
+            "bytes": 123449
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "9e33c58244586a1b061d2193e5ea1f32e9ddf3df",
+            "sha256": "e03e9759623e675921c8b5afd1d64f64261409b079229ab646e802881cf08488",
+            "bytes": 123449
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/commitlog/command_frame_v2.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "60256e46490f559b942abfed5920c832a965d1b6",
+            "sha256": "4c82385440a9cce32e7be24bd168e4fb148c13298645ea62f51a71a7af53a539",
+            "bytes": 16884
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "60256e46490f559b942abfed5920c832a965d1b6",
+            "sha256": "4c82385440a9cce32e7be24bd168e4fb148c13298645ea62f51a71a7af53a539",
+            "bytes": 16884
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "60256e46490f559b942abfed5920c832a965d1b6",
+            "sha256": "4c82385440a9cce32e7be24bd168e4fb148c13298645ea62f51a71a7af53a539",
+            "bytes": 16884
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "60256e46490f559b942abfed5920c832a965d1b6",
+            "sha256": "4c82385440a9cce32e7be24bd168e4fb148c13298645ea62f51a71a7af53a539",
+            "bytes": 16884
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/commitlog/command_typed_collection.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "16de74b9cc40d581dcb5ad29a408bed384502989",
+            "sha256": "d22b86627a4d2685e3d674ab34b2cfb6bc8b4e70c499c56168f53cc8ac317445",
+            "bytes": 10792
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "16de74b9cc40d581dcb5ad29a408bed384502989",
+            "sha256": "d22b86627a4d2685e3d674ab34b2cfb6bc8b4e70c499c56168f53cc8ac317445",
+            "bytes": 10792
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "16de74b9cc40d581dcb5ad29a408bed384502989",
+            "sha256": "d22b86627a4d2685e3d674ab34b2cfb6bc8b4e70c499c56168f53cc8ac317445",
+            "bytes": 10792
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "16de74b9cc40d581dcb5ad29a408bed384502989",
+            "sha256": "d22b86627a4d2685e3d674ab34b2cfb6bc8b4e70c499c56168f53cc8ac317445",
+            "bytes": 10792
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/durabilitycut/durabilitycut.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "3ee06040808884c59d34bf983615aba1f5c1fe0a",
+            "sha256": "c0d964af8da1f3492607a8d9901218da3b68eb4da3c29915b5cc84080ae47e59",
+            "bytes": 8651
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "3ee06040808884c59d34bf983615aba1f5c1fe0a",
+            "sha256": "c0d964af8da1f3492607a8d9901218da3b68eb4da3c29915b5cc84080ae47e59",
+            "bytes": 8651
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "3ee06040808884c59d34bf983615aba1f5c1fe0a",
+            "sha256": "c0d964af8da1f3492607a8d9901218da3b68eb4da3c29915b5cc84080ae47e59",
+            "bytes": 8651
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "3ee06040808884c59d34bf983615aba1f5c1fe0a",
+            "sha256": "c0d964af8da1f3492607a8d9901218da3b68eb4da3c29915b5cc84080ae47e59",
+            "bytes": 8651
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/rootpublication/admission.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "60a479a664536fcfcc5fb81f85958b73c6fd8a85",
+            "sha256": "67bae4ebe803e337571ff301e9b9e79d8c3a090c0e1ab5fc51b4cac4d26d86cf",
+            "bytes": 5968
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "60a479a664536fcfcc5fb81f85958b73c6fd8a85",
+            "sha256": "67bae4ebe803e337571ff301e9b9e79d8c3a090c0e1ab5fc51b4cac4d26d86cf",
+            "bytes": 5968
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "60a479a664536fcfcc5fb81f85958b73c6fd8a85",
+            "sha256": "67bae4ebe803e337571ff301e9b9e79d8c3a090c0e1ab5fc51b4cac4d26d86cf",
+            "bytes": 5968
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "60a479a664536fcfcc5fb81f85958b73c6fd8a85",
+            "sha256": "67bae4ebe803e337571ff301e9b9e79d8c3a090c0e1ab5fc51b4cac4d26d86cf",
+            "bytes": 5968
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/rootpublication/coordinator.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+            "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+            "bytes": 40172
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+            "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+            "bytes": 40172
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+            "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+            "bytes": 40172
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+            "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+            "bytes": 40172
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "1556e77ca6649647704ac93e252b4c20c70efbb7",
+            "sha256": "77c322d092ad51c58fce3a6618f47c842b21375581e7987399fe77a18490f7d2",
+            "bytes": 12407
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "1556e77ca6649647704ac93e252b4c20c70efbb7",
+            "sha256": "77c322d092ad51c58fce3a6618f47c842b21375581e7987399fe77a18490f7d2",
+            "bytes": 12407
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "1556e77ca6649647704ac93e252b4c20c70efbb7",
+            "sha256": "77c322d092ad51c58fce3a6618f47c842b21375581e7987399fe77a18490f7d2",
+            "bytes": 12407
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "1556e77ca6649647704ac93e252b4c20c70efbb7",
+            "sha256": "77c322d092ad51c58fce3a6618f47c842b21375581e7987399fe77a18490f7d2",
+            "bytes": 12407
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      }
+    ],
+    "changed_runtime_paths": [
+      {
+        "path": "TreeDB/collections/api.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "68d52943e70288fa9c44da752e90247622f532ee",
+            "sha256": "621f4d3e0c1ca1c9455a01faeab0c79b3c86c5ab76fdad57b05ef5fbb8a6e7dd",
+            "bytes": 965825
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "6b374f1563ac3ea4f4faf92cb6ce65c8a7dfec88",
+            "sha256": "fb61bd1c196eb1051df371d2f86a060dc99010b0bc3bc702c84c2d258c193e9c",
+            "bytes": 967239
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "30f227a1e8121037e934d4ec6bc8955c8414f6b0",
+            "sha256": "9abfcc36d347ab54d0cde49b8c9719be139ca8b6e5549659c79e21d040c7047f",
+            "bytes": 967298
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "30f227a1e8121037e934d4ec6bc8955c8414f6b0",
+            "sha256": "9abfcc36d347ab54d0cde49b8c9719be139ca8b6e5549659c79e21d040c7047f",
+            "bytes": 967298
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "b2a3e519f46713e4b60d0b6084b0416717e4365f471c2e60f0be386c2e2d880a",
+        "diff_bytes": 1225,
+        "applicability_note": "Only GetInto and bounded range materializer setup changed; selected mutation/Flush/indexed-publication function slices are unchanged. Read oracle paths still changed."
+      },
+      {
+        "path": "TreeDB/collections/column_asset_manager.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "c844c03647714eba5936ccdb0969ce7bf7d51945",
+            "sha256": "d2cbd36b7affa2b2b667277eea68bcee46162030f83062c12f4c09f7f5bfc6e8",
+            "bytes": 128432
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "c844c03647714eba5936ccdb0969ce7bf7d51945",
+            "sha256": "d2cbd36b7affa2b2b667277eea68bcee46162030f83062c12f4c09f7f5bfc6e8",
+            "bytes": 128432
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "105a0f674bd9a8b40af733eb997de1655a6c4a4e",
+            "sha256": "3db1a45b4b6f1511855b61e6e2c43297c261483e7ababe466df8fda0f8fe28b0",
+            "bytes": 128426
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "105a0f674bd9a8b40af733eb997de1655a6c4a4e",
+            "sha256": "3db1a45b4b6f1511855b61e6e2c43297c261483e7ababe466df8fda0f8fe28b0",
+            "bytes": 128426
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "e38c75ca55e5c917b98bea4f3e89555147463c5dcbee13e2c857031721b2018f",
+        "diff_bytes": 556,
+        "applicability_note": "Diagnostic active-handle accounting calls direct gauge accessor, no mutation admission change."
+      },
+      {
+        "path": "TreeDB/collections/document_materializer.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "0defceda677d71750c99ddd50bec7c3c4db1f2a5",
+            "sha256": "47f7aa8c55b1e65021425bff6f8a58e55b3be8f947e75a96da4cf3d5c25e6e86",
+            "bytes": 69381
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "f53a2388d17297ef11ee7006e2dd877ad47c3d8d",
+            "sha256": "5404f357841f1488ee032b20aeff0efdf02c339daab8379ac0129949a28566c3",
+            "bytes": 72819
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "a5afa1de427015c9ab559598bd0d5ab8ffbcfee1",
+            "sha256": "063532e755decef3f00e1a9886c4911fe7ccc9c9f2ee9b24992548358ad54388",
+            "bytes": 73157
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "a5afa1de427015c9ab559598bd0d5ab8ffbcfee1",
+            "sha256": "063532e755decef3f00e1a9886c4911fe7ccc9c9f2ee9b24992548358ad54388",
+            "bytes": 73157
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "b4faa7b3fe5f173f234ed9d0b3b18dadd08e6b894147fe20a68edf0371757bea",
+        "diff_bytes": 4208,
+        "applicability_note": "Ordered row reference validation/cache changed; full-row/range assertions exercise this newer path."
+      },
+      {
+        "path": "TreeDB/db/durable_root_runtime.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+            "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+            "bytes": 114319
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+            "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+            "bytes": 114319
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+            "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+            "bytes": 117323
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+            "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+            "bytes": 117323
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "42cdab05aa62d6b767364db0ede18370ea083cf529451a4895222f4d8883e7d5",
+        "diff_bytes": 6370,
+        "applicability_note": "Exact current packed dependency reachability selection and physical authority checks changed; independently selectable older recovery root retains inherited packed closure."
+      },
+      {
+        "path": "TreeDB/db/leaf_generation_gc.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "4559626cfefcacf4ead036eec69e98df49ea0c0a",
+            "sha256": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+            "bytes": 26958
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "4559626cfefcacf4ead036eec69e98df49ea0c0a",
+            "sha256": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+            "bytes": 26958
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+            "sha256": "c56131db852cb71150e41e007a9a8165f7b9bfe7ee7367e0e8a2e92331bd89fb",
+            "bytes": 27626
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+            "sha256": "c56131db852cb71150e41e007a9a8165f7b9bfe7ee7367e0e8a2e92331bd89fb",
+            "bytes": 27626
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "b2a28466a1f1820fa9f5bc12064331d7387c50c7473879b09d01cc2e166f51d8",
+        "diff_bytes": 1400,
+        "applicability_note": "Adds manifest-revision GC after leaf generation processing."
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": null,
+            "sha256": null,
+            "bytes": null
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": null,
+            "sha256": null,
+            "bytes": null
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "eddde48dbd47b1f548a5c442b50dc27559ed0ee5",
+            "sha256": "f28cd5029b92c547a3e1942d27cd70139ce5314af831d598aa8c7c4aee01d9bc",
+            "bytes": 13733
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "eddde48dbd47b1f548a5c442b50dc27559ed0ee5",
+            "sha256": "f28cd5029b92c547a3e1942d27cd70139ce5314af831d598aa8c7c4aee01d9bc",
+            "bytes": 13733
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "bbadad47fb9bb25fc84e1ad72a99ec7c8a7f509dcf7a41da929c8a71e4a8d157",
+        "diff_bytes": 14341,
+        "applicability_note": "New physical revision cleanup with fresh complete scans, at most16 retained selected authorities per batch, bounded descriptors, incarnation-safe quarantine/retry cleanup. Current D enables this path."
+      },
+      {
+        "path": "TreeDB/db/vacuum_online.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "70d30583f9354b8284cf0303a90fa7627e92bd06",
+            "sha256": "4f24ad829975a9c74b2d9f976e2a17e523da7964f2720eb77c6c15487bc34993",
+            "bytes": 75334
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "70d30583f9354b8284cf0303a90fa7627e92bd06",
+            "sha256": "4f24ad829975a9c74b2d9f976e2a17e523da7964f2720eb77c6c15487bc34993",
+            "bytes": 75334
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+            "sha256": "8e9d828ba099ec6ab2ef736d93bc42e327549c6ee66c07d734253ea8d7e4d41b",
+            "bytes": 75347
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+            "sha256": "8e9d828ba099ec6ab2ef736d93bc42e327549c6ee66c07d734253ea8d7e4d41b",
+            "bytes": 75347
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "bbfceec31069bb518a8542da93626289b30c3eca3c8adda4c5e0450e0b895daa",
+        "diff_bytes": 1397,
+        "applicability_note": "Current-root and older-recovery rebuild now choose distinct packed projection behavior."
+      },
+      {
+        "path": "TreeDB/db/wal_recovery.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+            "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+            "bytes": 45904
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+            "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+            "bytes": 45904
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+            "sha256": "6bb969fd95fa17294d53ba49530d9e3fa30a79256ec6267d6b560d3611457e41",
+            "bytes": 47414
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+            "sha256": "6bb969fd95fa17294d53ba49530d9e3fa30a79256ec6267d6b560d3611457e41",
+            "bytes": 47414
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "d1f0bb2703cc69457571f98a177585b42dd512d774cb236738f037fae28e2e8b",
+        "diff_bytes": 2143,
+        "applicability_note": "Replay/apply frame function slices unchanged; produced pointer registration now retires exact completed creation metadata. Replay and live native CommandWAL writers share this appender."
+      },
+      {
+        "path": "TreeDB/internal/mappedresource/manager.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "9cfc9b6f661d8e030b23cd4a0c5cd6ad8b6a817f",
+            "sha256": "5ab470fa7bad8be10f79da3be010faa3f3efb961a23bec91659192d59d9cf6e3",
+            "bytes": 19518
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "9cfc9b6f661d8e030b23cd4a0c5cd6ad8b6a817f",
+            "sha256": "5ab470fa7bad8be10f79da3be010faa3f3efb961a23bec91659192d59d9cf6e3",
+            "bytes": 19518
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "34228a52a9445bb698a88867ad00532a7c3429f0",
+            "sha256": "a685baae863ae5cba173fc3d6311d0de82f40a3b53cfb79ca40c2f5dd36f4027",
+            "bytes": 19739
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "34228a52a9445bb698a88867ad00532a7c3429f0",
+            "sha256": "a685baae863ae5cba173fc3d6311d0de82f40a3b53cfb79ca40c2f5dd36f4027",
+            "bytes": 19739
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "2f53eee1cbc2c59196e0984c910c1b48920f683d2c144e7c67a717e8ad7cf979",
+        "diff_bytes": 659,
+        "applicability_note": "Adds direct active-handles gauge only; no durability barrier change."
+      },
+      {
+        "path": "TreeDB/internal/rootpublication/resource_selector.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+            "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24",
+            "bytes": 2683
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+            "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24",
+            "bytes": 2683
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca",
+            "sha256": "39935124f1a9859b45984e4132faf6a871fb6b2ecb849a7017ebfda0c0e8d0d4",
+            "bytes": 4899
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca",
+            "sha256": "39935124f1a9859b45984e4132faf6a871fb6b2ecb849a7017ebfda0c0e8d0d4",
+            "bytes": 4899
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "4274bc82bbeb963785d18127535ff4f8ef1fe2c258b64cd30aef8f08821b7dfe",
+        "diff_bytes": 2685,
+        "applicability_note": "Adds exact physical-kind selection used by rebuilt packed dependency closure."
+      },
+      {
+        "path": "TreeDB/internal/valuelog/manager.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "1a613731464df0c8a8ef3d0036fb71232ca141ac",
+            "sha256": "766fb14d572daa93e368f9a694e9e8e1f44895d59650e177a2933c079e193ecf",
+            "bytes": 88040
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "1a613731464df0c8a8ef3d0036fb71232ca141ac",
+            "sha256": "766fb14d572daa93e368f9a694e9e8e1f44895d59650e177a2933c079e193ecf",
+            "bytes": 88040
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5",
+            "sha256": "fdea6bc5d50a58a6e64f630bc622f15c5f3a4fe6ae513b432ae8d12b62e5e6fe",
+            "bytes": 89734
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5",
+            "sha256": "fdea6bc5d50a58a6e64f630bc622f15c5f3a4fe6ae513b432ae8d12b62e5e6fe",
+            "bytes": 89734
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "5347b9efe7db7d9874843c0f4283abf1c5a553493ac6c0703d641a9efb6b5992",
+        "diff_bytes": 4202,
+        "applicability_note": "Close now owns retry admission, cancellation and joins; prevents surviving background retry workers accessing closed files."
+      },
+      {
+        "path": "TreeDB/internal/valuelog/stable_resource.go",
+        "versions": {
+          "original_C": {
+            "commit": "c791fd104188555aed1182ef2f4a0934e4b4eafc",
+            "git_blob": "d9dd7c01fd6965d3e47cf33e04a56da9d2e20534",
+            "sha256": "dd8be52da3d2305308c0031335a92c4bcd0d66afed62bfcb1d2bf93e4f019a9f",
+            "bytes": 53986
+          },
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "d9dd7c01fd6965d3e47cf33e04a56da9d2e20534",
+            "sha256": "dd8be52da3d2305308c0031335a92c4bcd0d66afed62bfcb1d2bf93e4f019a9f",
+            "bytes": 53986
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "8cff8dea2fa0e48531775552a8782eb079cb2113",
+            "sha256": "a42f0dfcf171e4aee7b08cbea7229683451e331389b813e4c7284b9e1dd70968",
+            "bytes": 53859
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "8cff8dea2fa0e48531775552a8782eb079cb2113",
+            "sha256": "a42f0dfcf171e4aee7b08cbea7229683451e331389b813e4c7284b9e1dd70968",
+            "bytes": 53859
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false,
+        "historical_D_to_current_diff_sha256": "a40b21f3e3b411926e0539c2be81ee8635ed6840741a9412a25b9339b24ff648",
+        "diff_bytes": 1033,
+        "applicability_note": "Retry-deletion admission switches to manager-owned worker lifecycle."
+      }
+    ],
+    "function_slice_method": "Raw bytes from matching line beginning func through immediately before the next top-level line beginning func (or EOF), including intervening comments/whitespace. This is byte equality evidence, not a Go AST or compiled equivalence claim. Start/end lines retained.",
+    "function_slices": [
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "function": "r1MutationMeta5059",
+        "versions": {
+          "original_C": {
+            "sha256": "090e58c109343ef5dc22a438337170cb58103a5ddb671a86a1a4b6c26e893cdc",
+            "bytes": 785,
+            "start_line": 22,
+            "end_line": 33,
+            "declaration": "func r1MutationMeta5059(indexed bool) CollectionMeta {"
+          },
+          "historical_D_10x": {
+            "sha256": "090e58c109343ef5dc22a438337170cb58103a5ddb671a86a1a4b6c26e893cdc",
+            "bytes": 785,
+            "start_line": 22,
+            "end_line": 33,
+            "declaration": "func r1MutationMeta5059(indexed bool) CollectionMeta {"
+          },
+          "reviewed_runtime": {
+            "sha256": "090e58c109343ef5dc22a438337170cb58103a5ddb671a86a1a4b6c26e893cdc",
+            "bytes": 785,
+            "start_line": 22,
+            "end_line": 33,
+            "declaration": "func r1MutationMeta5059(indexed bool) CollectionMeta {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "function": "r1MutationOpen5059",
+        "versions": {
+          "original_C": {
+            "sha256": "c50796f371935118c1f373e32f8ca188b3a09e85f2a98db3ceabd2ea8880e65e",
+            "bytes": 894,
+            "start_line": 76,
+            "end_line": 99,
+            "declaration": "func r1MutationOpen5059(t testing.TB, indexed bool) (string, *backenddb.DB, *Collection) {"
+          },
+          "historical_D_10x": {
+            "sha256": "c50796f371935118c1f373e32f8ca188b3a09e85f2a98db3ceabd2ea8880e65e",
+            "bytes": 894,
+            "start_line": 76,
+            "end_line": 99,
+            "declaration": "func r1MutationOpen5059(t testing.TB, indexed bool) (string, *backenddb.DB, *Collection) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "c50796f371935118c1f373e32f8ca188b3a09e85f2a98db3ceabd2ea8880e65e",
+            "bytes": 894,
+            "start_line": 76,
+            "end_line": 99,
+            "declaration": "func r1MutationOpen5059(t testing.TB, indexed bool) (string, *backenddb.DB, *Collection) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "function": "r1MutationAssert5059",
+        "versions": {
+          "original_C": {
+            "sha256": "c0b29faa151b25bf9baf3eaa5ff82f1b4b90dc873658cb59086e6abd1e72720d",
+            "bytes": 1192,
+            "start_line": 100,
+            "end_line": 143,
+            "declaration": "func r1MutationAssert5059(t testing.TB, col *Collection, want map[string]map[string]any, known map[string]map[string]bool) {"
+          },
+          "historical_D_10x": {
+            "sha256": "c0b29faa151b25bf9baf3eaa5ff82f1b4b90dc873658cb59086e6abd1e72720d",
+            "bytes": 1192,
+            "start_line": 100,
+            "end_line": 143,
+            "declaration": "func r1MutationAssert5059(t testing.TB, col *Collection, want map[string]map[string]any, known map[string]map[string]bool) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "c0b29faa151b25bf9baf3eaa5ff82f1b4b90dc873658cb59086e6abd1e72720d",
+            "bytes": 1192,
+            "start_line": 100,
+            "end_line": 143,
+            "declaration": "func r1MutationAssert5059(t testing.TB, col *Collection, want map[string]map[string]any, known map[string]map[string]bool) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "function": "TestR1MutationCrashCuts5059",
+        "versions": {
+          "original_C": {
+            "sha256": "3144153ba3b6f92d089a3354e07bcbe11a2f8229cabbee0f982cabf01a874808",
+            "bytes": 3321,
+            "start_line": 406,
+            "end_line": 497,
+            "declaration": "func TestR1MutationCrashCuts5059(t *testing.T) {"
+          },
+          "historical_D_10x": {
+            "sha256": "3144153ba3b6f92d089a3354e07bcbe11a2f8229cabbee0f982cabf01a874808",
+            "bytes": 3321,
+            "start_line": 421,
+            "end_line": 512,
+            "declaration": "func TestR1MutationCrashCuts5059(t *testing.T) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "3144153ba3b6f92d089a3354e07bcbe11a2f8229cabbee0f982cabf01a874808",
+            "bytes": 3321,
+            "start_line": 421,
+            "end_line": 512,
+            "declaration": "func TestR1MutationCrashCuts5059(t *testing.T) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "function": "r1MutationCrashRows5059",
+        "versions": {
+          "original_C": {
+            "sha256": "4b7fa0942a8937be4b1b72133e2f923a0668472d21898fa16deb179e58c8a661",
+            "bytes": 981,
+            "start_line": 498,
+            "end_line": 522,
+            "declaration": "func r1MutationCrashRows5059(operation string) ([]map[string]any, []string) {"
+          },
+          "historical_D_10x": {
+            "sha256": "4b7fa0942a8937be4b1b72133e2f923a0668472d21898fa16deb179e58c8a661",
+            "bytes": 981,
+            "start_line": 513,
+            "end_line": 537,
+            "declaration": "func r1MutationCrashRows5059(operation string) ([]map[string]any, []string) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "4b7fa0942a8937be4b1b72133e2f923a0668472d21898fa16deb179e58c8a661",
+            "bytes": 981,
+            "start_line": 513,
+            "end_line": 537,
+            "declaration": "func r1MutationCrashRows5059(operation string) ([]map[string]any, []string) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "function": "r1MutationCrashOperation5059",
+        "versions": {
+          "original_C": {
+            "sha256": "9c0434f95846ef19dc9f95fd9bee36d72e3a9c248e2e538c729769454bdfc5e0",
+            "bytes": 1305,
+            "start_line": 523,
+            "end_line": 559,
+            "declaration": "func r1MutationCrashOperation5059(t *testing.T, col *Collection, operation string) (int, error) {"
+          },
+          "historical_D_10x": {
+            "sha256": "9c0434f95846ef19dc9f95fd9bee36d72e3a9c248e2e538c729769454bdfc5e0",
+            "bytes": 1305,
+            "start_line": 538,
+            "end_line": 574,
+            "declaration": "func r1MutationCrashOperation5059(t *testing.T, col *Collection, operation string) (int, error) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "9c0434f95846ef19dc9f95fd9bee36d72e3a9c248e2e538c729769454bdfc5e0",
+            "bytes": 1305,
+            "start_line": 538,
+            "end_line": 574,
+            "declaration": "func r1MutationCrashOperation5059(t *testing.T, col *Collection, operation string) (int, error) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/typed_batch_test.go",
+        "function": "openTypedMinimaDB",
+        "versions": {
+          "original_C": {
+            "sha256": "57e23030e4192aaaae2c030a2c01b4ae082e7a4f7866c920940b6c7031f4d28f",
+            "bytes": 281,
+            "start_line": 385,
+            "end_line": 393,
+            "declaration": "func openTypedMinimaDB(t testing.TB, dir string) *backenddb.DB {"
+          },
+          "historical_D_10x": {
+            "sha256": "57e23030e4192aaaae2c030a2c01b4ae082e7a4f7866c920940b6c7031f4d28f",
+            "bytes": 281,
+            "start_line": 385,
+            "end_line": 393,
+            "declaration": "func openTypedMinimaDB(t testing.TB, dir string) *backenddb.DB {"
+          },
+          "reviewed_runtime": {
+            "sha256": "57e23030e4192aaaae2c030a2c01b4ae082e7a4f7866c920940b6c7031f4d28f",
+            "bytes": 281,
+            "start_line": 385,
+            "end_line": 393,
+            "declaration": "func openTypedMinimaDB(t testing.TB, dir string) *backenddb.DB {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "Flush",
+        "versions": {
+          "original_C": {
+            "sha256": "134f019e76f743be1ba0b56064c182fddbea7b215e1641ce371a471eed10465e",
+            "bytes": 842,
+            "start_line": 4768,
+            "end_line": 4793,
+            "declaration": "func (c *Collection) Flush() error {"
+          },
+          "historical_D_10x": {
+            "sha256": "134f019e76f743be1ba0b56064c182fddbea7b215e1641ce371a471eed10465e",
+            "bytes": 842,
+            "start_line": 4768,
+            "end_line": 4793,
+            "declaration": "func (c *Collection) Flush() error {"
+          },
+          "reviewed_runtime": {
+            "sha256": "134f019e76f743be1ba0b56064c182fddbea7b215e1641ce371a471eed10465e",
+            "bytes": 842,
+            "start_line": 4768,
+            "end_line": 4793,
+            "declaration": "func (c *Collection) Flush() error {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "UpdateBatch",
+        "versions": {
+          "original_C": {
+            "sha256": "2f45033e9a36e14f40c4b59c85de361dce4401367e78230bbe54fc265c1847dd",
+            "bytes": 962,
+            "start_line": 14798,
+            "end_line": 14815,
+            "declaration": "func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {"
+          },
+          "historical_D_10x": {
+            "sha256": "2f45033e9a36e14f40c4b59c85de361dce4401367e78230bbe54fc265c1847dd",
+            "bytes": 962,
+            "start_line": 14798,
+            "end_line": 14815,
+            "declaration": "func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "2f45033e9a36e14f40c4b59c85de361dce4401367e78230bbe54fc265c1847dd",
+            "bytes": 962,
+            "start_line": 14798,
+            "end_line": 14815,
+            "declaration": "func (c *Collection) UpdateBatch(items []UpdateBatchItem) ([]UpdateBatchResult, error) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "DeleteBatch",
+        "versions": {
+          "original_C": {
+            "sha256": "c07593cc18b6ac0352164663f08d9e5752f1e843af4538c588948cd1a6755c7d",
+            "bytes": 2013,
+            "start_line": 13862,
+            "end_line": 13923,
+            "declaration": "func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {"
+          },
+          "historical_D_10x": {
+            "sha256": "c07593cc18b6ac0352164663f08d9e5752f1e843af4538c588948cd1a6755c7d",
+            "bytes": 2013,
+            "start_line": 13862,
+            "end_line": 13923,
+            "declaration": "func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "c07593cc18b6ac0352164663f08d9e5752f1e843af4538c588948cd1a6755c7d",
+            "bytes": 2013,
+            "start_line": 13862,
+            "end_line": 13923,
+            "declaration": "func (c *Collection) DeleteBatch(documentIDs [][]byte) (int, error) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "scheduleIndexedAsyncFlush",
+        "versions": {
+          "original_C": {
+            "sha256": "23279968d238e9ea439e22c76e19e83d7ef2a0767567c5f79169af0f9091b088",
+            "bytes": 1140,
+            "start_line": 3499,
+            "end_line": 3532,
+            "declaration": "func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bool {"
+          },
+          "historical_D_10x": {
+            "sha256": "23279968d238e9ea439e22c76e19e83d7ef2a0767567c5f79169af0f9091b088",
+            "bytes": 1140,
+            "start_line": 3499,
+            "end_line": 3532,
+            "declaration": "func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bool {"
+          },
+          "reviewed_runtime": {
+            "sha256": "23279968d238e9ea439e22c76e19e83d7ef2a0767567c5f79169af0f9091b088",
+            "bytes": 1140,
+            "start_line": 3499,
+            "end_line": 3532,
+            "declaration": "func (c *Collection) scheduleIndexedAsyncFlush(domain *collectionWriteDomain) bool {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "publishPreparedIndexedFlush",
+        "versions": {
+          "original_C": {
+            "sha256": "3bc7f61e469fcb0135f1e26ba962e26409685dd73387256e79dfd70af251aecf",
+            "bytes": 11528,
+            "start_line": 9978,
+            "end_line": 10190,
+            "declaration": "func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) (retErr error) {"
+          },
+          "historical_D_10x": {
+            "sha256": "3bc7f61e469fcb0135f1e26ba962e26409685dd73387256e79dfd70af251aecf",
+            "bytes": 11528,
+            "start_line": 9978,
+            "end_line": 10190,
+            "declaration": "func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) (retErr error) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "3bc7f61e469fcb0135f1e26ba962e26409685dd73387256e79dfd70af251aecf",
+            "bytes": 11528,
+            "start_line": 9978,
+            "end_line": 10190,
+            "declaration": "func (c *Collection) publishPreparedIndexedFlush(work *indexedFlushPublishWork) (retErr error) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "flushBufferedIndexedLockedWithRawPublishState",
+        "versions": {
+          "original_C": {
+            "sha256": "81facc51816e1c1324c096eefcde6a6fe9b1178cb5d9d2463c2df879bb880182",
+            "bytes": 12370,
+            "start_line": 10682,
+            "end_line": 10982,
+            "declaration": "func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *collectionWriteDomain, rawPublishLocked bool) (err error) {"
+          },
+          "historical_D_10x": {
+            "sha256": "81facc51816e1c1324c096eefcde6a6fe9b1178cb5d9d2463c2df879bb880182",
+            "bytes": 12370,
+            "start_line": 10682,
+            "end_line": 10982,
+            "declaration": "func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *collectionWriteDomain, rawPublishLocked bool) (err error) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "81facc51816e1c1324c096eefcde6a6fe9b1178cb5d9d2463c2df879bb880182",
+            "bytes": 12370,
+            "start_line": 10682,
+            "end_line": 10982,
+            "declaration": "func (c *Collection) flushBufferedIndexedLockedWithRawPublishState(domain *collectionWriteDomain, rawPublishLocked bool) (err error) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "flushBufferedWritesWithRawPublishStateAndCoverage",
+        "versions": {
+          "original_C": {
+            "sha256": "03bc042a3c2b54b10fe526469c35e57fdad4399ec93a02c00f92648024972e29",
+            "bytes": 1483,
+            "start_line": 5471,
+            "end_line": 5523,
+            "declaration": "func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked, admissionLocked, vectorMutationLocked bool) error {"
+          },
+          "historical_D_10x": {
+            "sha256": "03bc042a3c2b54b10fe526469c35e57fdad4399ec93a02c00f92648024972e29",
+            "bytes": 1483,
+            "start_line": 5471,
+            "end_line": 5523,
+            "declaration": "func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked, admissionLocked, vectorMutationLocked bool) error {"
+          },
+          "reviewed_runtime": {
+            "sha256": "03bc042a3c2b54b10fe526469c35e57fdad4399ec93a02c00f92648024972e29",
+            "bytes": 1483,
+            "start_line": 5471,
+            "end_line": 5523,
+            "declaration": "func (c *Collection) flushBufferedWritesWithRawPublishStateAndCoverage(rawPublishLocked, coverageLocked, admissionLocked, vectorMutationLocked bool) error {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/collections/api.go",
+        "function": "canBufferCommandWALIndexedInsertBatch",
+        "versions": {
+          "original_C": {
+            "sha256": "512288ea4c674b28da9a7b6a76710fe449fedbde816084ae44060d41237e588a",
+            "bytes": 429,
+            "start_line": 5026,
+            "end_line": 5033,
+            "declaration": "func (c *Collection) canBufferCommandWALIndexedInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {"
+          },
+          "historical_D_10x": {
+            "sha256": "512288ea4c674b28da9a7b6a76710fe449fedbde816084ae44060d41237e588a",
+            "bytes": 429,
+            "start_line": 5026,
+            "end_line": 5033,
+            "declaration": "func (c *Collection) canBufferCommandWALIndexedInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {"
+          },
+          "reviewed_runtime": {
+            "sha256": "512288ea4c674b28da9a7b6a76710fe449fedbde816084ae44060d41237e588a",
+            "bytes": 429,
+            "start_line": 5026,
+            "end_line": 5033,
+            "declaration": "func (c *Collection) canBufferCommandWALIndexedInsertBatch(meta CollectionMeta, format DocumentFormat, commandWALIntent *backenddb.CommandWALIntent, documentCount int) bool {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/db/wal_recovery.go",
+        "function": "replayCommandWALIntoBackend",
+        "versions": {
+          "original_C": {
+            "sha256": "75db193509a47e2e222b46c557ea4ab1c9902c531204a0335d0965f0e0f08c46",
+            "bytes": 5464,
+            "start_line": 315,
+            "end_line": 491,
+            "declaration": "func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {"
+          },
+          "historical_D_10x": {
+            "sha256": "75db193509a47e2e222b46c557ea4ab1c9902c531204a0335d0965f0e0f08c46",
+            "bytes": 5464,
+            "start_line": 315,
+            "end_line": 491,
+            "declaration": "func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {"
+          },
+          "reviewed_runtime": {
+            "sha256": "75db193509a47e2e222b46c557ea4ab1c9902c531204a0335d0965f0e0f08c46",
+            "bytes": 5464,
+            "start_line": 315,
+            "end_line": 491,
+            "declaration": "func replayCommandWALIntoBackend(db *DB, segments []logSegment, maxSegmentBytes int64, dictLookup valuelog.DictLookup) error {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/db/wal_recovery.go",
+        "function": "applyCommandWALFrame",
+        "versions": {
+          "original_C": {
+            "sha256": "7d2c7ee44a2590a2c1240b97a37ca24eabba186a7652291db5d67a2d7cb46e60",
+            "bytes": 2127,
+            "start_line": 716,
+            "end_line": 764,
+            "declaration": "func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) (err error) {"
+          },
+          "historical_D_10x": {
+            "sha256": "7d2c7ee44a2590a2c1240b97a37ca24eabba186a7652291db5d67a2d7cb46e60",
+            "bytes": 2127,
+            "start_line": 716,
+            "end_line": 764,
+            "declaration": "func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) (err error) {"
+          },
+          "reviewed_runtime": {
+            "sha256": "7d2c7ee44a2590a2c1240b97a37ca24eabba186a7652291db5d67a2d7cb46e60",
+            "bytes": 2127,
+            "start_line": 716,
+            "end_line": 764,
+            "declaration": "func applyCommandWALFrame(db *DB, env commitlog.CommandEnvelope, ridMap map[uint64]page.ValuePtr, inlineAppender *replayInlineAppender, ensureReplayRIDMap commandWALReplayRIDMapFunc, ensureReplayLogSupport commandWALReplayLogSupportFunc) (err error) {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/db/wal_recovery.go",
+        "function": "applyRegisteredCommandWALFrame",
+        "versions": {
+          "original_C": {
+            "sha256": "3b098651acdbffa3166522af2f57361fd8e9725888690d926f556b71095c890a",
+            "bytes": 798,
+            "start_line": 765,
+            "end_line": 786,
+            "declaration": "func (db *DB) applyRegisteredCommandWALFrame(env commitlog.CommandEnvelope, registration commandWALReplayHandlerRegistration) error {"
+          },
+          "historical_D_10x": {
+            "sha256": "3b098651acdbffa3166522af2f57361fd8e9725888690d926f556b71095c890a",
+            "bytes": 798,
+            "start_line": 765,
+            "end_line": 786,
+            "declaration": "func (db *DB) applyRegisteredCommandWALFrame(env commitlog.CommandEnvelope, registration commandWALReplayHandlerRegistration) error {"
+          },
+          "reviewed_runtime": {
+            "sha256": "3b098651acdbffa3166522af2f57361fd8e9725888690d926f556b71095c890a",
+            "bytes": 798,
+            "start_line": 765,
+            "end_line": 786,
+            "declaration": "func (db *DB) applyRegisteredCommandWALFrame(env commitlog.CommandEnvelope, registration commandWALReplayHandlerRegistration) error {"
+          }
+        },
+        "identical_all_three": true
+      },
+      {
+        "path": "TreeDB/db/wal_recovery.go",
+        "function": "registerProducedPointerLocked",
+        "versions": {
+          "original_C": {
+            "sha256": "ff5c15bba63dfaf76208550da8bcc87e1e6a1d9bf98643524e32a937a18d720f",
+            "bytes": 555,
+            "start_line": 1244,
+            "end_line": 1258,
+            "declaration": "func (a *replayInlineAppender) registerProducedPointerLocked(ptr page.ValuePtr) error {"
+          },
+          "historical_D_10x": {
+            "sha256": "ff5c15bba63dfaf76208550da8bcc87e1e6a1d9bf98643524e32a937a18d720f",
+            "bytes": 555,
+            "start_line": 1244,
+            "end_line": 1258,
+            "declaration": "func (a *replayInlineAppender) registerProducedPointerLocked(ptr page.ValuePtr) error {"
+          },
+          "reviewed_runtime": {
+            "sha256": "3f4ef0839c671d13f459e54d7709ab9bfacb08cd4a94de774bf2599fd3c2f5d8",
+            "bytes": 952,
+            "start_line": 1244,
+            "end_line": 1264,
+            "declaration": "func (a *replayInlineAppender) registerProducedPointerLocked(ptr page.ValuePtr) error {"
+          }
+        },
+        "identical_all_three": false
+      }
+    ],
+    "selected_test_and_workflow_blobs": [
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+            "sha256": "ebd391f04d6310fb84e7b74006ef08055823d4fb0f069a4cc26d784fe3754dd0",
+            "bytes": 23453
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+            "sha256": "ebd391f04d6310fb84e7b74006ef08055823d4fb0f069a4cc26d784fe3754dd0",
+            "bytes": 23453
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+            "sha256": "ebd391f04d6310fb84e7b74006ef08055823d4fb0f069a4cc26d784fe3754dd0",
+            "bytes": 23453
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+            "sha256": "ebd391f04d6310fb84e7b74006ef08055823d4fb0f069a4cc26d784fe3754dd0",
+            "bytes": 23453
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/collections/typed_batch_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "34c59bb1ebac4a42bd46efaa7a9cfabc45b1d8b5",
+            "sha256": "6f9ec9ea83753c178f2c72f65ce6905531c3a8a898fdf251a64c4576ba094778",
+            "bytes": 37686
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "34c59bb1ebac4a42bd46efaa7a9cfabc45b1d8b5",
+            "sha256": "6f9ec9ea83753c178f2c72f65ce6905531c3a8a898fdf251a64c4576ba094778",
+            "bytes": 37686
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "34c59bb1ebac4a42bd46efaa7a9cfabc45b1d8b5",
+            "sha256": "6f9ec9ea83753c178f2c72f65ce6905531c3a8a898fdf251a64c4576ba094778",
+            "bytes": 37686
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "34c59bb1ebac4a42bd46efaa7a9cfabc45b1d8b5",
+            "sha256": "6f9ec9ea83753c178f2c72f65ce6905531c3a8a898fdf251a64c4576ba094778",
+            "bytes": 37686
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "d3ecb5ec68215be8d5705f4170b4496168b02100",
+            "sha256": "1fc1f11e616d64a3f81496a853b6e7d4f1f847322c4a1a6f23f0db361ec6b0ac",
+            "bytes": 16960
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "14c2dbb1ba6a35f614fef528196a2304221ab818",
+            "sha256": "a9c1ab0644cb395d9a8062f299d4c008ea434406b37297cfd5faaeabbe9e38cc",
+            "bytes": 16537
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "14c2dbb1ba6a35f614fef528196a2304221ab818",
+            "sha256": "a9c1ab0644cb395d9a8062f299d4c008ea434406b37297cfd5faaeabbe9e38cc",
+            "bytes": 16537
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "14c2dbb1ba6a35f614fef528196a2304221ab818",
+            "sha256": "a9c1ab0644cb395d9a8062f299d4c008ea434406b37297cfd5faaeabbe9e38cc",
+            "bytes": 16537
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": null,
+            "sha256": null,
+            "bytes": null
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "d834fe93be16047317b31b5097b304abf62ec9ff",
+            "sha256": "d7f4673d8e53d8263684734d443a296614f2d8725f9f4cd37f03b27a69642ac7",
+            "bytes": 7570
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "d834fe93be16047317b31b5097b304abf62ec9ff",
+            "sha256": "d7f4673d8e53d8263684734d443a296614f2d8725f9f4cd37f03b27a69642ac7",
+            "bytes": 7570
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "d834fe93be16047317b31b5097b304abf62ec9ff",
+            "sha256": "d7f4673d8e53d8263684734d443a296614f2d8725f9f4cd37f03b27a69642ac7",
+            "bytes": 7570
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "16c65952181245b547f1fc7e085e5af3e77d6721",
+            "sha256": "10878e2d278bbfb01980557422a5bb28db3f39921d9402795499dc0d2b4dbc51",
+            "bytes": 10680
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "f554bafe01b317bb9ecf04e1df123e2defea033a",
+            "sha256": "474436603768d189e9eb1f69d9ae7c44009de5685ea2b86da8545e80376c4fb5",
+            "bytes": 13074
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "f554bafe01b317bb9ecf04e1df123e2defea033a",
+            "sha256": "474436603768d189e9eb1f69d9ae7c44009de5685ea2b86da8545e80376c4fb5",
+            "bytes": 13074
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "f554bafe01b317bb9ecf04e1df123e2defea033a",
+            "sha256": "474436603768d189e9eb1f69d9ae7c44009de5685ea2b86da8545e80376c4fb5",
+            "bytes": 13074
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false
+      },
+      {
+        "path": "TreeDB/db/r1_native_appender_metadata_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": null,
+            "sha256": null,
+            "bytes": null
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "9c4e3e1f4829851042cebeccc0722f898cc7305e",
+            "sha256": "9b7f9a52a8c9db449af7c334db5ccb825ad3e690dbbbc75b46f6bb155c146191",
+            "bytes": 7595
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "9c4e3e1f4829851042cebeccc0722f898cc7305e",
+            "sha256": "9b7f9a52a8c9db449af7c334db5ccb825ad3e690dbbbc75b46f6bb155c146191",
+            "bytes": 7595
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "9c4e3e1f4829851042cebeccc0722f898cc7305e",
+            "sha256": "9b7f9a52a8c9db449af7c334db5ccb825ad3e690dbbbc75b46f6bb155c146191",
+            "bytes": 7595
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false
+      },
+      {
+        "path": "TreeDB/db/r1_rebuilt_pack_projection_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": null,
+            "sha256": null,
+            "bytes": null
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "0af9ac0b3f55e43f30a3938060052068d0f81e5a",
+            "sha256": "9a48e20faaea0061fd6f3d3a881ab1f9868e9e1b9ea4385a899930c5d495e9dc",
+            "bytes": 10018
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "0af9ac0b3f55e43f30a3938060052068d0f81e5a",
+            "sha256": "9a48e20faaea0061fd6f3d3a881ab1f9868e9e1b9ea4385a899930c5d495e9dc",
+            "bytes": 10018
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "0af9ac0b3f55e43f30a3938060052068d0f81e5a",
+            "sha256": "9a48e20faaea0061fd6f3d3a881ab1f9868e9e1b9ea4385a899930c5d495e9dc",
+            "bytes": 10018
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc_5066_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": null,
+            "sha256": null,
+            "bytes": null
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "bf6c414e933c1ac4152ef887de6063a40e18ba0f",
+            "sha256": "9097d03d84329d708e1a843594d74fe8a67ef90d9f55163b43c8d6621cac1efe",
+            "bytes": 17356
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "bf6c414e933c1ac4152ef887de6063a40e18ba0f",
+            "sha256": "9097d03d84329d708e1a843594d74fe8a67ef90d9f55163b43c8d6621cac1efe",
+            "bytes": 17356
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "bf6c414e933c1ac4152ef887de6063a40e18ba0f",
+            "sha256": "9097d03d84329d708e1a843594d74fe8a67ef90d9f55163b43c8d6621cac1efe",
+            "bytes": 17356
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false
+      },
+      {
+        "path": "TreeDB/internal/valuelog/retry_close_5066_test.go",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": null,
+            "sha256": null,
+            "bytes": null
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "b6dbfc3f386924f7a7425d783e3c563c15a2b28f",
+            "sha256": "b626dc2de28411db47bcc2eb2dd683ea7685038e4df090ba12c41bcf4bd763a1",
+            "bytes": 2982
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "b6dbfc3f386924f7a7425d783e3c563c15a2b28f",
+            "sha256": "b626dc2de28411db47bcc2eb2dd683ea7685038e4df090ba12c41bcf4bd763a1",
+            "bytes": 2982
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "b6dbfc3f386924f7a7425d783e3c563c15a2b28f",
+            "sha256": "b626dc2de28411db47bcc2eb2dd683ea7685038e4df090ba12c41bcf4bd763a1",
+            "bytes": 2982
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": false
+      },
+      {
+        "path": ".github/workflows/treedb-tests.yml",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+            "sha256": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477",
+            "bytes": 48207
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+            "sha256": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477",
+            "bytes": 48207
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+            "sha256": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477",
+            "bytes": 48207
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+            "sha256": "c131607e0b776f597a4fa05cf60517073d68d55a42844b9c6345b6d96b7eb477",
+            "bytes": 48207
+          }
+        },
+        "identical_C_to_current": false,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": ".github/ci/treedb_unix_weighted_shards.tsv",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+            "sha256": "e35d96903617ebc948457b2a321dacde244321de7bcfba2c6f243f0d1b062e30",
+            "bytes": 695
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+            "sha256": "e35d96903617ebc948457b2a321dacde244321de7bcfba2c6f243f0d1b062e30",
+            "bytes": 695
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+            "sha256": "e35d96903617ebc948457b2a321dacde244321de7bcfba2c6f243f0d1b062e30",
+            "bytes": 695
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+            "sha256": "e35d96903617ebc948457b2a321dacde244321de7bcfba2c6f243f0d1b062e30",
+            "bytes": 695
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      },
+      {
+        "path": ".github/ci/treedb_race_weighted_shards.tsv",
+        "versions": {
+          "historical_D_10x": {
+            "commit": "e2355fe4b5c3629c99478b3c81baef724833b155",
+            "git_blob": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
+            "sha256": "cd2dd0023ba4d8beaeeaf9cdbb77959a2141ec2afa6e9e9c0c74860852abf235",
+            "bytes": 2091
+          },
+          "cleanup_tested": {
+            "commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+            "git_blob": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
+            "sha256": "cd2dd0023ba4d8beaeeaf9cdbb77959a2141ec2afa6e9e9c0c74860852abf235",
+            "bytes": 2091
+          },
+          "reviewed_runtime": {
+            "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+            "git_blob": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
+            "sha256": "cd2dd0023ba4d8beaeeaf9cdbb77959a2141ec2afa6e9e9c0c74860852abf235",
+            "bytes": 2091
+          },
+          "reviewed_C": {
+            "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+            "git_blob": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
+            "sha256": "cd2dd0023ba4d8beaeeaf9cdbb77959a2141ec2afa6e9e9c0c74860852abf235",
+            "bytes": 2091
+          }
+        },
+        "identical_C_to_current": true,
+        "identical_historical_D_to_current": true
+      }
+    ],
+    "source_points": [
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "line": 23,
+        "note": "Both historical and current fixtures explicitly disable buffered indexed async flush.",
+        "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/r1_mutation_5059_test.go#L23"
+      },
+      {
+        "path": "TreeDB/collections/typed_batch_test.go",
+        "line": 385,
+        "note": "C helper opens backend with CommandWAL=true, durable resolved profile, and background prune disabled.",
+        "git_blob": "34c59bb1ebac4a42bd46efaa7a9cfabc45b1d8b5",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/typed_batch_test.go#L385"
+      },
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "line": 421,
+        "note": "C six-operation \u00d7 three-cut process oracle; no Close/Flush in child.",
+        "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/r1_mutation_5059_test.go#L421"
+      },
+      {
+        "path": "TreeDB/collections/r1_mutation_5059_test.go",
+        "line": 500,
+        "note": "Only ambiguous post-sync cut requires a newly replayed unapplied command frame.",
+        "git_blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/r1_mutation_5059_test.go#L500"
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+        "line": 54,
+        "note": "Current D supported opener owns close through OptionsFor(ProfileCommandWALDurable)+OpenBackend.",
+        "git_blob": "d834fe93be16047317b31b5097b304abf62ec9ff",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/r1_lifecycle_5060_profile_test.go#L54"
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+        "line": 136,
+        "note": "Current D final refresh asserts two durable slots at unchanged roots/coverage, then typed asset and physical leaf GC.",
+        "git_blob": "d834fe93be16047317b31b5097b304abf62ec9ff",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/r1_lifecycle_5060_profile_test.go#L136"
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_test.go",
+        "line": 343,
+        "note": "Current D upsert cuts occur after mixed churn, compaction/checkpoint/rewrite/GC and reopen through supported profile.",
+        "git_blob": "14c2dbb1ba6a35f614fef528196a2304221ab818",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/r1_lifecycle_5060_test.go#L343"
+      },
+      {
+        "path": "TreeDB/collections/r1_lifecycle_5060_test.go",
+        "line": 398,
+        "note": "D child uses supported opener, validates ambiguity/retry rules, and exits without orderly close.",
+        "git_blob": "14c2dbb1ba6a35f614fef528196a2304221ab818",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/collections/r1_lifecycle_5060_test.go#L398"
+      },
+      {
+        "path": "TreeDB/db/value_log_appender.go",
+        "line": 512,
+        "note": "Native CommandWAL appender installation reuses replayInlineAppender.",
+        "git_blob": "74a392295bfcd80a0175d4cb6b36d2f59d3fd5f0",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/value_log_appender.go#L512"
+      },
+      {
+        "path": "TreeDB/db/wal_recovery.go",
+        "line": 1244,
+        "note": "Produced pointer registration now retires only exact completed creation metadata.",
+        "git_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/wal_recovery.go#L1244"
+      },
+      {
+        "path": "TreeDB/db/durable_root_runtime.go",
+        "line": 1208,
+        "note": "Current rebuilt root projection selects reachable packed dependencies; older recovery root keeps inherited packed closure.",
+        "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/durable_root_runtime.go#L1208"
+      },
+      {
+        "path": "TreeDB/db/vacuum_online.go",
+        "line": 1309,
+        "note": "Current root rebuild passes projectCurrentPacked=true.",
+        "git_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_online.go#L1309"
+      },
+      {
+        "path": "TreeDB/db/vacuum_online.go",
+        "line": 1737,
+        "note": "Independently selectable recovery rebuild passes projectCurrentPacked=false.",
+        "git_blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_online.go#L1737"
+      },
+      {
+        "path": "TreeDB/db/leaf_generation_gc.go",
+        "line": 88,
+        "note": "Leaf GC now additionally performs manifest-revision GC.",
+        "git_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/leaf_generation_gc.go#L88"
+      },
+      {
+        "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+        "line": 21,
+        "note": "New bounded batch physical revision cleanup is not present in historical e235.",
+        "git_blob": "eddde48dbd47b1f548a5c442b50dc27559ed0ee5",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/leaf_manifest_revision_gc.go#L21"
+      },
+      {
+        "path": "TreeDB/internal/valuelog/manager.go",
+        "line": 1758,
+        "note": "Manager close now prevents retry admission and joins owned retry workers before closing files.",
+        "git_blob": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/internal/valuelog/manager.go#L1758"
+      },
+      {
+        "path": ".github/workflows/treedb-tests.yml",
+        "line": 372,
+        "note": "Ordinary test checkout defaults to PR merge candidate; require actual source receipt.",
+        "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/.github/workflows/treedb-tests.yml#L372"
+      },
+      {
+        "path": ".github/workflows/treedb-tests.yml",
+        "line": 473,
+        "note": "Unix normal shard runs assigned whole packages with go test -json -timeout30m -p1.",
+        "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/.github/workflows/treedb-tests.yml#L473"
+      },
+      {
+        "path": ".github/workflows/treedb-tests.yml",
+        "line": 706,
+        "note": "Dedicated race shard4 runs complete collections package, no run filter.",
+        "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/.github/workflows/treedb-tests.yml#L706"
+      },
+      {
+        "path": ".github/workflows/treedb-tests.yml",
+        "line": 783,
+        "note": "Race artifact name is treedb-race-json-linux-${{ matrix.shard }}.",
+        "git_blob": "a79702d0e610470fb45aa3cce7726d86e0098f38",
+        "url": "https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/.github/workflows/treedb-tests.yml#L783"
+      }
+    ]
+  },
+  "cut_contract": {
+    "operations": [
+      "insert",
+      "replace",
+      "upsert",
+      "update",
+      "source",
+      "delete"
+    ],
+    "cuts": [
+      "before_append",
+      "after_sync",
+      "ack"
+    ],
+    "C_expected_parent_and_children": [
+      "TestR1MutationCrashCuts5059",
+      "TestR1MutationCrashCuts5059/insert/before_append",
+      "TestR1MutationCrashCuts5059/insert/after_sync",
+      "TestR1MutationCrashCuts5059/insert/ack",
+      "TestR1MutationCrashCuts5059/replace/before_append",
+      "TestR1MutationCrashCuts5059/replace/after_sync",
+      "TestR1MutationCrashCuts5059/replace/ack",
+      "TestR1MutationCrashCuts5059/upsert/before_append",
+      "TestR1MutationCrashCuts5059/upsert/after_sync",
+      "TestR1MutationCrashCuts5059/upsert/ack",
+      "TestR1MutationCrashCuts5059/update/before_append",
+      "TestR1MutationCrashCuts5059/update/after_sync",
+      "TestR1MutationCrashCuts5059/update/ack",
+      "TestR1MutationCrashCuts5059/source/before_append",
+      "TestR1MutationCrashCuts5059/source/after_sync",
+      "TestR1MutationCrashCuts5059/source/ack",
+      "TestR1MutationCrashCuts5059/delete/before_append",
+      "TestR1MutationCrashCuts5059/delete/after_sync",
+      "TestR1MutationCrashCuts5059/delete/ack"
+    ],
+    "D_expected_parent_and_children": [
+      "TestR1LifecycleRecoveryAfterMaintenance5060",
+      "TestR1LifecycleRecoveryAfterMaintenance5060/before_append",
+      "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync",
+      "TestR1LifecycleRecoveryAfterMaintenance5060/ack"
+    ],
+    "before_append": "Injected ResourceCommandWAL BeforeDependencyAppend error; no ambiguous classification; recovered full rows/indexes unchanged.",
+    "after_sync": "Injected ResourceCommandWAL AfterDependencyFileSync error; ErrCommitAmbiguous required; automatic retry forbidden; C additionally requires unapplied frame replay counter increase; recovered entire indexed request.",
+    "ack": "Successful API return before child os.Exit(0); complete recovered rows/indexes; does not require an unapplied frame if publication finished before process exit.",
+    "limits": [
+      "No orderly Close/Flush in cut child.",
+      "Process exit does not simulate physical power loss.",
+      "Representative fixture/selected mutations, not every supported carrier/format.",
+      "These fixture metadata explicitly disable buffered indexed async flush; do not describe results as an async-specific crash suite.",
+      "Current D process-cut fixture covers upsert after maintenance, not all six mutations across every lifecycle state.",
+      "Normal/race correctness test durations are not performance/capacity results."
+    ]
+  },
+  "current_observed_CI": {
+    "workflow_run_id": 37453671475,
+    "workflow_run_attempt": 1,
+    "workflow_event": "pull_request",
+    "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "actual_test_merge_sha": "17c859b3b792a954880826e502bfb105282d4cf4",
+    "actual_test_merge_tree": "96bd466b509cefe22b2623acc7b03374d7668be5",
+    "actual_test_merge_parents": [
+      "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c",
+      "3182e15dfe1aa11120db9d309ad0d590283398d6"
+    ],
+    "complete_tree_equals_reviewed_runtime": true,
+    "source_receipts": [
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/3182-ci-run-source-original.json",
+        "sha256": "7ba6c864503c4137e309115c4c0eb2cbf08aed6fa426fb1d3defe773cd334d13",
+        "bytes": 11775
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/3182-ci-pr-head-source-original.json",
+        "sha256": "710cebf50066a34428c89ec49aa2076ad8fd6ed72f764ede1fe69af404e113c3",
+        "bytes": 1096
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/3182-ci-test-merge-source-original.json",
+        "sha256": "d63c40fde80095ec0e36cc27cba51c460d7b92fd5726db51af39848d083c3f11",
+        "bytes": 2551
+      }
+    ],
+    "local_jobs_snapshot_sha256": "28fef413978194f6f952eeaf4c509cf8b0f26ebd5e596fa29c4d9bc3bd92f82d",
+    "local_artifacts_snapshot_sha256": "3181924daf3274e79c6875330e5c0f90f1982425b214816e4b63f91e8f65bcd6",
+    "snapshot_limit": "Local latest/current metadata files may later be refreshed by root; exact selected observed job/artifact fields are copied here. Original raw packets and original source JSON are retained. No GitHub request by reviewer.",
+    "artifacts": [
+      {
+        "job": {
+          "id": 112235964466,
+          "name": "ubuntu-latest-2",
+          "status": "completed",
+          "conclusion": "success",
+          "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+          "started_at": "2026-10-06T11:32:39Z",
+          "completed_at": "2026-10-06T11:43:08Z",
+          "html_url": "https://github.com/snissn/gomap/actions/runs/37453671475/job/112235964466"
+        },
+        "artifact": {
+          "id": 11411170426,
+          "name": "treedb-test-json-ubuntu-latest-2",
+          "size_in_bytes": 697987,
+          "digest": "sha256:62109c41713fd926ebd70b00e485a7805aece77301a6730fb53b9d668bd97510",
+          "expired": false,
+          "workflow_run": {
+            "id": 37453671475,
+            "repository_id": 567933707,
+            "head_repository_id": 567933707,
+            "head_branch": "codex/5066-lifecycle-maintenance",
+            "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6"
+          }
+        },
+        "zip": {
+          "path": "/tmp/gomap-r1-execution-20261005/3182-ci-normal-ubuntu2-original.zip",
+          "sha256": "62109c41713fd926ebd70b00e485a7805aece77301a6730fb53b9d668bd97510",
+          "bytes": 697987
+        },
+        "raw_jsonl": {
+          "path": "/tmp/gomap-r1-execution-20261005/3182-ci-normal-ubuntu2-original/treedb-test.jsonl",
+          "sha256": "2e61abede641b4ddfa4e8211d196824f26f688bba62a49cbe4805cb8452813cc",
+          "bytes": 10031983
+        },
+        "summary": {
+          "path": "/tmp/gomap-r1-execution-20261005/3182-ci-normal-ubuntu2-original/treedb-test.jsonl.summary.md",
+          "sha256": "14616050c4419c145ad17a85f4bc842f27cc976abe1e5072391a19e69d35f839",
+          "bytes": 5855
+        },
+        "collections_package_rows": [
+          {
+            "Time": "2026-10-06T11:41:05.709770296Z",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Elapsed": 132.678
+          }
+        ],
+        "test_families": {
+          "TestR1MutationCrashCuts5059": {
+            "expected_subcase_count": 18,
+            "run_count": 19,
+            "pass_count": 19,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1MutationCrashCuts5059",
+              "TestR1MutationCrashCuts5059/insert/before_append",
+              "TestR1MutationCrashCuts5059/insert/after_sync",
+              "TestR1MutationCrashCuts5059/insert/ack",
+              "TestR1MutationCrashCuts5059/replace/before_append",
+              "TestR1MutationCrashCuts5059/replace/after_sync",
+              "TestR1MutationCrashCuts5059/replace/ack",
+              "TestR1MutationCrashCuts5059/upsert/before_append",
+              "TestR1MutationCrashCuts5059/upsert/after_sync",
+              "TestR1MutationCrashCuts5059/upsert/ack",
+              "TestR1MutationCrashCuts5059/update/before_append",
+              "TestR1MutationCrashCuts5059/update/after_sync",
+              "TestR1MutationCrashCuts5059/update/ack",
+              "TestR1MutationCrashCuts5059/source/before_append",
+              "TestR1MutationCrashCuts5059/source/after_sync",
+              "TestR1MutationCrashCuts5059/source/ack",
+              "TestR1MutationCrashCuts5059/delete/before_append",
+              "TestR1MutationCrashCuts5059/delete/after_sync",
+              "TestR1MutationCrashCuts5059/delete/ack"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:39:41.906318614Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.906329861Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.930946115Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/before_append",
+                "Elapsed": 0.02
+              },
+              {
+                "Time": "2026-10-06T11:39:41.930955529Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.963613862Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/after_sync",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:41.963618909Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/ack"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.999726552Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/ack",
+                "Elapsed": 0.04
+              },
+              {
+                "Time": "2026-10-06T11:39:41.999734534Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.026112596Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/before_append",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.026119787Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.058916803Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/after_sync",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.058924094Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/ack"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.094308605Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/ack",
+                "Elapsed": 0.04
+              },
+              {
+                "Time": "2026-10-06T11:39:42.094314774Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.122276798Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/before_append",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.122283387Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.154286325Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/after_sync",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.154292054Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/ack"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.191825455Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/ack",
+                "Elapsed": 0.04
+              },
+              {
+                "Time": "2026-10-06T11:39:42.191834388Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.221081959Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/before_append",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.2210896Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.25188333Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/after_sync",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.251890671Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/ack"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.289812496Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/ack",
+                "Elapsed": 0.04
+              },
+              {
+                "Time": "2026-10-06T11:39:42.289820728Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.317846217Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/before_append",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.317856212Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.349733551Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/after_sync",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.349742664Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/ack"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.386825729Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/ack",
+                "Elapsed": 0.04
+              },
+              {
+                "Time": "2026-10-06T11:39:42.386834542Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.414167429Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/before_append",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.414175822Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.443732462Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/after_sync",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.443739933Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/ack"
+              },
+              {
+                "Time": "2026-10-06T11:39:42.478123059Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/ack",
+                "Elapsed": 0.03
+              },
+              {
+                "Time": "2026-10-06T11:39:42.478134436Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059",
+                "Elapsed": 0.57
+              }
+            ]
+          },
+          "TestR1LifecycleRecoveryAfterMaintenance5060": {
+            "expected_subcase_count": 3,
+            "run_count": 4,
+            "pass_count": 4,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1LifecycleRecoveryAfterMaintenance5060",
+              "TestR1LifecycleRecoveryAfterMaintenance5060/before_append",
+              "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync",
+              "TestR1LifecycleRecoveryAfterMaintenance5060/ack"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:39:41.457971082Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.457978683Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.549580551Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/before_append",
+                "Elapsed": 0.09
+              },
+              {
+                "Time": "2026-10-06T11:39:41.549588173Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.653079128Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync",
+                "Elapsed": 0.1
+              },
+              {
+                "Time": "2026-10-06T11:39:41.65308734Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/ack"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.761602523Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/ack",
+                "Elapsed": 0.11
+              },
+              {
+                "Time": "2026-10-06T11:39:41.761617976Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060",
+                "Elapsed": 0.3
+              }
+            ]
+          },
+          "TestR1LifecycleMixedCycles5060": {
+            "expected_subcase_count": 2,
+            "run_count": 3,
+            "pass_count": 3,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1LifecycleMixedCycles5060",
+              "TestR1LifecycleMixedCycles5060/indexed=false",
+              "TestR1LifecycleMixedCycles5060/indexed=true"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:39:40.883110923Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060"
+              },
+              {
+                "Time": "2026-10-06T11:39:40.883120037Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=false"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.158711607Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=false",
+                "Elapsed": 0.28
+              },
+              {
+                "Time": "2026-10-06T11:39:41.158722273Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=true"
+              },
+              {
+                "Time": "2026-10-06T11:39:41.45795023Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=true",
+                "Elapsed": 0.3
+              },
+              {
+                "Time": "2026-10-06T11:39:41.457964622Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060",
+                "Elapsed": 0.57
+              }
+            ]
+          },
+          "TestR1LifecycleLogicalFoldAndVacuum5060": {
+            "expected_subcase_count": 0,
+            "run_count": 1,
+            "pass_count": 1,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1LifecycleLogicalFoldAndVacuum5060"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:39:40.66781199Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleLogicalFoldAndVacuum5060"
+              },
+              {
+                "Time": "2026-10-06T11:39:40.883099806Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleLogicalFoldAndVacuum5060",
+                "Elapsed": 0.22
+              }
+            ]
+          }
+        }
+      },
+      {
+        "job": {
+          "id": 112235964274,
+          "name": "race-check (linux)-4",
+          "status": "completed",
+          "conclusion": "success",
+          "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+          "started_at": "2026-10-06T11:30:06Z",
+          "completed_at": "2026-10-06T11:50:25Z",
+          "html_url": "https://github.com/snissn/gomap/actions/runs/37453671475/job/112235964274"
+        },
+        "artifact": {
+          "id": 11411425298,
+          "name": "treedb-race-json-linux-4",
+          "size_in_bytes": 449412,
+          "digest": "sha256:457a05b1b08a788860796c2d45151c8db87814760f20c12ee4525c139989d063",
+          "expired": false,
+          "workflow_run": {
+            "id": 37453671475,
+            "repository_id": 567933707,
+            "head_repository_id": 567933707,
+            "head_branch": "codex/5066-lifecycle-maintenance",
+            "head_sha": "3182e15dfe1aa11120db9d309ad0d590283398d6"
+          }
+        },
+        "zip": {
+          "path": "/tmp/gomap-r1-execution-20261005/3182-ci-race-linux4-original.zip",
+          "sha256": "457a05b1b08a788860796c2d45151c8db87814760f20c12ee4525c139989d063",
+          "bytes": 449412
+        },
+        "raw_jsonl": {
+          "path": "/tmp/gomap-r1-execution-20261005/3182-ci-race-linux4-original/treedb-race.jsonl",
+          "sha256": "c2bccc3b9a328e83228dd9bca2222208e7f7c3e20ef95c7be3324c3c40b911fc",
+          "bytes": 6194410
+        },
+        "summary": {
+          "path": "/tmp/gomap-r1-execution-20261005/3182-ci-race-linux4-original/treedb-race.jsonl.summary.md",
+          "sha256": "74d297cbf5eab5791fd60fcb7f47f7280970fb3f71457d3f6338c2379435b7c3",
+          "bytes": 3446
+        },
+        "collections_package_rows": [
+          {
+            "Time": "2026-10-06T11:48:57.574721608Z",
+            "Action": "pass",
+            "Package": "github.com/snissn/gomap/TreeDB/collections",
+            "Elapsed": 949.583
+          }
+        ],
+        "test_families": {
+          "TestR1MutationCrashCuts5059": {
+            "expected_subcase_count": 18,
+            "run_count": 19,
+            "pass_count": 19,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1MutationCrashCuts5059",
+              "TestR1MutationCrashCuts5059/insert/before_append",
+              "TestR1MutationCrashCuts5059/insert/after_sync",
+              "TestR1MutationCrashCuts5059/insert/ack",
+              "TestR1MutationCrashCuts5059/replace/before_append",
+              "TestR1MutationCrashCuts5059/replace/after_sync",
+              "TestR1MutationCrashCuts5059/replace/ack",
+              "TestR1MutationCrashCuts5059/upsert/before_append",
+              "TestR1MutationCrashCuts5059/upsert/after_sync",
+              "TestR1MutationCrashCuts5059/upsert/ack",
+              "TestR1MutationCrashCuts5059/update/before_append",
+              "TestR1MutationCrashCuts5059/update/after_sync",
+              "TestR1MutationCrashCuts5059/update/ack",
+              "TestR1MutationCrashCuts5059/source/before_append",
+              "TestR1MutationCrashCuts5059/source/after_sync",
+              "TestR1MutationCrashCuts5059/source/ack",
+              "TestR1MutationCrashCuts5059/delete/before_append",
+              "TestR1MutationCrashCuts5059/delete/after_sync",
+              "TestR1MutationCrashCuts5059/delete/ack"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:38:09.458722683Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059"
+              },
+              {
+                "Time": "2026-10-06T11:38:09.45918869Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:38:10.537356008Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/before_append",
+                "Elapsed": 1.08
+              },
+              {
+                "Time": "2026-10-06T11:38:10.537376199Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:38:11.64049067Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/after_sync",
+                "Elapsed": 1.1
+              },
+              {
+                "Time": "2026-10-06T11:38:11.640497581Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/ack"
+              },
+              {
+                "Time": "2026-10-06T11:38:12.734166865Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/insert/ack",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:12.73417686Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:38:13.811446095Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/before_append",
+                "Elapsed": 1.08
+              },
+              {
+                "Time": "2026-10-06T11:38:13.811454748Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:38:14.911109639Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/after_sync",
+                "Elapsed": 1.1
+              },
+              {
+                "Time": "2026-10-06T11:38:14.911120846Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/ack"
+              },
+              {
+                "Time": "2026-10-06T11:38:16.003038319Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/replace/ack",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:16.003046211Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:38:17.083475014Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/before_append",
+                "Elapsed": 1.08
+              },
+              {
+                "Time": "2026-10-06T11:38:17.08348539Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:38:18.176289018Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/after_sync",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:18.176299503Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/ack"
+              },
+              {
+                "Time": "2026-10-06T11:38:19.270941552Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/upsert/ack",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:19.270953339Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:38:20.350734206Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/before_append",
+                "Elapsed": 1.08
+              },
+              {
+                "Time": "2026-10-06T11:38:20.350744892Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:38:21.451798701Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/after_sync",
+                "Elapsed": 1.1
+              },
+              {
+                "Time": "2026-10-06T11:38:21.451809367Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/ack"
+              },
+              {
+                "Time": "2026-10-06T11:38:22.542216725Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/update/ack",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:22.542225628Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:38:23.61864443Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/before_append",
+                "Elapsed": 1.08
+              },
+              {
+                "Time": "2026-10-06T11:38:23.618652722Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:38:24.713609475Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/after_sync",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:24.713622234Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/ack"
+              },
+              {
+                "Time": "2026-10-06T11:38:25.806256388Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/source/ack",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:25.806265311Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:38:26.882208174Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/before_append",
+                "Elapsed": 1.08
+              },
+              {
+                "Time": "2026-10-06T11:38:26.882219011Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:38:27.971679993Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/after_sync",
+                "Elapsed": 1.09
+              },
+              {
+                "Time": "2026-10-06T11:38:27.97169082Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/ack"
+              },
+              {
+                "Time": "2026-10-06T11:38:29.055923334Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059/delete/ack",
+                "Elapsed": 1.08
+              },
+              {
+                "Time": "2026-10-06T11:38:29.05594708Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1MutationCrashCuts5059",
+                "Elapsed": 19.6
+              }
+            ]
+          },
+          "TestR1LifecycleRecoveryAfterMaintenance5060": {
+            "expected_subcase_count": 3,
+            "run_count": 4,
+            "pass_count": 4,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1LifecycleRecoveryAfterMaintenance5060",
+              "TestR1LifecycleRecoveryAfterMaintenance5060/before_append",
+              "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync",
+              "TestR1LifecycleRecoveryAfterMaintenance5060/ack"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:38:04.234023731Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060"
+              },
+              {
+                "Time": "2026-10-06T11:38:04.234130987Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/before_append"
+              },
+              {
+                "Time": "2026-10-06T11:38:05.756766271Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/before_append",
+                "Elapsed": 1.52
+              },
+              {
+                "Time": "2026-10-06T11:38:05.756797808Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync"
+              },
+              {
+                "Time": "2026-10-06T11:38:07.306115444Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/after_sync",
+                "Elapsed": 1.55
+              },
+              {
+                "Time": "2026-10-06T11:38:07.306126611Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/ack"
+              },
+              {
+                "Time": "2026-10-06T11:38:08.848490023Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060/ack",
+                "Elapsed": 1.54
+              },
+              {
+                "Time": "2026-10-06T11:38:08.848507249Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleRecoveryAfterMaintenance5060",
+                "Elapsed": 4.61
+              }
+            ]
+          },
+          "TestR1LifecycleMixedCycles5060": {
+            "expected_subcase_count": 2,
+            "run_count": 3,
+            "pass_count": 3,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1LifecycleMixedCycles5060",
+              "TestR1LifecycleMixedCycles5060/indexed=false",
+              "TestR1LifecycleMixedCycles5060/indexed=true"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:38:00.471434088Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060"
+              },
+              {
+                "Time": "2026-10-06T11:38:00.471487368Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=false"
+              },
+              {
+                "Time": "2026-10-06T11:38:02.194910659Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=false",
+                "Elapsed": 1.72
+              },
+              {
+                "Time": "2026-10-06T11:38:02.194921285Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=true"
+              },
+              {
+                "Time": "2026-10-06T11:38:04.234000326Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060/indexed=true",
+                "Elapsed": 2.04
+              },
+              {
+                "Time": "2026-10-06T11:38:04.234017371Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleMixedCycles5060",
+                "Elapsed": 3.76
+              }
+            ]
+          },
+          "TestR1LifecycleLogicalFoldAndVacuum5060": {
+            "expected_subcase_count": 0,
+            "run_count": 1,
+            "pass_count": 1,
+            "fail_count": 0,
+            "skip_count": 0,
+            "expected_names": [
+              "TestR1LifecycleLogicalFoldAndVacuum5060"
+            ],
+            "rows": [
+              {
+                "Time": "2026-10-06T11:37:59.66394503Z",
+                "Action": "run",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleLogicalFoldAndVacuum5060"
+              },
+              {
+                "Time": "2026-10-06T11:38:00.471426857Z",
+                "Action": "pass",
+                "Package": "github.com/snissn/gomap/TreeDB/collections",
+                "Test": "TestR1LifecycleLogicalFoldAndVacuum5060",
+                "Elapsed": 0.81
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "whole_required_gate_disposition": "Not asserted. Only these two completed jobs/artifacts and named test families were independently inspected."
+  },
+  "existing_CI_membership_and_minimal_next_action": {
+    "collections": "ubuntu-latest-2 (normal whole package) and race-check (linux)-4 (whole collections -race) already provided all 18 C cuts and all three current D maintenance cuts. No duplicate focused collection test requested.",
+    "normal_argv": "TreeDB working directory: xargs go test -json -timeout 30m -p 1 < weighted assigned package list; collections explicitly pinned normal shard index1.",
+    "race_argv": "TreeDB working directory: GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -json -race -p 1 -timeout 20m ./collections; dedicated shard4.",
+    "artifact_names": [
+      "treedb-test-json-ubuntu-latest-2",
+      "treedb-race-json-linux-4"
+    ],
+    "db": "Normal db whole package is pinned ubuntu/macos-latest-3. Core race db test names are distributed across shards1..3 by actual weighted/name list; do not guess individual shard without raw regex or JSONL. Existing exact52 GC normal/race receipt applies to identical current runtime/test blobs for its named GC families; it is not proof of unrelated native appender tests.",
+    "db_relevant_names": [
+      "TestR1NativeAppenderCreationMetadataBoundedAcrossRotations",
+      "TestR1NativeAppenderCreationMetadataRetainsFailedAndAmbiguousHandoffs",
+      "TestR1RebuiltCurrentRootDropsUnreachablePackedDependency",
+      "TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority",
+      "TestLeafGenerationGCReclaimsReleasedManifestRevisions5066",
+      "TestLeafManifestRevisionGCHeldAndRecovery5066",
+      "TestLeafManifestRevisionGCQuarantineCleanup5066"
+    ],
+    "valuelog_relevant_names": [
+      "TestManagerCloseJoinsPinnedZombieRetry5066",
+      "TestManagerConcurrentRetryAdmissionAndClose5066"
+    ],
+    "valuelog_membership": "Whole valuelog package belongs to one normal and one core race package shard via fallback go-list ordering; actual packet determines job. Required broad CI covers it; no new focused test requested.",
+    "remaining": "Root retains required workflow completion/other affected regression receipts and binds actual landed source to runtime9bae and current test blobs. D retained lifecycle/reopen performance packet remains a separate future actual gate; this review supplies current correctness evidence only."
+  },
+  "report_sentence_disposition": {
+    "original_sentence": "Eighteen selected process-crash cuts cover rejection-before-append, ambiguous post-sync/pre-ACK and ACK; not physical power loss.",
+    "verdict": "SUPPORTED_WITH_SELECTED_FIXTURE_SCOPE",
+    "recommended_sentence": "Eighteen selected indexed mutation process-crash cuts passed at the reviewed runtime in normal and race CI: rejection before command-WAL append, ambiguous return after file sync before ACK, and successful ACK. Three supported-profile upsert cuts also passed after mixed lifecycle maintenance. These exercise process exit, not physical power loss.",
+    "landing_limit": "Final report must bind the later actual landed tree/runtime/test identity; this review does not supply a future landing receipt."
+  }
+}

@@ -1,0 +1,109 @@
+[
+  {
+    "lane": "A",
+    "new_capture_root": "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/comparator/final-actual-M/3325dfe",
+    "new_public_receipt_root": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006/docs/evidence/r1-row-store-5061/_artifacts/final-M-3325dfe/receipts/A",
+    "new_replay_argv": [
+      "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/comparator/final-actual-M/3325dfe/collection_workload_bench",
+      "r1-validate",
+      "-source-manifest",
+      "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006/docs/evidence/r1-row-store-5061/_artifacts/final-M-3325dfe/receipts/A/independent-expected-source.json",
+      "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/comparator/final-actual-M/3325dfe/packet.json"
+    ],
+    "original_validation_argv": [
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/collection_workload_bench",
+      "r1-validate",
+      "-source-manifest",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-expected-source.json",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/packet.json"
+    ],
+    "preserved_original_capture_root": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe",
+    "preserved_original_receipt_root": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe"
+  },
+  {
+    "lane": "C",
+    "new_capture_root": "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/mutation-sweep/final-actual-M/3325dfe",
+    "new_public_receipt_root": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006/docs/evidence/r1-row-store-5061/_artifacts/final-M-3325dfe/receipts/C",
+    "new_replay_argv": [
+      "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/mutation-sweep/final-actual-M/3325dfe/collection_workload_bench",
+      "r1-mutation-sweep-validate",
+      "-source-manifest",
+      "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006/docs/evidence/r1-row-store-5061/_artifacts/final-M-3325dfe/receipts/C/independent-expected-source.json",
+      "-expected-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "-expected-runtime",
+      "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "-expected-harness",
+      "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "-expected-landed-tooling-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "-expected-binary-sha256",
+      "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+      "-expected-packet-sha256",
+      "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+      "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/mutation-sweep/final-actual-M/3325dfe/packet.json"
+    ],
+    "original_validation_argv": [
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/collection_workload_bench",
+      "r1-mutation-sweep-validate",
+      "-source-manifest",
+      "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe/independent-expected-source.json",
+      "-expected-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "-expected-runtime",
+      "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "-expected-harness",
+      "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "-expected-landed-tooling-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "-expected-binary-sha256",
+      "df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2",
+      "-expected-packet-sha256",
+      "5be838ef1e24f8fec1793471531b1b6da086cdf522aa35a3cabf1f76bf531e07",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe/packet.json"
+    ],
+    "preserved_original_capture_root": "/home/mikers/gomap-r1-evidence-20261005/r1-final-C-M-3325dfe",
+    "preserved_original_receipt_root": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-C-M-3325dfe"
+  },
+  {
+    "lane": "D",
+    "new_capture_root": "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/lifecycle/final-actual-M/3325dfe",
+    "new_public_receipt_root": "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006/docs/evidence/r1-row-store-5061/_artifacts/final-M-3325dfe/receipts/D",
+    "new_replay_argv": [
+      "/usr/bin/python3",
+      "/home/mikers/gomap-r1-public-git-M-3325dfe-20261006/docs/evidence/r1-row-store-5061/_artifacts/validation/r1_lifecycle_validate.py",
+      "/home/mikers/gomap-r1-public-restored-M-3325dfe-20261006/lifecycle/final-actual-M/3325dfe/packet.json",
+      "--expected-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "--expected-runtime",
+      "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "--expected-harness",
+      "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+      "--expected-landed-tooling-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "--expected-binary-sha256",
+      "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+      "--expected-packet-sha256",
+      "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc"
+    ],
+    "original_validation_argv": [
+      "/usr/bin/python3",
+      "/home/mikers/gomap-r1-final-source-20261006/scripts/r1_lifecycle_validate.py",
+      "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/packet.json",
+      "--expected-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "--expected-runtime",
+      "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+      "--expected-harness",
+      "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+      "--expected-landed-tooling-commit",
+      "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+      "--expected-binary-sha256",
+      "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+      "--expected-packet-sha256",
+      "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc"
+    ],
+    "preserved_original_capture_root": "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe",
+    "preserved_original_receipt_root": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-D-M-3325dfe"
+  }
+]

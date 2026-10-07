@@ -1,0 +1,2268 @@
+{
+  "files": {
+    "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/buildinfo.txt": {
+      "bytes": 1856,
+      "sha256": "08f685dcd28426e51a2b3fac6af304a6adb472f5fa3b082f3ea0a9dab6f03bb2",
+      "text": "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/collection_workload_bench: go1.26.4\n\tpath\tgithub.com/snissn/gomap/cmd/collection_workload_bench\n\tmod\tgithub.com/snissn/gomap\t(devel)\t\n\tdep\tgithub.com/buger/jsonparser\tv1.1.2\th1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/golang/snappy\tv0.0.4\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\n\tdep\tgithub.com/klauspost/cpuid/v2\tv2.2.10\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\n\tdep\tgithub.com/mattn/go-sqlite3\tv1.14.42\th1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.22\th1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=\n\tdep\tgithub.com/snissn/compress\tv1.18.2-snissn.0.0.20260506201017-87fb149e4721\th1:2XYKYq/WV3oldGbGi3b7M7VQoh38DIKSO0lNteuazJ0=\n\tdep\tgithub.com/snissn/go-crc32-asm\tv0.0.0-20260522204125-08945951423a\th1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=\n\tdep\tgithub.com/tidwall/btree\tv1.8.1\th1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=\n\tdep\tgithub.com/tidwall/gjson\tv1.14.3\th1:9jvXn7olKEHU1S9vwoMGliaT8jq1vJ7IH/n9zD9Dnlw=\n\tdep\tgithub.com/tidwall/match\tv1.1.1\th1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=\n\tdep\tgithub.com/tidwall/pretty\tv1.2.0\th1:RWIZEg2iJ8/g6fDDYzMpobmaoGh5OLl4AXtGUGPcqCs=\n\tdep\tgithub.com/tphakala/simd\tv1.0.22\th1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=\n\tdep\tgithub.com/zeebo/xxh3\tv1.1.0\th1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=\n\tdep\tgo.mongodb.org/mongo-driver/v2\tv2.6.0\th1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=\n\tdep\tgolang.org/x/sys\tv0.41.0\th1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=1\n\tbuild\tCGO_CFLAGS=\n\tbuild\tCGO_CPPFLAGS=\n\tbuild\tCGO_CXXFLAGS=\n\tbuild\tCGO_LDFLAGS=\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1\n"
+    },
+    "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/buildinfo.txt": {
+      "bytes": 2018,
+      "sha256": "1d1e68b983f212119bb070311de3744a40e594195054f373355d5212826d63b2",
+      "text": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/collection_workload_bench: go1.26.4\n\tpath\tgithub.com/snissn/gomap/cmd/collection_workload_bench\n\tmod\tgithub.com/snissn/gomap\tv0.6.2-0.20261006234446-3325dfe77940\t\n\tdep\tgithub.com/buger/jsonparser\tv1.1.2\th1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=\n\tdep\tgithub.com/cespare/xxhash/v2\tv2.3.0\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\n\tdep\tgithub.com/golang/snappy\tv0.0.4\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\n\tdep\tgithub.com/klauspost/cpuid/v2\tv2.2.10\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\n\tdep\tgithub.com/mattn/go-sqlite3\tv1.14.42\th1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=\n\tdep\tgithub.com/pierrec/lz4/v4\tv4.1.22\th1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=\n\tdep\tgithub.com/snissn/compress\tv1.18.2-snissn.0.0.20260506201017-87fb149e4721\th1:2XYKYq/WV3oldGbGi3b7M7VQoh38DIKSO0lNteuazJ0=\n\tdep\tgithub.com/snissn/go-crc32-asm\tv0.0.0-20260522204125-08945951423a\th1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=\n\tdep\tgithub.com/tidwall/btree\tv1.8.1\th1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=\n\tdep\tgithub.com/tidwall/gjson\tv1.14.3\th1:9jvXn7olKEHU1S9vwoMGliaT8jq1vJ7IH/n9zD9Dnlw=\n\tdep\tgithub.com/tidwall/match\tv1.1.1\th1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=\n\tdep\tgithub.com/tidwall/pretty\tv1.2.0\th1:RWIZEg2iJ8/g6fDDYzMpobmaoGh5OLl4AXtGUGPcqCs=\n\tdep\tgithub.com/tphakala/simd\tv1.0.22\th1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=\n\tdep\tgithub.com/zeebo/xxh3\tv1.1.0\th1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=\n\tdep\tgo.mongodb.org/mongo-driver/v2\tv2.6.0\th1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=\n\tdep\tgolang.org/x/sys\tv0.41.0\th1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=\n\tbuild\t-buildmode=exe\n\tbuild\t-compiler=gc\n\tbuild\tCGO_ENABLED=1\n\tbuild\tCGO_CFLAGS=\n\tbuild\tCGO_CPPFLAGS=\n\tbuild\tCGO_CXXFLAGS=\n\tbuild\tCGO_LDFLAGS=\n\tbuild\tGOARCH=amd64\n\tbuild\tGOOS=linux\n\tbuild\tGOAMD64=v1\n\tbuild\tvcs=git\n\tbuild\tvcs.revision=3325dfe77940fec8587d8b61b1ac4e0b2f72caca\n\tbuild\tvcs.time=2026-10-06T23:44:46Z\n\tbuild\tvcs.modified=false\n"
+    },
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-exit-original.json": {
+      "bytes": 4314,
+      "sha256": "ce0e0a48193adc257384fb8e7fb850c9d37220ea1926c8ea8af62e5c020e19f2",
+      "text": "{\n  \"exit\": 1,\n  \"input_sha256_after\": {\n    \"/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e/packet.json\": \"d3bcec0a4924267afeee67a13ec1e5f83c8ef930a12d1b46538c3cd71746013f\",\n    \"/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/collection_workload_bench\": \"df995f26aa80ce7e9bb99075537b9595fc850cfc2708c8036edaf2d4fad3bdc2\",\n    \"/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/packet.json\": \"e5b83232a75ecb0a30b2859dd64e0ee2e1cba2a31cb922c05d1b9384e048a17b\",\n    \"/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/source-after.json\": \"f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b\",\n    \"/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/source.json\": \"f081ca8adc487a6af45af3c760b05c312a399f66177b8b5c6f74d7e41514ab6b\",\n    \"/home/mikers/gomap-r1-final-configs-20261006/M-3325dfe/A-config.json\": \"f2b95b22d5e1c12a00c5cc77dc5846b199535aa3e30e2cc77ed8b8f8b03257b4\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/M-3325dfe-A-harness-equivalence-review-original.json\": \"4ef8ad2fc389514d05465dfdb100ea9d15e95442bd0bc745eaa7fa9dee907359\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/build-completed.json\": \"eadba7afdd37e1d1e40e8ac23a616346a300acc4bd9b3f9b49482cb8e9b832dc\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/build-start.json\": \"a3e24a691184ba034561b2b4bde989b3d268ba2a62970edb15b0da7f81b93655\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/driver.log\": \"9e83b5002b84360363a59f87669c951a56f6694654ef738f294d6551a74d80fa\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-expected-source.json\": \"d01cabb0159552b9d326977758278b9fd8f5df4f9f1f04b7587e79d95481998f\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-validation.log\": \"dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/observer-before.json\": \"3fa38456c281349c09c8ec81d3ad0eddd491f0bfa5755c18deb8af010ed1d441\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/root-frozen-inputs.json\": \"f2b95b22d5e1c12a00c5cc77dc5846b199535aa3e30e2cc77ed8b8f8b03257b4\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/run-exit.json\": \"b5e363605b66cf21c128fcb7c2a5d648ebc9678eb5d3962e2bda4db6249fe7cf\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/run-start.json\": \"82542e55e075cf8f292f188830d8a0d670a7b8ebbef7e6e9e337cb82e373693a\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/runner-after.json\": \"e621eb4eb75d9309fd71320388f0b870b03e25de890dd99ab08d5abea785f54f\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/runner-before.json\": \"f313adbee4c538b3d40ee7f7a0d285eee12f21cf75bfdf91ed4bb43c63e7772d\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/trusted-completed-receipt.json\": \"da663d1651263ac87e0f1f0a77bf2ea082177f81af3008390b4f5602c52c938e\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-exit.json\": \"6d2b2cedf89d8c3773cf840313860f1300dd532b82f0359f9962b7933cd86cbd\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-start.json\": \"66fd060aa0643a226f28c8cbd289d16e861716dc9e0e90c56757315e71e007fd\",\n    \"/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/frozen-source-accepted.json\": \"96aa5bb2dba3f2e604a8cd63c49d2deefa73786d36a0da2f0f7fcd704160566d\",\n    \"/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-approved-A-semantics-certificate.json\": \"8b1a409f13d09ad2e5cf91b0cae9c76722a9ab3f3b4d6b3b6305714edb6b4da8\",\n    \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/compare_r1_packets.py\": \"1a54cac528e5c8acc2501ec67b13d9a185b011e1467856741ada320a8bfdcfc8\",\n    \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-A-semantic-equivalence-preparation/compare-certified.py\": \"5bc6c7eb0c00b8f78860e31769ac4731f1d1aed2f91013e2a9b1ed7633065c75\"\n  },\n  \"stderr_sha256\": \"980e22031337b2c1a97cfd53dfb457e4bdaebac66923c5e7a8faaf4175d8f606\",\n  \"stdout_sha256\": \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n  \"utc\": \"2026-10-07T00:31:52.600596+00:00\"\n}\n"
+    },
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-stderr-original.log": {
+      "bytes": 897,
+      "sha256": "980e22031337b2c1a97cfd53dfb457e4bdaebac66923c5e7a8faaf4175d8f606",
+      "text": "Traceback (most recent call last):\n  File \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-A-semantic-equivalence-preparation/compare-certified.py\", line 184, in <module>\n    if __name__=='__main__':main()\n                            ~~~~^^\n  File \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-A-semantic-equivalence-preparation/compare-certified.py\", line 179, in main\n    result=math['compare'](b,a,baseline_namespace['capture_identity'](before_path,b),math['candidate_identity'](after_path,a,accepted,env))\n  File \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/compare_r1_packets.py\", line 63, in compare\n    assert environment_before == environment_after, 'host/toolchain/compiler/Go-runtime/filesystem/SQLite mismatch'\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError: host/toolchain/compiler/Go-runtime/filesystem/SQLite mismatch\n"
+    },
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/environment-mismatch-diagnostic-original.json": {
+      "bytes": 16986,
+      "sha256": "e769683d0a55544898190d12a30827fdc89e1603ea503cdc5f93f7a2eedbe169",
+      "text": "{\n  \"actual_M_identity\": {\n    \"buildinfo\": [\n      \"\\tpath\\tgithub.com/snissn/gomap/cmd/collection_workload_bench\",\n      \"\\tmod\\tgithub.com/snissn/gomap\\tv0.6.2-0.20261006234446-3325dfe77940\\t\",\n      \"\\tdep\\tgithub.com/buger/jsonparser\\tv1.1.2\\th1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=\",\n      \"\\tdep\\tgithub.com/cespare/xxhash/v2\\tv2.3.0\\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\",\n      \"\\tdep\\tgithub.com/golang/snappy\\tv0.0.4\\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\",\n      \"\\tdep\\tgithub.com/klauspost/cpuid/v2\\tv2.2.10\\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\",\n      \"\\tdep\\tgithub.com/mattn/go-sqlite3\\tv1.14.42\\th1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=\",\n      \"\\tdep\\tgithub.com/pierrec/lz4/v4\\tv4.1.22\\th1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=\",\n      \"\\tdep\\tgithub.com/snissn/compress\\tv1.18.2-snissn.0.0.20260506201017-87fb149e4721\\th1:2XYKYq/WV3oldGbGi3b7M7VQoh38DIKSO0lNteuazJ0=\",\n      \"\\tdep\\tgithub.com/snissn/go-crc32-asm\\tv0.0.0-20260522204125-08945951423a\\th1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=\",\n      \"\\tdep\\tgithub.com/tidwall/btree\\tv1.8.1\\th1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=\",\n      \"\\tdep\\tgithub.com/tidwall/gjson\\tv1.14.3\\th1:9jvXn7olKEHU1S9vwoMGliaT8jq1vJ7IH/n9zD9Dnlw=\",\n      \"\\tdep\\tgithub.com/tidwall/match\\tv1.1.1\\th1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=\",\n      \"\\tdep\\tgithub.com/tidwall/pretty\\tv1.2.0\\th1:RWIZEg2iJ8/g6fDDYzMpobmaoGh5OLl4AXtGUGPcqCs=\",\n      \"\\tdep\\tgithub.com/tphakala/simd\\tv1.0.22\\th1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=\",\n      \"\\tdep\\tgithub.com/zeebo/xxh3\\tv1.1.0\\th1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=\",\n      \"\\tdep\\tgo.mongodb.org/mongo-driver/v2\\tv2.6.0\\th1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=\",\n      \"\\tdep\\tgolang.org/x/sys\\tv0.41.0\\th1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=\",\n      \"\\tbuild\\t-buildmode=exe\",\n      \"\\tbuild\\t-compiler=gc\",\n      \"\\tbuild\\tCGO_ENABLED=1\",\n      \"\\tbuild\\tCGO_CFLAGS=\",\n      \"\\tbuild\\tCGO_CPPFLAGS=\",\n      \"\\tbuild\\tCGO_CXXFLAGS=\",\n      \"\\tbuild\\tCGO_LDFLAGS=\",\n      \"\\tbuild\\tGOARCH=amd64\",\n      \"\\tbuild\\tGOOS=linux\",\n      \"\\tbuild\\tGOAMD64=v1\",\n      \"\\tbuild\\tvcs=git\",\n      \"\\tbuild\\tvcs.modified=false\"\n    ],\n    \"compiler_version\": \"gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0\\nCopyright (C) 2025 Free Software Foundation, Inc.\\nThis is free software; see the source for copying conditions.  There is NO\\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\\n\\n\",\n    \"cpu_count\": 16,\n    \"database_device\": 66306,\n    \"go_build_environment\": {\n      \"CC\": \"gcc\",\n      \"CGO_CFLAGS\": \"-O2 -g\",\n      \"CGO_CPPFLAGS\": \"\",\n      \"CGO_CXXFLAGS\": \"-O2 -g\",\n      \"CGO_ENABLED\": \"1\",\n      \"CGO_LDFLAGS\": \"-O2 -g\",\n      \"CXX\": \"g++\",\n      \"GOARCH\": \"amd64\",\n      \"GOFLAGS\": \"\",\n      \"GOOS\": \"linux\",\n      \"GOROOT\": \"/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64\",\n      \"GOTOOLCHAIN\": \"local\"\n    },\n    \"go_runtime_environment\": {\n      \"GODEBUG\": \"\",\n      \"GOGC\": \"100\",\n      \"GOMAXPROCS\": \"16\",\n      \"GOMEMLIMIT\": \"off\"\n    },\n    \"go_version\": \"go1.26.4\",\n    \"goarch\": \"amd64\",\n    \"goos\": \"linux\",\n    \"hostname\": \"mikers-MS-7E71\",\n    \"sqlite_settings\": [\n      [\n        \"sqlite-json\",\n        [\n          [\n            \"sqlite.cache_bytes\",\n            \"67108864\"\n          ],\n          [\n            \"sqlite.journal_mode\",\n            \"wal\"\n          ],\n          [\n            \"sqlite.mmap_bytes\",\n            \"0\"\n          ],\n          [\n            \"sqlite.version\",\n            \"3.51.3\"\n          ]\n        ]\n      ],\n      [\n        \"sqlite-row\",\n        [\n          [\n            \"sqlite.cache_bytes\",\n            \"67108864\"\n          ],\n          [\n            \"sqlite.journal_mode\",\n            \"wal\"\n          ],\n          [\n            \"sqlite.mmap_bytes\",\n            \"0\"\n          ],\n          [\n            \"sqlite.version\",\n            \"3.51.3\"\n          ]\n        ]\n      ]\n    ],\n    \"uname\": [\n      \"Linux\",\n      \"mikers-MS-7E71\",\n      \"7.0.0-30-generic\",\n      \"#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026\",\n      \"x86_64\"\n    ]\n  },\n  \"baseline_identity\": {\n    \"buildinfo\": [\n      \"\\tpath\\tgithub.com/snissn/gomap/cmd/collection_workload_bench\",\n      \"\\tmod\\tgithub.com/snissn/gomap\\t(devel)\\t\",\n      \"\\tdep\\tgithub.com/buger/jsonparser\\tv1.1.2\\th1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=\",\n      \"\\tdep\\tgithub.com/cespare/xxhash/v2\\tv2.3.0\\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\",\n      \"\\tdep\\tgithub.com/golang/snappy\\tv0.0.4\\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\",\n      \"\\tdep\\tgithub.com/klauspost/cpuid/v2\\tv2.2.10\\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\",\n      \"\\tdep\\tgithub.com/mattn/go-sqlite3\\tv1.14.42\\th1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=\",\n      \"\\tdep\\tgithub.com/pierrec/lz4/v4\\tv4.1.22\\th1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=\",\n      \"\\tdep\\tgithub.com/snissn/compress\\tv1.18.2-snissn.0.0.20260506201017-87fb149e4721\\th1:2XYKYq/WV3oldGbGi3b7M7VQoh38DIKSO0lNteuazJ0=\",\n      \"\\tdep\\tgithub.com/snissn/go-crc32-asm\\tv0.0.0-20260522204125-08945951423a\\th1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=\",\n      \"\\tdep\\tgithub.com/tidwall/btree\\tv1.8.1\\th1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=\",\n      \"\\tdep\\tgithub.com/tidwall/gjson\\tv1.14.3\\th1:9jvXn7olKEHU1S9vwoMGliaT8jq1vJ7IH/n9zD9Dnlw=\",\n      \"\\tdep\\tgithub.com/tidwall/match\\tv1.1.1\\th1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=\",\n      \"\\tdep\\tgithub.com/tidwall/pretty\\tv1.2.0\\th1:RWIZEg2iJ8/g6fDDYzMpobmaoGh5OLl4AXtGUGPcqCs=\",\n      \"\\tdep\\tgithub.com/tphakala/simd\\tv1.0.22\\th1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=\",\n      \"\\tdep\\tgithub.com/zeebo/xxh3\\tv1.1.0\\th1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=\",\n      \"\\tdep\\tgo.mongodb.org/mongo-driver/v2\\tv2.6.0\\th1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=\",\n      \"\\tdep\\tgolang.org/x/sys\\tv0.41.0\\th1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=\",\n      \"\\tbuild\\t-buildmode=exe\",\n      \"\\tbuild\\t-compiler=gc\",\n      \"\\tbuild\\tCGO_ENABLED=1\",\n      \"\\tbuild\\tCGO_CFLAGS=\",\n      \"\\tbuild\\tCGO_CPPFLAGS=\",\n      \"\\tbuild\\tCGO_CXXFLAGS=\",\n      \"\\tbuild\\tCGO_LDFLAGS=\",\n      \"\\tbuild\\tGOARCH=amd64\",\n      \"\\tbuild\\tGOOS=linux\",\n      \"\\tbuild\\tGOAMD64=v1\"\n    ],\n    \"compiler_version\": \"gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0\\nCopyright (C) 2025 Free Software Foundation, Inc.\\nThis is free software; see the source for copying conditions.  There is NO\\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\\n\\n\",\n    \"cpu_count\": 16,\n    \"database_device\": 66306,\n    \"go_build_environment\": {\n      \"CC\": \"gcc\",\n      \"CGO_CFLAGS\": \"-O2 -g\",\n      \"CGO_CPPFLAGS\": \"\",\n      \"CGO_CXXFLAGS\": \"-O2 -g\",\n      \"CGO_ENABLED\": \"1\",\n      \"CGO_LDFLAGS\": \"-O2 -g\",\n      \"CXX\": \"g++\",\n      \"GOARCH\": \"amd64\",\n      \"GOFLAGS\": \"\",\n      \"GOOS\": \"linux\",\n      \"GOROOT\": \"/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64\",\n      \"GOTOOLCHAIN\": \"local\"\n    },\n    \"go_runtime_environment\": {\n      \"GODEBUG\": \"\",\n      \"GOGC\": \"100\",\n      \"GOMAXPROCS\": \"16\",\n      \"GOMEMLIMIT\": \"off\"\n    },\n    \"go_version\": \"go1.26.4\",\n    \"goarch\": \"amd64\",\n    \"goos\": \"linux\",\n    \"hostname\": \"mikers-MS-7E71\",\n    \"sqlite_settings\": [\n      [\n        \"sqlite-json\",\n        [\n          [\n            \"sqlite.cache_bytes\",\n            \"67108864\"\n          ],\n          [\n            \"sqlite.journal_mode\",\n            \"wal\"\n          ],\n          [\n            \"sqlite.mmap_bytes\",\n            \"0\"\n          ],\n          [\n            \"sqlite.version\",\n            \"3.51.3\"\n          ]\n        ]\n      ],\n      [\n        \"sqlite-row\",\n        [\n          [\n            \"sqlite.cache_bytes\",\n            \"67108864\"\n          ],\n          [\n            \"sqlite.journal_mode\",\n            \"wal\"\n          ],\n          [\n            \"sqlite.mmap_bytes\",\n            \"0\"\n          ],\n          [\n            \"sqlite.version\",\n            \"3.51.3\"\n          ]\n        ]\n      ]\n    ],\n    \"uname\": [\n      \"Linux\",\n      \"mikers-MS-7E71\",\n      \"7.0.0-30-generic\",\n      \"#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026\",\n      \"x86_64\"\n    ]\n  },\n  \"differences\": [\n    {\n      \"actual_M\": [\n        \"\\tpath\\tgithub.com/snissn/gomap/cmd/collection_workload_bench\",\n        \"\\tmod\\tgithub.com/snissn/gomap\\tv0.6.2-0.20261006234446-3325dfe77940\\t\",\n        \"\\tdep\\tgithub.com/buger/jsonparser\\tv1.1.2\\th1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=\",\n        \"\\tdep\\tgithub.com/cespare/xxhash/v2\\tv2.3.0\\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\",\n        \"\\tdep\\tgithub.com/golang/snappy\\tv0.0.4\\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\",\n        \"\\tdep\\tgithub.com/klauspost/cpuid/v2\\tv2.2.10\\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\",\n        \"\\tdep\\tgithub.com/mattn/go-sqlite3\\tv1.14.42\\th1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=\",\n        \"\\tdep\\tgithub.com/pierrec/lz4/v4\\tv4.1.22\\th1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=\",\n        \"\\tdep\\tgithub.com/snissn/compress\\tv1.18.2-snissn.0.0.20260506201017-87fb149e4721\\th1:2XYKYq/WV3oldGbGi3b7M7VQoh38DIKSO0lNteuazJ0=\",\n        \"\\tdep\\tgithub.com/snissn/go-crc32-asm\\tv0.0.0-20260522204125-08945951423a\\th1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=\",\n        \"\\tdep\\tgithub.com/tidwall/btree\\tv1.8.1\\th1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=\",\n        \"\\tdep\\tgithub.com/tidwall/gjson\\tv1.14.3\\th1:9jvXn7olKEHU1S9vwoMGliaT8jq1vJ7IH/n9zD9Dnlw=\",\n        \"\\tdep\\tgithub.com/tidwall/match\\tv1.1.1\\th1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=\",\n        \"\\tdep\\tgithub.com/tidwall/pretty\\tv1.2.0\\th1:RWIZEg2iJ8/g6fDDYzMpobmaoGh5OLl4AXtGUGPcqCs=\",\n        \"\\tdep\\tgithub.com/tphakala/simd\\tv1.0.22\\th1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=\",\n        \"\\tdep\\tgithub.com/zeebo/xxh3\\tv1.1.0\\th1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=\",\n        \"\\tdep\\tgo.mongodb.org/mongo-driver/v2\\tv2.6.0\\th1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=\",\n        \"\\tdep\\tgolang.org/x/sys\\tv0.41.0\\th1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=\",\n        \"\\tbuild\\t-buildmode=exe\",\n        \"\\tbuild\\t-compiler=gc\",\n        \"\\tbuild\\tCGO_ENABLED=1\",\n        \"\\tbuild\\tCGO_CFLAGS=\",\n        \"\\tbuild\\tCGO_CPPFLAGS=\",\n        \"\\tbuild\\tCGO_CXXFLAGS=\",\n        \"\\tbuild\\tCGO_LDFLAGS=\",\n        \"\\tbuild\\tGOARCH=amd64\",\n        \"\\tbuild\\tGOOS=linux\",\n        \"\\tbuild\\tGOAMD64=v1\",\n        \"\\tbuild\\tvcs=git\",\n        \"\\tbuild\\tvcs.modified=false\"\n      ],\n      \"baseline\": [\n        \"\\tpath\\tgithub.com/snissn/gomap/cmd/collection_workload_bench\",\n        \"\\tmod\\tgithub.com/snissn/gomap\\t(devel)\\t\",\n        \"\\tdep\\tgithub.com/buger/jsonparser\\tv1.1.2\\th1:frqHqw7otoVbk5M8LlE/L7HTnIq2v9RX6EJ48i9AxJk=\",\n        \"\\tdep\\tgithub.com/cespare/xxhash/v2\\tv2.3.0\\th1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=\",\n        \"\\tdep\\tgithub.com/golang/snappy\\tv0.0.4\\th1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=\",\n        \"\\tdep\\tgithub.com/klauspost/cpuid/v2\\tv2.2.10\\th1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=\",\n        \"\\tdep\\tgithub.com/mattn/go-sqlite3\\tv1.14.42\\th1:MigqEP4ZmHw3aIdIT7T+9TLa90Z6smwcthx+Azv4Cgo=\",\n        \"\\tdep\\tgithub.com/pierrec/lz4/v4\\tv4.1.22\\th1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=\",\n        \"\\tdep\\tgithub.com/snissn/compress\\tv1.18.2-snissn.0.0.20260506201017-87fb149e4721\\th1:2XYKYq/WV3oldGbGi3b7M7VQoh38DIKSO0lNteuazJ0=\",\n        \"\\tdep\\tgithub.com/snissn/go-crc32-asm\\tv0.0.0-20260522204125-08945951423a\\th1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=\",\n        \"\\tdep\\tgithub.com/tidwall/btree\\tv1.8.1\\th1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=\",\n        \"\\tdep\\tgithub.com/tidwall/gjson\\tv1.14.3\\th1:9jvXn7olKEHU1S9vwoMGliaT8jq1vJ7IH/n9zD9Dnlw=\",\n        \"\\tdep\\tgithub.com/tidwall/match\\tv1.1.1\\th1:+Ho715JplO36QYgwN9PGYNhgZvoUSc9X2c80KVTi+GA=\",\n        \"\\tdep\\tgithub.com/tidwall/pretty\\tv1.2.0\\th1:RWIZEg2iJ8/g6fDDYzMpobmaoGh5OLl4AXtGUGPcqCs=\",\n        \"\\tdep\\tgithub.com/tphakala/simd\\tv1.0.22\\th1:3wHL91t4yvhCB0ycyTznvucTHax+QGpYkvOhqfraTYw=\",\n        \"\\tdep\\tgithub.com/zeebo/xxh3\\tv1.1.0\\th1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=\",\n        \"\\tdep\\tgo.mongodb.org/mongo-driver/v2\\tv2.6.0\\th1:b9sJOYrkmt4l8bY43ZenFBcPlhYIjaOfYHLtbB/5qi8=\",\n        \"\\tdep\\tgolang.org/x/sys\\tv0.41.0\\th1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=\",\n        \"\\tbuild\\t-buildmode=exe\",\n        \"\\tbuild\\t-compiler=gc\",\n        \"\\tbuild\\tCGO_ENABLED=1\",\n        \"\\tbuild\\tCGO_CFLAGS=\",\n        \"\\tbuild\\tCGO_CPPFLAGS=\",\n        \"\\tbuild\\tCGO_CXXFLAGS=\",\n        \"\\tbuild\\tCGO_LDFLAGS=\",\n        \"\\tbuild\\tGOARCH=amd64\",\n        \"\\tbuild\\tGOOS=linux\",\n        \"\\tbuild\\tGOAMD64=v1\"\n      ],\n      \"field\": \"/buildinfo\"\n    }\n  ],\n  \"input_sha256_before_and_after\": {\n    \"/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/buildinfo.txt\": \"1d1e68b983f212119bb070311de3744a40e594195054f373355d5212826d63b2\",\n    \"/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe/packet.json\": \"e5b83232a75ecb0a30b2859dd64e0ee2e1cba2a31cb922c05d1b9384e048a17b\",\n    \"/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-A-environment-diagnostic-original.py\": \"a16d06747b17a9366b41d7c86149547bfa320892d51af396e9a63be854c38f6d\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/build-completed.json\": \"eadba7afdd37e1d1e40e8ac23a616346a300acc4bd9b3f9b49482cb8e9b832dc\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/build-start.json\": \"a3e24a691184ba034561b2b4bde989b3d268ba2a62970edb15b0da7f81b93655\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-expected-source.json\": \"d01cabb0159552b9d326977758278b9fd8f5df4f9f1f04b7587e79d95481998f\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/independent-validation.log\": \"dc43ac05fec58fff56b19ebd6ebc4ea34363f8c7bd645022d7f8ff25d74b1102\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/observer-before.json\": \"3fa38456c281349c09c8ec81d3ad0eddd491f0bfa5755c18deb8af010ed1d441\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/root-frozen-inputs.json\": \"f2b95b22d5e1c12a00c5cc77dc5846b199535aa3e30e2cc77ed8b8f8b03257b4\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/run-exit.json\": \"b5e363605b66cf21c128fcb7c2a5d648ebc9678eb5d3962e2bda4db6249fe7cf\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/run-start.json\": \"82542e55e075cf8f292f188830d8a0d670a7b8ebbef7e6e9e337cb82e373693a\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/runner-after.json\": \"e621eb4eb75d9309fd71320388f0b870b03e25de890dd99ab08d5abea785f54f\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/runner-before.json\": \"f313adbee4c538b3d40ee7f7a0d285eee12f21cf75bfdf91ed4bb43c63e7772d\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-exit.json\": \"6d2b2cedf89d8c3773cf840313860f1300dd532b82f0359f9962b7933cd86cbd\",\n    \"/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/validation-start.json\": \"66fd060aa0643a226f28c8cbd289d16e861716dc9e0e90c56757315e71e007fd\",\n    \"/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-exit-original.json\": \"ce0e0a48193adc257384fb8e7fb850c9d37220ea1926c8ea8af62e5c020e19f2\",\n    \"/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/comparison-stderr-original.log\": \"980e22031337b2c1a97cfd53dfb457e4bdaebac66923c5e7a8faaf4175d8f606\",\n    \"/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/frozen-source-accepted.json\": \"96aa5bb2dba3f2e604a8cd63c49d2deefa73786d36a0da2f0f7fcd704160566d\",\n    \"/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/A/root-approved-A-semantics-certificate.json\": \"8b1a409f13d09ad2e5cf91b0cae9c76722a9ab3f3b4d6b3b6305714edb6b4da8\",\n    \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-baseline-landed-0216e2e/buildinfo.txt\": \"08f685dcd28426e51a2b3fac6af304a6adb472f5fa3b082f3ea0a9dab6f03bb2\",\n    \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-baseline-landed-0216e2e/capture-environment.json\": \"f5315d27b097a3a4561673b6ff4748b5ecf72bcafa583598bd2db5c6d586da4f\",\n    \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-baseline-landed-0216e2e/packet.json\": \"d3bcec0a4924267afeee67a13ec1e5f83c8ef930a12d1b46538c3cd71746013f\",\n    \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/compare_r1_packets.py\": \"1a54cac528e5c8acc2501ec67b13d9a185b011e1467856741ada320a8bfdcfc8\",\n    \"/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-A-semantic-equivalence-preparation/compare-certified.py\": \"5bc6c7eb0c00b8f78860e31769ac4731f1d1aed2f91013e2a9b1ed7633065c75\"\n  },\n  \"normalization_applied\": false,\n  \"original_comparison_exit\": 1,\n  \"remeasurement\": false,\n  \"state\": \"ORIGINAL_ENVIRONMENT_COMPARISON_FAILED_DIAGNOSIS_ONLY_NO_ACCEPTANCE\",\n  \"utc\": \"2026-10-07T00:36:55.354225+00:00\"\n}\n"
+    }
+  },
+  "go_source": {
+    "src/cmd/go/internal/load/pkg.go": {
+      "bytes": 126442,
+      "numbered_selected_lines": [
+        [
+          227,
+          "\tCmdlineFiles      bool                // package built from files listed on command line"
+        ],
+        [
+          228,
+          "\tCmdlinePkg        bool                // package listed on command line"
+        ],
+        [
+          229,
+          "\tCmdlinePkgLiteral bool                // package listed as literal on command line (not via wildcard)"
+        ],
+        [
+          230,
+          "\tLocal             bool                // imported via local path (./ or ../)"
+        ],
+        [
+          231,
+          "\tLocalPrefix       string              // interpret ./ and ../ imports relative to this prefix"
+        ],
+        [
+          232,
+          "\tExeName           string              // desired name for temporary executable"
+        ],
+        [
+          233,
+          "\tFuzzInstrument    bool                // package should be instrumented for fuzzing"
+        ],
+        [
+          234,
+          "\tCover             CoverSetup          // coverage mode and other setup info of -cover is being applied to this package"
+        ],
+        [
+          235,
+          "\tOmitDebug         bool                // tell linker not to write debug information"
+        ],
+        [
+          236,
+          "\tGobinSubdir       bool                // install target would be subdir of GOBIN"
+        ],
+        [
+          237,
+          "\tBuildInfo         *debug.BuildInfo    // add this info to package main"
+        ],
+        [
+          238,
+          "\tTestmainGo        *[]byte             // content for _testmain.go"
+        ],
+        [
+          239,
+          "\tEmbed             map[string][]string // //go:embed comment mapping"
+        ],
+        [
+          240,
+          "\tOrigImportPath    string              // original import path before adding '_test' suffix"
+        ],
+        [
+          241,
+          "\tPGOProfile        string              // path to PGO profile"
+        ],
+        [
+          242,
+          "\tForMain           string              // the main package if this package is built specifically for it"
+        ],
+        [
+          243,
+          ""
+        ],
+        [
+          244,
+          "\tAsmflags   []string // -asmflags for this package"
+        ],
+        [
+          245,
+          "\tGcflags    []string // -gcflags for this package"
+        ],
+        [
+          246,
+          "\tLdflags    []string // -ldflags for this package"
+        ],
+        [
+          247,
+          "\tGccgoflags []string // -gccgoflags for this package"
+        ],
+        [
+          248,
+          "}"
+        ],
+        [
+          249,
+          ""
+        ],
+        [
+          250,
+          "// A NoGoError indicates that no Go files for the package were applicable to the"
+        ],
+        [
+          251,
+          "// build for that package."
+        ],
+        [
+          252,
+          "//"
+        ],
+        [
+          253,
+          "// That may be because there were no files whatsoever, or because all files were"
+        ],
+        [
+          254,
+          "// excluded, or because all non-excluded files were test sources."
+        ],
+        [
+          2038,
+          "\t\tif i < len(p.Imports) {"
+        ],
+        [
+          2039,
+          "\t\t\tp.Imports[i] = path"
+        ],
+        [
+          2040,
+          "\t\t}"
+        ],
+        [
+          2041,
+          ""
+        ],
+        [
+          2042,
+          "\t\timports = append(imports, p1)"
+        ],
+        [
+          2043,
+          "\t\tif p1.Incomplete {"
+        ],
+        [
+          2044,
+          "\t\t\tp.Incomplete = true"
+        ],
+        [
+          2045,
+          "\t\t}"
+        ],
+        [
+          2046,
+          "\t}"
+        ],
+        [
+          2047,
+          "\tp.Internal.Imports = imports"
+        ],
+        [
+          2048,
+          "\tif p.Error == nil && p.Name == \"main\" && !p.Internal.ForceLibrary && !p.Incomplete && !opts.SuppressBuildInfo {"
+        ],
+        [
+          2049,
+          "\t\t// TODO(bcmills): loading VCS metadata can be fairly slow."
+        ],
+        [
+          2050,
+          "\t\t// Consider starting this as a background goroutine and retrieving the result"
+        ],
+        [
+          2051,
+          "\t\t// asynchronously when we're actually ready to build the package, or when we"
+        ],
+        [
+          2052,
+          "\t\t// actually need to evaluate whether the package's metadata is stale."
+        ],
+        [
+          2053,
+          "\t\tp.setBuildInfo(ctx, loaderstate.Fetcher(), opts.AutoVCS)"
+        ],
+        [
+          2054,
+          "\t}"
+        ],
+        [
+          2055,
+          ""
+        ],
+        [
+          2056,
+          "\t// If cgo is not enabled, ignore cgo supporting sources"
+        ],
+        [
+          2057,
+          "\t// just as we ignore go files containing import \"C\"."
+        ],
+        [
+          2058,
+          "\tif !cfg.BuildContext.CgoEnabled {"
+        ],
+        [
+          2059,
+          "\t\tp.CFiles = nil"
+        ],
+        [
+          2060,
+          "\t\tp.CXXFiles = nil"
+        ],
+        [
+          2061,
+          "\t\tp.MFiles = nil"
+        ],
+        [
+          2062,
+          "\t\tp.SwigFiles = nil"
+        ],
+        [
+          2063,
+          "\t\tp.SwigCXXFiles = nil"
+        ],
+        [
+          2064,
+          "\t\t// Note that SFiles are okay (they go to the Go assembler)"
+        ],
+        [
+          2065,
+          "\t\t// and HFiles are okay (they might be used by the SFiles)."
+        ],
+        [
+          2066,
+          "\t\t// Also Sysofiles are okay (they might not contain object"
+        ],
+        [
+          2067,
+          "\t\t// code; see issue #16050)."
+        ],
+        [
+          2068,
+          "\t}"
+        ],
+        [
+          2069,
+          ""
+        ],
+        [
+          2070,
+          "\t// The gc toolchain only permits C source files with cgo or SWIG."
+        ],
+        [
+          2302,
+          "\tcase \".bzr\", \".hg\", \".git\", \".svn\":"
+        ],
+        [
+          2303,
+          "\t\treturn true"
+        ],
+        [
+          2304,
+          "\t}"
+        ],
+        [
+          2305,
+          "\treturn false"
+        ],
+        [
+          2306,
+          "}"
+        ],
+        [
+          2307,
+          ""
+        ],
+        [
+          2308,
+          "// vcsStatusCache maps repository directories (string)"
+        ],
+        [
+          2309,
+          "// to their VCS information."
+        ],
+        [
+          2310,
+          "var vcsStatusCache par.ErrCache[string, vcs.Status]"
+        ],
+        [
+          2311,
+          ""
+        ],
+        [
+          2312,
+          "func appendBuildSetting(info *debug.BuildInfo, key, value string) {"
+        ],
+        [
+          2313,
+          "\tvalue = strings.ReplaceAll(value, \"\\n\", \" \") // make value safe"
+        ],
+        [
+          2314,
+          "\tinfo.Settings = append(info.Settings, debug.BuildSetting{Key: key, Value: value})"
+        ],
+        [
+          2315,
+          "}"
+        ],
+        [
+          2316,
+          ""
+        ],
+        [
+          2317,
+          "// setBuildInfo gathers build information and sets it into"
+        ],
+        [
+          2318,
+          "// p.Internal.BuildInfo, which will later be formatted as a string and embedded"
+        ],
+        [
+          2319,
+          "// in the binary. setBuildInfo should only be called on a main package with no"
+        ],
+        [
+          2320,
+          "// errors."
+        ],
+        [
+          2321,
+          "//"
+        ],
+        [
+          2322,
+          "// This information can be retrieved using debug.ReadBuildInfo."
+        ],
+        [
+          2323,
+          "//"
+        ],
+        [
+          2324,
+          "// Note that the GoVersion field is not set here to avoid encoding it twice."
+        ],
+        [
+          2325,
+          "// It is stored separately in the binary, mostly for historical reasons."
+        ],
+        [
+          2326,
+          "func (p *Package) setBuildInfo(ctx context.Context, f *modfetch.Fetcher, autoVCS bool) {"
+        ],
+        [
+          2327,
+          "\tsetPkgErrorf := func(format string, args ...any) {"
+        ],
+        [
+          2328,
+          "\t\tif p.Error == nil {"
+        ],
+        [
+          2329,
+          "\t\t\tp.Error = &PackageError{Err: fmt.Errorf(format, args...)}"
+        ],
+        [
+          2330,
+          "\t\t\tp.Incomplete = true"
+        ],
+        [
+          2331,
+          "\t\t}"
+        ],
+        [
+          2332,
+          "\t}"
+        ],
+        [
+          2333,
+          ""
+        ],
+        [
+          2334,
+          "\tvar debugModFromModinfo func(*modinfo.ModulePublic) *debug.Module"
+        ],
+        [
+          2335,
+          "\tdebugModFromModinfo = func(mi *modinfo.ModulePublic) *debug.Module {"
+        ],
+        [
+          2336,
+          "\t\tversion := mi.Version"
+        ],
+        [
+          2337,
+          "\t\tif version == \"\" {"
+        ],
+        [
+          2338,
+          "\t\t\tversion = \"(devel)\""
+        ],
+        [
+          2339,
+          "\t\t}"
+        ],
+        [
+          2340,
+          "\t\tdm := &debug.Module{"
+        ],
+        [
+          2341,
+          "\t\t\tPath:    mi.Path,"
+        ],
+        [
+          2342,
+          "\t\t\tVersion: version,"
+        ],
+        [
+          2343,
+          "\t\t}"
+        ],
+        [
+          2344,
+          "\t\tif mi.Replace != nil {"
+        ],
+        [
+          2345,
+          "\t\t\tdm.Replace = debugModFromModinfo(mi.Replace)"
+        ],
+        [
+          2346,
+          "\t\t} else if mi.Version != \"\" && cfg.BuildMod != \"vendor\" {"
+        ],
+        [
+          2347,
+          "\t\t\tdm.Sum = modfetch.Sum(ctx, module.Version{Path: mi.Path, Version: mi.Version})"
+        ],
+        [
+          2348,
+          "\t\t}"
+        ],
+        [
+          2349,
+          "\t\treturn dm"
+        ],
+        [
+          2350,
+          "\t}"
+        ],
+        [
+          2351,
+          ""
+        ],
+        [
+          2352,
+          "\tvar main debug.Module"
+        ],
+        [
+          2353,
+          "\tif p.Module != nil {"
+        ],
+        [
+          2354,
+          "\t\tmain = *debugModFromModinfo(p.Module)"
+        ],
+        [
+          2355,
+          "\t}"
+        ],
+        [
+          2380,
+          "\tgover.ModSort(sortedMods)"
+        ],
+        [
+          2381,
+          "\tdeps := make([]*debug.Module, len(sortedMods))"
+        ],
+        [
+          2382,
+          "\tfor i, mod := range sortedMods {"
+        ],
+        [
+          2383,
+          "\t\tdeps[i] = mdeps[mod]"
+        ],
+        [
+          2384,
+          "\t}"
+        ],
+        [
+          2385,
+          ""
+        ],
+        [
+          2386,
+          "\tpkgPath := p.ImportPath"
+        ],
+        [
+          2387,
+          "\tif p.Internal.CmdlineFiles {"
+        ],
+        [
+          2388,
+          "\t\tpkgPath = \"command-line-arguments\""
+        ],
+        [
+          2389,
+          "\t}"
+        ],
+        [
+          2390,
+          "\tinfo := &debug.BuildInfo{"
+        ],
+        [
+          2391,
+          "\t\tPath: pkgPath,"
+        ],
+        [
+          2392,
+          "\t\tMain: main,"
+        ],
+        [
+          2393,
+          "\t\tDeps: deps,"
+        ],
+        [
+          2394,
+          "\t}"
+        ],
+        [
+          2395,
+          "\tappendSetting := func(key, value string) {"
+        ],
+        [
+          2396,
+          "\t\tappendBuildSetting(info, key, value)"
+        ],
+        [
+          2397,
+          "\t}"
+        ],
+        [
+          2398,
+          ""
+        ],
+        [
+          2399,
+          "\t// Add command-line flags relevant to the build."
+        ],
+        [
+          2400,
+          "\t// This is informational, not an exhaustive list."
+        ],
+        [
+          2401,
+          "\t// Please keep the list sorted."
+        ],
+        [
+          2402,
+          "\tif cfg.BuildASan {"
+        ],
+        [
+          2403,
+          "\t\tappendSetting(\"-asan\", \"true\")"
+        ],
+        [
+          2404,
+          "\t}"
+        ],
+        [
+          2405,
+          "\tif BuildAsmflags.present {"
+        ],
+        [
+          2406,
+          "\t\tappendSetting(\"-asmflags\", BuildAsmflags.String())"
+        ],
+        [
+          2407,
+          "\t}"
+        ],
+        [
+          2484,
+          ""
+        ],
+        [
+          2485,
+          "\t// Add VCS status if all conditions are true:"
+        ],
+        [
+          2486,
+          "\t//"
+        ],
+        [
+          2487,
+          "\t// - -buildvcs is enabled."
+        ],
+        [
+          2488,
+          "\t// - p is a non-test contained within a main module (there may be multiple"
+        ],
+        [
+          2489,
+          "\t//   main modules in a workspace, but local replacements don't count)."
+        ],
+        [
+          2490,
+          "\t// - Both the current directory and p's module's root directory are contained"
+        ],
+        [
+          2491,
+          "\t//   in the same local repository."
+        ],
+        [
+          2492,
+          "\t// - We know the VCS commands needed to get the status."
+        ],
+        [
+          2493,
+          "\tsetVCSError := func(err error) {"
+        ],
+        [
+          2494,
+          "\t\tsetPkgErrorf(\"error obtaining VCS status: %v\\n\\tUse -buildvcs=false to disable VCS stamping.\", err)"
+        ],
+        [
+          2495,
+          "\t}"
+        ],
+        [
+          2496,
+          ""
+        ],
+        [
+          2497,
+          "\tvar repoDir string"
+        ],
+        [
+          2498,
+          "\tvar vcsCmd *vcs.Cmd"
+        ],
+        [
+          2499,
+          "\tvar err error"
+        ],
+        [
+          2500,
+          ""
+        ],
+        [
+          2501,
+          "\twantVCS := false"
+        ],
+        [
+          2502,
+          "\tswitch cfg.BuildBuildvcs {"
+        ],
+        [
+          2503,
+          "\tcase \"true\":"
+        ],
+        [
+          2504,
+          "\t\twantVCS = true // Include VCS metadata even for tests if requested explicitly; see https://go.dev/issue/52648."
+        ],
+        [
+          2505,
+          "\tcase \"auto\":"
+        ],
+        [
+          2506,
+          "\t\twantVCS = autoVCS && !p.IsTestOnly()"
+        ],
+        [
+          2507,
+          "\tcase \"false\":"
+        ],
+        [
+          2508,
+          "\tdefault:"
+        ],
+        [
+          2509,
+          "\t\tpanic(fmt.Sprintf(\"unexpected value for cfg.BuildBuildvcs: %q\", cfg.BuildBuildvcs))"
+        ],
+        [
+          2510,
+          "\t}"
+        ],
+        [
+          2511,
+          ""
+        ],
+        [
+          2525,
+          "\t\t\t!str.HasFilePathPrefix(repoDir, p.Module.Dir) {"
+        ],
+        [
+          2526,
+          "\t\t\t// The module containing the main package does not overlap with the"
+        ],
+        [
+          2527,
+          "\t\t\t// repository containing the working directory. Don't include VCS info."
+        ],
+        [
+          2528,
+          "\t\t\t// If the repo contains the module or vice versa, but they are not"
+        ],
+        [
+          2529,
+          "\t\t\t// the same directory, it's likely an error (see below)."
+        ],
+        [
+          2530,
+          "\t\t\tgoto omitVCS"
+        ],
+        [
+          2531,
+          "\t\t}"
+        ],
+        [
+          2532,
+          "\t\tif cfg.BuildBuildvcs == \"auto\" && vcsCmd != nil && vcsCmd.Cmd != \"\" {"
+        ],
+        [
+          2533,
+          "\t\t\tif _, err := pathcache.LookPath(vcsCmd.Cmd); err != nil {"
+        ],
+        [
+          2534,
+          "\t\t\t\t// We fould a repository, but the required VCS tool is not present."
+        ],
+        [
+          2535,
+          "\t\t\t\t// \"-buildvcs=auto\" means that we should silently drop the VCS metadata."
+        ],
+        [
+          2536,
+          "\t\t\t\tgoto omitVCS"
+        ],
+        [
+          2537,
+          "\t\t\t}"
+        ],
+        [
+          2538,
+          "\t\t}"
+        ],
+        [
+          2539,
+          "\t}"
+        ],
+        [
+          2540,
+          "\tif repoDir != \"\" && vcsCmd.Status != nil {"
+        ],
+        [
+          2541,
+          "\t\t// Check that the current directory, package, and module are in the same"
+        ],
+        [
+          2542,
+          "\t\t// repository. vcs.FromDir disallows nested VCS and multiple VCS in the"
+        ],
+        [
+          2543,
+          "\t\t// same repository, unless the GODEBUG allowmultiplevcs is set. The"
+        ],
+        [
+          2544,
+          "\t\t// current directory may be outside p.Module.Dir when a workspace is"
+        ],
+        [
+          2545,
+          "\t\t// used."
+        ],
+        [
+          2546,
+          "\t\tpkgRepoDir, _, err := vcs.FromDir(p.Dir, \"\")"
+        ],
+        [
+          2547,
+          "\t\tif err != nil {"
+        ],
+        [
+          2548,
+          "\t\t\tsetVCSError(err)"
+        ],
+        [
+          2549,
+          "\t\t\treturn"
+        ],
+        [
+          2550,
+          "\t\t}"
+        ],
+        [
+          2551,
+          "\t\tif pkgRepoDir != repoDir {"
+        ],
+        [
+          2552,
+          "\t\t\tif cfg.BuildBuildvcs != \"auto\" {"
+        ],
+        [
+          2571,
+          "\t\tst, err := vcsStatusCache.Do(repoDir, func() (vcs.Status, error) {"
+        ],
+        [
+          2572,
+          "\t\t\treturn vcsCmd.Status(vcsCmd, repoDir)"
+        ],
+        [
+          2573,
+          "\t\t})"
+        ],
+        [
+          2574,
+          "\t\tif err != nil {"
+        ],
+        [
+          2575,
+          "\t\t\tsetVCSError(err)"
+        ],
+        [
+          2576,
+          "\t\t\treturn"
+        ],
+        [
+          2577,
+          "\t\t}"
+        ],
+        [
+          2578,
+          ""
+        ],
+        [
+          2579,
+          "\t\tappendSetting(\"vcs\", vcsCmd.Cmd)"
+        ],
+        [
+          2580,
+          "\t\tif st.Revision != \"\" {"
+        ],
+        [
+          2581,
+          "\t\t\tappendSetting(\"vcs.revision\", st.Revision)"
+        ],
+        [
+          2582,
+          "\t\t}"
+        ],
+        [
+          2583,
+          "\t\tif !st.CommitTime.IsZero() {"
+        ],
+        [
+          2584,
+          "\t\t\tstamp := st.CommitTime.UTC().Format(time.RFC3339Nano)"
+        ],
+        [
+          2585,
+          "\t\t\tappendSetting(\"vcs.time\", stamp)"
+        ],
+        [
+          2586,
+          "\t\t}"
+        ],
+        [
+          2587,
+          "\t\tappendSetting(\"vcs.modified\", strconv.FormatBool(st.Uncommitted))"
+        ],
+        [
+          2588,
+          "\t\t// Determine the correct version of this module at the current revision and update the build metadata accordingly."
+        ],
+        [
+          2589,
+          "\t\trootModPath := goModPath(repoDir)"
+        ],
+        [
+          2590,
+          "\t\t// If no root module is found, skip embedding VCS data since we cannot determine the module path of the root."
+        ],
+        [
+          2591,
+          "\t\tif rootModPath == \"\" {"
+        ],
+        [
+          2592,
+          "\t\t\tgoto omitVCS"
+        ],
+        [
+          2593,
+          "\t\t}"
+        ],
+        [
+          2594,
+          "\t\tcodeRoot, _, ok := module.SplitPathVersion(rootModPath)"
+        ],
+        [
+          2595,
+          "\t\tif !ok {"
+        ],
+        [
+          2596,
+          "\t\t\tgoto omitVCS"
+        ],
+        [
+          2597,
+          "\t\t}"
+        ],
+        [
+          2598,
+          "\t\trepo := f.LookupLocal(ctx, codeRoot, p.Module.Path, repoDir)"
+        ],
+        [
+          2599,
+          "\t\trevInfo, err := repo.Stat(ctx, st.Revision)"
+        ],
+        [
+          2600,
+          "\t\tif err != nil {"
+        ],
+        [
+          2601,
+          "\t\t\tgoto omitVCS"
+        ],
+        [
+          2602,
+          "\t\t}"
+        ],
+        [
+          2603,
+          "\t\tvers := revInfo.Version"
+        ],
+        [
+          2604,
+          "\t\tif vers != \"\" {"
+        ],
+        [
+          2608,
+          "\t\t\t\t\tvers += \".dirty\""
+        ],
+        [
+          2609,
+          "\t\t\t\t} else {"
+        ],
+        [
+          2610,
+          "\t\t\t\t\tvers += \"+dirty\""
+        ],
+        [
+          2611,
+          "\t\t\t\t}"
+        ],
+        [
+          2612,
+          "\t\t\t}"
+        ],
+        [
+          2613,
+          "\t\t\tinfo.Main.Version = vers"
+        ],
+        [
+          2614,
+          "\t\t}"
+        ],
+        [
+          2615,
+          "\t}"
+        ],
+        [
+          2616,
+          "omitVCS:"
+        ],
+        [
+          2617,
+          ""
+        ],
+        [
+          2618,
+          "\tp.Internal.BuildInfo = info"
+        ],
+        [
+          2619,
+          "}"
+        ],
+        [
+          2620,
+          ""
+        ],
+        [
+          2621,
+          "// SafeArg reports whether arg is a \"safe\" command-line argument,"
+        ],
+        [
+          2622,
+          "// meaning that when it appears in a command-line, it probably"
+        ],
+        [
+          2623,
+          "// doesn't have some special meaning other than its own name."
+        ],
+        [
+          2624,
+          "// Obviously args beginning with - are not safe (they look like flags)."
+        ],
+        [
+          2625,
+          "// Less obviously, args beginning with @ are not safe (they look like"
+        ],
+        [
+          2626,
+          "// GNU binutils flagfile specifiers, sometimes called \"response files\")."
+        ],
+        [
+          2627,
+          "// To be conservative, we reject almost any arg beginning with non-alphanumeric ASCII."
+        ],
+        [
+          2628,
+          "// We accept leading . _ and / as likely in file system paths."
+        ],
+        [
+          2629,
+          "// There is a copy of this function in cmd/compile/internal/gc/noder.go."
+        ],
+        [
+          2630,
+          "func SafeArg(name string) bool {"
+        ],
+        [
+          2631,
+          "\tif name == \"\" {"
+        ],
+        [
+          2632,
+          "\t\treturn false"
+        ],
+        [
+          2633,
+          "\t}"
+        ],
+        [
+          2634,
+          "\tc := name[0]"
+        ],
+        [
+          2635,
+          "\treturn '0' <= c && c <= '9' || 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || c == '.' || c == '_' || c == '/' || c >= utf8.RuneSelf"
+        ],
+        [
+          2873,
+          "\tModResolveTests bool"
+        ],
+        [
+          2874,
+          ""
+        ],
+        [
+          2875,
+          "\t// MainOnly is true if the caller only wants to load main packages."
+        ],
+        [
+          2876,
+          "\t// For a literal argument matching a non-main package, a stub may be returned"
+        ],
+        [
+          2877,
+          "\t// with an error. For a non-literal argument (with \"...\"), non-main packages"
+        ],
+        [
+          2878,
+          "\t// are not be matched, and their dependencies may not be loaded. A warning"
+        ],
+        [
+          2879,
+          "\t// may be printed for non-literal arguments that match no main packages."
+        ],
+        [
+          2880,
+          "\tMainOnly bool"
+        ],
+        [
+          2881,
+          ""
+        ],
+        [
+          2882,
+          "\t// AutoVCS controls whether we also load version-control metadata for main packages"
+        ],
+        [
+          2883,
+          "\t// when -buildvcs=auto (the default)."
+        ],
+        [
+          2884,
+          "\tAutoVCS bool"
+        ],
+        [
+          2885,
+          ""
+        ],
+        [
+          2886,
+          "\t// SuppressBuildInfo is true if the caller does not need p.Stale, p.StaleReason, or p.Internal.BuildInfo"
+        ],
+        [
+          2887,
+          "\t// to be populated on the package."
+        ],
+        [
+          2888,
+          "\tSuppressBuildInfo bool"
+        ],
+        [
+          2889,
+          ""
+        ],
+        [
+          2890,
+          "\t// SuppressEmbedFiles is true if the caller does not need any embed files to be populated on the"
+        ],
+        [
+          2891,
+          "\t// package."
+        ],
+        [
+          2892,
+          "\tSuppressEmbedFiles bool"
+        ],
+        [
+          2893,
+          "}"
+        ],
+        [
+          2894,
+          ""
+        ],
+        [
+          2895,
+          "// PackagesAndErrors returns the packages named by the command line arguments"
+        ],
+        [
+          2896,
+          "// 'patterns'. If a named package cannot be loaded, PackagesAndErrors returns"
+        ],
+        [
+          2897,
+          "// a *Package with the Error field describing the failure. If errors are found"
+        ],
+        [
+          2898,
+          "// loading imported packages, the DepsErrors field is set. The Incomplete field"
+        ],
+        [
+          2899,
+          "// may be set as well."
+        ],
+        [
+          2900,
+          "//"
+        ],
+        [
+          2901,
+          "// To obtain a flat list of packages, use PackageList."
+        ],
+        [
+          2902,
+          "// To report errors loading packages, use ReportPackageErrors."
+        ],
+        [
+          2903,
+          "func PackagesAndErrors(loaderstate *modload.State, ctx context.Context, opts PackageOpts, patterns []string) []*Package {"
+        ],
+        [
+          2904,
+          "\tctx, span := trace.StartSpan(ctx, \"load.PackagesAndErrors\")"
+        ],
+        [
+          2905,
+          "\tdefer span.Done()"
+        ],
+        [
+          2996,
+          "\tsetToolFlags(loaderstate, pkgs...)"
+        ],
+        [
+          2997,
+          ""
+        ],
+        [
+          2998,
+          "\tsetPGOProfilePath(pkgs)"
+        ],
+        [
+          2999,
+          ""
+        ],
+        [
+          3000,
+          "\treturn pkgs"
+        ],
+        [
+          3001,
+          "}"
+        ],
+        [
+          3002,
+          ""
+        ],
+        [
+          3003,
+          "// setPGOProfilePath sets the PGO profile path for pkgs."
+        ],
+        [
+          3004,
+          "// In -pgo=auto mode, it finds the default PGO profile."
+        ],
+        [
+          3005,
+          "func setPGOProfilePath(pkgs []*Package) {"
+        ],
+        [
+          3006,
+          "\tupdateBuildInfo := func(p *Package, file string) {"
+        ],
+        [
+          3007,
+          "\t\t// Don't create BuildInfo for packages that didn't already have it."
+        ],
+        [
+          3008,
+          "\t\tif p.Internal.BuildInfo == nil {"
+        ],
+        [
+          3009,
+          "\t\t\treturn"
+        ],
+        [
+          3010,
+          "\t\t}"
+        ],
+        [
+          3011,
+          ""
+        ],
+        [
+          3012,
+          "\t\tif cfg.BuildTrimpath {"
+        ],
+        [
+          3013,
+          "\t\t\tappendBuildSetting(p.Internal.BuildInfo, \"-pgo\", filepath.Base(file))"
+        ],
+        [
+          3014,
+          "\t\t} else {"
+        ],
+        [
+          3015,
+          "\t\t\tappendBuildSetting(p.Internal.BuildInfo, \"-pgo\", file)"
+        ],
+        [
+          3016,
+          "\t\t}"
+        ],
+        [
+          3017,
+          "\t\t// Adding -pgo breaks the sort order in BuildInfo.Settings. Restore it."
+        ],
+        [
+          3018,
+          "\t\tslices.SortFunc(p.Internal.BuildInfo.Settings, func(x, y debug.BuildSetting) int {"
+        ],
+        [
+          3019,
+          "\t\t\treturn strings.Compare(x.Key, y.Key)"
+        ],
+        [
+          3020,
+          "\t\t})"
+        ],
+        [
+          3021,
+          "\t}"
+        ],
+        [
+          3022,
+          ""
+        ],
+        [
+          3023,
+          "\tswitch cfg.BuildPGO {"
+        ],
+        [
+          3024,
+          "\tcase \"off\":"
+        ],
+        [
+          3025,
+          "\t\treturn"
+        ],
+        [
+          3026,
+          ""
+        ],
+        [
+          3027,
+          "\tcase \"auto\":"
+        ],
+        [
+          3028,
+          "\t\t// Locate PGO profiles from the main packages, and"
+        ],
+        [
+          3029,
+          "\t\t// attach the profile to the main package and its"
+        ],
+        [
+          3030,
+          "\t\t// dependencies."
+        ],
+        [
+          3031,
+          "\t\t// If we're building multiple main packages, they may"
+        ],
+        [
+          3032,
+          "\t\t// have different profiles. We may need to split (unshare)"
+        ],
+        [
+          3033,
+          "\t\t// the dependency graph so they can attach different"
+        ],
+        [
+          3034,
+          "\t\t// profiles."
+        ],
+        [
+          3035,
+          "\t\tfor _, p := range pkgs {"
+        ],
+        [
+          3067,
+          "\t\t\t\t\t// we don't change them."
+        ],
+        [
+          3068,
+          "\t\t\t\t\tp1.Imports = slices.Clone(p.Imports)"
+        ],
+        [
+          3069,
+          "\t\t\t\t\tp1.Internal.Imports = slices.Clone(p.Internal.Imports)"
+        ],
+        [
+          3070,
+          "\t\t\t\t\tp1.Internal.ForMain = pmain.ImportPath"
+        ],
+        [
+          3071,
+          "\t\t\t\t\tvisited[p] = p1"
+        ],
+        [
+          3072,
+          "\t\t\t\t\tp = p1"
+        ],
+        [
+          3073,
+          "\t\t\t\t} else {"
+        ],
+        [
+          3074,
+          "\t\t\t\t\tvisited[p] = p"
+        ],
+        [
+          3075,
+          "\t\t\t\t}"
+        ],
+        [
+          3076,
+          "\t\t\t\tp.Internal.PGOProfile = file"
+        ],
+        [
+          3077,
+          "\t\t\t\tupdateBuildInfo(p, file)"
+        ],
+        [
+          3078,
+          "\t\t\t\t// Recurse to dependencies."
+        ],
+        [
+          3079,
+          "\t\t\t\tfor i, pp := range p.Internal.Imports {"
+        ],
+        [
+          3080,
+          "\t\t\t\t\tp.Internal.Imports[i] = split(pp)"
+        ],
+        [
+          3081,
+          "\t\t\t\t}"
+        ],
+        [
+          3082,
+          "\t\t\t\treturn p"
+        ],
+        [
+          3083,
+          "\t\t\t}"
+        ],
+        [
+          3084,
+          ""
+        ],
+        [
+          3085,
+          "\t\t\t// Replace the package and imports with the PGO version."
+        ],
+        [
+          3086,
+          "\t\t\tsplit(pmain)"
+        ],
+        [
+          3087,
+          "\t\t}"
+        ],
+        [
+          3088,
+          ""
+        ],
+        [
+          3089,
+          "\tdefault:"
+        ],
+        [
+          3090,
+          "\t\t// Profile specified from the command line."
+        ],
+        [
+          3091,
+          "\t\t// Make it absolute path, as the compiler runs on various directories."
+        ],
+        [
+          3092,
+          "\t\tfile, err := filepath.Abs(cfg.BuildPGO)"
+        ],
+        [
+          3093,
+          "\t\tif err != nil {"
+        ],
+        [
+          3094,
+          "\t\t\tbase.Fatalf(\"fail to get absolute path of PGO file %s: %v\", cfg.BuildPGO, err)"
+        ],
+        [
+          3095,
+          "\t\t}"
+        ],
+        [
+          3096,
+          ""
+        ],
+        [
+          3097,
+          "\t\tfor _, p := range PackageList(pkgs) {"
+        ],
+        [
+          3098,
+          "\t\t\tp.Internal.PGOProfile = file"
+        ],
+        [
+          3099,
+          "\t\t\tupdateBuildInfo(p, file)"
+        ],
+        [
+          3100,
+          "\t\t}"
+        ],
+        [
+          3101,
+          "\t}"
+        ],
+        [
+          3102,
+          "}"
+        ],
+        [
+          3103,
+          ""
+        ],
+        [
+          3104,
+          "// CheckPackageErrors prints errors encountered loading pkgs and their"
+        ],
+        [
+          3105,
+          "// dependencies, then exits with a non-zero status if any errors were found."
+        ],
+        [
+          3106,
+          "func CheckPackageErrors(pkgs []*Package) {"
+        ],
+        [
+          3107,
+          "\tPackageErrors(pkgs, func(p *Package) {"
+        ],
+        [
+          3108,
+          "\t\tDefaultPrinter().Errorf(p, \"%v\", p.Error)"
+        ],
+        [
+          3109,
+          "\t})"
+        ],
+        [
+          3110,
+          "\tbase.ExitIfErrors()"
+        ],
+        [
+          3111,
+          "}"
+        ],
+        [
+          3112,
+          ""
+        ],
+        [
+          3113,
+          "// PackageErrors calls report for errors encountered loading pkgs and their dependencies."
+        ],
+        [
+          3114,
+          "func PackageErrors(pkgs []*Package, report func(*Package)) {"
+        ],
+        [
+          3115,
+          "\tvar anyIncomplete, anyErrors bool"
+        ],
+        [
+          3116,
+          "\tfor _, pkg := range pkgs {"
+        ]
+      ],
+      "path": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/cmd/go/internal/load/pkg.go",
+      "sha256": "8ab6cf53b1674ef93d500b1ab07df3dc650fe003374ce14c31d992f899f4d339"
+    },
+    "src/cmd/go/internal/modload/build.go": {
+      "bytes": 14408,
+      "numbered_selected_lines": [],
+      "path": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/cmd/go/internal/modload/build.go",
+      "sha256": "9c5d040ed7cc2dd6987a498549de22ee0c5414cae7fd36e2c8049fcef01efb13"
+    },
+    "src/runtime/debug/mod.go": {
+      "bytes": 8462,
+      "numbered_selected_lines": [
+        [
+          7,
+          "import ("
+        ],
+        [
+          8,
+          "\t\"fmt\""
+        ],
+        [
+          9,
+          "\t\"runtime\""
+        ],
+        [
+          10,
+          "\t\"strconv\""
+        ],
+        [
+          11,
+          "\t\"strings\""
+        ],
+        [
+          12,
+          ")"
+        ],
+        [
+          13,
+          ""
+        ],
+        [
+          14,
+          "// exported from runtime."
+        ],
+        [
+          15,
+          "func modinfo() string"
+        ],
+        [
+          16,
+          ""
+        ],
+        [
+          17,
+          "// ReadBuildInfo returns the build information embedded"
+        ],
+        [
+          18,
+          "// in the running binary. The information is available only"
+        ],
+        [
+          19,
+          "// in binaries built with module support."
+        ],
+        [
+          20,
+          "func ReadBuildInfo() (info *BuildInfo, ok bool) {"
+        ],
+        [
+          21,
+          "\tdata := modinfo()"
+        ],
+        [
+          22,
+          "\tif len(data) < 32 {"
+        ],
+        [
+          23,
+          "\t\treturn nil, false"
+        ],
+        [
+          24,
+          "\t}"
+        ],
+        [
+          25,
+          "\tdata = data[16 : len(data)-16]"
+        ],
+        [
+          26,
+          "\tbi, err := ParseBuildInfo(data)"
+        ],
+        [
+          27,
+          "\tif err != nil {"
+        ],
+        [
+          28,
+          "\t\treturn nil, false"
+        ],
+        [
+          29,
+          "\t}"
+        ],
+        [
+          30,
+          ""
+        ],
+        [
+          31,
+          "\t// The go version is stored separately from other build info, mostly for"
+        ],
+        [
+          32,
+          "\t// historical reasons. It is not part of the modinfo() string, and"
+        ],
+        [
+          33,
+          "\t// ParseBuildInfo does not recognize it. We inject it here to hide this"
+        ],
+        [
+          34,
+          "\t// awkwardness from the user."
+        ],
+        [
+          35,
+          "\tbi.GoVersion = runtime.Version()"
+        ],
+        [
+          36,
+          ""
+        ],
+        [
+          37,
+          "\treturn bi, true"
+        ],
+        [
+          38,
+          "}"
+        ],
+        [
+          39,
+          ""
+        ],
+        [
+          40,
+          "// BuildInfo represents the build information read from a Go binary."
+        ],
+        [
+          41,
+          "type BuildInfo struct {"
+        ],
+        [
+          42,
+          "\t// GoVersion is the version of the Go toolchain that built the binary"
+        ],
+        [
+          43,
+          "\t// (for example, \"go1.19.2\")."
+        ],
+        [
+          44,
+          "\tGoVersion string `json:\",omitempty\"`"
+        ],
+        [
+          45,
+          ""
+        ],
+        [
+          46,
+          "\t// Path is the package path of the main package for the binary"
+        ],
+        [
+          47,
+          "\t// (for example, \"golang.org/x/tools/cmd/stringer\")."
+        ],
+        [
+          48,
+          "\tPath string `json:\",omitempty\"`"
+        ],
+        [
+          49,
+          ""
+        ],
+        [
+          50,
+          "\t// Main describes the module that contains the main package for the binary."
+        ],
+        [
+          51,
+          "\tMain Module `json:\"\"`"
+        ],
+        [
+          52,
+          ""
+        ],
+        [
+          53,
+          "\t// Deps describes all the dependency modules, both direct and indirect,"
+        ],
+        [
+          54,
+          "\t// that contributed packages to the build of this binary."
+        ],
+        [
+          55,
+          "\tDeps []*Module `json:\",omitempty\"`"
+        ],
+        [
+          56,
+          ""
+        ],
+        [
+          57,
+          "\t// Settings describes the build settings used to build the binary."
+        ],
+        [
+          58,
+          "\tSettings []BuildSetting `json:\",omitempty\"`"
+        ],
+        [
+          76,
+          "//   - CGO_CFLAGS: the effective CGO_CFLAGS environment variable"
+        ],
+        [
+          77,
+          "//   - CGO_CPPFLAGS: the effective CGO_CPPFLAGS environment variable"
+        ],
+        [
+          78,
+          "//   - CGO_CXXFLAGS:  the effective CGO_CXXFLAGS environment variable"
+        ],
+        [
+          79,
+          "//   - CGO_LDFLAGS: the effective CGO_LDFLAGS environment variable"
+        ],
+        [
+          80,
+          "//   - DefaultGODEBUG: the effective GODEBUG settings"
+        ],
+        [
+          81,
+          "//   - GOARCH: the architecture target"
+        ],
+        [
+          82,
+          "//   - GOAMD64/GOARM/GO386/etc: the architecture feature level for GOARCH"
+        ],
+        [
+          83,
+          "//   - GOOS: the operating system target"
+        ],
+        [
+          84,
+          "//   - GOFIPS140: the frozen FIPS 140-3 module version, if any"
+        ],
+        [
+          85,
+          "//   - vcs: the version control system for the source tree where the build ran"
+        ],
+        [
+          86,
+          "//   - vcs.revision: the revision identifier for the current commit or checkout"
+        ],
+        [
+          87,
+          "//   - vcs.time: the modification time associated with vcs.revision, in RFC3339 format"
+        ],
+        [
+          88,
+          "//   - vcs.modified: true or false indicating whether the source tree had local modifications"
+        ],
+        [
+          89,
+          "type BuildSetting struct {"
+        ],
+        [
+          90,
+          "\t// Key and Value describe the build setting."
+        ],
+        [
+          91,
+          "\t// Key must not contain an equals sign, space, tab, or newline."
+        ],
+        [
+          92,
+          "\tKey string `json:\",omitempty\"`"
+        ],
+        [
+          93,
+          "\t// Value must not contain newlines ('\\n')."
+        ],
+        [
+          94,
+          "\tValue string `json:\",omitempty\"`"
+        ],
+        [
+          95,
+          "}"
+        ],
+        [
+          96,
+          ""
+        ],
+        [
+          97,
+          "// quoteKey reports whether key is required to be quoted."
+        ],
+        [
+          98,
+          "func quoteKey(key string) bool {"
+        ],
+        [
+          99,
+          "\treturn len(key) == 0 || strings.ContainsAny(key, \"= \\t\\r\\n\\\"`\")"
+        ],
+        [
+          100,
+          "}"
+        ],
+        [
+          101,
+          ""
+        ],
+        [
+          102,
+          "// quoteValue reports whether value is required to be quoted."
+        ],
+        [
+          103,
+          "func quoteValue(value string) bool {"
+        ],
+        [
+          104,
+          "\treturn strings.ContainsAny(value, \" \\t\\r\\n\\\"`\")"
+        ],
+        [
+          105,
+          "}"
+        ],
+        [
+          106,
+          ""
+        ],
+        [
+          107,
+          "// String returns a string representation of a [BuildInfo]."
+        ],
+        [
+          108,
+          "func (bi *BuildInfo) String() string {"
+        ],
+        [
+          109,
+          "\tbuf := new(strings.Builder)"
+        ],
+        [
+          110,
+          "\tif bi.GoVersion != \"\" {"
+        ],
+        [
+          111,
+          "\t\tfmt.Fprintf(buf, \"go\\t%s\\n\", bi.GoVersion)"
+        ],
+        [
+          112,
+          "\t}"
+        ],
+        [
+          113,
+          "\tif bi.Path != \"\" {"
+        ],
+        [
+          114,
+          "\t\tfmt.Fprintf(buf, \"path\\t%s\\n\", bi.Path)"
+        ],
+        [
+          115,
+          "\t}"
+        ],
+        [
+          116,
+          "\tvar formatMod func(string, Module)"
+        ],
+        [
+          117,
+          "\tformatMod = func(word string, m Module) {"
+        ],
+        [
+          118,
+          "\t\tbuf.WriteString(word)"
+        ],
+        [
+          119,
+          "\t\tbuf.WriteByte('\\t')"
+        ],
+        [
+          120,
+          "\t\tbuf.WriteString(m.Path)"
+        ],
+        [
+          121,
+          "\t\tbuf.WriteByte('\\t')"
+        ],
+        [
+          122,
+          "\t\tbuf.WriteString(m.Version)"
+        ],
+        [
+          123,
+          "\t\tif m.Replace == nil {"
+        ],
+        [
+          124,
+          "\t\t\tbuf.WriteByte('\\t')"
+        ],
+        [
+          125,
+          "\t\t\tbuf.WriteString(m.Sum)"
+        ],
+        [
+          143,
+          "\t\tvalue := s.Value"
+        ],
+        [
+          144,
+          "\t\tif quoteValue(value) {"
+        ],
+        [
+          145,
+          "\t\t\tvalue = strconv.Quote(value)"
+        ],
+        [
+          146,
+          "\t\t}"
+        ],
+        [
+          147,
+          "\t\tfmt.Fprintf(buf, \"build\\t%s=%s\\n\", key, value)"
+        ],
+        [
+          148,
+          "\t}"
+        ],
+        [
+          149,
+          ""
+        ],
+        [
+          150,
+          "\treturn buf.String()"
+        ],
+        [
+          151,
+          "}"
+        ],
+        [
+          152,
+          ""
+        ],
+        [
+          153,
+          "// ParseBuildInfo parses the string returned by [*BuildInfo.String],"
+        ],
+        [
+          154,
+          "// restoring the original BuildInfo,"
+        ],
+        [
+          155,
+          "// except that the GoVersion field is not set."
+        ],
+        [
+          156,
+          "// Programs should normally not call this function,"
+        ],
+        [
+          157,
+          "// but instead call [ReadBuildInfo], [debug/buildinfo.ReadFile],"
+        ],
+        [
+          158,
+          "// or [debug/buildinfo.Read]."
+        ],
+        [
+          159,
+          "func ParseBuildInfo(data string) (bi *BuildInfo, err error) {"
+        ],
+        [
+          160,
+          "\tlineNum := 1"
+        ],
+        [
+          161,
+          "\tdefer func() {"
+        ],
+        [
+          162,
+          "\t\tif err != nil {"
+        ],
+        [
+          163,
+          "\t\t\terr = fmt.Errorf(\"could not parse Go build info: line %d: %w\", lineNum, err)"
+        ],
+        [
+          164,
+          "\t\t}"
+        ],
+        [
+          165,
+          "\t}()"
+        ],
+        [
+          166,
+          ""
+        ],
+        [
+          167,
+          "\tconst ("
+        ],
+        [
+          168,
+          "\t\tpathLine  = \"path\\t\""
+        ],
+        [
+          169,
+          "\t\tmodLine   = \"mod\\t\""
+        ],
+        [
+          170,
+          "\t\tdepLine   = \"dep\\t\""
+        ],
+        [
+          171,
+          "\t\trepLine   = \"=>\\t\""
+        ],
+        [
+          172,
+          "\t\tbuildLine = \"build\\t\""
+        ],
+        [
+          173,
+          "\t\tnewline   = \"\\n\""
+        ],
+        [
+          174,
+          "\t\ttab       = \"\\t\""
+        ],
+        [
+          175,
+          "\t)"
+        ],
+        [
+          176,
+          ""
+        ],
+        [
+          183,
+          "\t\tif len(elem) == 3 {"
+        ],
+        [
+          184,
+          "\t\t\tsum = elem[2]"
+        ],
+        [
+          185,
+          "\t\t}"
+        ],
+        [
+          186,
+          "\t\treturn Module{"
+        ],
+        [
+          187,
+          "\t\t\tPath:    elem[0],"
+        ],
+        [
+          188,
+          "\t\t\tVersion: version,"
+        ],
+        [
+          189,
+          "\t\t\tSum:     sum,"
+        ],
+        [
+          190,
+          "\t\t}, nil"
+        ],
+        [
+          191,
+          "\t}"
+        ],
+        [
+          192,
+          ""
+        ],
+        [
+          193,
+          "\tbi = new(BuildInfo)"
+        ],
+        [
+          194,
+          "\tvar ("
+        ],
+        [
+          195,
+          "\t\tlast *Module"
+        ],
+        [
+          196,
+          "\t\tline string"
+        ],
+        [
+          197,
+          "\t\tok   bool"
+        ],
+        [
+          198,
+          "\t)"
+        ],
+        [
+          199,
+          "\t// Reverse of BuildInfo.String(), except for go version."
+        ],
+        [
+          200,
+          "\tfor len(data) > 0 {"
+        ],
+        [
+          201,
+          "\t\tline, data, ok = strings.Cut(data, newline)"
+        ],
+        [
+          202,
+          "\t\tif !ok {"
+        ],
+        [
+          203,
+          "\t\t\tbreak"
+        ],
+        [
+          204,
+          "\t\t}"
+        ],
+        [
+          205,
+          "\t\tswitch {"
+        ],
+        [
+          206,
+          "\t\tcase strings.HasPrefix(line, pathLine):"
+        ],
+        [
+          207,
+          "\t\t\telem := line[len(pathLine):]"
+        ],
+        [
+          208,
+          "\t\t\tbi.Path = elem"
+        ],
+        [
+          209,
+          "\t\tcase strings.HasPrefix(line, modLine):"
+        ],
+        [
+          210,
+          "\t\t\telem := strings.Split(line[len(modLine):], tab)"
+        ],
+        [
+          211,
+          "\t\t\tlast = &bi.Main"
+        ],
+        [
+          212,
+          "\t\t\t*last, err = readModuleLine(elem)"
+        ],
+        [
+          213,
+          "\t\t\tif err != nil {"
+        ],
+        [
+          214,
+          "\t\t\t\treturn nil, err"
+        ],
+        [
+          215,
+          "\t\t\t}"
+        ],
+        [
+          216,
+          "\t\tcase strings.HasPrefix(line, depLine):"
+        ]
+      ],
+      "path": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/runtime/debug/mod.go",
+      "sha256": "2ed3d813e6d666049ff4320a361b2639ae6f6f185545da31cd56c7cc85f298aa"
+    }
+  },
+  "inspection": "READ ONLY original bytes; no Go or helper execution"
+}

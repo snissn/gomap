@@ -1,0 +1,18 @@
+{
+  "inventory_sha256": "cc63f5cf7df481bcea9db8e99ab44af5e18b81ae31aef77d256aed2b108c5f16",
+  "new_readonly_git_object_observation_count": 7,
+  "original_bytes": 3301927,
+  "packet_root": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation",
+  "preexisting_original_count": 53,
+  "readiness_sha256": "b4b4f154bb765953fb2aa1a31bdf3e845f702e2000211a5180ca93d5aee9b849",
+  "retained_text_original_count": 60,
+  "root_owns_remaining_gates": [
+    "Root adoption/public supplemental selection",
+    "Exact-head required CI including repaired Windows fixture job",
+    "Exact-head hosted review and all review threads",
+    "Protected landing with current-main applicability",
+    "Actual landed A/C/D capture and independent validation",
+    "Public E artifact replay and outcome acceptance"
+  ],
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION"
+}

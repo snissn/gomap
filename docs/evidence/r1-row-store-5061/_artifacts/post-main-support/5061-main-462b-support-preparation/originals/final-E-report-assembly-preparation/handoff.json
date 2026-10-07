@@ -1,0 +1,57 @@
+{
+  "status": "PREPARATION_COMPLETE_NONQUALIFYING_ROOT_OWNS_ACCEPTANCE",
+  "route": "gpt-6.1-sol",
+  "owned_directory": "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation",
+  "actual_primary_report": {
+    "path": "/private/tmp/gomap-r1-5061-final/TreeDB/docs/evidence/r1-row-store-5061/README.md",
+    "head": "4c9f21a51d304534619e8f70155a5dea51c5989b",
+    "blob": "cd2e19b2e2b6bb167d6a2956fed3ebe806e49f8e",
+    "sha256": "e636404bed9bb61be7543428dbc97504bc8511228467cdfab07c21701acfde8b",
+    "bytes": 15419,
+    "lines": 218,
+    "preservation": "verbatim explicitly historical appendix; no numerical/source/status rebinding"
+  },
+  "candidate_only": {
+    "commit": "898a7bae48f02e7067318f5165501d16ce7d47ad",
+    "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+    "A_C_harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "landed": false,
+    "measured_or_accepted_claim": false
+  },
+  "artifact_root": "docs/evidence/r1-row-store-5061/_artifacts",
+  "primary_relative_prefix": "../../../../docs/evidence/r1-row-store-5061/_artifacts/",
+  "helper": {
+    "sha256": "ab1a24e399b34490293b54c2511dd9ccdbccae2b908f0106647c60804b105925",
+    "bytes": 6666
+  },
+  "template": {
+    "sha256": "ab4a4802c80b6c433736dba7ab9871b93ab04e978893c6ea17a8607f76d259bc",
+    "bytes": 1880
+  },
+  "manifest_template": {
+    "sha256": "fbbef4a5e78bf0e9b88708749e2ae5a9e17f36486c46d2b9daaff06ab4c2451c",
+    "bytes": 2493
+  },
+  "checks": {
+    "sha256": "ff707a0549d8b0e2e5804a95f773aded223db1511b0dc381617e775fa5ad8a8d",
+    "bytes": 7969
+  },
+  "final_cli_cases": 9,
+  "existing_original_inputs_unchanged": 13,
+  "inputs_inventory": "inputs.json",
+  "output_inventory": "inventory.json",
+  "remaining_root_work": [
+    "Supply actual selected main/landing and source/build/environment/validation/decision receipts after actual qualification",
+    "Generate current fragments with pinned frozen formatters and original derivation identities",
+    "Supply separately certified A comparison and current interpretation covering closure audit",
+    "Supply actual fresh public restore and semantic replay proof",
+    "Independently review actual report then own publication/E review/CI/merge and ticket reconciliation"
+  ],
+  "limitations": [
+    "Byte/hash and presentation checks only; supplied metadata is not cross-authenticated against receipt semantics by assembler",
+    "No measurements, ratios, acceptance, causal/performance/source-binary equivalence or capacity claims invented",
+    "No qualification or formatter execution is performed by assembly",
+    "All synthetic files are unmistakably nonqualifying; no synthetic/future field is accepted in actual mode",
+    "No worktree/existing-helper/source/GitHub changes; no Go/capture/CI/remote/delegation"
+  ]
+}

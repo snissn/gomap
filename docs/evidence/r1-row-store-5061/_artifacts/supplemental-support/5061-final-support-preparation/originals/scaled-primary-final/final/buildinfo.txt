@@ -1,0 +1,13 @@
+/home/mikers/gomap-r1-vlog-rotation-boundary-evidence-unlink-corrected/db.test: go1.26.4
+	path	github.com/snissn/gomap/TreeDB/db.test
+	mod	github.com/snissn/gomap	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=1
+	build	CGO_CFLAGS=
+	build	CGO_CPPFLAGS=
+	build	CGO_CXXFLAGS=
+	build	CGO_LDFLAGS=
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1

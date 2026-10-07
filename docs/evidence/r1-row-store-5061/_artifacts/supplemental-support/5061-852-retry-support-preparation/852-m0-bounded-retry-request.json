@@ -1,0 +1,37 @@
+{
+  "utc": "2026-10-06T10:24:55.301387+00:00",
+  "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "original_run": 37447383111,
+  "original_job": 112215377747,
+  "original_artifact": 11404352211,
+  "original_zip_sha256": "f0334fd3e05c4ffb0844bcc8c2c5eefb3aefafdb15191503996cc2870f084c7d",
+  "original_retained": true,
+  "action": "ONE workflow_dispatch of unchanged exact852 workflow/gates; distinct run retains original artifact",
+  "rationale": "All raw samples PASS correctness; CV gates failed. 095 vs852 CPUs differ. Unchanged executed benchmark source path is insufficient binary/perf equivalence. One bounded noise-discrimination retry, not acceptance or waiver.",
+  "unchanged": [
+    "source",
+    "thresholds",
+    "sample count",
+    "workload",
+    "math"
+  ],
+  "repeat_failure_next": "No further unchanged-head retries; matched same-host control/head attribution first",
+  "artifact_semantics_sources": [
+    "https://github.com/actions/upload-artifact",
+    "https://github.com/actions/upload-artifact/issues/585"
+  ],
+  "actual_ref_before": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "request_argv": [
+    "gh",
+    "workflow",
+    "run",
+    "treedb-vacuum-m0.yml",
+    "--repo",
+    "snissn/gomap",
+    "--ref",
+    "codex/5066-lifecycle-maintenance"
+  ],
+  "request_exit": 0,
+  "stdout": "https://github.com/snissn/gomap/actions/runs/37449625940\n",
+  "stderr": ""
+}

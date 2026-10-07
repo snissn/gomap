@@ -18,24 +18,87 @@ func TestCommandWALDocsRejectActiveCollectionWALReferencesOutsideDeprecatedDoc(t
 		if err != nil {
 			t.Fatalf("read %s: %v", p, err)
 		}
-		lower := strings.ToLower(string(content))
-		lines := strings.Split(lower, "\n")
-		for i, line := range lines {
-			if !strings.Contains(line, "internal/collectionwal") && !strings.Contains(line, "wal/collection-l") {
-				continue
-			}
-			context := line
-			if i > 0 {
-				context = lines[i-1] + " " + context
-			}
-			if i+1 < len(lines) {
-				context += " " + lines[i+1]
-			}
-			if strings.Contains(context, "deprecated") || strings.Contains(context, "historical") || strings.Contains(context, "superseded") || strings.Contains(context, "not an active") || strings.Contains(context, "no active") || strings.Contains(context, "no new") || strings.Contains(context, "active implementation targets") || strings.Contains(context, "do not describe") || strings.Contains(context, "old collection") || strings.Contains(context, "must not create") || strings.Contains(context, "must not add") {
-				continue
-			}
-			t.Fatalf("%s:%d points active docs at deprecated collection WAL implementation", p, i+1)
+		if line := activeCollectionWALReferenceLine(content); line != 0 {
+			t.Fatalf("%s:%d points active docs at deprecated collection WAL implementation", p, line)
 		}
+	}
+}
+
+func activeCollectionWALReferenceLine(content []byte) int {
+	lower := strings.ToLower(string(content))
+	lines := strings.Split(lower, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "internal/collectionwal") && !strings.Contains(line, "wal/collection-l") {
+			continue
+		}
+		context := line
+		if i > 0 {
+			context = lines[i-1] + " " + context
+		}
+		if i+1 < len(lines) {
+			context += " " + lines[i+1]
+		}
+		if strings.Contains(context, "deprecated") || strings.Contains(context, "historical") || strings.Contains(context, "superseded") || strings.Contains(context, "not an active") || strings.Contains(context, "no active") || strings.Contains(context, "no new") || strings.Contains(context, "active implementation targets") || strings.Contains(context, "do not describe") || strings.Contains(context, "old collection") || strings.Contains(context, "must not create") || strings.Contains(context, "must not add") {
+			continue
+		}
+		return i + 1
+	}
+	return 0
+}
+
+func TestCommandWALActiveDocsFrozenEvidenceBoundary(t *testing.T) {
+	files := map[string]bool{
+		"docs/evidence/r1-row-store-5061/_artifacts/original.md":              false,
+		"docs/evidence/r1-row-store-5061/public-replay-M-3325dfe/original.md": false,
+		"TreeDB/README.md":                                               true,
+		"TreeDB/AGENTS.md":                                               true,
+		"TreeDB/AUDIT_TRACKING.md":                                       true,
+		"TreeDB/docs/spec/current.md":                                    true,
+		"TreeDB/docs/guides/current.md":                                  true,
+		"docs/evidence/r1-row-store-5061/README.md":                      true,
+		"docs/evidence/r1-row-store-5061/_artifacts-neighbor/current.md": true,
+		"docs/evidence/r1-row-store-5061/public-replay-M-3325dfe-neighbor/current.md": true,
+		"docs/evidence/r1-row-store-5061/public-replay-M-other/current.md":            true,
+		"docs/evidence/other/_artifacts/current.md":                                   true,
+		"docs/contracts/current.md":                                                   true,
+	}
+	for _, reference := range []string{"internal/collectionwal", "wal/collection-l"} {
+		t.Run(reference, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			treeRoot := filepath.Join(repoRoot, "TreeDB")
+			for rel := range files {
+				path := filepath.Join(repoRoot, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("Use "+reference+" for writes.\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			violations := make(map[string]int)
+			for _, path := range markdownDocsAtRoots(t, treeRoot, repoRoot) {
+				content, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if line := activeCollectionWALReferenceLine(content); line != 0 {
+					rel, err := filepath.Rel(repoRoot, path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					violations[filepath.ToSlash(rel)] = line
+				}
+			}
+			for rel, active := range files {
+				line, found := violations[rel]
+				if found != active || (found && line != 1) {
+					t.Errorf("%s: found=%t line=%d; want active=%t with forbidden reference on line 1", rel, found, line, active)
+				}
+			}
+			if line := activeCollectionWALReferenceLine([]byte("Historical: " + reference + "\n")); line != 0 {
+				t.Errorf("historical context rejected at line %d", line)
+			}
+		})
 	}
 }
 

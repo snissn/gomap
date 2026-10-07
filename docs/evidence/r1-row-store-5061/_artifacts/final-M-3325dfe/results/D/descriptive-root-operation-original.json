@@ -1,0 +1,59 @@
+{
+  "input_pins_unchanged": true,
+  "outputs": {
+    "descriptive-projection.json": {
+      "bytes": 8322164,
+      "sha256": "adb797d2d8837e02b1d623c26db33d3029e6ffdf3e9a8368261c792293047fe5"
+    },
+    "descriptive-report.md": {
+      "bytes": 113698,
+      "sha256": "37b055a03d816d0da38a8d74e9785908ed37a5b8db960d86b97f5536fe69f438"
+    },
+    "format-exit-original.json": {
+      "bytes": 102,
+      "sha256": "743f2b7a2b643331b094ef64e3846d8a086335a7ef2bd5bcee47345bfc1a0836"
+    },
+    "format-start-original.json": {
+      "bytes": 4873,
+      "sha256": "3dd7534cc4012709e72db3d829d87c1369668d15f008c7c119d455d748d952cb"
+    },
+    "format-stderr-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "format-stdout-original.log": {
+      "bytes": 113698,
+      "sha256": "37b055a03d816d0da38a8d74e9785908ed37a5b8db960d86b97f5536fe69f438"
+    },
+    "root-provenance-verification-original.json": {
+      "bytes": 341099,
+      "sha256": "ad6d8488831de1c1e25adb2ce66aba6c78403f9938118173e2bb1cd6d49c1316"
+    },
+    "summarize-exit-original.json": {
+      "bytes": 102,
+      "sha256": "a8c50b0d265ba80e983569269559fa5846763f2f3290d6417d4e6914ebfe94e1"
+    },
+    "summarize-start-original.json": {
+      "bytes": 4631,
+      "sha256": "fdf795de94237cb382a611dc155ca603c2054cc10a99a7675e2aefbda71e1fd5"
+    },
+    "summarize-stderr-original.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "summarize-stdout-original.log": {
+      "bytes": 60424,
+      "sha256": "804a8db11d93f520a5f25935ed7b23835518ec8b9965bad189a3524ae2876f49"
+    },
+    "summary.json": {
+      "bytes": 524675,
+      "sha256": "f93ee51b1924df0dd25dde001e5ad45c6c8ce7c07ae8276b2cd782ed0c0e4a9f"
+    },
+    "summary.md": {
+      "bytes": 60424,
+      "sha256": "804a8db11d93f520a5f25935ed7b23835518ec8b9965bad189a3524ae2876f49"
+    }
+  },
+  "scope": "raw descriptive projection only; numeric acceptance remains separate",
+  "utc": "2026-10-07T01:04:17.371824+00:00"
+}

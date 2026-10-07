@@ -1,0 +1,1 @@
+{"GOCACHE": "/home/mikers/.cache/gomap-r1-5066-go1264", "GODEBUG": "", "GOFLAGS": "", "GOGC": "100", "GOMAXPROCS": "16", "GOMEMLIMIT": "off", "GOMODCACHE": "/home/mikers/go/pkg/mod", "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64", "GOTOOLCHAIN": "local", "GOWORK": "off"}

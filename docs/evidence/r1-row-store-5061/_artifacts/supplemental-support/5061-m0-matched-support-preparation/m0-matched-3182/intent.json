@@ -1,0 +1,30 @@
+{
+  "utc": "2026-10-06T11:16:20.991281+00:00",
+  "sources_order": [
+    [
+      "control",
+      "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c"
+    ],
+    [
+      "candidate",
+      "3182e15dfe1aa11120db9d309ad0d590283398d6"
+    ]
+  ],
+  "scope": "One unchanged full ten-sample M0 control capture followed by one unchanged candidate capture on same host. Diagnostic only; not replacement of failed GitHub CI. No further automatic repeats.",
+  "canonical_lock": "/home/mikers/gomap-r1-evidence-20261005/timed-capture.lock",
+  "env_overrides": {
+    "PATH": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local",
+    "GOENV": "off",
+    "GOWORK": "off",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-m0-matched-go1264",
+    "GOMAXPROCS": "2",
+    "GOMEMLIMIT": "8GiB",
+    "GOGC": "100",
+    "GODEBUG": "",
+    "GOFLAGS": "",
+    "CPU_SET": "0,1"
+  }
+}

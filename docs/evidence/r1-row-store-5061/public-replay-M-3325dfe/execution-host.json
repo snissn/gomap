@@ -1,0 +1,15 @@
+{
+  "classification": "actual local identity; no physical-host equivalence claim",
+  "host_identity_input": "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-public-replay-host-original.json",
+  "host_identity_sha256": "cf0cce6e46a7f4ce830329897217582b03af42d47d36b635d8710a4a4de22edd",
+  "hostname": "mikers-MS-7E71",
+  "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.43",
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64",
+    ""
+  ]
+}

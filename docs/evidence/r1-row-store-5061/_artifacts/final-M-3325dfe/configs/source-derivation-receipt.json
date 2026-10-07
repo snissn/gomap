@@ -1,0 +1,150 @@
+{
+  "authority_limit": "Root supplies verified landing/review authority; this script does not query GitHub or run capture. Actual flock is held by caller, not proven by marker.",
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca\n"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "version"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "go version go1.26.4 linux/amd64\n"
+    },
+    {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "env",
+        "-json"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "{\n\t\"AR\": \"ar\",\n\t\"CC\": \"gcc\",\n\t\"CGO_CFLAGS\": \"-O2 -g\",\n\t\"CGO_CPPFLAGS\": \"\",\n\t\"CGO_CXXFLAGS\": \"-O2 -g\",\n\t\"CGO_ENABLED\": \"1\",\n\t\"CGO_FFLAGS\": \"-O2 -g\",\n\t\"CGO_LDFLAGS\": \"-O2 -g\",\n\t\"CXX\": \"g++\",\n\t\"GCCGO\": \"gccgo\",\n\t\"GO111MODULE\": \"\",\n\t\"GOAMD64\": \"v1\",\n\t\"GOARCH\": \"amd64\",\n\t\"GOAUTH\": \"netrc\",\n\t\"GOBIN\": \"\",\n\t\"GOCACHE\": \"/home/mikers/.cache/gomap-r1-retained-20261006-go1264\",\n\t\"GOCACHEPROG\": \"\",\n\t\"GODEBUG\": \"\",\n\t\"GOENV\": \"\",\n\t\"GOEXE\": \"\",\n\t\"GOEXPERIMENT\": \"\",\n\t\"GOFIPS140\": \"off\",\n\t\"GOFLAGS\": \"\",\n\t\"GOGCCFLAGS\": \"-fPIC -m64 -pthread -Wl,--no-gc-sections -fmessage-length=0 -ffile-prefix-map=/tmp/go-build667961068=/tmp/go-build -gno-record-gcc-switches\",\n\t\"GOHOSTARCH\": \"amd64\",\n\t\"GOHOSTOS\": \"linux\",\n\t\"GOINSECURE\": \"\",\n\t\"GOMOD\": \"/home/mikers/gomap-r1-final-source-20261006/go.mod\",\n\t\"GOMODCACHE\": \"/home/mikers/go/pkg/mod\",\n\t\"GONOPROXY\": \"\",\n\t\"GONOSUMDB\": \"\",\n\t\"GOOS\": \"linux\",\n\t\"GOPATH\": \"/home/mikers/go\",\n\t\"GOPRIVATE\": \"\",\n\t\"GOPROXY\": \"https://proxy.golang.org,direct\",\n\t\"GOROOT\": \"/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64\",\n\t\"GOSUMDB\": \"sum.golang.org\",\n\t\"GOTELEMETRY\": \"local\",\n\t\"GOTELEMETRYDIR\": \"/home/mikers/.config/go/telemetry\",\n\t\"GOTMPDIR\": \"\",\n\t\"GOTOOLCHAIN\": \"local\",\n\t\"GOTOOLDIR\": \"/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/pkg/tool/linux_amd64\",\n\t\"GOVCS\": \"\",\n\t\"GOVERSION\": \"go1.26.4\",\n\t\"GOWORK\": \"off\",\n\t\"PKG_CONFIG\": \"pkg-config\"\n}\n"
+    },
+    {
+      "argv": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca\n"
+    },
+    {
+      "argv": [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal"
+      ],
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": ""
+    }
+  ],
+  "environment": {
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "16",
+    "GOMEMLIMIT": "off",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "HOME": "/home/mikers",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "go_environment": {
+    "AR": "ar",
+    "CC": "gcc",
+    "CGO_CFLAGS": "-O2 -g",
+    "CGO_CPPFLAGS": "",
+    "CGO_CXXFLAGS": "-O2 -g",
+    "CGO_ENABLED": "1",
+    "CGO_FFLAGS": "-O2 -g",
+    "CGO_LDFLAGS": "-O2 -g",
+    "CXX": "g++",
+    "GCCGO": "gccgo",
+    "GO111MODULE": "",
+    "GOAMD64": "v1",
+    "GOARCH": "amd64",
+    "GOAUTH": "netrc",
+    "GOBIN": "",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+    "GOCACHEPROG": "",
+    "GODEBUG": "",
+    "GOENV": "",
+    "GOEXE": "",
+    "GOEXPERIMENT": "",
+    "GOFIPS140": "off",
+    "GOFLAGS": "",
+    "GOGCCFLAGS": "-fPIC -m64 -pthread -Wl,--no-gc-sections -fmessage-length=0 -ffile-prefix-map=/tmp/go-build667961068=/tmp/go-build -gno-record-gcc-switches",
+    "GOHOSTARCH": "amd64",
+    "GOHOSTOS": "linux",
+    "GOINSECURE": "",
+    "GOMOD": "/home/mikers/gomap-r1-final-source-20261006/go.mod",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GONOPROXY": "",
+    "GONOSUMDB": "",
+    "GOOS": "linux",
+    "GOPATH": "/home/mikers/go",
+    "GOPRIVATE": "",
+    "GOPROXY": "https://proxy.golang.org,direct",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOSUMDB": "sum.golang.org",
+    "GOTELEMETRY": "local",
+    "GOTELEMETRYDIR": "/home/mikers/.config/go/telemetry",
+    "GOTMPDIR": "",
+    "GOTOOLCHAIN": "local",
+    "GOTOOLDIR": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/pkg/tool/linux_amd64",
+    "GOVCS": "",
+    "GOVERSION": "go1.26.4",
+    "GOWORK": "off",
+    "PKG_CONFIG": "pkg-config"
+  },
+  "go_executable_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+  "helper_sha256": "eda94146836c9a91f8e9f25a7148a1387e79a151c8b8a6aca547b21158711a7e",
+  "landing_observation_sha256": "d3cd24a08f3ffadd282467984406e0a4465fe32837bcfa36df06a9eb0deb4ffe",
+  "root_input_sha256": "93fd76edb602e0e878eb26b58b3c5d70c337845e94b30a42dbafb3bda5f31d99",
+  "selected_merge_sha": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "source_config_hashes": {
+    "A-config.json": "f2b95b22d5e1c12a00c5cc77dc5846b199535aa3e30e2cc77ed8b8f8b03257b4",
+    "C-config.json": "c82fa7bc36130589be0e27858afa3df7daaec1422f4766cf9be850dde03ebc39",
+    "D-config.json": "b9998acfae072641810e625bb6e6ce1e7698e78a87e5d7f2f6b73c061f2b31df",
+    "derived-A-C-source.json": "d01cabb0159552b9d326977758278b9fd8f5df4f9f1f04b7587e79d95481998f",
+    "derived-D-source.json": "96a3f3feb2ed3d770e082fe5eda63c2faed1804b29e6e8a9c0f3d8740a595e04",
+    "root-inputs.json": "2ff9feee21926ecdaf3eb45360666152bf0846f3d5b56762d921a3e1d56d4058"
+  },
+  "source_helpers": {
+    "scripts/r1_collection_source.py": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+    "scripts/r1_lifecycle_capture.py": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+    "scripts/r1_lifecycle_validate.py": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968"
+  },
+  "status": "ACTUAL_SOURCE_DERIVATION_ONLY_NOT_BUILD_RUN_OR_ACCEPTANCE",
+  "utc": "2026-10-06T23:49:32Z"
+}

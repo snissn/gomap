@@ -1,0 +1,13 @@
+{
+  "utc": "2026-10-06T20:34:34.065405+00:00",
+  "root_adopted": "byte-exact additional support; frozen group11 is historical preparation, no current gate/landing/capture acceptance",
+  "original_count": 83,
+  "original_bytes": 16121291,
+  "ledger_members": 91,
+  "pins": {
+    "inventory.json": "eebf6229644bb41b66ba00f730964ba68587e02f736f623f76c4f47a6d98fbe5",
+    "handoff.json": "ed04d2e64e7a9b269d9b6f09ca2f0dd8a74336b554e7a8cb37b328ef107b35f1",
+    "SUPPORT_SHA256SUMS": "00f1bdebed3a6a16e68b4634dfcdb135b9c613deafc78fa858d5f6f6c9f6ba2b"
+  },
+  "scope": "Original0245 FAIL preserved; exacte4e7 hostedCLEAN/currentCI and actual0245 final cancellation appended separately later"
+}

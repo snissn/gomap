@@ -1,0 +1,10 @@
+--- FAIL: TestLeafManifestRevisionGCBoundedDescriptors (4.90s)
+    leaf_manifest_revision_gc_fd_linux_test.go:22: isolated child:
+        === RUN   TestLeafManifestRevisionGCBoundedDescriptors
+            leaf_manifest_revision_gc_fd_linux_test.go:44: dry inventory: stable resource conflict: open "manifest.durable.0000000000000016.json" relative to exact parent: too many open files
+        --- FAIL: TestLeafManifestRevisionGCBoundedDescriptors (4.90s)
+        FAIL
+    leaf_manifest_revision_gc_fd_linux_test.go:23: exit status 1
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	4.904s
+FAIL

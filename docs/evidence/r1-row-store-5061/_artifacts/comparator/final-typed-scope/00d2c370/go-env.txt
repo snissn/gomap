@@ -1,0 +1,14 @@
+linux
+amd64
+1
+/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64
+/home/mikers/.cache/gomap-r1-go1264
+/home/mikers/go/pkg/mod
+off
+local
+gcc
+g++
+-O2 -g
+
+-O2 -g
+-O2 -g
