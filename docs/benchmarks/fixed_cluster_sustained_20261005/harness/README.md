@@ -440,3 +440,10 @@ and outer accounting/source joins before producing any output. Failed and
 incomplete windows remain in their declared order. This offline reporter repair
 is a separately reviewed current-source supplement; it does not alter frozen
 measurement sources, raw observations, prior acceptances or qualification status.
+
+Reporter schema controls rebind all dependent synthetic raw hashes before testing
+each malformed planned/result field and require its exact schema refusal. One
+representative input for each of the five guard predicates must succeed when
+only that predicate is bypassed in an isolated test copy. Synthetic oracle/admission identity controls likewise
+rebind dependent hashes and require the intended identity refusal. Deliberate raw
+and source substitutions remain separate controls; no measured receipt is edited.
