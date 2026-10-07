@@ -9,7 +9,7 @@
     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate."
   ],
-  "discovery_source_sha256": "42e45c2fa91d40b7dbabc5ee1245a3ea9f858f2972bf5d2f576ccdf0412031bd",
+  "discovery_source_sha256": "fbe29679aad0994ce45c939c931af74ee16547155abf2340ca8d1028b5ddba5e",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
