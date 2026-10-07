@@ -58,6 +58,9 @@ type File struct {
 	// retirementIdentity is captured under manager.mu before retirement or
 	// destructive admission. It survives Close and is independent of pins.
 	retirementIdentity rootpublication.StableIdentity
+	// deletionAdmissions is protected by manager.mu. Eviction must retain the
+	// exact owner and parent until each admitted destructive attempt finishes.
+	deletionAdmissions int
 	// The physical parent is captured with retirementIdentity, independently of
 	// an optional pin registry. A missing configured alias is not absence proof.
 	retirementParentMu       sync.Mutex
@@ -2514,16 +2517,17 @@ func (m *Manager) retryZombieDelete(f *File) {
 
 	backoff := 200 * time.Millisecond
 	for {
-		m.mu.RLock()
+		m.mu.Lock()
 		cur, exists := m.files[f.ID]
 		keepRetrying := !m.closing && exists && cur == f && f.RefCount.Load() == 0 && f.IsZombie.Load()
 		identity := f.retirementIdentity
-		m.mu.RUnlock()
 		if !keepRetrying {
+			m.mu.Unlock()
 			return
 		}
 		lease, leaseErr := m.stableDeleteLease(f)
 		if errors.Is(leaseErr, ErrFilePinned) {
+			m.mu.Unlock()
 			// The conflict can be either an identity pin or a different identity
 			// holding the pathname lease. Backoff handles both without spinning on
 			// an already-ready per-identity pin channel.
@@ -2536,13 +2540,21 @@ func (m *Manager) retryZombieDelete(f *File) {
 			continue
 		}
 		if leaseErr != nil {
+			m.mu.Unlock()
 			log.Printf("valuelog: retry zombie delete gate failed for %s: %v", f.Path, leaseErr)
 			return
 		}
 		if err := validateRetirementPath(f, identity); err != nil {
 			abortStableDeleteLease(lease)
+			m.mu.Unlock()
 			log.Printf("valuelog: retry zombie delete path validation failed for %s: %v", f.Path, err)
 			return
+		}
+
+		f.deletionAdmissions++
+		m.mu.Unlock()
+		if m.directDeleteAdmissionHook != nil {
+			m.directDeleteAdmissionHook()
 		}
 
 		deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
@@ -2557,16 +2569,19 @@ func (m *Manager) retryZombieDelete(f *File) {
 				unobserveErr = m.unobserveStableFileLocked(f)
 			}
 			m.mu.Unlock()
+			m.finishDeletionAdmission(f)
 			if finishErr := errors.Join(removeErr, syncErr, unobserveErr, closeRetirementParent(parent)); finishErr != nil {
 				log.Printf("valuelog: removed retired zombie %s with finalization error: %v", f.Path, finishErr)
 			}
 			return
 		} else if !isWindowsSharingViolationError(removeErr) {
 			abortStableDeleteLease(lease)
+			m.finishDeletionAdmission(f)
 			log.Printf("valuelog: retry zombie delete failed for %s: %v", f.Path, removeErr)
 			return
 		}
 		abortStableDeleteLease(lease)
+		m.finishDeletionAdmission(f)
 
 		if !m.waitZombieRetry(backoff) {
 			return
@@ -2636,7 +2651,7 @@ func (m *Manager) EvictSegment(id uint32) error {
 		m.mu.Unlock()
 		return nil
 	}
-	if f.RefCount.Load() != 0 {
+	if f.RefCount.Load() != 0 || f.deletionAdmissions != 0 {
 		m.mu.Unlock()
 		return &filePinnedError{id: id, op: "evict"}
 	}

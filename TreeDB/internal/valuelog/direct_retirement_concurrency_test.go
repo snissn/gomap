@@ -2,6 +2,7 @@ package valuelog
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -123,6 +124,128 @@ func TestManagerDirectRetirementQueuedReplacement(t *testing.T) {
 			}
 			if !manager.HasSegment(file.ID) || !rootpublication.SamePhysicalIdentity(replacementIdentity, retirementIdentityAtPath(t, file.Path)) {
 				t.Fatal("new registration changed preserved successor")
+			}
+		})
+	}
+}
+
+// Eviction must not detach the exact manager owner between admission and the
+// first parent borrow, even when no identity registry supplies a delete lease.
+func TestManagerRetirementAdmissionBlocksEviction(t *testing.T) {
+	for _, registry := range []bool{false, true} {
+		name := "nil-registry"
+		if registry {
+			name = "registry"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, mode := range []string{"RemoveSegment", "RemoveSegmentExpectedIdentity", "RemoveSegmentIfUnpinned", "RemoveSegmentForce", "Release", "Retry"} {
+				t.Run(mode, func(t *testing.T) {
+					manager, file := directRetirementManager(t, registry)
+					identity := retirementIdentityAtPath(t, file.Path)
+					var set *Set
+					if mode == "Release" {
+						set = manager.CurrentSetNoRefresh()
+					}
+					if mode == "Release" || mode == "Retry" {
+						if err := manager.MarkZombie(file.ID); err != nil {
+							t.Fatal(err)
+						}
+					}
+					admitted, resume := make(chan struct{}), make(chan struct{})
+					var resumeOnce sync.Once
+					unblock := func() { resumeOnce.Do(func() { close(resume) }) }
+					manager.directDeleteAdmissionHook = func() {
+						close(admitted)
+						<-resume
+					}
+					done := make(chan error, 1)
+					joined := false
+					t.Cleanup(func() {
+						unblock()
+						if !joined {
+							select {
+							case <-done:
+							case <-time.After(5 * time.Second):
+								t.Error("admitted retirement cleanup did not join")
+							}
+						}
+					})
+					go func() {
+						switch mode {
+						case "Release":
+							done <- manager.Release(set)
+						case "Retry":
+							manager.startZombieRetry(file)
+							manager.retryWorkers.Wait()
+							done <- nil
+						default:
+							done <- retirementIdentityRemove(manager, file, identity, mode)
+						}
+					}()
+					select {
+					case <-admitted:
+					case err := <-done:
+						joined = true
+						t.Fatalf("retirement did not reach admission barrier: %v", err)
+					case <-time.After(5 * time.Second):
+						t.Fatal("retirement did not reach admission barrier")
+					}
+					if err := manager.EvictSegment(file.ID); !errors.Is(err, ErrFilePinned) {
+						t.Fatalf("eviction of admitted retirement = %v, want ErrFilePinned", err)
+					}
+					directRetirementAssertState(t, manager, file, true)
+					manager.mu.RLock()
+					admissions := file.deletionAdmissions
+					manager.mu.RUnlock()
+					file.retirementParentMu.Lock()
+					parentRetained := file.retirementParent != nil && !file.retirementParentReleased && file.retirementParentUsers == 0
+					file.retirementParentMu.Unlock()
+					if admissions != 1 || !parentRetained {
+						t.Fatalf("pre-borrow admission lost parent authority: admissions=%d retained=%v", admissions, parentRetained)
+					}
+					unblock()
+					select {
+					case err := <-done:
+						joined = true
+						if err != nil {
+							t.Fatalf("admitted retirement failed: %v", err)
+						}
+					case <-time.After(5 * time.Second):
+						t.Fatal("admitted retirement did not join")
+					}
+					directRetirementAssertState(t, manager, file, false)
+					manager.mu.RLock()
+					admissions = file.deletionAdmissions
+					manager.mu.RUnlock()
+					if admissions != 0 {
+						t.Fatalf("completed retirement leaked %d admissions", admissions)
+					}
+					if _, err := os.Stat(file.Path); !os.IsNotExist(err) {
+						t.Fatalf("admitted retirement did not unlink original: %v", err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestManagerInactiveZombieAllowsEviction(t *testing.T) {
+	for _, registry := range []bool{false, true} {
+		name := "nil-registry"
+		if registry {
+			name = "registry"
+		}
+		t.Run(name, func(t *testing.T) {
+			manager, file := directRetirementManager(t, registry)
+			if err := manager.MarkZombie(file.ID); err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.EvictSegment(file.ID); err != nil {
+				t.Fatalf("inactive zombie eviction failed: %v", err)
+			}
+			directRetirementAssertState(t, manager, file, false)
+			if _, err := os.Stat(file.Path); err != nil {
+				t.Fatalf("eviction removed the persistent segment: %v", err)
 			}
 		})
 	}

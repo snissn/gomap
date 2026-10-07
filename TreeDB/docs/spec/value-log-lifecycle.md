@@ -182,7 +182,12 @@ child or empty rebound parent at that first admission fails before retirement
 publication. After capture, genuine child absence is proved through the retained
 parent even when the configured parent name has disappeared.
 The parent survives failed attempts until successful ownership release, eviction
-or manager Close. Eviction keeps the parent borrowable until its actual File.Close
+or manager Close. An admitted destructive attempt keeps the exact manager owner
+and parent: `EvictSegment` returns `ErrFilePinned` until that attempt completes,
+even with no live reader pins. Direct removal, final Release and each retry
+attempt share this guard. Retry backoff releases it, so an inactive zombie can
+still be evicted without deleting its persistent storage. Eviction keeps the
+parent borrowable until its actual File.Close
 joins; short operation borrows preserve it through that lifecycle transfer.
 The last owner or borrower closes it outside the manager mutex. It reuses
 the registered identity when available, without modifying the identity exposed
