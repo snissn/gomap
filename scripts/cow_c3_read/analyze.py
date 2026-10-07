@@ -6,6 +6,7 @@ import statistics
 from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, retained_tooling
 from collect import host_gate, selected_protocol, invocation_command, invocation_work_contract
 from build import verify_git_receipt, objects
+from protocol import validate_run_processes, benchmark_comms
 
 def summary(values):
     low, high = min(values), max(values)
@@ -19,6 +20,7 @@ def validate_packet(packet, suite="c3-read"):
     selected, selected_scripts = selected_protocol(suite)
     need(not (packet / "failure.json").exists(), "failed capture retained; no graceful analysis fallback")
     c = selected.config(packet / "config.json")
+    configured_comms = benchmark_comms(c)
     env = process_environment(c["environment"])
     need(json.loads((packet / "environment.json").read_text()) ==
          {"effective_controls": c["environment"], "effective_process_environment": env}, "captured process environment mismatch")
@@ -82,6 +84,7 @@ def validate_packet(packet, suite="c3-read"):
         name = label(expected)
         need(r["label"] == name and all(r[k] == v for k, v in expected.items()), "schedule/order mismatch")
         need(r["exit_code"] == 0 and not r["timed_out"] and not r["validation_error"] and not any(r["source_drift_after"].values()), "failed/drifted run")
+        validate_run_processes(packet, name, r, configured_comms)
         need(r["binary_sha256"] == c["variants"][r["variant"]]["binary_sha256"], "binary hash mismatch")
         for suffix, key in ((".stdout", "stdout_sha256"), (".stderr", "stderr_sha256")):
             need(sha(packet / (name + suffix)) == r[key], "raw stream drift")

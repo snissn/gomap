@@ -6,7 +6,7 @@ import math
 from pathlib import Path
 import re
 
-from protocol import CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products, validate_harness_fixtures, C4_PACKAGE, validate_cpu_affinity
+from protocol import validate_host_isolation, benchmark_comms, CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products, validate_harness_fixtures, C4_PACKAGE, validate_cpu_affinity
 
 SCHEMA = "gomap-cow-sustained-public-v2"
 COMPLETION_CLAIM = "Supported sustained construction/evidence only; native/product/C4 qualification pending"
@@ -100,9 +100,10 @@ def quiescent_owners(stats, phase):
 def validate_config(c):
     exact(c, ("schema","suite","status","coordinator_acceptance","result_class","qualification",
               "native_requirements","cycles","order","timeout_seconds","go_binary","go_binary_sha256",
-              "go_version","toolchain_identity","external_input_identity","environment","host","noise_policy","fixtures","variants","cases",
+              "go_version","toolchain_identity","external_input_identity","environment","host","host_isolation","noise_policy","fixtures","variants","cases",
               "comparison_metrics"), "configuration")
     need(c["schema"] == SCHEMA and c["suite"] == "c4-sustained", "wrong sustained schema/suite")
+    validate_host_isolation(c.get("host_isolation"))
     need(c["status"] == "frozen-approved" and type(c["coordinator_acceptance"]) is str and c["coordinator_acceptance"], "missing coordinator freeze")
     need(c["result_class"] in ("construction","matched-supported-evidence"), "unsupported qualification request")
     need(c["qualification"] == "pending_native_observations", "native/product/C4 qualification unavailable")
@@ -150,6 +151,7 @@ def validate_config(c):
     need(len(cells)==36 and len(set(cells))==36 and set(cells)==expected,"missing/duplicate/extra sustained matrix")
     need(c["comparison_metrics"]==["ns/op","B/op","allocs/op"],"comparison metrics mismatch")
     validate_harness_fixtures(c["fixtures"], suite="c4")
+    benchmark_comms(c)
     return c
 
 def config(path):return validate_config(load(path))
