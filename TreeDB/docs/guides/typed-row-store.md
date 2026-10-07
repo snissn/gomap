@@ -5,10 +5,13 @@ string fields, complete-row reads, and scalar indexes. This guide accompanies
 the selected [R1 contract](../spec/r1-indexed-row-contract.md),
 [read contract](../spec/r1-row-reads.md),
 [mutation contract](../spec/r1-indexed-mutations.md), and
-[lifecycle contract](../spec/r1-row-lifecycle.md). The read and mutation integration landed in
-[PR #5065](https://github.com/snissn/gomap/pull/5065); retained lifecycle and
-performance qualification remain pending. TreeDB is pre-alpha; APIs and disk
-formats may change without migration guarantees.
+[lifecycle contract](../spec/r1-row-lifecycle.md). The read and mutation integration
+landed in [PR #5065](https://github.com/snissn/gomap/pull/5065), and the maintenance
+prerequisite landed in [PR #5071](https://github.com/snissn/gomap/pull/5071).
+The [integrated evidence](../evidence/r1-row-store-5061/README.md) records accepted
+complete-row read, indexed mutation, and finite lifecycle qualification on those
+landed sources. TreeDB is pre-alpha; APIs and disk formats may change without
+migration guarantees.
 
 ## Run the example
 
@@ -185,7 +188,10 @@ at creation and reopen. Its same-live-backend vacuum and exhaustive
 `CompactStorage` stages record actual owner admission, phase work and debt; a
 final fallback refresh precedes typed and leaf GC. These costs exclude
 cached-wrapper checkpoint/reconciliation overhead. Full-root file censuses
-include side stores and immutable manifest metadata. Route equivalence and
-physical-growth acceptance remain pending.
+include side stores and immutable manifest metadata. The
+[integrated evidence](../evidence/r1-row-store-5061/README.md) accepts the finite
+five-process/five-epoch lifecycle and its measured component growth and
+maintenance costs. It does not qualify equivalence with the cached-leaf-log route
+or a duration-unbounded storage bound.
 Use reviewed, landed tooling and frozen sources for retained evidence. This
 example and guide establish usage, with no measured speedup or capacity claim.

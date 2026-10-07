@@ -25,6 +25,26 @@ missing-path refresh; restoring the original file permits retirement to complete
 unlink cases without an external pin registry. The direct preexisting-replacement
 test covers all four explicit removal APIs; the quarantine-replacement test
 creates a new canonical file after close and proves its bytes and identity survive.
+`TestManagerDirectRetirementPostPreflightReplacement` pauses each of the four
+real removal APIs at Close's existing cache lock after immutable identity
+admission, substitutes a valid segment before quarantine rename, then unblocks
+and joins the operation. With and without the registry, conflict must retain
+the original zombie and observation, exclude it from snapshots, refuse repeated
+refresh and retry, and preserve replacement bytes and inode. Restoring the
+original permits cleanup. Companion portable tests retain ownership on ordinary
+failed unlink, preserve missing-path retry and Force's refcount behavior, and
+protect a different current owner during successful old-file finalization.
+`TestManagerDirectRetirementCloseJoinsAdmission` pauses actual direct removal
+and final-Release cleanup after the closed flag, and requires Manager.Close to
+join physical removal and ownership completion with and without a registry.
+`TestManagerDirectRetirementJoinsExternalClose` requires physical deletion to
+wait for actual File.Close or EvictSegment handle cleanup. The queued-removal
+test admits two real nil-registry direct calls, pauses the first unlink, then
+publishes a successor after that unlink succeeds but before the deletion mutex
+is released. The second call must observe the first File's completed deletion,
+return success without canonical access, and preserve the successor's bytes
+without another unlink. Its test-only admission
+barrier is fixed before the calls and runs outside manager and cleanup locks.
 `TestManagerRetirementIdentityCaptureFailure` requires failed identity capture to
 leave both zombie transitions and all four removal APIs before their state change.
 Retirement state tests balance repeated marking, ownership removal, eviction and

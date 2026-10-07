@@ -1,0 +1,152 @@
+{
+  "utc": "2026-10-06T11:18:54.444974+00:00",
+  "source": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+  "exit": 1,
+  "elapsed_seconds": 68.26570963487029,
+  "status_after": "",
+  "host": {
+    "utc": "2026-10-06T11:18:54.450315+00:00",
+    "hostname": "mikers-MS-7E71",
+    "load": [
+      2.6865234375,
+      1.3212890625,
+      0.53662109375
+    ],
+    "cpu_count": 16,
+    "uname": [
+      "Linux",
+      "mikers-MS-7E71",
+      "7.0.0-30-generic",
+      "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+      "x86_64"
+    ],
+    "processes": [
+      "    PID COMMAND         %CPU %MEM COMMAND",
+      " 635514 codex            0.5  0.3 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox resume 01a04fab-b2ab-7562-93c6-339af668778b",
+      "   2499 gnome-shell      0.4  1.0 /usr/bin/gnome-shell --mode=ubuntu",
+      "2971628 codex            0.3  0.8 /home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex app-server --listen unix:// --managed-daemon",
+      "   4644 tmux: server     0.3  5.2 tmux",
+      " 641714 codex            0.2  0.3 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox",
+      " 702994 codex            0.2  0.4 /home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex --dangerously-bypass-approvals-and-sandbox",
+      "1975939 kworker/u64:10-  0.1  0.0 [kworker/u64:10-events_unbound]",
+      "    967 napi/phy0-0      0.1  0.0 [napi/phy0-0]",
+      "1975936 kworker/u64:7-m  0.0  0.0 [kworker/u64:7-mt76]",
+      "1199661 containerd       0.0  0.1 /usr/bin/containerd",
+      "1975934 kworker/u64:1-e  0.0  0.0 [kworker/u64:1-events_unbound]",
+      "    965 napi/phy0-0      0.0  0.0 [napi/phy0-0]",
+      "   1744 dbus-daemon      0.0  0.0 @dbus-daemon --system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only",
+      "    122 kcompactd0       0.0  0.0 [kcompactd0]",
+      "1972026 kworker/u64:0-e  0.0  0.0 [kworker/u64:0-events_unbound]"
+    ]
+  },
+  "raw_hashes": {
+    "capture/commands.txt": {
+      "sha256": "1cce4d5f280ca1a1a25dc4d5bbd32017ca7554e6febd6af2b5aa2e0c9c89500c",
+      "bytes": 383
+    },
+    "capture/fixture.json": {
+      "sha256": "fdcd37b79c8342ed12e4510543c056cfa7d314e42e77b3c58cef77bb6bc91514",
+      "bytes": 1220
+    },
+    "capture/legacy-benchstat-input.txt": {
+      "sha256": "313bf6ed57fb6494159856b1348222cb75d57b83943d4014114500d2c29c5928",
+      "bytes": 11100
+    },
+    "capture/raw/legacy-1.txt": {
+      "sha256": "53b4b55197515d8a9efbf7d9af25ca205481780e8c061ebb48f6167a51b7a7e9",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-10.txt": {
+      "sha256": "94fb71bd59d46836ef962238f0aed927a41f191ac81f0333601afc9acaa3febf",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-2.txt": {
+      "sha256": "619254000432fa6614f0bea3c4ce2d44383d27c9c2cecd64effcdca8556b0403",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-3.txt": {
+      "sha256": "1e4e112e152b087f57e67ab6157190f6f7b376d3e33fb34f8afed55b57e00522",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-4.txt": {
+      "sha256": "ce9d0bcc5e5fd23b94d0cf4b501fa948162a15453832770b11e924fc19843b4f",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-5.txt": {
+      "sha256": "a476a433928c1e45a262e99d7b1d061e065bec2651d60b62865f85a7733b378d",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-6.txt": {
+      "sha256": "23f4a5467c6c764790637f8d6bb54a97ada6d9f71da3d976f4f08fc286da4071",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-7.txt": {
+      "sha256": "548077082325fdd174a17ba1a6f6cb2f26318cac42e1d7a2d08e03a717920706",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-8.txt": {
+      "sha256": "e732b7f0448576158aa55a213a3d71c7dd096eacb69fb4da45042c17508ca850",
+      "bytes": 1110
+    },
+    "capture/raw/legacy-9.txt": {
+      "sha256": "e70d947b86d579709a59194352c705eede354336a8413de2f9e4369d29ea1868",
+      "bytes": 1110
+    },
+    "capture/raw/public-1.txt": {
+      "sha256": "76e8b739cd16ac46a1eeb1652d355356ff4f5a0adf253097c0a72f4192c9c46d",
+      "bytes": 662
+    },
+    "capture/raw/public-10.txt": {
+      "sha256": "fe21474f6256e40c6fe8c40a473a7c89330482c6c2cbf61eaeffd850f436285c",
+      "bytes": 667
+    },
+    "capture/raw/public-2.txt": {
+      "sha256": "c3ae36665f3b9083b717c0581678db24b464817937ca1c1ee342e966b3d0e79d",
+      "bytes": 667
+    },
+    "capture/raw/public-3.txt": {
+      "sha256": "45e6fad14a673e6b53285abfd7cfb1c663e90bd38d7b0af7e859cb34c03fc3bc",
+      "bytes": 666
+    },
+    "capture/raw/public-4.txt": {
+      "sha256": "e4b9dc5f6c5928b4f88fa737d70354d38f197b004c636eb8cbdb42423cf19ebb",
+      "bytes": 667
+    },
+    "capture/raw/public-5.txt": {
+      "sha256": "79d845efe0e7b5570316e2204d57c7645bf3a1eb0cee115303d6455a8fe244b1",
+      "bytes": 663
+    },
+    "capture/raw/public-6.txt": {
+      "sha256": "982a82228ea30f78575b0e9a741670ee4c23e3c47a9d81db1c0b1b3ca75297c6",
+      "bytes": 666
+    },
+    "capture/raw/public-7.txt": {
+      "sha256": "945cd16cacb0384eea70c21ef6f26ca49411b4b99c32701dc458a2b1baa329dc",
+      "bytes": 662
+    },
+    "capture/raw/public-8.txt": {
+      "sha256": "36dfa4baa782066b8f85886fcafd484b182c84fa8f955d7f8ed5f89a4617d152",
+      "bytes": 666
+    },
+    "capture/raw/public-9.txt": {
+      "sha256": "9d207615fef6fe319baa2f533241481e648691f70689a91aaa95a23c81e0291a",
+      "bytes": 667
+    },
+    "capture/results.json": {
+      "sha256": "199d953e216a02ba1fde5ff8b1cfefabf39c1a7a234baf1c0beeb4bf29884df0",
+      "bytes": 16560
+    },
+    "capture/summary.md": {
+      "sha256": "d225a3c527374e73ecf155e961f7d6c51fc951a5c1837c5ed3b5007494912f36",
+      "bytes": 2027
+    },
+    "driver.log": {
+      "sha256": "0195a13258fc9ba3052c87e27fedab338eeff00e768a9150d5ff4f95e7d10bb2",
+      "bytes": 281
+    },
+    "start.json": {
+      "sha256": "9d9df87d396694bc89df634294b6bcb45382cf29b61fd837972681ead827b1e9",
+      "bytes": 2590
+    }
+  }
+}

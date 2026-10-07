@@ -1,0 +1,11 @@
+{
+  "acceptance_scope": "Original source/build/full30-cell oracle provenance and A workload semantics only; numeric cost/performance acceptance pending",
+  "accepted": true,
+  "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "coordinator": "/root",
+  "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "review_url": "https://github.com/snissn/gomap/pull/5071#issuecomment-6026511976",
+  "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+  "trusted_completed_receipt_sha256": "da663d1651263ac87e0f1f0a77bf2ea082177f81af3008390b4f5602c52c938e",
+  "utc": "2026-10-07T00:31:52.128233+00:00"
+}

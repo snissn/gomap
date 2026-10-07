@@ -1,0 +1,19 @@
+{
+  "acceptances": {
+    "A": "d8ad4eb017813c154aa1aa00eff999cbf63e42cd87d55e227fc63929ebf3f0ed",
+    "C": "2930b8f63442bbbb4ac33157591f813e11a995c3e64b12b1260aecee614e2baf",
+    "D": "1171386166b648684ae70091178ccd135416ff64a9d13179a7f6695267212c12"
+  },
+  "argv": [
+    "python3",
+    "-B",
+    "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/prepare-evidence-publication-final.py",
+    "--captures",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-publication-selection16-original.json",
+    "--out",
+    "/home/mikers/gomap-r1-publication-stage-M-3325dfe-20261006"
+  ],
+  "helper_sha256": "d03f6fe489ae7bd0296cd31dcff1785cbd25d855acb714afe1191ea73a0b426a",
+  "selection_sha256": "2df7bf9f18890943f466e1789d00e6b8b3431264ca7bc68b79e685651250c9c6",
+  "utc": "2026-10-07T01:08:23.221845+00:00"
+}

@@ -802,7 +802,11 @@ var typedStorageLegacyNamePattern = regexp.MustCompile(typedStorageLegacyNamePat
 
 func scanTypedStorageLegacyNameUsage(t *testing.T) map[string]typedStorageLegacyNameUsage {
 	t.Helper()
-	repoRoot := typedStorageRepoRoot(t)
+	return scanTypedStorageLegacyNameUsageAtRoot(t, typedStorageRepoRoot(t))
+}
+
+func scanTypedStorageLegacyNameUsageAtRoot(t *testing.T, repoRoot string) map[string]typedStorageLegacyNameUsage {
+	t.Helper()
 	roots := []string{"TreeDB", "docs", "experiments"}
 	usage := make(map[string]typedStorageLegacyNameUsage)
 	for _, rel := range typedStorageLegacyNameScanFiles(t, repoRoot, roots) {
@@ -892,10 +896,63 @@ func typedStorageLegacyNameWalkFiles(t *testing.T, repoRoot string, roots []stri
 }
 
 func typedStorageLegacyNameScanSkipsGeneratedArtifact(rel string) bool {
-	// CI test/race jobs write transient JSONL output under TreeDB before package
-	// tests run. The contract is over repository sources matched by the audit
-	// command in a clean checkout, not generated run logs.
+	// These two frozen evidence namespaces preserve original source and logs;
+	// their historical names are evidence, rather than current naming choices.
+	// Keep the current report and every neighboring source/doc path audited.
+	if strings.HasPrefix(rel, "docs/evidence/r1-row-store-5061/_artifacts/") ||
+		strings.HasPrefix(rel, "docs/evidence/r1-row-store-5061/public-replay-M-3325dfe/") {
+		return true
+	}
+	// CI test/race jobs write transient JSONL output before package tests run.
 	return strings.HasPrefix(rel, "TreeDB/treedb-") && strings.HasSuffix(rel, ".jsonl")
+}
+
+func TestTypedStorageLegacyNameScanFrozenEvidenceBoundary(t *testing.T) {
+	files := map[string]bool{
+		"docs/evidence/r1-row-store-5061/_artifacts/source-original.txt":              false,
+		"docs/evidence/r1-row-store-5061/public-replay-M-3325dfe/source-original.txt": false,
+		"TreeDB/treedb-generated.jsonl":                                               false,
+		"docs/evidence/r1-row-store-5061/README.md":                                   true,
+		"docs/evidence/r1-row-store-5061/_artifacts-neighbor/current.md":              true,
+		"docs/evidence/r1-row-store-5061/public-replay-M-3325dfe-neighbor/current.md": true,
+		"docs/evidence/r1-row-store-5061/public-replay-M-other/current.md":            true,
+		"docs/evidence/other/_artifacts/current.md":                                   true,
+		"TreeDB/docs/evidence/r1-row-store-5061/_artifacts/current.md":                true,
+		"TreeDB/docs/spec/current.md":                                                 true,
+		"TreeDB/collections/current.go":                                               true,
+		"TreeDB/collections/enabled_example_test.go":                                  true,
+		"docs/current.md":        true,
+		"experiments/current.go": true,
+	}
+	for _, inventory := range []string{"walk", "tracked"} {
+		t.Run(inventory, func(t *testing.T) {
+			repoRoot := t.TempDir()
+			for rel := range files {
+				path := filepath.Join(repoRoot, filepath.FromSlash(rel))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				// Use the same legacy pattern without adding a self-allowlist entry.
+				if err := os.WriteFile(path, []byte(strings.Split(typedStorageLegacyNamePatternText(), "|")[0]+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if inventory == "tracked" {
+				for _, args := range [][]string{{"init", "-q", repoRoot}, {"-C", repoRoot, "add", "--", "TreeDB", "docs", "experiments"}} {
+					if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+						t.Fatalf("git %v: %v: %s", args, err, out)
+					}
+				}
+			}
+			usage := scanTypedStorageLegacyNameUsageAtRoot(t, repoRoot)
+			for rel, audited := range files {
+				got, found := usage[rel]
+				if found != audited || (found && got != (typedStorageLegacyNameUsage{matchingLines: 1, occurrences: 1})) {
+					t.Errorf("scan %s: found=%t usage=%+v; want audited=%t with one match", rel, found, got, audited)
+				}
+			}
+		})
+	}
 }
 
 var typedStorageMarkdownReferencePatterns = []*regexp.Regexp{

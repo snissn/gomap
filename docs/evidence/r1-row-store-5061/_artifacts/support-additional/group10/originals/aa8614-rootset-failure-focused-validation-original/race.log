@@ -1,0 +1,8 @@
+{"Time":"2026-10-06T09:45:11.976377963-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/db"}
+{"Time":"2026-10-06T09:45:11.985476179-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC"}
+{"Time":"2026-10-06T09:45:11.985523521-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC","Output":"=== RUN   TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC\n"}
+{"Time":"2026-10-06T09:45:12.273910871-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC","Output":"--- PASS: TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC (0.29s)\n"}
+{"Time":"2026-10-06T09:45:12.273935629-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC","Elapsed":0.29}
+{"Time":"2026-10-06T09:45:12.274469439-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Output":"PASS\n"}
+{"Time":"2026-10-06T09:45:13.277952782-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.301s\n"}
+{"Time":"2026-10-06T09:45:13.277977781-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Elapsed":1.302}

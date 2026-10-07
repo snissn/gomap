@@ -1,0 +1,59 @@
+{
+  "verdict": "READY_FOR_ROOT_ADOPTION_AND_ACTUAL_AFTER_D_EXECUTION",
+  "findings": [],
+  "role": "independent read-only gpt-6.1-sol/high",
+  "utc": "2026-10-07T00:31:13.441333+00:00",
+  "reviewed_files": {
+    "run-example.py": {
+      "sha256": "4f48ca71d65c058e3fe2cb071120af1707a1b6332c6a4f41597267ec5669ce77",
+      "bytes": 11454
+    },
+    "handoff.md": {
+      "sha256": "11157c057415ff0287eb9917897dafead67c763e9150082c9c8478a0ad67f21a",
+      "bytes": 3894
+    },
+    "handoff.json": {
+      "sha256": "4e04dcf0392d1be4e7b8da04da2a6954b6e2e4289b7175a84ec387426ae49512",
+      "bytes": 2317
+    },
+    "static-checks.json": {
+      "sha256": "728eb529268fb08fe64af59713862e6cba7cd0d33226e7c945d71f36270e863a",
+      "bytes": 1415
+    }
+  },
+  "actual_M_sources": {
+    "scripts/r1_collection_source.py": {
+      "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+      "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+      "bytes": 1994
+    },
+    "examples/typed_rows/main.go": {
+      "blob": "f54a456e2d16bbb78cfc637d80f8b6b48410c563",
+      "sha256": "593786d47dfb761ad7b60f6ef344f396e5c33281cdf3f41176d59a13f0f44f2f",
+      "bytes": 9653
+    },
+    "examples/typed_rows/README.md": {
+      "blob": "a268b790e245aecc77712ee82e04be19cc564b27",
+      "sha256": "4f8d6a29461e5f848a8c71119f6454cfff0a0a48d65c26041631342aabce90e0",
+      "bytes": 2337
+    }
+  },
+  "independent_actual_Git_identity": {
+    "commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+    "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+    "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822"
+  },
+  "checks": [
+    "Actual M source-identity algorithm matches: same ordered top-level command harness paths/byte framing, runtime suffix/domain/test exclusion and blob identity framing. Independently recomputed M runtime/harness hashes above.",
+    "Pinned config and BEFORE A/C manifest, exact clean M, actual source working bytes and example Git blob identities checked before/after execution by runner. No producer import or remeasurement.",
+    "Actual example has -dir flag; refuses nonempty existing DB; uses durable cached-leaf backend and verifies full reopened rows/current and removed index postings/deleted row absent before exact verification stdout. Deferred cleanup errors join returned error and cause exit1.",
+    "Runner uses exclusive new private output and unused absolute db child, runs exact go version/vet/run commands with fixed toolchain/runtime environment and own TMPDIR; compiler bytes/version observed and retained. Original success stdout and exact DB path required after original exit0; no stdout fabrication.",
+    "Separate actual argv/cwd/environment/start/exit/stdout/stderr hashes and post-command source status recorded. Failure outputs remain untouched; refusal of preexisting output does not append failure records to it.",
+    "Root external canonical flock and AFTER-D ordering explicitly remain required duties. No correctness output implies finite capacity/performance/power-loss acceptance; DB remains private."
+  ],
+  "limits": [
+    "Source/object/hash inspection only; no helper execution, Go/vet/run/build/test/capture/SSH/network/GitHub/source mutation.",
+    "Actual remote config/manifest/compiler and actual resulting logs are not reviewed here; future root execution must verify declared pins and assess original result.",
+    "No physical-host attestation or direct-backend D cost equivalence claimed."
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "classification": "derived-durable-state-association-not-original-run-receipt",
+  "original_path": "/tmp/gomap-r1-execution-20261005/state.json",
+  "original_bytes_sha256": "2087dd404331a04bf891395b7d7b3b97c2b698cbb6577f3bdbb18276ddb3de8b",
+  "original_size": 66100,
+  "json_pointer": "/maintenance_integration",
+  "selected_fields": {
+    "head": "f79616f2aeb99b43af81877f26d646cca51177b9",
+    "v3_tests": "83 actualv3tests PASS163.502s; originalpacketunchanged",
+    "independent_review": "CLEAN exactf796; acceptedproductblobs preserved; v3scope/schedule/receipts plusfdcompletecommands/context intact; CI14/56canonicaldigestmatches"
+  },
+  "actual_command": null,
+  "actual_process_exit": null,
+  "limit": "Source association only. No independently retained original argv/exit receipt for83 log; actual D/sweep state excluded."
+}

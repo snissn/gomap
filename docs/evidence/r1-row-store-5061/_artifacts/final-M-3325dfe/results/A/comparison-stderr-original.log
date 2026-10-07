@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-A-semantic-equivalence-preparation/compare-certified.py", line 184, in <module>
+    if __name__=='__main__':main()
+                            ~~~~^^
+  File "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/final-A-semantic-equivalence-preparation/compare-certified.py", line 179, in main
+    result=math['compare'](b,a,baseline_namespace['capture_identity'](before_path,b),math['candidate_identity'](after_path,a,accepted,env))
+  File "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/compare_r1_packets.py", line 63, in compare
+    assert environment_before == environment_after, 'host/toolchain/compiler/Go-runtime/filesystem/SQLite mismatch'
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: host/toolchain/compiler/Go-runtime/filesystem/SQLite mismatch

@@ -1,0 +1,225 @@
+{
+  "base": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+  "head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "branch": "codex/5066-lifecycle-maintenance",
+  "source_clean": true,
+  "runtime_fix_commit": "334571ef2ec7fc7b9590e0f0dca8c9c72be159d9",
+  "red_test_commit": "e03f4ca9eb341aa96f343b9b771e2c77f058f544",
+  "owned_files": {
+    ".github/ci/ci_impact.json": {
+      "git_blob": "a0e602ce1ae2d2baec8198dfbde7722344888a2c",
+      "sha256": "a8d668bcb579163961cfc4a00a8a3e35f446b733cdf83cba7c4473169ba96be5"
+    },
+    "TreeDB/db/leaf_manifest_revision_gc.go": {
+      "git_blob": "6b62b35cff8e2ede152ea092bff4cb53b8e6ba01",
+      "sha256": "d6f6786283be1460ba37d304dd9df88cc61ee35983cd3b87ad7b5c4d66509276"
+    },
+    "TreeDB/db/leaf_manifest_revision_gc_fd_linux_test.go": {
+      "git_blob": "3d0f589a95ab6ef6063fb4df6d72dfe7676d932e",
+      "sha256": "5ecfbe10af899e9456e705a545b0313294efcfc6d9e3bf692b94bffc248163cc"
+    }
+  },
+  "artifacts": {
+    "final-checks.py": {
+      "sha256": "e91bf7bf6a7480ddad753541c6c33874eb0d05f28fb152f01a5e055dd2decad5",
+      "size": 2098
+    },
+    "benchmark-final.log": {
+      "sha256": "155ad566dbcaa123b78006852fd418d2074f69b280cfdd88fdb3891a5839f59d",
+      "size": 297
+    },
+    "red.log": {
+      "sha256": "8d4e68613c27f3204ca2c3e29096412c83d4984366d2e043fcade26c31724552",
+      "size": 590
+    },
+    "fresh-protection-normal.log": {
+      "sha256": "c3c9e452562b4615523703326fe1f5d6c6051aed7b7c17f501084f7597787ced",
+      "size": 171
+    },
+    "race-334571.log": {
+      "sha256": "a4bc11eddb51bfb073ba11796a91705f672a35d9aa79a27d28caccf6dd92703f",
+      "size": 14671
+    },
+    "normal-334571.log": {
+      "sha256": "c48f362027f047d18b365f27187685486f1203902676102721a41bf9fc9d44fb",
+      "size": 14660
+    },
+    "final-checks.json": {
+      "sha256": "2e226c73c9ca72b048f3f3f3f3b52e9382cd285119f1a055c7391ba3b46b1a64",
+      "size": 3074
+    },
+    "fresh-protection-race.log": {
+      "sha256": "c826fb35d9fe7509bba686a08ccf0e241c49c488019ffd3f17fb908caca32ebc",
+      "size": 171
+    },
+    "vet-final.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 0
+    }
+  },
+  "broad_checks": {
+    "source_commit": "334571ef2ec7fc7b9590e0f0dca8c9c72be159d9",
+    "runtime_identical_final": true,
+    "normal": {
+      "argv": [
+        "go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "TestLeafManifestRevisionGC|TestLeafGenerationGC|TestLeafGenerationMaintenanceLimits|TestStableLeafGenerationManifest|Test.*Rebuilt.*Pack|Test.*Vacuum.*Pack",
+        "-count=1",
+        "-timeout=5m",
+        "-v"
+      ],
+      "exit_code_tool_observed": 0,
+      "seconds": 40.007
+    },
+    "race": {
+      "extra_arg": "-race",
+      "exit_code_tool_observed": 0,
+      "seconds": 44.808
+    }
+  },
+  "red": {
+    "source_commit": "e03f4ca9eb341aa96f343b9b771e2c77f058f544",
+    "argv": [
+      "go",
+      "test",
+      "./TreeDB/db",
+      "-run",
+      "^TestLeafManifestRevisionGCBoundedDescriptors$",
+      "-count=1",
+      "-timeout=3m"
+    ],
+    "exit_code_tool_observed": 1,
+    "failure": "isolated RLIMIT64 dry inventory EMFILE before deletion"
+  },
+  "final_checks": {
+    "source_commit": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "source_clean_before": true,
+    "hostname": "mikers-B560-DS3H-AC-Y1",
+    "toolchain_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+    "toolchain_version": "go version go1.26.4 linux/amd64",
+    "environment": {
+      "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+      "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+      "GOMODCACHE": "/home/mikers/go/pkg/mod",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local"
+    },
+    "steps": [
+      {
+        "name": "fresh-protection-normal",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "./TreeDB/db",
+          "-run",
+          "^TestLeafManifestRevisionGCFreshHeldProtection$",
+          "-count=1",
+          "-timeout=3m",
+          "-v"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791280660.6334534,
+        "finished_unix": 1791280677.3644218,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/fresh-protection-normal.log",
+        "log_sha256": "c3c9e452562b4615523703326fe1f5d6c6051aed7b7c17f501084f7597787ced"
+      },
+      {
+        "name": "fresh-protection-race",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-race",
+          "./TreeDB/db",
+          "-run",
+          "^TestLeafManifestRevisionGCFreshHeldProtection$",
+          "-count=1",
+          "-timeout=3m",
+          "-v"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791280677.3645196,
+        "finished_unix": 1791280716.1507988,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/fresh-protection-race.log",
+        "log_sha256": "c826fb35d9fe7509bba686a08ccf0e241c49c488019ffd3f17fb908caca32ebc"
+      },
+      {
+        "name": "vet-final",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "vet",
+          "./TreeDB/db"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791280716.1508808,
+        "finished_unix": 1791280718.9544427,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/vet-final.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "name": "benchmark-final",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "./TreeDB/db",
+          "-run",
+          "^$",
+          "-bench",
+          "^BenchmarkLeafManifestRevisionGC5066$",
+          "-benchtime=1x",
+          "-count=1",
+          "-timeout=3m"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791280718.954525,
+        "finished_unix": 1791280720.5727754,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd/benchmark-final.log",
+        "log_sha256": "155ad566dbcaa123b78006852fd418d2074f69b280cfdd88fdb3891a5839f59d"
+      }
+    ],
+    "source_commit_after": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "source_clean_after": true
+  },
+  "ci_checks": {
+    "refresh_and_check_final": 0,
+    "test_refresh_inventory_334571": {
+      "tests": 15,
+      "exit": 0
+    },
+    "test_ci_impact_334571": {
+      "tests": 21,
+      "exit": 0
+    },
+    "treedb_contract": {
+      "tests": 6,
+      "exit": 0
+    },
+    "windows_headroom": {
+      "tests": 16,
+      "exit": 0
+    },
+    "scope": "final CI delta only discovery SHA, workflows14/owners56 unchanged; Python implementation unchanged"
+  },
+  "limits": {
+    "retained_deletion_handles": 16,
+    "transient_scan_child": 1,
+    "rename_sampled_descriptors": 28,
+    "descriptor_baseline": 12,
+    "rlimit_no_file": 64,
+    "revisions": 257,
+    "deleted": 255,
+    "protected": 2,
+    "worst_case_scan_cost": "O(N\u00b2/16), per-inventory footprint admission preserved"
+  },
+  "claim_limits": [
+    "No physical-capacity acceptance or retained benchmark",
+    "First census does not retain nonselected physical objects; each later batch acquires fresh exact open-file authority",
+    "Single benchmark smoke includes no baseline, spread/noise or comparison claim",
+    "Original first development GREEN and benchmark are retained remotely but not final source-bound evidence"
+  ],
+  "bundle": "/tmp/gomap-r1-execution-20261005/5071-fd-final.bundle",
+  "remote": "mikers@192.168.0.185:/home/mikers/gomap-r1-5071-fd",
+  "remote_raw": "/home/mikers/gomap-r1-evidence-20261005/5071-bounded-fd"
+}

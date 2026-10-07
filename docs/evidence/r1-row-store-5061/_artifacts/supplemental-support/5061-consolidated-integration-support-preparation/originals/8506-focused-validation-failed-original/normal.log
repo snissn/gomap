@@ -1,0 +1,3 @@
+go: cannot find main module, but found .git/config in /home/mikers/gomap-r1-5071-main-integration-8506
+	to create a module there, run:
+	go mod init

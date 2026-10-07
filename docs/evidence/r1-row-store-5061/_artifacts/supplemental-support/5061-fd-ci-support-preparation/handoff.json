@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "directory": "/tmp/gomap-r1-execution-20261005/5061-fd-ci-support-preparation",
+  "inventory": "inventory.json",
+  "inventory_sha256": "bd3e0e84b3d826b5f04edb7d1c4f30bd03921ce2b9f1e29439d4dbef5b38e1d3",
+  "copy_count": 105,
+  "copy_bytes": 2177365,
+  "byte_exact_original_copy_equality": true,
+  "classifications": {
+    "fd_correctness": {
+      "red_source": "e03f4ca9eb341aa96f343b9b771e2c77f058f544",
+      "red_result": "Retained actual RLIMIT64 inventory fails EMFILE before mutation, exit1.",
+      "green_runtime_source": "334571ef2ec7fc7b9590e0f0dca8c9c72be159d9",
+      "final_test_source": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "green_result": "Retained focused normal/race correctness checks pass on runtime334571; final852 fresh-held normal/race and vet pass; runtime bytes identical according to retained independent review. Actual RLIMIT64 one-call fixture starts257 revisions, deletes255, preserves2; no continuous peak-FD or capacity claim.",
+      "independent_review": "CLEAN for bounded FD source/correctness evidence only.",
+      "benchmark_limit": "Included32-revision single-operation benchmark is completion/cost smoke only; no capacity, stable performance, baseline comparison, or CI acceptance."
+    },
+    "m0_current_852": {
+      "sha": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "run_id": 37447383111,
+      "job_id": 112215377747,
+      "artifact_id": 11404352211,
+      "original_verdict": "FAIL",
+      "total_cv_percent": 12.729458807664798,
+      "pause_cv_percent": 9.90837207310864,
+      "p99_cv_percent": 78.05810471896164,
+      "contract": "All20 samples complete; public available; unchanged ten legacy samples and <=10% sample-CV gate. Total/p99 fail, pause passes.",
+      "cpu": "AMD EPYC 9V74 80-Core Processor"
+    },
+    "m0_observed_green_095": {
+      "sha": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+      "run_id": 37443503169,
+      "artifact_id": 11402113032,
+      "original_verdict": "PASS",
+      "total_cv_percent": 0.37438077617348026,
+      "pause_cv_percent": 2.208716839538686,
+      "p99_cv_percent": 1.6005452732528143,
+      "cpu": "AMD EPYC 7763 64-Core Processor",
+      "limit": "Different CPU model from852/1567. Recorded command/toolchain/affinity/fixture equality does not establish matched host, physical storage, binary equivalence, or cross-head regression/performance equivalence.",
+      "job_log": "No separate original095 M0 job log present at the inspected explicit evidence paths; full raw packet and actual artifact/run identifiers retained. No log fabricated or downloaded."
+    },
+    "m0_historical_1567": {
+      "sha": "1567a8a0a8b496d90e310c24b2cee53c2a169366",
+      "run_id": 37440823246,
+      "job_id": 112193867883,
+      "artifact_id": 11401223897,
+      "original_verdict": "FAIL",
+      "total_cv_percent": 22.505228515706435,
+      "pause_cv_percent": 17.04833277124989,
+      "p99_cv_percent": 46.683548959434745,
+      "cpu": "AMD EPYC 9V74 80-Core Processor",
+      "limit": "All three legacy variance gates fail. Same CPU model does not bind the852 host. No pooling or source/binary/performance equivalence."
+    },
+    "mvcc_original_cb09": {
+      "sha": "cb09ffe33b10a8a623cd335a43780d4997524f82",
+      "baseline_sha": "edbd68d34b0fdf7152a498b87d373576de029721",
+      "original_verdict": "FAIL",
+      "accepted": false,
+      "failed_benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+      "paired_median_delta_percent": 11.1942906566171,
+      "unpaired_median_delta_percent": -41.31410891671173,
+      "contract": "Original eight-pair/5% contract remains failed; favorable separate median does not replace the paired gate. Original pairing, file-sync observations and uncertainty retained.",
+      "limit": "No infrastructure-flake proof, binary equivalence, stable performance, or later CI acceptance inferred."
+    },
+    "pending_current852_verification": {
+      "run_id": 37449625940,
+      "source": "Root stated pending at task assignment; not queried.",
+      "result": null,
+      "included_as_evidence": false
+    }
+  },
+  "originals_and_original105support": "No original evidence or existing105support file was modified. Only this NEW staging directory was created.",
+  "pending_result": "Run37449625940 was not polled or classified; no inferred result included.",
+  "applicability": "This is supporting correctness/diagnostic evidence. E still requires root acceptance of actual landed-source A/C/D measurements and current CI; this staging adds no capacity, performance, or CI acceptance."
+}

@@ -1,0 +1,85 @@
+{
+  "mode": "synthetic-format-only",
+  "artifact_link_prefix": "../../../../docs/evidence/r1-row-store-5061/_artifacts/",
+  "actual_main": null,
+  "actual_main_tree": null,
+  "landing_receipt": null,
+  "public_replay_receipt": null,
+  "historical_report": {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-altered-history.md",
+    "sha256": "4565076e6e0284e4ff350b1ee28b47aa891efc4cef30dda5883954ed72899b3a"
+  },
+  "interpretation": {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-interpretation.md",
+    "sha256": "a7341aa0c825ddff78b12a840e3e8a9320cbf4b6e5ea767247ce3e55a6c8584f"
+  },
+  "A_comparison": {
+    "path": "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-A_comparison.md",
+    "sha256": "7bec317318d36fd76f2b9af797948679c2c601f69c025fb1554505bdf76a2467"
+  },
+  "evidence": {
+    "A": {
+      "formatter": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-A-report-preparation/report-a.py",
+        "sha256": "b2e386b4ec939978b9de1759ff6a2b564abf2afc0ecd136171823302b1fdefa4"
+      },
+      "markdown": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-A.md",
+        "sha256": "62112ae7f20587d92ba75aa83abd979bf3914a014c54e5bc698b9647eb6e54a5"
+      },
+      "source_commit": null,
+      "landed_commit": null,
+      "runtime_sha256": null,
+      "harness_sha256": null,
+      "fixture_sha256": null,
+      "config_sha256": null,
+      "binary_sha256": null,
+      "packet_sha256": null,
+      "source_receipt": null,
+      "validation_receipt": null,
+      "decision_receipt": null
+    },
+    "C": {
+      "formatter": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-C-report-preparation/format.py",
+        "sha256": "52d94e91dcfd696c1d8aaa29f3a39ff0da010e5d238bf10818d802832a66323d"
+      },
+      "markdown": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-C.md",
+        "sha256": "88ebe5908097bbd88a1c5b92d3e7cdd42eea9682ecd5f48fe56047e6a9f51ed0"
+      },
+      "source_commit": null,
+      "landed_commit": null,
+      "runtime_sha256": null,
+      "harness_sha256": null,
+      "fixture_sha256": null,
+      "config_sha256": null,
+      "binary_sha256": null,
+      "packet_sha256": null,
+      "source_receipt": null,
+      "validation_receipt": null,
+      "decision_receipt": null
+    },
+    "D": {
+      "formatter": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/format.py",
+        "sha256": "022c45de44e96014de9ef343b639be4abd92189152efd411314b829b54c4da58"
+      },
+      "markdown": {
+        "path": "/private/tmp/gomap-r1-execution-20261005/final-E-report-assembly-preparation/synthetic-D.md",
+        "sha256": "e81df18d89167e102600347d0db322afc2cb2758476f11858054d708a7513e00"
+      },
+      "source_commit": null,
+      "landed_commit": null,
+      "runtime_sha256": null,
+      "harness_sha256": null,
+      "fixture_sha256": null,
+      "config_sha256": null,
+      "binary_sha256": null,
+      "packet_sha256": null,
+      "source_receipt": null,
+      "validation_receipt": null,
+      "decision_receipt": null
+    }
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "head": "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a",
+  "tree": "e241ca84dca3da947197f3f903d86cf7724b784f",
+  "base": "2d2e7db51b572b271bbd0fef5ed796d6b9287c2e",
+  "branch": "codex/5066-rebuilt-pack-projection",
+  "local_worktree": "/tmp/gomap-r1-5066-pack-projection",
+  "remote_worktree": "/home/mikers/gomap-r1-5066-pack-projection",
+  "bundle": "/private/tmp/gomap-r1-execution-20261005/pack-projection-final3.bundle",
+  "writer_released": true,
+  "push": false,
+  "final_source_sidecar": "final-source.json",
+  "tests": {
+    "normal": {
+      "command": [
+        "go",
+        "test",
+        "./TreeDB/db",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestR1Rebuilt|TestStablePhysicalKindSelection|TestProjectRebuilt|TestVacuumIndexOnline(Binds|Recaptures|FallsBack)|TestCloneStableResourceForSelector|TestImmutableAliases).*",
+        "-count=3",
+        "-timeout=5m"
+      ],
+      "exit": 0,
+      "package_seconds": [
+        8.354,
+        0.062
+      ]
+    },
+    "race": {
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "./TreeDB/db",
+        "./TreeDB/internal/rootpublication",
+        "-run",
+        "^(TestR1Rebuilt|TestStablePhysicalKindSelection|TestProjectRebuilt|TestVacuumIndexOnline(Binds|Recaptures|FallsBack)|TestCloneStableResourceForSelector|TestImmutableAliases).*",
+        "-count=1",
+        "-timeout=5m"
+      ],
+      "exit": 0,
+      "package_seconds": [
+        4.045,
+        1.037
+      ]
+    },
+    "vet": {
+      "command": [
+        "go",
+        "vet",
+        "./TreeDB/db",
+        "./TreeDB/internal/rootpublication"
+      ],
+      "exit": 0
+    },
+    "diff_check": {
+      "command": [
+        "git",
+        "diff",
+        "--check",
+        "2d2e7db51b572b271bbd0fef5ed796d6b9287c2e",
+        "39f82246d1fc8faa44293d2c6c5a22cf7039ce1a"
+      ],
+      "exit": 0
+    }
+  },
+  "failure_inventory": {
+    "red3.log": {
+      "source": "d591390b0ca258272dc809daa98f6b628acc49dd",
+      "exit": 1,
+      "classification": "meaningful original runtime red: ordinary current vacuum bypasses exact packed scan"
+    },
+    "hardened-checks.log": {
+      "source": "e6c05004b8514f24ce4d980d9f241522b2db3967",
+      "classification": "normal/race failed only overstrict DBState pointer oracle; expected fail-closed authority errors returned; final39 asserts exact logical state instead; vet green"
+    },
+    "red.log": {
+      "remote_only": true,
+      "source": "3ec5d2874fa52dced362a85aa64fc546be485095",
+      "exit": 1,
+      "classification": "initial fixture duplicate replay-inline RID owner; corrected fixture without runtime repair"
+    }
+  },
+  "rehearsal": {
+    "source_commit": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+    "source_runtime_sha256": "f082e992fd9ca4810994ce51dac9635aecfacb5e6f568131433a81288181bb66",
+    "source_runtime_working_sha256": "632e8c2a6950a2bcf616969d6c5eb783f99767db4a7e2e79ccc507556d1223b2",
+    "harness_sha256": "73b9add9b8efc6e9efa106c71524833678e486c40e4abdf6dbe75614bb63aa42",
+    "binary_sha256": "0b77d47061bbe15d700555a3b4765b07e19bbd7e2c59ec9bf0fc8cee7ea5486a",
+    "remote_directory": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs",
+    "packet": "rehearsal-d078/packet.json",
+    "exit": 0,
+    "processes": 1,
+    "final_epochs": 2,
+    "documents": 4096,
+    "calls_per_epoch": 1024,
+    "total_calls": 2048,
+    "distinct_repeated_ids": 512,
+    "load_before": [
+      7.1533203125,
+      4.79443359375,
+      4.10107421875
+    ],
+    "load_after": [
+      6.1669921875,
+      5.02099609375,
+      4.2421875
+    ],
+    "utc_before": "2026-10-06T06:48:51Z",
+    "utc_after": "2026-10-06T06:50:15Z",
+    "build_command": [
+      "go",
+      "test",
+      "-c",
+      "-o",
+      "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+      "./TreeDB/collections"
+    ],
+    "invocation": [
+      "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/collections.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkR1Lifecycle5060$",
+      "-test.benchtime=2x",
+      "-test.count=1",
+      "-test.benchmem",
+      "-test.v"
+    ],
+    "qualification": "nonqualifying pre-hardening diagnostic, unchanged harness; never rebound to final39"
+  },
+  "open_gate": "no sustained capacity acceptance; integrated exact-source/review/CI and reviewed full retained workload remain coordinator-owned",
+  "runtime_risks": [
+    "current packed vacuum invokes existing exact scan; scan cost visible in existing stats",
+    "older fallback intentionally keeps full pack closure until lawful same-LSN convergence",
+    "vlog partial-segment retention distinct; tiny evidence cannot prove plateau"
+  ],
+  "evidence_root_remote": "/home/mikers/gomap-r1-pack-projection-evidence-20261005",
+  "bundle_sha256": "0cb2298718e24375c32089a3d9005cefb1ae373be6f569a4598359ec53ff2d4c",
+  "test_environment": {
+    "host": "mikers@192.168.0.185",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-5065-ci-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "16",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off",
+    "GOFLAGS": "",
+    "GODEBUG": "",
+    "flock": "/home/mikers/gomap-r1-correctness-185.lock"
+  }
+}

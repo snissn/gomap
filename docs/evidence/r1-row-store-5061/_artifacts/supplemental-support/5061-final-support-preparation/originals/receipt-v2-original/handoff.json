@@ -1,0 +1,59 @@
+{
+  "head": "70e589ae5771bb8c382486a95f17ac0ce2160b08",
+  "base": "6ff859105f2abcbce669239a7d52025fe1625344",
+  "tree": "4080cd3c261084c14cfc8e595a1ea8eb9b39d005",
+  "branch": "codex/5065-retained-receipt",
+  "worktree": "/private/tmp/gomap-r1-5065-retained-receipt",
+  "bundle": "/tmp/gomap-r1-execution-20261005/5065-retained-receipt-evidence/repair.bundle",
+  "bundle_sha256": "5e388386f9d2a5a9c21e991f176616056f4b7a4011647f5c5e3024da972bc318",
+  "files": [
+    "TreeDB/docs/spec/r1-row-lifecycle.md",
+    "scripts/r1_lifecycle_capture.py",
+    "scripts/r1_lifecycle_validate.py",
+    "scripts/r1_lifecycle_validate_test.py"
+  ],
+  "runtime_sha256": "53f92a2a08ddb0496e51734686b851790f79027df93e7d5a83d7f1258360248c",
+  "A_harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb",
+  "unchanged_runtime_and_A": true,
+  "new_validate_signature_trailing_parameters": [
+    "expected_binary_sha256=None",
+    "expected_packet_sha256=None"
+  ],
+  "new_CLI": [
+    "--expected-binary-sha256",
+    "--expected-packet-sha256"
+  ],
+  "external_receipt_semantics": "retained requires both hashes plus existing independent landing/source/runtime/harness bindings; packet exact-byte hash checked before trusting claims, actual binary checked against independent hash and internal metadata; raw/buildlog hashes checked transitively from bound packet; expected values must originate from separately verified clean build/completed run receipt",
+  "capture_semantics": "passes locally computed built binary/completed packet hashes for consistency self-check only; no claim independent acceptance",
+  "tests": {
+    "python": "49 tests PASS22.335s; real a54d51a v2 packet/binary/raw, actual child environment,9new cases",
+    "cli_rehearsal": "PASS offline no receipt",
+    "cli_frozen_hash_rehearsal": "PASS exact originalbinary/packet hash bindings",
+    "AST": "PASS capture/validate/validate_test/capture_test",
+    "diff_check": "PASS"
+  },
+  "commands": [
+    "R1_LIFECYCLE_TEST_PACKET=/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p 'r1_lifecycle*test.py' -v",
+    "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+    "python3 scripts/r1_lifecycle_validate.py /tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json --expected-binary-sha256 80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc --expected-packet-sha256 94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+  ],
+  "original_packet": "/tmp/gomap-r1-execution-20261005/5065-review-tooling-evidence/v2-rehearsal/packet.json",
+  "original_source": "a54d51a2a631480f2ed7203cdd66b2128e5a60f2",
+  "original_frozen_replay_bindings": {
+    "expected_binary_sha256": "80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc",
+    "expected_packet_sha256": "94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00"
+  },
+  "original_raw_hashes": {
+    "packet.json": "94b3924f343d9f27254397cec6fcb912d439fc223c4c65d6224a693912de0b00",
+    "collections.test": "80883c288b18104c43ea13a805b007b3b2ae3d96be6f2ce086629e28b5c2aadc",
+    "build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "run-001.log": "07e0b54f33bf416862a004613256757d74b20ee425f3660cf742931a19ae01d2",
+    "run-002.log": "b8cad575d1839a87f2b40805f1ac3471e59b977523855a68f8d29f87a9ea52a9"
+  },
+  "new_tests": "actual-packet receipt acceptance; selfhash-rebound binary substitution; independent binary guard with matching corrupted-packet testfixture; rebound raw/buildlog checksum, source/metadata relabel, exactpacket whitespace bytes, missing external retainedbindings",
+  "test_limits": "temporary substituted binary corruption bytes are never executed; intentionally rebound retained-size declarations are negative fixtures only; currentpacket hash supplied only to reach other provenance guards, expectedbinary always original; original packet/binary/log bytes preserved",
+  "ownership_release": true,
+  "no_Go_or_capture": true,
+  "no_push_or_review_trigger": true,
+  "next": "independent root review and adapt v2 delta onto v3 integration; final retained acceptance only externally verified receipt; coordinator owns graph/GH/CI"
+}

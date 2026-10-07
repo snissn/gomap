@@ -1,0 +1,62 @@
+{
+  "verdict": "READY_FOR_ROOT_ADOPTION_AND_ACTUAL_ORIGINAL_PROVENANCE_QUALIFICATION",
+  "findings": [],
+  "review_role": "independent read-only gpt-6.1-sol/high",
+  "utc": "2026-10-07T00:19:27.474812+00:00",
+  "reviewed_files": {
+    "qualify.py": {
+      "sha256": "82f2cbbc8288898a481edcdc099c6d5009cdf1bc77af0560ac31fa44818e81c5",
+      "bytes": 17332
+    },
+    "handoff.md": {
+      "sha256": "a8e4f68f7586eb5f271fed297e3259ac6916cda644aad1d066f800763fc2863f",
+      "bytes": 4063
+    },
+    "handoff.json": {
+      "sha256": "860a474d3a55694a5ae75a39c511ebc89f34573a7c257359ef4a84b3d47d83d7",
+      "bytes": 2738
+    },
+    "static-checks.json": {
+      "sha256": "b00d41673aaf31281ef3e6f15c9b3ec0f7c132a78f412948fa473e9f2be413b4",
+      "bytes": 1465
+    }
+  },
+  "original_sources": {
+    "/private/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/observe.py": {
+      "sha256": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68",
+      "bytes": 8856
+    },
+    "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:scripts/r1_lifecycle_capture.py": {
+      "blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+      "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+      "bytes": 10594
+    },
+    "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:scripts/r1_collection_source.py": {
+      "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+      "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+      "bytes": 1994
+    },
+    "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:scripts/r1_lifecycle_validate.py": {
+      "blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+      "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+      "bytes": 61009
+    }
+  },
+  "source_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "checks": [
+    "Fixed config and independent BEFORE-D manifest byte pins precede source/capture checks; exact M clean checkout and landed-tooling ancestry required.",
+    "Runtime blob inventory and working runtime bytes reconstructed with Git directly. Independent pre-D compiled-test selection plus all top-level lifecycle scripts bind D harness bytes; manifest compared exactly to producer/observer build/before-after declarations. No Go/imported producer discovery is used by qualifier.",
+    "Observer/config/compiler source and actual wrapper bytes checked. Compiler argv/cwd/toolchain executable hash, completed ELF hash and packet toolchain hash agree. Driver argv/environment fixes exact retained dimensions; unknown child environment keys rejected.",
+    "Original success receipts use exit; raw benchmark process records use exit_code. Bool exits refused. Completed six-pin receipt source/review/landing/binary/packet values checked and precedes validation.",
+    "Exact original validator argv contains all six independent receipt pins; parser bytes must equal frozen original parser and independently reconstructed harness. No validator or benchmark is rerun.",
+    "Actual five serial distinct-PID runs with exact log hashes, UTC/monotonic bounds, exact benchmark argv/build log/sidecars/config are required. Strict original v3 parser receipt supplies phase/oracle validation.",
+    "Canonical lock path and externally supplied marker required; marker is explicitly not lock ownership proof. Root must actually hold flock.",
+    "Only NEW result directory and NEW expected-source replay copy are created after original checks; original receipts/logs/packets remain untouched and are hashed before/after. Final output has no accepted flag and leaves numeric finite capacity/cost pending."
+  ],
+  "limits": [
+    "Local named observe-D.py was not present. Inspected frozen retained-receipt-preparation/observe.py with identical required SHA; qualifier validates actual supplied observer hash and exact original wrapper path when root executes.",
+    "No remote actual config, BEFORE-D manifest, original run receipts or capture was inspected; declared pins are not independently converted into successful actual qualification by this review.",
+    "Source-only review/read-only Git object reads and file hashing. No helper execution, Go/test/build/capture/network/SSH/GitHub action or source mutation.",
+    "Root alone supplies actual flock, execution, original receipt authority and numeric/performance/capacity acceptance. Failed partial NEW output remains failed preparation; originals must not be rewritten."
+  ]
+}

@@ -1,0 +1,3 @@
+Prepared private A report helper `/tmp/gomap-r1-execution-20261005/final-A-report-preparation/report-a.py`.
+
+SHA256: `b2e386b4ec939978b9de1759ff6a2b564abf2afc0ecd136171823302b1fdefa4`. Baseline source inspection pinned `0216e2e9ee701dee0eda96c569dc0c8facb37ca9:cmd/collection_workload_bench/r1.go` / blob `fec4f76df23af2cfa04522fa3e6d07a6fbb43a68`. Python formatting verification exited 0 with 1,214 checks, 92 enabled groups and four preserved skips. All original input bytes remain unchanged. No Go/capture/source/GitHub/CI activity. Root later supplies the actual independently accepted final packet; report output establishes no acceptance or equivalence. Writer released.

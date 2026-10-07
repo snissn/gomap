@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "python3",
+    "-B",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-E-final-report-public-proof-layout-preparation/assemble.py",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/manifest-root-approved-original.json",
+    "--out",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-final-E-root-assembly-original/README-assembled-original.md"
+  ],
+  "helper_sha256": "fe81e26e777e49c78fd2e7b81e2a556e0fd4b8be2facfb8be64f945278372a5f",
+  "utc": "2026-10-07T01:28:15.806389+00:00"
+}

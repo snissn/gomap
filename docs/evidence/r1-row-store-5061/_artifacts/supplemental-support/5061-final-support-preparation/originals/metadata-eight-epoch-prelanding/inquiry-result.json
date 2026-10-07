@@ -1,0 +1,929 @@
+{
+  "source": "f79616f2aeb99b43af81877f26d646cca51177b9",
+  "qualification": "prelanding rehearsal, nonqualifying tiny fixture",
+  "packet_sha256": "70b6e757051ffeb5932450f5a2371c07c8717746cdc7bf947ac604e29d38760c",
+  "matrix": {
+    "processes": 1,
+    "epochs": 8,
+    "documents": 32,
+    "calls_per_epoch": 8
+  },
+  "observed_exit": 0,
+  "components": [
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 13478
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000003.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000004.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 462
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000005.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 510
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000006.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 718
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000007.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 752
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 752
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 752
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 25845
+        },
+        "maindb/leaf_vlog/value-l255-000001.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 376
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4569
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000003.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3060
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 1485
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 309
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 7604
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4256405,
+      "total_files": 24,
+      "phase": "maintenance-0",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 4049,
+        "index": 4194304,
+        "other": 791,
+        "persistent_leaf_log": 34682,
+        "persistent_vlog": 1485,
+        "redo_wal": 7616,
+        "template_store": 0,
+        "typed_assets": 13478
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 8,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 6,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 58318304,
+      "heap_inuse": 59490304,
+      "heap_objects": 117197,
+      "num_gc": 8
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000002.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 752
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 512
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 512
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4569
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 1342
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 1485
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 309
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 7604
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4217477,
+      "total_files": 16,
+      "phase": "after_view_release",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1264,
+        "index": 4194304,
+        "other": 791,
+        "persistent_leaf_log": 6503,
+        "persistent_vlog": 1485,
+        "redo_wal": 7616,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 61401192,
+      "heap_inuse": 62537728,
+      "heap_objects": 136139,
+      "num_gc": 8
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000003.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000011.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 996
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000015.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 512
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 512
+        },
+        "maindb/leaf_vlog/value-l255-000005.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4578
+        },
+        "maindb/leaf_vlog/value-l255-000005.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000006.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3069
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 1957
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 456
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 1369
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4213841,
+      "total_files": 16,
+      "phase": "maintenance-1",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1508,
+        "index": 4194304,
+        "other": 938,
+        "persistent_leaf_log": 8239,
+        "persistent_vlog": 1957,
+        "redo_wal": 1381,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 47880144,
+      "heap_inuse": 50831360,
+      "heap_objects": 40784,
+      "num_gc": 9
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000004.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000001c.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1239
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000020.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 513
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 513
+        },
+        "maindb/leaf_vlog/value-l255-000008.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4590
+        },
+        "maindb/leaf_vlog/value-l255-000008.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000009.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3072
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 2428
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 603
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 1368
+        },
+        "maindb/wal/commit-l0-000004.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4214718,
+      "total_files": 16,
+      "phase": "maintenance-2",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1752,
+        "index": 4194304,
+        "other": 1085,
+        "persistent_leaf_log": 8255,
+        "persistent_vlog": 2428,
+        "redo_wal": 1380,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 67733776,
+      "heap_inuse": 69263360,
+      "heap_objects": 115337,
+      "num_gc": 9
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000005.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000027.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1243
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000002b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/value-l255-000011.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4589
+        },
+        "maindb/leaf_vlog/value-l255-000011.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000012.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3069
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 2900
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 603
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000004.log": {
+          "component": "redo_wal",
+          "bytes": 1369
+        },
+        "maindb/wal/commit-l0-000005.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4215197,
+      "total_files": 16,
+      "phase": "maintenance-3",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1759,
+        "index": 4194304,
+        "other": 1085,
+        "persistent_leaf_log": 8254,
+        "persistent_vlog": 2900,
+        "redo_wal": 1381,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 54109216,
+      "heap_inuse": 57196544,
+      "heap_objects": 65388,
+      "num_gc": 10
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000006.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000032.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1245
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000036.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/value-l255-000014.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4595
+        },
+        "maindb/leaf_vlog/value-l255-000014.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000015.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3072
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 3373
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 603
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000005.log": {
+          "component": "redo_wal",
+          "bytes": 1370
+        },
+        "maindb/wal/commit-l0-000006.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4215682,
+      "total_files": 16,
+      "phase": "maintenance-4",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1761,
+        "index": 4194304,
+        "other": 1085,
+        "persistent_leaf_log": 8263,
+        "persistent_vlog": 3373,
+        "redo_wal": 1382,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 73827680,
+      "heap_inuse": 75096064,
+      "heap_objects": 140092,
+      "num_gc": 10
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000007.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000003d.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1245
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000041.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/value-l255-000017.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4581
+        },
+        "maindb/leaf_vlog/value-l255-000017.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000018.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3072
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 3848
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 603
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000006.log": {
+          "component": "redo_wal",
+          "bytes": 1372
+        },
+        "maindb/wal/commit-l0-000007.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4216145,
+      "total_files": 16,
+      "phase": "maintenance-5",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1761,
+        "index": 4194304,
+        "other": 1085,
+        "persistent_leaf_log": 8249,
+        "persistent_vlog": 3848,
+        "redo_wal": 1384,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 57143216,
+      "heap_inuse": 60588032,
+      "heap_objects": 80873,
+      "num_gc": 11
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000008.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000048.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1245
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000004c.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/value-l255-000020.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4572
+        },
+        "maindb/leaf_vlog/value-l255-000020.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000021.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3072
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 4322
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 603
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000007.log": {
+          "component": "redo_wal",
+          "bytes": 1371
+        },
+        "maindb/wal/commit-l0-000008.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4216609,
+      "total_files": 16,
+      "phase": "maintenance-6",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1761,
+        "index": 4194304,
+        "other": 1085,
+        "persistent_leaf_log": 8240,
+        "persistent_vlog": 4322,
+        "redo_wal": 1383,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 39899272,
+      "heap_inuse": 48177152,
+      "heap_objects": 18268,
+      "num_gc": 12
+    },
+    {
+      "scope": "full-profile-root",
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 12
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000009.tca": {
+          "component": "typed_assets",
+          "bytes": 5514
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000053.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1245
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000057.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 516
+        },
+        "maindb/leaf_vlog/value-l255-000023.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4578
+        },
+        "maindb/leaf_vlog/value-l255-000023.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 80
+        },
+        "maindb/leaf_vlog/value-l255-000024.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3069
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 4797
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 603
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 12
+        },
+        "maindb/wal/commit-l0-000008.log": {
+          "component": "redo_wal",
+          "bytes": 1372
+        },
+        "maindb/wal/commit-l0-000009.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      },
+      "total_bytes": 4217088,
+      "total_files": 16,
+      "phase": "maintenance-7",
+      "logical_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1761,
+        "index": 4194304,
+        "other": 1085,
+        "persistent_leaf_log": 8243,
+        "persistent_vlog": 4797,
+        "redo_wal": 1384,
+        "template_store": 0,
+        "typed_assets": 5514
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "heap_alloc": 59825248,
+      "heap_inuse": 62537728,
+      "heap_objects": 93374,
+      "num_gc": 12
+    }
+  ],
+  "conclusion": "Immutable manifest/health metadata reaches stable maintenance window by epoch4; not demonstrated unbounded history. Typed5514 andleaf~8240 stable; activeprimaryvlog stillgrows~475B/epoch. Fullretainedcapacity remains OPEN."
+}

@@ -1,0 +1,48 @@
+{
+  "utc": "2026-10-06T06:27:20Z",
+  "scope": "one mid-capture observation; external nativewire.test appeared after capture start; no process was stopped; not an exact load history",
+  "processes": [
+    {
+      "pid": 1586630,
+      "cpu_percent": 50.0,
+      "elapsed": "00:00",
+      "executable": "python3"
+    },
+    {
+      "pid": 1581942,
+      "cpu_percent": 45.9,
+      "elapsed": "03:25",
+      "executable": "/home/mikers/gomap-5067-recovery-shard-sol-root-v2/go-tmp/go-build368146619/b001/nativewire.test"
+    },
+    {
+      "pid": 1571965,
+      "cpu_percent": 34.1,
+      "elapsed": "09:06",
+      "executable": "/home/mikers/gomap-r1-evidence-20261005/r1-final-typed-scope-00d2c370/collection_workload_bench"
+    },
+    {
+      "pid": 635514,
+      "cpu_percent": 0.5,
+      "elapsed": "28-11:42:46",
+      "executable": "/home/mikers/.npm/_npx/ed3c98cb1adfc51b/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex"
+    },
+    {
+      "pid": 2499,
+      "cpu_percent": 0.4,
+      "elapsed": "32-01:37:39",
+      "executable": "/usr/bin/gnome-shell"
+    },
+    {
+      "pid": 2971628,
+      "cpu_percent": 0.3,
+      "elapsed": "13-12:14:50",
+      "executable": "/home/mikers/.codex/packages/app-server-daemon/releases/local-d1ad59a93314ab3fb6ed6dbe1bcb7bc89efb1a36b8f889b3209a95434b5e2df1-x86_64-unknown-linux-musl/bin/codex"
+    },
+    {
+      "pid": 4644,
+      "cpu_percent": 0.3,
+      "elapsed": "31-23:43:35",
+      "executable": "tmux"
+    }
+  ]
+}

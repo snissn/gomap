@@ -1,0 +1,79 @@
+{
+  "source_commit": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+  "source_clean_before": true,
+  "hostname": "mikers-B560-DS3H-AC-Y1",
+  "toolchain_sha256": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+  "toolchain_version": "go version go1.26.4 linux/amd64",
+  "environment": {
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "steps": [
+    {
+      "name": "normal",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "./TreeDB/db",
+        "-run",
+        "TestLeafManifestRevisionGC|TestLeafGenerationGCReclaimsReleasedManifest",
+        "-count=1",
+        "-timeout=3m",
+        "-v"
+      ],
+      "exit_code": 0,
+      "started_unix": 1791283431.2645202,
+      "finished_unix": 1791283503.1722896,
+      "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/normal.log",
+      "log_sha256": "02177cca2935db8e97a3e0074325e3cc19b1a80e195ed99eac82d0504cf54405"
+    },
+    {
+      "name": "race",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "./TreeDB/db",
+        "-run",
+        "TestLeafManifestRevisionGC|TestLeafGenerationGCReclaimsReleasedManifest",
+        "-count=1",
+        "-timeout=3m",
+        "-v"
+      ],
+      "exit_code": 0,
+      "started_unix": 1791283503.1724987,
+      "finished_unix": 1791283628.502114,
+      "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/race.log",
+      "log_sha256": "3bcc2ec352bc4a402c60131e1dc2542ed75f4d02fa922ca9b449a8b5f5f39fcf"
+    },
+    {
+      "name": "vet",
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/db"
+      ],
+      "exit_code": 0,
+      "started_unix": 1791283628.5022178,
+      "finished_unix": 1791283632.8517835,
+      "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/vet.log",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "load_before": [
+    26.40087890625,
+    27.29248046875,
+    21.267578125
+  ],
+  "serialization_lock": "/home/mikers/gomap-r1-correctness-185.lock",
+  "load_after": [
+    21.2490234375,
+    26.38134765625,
+    22.23388671875
+  ],
+  "source_commit_after": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+  "source_clean_after": true
+}

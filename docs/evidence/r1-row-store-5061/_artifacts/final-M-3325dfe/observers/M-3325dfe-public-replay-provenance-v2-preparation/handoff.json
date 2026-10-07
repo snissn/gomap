@@ -1,0 +1,126 @@
+{
+  "Go_build_test_benchmark_measurement_performed": false,
+  "certified_A_compare": {
+    "CLI_required_names": [
+      "certificate",
+      "expected-certificate-sha256",
+      "repo",
+      "before",
+      "after",
+      "receipts",
+      "accepted-freeze",
+      "original-compare"
+    ],
+    "public_stage_relative": "validation/compare-certified-v2.py",
+    "sha256": "3c4502ebb4620ac010b615ca10bbdd45a4448f66e2c7ed663d57c32413c1c2c2"
+  },
+  "checks": {
+    "bytes": 3242,
+    "path": "static-checks.json",
+    "sha256": "7c92a2385d326c167e8e33fabf15751613eb50214fb54c543cf23cd95f64f4d2"
+  },
+  "exact_scoped_changes": {
+    "build-draft-inputs.py": [
+      "cert_name leaf only (PREFIX unchanged)",
+      "TEMPLATE_SHA matching new exact template only"
+    ],
+    "replay-public.py": [
+      "certified_A_compare hardcoded SHA only"
+    ],
+    "root-inputs.template.json": [
+      "frozen_validator_public_paths.certified_A_compare.stage_relative only",
+      "frozen_validator_public_paths.certified_A_compare.sha256 only"
+    ]
+  },
+  "handoff": "Root may independently review/adopt these NEW versions, pin the exact bytes, stage the reviewed provenance adapter and NEW actual certificate at the specified public paths, then use existing unchanged CLI. No other helper logic, approval field, or capture acceptance is supplied or modified by this preparation.",
+  "helper_execution_performed": false,
+  "new_certificate_stage_relative": "final-M-3325dfe/results/A/root-approved-A-semantics-and-provenance-certificate-v2.json",
+  "new_source_and_original_bindings": [
+    {
+      "diff_bytes": 605,
+      "diff_name": "replay-public.py.diff",
+      "diff_sha256": "a5fcb25b4b93006de6cae4c3f315aee1447ed39f8d4cf86fccddfdbdf6a510ca",
+      "new_bytes": 34425,
+      "new_name": "replay-public.py",
+      "new_sha256": "1bcdfa4ebc4489b2292caeb25a3f5ffd38a1adb347a0e455e8f4d736c4a07fcc",
+      "original_bytes": 34425,
+      "original_path": "/home/mikers/gomap-r1-final-observers-20261006/final-public-replay-executor-preparation/replay-public.py",
+      "original_sha256": "343135d1c72fa4bb86a4185849fbba70b0ba5ca8c0dc166a6366052b227f12aa",
+      "role": "executor"
+    },
+    {
+      "diff_bytes": 1692,
+      "diff_name": "build-draft-inputs.py.diff",
+      "diff_sha256": "8560cd3174dcb9bac0d68cf0ac590073566f02f37cfa23553dff364c76bb9bef",
+      "new_bytes": 22314,
+      "new_name": "build-draft-inputs.py",
+      "new_sha256": "df71ce652147f3a55522e6c00f2a168f57266b66eb454060ce90eb792108c341",
+      "original_bytes": 22296,
+      "original_path": "/home/mikers/gomap-r1-final-observers-20261006/final-public-input-builder-v2-preparation/build-draft-inputs.py",
+      "original_sha256": "070488cb9c969d0c561ba0c310172e62f89087999d24ea14dae9e4ea010e57af",
+      "role": "builder"
+    },
+    {
+      "diff_bytes": 590,
+      "diff_name": "root-inputs.template.json.diff",
+      "diff_sha256": "bb2df5f3ae4b3a8dfb7071516c4128379eed7969b58c9608c87a9c4ff7e839c0",
+      "new_bytes": 15652,
+      "new_name": "root-inputs.template.json",
+      "new_sha256": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4",
+      "original_bytes": 15649,
+      "original_path": "/home/mikers/gomap-r1-final-observers-20261006/final-public-input-builder-v2-preparation/root-inputs.template.json",
+      "original_sha256": "bbcc02ef96051b79cf43b8666505ff9f98f59ca39e652988b73797d5a0869dfd",
+      "role": "input_template"
+    }
+  ],
+  "new_template_sha256": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4",
+  "originals_preserved": true,
+  "other_bytes_logic_flags_and_unapproved_fields_preserved": true,
+  "preparation_file_inventory": [
+    {
+      "bytes": 22314,
+      "name": "build-draft-inputs.py",
+      "sha256": "df71ce652147f3a55522e6c00f2a168f57266b66eb454060ce90eb792108c341"
+    },
+    {
+      "bytes": 1692,
+      "name": "build-draft-inputs.py.diff",
+      "sha256": "8560cd3174dcb9bac0d68cf0ac590073566f02f37cfa23553dff364c76bb9bef"
+    },
+    {
+      "bytes": 75851,
+      "name": "original-read-only-observations.json",
+      "sha256": "f44d1ad9936d1fc0beea8c252bed11a61c394059a3d983f879257c024c2e9950"
+    },
+    {
+      "bytes": 34425,
+      "name": "replay-public.py",
+      "sha256": "1bcdfa4ebc4489b2292caeb25a3f5ffd38a1adb347a0e455e8f4d736c4a07fcc"
+    },
+    {
+      "bytes": 605,
+      "name": "replay-public.py.diff",
+      "sha256": "a5fcb25b4b93006de6cae4c3f315aee1447ed39f8d4cf86fccddfdbdf6a510ca"
+    },
+    {
+      "bytes": 15652,
+      "name": "root-inputs.template.json",
+      "sha256": "7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4"
+    },
+    {
+      "bytes": 590,
+      "name": "root-inputs.template.json.diff",
+      "sha256": "bb2df5f3ae4b3a8dfb7071516c4128379eed7969b58c9608c87a9c4ff7e839c0"
+    },
+    {
+      "bytes": 3242,
+      "name": "static-checks.json",
+      "sha256": "7c92a2385d326c167e8e33fabf15751613eb50214fb54c543cf23cd95f64f4d2"
+    }
+  ],
+  "remote_files_modified_or_new_files_transferred": false,
+  "root_approval_given_here": false,
+  "schema": "gomap-r1-public-replay-provenance-v2-preparation-v1",
+  "status": "UNPROMOTED_PREPARATION_ONLY; root activation and approval remain required",
+  "utc": "2026-10-07T00:47:51.019715+00:00"
+}
