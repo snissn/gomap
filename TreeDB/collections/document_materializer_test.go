@@ -1292,8 +1292,13 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef after rebuild: %v", err)
 	}
-	if view.columnSnapshotView == nil || view.preparedMaterializer == nil || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+	if view.columnSnapshotView == nil || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be repopulated before close")
+	}
+	// Changing integrity retires the prepared metadata authority. A later
+	// fetch reconstructs independently rather than restoring the retired view.
+	if view.preparedMaterializer != nil || view.preparedMaterializerView != nil || !view.materializerMetadataInvalidated {
+		t.Fatalf("integrity change restored retired prepared metadata: prepared=%v bound=%v invalidated=%v", view.preparedMaterializer, view.preparedMaterializerView, view.materializerMetadataInvalidated)
 	}
 	if err := view.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
