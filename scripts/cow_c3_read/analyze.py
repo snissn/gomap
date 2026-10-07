@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
-from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs
+from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command
 from collect import host_gate
 from build import verify_git_receipt, objects
 
@@ -40,6 +40,7 @@ def main():
         need(build["binary_sha256"] == declaration["binary_sha256"] and build["source_tree_sha256"] == declaration["source_tree_sha256"], "unbound build receipt")
         need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "build controls drift")
         need(build.get("effective_process_environment") == env, "build process environment mismatch")
+        validate_build_command(build, c["go_binary"], declaration["binary"])
         artifacts = json.loads((packet / (variant + "-build-artifacts.json")).read_text())
         required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
         need(set(artifacts) == set(build["artifacts"]) == required, "missing/extra build provenance map")

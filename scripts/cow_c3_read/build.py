@@ -14,7 +14,7 @@ import stat
 import subprocess
 import time
 
-from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest
+from protocol import drift, identity, need, now, process_environment, sha, write, validate_go_environment, toolchain_inventory, validate_toolchain, validate_no_cgo, selected_inputs, digest, build_command, module_command
 
 GIT_SOURCE_SCHEMA = "gomap-git-export-authority-v1"
 
@@ -283,14 +283,14 @@ def main():
         go_env = json.loads(run("go-env", [str(go), "env", "-json"]))
         validate_go_environment(go_env, env)
         binary = out / "mvcc-normal.test"
-        argv = [str(go), "test", "-c", "-o", str(binary), "./TreeDB/mvcc"]
-        before_packages = objects(run("compiled-dependencies-before", [str(go), "list", "-compiled", "-deps", "-test", "-json", "./TreeDB/mvcc"]))
+        argv = build_command(go, binary)
+        before_packages = objects(run("compiled-dependencies-before", module_command(go)))
         validate_no_cgo(before_packages)
         compiled_modules(before_packages, source)
         before, generated_before = selected_inputs(before_packages, source, controls)
         write(out / "compiled-inputs-before.json", before)
         run("build", argv)
-        packages = objects(run("compiled-dependencies", [str(go), "list", "-compiled", "-deps", "-test", "-json", "./TreeDB/mvcc"]))
+        packages = objects(run("compiled-dependencies", module_command(go)))
         validate_no_cgo(packages)
         modules = compiled_modules(packages, source)
         write(out / "module-graph.stdout", modules)

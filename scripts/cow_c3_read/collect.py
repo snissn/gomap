@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 
-from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo, build_inputs
+from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo, build_inputs, validate_build_command
 from build import verify_git_receipt, objects
 
 def wait_child(child, timeout, grace=3.0):
@@ -113,7 +113,7 @@ def main():
             need(build.get("effective_process_environment") == env, "build process environment mismatch")
             # Root must retain actual build command/exit and go env/list module /
             # compiled dependency/buildinfo outputs, not just asserted labels.
-            need(build["exit_code"] == 0 and build["command"] and build["artifacts"], "missing actual successful build receipt")
+            validate_build_command(build, c["go_binary"], v["binary"])
             required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
             need(set(build["artifacts"]) == required, "missing/extra build provenance artifacts")
             frozen_artifacts = {}
