@@ -597,16 +597,11 @@ func validateStableDeletePath(file *File) error {
 }
 
 func validateStableDeletePathIdentity(path string, identity rootpublication.StableIdentity) error {
-	linked, err := os.Open(path)
+	linkedIdentity, err := stableIdentityAtPath(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return err
-	}
-	defer linked.Close()
-	linkedIdentity, err := rootpublication.StableIdentityFromFile(linked)
-	if err != nil {
 		return err
 	}
 	if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
@@ -701,11 +696,26 @@ func parseStableDeleteQuarantineName(name string) (string, rootpublication.Stabl
 }
 
 func stableIdentityAtPath(path string) (rootpublication.StableIdentity, error) {
-	file, err := os.Open(path)
+	// A rebound pathname can name a link or FIFO. Use the existing exact-parent,
+	// no-follow child primitive, which is nonblocking on Unix, before inspecting
+	// identity. This also protects quarantine recovery from special-file opens.
+	parent, err := rootpublication.OpenStableParent(filepath.Dir(path))
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	defer parent.Close()
+	file, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDONLY, 0)
 	if err != nil {
 		return rootpublication.StableIdentity{}, err
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return rootpublication.StableIdentity{}, fmt.Errorf("%w: value-log path is not a regular file", rootpublication.ErrResourceConflict)
+	}
 	return rootpublication.StableIdentityFromFile(file)
 }
 

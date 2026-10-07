@@ -37,16 +37,19 @@ func TestManagerRefreshRetiredSegmentRejectsReboundPath(t *testing.T) {
 	if err := manager.Refresh(); err != nil {
 		t.Fatalf("unchanged retired identity refused: %v", err)
 	}
-	oldInfo, err := os.Stat(retired.Path)
+	oldIdentity, err := stableIdentityAtPath(retired.Path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !rootpublication.SamePhysicalIdentity(oldIdentity, retired.stableIdentity) {
+		t.Fatal("retired pathname identity changed before rebound")
 	}
 	if err := os.Rename(retired.Path, retired.Path+".retired"); err != nil {
 		t.Fatal(err)
 	}
 	writeTestSegment(t, dir, 0, 1, 2, []byte("replacement"))
-	newInfo, err := os.Stat(retired.Path)
-	if err != nil || os.SameFile(oldInfo, newInfo) {
+	newIdentity, err := stableIdentityAtPath(retired.Path)
+	if err != nil || rootpublication.SamePhysicalIdentity(oldIdentity, newIdentity) {
 		t.Fatalf("path was not rebound to a different file: %v", err)
 	}
 	wantBytes, err := os.ReadFile(retired.Path)
@@ -78,8 +81,8 @@ func TestManagerRefreshRetiredSegmentRejectsReboundPath(t *testing.T) {
 	if err != nil || !bytes.Equal(gotBytes, wantBytes) {
 		t.Fatalf("replacement changed during refresh or retry: %v", err)
 	}
-	finalInfo, err := os.Stat(retired.Path)
-	if err != nil || !os.SameFile(newInfo, finalInfo) {
+	finalIdentity, err := stableIdentityAtPath(retired.Path)
+	if err != nil || !rootpublication.SamePhysicalIdentity(newIdentity, finalIdentity) {
 		t.Fatalf("replacement identity changed during refresh or retry: %v", err)
 	}
 }
