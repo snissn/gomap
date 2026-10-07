@@ -147,6 +147,7 @@ type FixedPeerTCPRuntimeV1 struct {
 	}
 	server       *http.Server
 	listener     net.Listener
+	serveDone    chan struct{}
 	listenersMu  sync.Mutex
 	listeners    map[string]net.Listener
 	reopened     bool
@@ -627,7 +628,12 @@ func openFixedPeerTCPRuntimeV1(config FixedPeerTCPConfigV1, listeners map[string
 		}
 		r.vector.start()
 	}
-	go func() { _ = r.server.Serve(r.listener) }()
+	r.serveDone = make(chan struct{})
+	server, listener, done := r.server, r.listener, r.serveDone
+	go func() {
+		defer close(done)
+		_ = server.Serve(listener)
+	}()
 	r.startSplitVectorRetryV1()
 	return r, nil
 }
@@ -689,8 +695,16 @@ func (r *FixedPeerTCPRuntimeV1) Close() error {
 				_ = r.server.Close()
 			}
 			errs = append(errs, err)
-		} else if r.listener != nil {
-			errs = append(errs, r.listener.Close())
+		}
+		// Shutdown only closes listeners already registered by Serve. The
+		// consumed listener remains our owner even before Serve starts.
+		if r.listener != nil {
+			if err := r.listener.Close(); !errors.Is(err, net.ErrClosed) {
+				errs = append(errs, err)
+			}
+		}
+		if r.serveDone != nil {
+			<-r.serveDone
 		}
 		workDone := make([]<-chan struct{}, 0, len(data))
 		for _, d := range data {
