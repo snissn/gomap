@@ -142,4 +142,5 @@ func BenchmarkManagerRefreshLiveSegment(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+	b.StopTimer()
 }
