@@ -1,6 +1,6 @@
 {
   "root": "/mnt/fast4tb/gomap-r1-arch-5090-20261007/artifacts/5091",
-  "scope": "final diagnostic snapshot before commit; administrative PR/handoff files generated later excluded; task build tmp excluded",
+  "scope": "final diagnostic snapshot before commit; administrative PR/handoff files generated later excluded; task build tmp excluded; additive v4 full-read-oracle correction and smoke files retained",
   "files": [
     {
       "path": "alloc-checkpoint/allocs-after.pprof",
@@ -231,6 +231,16 @@
       "path": "attribution-v3.test",
       "bytes": 43615344,
       "sha256": "385d9cc702e7fc6b606af258fe5676988d53ecbd61622c5aa252334d02fb47ee"
+    },
+    {
+      "path": "attribution-v4-source.go",
+      "sha256": "e9c8f0482e226a2207bd5b96ca644e94494750a0029eb503d9679c306da7f0e9",
+      "bytes": 14871
+    },
+    {
+      "path": "attribution-v4.test",
+      "sha256": "42f245f6e17f8018e9e70c8a2d30961fbcf6bb5c00d6ab0ed7fc53b08d22db92",
+      "bytes": 43632376
     },
     {
       "path": "attribution.test",
@@ -763,6 +773,11 @@
       "sha256": "560bb87bb32f21578d5acfcd56d1c5eab73108e21f022c609ba5e93ec7ebe300"
     },
     {
+      "path": "build-oracle-v4.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
       "path": "ci-inventory-check.log",
       "bytes": 83,
       "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa"
@@ -898,14 +913,44 @@
       "sha256": "03c7625faab91bf960a659a3674dc22617e135cd9d8339d9758723be5afcb5b1"
     },
     {
-      "path": "rollover-probe/report.json",
-      "bytes": 215966,
-      "sha256": "0f272ccbba79b175a85b41bfbbefc2992d8e44b595c71a7a9ad7825ed306901e"
+      "path": "read-oracle-v4-point.log",
+      "sha256": "f0fe910c321caaafe4a165b3e878ce24eca027a718f4e6abba72f2c6cbb2f693",
+      "bytes": 348
+    },
+    {
+      "path": "read-oracle-v4-point/report.json",
+      "sha256": "539d648b1ee358d6e2436530a7b831923209aa09d99fe1b4700224deacf04907",
+      "bytes": 446902
+    },
+    {
+      "path": "read-oracle-v4-prepared.log",
+      "sha256": "183e79ac9bd498827505d52f5a0bb28464975678c42711db5b99a3a8ccf0aaf6",
+      "bytes": 347
+    },
+    {
+      "path": "read-oracle-v4-prepared/report.json",
+      "sha256": "10c5fc6e9d464071fb3cc1f3f9026059534faf767a5e3bdd5a7bb1256f14fe08",
+      "bytes": 446957
+    },
+    {
+      "path": "read-oracle-v4-range.log",
+      "sha256": "a8ca5ee0dfbdc44a6a8758209ab5b1524b4853997490f2da9f24a14f799e5867",
+      "bytes": 348
+    },
+    {
+      "path": "read-oracle-v4-range/report.json",
+      "sha256": "0b811f18148cf599bebc54c425386dddc8dd37b27a555625194ed3b5b79396b7",
+      "bytes": 446902
     },
     {
       "path": "rollover-probe.log",
       "bytes": 93,
       "sha256": "9bcbd5baf9f962185872e4394d67ffaa493665c874094e34deb9ca43d819f838"
+    },
+    {
+      "path": "rollover-probe/report.json",
+      "bytes": 215966,
+      "sha256": "0f272ccbba79b175a85b41bfbbefc2992d8e44b595c71a7a9ad7825ed306901e"
     },
     {
       "path": "rollover-summary.json",
@@ -946,6 +991,11 @@
       "path": "test-harness.log",
       "bytes": 67,
       "sha256": "847b861bc5580c576e2d30da6a1018c326eaa03ace256911e6f5031d1dab6b37"
+    },
+    {
+      "path": "test-read-oracle-correction.log",
+      "sha256": "5d50db41daf4fe89991e3e75828fc192eff1029b4154174c7dde54370cfe11c4",
+      "bytes": 2019
     },
     {
       "path": "test-read-race.log",

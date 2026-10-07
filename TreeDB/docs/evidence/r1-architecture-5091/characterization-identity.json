@@ -30,5 +30,13 @@
   "gc-attribution-source.go": {
     "sha256": "dfec7f07f5430e07b884660fff52f593f59d9fcb2c1c98d9ab22b315c4d5a65e",
     "bytes": 1923
+  },
+  "attribution-v4.test": {
+    "sha256": "42f245f6e17f8018e9e70c8a2d30961fbcf6bb5c00d6ab0ed7fc53b08d22db92",
+    "bytes": 43632376
+  },
+  "attribution-v4-source.go": {
+    "sha256": "e9c8f0482e226a2207bd5b96ca644e94494750a0029eb503d9679c306da7f0e9",
+    "bytes": 14871
   }
 }

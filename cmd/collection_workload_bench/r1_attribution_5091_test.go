@@ -258,8 +258,22 @@ func TestR1Attribution5091(t *testing.T) {
 			}
 		}
 	}
+	oracleScope := "mutated_primary_rows_post_timing"
+	if route == "point" || route == "range" || route == "prepared" {
+		point := func(id []byte) ([]byte, error) {
+			doc, found, e := tree.col.GetInto(id, nil)
+			if e == nil && !found {
+				e = fmt.Errorf("missing point oracle row %q", id)
+			}
+			return doc, e
+		}
+		if err = r1AttributionReadOracle(route, fixture, point, tree.rangeDocuments, reader); err != nil {
+			t.Fatal(err)
+		}
+		oracleScope = "full_row_fields_ids_and_order_post_timing"
+	}
 	micros := func(v syscall.Timeval) int64 { return v.Sec*1000000 + v.Usec }
-	report := map[string]any{"scope": "short nonqualifying characterization; preencoded equivalent replacements; CPU is process user+system, not exclusive request CPU; profiles exclude fixture/oracle; nested timings nonadditive", "route": route, "engine": engine, "calls": len(samples), "workers": workers, "profile": profile, "detailed_stats": detailed, "wall_ns": wall.Nanoseconds(), "request_samples_ns": samples, "user_cpu_us": micros(rusageAfter.Utime) - micros(rusageBefore.Utime), "system_cpu_us": micros(rusageAfter.Stime) - micros(rusageBefore.Stime), "allocated_bytes": after.TotalAlloc - before.TotalAlloc, "allocations": after.Mallocs - before.Mallocs, "heap_before": before.HeapAlloc, "heap_after": after.HeapAlloc, "stats_before": beforeStats, "stats_after": afterStats, "last_update_stats": tree.col.LastUpdateStats(), "fixture_sha256": r1FixtureHash(fixture), "oracle": true}
+	report := map[string]any{"scope": "short nonqualifying characterization; preencoded equivalent replacements; CPU is process user+system, not exclusive request CPU; profiles exclude fixture/oracle; nested timings nonadditive", "route": route, "engine": engine, "calls": len(samples), "workers": workers, "profile": profile, "detailed_stats": detailed, "wall_ns": wall.Nanoseconds(), "request_samples_ns": samples, "user_cpu_us": micros(rusageAfter.Utime) - micros(rusageBefore.Utime), "system_cpu_us": micros(rusageAfter.Stime) - micros(rusageBefore.Stime), "allocated_bytes": after.TotalAlloc - before.TotalAlloc, "allocations": after.Mallocs - before.Mallocs, "heap_before": before.HeapAlloc, "heap_after": after.HeapAlloc, "stats_before": beforeStats, "stats_after": afterStats, "last_update_stats": tree.col.LastUpdateStats(), "fixture_sha256": r1FixtureHash(fixture), "oracle": true, "oracle_scope": oracleScope}
 	raw, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		t.Fatal(err)
@@ -400,5 +414,104 @@ func TestR1RolloverAttribution5091(t *testing.T) {
 	e = json.NewEncoder(f).Encode(map[string]any{"scope": "single nonqualifying reduced64KiB leaf/hot target rollover probe,64 public mutations, held then released old reader; default economics unavailable", "initial_files": initial, "held_files": held, "final_files": final, "held_gc": before, "released_gc": after, "stats": tree.db.Stats(), "oracle": true})
 	if e != nil {
 		t.Fatal(e)
+	}
+}
+
+func r1AttributionReadOracle(route string, fixture []r1Document, point func([]byte) ([]byte, error), rangeDocuments func(string, int) ([][]byte, error), reader r1Reader) error {
+	switch route {
+	case "point":
+		for _, expected := range fixture {
+			raw, err := point([]byte(expected.ID))
+			if err != nil {
+				return err
+			}
+			if err = r1VerifyDocument(raw, expected); err != nil {
+				return err
+			}
+		}
+	case "range":
+		for bucket := range 8 {
+			city := fmt.Sprintf("city-%02d", bucket)
+			documents, err := rangeDocuments(city, 10)
+			if err != nil {
+				return err
+			}
+			var expected []r1Document
+			for _, row := range fixture {
+				if row.City == city && len(expected) < 10 {
+					expected = append(expected, row)
+				}
+			}
+			if len(documents) != len(expected) {
+				return fmt.Errorf("range oracle row count: got %d want %d", len(documents), len(expected))
+			}
+			for i, raw := range documents {
+				if err = r1VerifyDocument(raw, expected[i]); err != nil {
+					return err
+				}
+			}
+		}
+	case "prepared":
+		return r1VerifyAll(reader, fixture, 32)
+	default:
+		return fmt.Errorf("unsupported read oracle route %q", route)
+	}
+	return nil
+}
+
+type r1AttributionOracleReader struct {
+	point func([]byte) ([]byte, error)
+}
+
+func (r r1AttributionOracleReader) fetch(ids [][]byte) ([][]byte, collections.DocumentMaterializationStats, error) {
+	docs := make([][]byte, len(ids))
+	for i, id := range ids {
+		var err error
+		docs[i], err = r.point(id)
+		if err != nil {
+			return nil, collections.DocumentMaterializationStats{}, err
+		}
+	}
+	return docs, collections.DocumentMaterializationStats{}, nil
+}
+func (r r1AttributionOracleReader) close() error { return nil }
+
+func TestR1Attribution5091ReadOracleRejectsWrongRows(t *testing.T) {
+	fixture := r1Fixture(128)
+	for _, route := range []string{"point", "range", "prepared"} {
+		for _, corruption := range []string{"none", "field", "id", "order"} {
+			t.Run(route+"/"+corruption, func(t *testing.T) {
+				encoded := make(map[string][]byte, len(fixture))
+				for i, row := range fixture {
+					switch corruption {
+					case "field":
+						row.Bio = "incorrect"
+					case "id":
+						row.ID = "incorrect-id"
+					case "order":
+						row = fixture[(i+8)%len(fixture)]
+					}
+					raw, err := json.Marshal(row)
+					if err != nil {
+						t.Fatal(err)
+					}
+					encoded[fixture[i].ID] = raw
+				}
+				point := func(id []byte) ([]byte, error) { return encoded[string(id)], nil }
+				rangeDocuments := func(city string, limit int) ([][]byte, error) {
+					var docs [][]byte
+					for _, row := range fixture {
+						if row.City == city && len(docs) < limit {
+							docs = append(docs, encoded[row.ID])
+						}
+					}
+					return docs, nil
+				}
+				err := r1AttributionReadOracle(route, fixture, point, rangeDocuments, r1AttributionOracleReader{point: point})
+				if (err != nil) != (corruption != "none") {
+					t.Fatalf("oracle corruption=%s: %v", corruption, err)
+				}
+			})
+		}
 	}
 }

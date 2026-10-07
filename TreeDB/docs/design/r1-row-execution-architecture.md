@@ -1,7 +1,6 @@
 # R1 row execution architecture decision (#5091)
 
-Proposed for coordinator acceptance under #5090. This source-bound decision selects
-architecture, owners and descendant targets; it does not accept a runtime speedup.
+Accepted execution contract under #5090: [D v1](https://github.com/snissn/gomap/issues/5091#issuecomment-6034625243), extended by the [L new-format v2 decision](https://github.com/snissn/gomap/issues/5095#issuecomment-6034868284). This source-bound decision selects architecture, owners and descendant targets; it does not accept a runtime speedup. Supporting PR review corrections are incorporated below.
 Frozen runtime: `797d783b21b36e7a0e540cd8190b4ec5921711fe`; runtime blob digest:
 `eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff`.
 Go 1.26.3, Linux amd64, GOWORK=off, GOMAXPROCS=16. Individual runtime/harness
@@ -27,7 +26,7 @@ and failures remain in the [evidence packet](../evidence/r1-architecture-5091/RE
 - #5095 owns resumable revision retirement and its concrete enforceable immutable-content
   plus namespace-authority prerequisite. Current ext4 does not supply the proposed
   fs-verity capability. Untrusted full validation stays charged and cannot satisfy the
-  near-linear product gate. That gate remains required, rather than silently optional.
+  near-linear product gate. That gate remains required, rather than silently optional. The accepted v2 alternative selects canonical manifests inside the existing system-root COW tree for new databases/rebuilds only, with physical format refusal and bounded existing allocator pruning; legacy standalone authority stays unchanged.
 - #5015 owns shared physical publication/capture/coalescing evidence; #5016 owns
   main-value-log certified recovery membership/retained pruning. Neither draft is a
   landed prerequisite. Distinct collection leaf-append retention is owned by #5098 before final qualification. The required checkpoint-materialization residual is #5099; #5015 is not silently expanded. COW#5044 and MVCC#4877 retain
@@ -55,6 +54,8 @@ Three-process medians, per complete request; allocation is Go allocation:
 | generic nonindexed update |13.473 ms|856294|16.030 ms|1587939|
 | generic indexed update |14.442 ms|1017423|16.341 ms|1736651|
 | native complete replacement |13.131 ms|889126|13.679 ms|1424163|
+
+The archived diagnostic read profiles checked nonempty/count output only; their historical oracle=true flag is not full-row correctness evidence. They provide nonqualifying cause hypotheses. The separate landed rehearsal baseline verifies full rows, IDs and order; the corrected diagnostic source now runs those checks outside timing before reporting success. This correction changes evidence scope, not the selected runtime architecture.
 
 Population-dependent ordinary read cost is measured. Ordinary point profiles assign
 50.8% cumulative sampled CPU to classic manifest snapshot decoding. Source confirms
@@ -227,6 +228,16 @@ cannot pass the near-linear gate. Concrete #5095 prerequisite: enforceable immut
 plus namespace authority through existing producer/resource contracts, using the conditional protected fs-verity capability or the same-owner portable owned-store/format redesign if that capability cannot be provisioned reversibly. fs-verity
 on this filesystem was rejected. Existing unrelated-corruption tests cannot silently leave
 the contract. Bounded fallback is useful progress but does not complete the parent gate.
+
+### Accepted new-format extension (L v2)
+
+The current host cannot admit the protected fs-verity route. The bounded feasibility inquiry instead selected canonical leaf-manifest header/chunks (at most 2048 bytes/chunk) in the existing system-root COW tree. Historical manifests are historical root content; both selectable durable slots, held roots and queued/candidate ownership preserve them. Existing allocator retirement/reuse is the only history owner. No second registry or fake external manifest token is authorized; actual leaf-log/pack dependencies retain their existing resource tokens.
+
+This new format explicitly inherits the supported engine-exclusive index-write contract. Logical COW immutability is not kernel enforcement against arbitrary external FD/mmap writes. Fresh raw checksums/digests validate visited content; immediate global detection of an unvisited unrelated externally corrupted index page is not claimed. Every legacy standalone inventory/corruption/rebind/quarantine/sync safeguard above remains required. New DB/rebuild admission needs a required feature plus physically incompatible durable-root-record encoding, including refusal with absent format.json, IgnoreFormatConfig, read-only and rebind paths. Mixed layouts and in-place feature enabling are rejected.
+
+The [narrow adopted #5044 slice](https://github.com/snissn/gomap/issues/5044#issuecomment-6034909539) bounds traversal/pruning in the existing allocator; the current all-prunable-pages slice cannot meet per-step work/memory/fence limits. Bound every node visit, page/byte credit, retained backing and COW mutation before load; bind cursors to exact index/allocator generations and fresh root/pin authority, invalidating them on supported mutation/publication/reuse/relocation. No externally owned C3/C4 PR is taken over.
+
+Keep the original 128/512 matched control and near-linear/allocation/time/fence objectives. Count COW paths, allocator visits, restarts, root/pin checks and candidate work. Report retired/free/reused internal page bytes separately from durably unlinked file bytes; zero sidecars is not a deletion claim. The equivalent new-layout endpoint requires actual reuse plus drained-pin metadata-debt/index high-water plateau at equal revisions. Physical shrink is a separate vacuum result. Two independently recoverable manifests, a held old root and 512 revisions with finite progress and no premature reuse are decisive guardrails. This selects an implementation contract; no runtime or performance gate has passed.
 
 ## Targets and finite budgets frozen before runtime candidates
 
