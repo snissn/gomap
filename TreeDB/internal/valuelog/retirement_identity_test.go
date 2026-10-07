@@ -58,7 +58,7 @@ func retirementIdentityClosedZombie(t *testing.T, additional bool) (*Manager, *F
 	err = func() error {
 		originalRemove := removeSegmentPath
 		defer func() { removeSegmentPath = originalRemove }()
-		removeSegmentPath = func(string) error { return wantErr }
+		removeSegmentPath = func(string, func(string) error) error { return wantErr }
 		return manager.Release(set)
 	}()
 	if !errors.Is(err, wantErr) || !file.closed.Load() {
@@ -254,7 +254,7 @@ func TestManagerRetirementIdentityDirectQuarantineReplacement(t *testing.T) {
 			err = func() error {
 				originalRemove := removeSegmentPath
 				defer func() { removeSegmentPath = originalRemove }()
-				removeSegmentPath = func(path string) error {
+				removeSegmentPath = func(path string, remove func(string) error) error {
 					if called || !file.closed.Load() {
 						t.Fatal("direct unlink hook did not run once after original close")
 					}
@@ -273,7 +273,7 @@ func TestManagerRetirementIdentityDirectQuarantineReplacement(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					return originalRemove(path)
+					return originalRemove(path, remove)
 				}
 				return retirementIdentityRemove(manager, file, identity, mode)
 			}()

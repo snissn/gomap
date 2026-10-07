@@ -32,7 +32,7 @@ func TestManagerRefreshDuringRetiredSegmentUnlink(t *testing.T) {
 			originalRemove := removeSegmentPath
 			wantErr := errors.New("injected unlink failure")
 			called := false
-			removeSegmentPath = func(path string) error {
+			removeSegmentPath = func(path string, remove func(string) error) error {
 				called = true
 				if _, err := retired.File.Stat(); !retired.closed.Load() || err == nil {
 					t.Errorf("retirement did not close before unlink: %v", err)
@@ -56,7 +56,7 @@ func TestManagerRefreshDuringRetiredSegmentUnlink(t *testing.T) {
 				if failUnlink {
 					return wantErr
 				}
-				return originalRemove(path)
+				return originalRemove(path, remove)
 			}
 			t.Cleanup(func() { removeSegmentPath = originalRemove })
 			err = manager.Release(set)

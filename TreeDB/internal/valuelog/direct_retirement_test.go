@@ -64,7 +64,7 @@ func TestManagerDirectRetirementFailedUnlink(t *testing.T) {
 				err := func() error {
 					originalRemove := removeSegmentPath
 					defer func() { removeSegmentPath = originalRemove }()
-					removeSegmentPath = func(string) error { return wantErr }
+					removeSegmentPath = func(string, func(string) error) error { return wantErr }
 					if mode == "RemoveSegmentIfUnpinned" {
 						admitted, err := manager.RemoveSegmentIfUnpinned(file.ID)
 						if !admitted {
@@ -102,7 +102,7 @@ func TestManagerDirectRetirementMissingPath(t *testing.T) {
 			err := func() error {
 				originalRemove := removeSegmentPath
 				defer func() { removeSegmentPath = originalRemove }()
-				removeSegmentPath = func(string) error { return wantErr }
+				removeSegmentPath = func(string, func(string) error) error { return wantErr }
 				return retirementIdentityRemove(manager, file, identity, mode)
 			}()
 			if !errors.Is(err, wantErr) {
@@ -145,7 +145,7 @@ func TestManagerDirectRetirementSamePointerFinalization(t *testing.T) {
 	err := func() error {
 		originalRemove := removeSegmentPath
 		defer func() { removeSegmentPath = originalRemove }()
-		removeSegmentPath = func(path string) error {
+		removeSegmentPath = func(path string, remove func(string) error) error {
 			// The old identity is already quarantined. Explicit eviction releases
 			// this manager's ownership; explicit registration may install a new identity.
 			if err := manager.EvictSegment(file.ID); err != nil {
@@ -158,7 +158,7 @@ func TestManagerDirectRetirementSamePointerFinalization(t *testing.T) {
 			manager.mu.RLock()
 			replacement = manager.files[file.ID]
 			manager.mu.RUnlock()
-			return originalRemove(path)
+			return originalRemove(path, remove)
 		}
 		return manager.RemoveSegmentExpectedIdentity(file.ID, identity)
 	}()

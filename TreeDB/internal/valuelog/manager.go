@@ -2642,10 +2642,13 @@ func (m *Manager) EvictSegment(id uint32) error {
 	}
 	m.retryWorkers.Add(1)
 	defer m.retryWorkers.Done()
-	parent := m.forgetSegmentLocked(f)
+	m.detachSegmentLocked(f)
 	unobserveErr := m.unobserveStableFileLocked(f)
 	m.mu.Unlock()
-	return errors.Join(unobserveErr, f.Close(), closeRetirementParent(parent))
+	// Keep the parent borrowable until the real Close joins an external closer.
+	closeErr := f.Close()
+	parent := releaseRetirementParent(f)
+	return errors.Join(unobserveErr, closeErr, closeRetirementParent(parent))
 }
 
 // RemapStats reports aggregate remap executions and tracked dead mappings.
@@ -3119,7 +3122,9 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 	return m.finishDirectSegmentDeletion(f, identity, lease)
 }
 
-var removeSegmentPath = os.Remove
+// Fault injection wraps the supplied operation; stable deletion supplies its
+// exact-root removal rather than reopening the diagnostic pathname.
+var removeSegmentPath = func(path string, remove func(string) error) error { return remove(path) }
 
 func segmentNamespaceResource(path string) durabilitycut.Resource {
 	if filepath.Base(filepath.Dir(filepath.Clean(path))) == "leaf_vlog" {
@@ -3129,7 +3134,7 @@ func segmentNamespaceResource(path string) durabilitycut.Resource {
 }
 
 func removeSegmentFileOnce(path string) (bool, error) {
-	err := removeSegmentPath(path)
+	err := removeSegmentPath(path, os.Remove)
 	if err == nil {
 		return true, durabilitycut.EmitNamespace(durabilitycut.NamespaceUnlink, segmentNamespaceResource(path), filepath.Dir(path), path, "")
 	}

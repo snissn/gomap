@@ -369,11 +369,11 @@ func TestManagerRetryZombieDeleteClosesOwnHandleBeforeUnlink(t *testing.T) {
 	}
 
 	originalRemove := removeSegmentPath
-	removeSegmentPath = func(removePath string) error {
+	removeSegmentPath = func(removePath string, remove func(string) error) error {
 		if _, statErr := file.File.Stat(); statErr == nil {
 			return errors.New("unlink attempted before closing manager handle")
 		}
-		return os.Remove(removePath)
+		return remove(removePath)
 	}
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
@@ -398,14 +398,14 @@ func TestManagerStableDeletePreservesReplacementCreatedAtUnlink(t *testing.T) {
 
 	const replacement = "replacement created after quarantine rename"
 	originalRemove := removeSegmentPath
-	removeSegmentPath = func(quarantinePath string) error {
+	removeSegmentPath = func(quarantinePath string, remove func(string) error) error {
 		if filepath.Clean(quarantinePath) == filepath.Clean(path) {
 			t.Fatal("stable delete passed the original pathname to unlink")
 		}
 		if err := os.WriteFile(path, []byte(replacement), 0o600); err != nil {
 			return err
 		}
-		return os.Remove(quarantinePath)
+		return remove(quarantinePath)
 	}
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
@@ -544,9 +544,9 @@ func TestManagerStableDeleteEmitsCanonicalUnlinkCutBeforeQuarantineUnlink(t *tes
 
 	originalRemove := removeSegmentPath
 	quarantineUnlinked := false
-	removeSegmentPath = func(removePath string) error {
+	removeSegmentPath = func(removePath string, remove func(string) error) error {
 		quarantineUnlinked = true
-		return originalRemove(removePath)
+		return originalRemove(removePath, remove)
 	}
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
@@ -641,7 +641,7 @@ func TestManagerStableDeleteRestoreCompensatesCanonicalUnlink(t *testing.T) {
 
 	wantErr := errors.New("injected quarantine unlink failure")
 	originalRemove := removeSegmentPath
-	removeSegmentPath = func(string) error { return wantErr }
+	removeSegmentPath = func(string, func(string) error) error { return wantErr }
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 
 	var operations []durabilitycut.NamespaceOperation

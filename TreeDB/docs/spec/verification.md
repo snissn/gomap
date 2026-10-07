@@ -62,13 +62,22 @@ fixtures retain exact-child no-follow validation rather than resolving child lin
 `TestManagerSymlinkParentRetirementAliasDisappears` pauses real Close after
 destructive admission, removes the configured alias, and requires all four APIs
 with and without a registry to refuse while retaining the owner and original
-physical bytes. Restoring the alias permits retry. Separate retired retry,
+physical bytes. Restoring the alias permits retry.
+`TestManagerSymlinkParentRetirementAliasReboundHardlink` uses the same real Close
+pause, then redirects the alias to a foreign parent containing a hard link to
+the original inode. All four APIs and both registry modes preserve both links
+and the owner on refusal; restoring the original parent permits its deletion
+without removing the foreign link. Separate retired retry,
 physical-parent rename/replacement, true physical absence and post-rename cut
 fixtures prove the exact-parent absence boundary and deterministic recovery.
 Initial capture through an empty rebound alias must preserve the live owner,
 open handle and optional registry observation without modifying that directory.
 `TestManagerDirectRetirementParentLifetime` checks release on deletion, eviction
 and manager Close, and delays release until an admitted eviction borrow joins.
+The existing external-Close joining assertions remain unchanged: eviction must
+keep parent authority borrowable until actual handle cleanup completes. Quarantine
+normal and recovery operations use one post-Close identity-checked operation root;
+failed-unlink hooks wrap its supplied removal rather than reopen a diagnostic path.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 

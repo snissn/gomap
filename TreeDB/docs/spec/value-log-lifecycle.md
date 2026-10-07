@@ -161,15 +161,21 @@ The manager captures a separate immutable retirement identity from its owned
 open handle before publishing a zombie or admitting explicit removal. At that
 cold admission it also retains an exact physical-parent handle, independently
 of pin registration. A vanished alias or renamed physical directory cannot
-make the still-present target count as deleted. Removal continues to use the
-configured path; it never silently deletes through the saved physical namespace.
+make the still-present target count as deleted. After actual File.Close completes,
+each physical attempt opens the configured parent again and verifies it against that retained physical identity. The checked
+operation root anchors quarantine creation, rename, identity lookup, rollback,
+unlink and recovery. Alias loss or a different parent before this capture refuses
+while the target remains. Later alias changes cannot redirect the captured root
+operations; the check does not promise an atomic alias-and-rename predicate.
+The saved parent is absence/comparison authority, never a fallback deletion path.
 Initial capture requires a linked child matching the open segment. A missing
 child or empty rebound parent at that first admission fails before retirement
 publication. After capture, genuine child absence is proved through the retained
 parent even when the configured parent name has disappeared.
 The parent survives failed attempts until successful ownership release, eviction
-or manager Close. Short operation borrows preserve it through explicit eviction;
-the last owner or borrower closes it outside the manager mutex. It reuses
+or manager Close. Eviction keeps the parent borrowable until its actual File.Close
+joins; short operation borrows preserve it through that lifecycle transfer.
+The last owner or borrower closes it outside the manager mutex. It reuses
 the registered identity when available, without modifying the identity exposed
 to pinned readers. Refresh, deletion and retry use that retained identity even
 without an external pin registry. Capture failure leaves ownership and zombie

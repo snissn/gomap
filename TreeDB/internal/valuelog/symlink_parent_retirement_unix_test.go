@@ -185,3 +185,74 @@ func TestManagerSymlinkParentRetirementCaptureRebound(t *testing.T) {
 		})
 	}
 }
+
+// A hard link has the same segment identity but does not make its foreign
+// parent the configured retirement namespace. This uses only baseline APIs.
+func TestManagerSymlinkParentRetirementAliasReboundHardlink(t *testing.T) {
+	for _, mode := range []string{"RemoveSegment", "RemoveSegmentExpectedIdentity", "RemoveSegmentIfUnpinned", "RemoveSegmentForce"} {
+		for _, pins := range []string{"nil", "registry"} {
+			t.Run(mode+"/"+pins, func(t *testing.T) {
+				manager, file, target := retirementSymlinkParentManager(t, false, pins == "registry")
+				identity := retirementIdentityAtPath(t, file.Path)
+				alias := filepath.Dir(file.Path)
+				original := filepath.Join(target, filepath.Base(file.Path))
+				foreignParent := t.TempDir()
+				foreign := filepath.Join(foreignParent, filepath.Base(file.Path))
+				if err := os.Link(original, foreign); err != nil {
+					t.Fatal(err)
+				}
+				want, err := os.ReadFile(original)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resume, join := directRetirementPausedCall(t, file, func() error {
+					return retirementIdentityRemove(manager, file, identity, mode)
+				})
+				if err := os.Remove(alias); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(foreignParent, alias); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Remove(alias); _ = os.Symlink(target, alias) })
+				resume()
+				if err := join(); !errors.Is(err, rootpublication.ErrResourceConflict) {
+					t.Fatalf("rebound hardlink parent lost retirement owner: %v", err)
+				}
+				for _, path := range []string{original, foreign} {
+					got, err := os.ReadFile(path)
+					if err != nil || !bytes.Equal(got, want) || !rootpublication.SamePhysicalIdentity(identity, retirementIdentityAtPath(t, path)) {
+						t.Fatalf("rebound hardlink changed preserved path %s: %v", path, err)
+					}
+				}
+				directRetirementAssertState(t, manager, file, true)
+				if err := manager.Refresh(); !errors.Is(err, rootpublication.ErrResourceConflict) {
+					t.Fatalf("rebound parent Refresh accepted: %v", err)
+				}
+				if err := manager.deleteZombieFile(file); !errors.Is(err, rootpublication.ErrResourceConflict) {
+					t.Fatalf("rebound parent retry accepted: %v", err)
+				}
+				if err := os.Remove(alias); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, alias); err != nil {
+					t.Fatal(err)
+				}
+				if err := manager.Refresh(); err != nil {
+					t.Fatal(err)
+				}
+				if err := retirementIdentityRemove(manager, file, identity, mode); err != nil {
+					t.Fatal(err)
+				}
+				directRetirementAssertState(t, manager, file, false)
+				if _, err := os.Stat(original); !os.IsNotExist(err) {
+					t.Fatalf("restored original survived valid retry: %v", err)
+				}
+				got, err := os.ReadFile(foreign)
+				if err != nil || !bytes.Equal(got, want) || !rootpublication.SamePhysicalIdentity(identity, retirementIdentityAtPath(t, foreign)) {
+					t.Fatalf("valid original retry removed foreign hard link: %v", err)
+				}
+			})
+		}
+	}
+}
