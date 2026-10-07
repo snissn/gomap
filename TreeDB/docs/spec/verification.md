@@ -59,6 +59,16 @@ preserve regular, directory, symlink and FIFO replacements, original resources,
 zombie ownership and lock release; FIFO failure paths unblock and join. Matching
 quarantine recovery also works through a configured parent alias. These Unix
 fixtures retain exact-child no-follow validation rather than resolving child links.
+`TestManagerSymlinkParentRetirementAliasDisappears` pauses real Close after
+destructive admission, removes the configured alias, and requires all four APIs
+with and without a registry to refuse while retaining the owner and original
+physical bytes. Restoring the alias permits retry. Separate retired retry,
+physical-parent rename/replacement, true physical absence and post-rename cut
+fixtures prove the exact-parent absence boundary and deterministic recovery.
+Initial capture through an empty rebound alias must preserve the live owner,
+open handle and optional registry observation without modifying that directory.
+`TestManagerDirectRetirementParentLifetime` checks release on deletion, eviction
+and manager Close, and delays release until an admitted eviction borrow joins.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 

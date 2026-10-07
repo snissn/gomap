@@ -599,6 +599,37 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 			return rootpublication.StableIdentity{}, err
 		}
 	}
+	parentPath, err := filepath.EvalSymlinks(filepath.Dir(file.Path))
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	parent, err := rootpublication.OpenStableParent(parentPath)
+	if err != nil {
+		return rootpublication.StableIdentity{}, err
+	}
+	parentIdentity, err := rootpublication.StableIdentityFromFile(parent)
+	if err != nil {
+		_ = parent.Close()
+		return rootpublication.StableIdentity{}, err
+	}
+	// Verify the exact opened parent still names this handle. Resolving an alias
+	// and reopening its target must not combine two different namespaces.
+	linkedIdentity, err := stableIdentityAtChild(parent, filepath.Base(file.Path))
+	if err != nil {
+		_ = parent.Close()
+		if os.IsNotExist(err) {
+			return rootpublication.StableIdentity{}, fmt.Errorf("%w: retirement admission cannot prove the original linked child: %v", rootpublication.ErrResourceConflict, err)
+		}
+		return rootpublication.StableIdentity{}, err
+	}
+	if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
+		_ = parent.Close()
+		return rootpublication.StableIdentity{}, fmt.Errorf("%w: retirement parent does not name captured segment", rootpublication.ErrResourceConflict)
+	}
+	file.retirementParentMu.Lock()
+	file.retirementParent = parent
+	file.retirementParentIdentity = parentIdentity
+	file.retirementParentMu.Unlock()
 	file.retirementIdentity = identity
 	return identity, nil
 }
@@ -628,20 +659,22 @@ func (m *Manager) finishDirectSegmentDeletion(file *File, identity rootpublicati
 	}
 	m.mu.Lock()
 	var unobserveErr error
+	var parent *os.File
 	if m.files[file.ID] == file {
-		m.forgetSegmentLocked(file)
+		parent = m.forgetSegmentLocked(file)
 		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()
-	return errors.Join(removeErr, unobserveErr)
+	return errors.Join(removeErr, unobserveErr, closeRetirementParent(parent))
 }
 
 // forgetSegmentLocked balances retirement ownership at every removal site.
-func (m *Manager) forgetSegmentLocked(file *File) {
+func (m *Manager) forgetSegmentLocked(file *File) *os.File {
 	if file.IsZombie.Load() {
 		m.retiredCount--
 	}
 	delete(m.files, file.ID)
+	return releaseRetirementParent(file)
 }
 
 func validateStableDeletePathIdentity(path string, identity rootpublication.StableIdentity) error {
@@ -659,6 +692,89 @@ func validateStableDeletePathIdentity(path string, identity rootpublication.Stab
 		return fmt.Errorf("%w: value-log path no longer names captured identity", rootpublication.ErrResourceConflict)
 	}
 	return nil
+}
+
+// borrowRetirementParent keeps an admitted operation valid through explicit
+// eviction. Ownership release never waits under manager.mu for a deleter.
+func borrowRetirementParent(file *File) (*os.File, func() error, error) {
+	file.retirementParentMu.Lock()
+	defer file.retirementParentMu.Unlock()
+	if file.retirementParent == nil || file.retirementParentReleased {
+		return nil, nil, fmt.Errorf("%w: missing value-log retirement parent", rootpublication.ErrUnresolvedResource)
+	}
+	parent := file.retirementParent
+	file.retirementParentUsers++
+	return parent, func() error {
+		file.retirementParentMu.Lock()
+		file.retirementParentUsers--
+		closeParent := file.retirementParentReleased && file.retirementParentUsers == 0
+		if closeParent {
+			file.retirementParent = nil
+		}
+		file.retirementParentMu.Unlock()
+		if closeParent {
+			return parent.Close()
+		}
+		return nil
+	}, nil
+}
+
+// releaseRetirementParent relinquishes ownership without closing under mu.
+// The caller closes the returned handle after unlocking; an active borrower
+// instead closes it when the last operation joins.
+func releaseRetirementParent(file *File) *os.File {
+	file.retirementParentMu.Lock()
+	file.retirementParentReleased = true
+	parent := file.retirementParent
+	closeParent := parent != nil && file.retirementParentUsers == 0
+	if closeParent {
+		file.retirementParent = nil
+	}
+	file.retirementParentMu.Unlock()
+	if closeParent {
+		return parent
+	}
+	return nil
+}
+
+func closeRetirementParent(parent *os.File) error {
+	if parent != nil {
+		return parent.Close()
+	}
+	return nil
+}
+
+func requireRetirementChildAbsent(parent *os.File, name string) (bool, error) {
+	_, err := stableIdentityAtChild(parent, name)
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, fmt.Errorf("%w: configured retirement path is absent but physical target remains", rootpublication.ErrResourceConflict)
+}
+
+func validateRetirementPath(file *File, identity rootpublication.StableIdentity) error {
+	if identity == (rootpublication.StableIdentity{}) {
+		return fmt.Errorf("%w: missing value-log retirement identity", rootpublication.ErrUnresolvedResource)
+	}
+	linkedIdentity, err := stableIdentityAtPath(file.Path, file.retirementParentIdentity)
+	if err == nil {
+		if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
+			return fmt.Errorf("%w: value-log path no longer names captured identity", rootpublication.ErrResourceConflict)
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	parent, release, err := borrowRetirementParent(file)
+	if err != nil {
+		return err
+	}
+	_, proofErr := requireRetirementChildAbsent(parent, filepath.Base(file.Path))
+	return errors.Join(proofErr, release())
 }
 
 func abortStableDeleteLease(lease *rootpublication.IdentityDeleteLease) {
@@ -685,7 +801,7 @@ func finishStableDeleteLease(lease *rootpublication.IdentityDeleteLease, deleted
 // unlink (required on Windows), then revalidates that the path still names the
 // identity captured before close. The registry lease excludes process-local
 // pin and delete races across this boundary.
-func closeAndRemoveStableSegmentFileResult(file *File, identity rootpublication.StableIdentity) (bool, error) {
+func closeAndRemoveStableSegmentFileResult(file *File, identity rootpublication.StableIdentity) (deleted bool, resultErr error) {
 	if file == nil {
 		return true, nil
 	}
@@ -701,11 +817,18 @@ func closeAndRemoveStableSegmentFileResult(file *File, identity rootpublication.
 	if file.deleteCompleted {
 		return true, nil
 	}
-	if err := validateStableDeletePathIdentity(file.Path, identity); err != nil {
+	// Retain an exact-parent handle across Close and namespace operations. The
+	// configured alias may disappear while the physical target still exists.
+	parent, release, err := borrowRetirementParent(file)
+	if err != nil {
+		return false, err
+	}
+	defer func() { resultErr = errors.Join(resultErr, release()) }()
+	if err := validateRetirementPath(file, identity); err != nil {
 		return false, err
 	}
 	closeErr := file.Close()
-	removed, removeErr := removeSegmentFileWithRetryStable(file.Path, identity)
+	removed, removeErr := removeSegmentFileWithRetryStable(file.Path, identity, parent)
 	if removed {
 		file.deleteCompleted = true
 	}
@@ -750,7 +873,7 @@ func parseStableDeleteQuarantineName(name string) (string, rootpublication.Stabl
 	return base, rootpublication.StableIdentity{Platform: runtime.GOOS, VolumeID: volumeID, ObjectID: objectID}, true
 }
 
-func stableIdentityAtPath(path string) (rootpublication.StableIdentity, error) {
+func stableIdentityAtPath(path string, expectedParent ...rootpublication.StableIdentity) (rootpublication.StableIdentity, error) {
 	// A rebound pathname can name a link or FIFO. Use the existing exact-parent,
 	// no-follow child primitive, which is nonblocking on Unix, before inspecting
 	// identity. This also protects quarantine recovery from special-file opens.
@@ -765,7 +888,20 @@ func stableIdentityAtPath(path string) (rootpublication.StableIdentity, error) {
 		return rootpublication.StableIdentity{}, err
 	}
 	defer parent.Close()
-	file, err := rootpublication.OpenStableChildFile(parent, filepath.Base(path), os.O_RDONLY, 0)
+	if len(expectedParent) != 0 {
+		identity, err := rootpublication.StableIdentityFromFile(parent)
+		if err != nil {
+			return rootpublication.StableIdentity{}, err
+		}
+		if !rootpublication.SamePhysicalIdentity(identity, expectedParent[0]) {
+			return rootpublication.StableIdentity{}, fmt.Errorf("%w: retirement physical parent changed", rootpublication.ErrResourceConflict)
+		}
+	}
+	return stableIdentityAtChild(parent, filepath.Base(path))
+}
+
+func stableIdentityAtChild(parent *os.File, name string) (rootpublication.StableIdentity, error) {
+	file, err := rootpublication.OpenStableChildFile(parent, name, os.O_RDONLY, 0)
 	if err != nil {
 		return rootpublication.StableIdentity{}, err
 	}
@@ -877,18 +1013,24 @@ func recoverStableDeleteQuarantine(parent, quarantineName, base string, expected
 // same-directory quarantine and records that completed canonical-name unlink.
 // It then validates and unlinks the renamed object. A replacement created at
 // the original name after the rename is never passed to the unlink syscall.
-func removeStableSegmentFileOnce(path string, identity rootpublication.StableIdentity) (bool, error) {
+func removeStableSegmentFileOnce(path string, identity rootpublication.StableIdentity, capturedParent ...*os.File) (bool, error) {
 	parent := filepath.Dir(path)
 	resource := segmentNamespaceResource(path)
 	quarantineDir, quarantinePath, err := stableDeleteQuarantinePaths(path, identity)
 	if err != nil {
 		return false, err
 	}
+	// Production deletion supplies its retained physical parent. A pathname
+	// ENOENT is successful only if that exact namespace has no canonical child.
+	absent := func() (bool, error) {
+		if len(capturedParent) != 0 {
+			return requireRetirementChildAbsent(capturedParent[0], filepath.Base(path))
+		}
+		return true, nil
+	}
 	if err := os.Mkdir(quarantineDir, 0o700); err != nil {
 		if os.IsNotExist(err) {
-			// An absent parent also makes the canonical target absent. Preserve
-			// ordinary successful-absence semantics without unchecked unlink.
-			return true, nil
+			return absent()
 		}
 		if !os.IsExist(err) {
 			return false, err
@@ -905,7 +1047,7 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 			return true, nil
 		}
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return true, nil
+			return absent()
 		} else if err != nil {
 			return false, err
 		}
@@ -916,7 +1058,7 @@ func removeStableSegmentFileOnce(path string, identity rootpublication.StableIde
 	if err := os.Rename(path, quarantinePath); err != nil {
 		_ = os.Remove(quarantineDir)
 		if os.IsNotExist(err) {
-			return true, nil
+			return absent()
 		}
 		return false, err
 	}
@@ -980,7 +1122,7 @@ func (m *Manager) deleteZombieFile(file *File) error {
 		m.mu.Unlock()
 		return err
 	}
-	if err := validateStableDeletePathIdentity(file.Path, identity); err != nil {
+	if err := validateRetirementPath(file, identity); err != nil {
 		abortStableDeleteLease(lease)
 		m.mu.Unlock()
 		return err
@@ -1000,12 +1142,13 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	commitStableDeleteLease(lease)
 	m.mu.Lock()
 	var unobserveErr error
+	var parent *os.File
 	if current, exists := m.files[file.ID]; exists && current == file && file.RefCount.Load() == 0 && file.IsZombie.Load() {
-		m.forgetSegmentLocked(file)
+		parent = m.forgetSegmentLocked(file)
 		unobserveErr = m.unobserveStableFileLocked(file)
 	}
 	m.mu.Unlock()
-	return errors.Join(unlinkErr, syncErr, unobserveErr)
+	return errors.Join(unlinkErr, syncErr, unobserveErr, closeRetirementParent(parent))
 }
 
 func captureStableValueLogParent(path string, resource *os.File) (*os.File, error) {

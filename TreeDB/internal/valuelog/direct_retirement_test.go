@@ -213,6 +213,88 @@ func directRetirementPausedCall(t *testing.T, file *File, call func() error) (fu
 	return resume, join
 }
 
+func TestManagerDirectRetirementParentLifetime(t *testing.T) {
+	for _, mode := range []string{"delete", "EvictSegment", "Close", "borrowed-EvictSegment"} {
+		t.Run(mode, func(t *testing.T) {
+			manager, file := directRetirementManager(t, false)
+			if err := manager.MarkZombie(file.ID); err != nil {
+				t.Fatal(err)
+			}
+			parent := file.retirementParent
+			if parent == nil {
+				t.Fatal("retirement did not retain its physical parent")
+			}
+			var release func() error
+			if mode == "borrowed-EvictSegment" {
+				borrowed, done, err := borrowRetirementParent(file)
+				if err != nil || borrowed != parent {
+					t.Fatalf("retirement parent borrow: %v", err)
+				}
+				release = done
+				t.Cleanup(func() {
+					if release != nil {
+						_ = release()
+					}
+				})
+			}
+			var err error
+			switch mode {
+			case "delete":
+				err = manager.deleteZombieFile(file)
+			case "Close":
+				err = manager.Close()
+			default:
+				err = manager.EvictSegment(file.ID)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if release != nil {
+				if _, err := parent.Stat(); err != nil {
+					t.Fatalf("eviction closed an admitted borrow: %v", err)
+				}
+				err := release()
+				release = nil
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := parent.Stat(); !errors.Is(err, os.ErrClosed) {
+				t.Fatalf("retirement parent not released exactly once: %v", err)
+			}
+			if file.retirementParent != nil {
+				t.Fatal("released retirement parent remains owned")
+			}
+			if mode == "Close" {
+				if err := manager.MarkZombie(file.ID); err != nil {
+					t.Fatal(err)
+				}
+				tracked, marked, err := manager.MarkZombieIfTracked(file.ID)
+				if err != nil || tracked || marked {
+					t.Fatalf("closed zombie admission: %t %t %v", tracked, marked, err)
+				}
+				if err := manager.RegisterSegment(file.Path, file.ID); !errors.Is(err, os.ErrClosed) {
+					t.Fatalf("closed registration admitted: %v", err)
+				}
+				if err := manager.EvictSegment(file.ID); err != nil {
+					t.Fatal(err)
+				}
+				for _, api := range []string{"RemoveSegment", "RemoveSegmentExpectedIdentity", "RemoveSegmentForce"} {
+					if err := retirementIdentityRemove(manager, file, file.retirementIdentity, api); err != nil {
+						t.Fatalf("closed direct admission %s: %v", api, err)
+					}
+				}
+				if admitted, err := manager.RemoveSegmentIfUnpinned(file.ID); err != nil || admitted {
+					t.Fatalf("closed unpinned admission: %t %v", admitted, err)
+				}
+				if err := manager.Close(); err != nil {
+					t.Fatalf("repeated Close completion: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestManagerDirectRetirementCloseJoinsAdmission(t *testing.T) {
 	for _, mode := range []string{"direct", "Release"} {
 		for _, pins := range []string{"nil", "registry"} {
