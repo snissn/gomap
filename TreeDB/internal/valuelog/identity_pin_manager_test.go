@@ -444,6 +444,14 @@ func TestManagerZombieDeleteCommitsSuccessfulUnlinkAfterCloseError(t *testing.T)
 		handle.Close()
 		t.Fatal(err)
 	}
+	parent, parentIdentity, err := openRegisteredSegmentParent(path)
+	if err != nil {
+		handle.Close()
+		t.Fatal(err)
+	}
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := handle.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -452,7 +460,7 @@ func TestManagerZombieDeleteCommitsSuccessfulUnlinkAfterCloseError(t *testing.T)
 		t.Fatal(err)
 	}
 	file := &File{
-		ID: 1, Path: path, File: handle,
+		ID: 1, Path: path, File: handle, registeredParentIdentity: parentIdentity,
 		stableIdentity: identity, stableNamespace: namespace, stableObserved: true,
 	}
 	file.IsZombie.Store(true)
