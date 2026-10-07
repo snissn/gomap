@@ -137,7 +137,11 @@ new live segments are still discovered. A conflicting path for the same file
 ID remains an error. Identity-gated managers also validate the current pathname
 against the captured retired identity before skipping it. A replacement inode
 is a resource conflict; a disappeared pathname is a benign deletion race. This
-check opens only the current pathname and does not access the retired handle.
+check opens a no-follow child of an exact parent handle and requires a regular
+file. The Unix child open is nonblocking, so a replacement FIFO cannot stall
+refresh or reclamation while the manager lock is held. Links are refused,
+including links back to the original inode. Quarantine recovery uses the same
+safe identity lookup. The check does not access the retired handle.
 Managers without an identity registry retain their existing refresh semantics.
 
 ### 2.2 External-version logical pruning is not segment GC
