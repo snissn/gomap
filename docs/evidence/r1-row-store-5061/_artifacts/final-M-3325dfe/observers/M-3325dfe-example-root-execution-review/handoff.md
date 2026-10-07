@@ -1,0 +1,9 @@
+READY FOR ROOT ADOPTION AND ACTUAL AFTER-D EXECUTION. No material source defect found.
+
+Reviewed runner SHA256 `4f48ca71d65c058e3fe2cb071120af1707a1b6332c6a4f41597267ec5669ce77` (11,454 bytes), handoff and landed M source/helper Git objects. Independently recomputed M runtime `eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff` and A/C harness `706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822`; the runner's ordered harness byte framing and runtime blob inventory match the actual source helper.
+
+Pinned config/BEFORE manifest, exact clean M, working runtime/harness/example bytes and exact example blobs are checked before/after. Actual CLI uses `-dir`; runner passes its absolute unused NEW private `db` child. Landed example refuses nonempty DBs and emits the exact meaningful durable-reopen verification line only after row/posting/deletion checks. Deferred cleanup errors propagate to exit1, so the runner's exit-zero requirement covers cleanup too.
+
+Real `go version`, `go vet ./examples/typed_rows` and `go run ./examples/typed_rows -dir ...` commands retain separate untouched argv/cwd/environment/stdout/stderr/exit/hash receipts. Version must be Go1.26.4 Linux/amd64. Compiler bytes, fixed config environment and output-owned TMPDIR are observed; no successful stdout is synthesized. New output is exclusive and failures preserve logs/DB; refusing an existing output does not modify it.
+
+Actual externally held canonical flock and AFTER-D ordering remain root duties; the marker is not lock proof. Example correctness grants no numeric capacity, performance or power-loss acceptance, and its DB must remain private. Remote config/manifest/compiler/result bytes were not assessed. No helper execution, Go/vet/run/capture, SSH/network/GitHub/source mutation occurred. Released to root for adopted locked execution and actual-result assessment.

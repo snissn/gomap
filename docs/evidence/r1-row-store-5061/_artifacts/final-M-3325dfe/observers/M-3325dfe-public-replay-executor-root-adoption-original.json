@@ -1,0 +1,28 @@
+{
+  "utc": "2026-10-07T00:09:20.773626+00:00",
+  "coordinator": "/root",
+  "state": "ROOT_ADOPTED_PRIVATE_PUBLIC_REPLAY_EXECUTOR_PREPARATION_AND_ROOT_A_QUALIFIER_REVIEW_ONLY_NO_ACTIVATION_OR_CAPTURE_COST_ACCEPTANCE",
+  "pins": {
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-preparation/replay-public.py": "343135d1c72fa4bb86a4185849fbba70b0ba5ca8c0dc166a6366052b227f12aa",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-preparation/root-inputs.schema.json": "92e71d8552045272f7768e87541f608d0084e536972f7894f5626b3cb3f06633",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-preparation/root-inputs.template.json": "bbcc02ef96051b79cf43b8666505ff9f98f59ca39e652988b73797d5a0869dfd",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-preparation/handoff.md": "b9a3a0dda1598ef61fed46c548796a8805cd486d8759d98fda4abf6d4beb3d23",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-preparation/handoff.json": "a345daaa2b04001f7281e2617aec01c27aa5322f32898bc840306f72f5696ef5",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-preparation/static-verification.json": "ac5ff011e904de3c7ddf1eec2350f80826e2d9093ce38b0b7874ae12b85b91ef",
+    "/private/tmp/gomap-r1-execution-20261005/verify-publication-replay.py": "66f6c4096014322e3407b3efc5959751f534307ebe9a3e272b6148eba2f40ea6",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-command-contract-preparation/handoff.json": "14548ad1e8766c99a4e1a7e47e7bfea50fae05f92495e94415f53276788095b6",
+    "/private/tmp/gomap-r1-execution-20261005/final-A-semantic-equivalence-preparation/compare-certified.py": "5bc6c7eb0c00b8f78860e31769ac4731f1d1aed2f91013e2a9b1ed7633065c75",
+    "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/frozen-r1_lifecycle_validate.py": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+    "/private/tmp/gomap-r1-execution-20261005/final-comparator-receipt-preparation/observe.py": "b42c33c2e9b146cbf85438f64c30d0c47e1d780f9dfc8e12aa8833092700995e",
+    "/private/tmp/gomap-r1-execution-20261005/mutation-receipt-preparation/observe.py": "ebe05a3822f2716596831ceb464bc8c95adb340eb52f7bfa75b87183a3602efa",
+    "/private/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/observe.py": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-root-review/handoff.md": "2631792d1f747778d05a87670f89afb90d99d7c4b985066480bbfe07b5017823",
+    "/private/tmp/gomap-r1-execution-20261005/final-public-replay-executor-root-review/handoff.json": "4650c283efc589afc139e4e63f0b90da150b92417bcf4020e011a0092bfec336",
+    "/private/tmp/gomap-r1-execution-20261005/M-3325dfe-root-A-qualification.py": "d460473141c7ece8b3a864bb652f4bc4bad351be0743b01ac7607bdd37072839",
+    "/private/tmp/gomap-r1-execution-20261005/final-root-A-qualification-review.md": "ef060c79fc3b6fdd0f6eba163c66ed97e193c860478410ee6920267fb7ac0f19"
+  },
+  "actual_M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "public_executor_review": "READY_WITH_ROOT_ACTUAL_INPUTS",
+  "A_qualifier_scope": "Original source/build/full30-cell validation and scoped workload semantics; requires final successful comparison/rootprovenance; root numeric acceptance remains separate",
+  "required_actual_public_inputs": "Complete actual public artifact/release/fullledgers/originalqualifiedA/C/D/source/12receipts/rootacceptance/freshcheckout/host/certificate must be independently approved before executor activation"
+}

@@ -1,0 +1,84 @@
+# Standalone R1 lifecycle diagnostic
+
+Qualification: **retained**. No SQLite or cross-fixture speed comparison.
+Source `3325dfe77940fec8587d8b61b1ac4e0b2f72caca`; runtime `eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff`; harness `325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13`.
+5 fresh processes; 5 final epochs/process; 4096 live rows; 1024 calls/epoch.
+Every final epoch revisits the same 512 IDs. Full row/posting oracles cover the live population; timed churn covers this bounded working set. This is finite hot-set evidence, not full-population or unlimited-capacity qualification.
+
+| Final metric | Median | Minimum | Maximum | max/min |
+| --- | ---: | ---: | ---: | ---: |
+| B/op | 8.30358e+08 | 8.29375e+08 | 8.31378e+08 | 1.002 |
+| allocs/op | 6.13239e+06 | 6.13179e+06 | 6.13253e+06 | 1 |
+| calls/op | 1024 | 1024 | 1024 | 1 |
+| loop-B/call | 810897 | 809937 | 811893 | 1.002 |
+| loop-allocs/call | 5989 | 5988 | 5989 | 1 |
+| loop-ns/call | 6.73457e+06 | 6.63683e+06 | 6.87824e+06 | 1.036 |
+| mixed-calls/s | 148.5 | 145.4 | 150.7 | 1.036 |
+| mixed-p95-ns/call | 1.36179e+07 | 1.34026e+07 | 1.49147e+07 | 1.113 |
+| mixed-p99-ns/call | 1.81481e+07 | 1.76205e+07 | 2.1275e+07 | 1.207 |
+| ns/op | 6.89738e+09 | 6.79715e+09 | 7.04436e+09 | 1.036 |
+| process-retained-heap-B | 7.96845e+07 | 7.96784e+07 | 8.06413e+07 | 1.012 |
+| sampled-heap-high-B | 1.75874e+08 | 1.68691e+08 | 1.79945e+08 | 1.067 |
+
+Logical storage medians across final process results:
+
+| Phase | index | vlog | leaf log | typed assets | redo WAL | dictionary store | template store | immutable manifest metadata | other | all bytes | regular files | growth from ingest |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| ingest | 8.38861e+06 | 131289 | 1.62793e+06 | 725636 | 699917 | 0 | 0 | 554 | 470 | 1.15744e+07 | 12 | 0 |
+| churn-0 | 8.80804e+07 | 193991 | 7.30744e+06 | 1.04546e+06 | 878285 | 0 | 0 | 554 | 470 | 9.75066e+07 | 12 | 8.59322e+07 |
+| checkpoint-0 | 8.80804e+07 | 193991 | 7.30744e+06 | 1.04546e+06 | 878285 | 0 | 0 | 554 | 470 | 9.75066e+07 | 13 | 8.59322e+07 |
+| folded-0 | 8.80804e+07 | 193991 | 7.40502e+06 | 1.73664e+06 | 878285 | 0 | 0 | 554 | 470 | 9.82953e+07 | 13 | 8.6721e+07 |
+| before_vacuum-0 | 8.80804e+07 | 193991 | 7.40502e+06 | 1.73664e+06 | 878285 | 0 | 0 | 554 | 795 | 9.82957e+07 | 14 | 8.67213e+07 |
+| before_exhaustive-0 | 4.1943e+06 | 193991 | 7.4071e+06 | 1.73664e+06 | 878285 | 0 | 0 | 855 | 795 | 1.4412e+07 | 15 | 2.83759e+06 |
+| before_final_gc-0 | 4.1943e+06 | 193991 | 7.6573e+06 | 1.73664e+06 | 878285 | 0 | 0 | 4080 | 795 | 1.46654e+07 | 24 | 3.09101e+06 |
+| maintenance-0 | 4.1943e+06 | 193991 | 7.6573e+06 | 1.73664e+06 | 878285 | 0 | 0 | 4080 | 795 | 1.46654e+07 | 24 | 3.09101e+06 |
+| after_view_release | 4.1943e+06 | 193991 | 189498 | 691175 | 878285 | 0 | 0 | 1277 | 795 | 6.14932e+06 | 16 | -5.42508e+06 |
+| churn-1 | 8.38861e+06 | 256821 | 5.06439e+06 | 1.01296e+06 | 1.05874e+06 | 0 | 0 | 1277 | 795 | 1.57836e+07 | 17 | 4.20917e+06 |
+| checkpoint-1 | 8.38861e+06 | 256821 | 5.06439e+06 | 1.01296e+06 | 180466 | 0 | 0 | 1277 | 795 | 1.49053e+07 | 17 | 3.33089e+06 |
+| folded-1 | 8.38861e+06 | 256821 | 5.17289e+06 | 1.70413e+06 | 180466 | 0 | 0 | 1277 | 795 | 1.5705e+07 | 17 | 4.13058e+06 |
+| before_vacuum-1 | 8.38861e+06 | 256821 | 5.17437e+06 | 1.70413e+06 | 180466 | 0 | 0 | 1277 | 946 | 1.57066e+07 | 17 | 4.13221e+06 |
+| before_exhaustive-1 | 4.1943e+06 | 256821 | 5.17642e+06 | 1.70413e+06 | 180466 | 0 | 0 | 1794 | 946 | 1.15149e+07 | 18 | -59518 |
+| before_final_gc-1 | 4.1943e+06 | 256821 | 5.40818e+06 | 1.70413e+06 | 180466 | 0 | 0 | 4398 | 946 | 1.17492e+07 | 24 | 174840 |
+| maintenance-1 | 4.1943e+06 | 256821 | 190671 | 691175 | 180466 | 0 | 0 | 1540 | 946 | 5.51592e+06 | 16 | -6.05848e+06 |
+| churn-2 | 8.38861e+06 | 319524 | 5.09424e+06 | 1.01296e+06 | 360793 | 0 | 0 | 2276 | 946 | 1.51794e+07 | 20 | 3.60493e+06 |
+| checkpoint-2 | 8.38861e+06 | 319524 | 5.09424e+06 | 1.01296e+06 | 180339 | 0 | 0 | 2276 | 946 | 1.49989e+07 | 20 | 3.42447e+06 |
+| folded-2 | 8.38861e+06 | 319524 | 5.20131e+06 | 1.70413e+06 | 180339 | 0 | 0 | 2276 | 946 | 1.57971e+07 | 20 | 4.22273e+06 |
+| before_vacuum-2 | 8.38861e+06 | 319524 | 5.20278e+06 | 1.70413e+06 | 180339 | 0 | 0 | 2276 | 1092 | 1.57988e+07 | 20 | 4.22435e+06 |
+| before_exhaustive-2 | 4.1943e+06 | 319524 | 5.20484e+06 | 1.70413e+06 | 180339 | 0 | 0 | 3012 | 1092 | 1.16072e+07 | 21 | 32838 |
+| before_final_gc-2 | 4.1943e+06 | 319524 | 5.43506e+06 | 1.70413e+06 | 180339 | 0 | 0 | 2296 | 1094 | 1.18367e+07 | 21 | 262342 |
+| maintenance-2 | 4.1943e+06 | 319524 | 192178 | 691175 | 180339 | 0 | 0 | 1796 | 1094 | 5.58041e+06 | 16 | -5.994e+06 |
+| churn-3 | 8.38861e+06 | 382355 | 5.05335e+06 | 1.01296e+06 | 360794 | 0 | 0 | 2535 | 1094 | 1.52017e+07 | 20 | 3.62729e+06 |
+| checkpoint-3 | 8.38861e+06 | 382355 | 5.05335e+06 | 1.01296e+06 | 180467 | 0 | 0 | 2535 | 1094 | 1.50214e+07 | 20 | 3.44696e+06 |
+| folded-3 | 8.38861e+06 | 382355 | 5.15974e+06 | 1.70413e+06 | 180467 | 0 | 0 | 2535 | 1094 | 1.58189e+07 | 20 | 4.2445e+06 |
+| before_vacuum-3 | 8.38861e+06 | 382355 | 5.16121e+06 | 1.70413e+06 | 180467 | 0 | 0 | 2535 | 1092 | 1.58204e+07 | 20 | 4.24598e+06 |
+| before_exhaustive-3 | 4.1943e+06 | 382355 | 5.16327e+06 | 1.70413e+06 | 180467 | 0 | 0 | 3274 | 1092 | 1.16289e+07 | 21 | 54471 |
+| before_final_gc-3 | 4.1943e+06 | 382355 | 5.39314e+06 | 1.70413e+06 | 180467 | 0 | 0 | 2304 | 1094 | 1.18578e+07 | 21 | 283372 |
+| maintenance-3 | 4.1943e+06 | 382355 | 192148 | 691175 | 180467 | 0 | 0 | 1803 | 1094 | 5.64335e+06 | 16 | -5.93106e+06 |
+| churn-4 | 8.38861e+06 | 445187 | 5.01898e+06 | 1.01296e+06 | 360923 | 0 | 0 | 2544 | 1094 | 1.52303e+07 | 20 | 3.65588e+06 |
+| checkpoint-4 | 8.38861e+06 | 445187 | 5.01898e+06 | 1.01296e+06 | 180468 | 0 | 0 | 2544 | 1094 | 1.50498e+07 | 20 | 3.47542e+06 |
+| folded-4 | 8.38861e+06 | 445187 | 5.12687e+06 | 1.70413e+06 | 180468 | 0 | 0 | 2544 | 1094 | 1.58489e+07 | 20 | 4.27452e+06 |
+| before_vacuum-4 | 8.38861e+06 | 445187 | 5.12834e+06 | 1.70413e+06 | 180468 | 0 | 0 | 2544 | 1094 | 1.58504e+07 | 20 | 4.27599e+06 |
+| before_exhaustive-4 | 4.1943e+06 | 445187 | 5.1304e+06 | 1.70413e+06 | 180468 | 0 | 0 | 3285 | 1094 | 1.16589e+07 | 21 | 84485 |
+| before_final_gc-4 | 4.1943e+06 | 445187 | 5.36049e+06 | 1.70413e+06 | 180468 | 0 | 0 | 2307 | 1094 | 1.1888e+07 | 21 | 313598 |
+| maintenance-4 | 4.1943e+06 | 445187 | 192373 | 691175 | 180468 | 0 | 0 | 1805 | 1094 | 5.70641e+06 | 16 | -5.868e+06 |
+| reopen | 4.1943e+06 | 445187 | 192373 | 691175 | 12 | 0 | 0 | 1805 | 1094 | 5.52595e+06 | 16 | -6.04846e+06 |
+
+Maintenance API medians (oracles and census excluded):
+
+| Epoch | maintenance ns | fold ns | live rows folded | mutation parts before/after | active refs before/after | rewrite decision | typed deleted bytes | vacuum ns | vacuum completed |
+| --- | ---: | ---: | ---: | --- | --- | --- | ---: | ---: | --- |
+| 0 | 2.45956e+08 | 1.60402e+07 | 4096 | 512/0 | 896/1 | no_debt | 0 | 3.89319e+07 | True |
+| 1 | 3.35056e+08 | 1.43032e+07 | 4096 | 512/0 | 769/1 | eligible | 1.70413e+06 | 6.40034e+07 | True |
+| 2 | 3.62459e+08 | 1.44589e+07 | 4096 | 512/0 | 769/1 | eligible | 1.70413e+06 | 3.70764e+07 | True |
+| 3 | 3.51379e+08 | 1.42327e+07 | 4096 | 512/0 | 769/1 | eligible | 1.70413e+06 | 3.71953e+07 | True |
+| 4 | 3.54519e+08 | 1.55468e+07 | 4096 | 512/0 | 769/1 | eligible | 1.70413e+06 | 3.56163e+07 | True |
+
+Post-view-release rewrite decisions: eligible. Raw packets retain eligibility, completed remaps, deleted bytes and protected/recovery retention.
+Direct-backend command_wal_durable fixture; vacuum runs on the same live backend. Cached-wrapper checkpoint/reconcile overhead is omitted. Logical fold resets lineage; it does not itself prove physical reclamation.
+
+Go calibration results remain in raw logs and are excluded from this table.
+Call timers include encoding, full-row decode/oracle and callback bookkeeping. Epoch metrics also include ID preparation and latency/count/visited-ID bookkeeping. Maintenance, coverage aggregation and phase oracles are excluded.
+Heap high is sampled at epoch boundaries; retained heap after GC includes live oracle maps and latency samples. RSS and unsampled peak are unavailable.
+Component census uses logical file lengths, including redo WAL separately; no-op maintenance is recorded without a reclamation claim.
+Full aggregate typed reachability sources/ref/segment/mapped attribution and value-log active/pending/protected/referenced classifications remain separate in the packet. Source classes can overlap; their byte counts are not unique retained bytes. Release GC is recorded; no-op or protected work is not reclamation.
+Raw logs and packet retain per-epoch checkpoint/maintenance/debt/component observations and actual host load. Spread is descriptive; this diagnostic supplies no automatic performance acceptance threshold.

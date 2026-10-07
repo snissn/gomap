@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "utc": "2026-10-06T11:17:37.708043+00:00",
+  "state": "UNPROMOTED_PRIVATE_E_SUPPORT",
+  "directory": "/tmp/gomap-r1-execution-20261005/5061-cleanup-support-preparation",
+  "inventory": "inventory.json",
+  "inventory_sha256": "06c46feb9e400de95c29c890575c56593137cf847593af4382190fe6535944c5",
+  "copy_count": 43,
+  "copy_bytes": 301552,
+  "cleanup": {
+    "original_tested_source": "52bc214704bfd1bad946ad9e88989b8a52f12dc2",
+    "base_runtime_for_original_negative": "852aa29e1eed3511f93aba244aef917c89d033e8",
+    "intermediate_source": "b4e02d903f79f60d791aec4bf205ca80576b4cd2",
+    "final_independent_review_head": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "final_focused_steps": [
+      {
+        "name": "normal",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "./TreeDB/db",
+          "-run",
+          "TestLeafManifestRevisionGC|TestLeafGenerationGCReclaimsReleasedManifest",
+          "-count=1",
+          "-timeout=3m",
+          "-v"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791283431.2645202,
+        "finished_unix": 1791283503.1722896,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/normal.log",
+        "log_sha256": "02177cca2935db8e97a3e0074325e3cc19b1a80e195ed99eac82d0504cf54405"
+      },
+      {
+        "name": "race",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "test",
+          "-race",
+          "./TreeDB/db",
+          "-run",
+          "TestLeafManifestRevisionGC|TestLeafGenerationGCReclaimsReleasedManifest",
+          "-count=1",
+          "-timeout=3m",
+          "-v"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791283503.1724987,
+        "finished_unix": 1791283628.502114,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/race.log",
+        "log_sha256": "3bcc2ec352bc4a402c60131e1dc2542ed75f4d02fa922ca9b449a8b5f5f39fcf"
+      },
+      {
+        "name": "vet",
+        "argv": [
+          "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+          "vet",
+          "./TreeDB/db"
+        ],
+        "exit_code": 0,
+        "started_unix": 1791283628.5022178,
+        "finished_unix": 1791283632.8517835,
+        "log": "/home/mikers/gomap-r1-evidence-20261005/5071-cleanup-review-repair/final/vet.log",
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "all13_declared_pins_verified": true,
+    "all13_originals_retained_unmodified": true,
+    "original_observer_sources_included_text_only_not_executed": true,
+    "root_correction_receipt": "5071-descriptor-bound-root-correction.json",
+    "gc_owned_child_fds_bound": 18,
+    "continuous_global_fd_maximum_established": false,
+    "focused_correctness_is_measurement_qualification": false
+  },
+  "integration": {
+    "original_main": "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c",
+    "original_mature_integration": "46aa32fd8c8ed1de83f783d07b30b8d0433feff6",
+    "C_original_integration": "c5803b93caca11825cb826a54a568ff522b80373",
+    "final_5071_head": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "final_C_head": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+    "actual_landed_commit": null,
+    "runtime_sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873",
+    "canonical_runtime_input_count": 1098,
+    "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "independent3182_review": "CLEAN",
+    "independent90fa_integration_review": "CLEAN for bounded source/integration applicability",
+    "independent90fa_A_review": "CLEAN for source/workload semantics only",
+    "full_A_numerical_qualification_transferred": false
+  },
+  "actual_thread_receipts": [
+    {
+      "thread_id": "PRRT_kwDOIdn7C86pYwN4",
+      "resolved": true,
+      "resolution_receipt": "5071-cleanup-resolution-actual.json",
+      "reply_receipt": "5071-cleanup-thread-reply-actual.json",
+      "reply_url": "https://github.com/snissn/gomap/pull/5071#discussion_r4194466317",
+      "reply_commit_id": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "reply_original_commit_id": "cb09ffe33b10a8a623cd335a43780d4997524f82",
+      "reply_created_at": "2026-10-06T11:02:11Z"
+    },
+    {
+      "thread_id": "PRRT_kwDOIdn7C86paj42",
+      "resolved": true,
+      "resolution_receipt": "5071-quadratic-resolution-actual.json",
+      "reply_receipt": "5071-quadratic-thread-reply-actual.json",
+      "reply_url": "https://github.com/snissn/gomap/pull/5071#discussion_r4194468101",
+      "reply_commit_id": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "reply_original_commit_id": "852aa29e1eed3511f93aba244aef917c89d033e8",
+      "reply_created_at": "2026-10-06T11:02:23Z"
+    },
+    {
+      "thread_id": "PRRT_kwDOIdn7C86pYwNq",
+      "resolved": true,
+      "resolution_receipt": "5071-cached-stats-thread-resolution.json",
+      "reply_receipt": "5071-cached-stats-disposition-response.json",
+      "reply_url": "https://github.com/snissn/gomap/pull/5071#discussion_r4194233479",
+      "reply_commit_id": "095ad11831ccfa5da381286f4f0f12bd95541ca4",
+      "reply_original_commit_id": "cb09ffe33b10a8a623cd335a43780d4997524f82",
+      "reply_created_at": "2026-10-06T10:34:12Z"
+    }
+  ],
+  "head_metadata_snapshots": {
+    "5071-actual-final-cleanup-head.json": {
+      "metadata": {
+        "baseRefName": "main",
+        "headRefOid": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+        "mergeStateStatus": "BLOCKED",
+        "mergeable": "MERGEABLE"
+      },
+      "observed_original_file_mtime_utc": "2026-10-06T11:01:52.001479+00:00",
+      "scope": "Retained head metadata snapshot only; not current CI/review or merge acceptance."
+    },
+    "5072-actual-final-cleanup-head.json": {
+      "metadata": {
+        "baseRefName": "codex/5066-lifecycle-maintenance",
+        "headRefOid": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+        "mergeStateStatus": "UNSTABLE",
+        "mergeable": "MERGEABLE"
+      },
+      "observed_original_file_mtime_utc": "2026-10-06T11:01:51.974927+00:00",
+      "scope": "Retained head metadata snapshot only; not current CI/review or merge acceptance."
+    }
+  },
+  "prior3groups_preserved": {
+    "5061-final-support-preparation": {
+      "all_regular_files_unchanged_before_after": true,
+      "regular_file_count": 110,
+      "regular_file_bytes": 5006762,
+      "snapshot_sha256": "fc2719ebcd1fddbf67ed746d600e3bd5eae0984e08ba03b65c843b13a65b8c9e"
+    },
+    "5061-fd-ci-support-preparation": {
+      "all_regular_files_unchanged_before_after": true,
+      "regular_file_count": 108,
+      "regular_file_bytes": 2240783,
+      "snapshot_sha256": "bc734541a5c56eff86f92dcb03b2e87a2909cd1f68b4e5588e34c37a037e0963"
+    },
+    "5061-852-retry-support-preparation": {
+      "all_regular_files_unchanged_before_after": true,
+      "regular_file_count": 39,
+      "regular_file_bytes": 762864,
+      "snapshot_sha256": "11b1b77037a883c704fe21e0eb569b22b857de08a91edda38cb2d8d440199655"
+    }
+  },
+  "all_selected_original_sha256_unchanged_after_copy": true,
+  "missing_or_pending": {
+    "current_required_exact_head_CI": "Not queried or qualified here; root owns current3182/90fa or successor gates.",
+    "current_hosted_review": "Not queried or promoted here; retained actual review requests are copied.",
+    "actual_landed_source": null,
+    "actual_fresh_fullA_C_D": null,
+    "final_public_certificate_and_URLs": null
+  },
+  "limitations": [
+    "Private support copies remain UNPROMOTED; no issue acceptance, current CI acceptance, merge authorization, measurement acceptance, capacity/latency claim, or public publication is performed.",
+    "Final focused normal/race/vet receipts remain bound to actual source52bc214704bfd1bad946ad9e88989b8a52f12dc2. Independent source applicability relates unchanged relevant runtime/test blobs to3182/90fa; no original receipt or argv is rewritten or rebound.",
+    "Original base852 plus uncommitted new test RED and intermediateb4 are distinct retained records. The original RED is not a clean measured source/binary receipt.",
+    "Original52 handoff narrower16+1 descriptor wording is historical; separate root correction and independent3182/90fa reviews establish18 GC-owned children:16 selected +1 scan child OR quarantine placeholder +1 temporary link-validation child. Parent/manager/process and arbitrary observer/hook descriptors are separate. Sampled FD28 is not a global peak.",
+    "Whole-call writer/snapshot-admission locks, complete rescans, worst-case O(N^2/16), and per-phase footprint admission rather than cumulative I/O or pause quota are disclosed. Final finite sustained D cost and physical retention remain unqualified.",
+    "Canonical1098 source inventory/runtime hash equality proves source-input identity in its stated scope. It proves neither generated binary/performance equivalence nor current-head hosted CI.",
+    "Independent90fa A review transfers source/workload semantics only. Runtime changed since b29. Preserve frozen original fixture/count/config/denominator/noise/full-run gates; fresh landed-source measurements remain required.",
+    "Copied actual thread resolution responses prove those named threads were resolved when actions occurred; historical cached-stats API disposition does not certify new cleanup source or expand ValueLogGCStats. These are distinct from hosted review/CI readiness.",
+    "Exact3182/90fa metadata snapshots and actual review requests identify the then-mature candidates. No candidate is asserted landed; root must assess subsequent exact-head hosted CI/review, actual landing and source applicability.",
+    "Fresh fullA,C,D actual receipts plus independent validation/certificate/publication/replay remain pending. This task creates no future source SHA, result, certificate or public URL."
+  ]
+}

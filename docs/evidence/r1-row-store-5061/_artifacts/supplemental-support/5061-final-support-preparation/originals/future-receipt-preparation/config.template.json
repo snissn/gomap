@@ -1,0 +1,16 @@
+{
+  "repo": "/home/mikers/ROOT_SELECTED_CLEAN_LANDED_WORKTREE",
+  "out": "/home/mikers/ROOT_SELECTED_NEW_D_RETAINED_DIRECTORY",
+  "receipt_dir": "/home/mikers/ROOT_PRIVATE_NEW_RECEIPT_DIRECTORY",
+  "real_go": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+  "goroot": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+  "gocache": "/home/mikers/.cache/ROOT_SELECTED_GO1264_CACHE",
+  "gomodcache": "/home/mikers/go/pkg/mod",
+  "lock": "/home/mikers/gomap-r1-evidence-20261005/timed-capture.lock",
+  "source_commit": "",
+  "runtime_sha256": "",
+  "harness_sha256": "",
+  "landed_tooling_commit": "",
+  "review_url": "",
+  "landing_observation": ""
+}

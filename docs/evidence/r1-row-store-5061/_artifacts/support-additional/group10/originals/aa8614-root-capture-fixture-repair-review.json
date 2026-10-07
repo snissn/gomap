@@ -1,0 +1,151 @@
+{
+  "kind": "bounded_independent_root_capture_fixture_repair_review",
+  "utc": "2026-10-06T19:51:56.971157+00:00",
+  "verdict": "CLEAN_SOURCE_SUPPORTED_FIXTURE_BARRIER",
+  "findings": [],
+  "reviewed_original_head": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b",
+  "reviewed_repaired_head": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "root_commit_observed_during_review": true,
+  "exact_delta": "Only six added lines, checked checkpoint/comment/cleanup/fatal. No prior assertions changed. Root canonical CI inventory refresh is separate and not a passed CI gate.",
+  "fixture_diff_sha256": "923390a772016033101d466ba4a5caf2675d97efeb45e88fb8c0e1fb2f271ff7",
+  "source_bindings": {
+    "TreeDB/db/ordered_root_span_native_correctness_test.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "5c5a54f520294e1ab8655248d73a5a4feb2b6494",
+        "sha256": "a9a04bd518b8737b3ddc877e5e71c3265e3c5246dd55eb05579f372c0ad71268"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "0b8e232ed2b69eb06177b1352f38aba81cace8fd",
+        "sha256": "a2b9c43123e7a2f5908063d856c438564e7a1283f589385532233dd14f845459"
+      }
+    },
+    "TreeDB/db/ordered_root_publish.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "05538b40ac20cffe57e5d5665d1ac949875945d7",
+        "sha256": "d98eb43203903cb6c72ac9f15c32bf7c3bd0fac153b115db24ddf6c5b0f4cef8"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "05538b40ac20cffe57e5d5665d1ac949875945d7",
+        "sha256": "d98eb43203903cb6c72ac9f15c32bf7c3bd0fac153b115db24ddf6c5b0f4cef8"
+      }
+    },
+    "TreeDB/db/db.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+        "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+        "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50"
+      }
+    },
+    "TreeDB/db/root_publication_activation.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+        "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+        "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132"
+      }
+    },
+    "TreeDB/db/recoverable_root_set.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+        "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29"
+      }
+    },
+    "TreeDB/db/vlog_gc.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "35ea5228db716396785dc16a3c2c331d4b41affe",
+        "sha256": "10fdfc34d8abc2e1c87d585e0b4e1cba6dc9a1dca2846610e99b5f5afd6f73ca"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "35ea5228db716396785dc16a3c2c331d4b41affe",
+        "sha256": "10fdfc34d8abc2e1c87d585e0b4e1cba6dc9a1dca2846610e99b5f5afd6f73ca"
+      }
+    },
+    "TreeDB/db/vlog_gc_test.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "c638034a3c0cd92c4618b3882759846b4f7953b5",
+        "sha256": "f42ac95a2c7ccd82c0fb693162a460582f5fc0e2d37cc06a3578f1299fdadbb2"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "c638034a3c0cd92c4618b3882759846b4f7953b5",
+        "sha256": "f42ac95a2c7ccd82c0fb693162a460582f5fc0e2d37cc06a3578f1299fdadbb2"
+      }
+    },
+    "TreeDB/internal/rootpublication/coordinator.go": {
+      "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b": {
+        "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+        "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f"
+      },
+      "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133": {
+        "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+        "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f"
+      }
+    }
+  },
+  "diagnosis_pins": {
+    "aa8614-root-capture-ci-diagnosis.md": "de3bbcf1b1761a0e088aafc46027c1d60d6b0f28f0ffbf3da14950f01440b066",
+    "aa8614-root-capture-ci-diagnosis.json": "ea4e39f94e2a2103a0221c9f9e09a927e098358a7ca19b1b70bccd4cdeacce7d"
+  },
+  "original_failure": {
+    "path": "/tmp/gomap-r1-execution-20261005/aa8614-windows-core2-failure-rest-original.log",
+    "sha256": "12254287cc12e6c0c83148dacdcea4550d4ad9304e9b5204e352fa5fb928cbe8",
+    "bytes": 694851,
+    "target_rows": [
+      {
+        "raw_line": 2811,
+        "Time": "2026-10-06T19:42:42.2705668Z",
+        "Action": "run",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC"
+      },
+      {
+        "raw_line": 2812,
+        "Time": "2026-10-06T19:42:42.2705668Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Output": "=== RUN   TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC\n"
+      },
+      {
+        "raw_line": 2813,
+        "Time": "2026-10-06T19:42:42.4868674Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Output": "    ordered_root_span_native_correctness_test.go:297: ValueLogGC: treedb: recoverable root set changed: capture did not converge\n"
+      },
+      {
+        "raw_line": 2814,
+        "Time": "2026-10-06T19:42:42.4901928Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Output": "--- FAIL: TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC (0.22s)\n"
+      },
+      {
+        "raw_line": 2815,
+        "Time": "2026-10-06T19:42:42.4901928Z",
+        "Action": "fail",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Elapsed": 0.22
+      }
+    ]
+  },
+  "review_reasoning": "# Independent root-capture fixture repair review\n\n**CLEAN \u2014 source-supported fixture barrier**, exact repaired head `0245d8e0f5835dcba2929e4f1ba8b5d7ea909133` against `aa8614ea79c63b21ca9a04580ace7f77a90b7f1b`. Root committed the already inspected six-line delta during this review; its Git object matches that delta exactly. No material findings.\n\nThe checked `db.Checkpoint()` is immediately before `ValueLogGC`, with existing-style cleanup and fatal error handling. Every native-route/leaf-reference counter, raw value-pointer assertion, nonzero GC referenced-segment check, pre/post-GC value read, later checkpoint, close and reopened value assertion is preserved. No stale error suppression, retry, skip, capture-limit change or production change is introduced.\n\nOrdinary ordered publication finalizes with `sync=false` (`ordered_root_publish.go:3972`) and ordinarily waits for admission rather than durability (`root_publication_activation.go:917\u2013943`). Backend durable basis can advance before the coordinator reports the returned publication result (`root_publication_activation.go:1415\u20131447`; `coordinator.go:757\u2013761,837\u2013854`). Capture rejects mismatched coordinator/backend bases and has eight immediate attempts (`recoverable_root_set.go:164\u2013179,304\u2013331`). A checked checkpoint waits for the visible prefix through the supported coordinator outside write/build locks (`db.go:4274\u20134308`), without itself advancing CommitSeq. With no competing fixture writer and background prune disabled, this establishes the intended maintenance precondition.\n\nThe test had no deliberate publisher hold or pending-frontier assertion. Separate `TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment` (`vlog_gc_test.go:555\u2013691`) retains deliberate pending-root coverage: blocked publication before seal, visible > durable, dry/live GC protection, physical segment persistence, read-only recovery readability and actual unlink after checkpoint and both-slot advance. Its bytes remain unchanged. This does not claim every ordered-native pending schedule is covered.\n\nOriginal Windows log SHA256: `12254287cc12e6c0c83148dacdcea4550d4ad9304e9b5204e352fa5fb928cbe8`. Five exact-target rows substantiate nonconvergent capture; the rejecting predicate and schedule remain untraced. Source equality cannot exclude shared manager/release scheduling effects, and the available named main job is not an observed same-case green control. This is neither an unrelatedness claim nor a required-CI waiver.\n\nRoot still owns focused repaired-fixture/pending-root normal and race validation, canonical inventory/current repaired-head Windows/required TreeDB and hosted review gates. The companion JSON binds original and repaired Git objects, exact fixture diff, diagnostics and original failure rows. No Go, tests, capture, SSH, GitHub operation or CI polling occurred; only this new review pair was written.\n",
+  "limits": [
+    "Actual Windows rejecting capture predicate and goroutine schedule untraced; no unrelated-infrastructure inference or same-case main green control.",
+    "Checkpoint does not ensure quiescence against arbitrary concurrent postcut writers; this fixture has none and disables background prune.",
+    "Separate pending-root protection remains meaningful but does not prove every ordered-native schedule.",
+    "Original required failure preserved/unwaived; current focused normal/race and Windows/TreeDB/hosted gates remain root-owned."
+  ],
+  "performed": "Read-only source/Git-object and original log/diagnosis inspection; only this review pair written. No Go, test, capture, SSH, GitHub operation or CI polling."
+}

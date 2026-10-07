@@ -1,0 +1,201 @@
+{
+  "baseline_sha": "edbd68d34b0fdf7152a498b87d373576de029721",
+  "candidate_sha": "cb09ffe33b10a8a623cd335a43780d4997524f82",
+  "original_summary_path": "/tmp/gomap-r1-execution-20261005/cb09-mvcc-artifact/summary.json",
+  "original_failed_log": "/tmp/gomap-r1-execution-20261005/cb09-mvcc-failed.log",
+  "original_verdict": "FAIL",
+  "original_accepted": false,
+  "failed_benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+  "original_result": {
+    "acceptance_pass": false,
+    "acceptance_verdict": "FAIL",
+    "allocs_pass": true,
+    "attribution": "CANDIDATE",
+    "baseline": {
+      "allocs_per_op": 17.0,
+      "bytes_per_op": 4578.0,
+      "ns_per_op": 744192.5
+    },
+    "benchmark": "BenchmarkPublicCommandWALDurableTinyBatchWriteSync/placement=inline/shape=dirty_batch/ops=1",
+    "binary_equivalent": false,
+    "binary_package": "treedb",
+    "bytes_delta": 2.5,
+    "bytes_pass": true,
+    "bytes_tolerance": 45.78,
+    "candidate": {
+      "allocs_per_op": 17.0,
+      "bytes_per_op": 4580.5,
+      "ns_per_op": 436736.0
+    },
+    "measurement_pass": false,
+    "ns_delta_percent": -41.31410891671173,
+    "paired_ns_delta_percent": 11.1942906566171,
+    "timing_pass": false
+  },
+  "pairing_validated": true,
+  "paired_median_delta_percent": 11.1942906566171,
+  "order_AB_median_delta_percent": 11.1942906566171,
+  "order_BA_median_delta_percent": -12.934180766169973,
+  "baseline_max_min_ratio": 8.377826508791383,
+  "candidate_max_min_ratio": 4.203444165216831,
+  "minimum_file_sync_share_percent": 91.82638998891177,
+  "maximum_file_sync_share_percent": 98.8279156609777,
+  "maximum_abs_paired_delta_outside_file_sync_ns_per_op": 2780.0,
+  "counts": {
+    "command_wal_file_sync_per_iteration": 1,
+    "checkpoint_runs_per_iteration": 0,
+    "value_log_sync_per_iteration": 0,
+    "value_log_materialization_sync_per_iteration": 0
+  },
+  "unchanged_relevant_source_paths": [
+    ".github/scripts/check_mvcc_raw_path_gate.py",
+    "scripts/mvcc_raw_path_gate.sh",
+    "TreeDB/command_wal_public_test.go",
+    "TreeDB/command_wal_public_cached.go",
+    "TreeDB/caching",
+    "TreeDB/internal/commitlog"
+  ],
+  "binary_equivalence_supported": false,
+  "binary_digests": {
+    "caching": {
+      "baseline": "dcb73a53abc60fe622f8f48d694611bce661a2ff56cbecb1f8ee3b31aff7ebf1",
+      "candidate": "9cdc109305b032d4eca4bc0b7bcd8248068afabe039511279e52cede13e27667"
+    },
+    "db": {
+      "baseline": "254417d6df230fc850c17aaeed912859f9c8c387498434837b1fa4e2f60e994e",
+      "candidate": "cc83869bec750f0ca3469f5399e2fbd38efd404a8bbec2cff154fd1b5b94388c"
+    },
+    "treedb": {
+      "baseline": "4121b4e7a650757d741ea6b39b11c54ce9efcdfe50e8bea3091f8e7f9352d995",
+      "candidate": "0aa9f871c5220fd81857a5d650bb0e917594eff3b844d1eec4869412c51901b3"
+    }
+  },
+  "pairs": [
+    {
+      "sample": 1,
+      "order": "AB",
+      "baseline_iterations": 8312,
+      "candidate_iterations": 10000,
+      "baseline_ns_per_op": 616869.0,
+      "candidate_ns_per_op": 656066.0,
+      "paired_delta_percent": 6.354185410516666,
+      "baseline_file_sync_ns_per_op": 596624.0,
+      "candidate_file_sync_ns_per_op": 637037.0,
+      "total_delta_ns_per_op": 39197.0,
+      "file_sync_delta_ns_per_op": 40413.0,
+      "delta_outside_file_sync_ns_per_op": -1216.0
+    },
+    {
+      "sample": 2,
+      "order": "BA",
+      "baseline_iterations": 1285,
+      "candidate_iterations": 7645,
+      "baseline_ns_per_op": 1692455.0,
+      "candidate_ns_per_op": 944275.0,
+      "paired_delta_percent": -44.20678836364925,
+      "baseline_file_sync_ns_per_op": 1672618.0,
+      "candidate_file_sync_ns_per_op": 926027.0,
+      "total_delta_ns_per_op": -748180.0,
+      "file_sync_delta_ns_per_op": -746591.0,
+      "delta_outside_file_sync_ns_per_op": -1589.0
+    },
+    {
+      "sample": 3,
+      "order": "AB",
+      "baseline_iterations": 2338,
+      "candidate_iterations": 2211,
+      "baseline_ns_per_op": 871516.0,
+      "candidate_ns_per_op": 1043732.0,
+      "paired_delta_percent": 19.760509273495842,
+      "baseline_file_sync_ns_per_op": 851762.0,
+      "candidate_file_sync_ns_per_op": 1024067.0,
+      "total_delta_ns_per_op": 172216.0,
+      "file_sync_delta_ns_per_op": 172305.0,
+      "delta_outside_file_sync_ns_per_op": -89.0
+    },
+    {
+      "sample": 4,
+      "order": "BA",
+      "baseline_iterations": 10000,
+      "candidate_iterations": 6109,
+      "baseline_ns_per_op": 901331.0,
+      "candidate_ns_per_op": 353772.0,
+      "paired_delta_percent": -60.75004632038619,
+      "baseline_file_sync_ns_per_op": 882643.0,
+      "candidate_file_sync_ns_per_op": 333876.0,
+      "total_delta_ns_per_op": -547559.0,
+      "file_sync_delta_ns_per_op": -548767.0,
+      "delta_outside_file_sync_ns_per_op": 1208.0
+    },
+    {
+      "sample": 5,
+      "order": "AB",
+      "baseline_iterations": 3828,
+      "candidate_iterations": 10000,
+      "baseline_ns_per_op": 1038199.0,
+      "candidate_ns_per_op": 357307.0,
+      "paired_delta_percent": -65.58395837406894,
+      "baseline_file_sync_ns_per_op": 1019084.0,
+      "candidate_file_sync_ns_per_op": 339040.0,
+      "total_delta_ns_per_op": -680892.0,
+      "file_sync_delta_ns_per_op": -680044.0,
+      "delta_outside_file_sync_ns_per_op": -848.0
+    },
+    {
+      "sample": 6,
+      "order": "BA",
+      "baseline_iterations": 9321,
+      "candidate_iterations": 6328,
+      "baseline_ns_per_op": 436177.0,
+      "candidate_ns_per_op": 516165.0,
+      "paired_delta_percent": 18.338426831309306,
+      "baseline_file_sync_ns_per_op": 414069.0,
+      "candidate_file_sync_ns_per_op": 496837.0,
+      "total_delta_ns_per_op": 79988.0,
+      "file_sync_delta_ns_per_op": 82768.0,
+      "delta_outside_file_sync_ns_per_op": -2780.0
+    },
+    {
+      "sample": 7,
+      "order": "AB",
+      "baseline_iterations": 10000,
+      "candidate_iterations": 10000,
+      "baseline_ns_per_op": 285848.0,
+      "candidate_ns_per_op": 331682.0,
+      "paired_delta_percent": 16.034395902717534,
+      "baseline_file_sync_ns_per_op": 268581.0,
+      "candidate_file_sync_ns_per_op": 314172.0,
+      "total_delta_ns_per_op": 45834.0,
+      "file_sync_delta_ns_per_op": 45591.0,
+      "delta_outside_file_sync_ns_per_op": 243.0
+    },
+    {
+      "sample": 8,
+      "order": "BA",
+      "baseline_iterations": 9934,
+      "candidate_iterations": 10000,
+      "baseline_ns_per_op": 202016.0,
+      "candidate_ns_per_op": 248304.0,
+      "paired_delta_percent": 22.913036591161106,
+      "baseline_file_sync_ns_per_op": 185504.0,
+      "candidate_file_sync_ns_per_op": 229503.0,
+      "total_delta_ns_per_op": 46288.0,
+      "file_sync_delta_ns_per_op": 43999.0,
+      "delta_outside_file_sync_ns_per_op": 2289.0
+    }
+  ],
+  "source_links": {
+    "paired_statistic": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/.github/scripts/check_mvcc_raw_path_gate.py#L135-L170",
+    "binary_equivalence": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/.github/scripts/check_mvcc_raw_path_gate.py#L206-L235",
+    "sample_order": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/scripts/mvcc_raw_path_gate.sh#L130-L171",
+    "benchmark_options": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/TreeDB/command_wal_public_test.go#L616-L631",
+    "benchmark_timed_loop": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/TreeDB/command_wal_public_test.go#L4183-L4251",
+    "file_sync_instrumentation": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/TreeDB/internal/commitlog/writer.go#L302-L320",
+    "changed_appender_metadata": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/TreeDB/db/wal_recovery.go#L1244-L1314",
+    "changed_manager_shutdown": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/TreeDB/internal/valuelog/manager.go#L1758",
+    "changed_manifest_gc": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/TreeDB/db/leaf_manifest_revision_gc.go#L20",
+    "changed_rebuild_capture": "https://github.com/snissn/gomap/blob/cb09ffe33b10a8a623cd335a43780d4997524f82/TreeDB/db/durable_root_runtime.go#L1208"
+  },
+  "diagnosis": "Large variable fsync latency is the leading supported explanation. Pairing is correct; alternating order does not establish a simple candidate-second penalty. Candidate regression is not excluded because executables differ and only one packet exists. Original FAIL remains valid.",
+  "next_action": "One exact-head/base rerun of the completed MVCC raw-path CI job with the existing eight paired samples and unchanged 5%/allocation/bytes contract; retain and report the original failed observation. If the durable cell fails again, stop retrying and collect one focused durable-cell diagnostic with retained exact executables, identical fixed iteration count and balanced AB/BA order, per-stage and fsync/host-I/O evidence. That diagnostic investigates attribution and does not replace the gate result."
+}

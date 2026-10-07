@@ -1,0 +1,7 @@
+go version go1.26.4 linux/amd64
+=== RUN   TestR1NativeAppenderCreationMetadataBoundedAcrossRotations
+    r1_native_appender_metadata_test.go:112: natural rotations primary files=6 leaf files=12 metadata peaks IDs=18 segments=18
+    r1_native_appender_metadata_test.go:117: handed-off native metadata retained: IDs=18 segments=18
+    r1_native_appender_metadata_test.go:121: native metadata backing storage or publish cursor retained after handoff
+--- FAIL: TestR1NativeAppenderCreationMetadataBoundedAcrossRotations (6.21s)
+FAIL

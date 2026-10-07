@@ -1,0 +1,7 @@
+{
+  "utc": "2026-10-06T10:26:38.643814+00:00",
+  "exact_head": "852aa29e1eed3511f93aba244aef917c89d033e8",
+  "independent_diagnosis_sha256": "bafc091af010f2f8c42e1a36815576cbe5196ac72e2f36b4fcab71be1dbc9177",
+  "root_verified_raw_files": 25,
+  "disposition": "Gate remainsblocked; exactly ONEunchangedgate dispatch37449625940 inprogress/queued; originalsretained; repeatsneedmatchedcontrol/head first; noflakeregressequivalence claim"
+}

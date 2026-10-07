@@ -1,0 +1,11 @@
+{
+  "actual_C_A_D_publication_acceptance": "not supplied by this support packet",
+  "copy_pairs_verified": 79,
+  "current45d_required_ci_and_hosted": "Pending in original root-adoption/start records; no current polling performed.",
+  "frozen_paths_verified_unchanged": 790,
+  "no_snapshot_membership_invented": true,
+  "not_in_preservation_snapshot": "Some selected records predate transfer but were not in support1-11; later originals, portability and45d need explicit additive publication support. Snapshot membership remains original manifest authority.",
+  "raw_patch_text_original_included_matches_review": true,
+  "status": "READY_FOR_ROOT_REVIEW_ONLY",
+  "utc": "2026-10-06T21:39:48.690279+00:00"
+}

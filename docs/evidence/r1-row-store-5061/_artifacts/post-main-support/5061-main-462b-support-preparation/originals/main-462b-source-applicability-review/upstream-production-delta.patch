@@ -1,0 +1,48 @@
+diff --git a/TreeDB/db/maintenance_reachability.go b/TreeDB/db/maintenance_reachability.go
+index 3c775ef4e707c456072761270a7c4c0667eec463..408cb2215fb23c74a3440d81213a7f6dc1b73361 100644
+--- a/TreeDB/db/maintenance_reachability.go
++++ b/TreeDB/db/maintenance_reachability.go
+@@ -252,7 +252,8 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
+ 					if hint == 0 {
+ 						result.counters.PhysicalBytesRead += valuelog.HeaderSize
+ 					}
+-					tally.liveBytes += int64(recordLen)
++					// Pointer lengths begin after the CRC; file sizes include it.
++					tally.liveBytes += int64(recordLen) + 4
+ 				}
+ 				segmentTallies[ptr.FileID] = tally
+ 				continue
+@@ -288,7 +289,9 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
+ 						if hint == 0 {
+ 							result.counters.PhysicalBytesRead += valuelog.HeaderSize
+ 						}
+-						recordLen = int64(length)
++						// Cache the physical span so projection counts the CRC once,
++						// together with the rest of each deduplicated grouped record.
++						recordLen = int64(length) + 4
+ 						lengths[start] = recordLen
+ 					} else if recordLen < 0 {
+ 						recordLen = -recordLen
+@@ -309,7 +312,7 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
+ 				if hint == 0 {
+ 					result.counters.PhysicalBytesRead += valuelog.HeaderSize
+ 				}
+-				tally.liveBytes += int64(recordLen)
++				tally.liveBytes += int64(recordLen) + 4
+ 			}
+ 			entry.valueLogTallies[ptr.FileID] = tally
+ 		}
+diff --git a/TreeDB/db/vlog_rewrite_chunk_plan.go b/TreeDB/db/vlog_rewrite_chunk_plan.go
+index 624baeb5e957ea04427e83d6653679164062b83d..2181792e89cd18f9d2b319371fae75ec2c938710 100644
+--- a/TreeDB/db/vlog_rewrite_chunk_plan.go
++++ b/TreeDB/db/vlog_rewrite_chunk_plan.go
+@@ -197,7 +197,8 @@ func (db *DB) collectValueLogLiveBytesByChunk(ctx context.Context, it iterator.U
+ 			if err != nil {
+ 				return err
+ 			}
+-			liveByChunk[valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}] += int64(recordLen)
++			// Chunk/file byte budgets include the CRC preceding ptr.Offset.
++			liveByChunk[valueLogChunkKey{fileID: ptr.FileID, chunkOffset: chunkOffset}] += int64(recordLen) + 4
+ 			return nil
+ 		}); err != nil {
+ 			return err

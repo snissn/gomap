@@ -1,0 +1,23 @@
+{
+  "utc": "2026-10-06T18:34:17.483156+00:00",
+  "source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+  "actual_argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-json",
+    "./TreeDB/caching",
+    "-run",
+    "^TestCOWMaintenanceAcceptedRefreshPressureLifetime$/^central-index-compaction$/^capture$",
+    "-count=1",
+    "-timeout=3m"
+  ],
+  "actual_start_utc": "2026-10-06T18:33:13.717057+00:00",
+  "actual_exit_utc": "2026-10-06T18:33:22.050168+00:00",
+  "exit": 0,
+  "log_sha256": "c471ac74151b4ea2a9faaf7bbc41e06c21124997ef6a6de1cd222b31d7a4bdf3",
+  "passed_test_rows": [
+    "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+    "TestCOWMaintenanceAcceptedRefreshPressureLifetime"
+  ],
+  "scope": "One unchanged Linux exact capture-case reproduction. Does not prove Windows equivalence, unrelated failure, or justify retry alone."
+}

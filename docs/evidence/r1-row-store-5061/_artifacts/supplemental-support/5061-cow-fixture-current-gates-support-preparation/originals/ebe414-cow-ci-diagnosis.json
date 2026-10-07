@@ -1,0 +1,862 @@
+{
+  "schema": "r1-cow-ci-diagnosis-v1",
+  "created_utc": "2026-10-06T18:38:29.872366+00:00",
+  "scope": "Read-only source/log diagnosis; no Go, captures, GitHub, CI, tests, source edits or delegation.",
+  "base": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+  "candidate": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+  "original_failure": {
+    "run": 37511192351,
+    "job": 112432461744,
+    "test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+    "observed_result": "FAIL: following Set=<nil>; expected errors.Is(ErrCOWCapacity)",
+    "start_go_time": "2026-10-06T18:27:44.5807715Z",
+    "failure_go_time": "2026-10-06T18:27:47.5867225Z",
+    "child_elapsed_seconds": 5.02,
+    "assertion_log_delta_seconds": 3.005951,
+    "post_assertion_cleanup_delta_seconds": 2.0149442
+  },
+  "verdict": "MATERIAL_FIXTURE_SCHEDULING_HOLE; ORIGINAL_CAUSE_NOT_DIRECTLY_TRACED; REQUIRED_CI_FAILURE_REMAINS_UNACCEPTED",
+  "conclusion": "With default generation maintenance enabled, successful subsequent fenced background refresh is allowed to clear refreshRequired after pressure release. The following Set denial assertion is not deterministic. Production admission safety failure is not established by the observed nil return, because a successfully refreshed basis would make success coherent. Original logs do not bind that basis or worker schedule, so the exact cause remains inferred, not observed.",
+  "source_bindings": [
+    {
+      "path": "TreeDB/caching/cow_maintenance_lifetime_test.go",
+      "base": {
+        "git_blob": "c951bb07284cf4afbdae319720ddbe3d042fa64f",
+        "sha256": "a7f108461898ba5bfd56a9f3d8f2c1300ac60d7a7c3e55858fcef2a2093ca2a5",
+        "bytes": 15329
+      },
+      "candidate": {
+        "git_blob": "c951bb07284cf4afbdae319720ddbe3d042fa64f",
+        "sha256": "a7f108461898ba5bfd56a9f3d8f2c1300ac60d7a7c3e55858fcef2a2093ca2a5",
+        "bytes": 15329
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "base": {
+        "git_blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+        "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+        "bytes": 1397560
+      },
+      "candidate": {
+        "git_blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+        "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+        "bytes": 1397560
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/cow_maintenance.go",
+      "base": {
+        "git_blob": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e",
+        "sha256": "41a80a482023fb306eb4f1ec221fc352a6df71d8da18db7995adad322dd887c5",
+        "bytes": 1038
+      },
+      "candidate": {
+        "git_blob": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e",
+        "sha256": "41a80a482023fb306eb4f1ec221fc352a6df71d8da18db7995adad322dd887c5",
+        "bytes": 1038
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/cow_checkpoint.go",
+      "base": {
+        "git_blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+        "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+        "bytes": 6605
+      },
+      "candidate": {
+        "git_blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+        "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+        "bytes": 6605
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/cow_flush.go",
+      "base": {
+        "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036",
+        "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+        "bytes": 7405
+      },
+      "candidate": {
+        "git_blob": "b43a467197fc492c0e34b859bf8176fe40cea036",
+        "sha256": "dee2247416fa56874d20c3470085224fcba4a6b4b0be492c0e15b11c0c11077e",
+        "bytes": 7405
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/cow_batch.go",
+      "base": {
+        "git_blob": "56847c1f313ecd25384fd77a37230f8b03a9ef6e",
+        "sha256": "87be22f652e2befd4ad32e6697d518b056667fbb5e28a75069ef412e2c004d46",
+        "bytes": 11917
+      },
+      "candidate": {
+        "git_blob": "56847c1f313ecd25384fd77a37230f8b03a9ef6e",
+        "sha256": "87be22f652e2befd4ad32e6697d518b056667fbb5e28a75069ef412e2c004d46",
+        "bytes": 11917
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/cow_batch_storage.go",
+      "base": {
+        "git_blob": "533c212677fdf39311bc5ee5c793ef040f4bc564",
+        "sha256": "1b5d75f228f511208d21f5aa60ad21996c14a692cbe692b1c078544865b7fa6a",
+        "bytes": 8201
+      },
+      "candidate": {
+        "git_blob": "533c212677fdf39311bc5ee5c793ef040f4bc564",
+        "sha256": "1b5d75f228f511208d21f5aa60ad21996c14a692cbe692b1c078544865b7fa6a",
+        "bytes": 8201
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/debug_vlog_shape.go",
+      "base": {
+        "git_blob": "1de2680033a21cb1cfc7ee3449756934ec7d601f",
+        "sha256": "af371191cab78f9a8dca17e784047a4229a842e11dcb4a360ccd2b8457e61f6a",
+        "bytes": 4829
+      },
+      "candidate": {
+        "git_blob": "1de2680033a21cb1cfc7ee3449756934ec7d601f",
+        "sha256": "af371191cab78f9a8dca17e784047a4229a842e11dcb4a360ccd2b8457e61f6a",
+        "bytes": 4829
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "base": {
+        "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+        "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+        "bytes": 192264
+      },
+      "candidate": {
+        "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+        "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+        "bytes": 192264
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "base": {
+        "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+        "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+        "bytes": 114319
+      },
+      "candidate": {
+        "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+        "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+        "bytes": 117323
+      },
+      "byte_identical": false
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_gc.go",
+      "base": {
+        "git_blob": "4559626cfefcacf4ead036eec69e98df49ea0c0a",
+        "sha256": "85558462e828b613fb4889e0e8f8ca0e50b073c9d3a48776d48a355a73bcf969",
+        "bytes": 26958
+      },
+      "candidate": {
+        "git_blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+        "sha256": "c56131db852cb71150e41e007a9a8165f7b9bfe7ee7367e0e8a2e92331bd89fb",
+        "bytes": 27626
+      },
+      "byte_identical": false
+    },
+    {
+      "path": "TreeDB/db/wal_recovery.go",
+      "base": {
+        "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+        "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+        "bytes": 45904
+      },
+      "candidate": {
+        "git_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+        "sha256": "6bb969fd95fa17294d53ba49530d9e3fa30a79256ec6267d6b560d3611457e41",
+        "bytes": 47414
+      },
+      "byte_identical": false
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_selector.go",
+      "base": {
+        "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+        "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24",
+        "bytes": 2683
+      },
+      "candidate": {
+        "git_blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca",
+        "sha256": "39935124f1a9859b45984e4132faf6a871fb6b2ecb849a7017ebfda0c0e8d0d4",
+        "bytes": 4899
+      },
+      "byte_identical": false
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "base": {
+        "git_blob": "881b1d4bfb041c13c9210be43a2df7b9c2e24082",
+        "sha256": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+        "bytes": 90520
+      },
+      "candidate": {
+        "git_blob": "976ddd6ed35599342c134eb78ed8433c91e994f9",
+        "sha256": "fc3bf7fe38eb984c8bc3397a8937adf9ad024fb075b6a0bd925c73ac4b22fbb5",
+        "bytes": 92214
+      },
+      "byte_identical": false
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "base": {
+        "git_blob": "27af14233e201939895b1cc216f6f7419349ad6a",
+        "sha256": "271def2d2ecafa4871dbc0497deb71230a2d73cd00979f908b7a4bad8b5fe5c8",
+        "bytes": 54370
+      },
+      "candidate": {
+        "git_blob": "ffffe0e0e16c285def4b82b5d5287186c6bb0df6",
+        "sha256": "f534ee2742eebf8b9c61fb5178992aaa73fe33ce549f580a6e9da8d02dc5e565",
+        "bytes": 54243
+      },
+      "byte_identical": false
+    },
+    {
+      "path": "TreeDB/db/hardware_defaults.go",
+      "base": {
+        "git_blob": "0bc889a236eb5f2c5323c738eef3359ae13c04f0",
+        "sha256": "84bd286f1af52394660afe7d82f09ca6e342aaa2ed9e153a2342f4ab82020974",
+        "bytes": 3748
+      },
+      "candidate": {
+        "git_blob": "0bc889a236eb5f2c5323c738eef3359ae13c04f0",
+        "sha256": "84bd286f1af52394660afe7d82f09ca6e342aaa2ed9e153a2342f4ab82020974",
+        "bytes": 3748
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "TreeDB/caching/cow_open.go",
+      "base": {
+        "git_blob": "738668580b950604ff5b4997dd5eec45687c9e34",
+        "sha256": "439cdb487f7941ff8279845ee0b5c807b702119e725b8b2d3750b8cb8e68b213",
+        "bytes": 1466
+      },
+      "candidate": {
+        "git_blob": "738668580b950604ff5b4997dd5eec45687c9e34",
+        "sha256": "439cdb487f7941ff8279845ee0b5c807b702119e725b8b2d3750b8cb8e68b213",
+        "bytes": 1466
+      },
+      "byte_identical": true
+    }
+  ],
+  "all_caching_delta_empty": true,
+  "relevant_source_evidence": [
+    {
+      "path": "TreeDB/caching/cow_maintenance_lifetime_test.go",
+      "lines": [
+        122,
+        138,
+        233,
+        239,
+        244,
+        282
+      ],
+      "finding": "Fixture uses default ValueLogGenerationPolicy; pressure/gate/retained-basis assertions pass before the pressure is closed and following unsynced Set unexpectedly succeeds. Explicit checkpoint retry occurs later."
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "lines": [
+        12698,
+        12703,
+        13415,
+        13416,
+        13666,
+        19541,
+        19560,
+        19591,
+        19606,
+        19632
+      ],
+      "finding": "Open defaults generation policy to HotWarmCold and starts WAL-off periodic generation maintenance. Auto-checkpoint is a separately explicit start, absent in this fixture. Periodic tick is 1 second."
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "lines": [
+        2438,
+        10137,
+        10138,
+        10168,
+        13820,
+        13835,
+        21982,
+        21991,
+        22090,
+        23535,
+        23617,
+        23648
+      ],
+      "finding": "250ms leaf-pack write-burst admission can admit a non-GC periodic pass while full 15s quiet is false; rewrite is suppressed, optional leaf-pack can return without work, then GC/dry-run is reached. Ordinary runGC false passes use GC eligibility estimation when no GC pressure; entering central maintenance still checkpoints before eligibility scan."
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "lines": [
+        7976,
+        7985,
+        7989,
+        8005,
+        8010,
+        8025,
+        8043,
+        24296,
+        24415,
+        24439,
+        24459,
+        37917
+      ],
+      "finding": "Central maintenance serializes on checkpointMu, marks maintenanceActive, optionally checkpoints, and finishes with a COW refresh. Set uses COW batch writeRegular -> beginDirectWrite; when maintenanceActive is true it waits instead of immediate refreshRequired refusal, then rechecks after a valid refresh."
+    },
+    {
+      "path": "TreeDB/caching/cow_checkpoint.go",
+      "lines": [
+        16,
+        49,
+        52,
+        53,
+        134,
+        145
+      ],
+      "finding": "Checkpoint legitimately retries a required refresh; refresh may succeed once pressure is released. The no-vacuum checkpoint path clears its temporary gate. Test hooks are after initial required refresh and are therefore unsuitable for pausing that initial retry."
+    },
+    {
+      "path": "TreeDB/caching/cow_maintenance.go",
+      "lines": [
+        7,
+        12,
+        25,
+        29,
+        35
+      ],
+      "finding": "Only successful captured/installed fenced basis clears refreshRequired in refresh helper; central accepted-error cleanup joins maintenance and refresh errors."
+    },
+    {
+      "path": "TreeDB/caching/cow_batch.go",
+      "lines": [
+        257,
+        258,
+        311,
+        316
+      ],
+      "finding": "Unsynced following Set passes false to cowPoint and writeCOWPublication, so it does not self-initiate a sync checkpoint. No capacity-driven automatic point-write retry was found."
+    },
+    {
+      "path": "TreeDB/caching/debug_vlog_shape.go",
+      "lines": [
+        51,
+        59,
+        71,
+        81
+      ],
+      "finding": "Optional shape loop only emits diagnostics, and does not checkpoint/refresh."
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "lines": [
+        4900,
+        4960,
+        4978
+      ],
+      "finding": "Native CompactIndex uses ordinary finalizeCommitReleasingRootSerialization and is byte-identical to actual main; R1 changed rebuilt-index resource helpers are used by online/offline vacuum rather than this selected CompactIndex route."
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_gc.go",
+      "lines": [
+        49,
+        61
+      ],
+      "finding": "Leaf generation GC requires indexOuterLeavesInValueLog. Fixture does not enable that native layout; newly added manifest GC is not invoked by selected central CompactIndex operation."
+    },
+    {
+      "path": "TreeDB/caching/cow_open.go",
+      "lines": [
+        9,
+        28,
+        31
+      ],
+      "finding": "COW validation does not restrict ValueLogGenerationPolicy; Off is supported by cached Open policy resolution."
+    },
+    {
+      "path": "TreeDB/db/hardware_defaults.go",
+      "lines": [
+        76,
+        81,
+        94,
+        101,
+        109,
+        113
+      ],
+      "finding": "Explicit lane counts are authoritative; generation-on defaults to three lanes, Off defaults to one. This profile difference does not remove explicit maintenance/Checkpoint routes."
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "lines": [
+        12708,
+        12720,
+        19545,
+        19549,
+        19567,
+        21663
+      ],
+      "finding": "Off is installed before workers start and prevents optional generation entry, including the periodic worker. The environment-only disable controls periodic startup; the per-DB policy is the broader generation-entry guard."
+    }
+  ],
+  "original_log_receipts": [
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/ebe414-windows-caching-rest1-failed-original.log",
+      "sha256": "bfc93b053e1776896e9678dff8c929c6d93be1ca4212d045843c90053d6bf06f",
+      "bytes": 555937,
+      "selected_go_test_json_rows": [
+        {
+          "Time": "2026-10-06T18:27:43.8833256Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "raw_line": 777
+        },
+        {
+          "Time": "2026-10-06T18:27:43.8833256Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime\n",
+          "raw_line": 778
+        },
+        {
+          "Time": "2026-10-06T18:27:43.8838758Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "raw_line": 779
+        },
+        {
+          "Time": "2026-10-06T18:27:43.8838758Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum\n",
+          "raw_line": 780
+        },
+        {
+          "Time": "2026-10-06T18:27:44.0822499Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum (0.20s)\n",
+          "raw_line": 781
+        },
+        {
+          "Time": "2026-10-06T18:27:44.0822499Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "Elapsed": 0.2,
+          "raw_line": 782
+        },
+        {
+          "Time": "2026-10-06T18:27:44.0822499Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "raw_line": 783
+        },
+        {
+          "Time": "2026-10-06T18:27:44.0822499Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum\n",
+          "raw_line": 784
+        },
+        {
+          "Time": "2026-10-06T18:27:44.580199Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum (0.50s)\n",
+          "raw_line": 785
+        },
+        {
+          "Time": "2026-10-06T18:27:44.5807715Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "Elapsed": 0.5,
+          "raw_line": 786
+        },
+        {
+          "Time": "2026-10-06T18:27:44.5807715Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "raw_line": 787
+        },
+        {
+          "Time": "2026-10-06T18:27:44.5807715Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture\n",
+          "raw_line": 788
+        },
+        {
+          "Time": "2026-10-06T18:27:47.5867225Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Output": "    cow_maintenance_lifetime_test.go:244: following Set=<nil>\n",
+          "raw_line": 789
+        },
+        {
+          "Time": "2026-10-06T18:27:49.6016667Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Output": "--- FAIL: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture (5.02s)\n",
+          "raw_line": 790
+        },
+        {
+          "Time": "2026-10-06T18:27:49.6016667Z",
+          "Action": "fail",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Elapsed": 5.02,
+          "raw_line": 791
+        },
+        {
+          "Time": "2026-10-06T18:27:49.6016667Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "raw_line": 792
+        },
+        {
+          "Time": "2026-10-06T18:27:49.6016667Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install\n",
+          "raw_line": 793
+        },
+        {
+          "Time": "2026-10-06T18:27:53.9652751Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Output": "    cow_maintenance_lifetime_test.go:308: real accepted maintenance1; install refusal then retry; captures5 oldRevision1\n",
+          "raw_line": 794
+        },
+        {
+          "Time": "2026-10-06T18:27:54.4478825Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install (4.85s)\n",
+          "raw_line": 795
+        },
+        {
+          "Time": "2026-10-06T18:27:54.4478825Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Elapsed": 4.85,
+          "raw_line": 796
+        },
+        {
+          "Time": "2026-10-06T18:27:54.4478825Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "Output": "--- FAIL: TestCOWMaintenanceAcceptedRefreshPressureLifetime (10.56s)\n",
+          "raw_line": 797
+        },
+        {
+          "Time": "2026-10-06T18:27:54.4478825Z",
+          "Action": "fail",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "Elapsed": 10.56,
+          "raw_line": 798
+        }
+      ]
+    },
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/main3cfe-windows-caching-rest1-original.log",
+      "sha256": "02642334cea8f87bf8399c3b1e3543afece466f7d6f950ea11433429cc9a2a49",
+      "bytes": 555247,
+      "selected_go_test_json_rows": [
+        {
+          "Time": "2026-10-06T16:47:23.2865825Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "raw_line": 761
+        },
+        {
+          "Time": "2026-10-06T16:47:23.2865825Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime\n",
+          "raw_line": 762
+        },
+        {
+          "Time": "2026-10-06T16:47:23.2865825Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "raw_line": 763
+        },
+        {
+          "Time": "2026-10-06T16:47:23.2865825Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum\n",
+          "raw_line": 764
+        },
+        {
+          "Time": "2026-10-06T16:47:23.5604127Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum (0.27s)\n",
+          "raw_line": 765
+        },
+        {
+          "Time": "2026-10-06T16:47:23.5604127Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum",
+          "Elapsed": 0.27,
+          "raw_line": 766
+        },
+        {
+          "Time": "2026-10-06T16:47:23.5604127Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "raw_line": 767
+        },
+        {
+          "Time": "2026-10-06T16:47:23.5604127Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum\n",
+          "raw_line": 768
+        },
+        {
+          "Time": "2026-10-06T16:47:23.8737592Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum (0.31s)\n",
+          "raw_line": 769
+        },
+        {
+          "Time": "2026-10-06T16:47:23.8744151Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum",
+          "Elapsed": 0.31,
+          "raw_line": 770
+        },
+        {
+          "Time": "2026-10-06T16:47:23.8744151Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "raw_line": 771
+        },
+        {
+          "Time": "2026-10-06T16:47:23.8744151Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture\n",
+          "raw_line": 772
+        },
+        {
+          "Time": "2026-10-06T16:47:24.1468625Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Output": "    cow_maintenance_lifetime_test.go:308: real accepted maintenance1; capture refusal then retry; captures3 oldRevision1\n",
+          "raw_line": 773
+        },
+        {
+          "Time": "2026-10-06T16:47:24.1880822Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture (0.31s)\n",
+          "raw_line": 774
+        },
+        {
+          "Time": "2026-10-06T16:47:24.1880822Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture",
+          "Elapsed": 0.31,
+          "raw_line": 775
+        },
+        {
+          "Time": "2026-10-06T16:47:24.1880822Z",
+          "Action": "run",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "raw_line": 776
+        },
+        {
+          "Time": "2026-10-06T16:47:24.1880822Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Output": "=== RUN   TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install\n",
+          "raw_line": 777
+        },
+        {
+          "Time": "2026-10-06T16:47:24.4615176Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Output": "    cow_maintenance_lifetime_test.go:308: real accepted maintenance1; install refusal then retry; captures4 oldRevision1\n",
+          "raw_line": 778
+        },
+        {
+          "Time": "2026-10-06T16:47:24.5175719Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install (0.33s)\n",
+          "raw_line": 779
+        },
+        {
+          "Time": "2026-10-06T16:47:24.5175719Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install",
+          "Elapsed": 0.33,
+          "raw_line": 780
+        },
+        {
+          "Time": "2026-10-06T16:47:24.5175719Z",
+          "Action": "output",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "Output": "--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime (1.23s)\n",
+          "raw_line": 781
+        },
+        {
+          "Time": "2026-10-06T16:47:24.5175719Z",
+          "Action": "pass",
+          "Package": "github.com/snissn/gomap/TreeDB/caching",
+          "Test": "TestCOWMaintenanceAcceptedRefreshPressureLifetime",
+          "Elapsed": 1.23,
+          "raw_line": 782
+        }
+      ]
+    }
+  ],
+  "focused_linux_control": {
+    "original_files": [
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/normal-start.json",
+        "sha256": "f3b1cbf62b6697e1b1a0618beca2b1e47e31c9c76be3bac826ce6ed2c3e5a4af",
+        "bytes": 109446
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/normal-exit.json",
+        "sha256": "b7a39b6c62453df45d2ef5c7acc846b277eed3100a9154943baa84960a9d88bb",
+        "bytes": 108295
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/normal.log",
+        "sha256": "c471ac74151b4ea2a9faaf7bbc41e06c21124997ef6a6de1cd222b31d7a4bdf3",
+        "bytes": 2827
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/source-before.json",
+        "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000",
+        "bytes": 105879
+      },
+      {
+        "path": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/source-after.json",
+        "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000",
+        "bytes": 105879
+      }
+    ],
+    "actual_argv": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "-json",
+      "./TreeDB/caching",
+      "-run",
+      "^TestCOWMaintenanceAcceptedRefreshPressureLifetime$/^central-index-compaction$/^capture$",
+      "-count=1",
+      "-timeout=3m"
+    ],
+    "actual_environment": {
+      "GOCACHE": "/home/mikers/.cache/gomap-r1-5071-fd-go1264",
+      "GODEBUG": "",
+      "GOENV": "off",
+      "GOFLAGS": "",
+      "GOGC": "100",
+      "GOMAXPROCS": "12",
+      "GOMEMLIMIT": "off",
+      "GOMODCACHE": "/home/mikers/go/pkg/mod",
+      "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+      "GOTOOLCHAIN": "local",
+      "GOWORK": "off",
+      "HOME": "/home/mikers",
+      "PATH": "/home/mikers/.gvm/pkgsets/go1.25/global/bin:/home/mikers/.gvm/gos/go1.25/bin:/home/mikers/.gvm/pkgsets/go1.25/global/overlay/bin:/home/mikers/.gvm/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+      "PYTHONDONTWRITEBYTECODE": "1"
+    },
+    "observed_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+    "exit_receipt_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+    "exit": 0,
+    "limitation": "Linux count=1 success is not Windows schedule coverage, a causal attribution, or a CI waiver."
+  },
+  "R1_intersection": {
+    "direct_cow_gate_logic": "Unchanged at byte level from actual main; original main Windows same capture child PASS 0.31s with captures3.",
+    "direct_compact_index_logic": "Unchanged; selected rebuilt-index packed selection helpers are used by vacuum paths rather than CompactIndex.",
+    "shared_runtime_constraint": "Manager retry admission/Close logic did change. Manager set retention/release is reachable from COW snapshot/cut drain and may affect timing. No direct assignment to COW refreshRequired exists in those changed manager paths. This is not whole-binary equivalence and does not exclude indirect scheduling or resource effects.",
+    "layout_constraint": "No native outer-leaf layout option in fixture; leaf/manifest GC new behavior is not the selected operation.",
+    "observed_variance": "Main capture passed in0.31s; candidate failed after3.005951s at assertion and finished5.02s. Candidate install passed4.85s with captures5 vs main install0.33s/captures4; extra capture is compatible with background activity but is not a tagged worker trace."
+  },
+  "recommendation": {
+    "preferred": "Make the coherence-only fixture deterministic at construction: Options.ValueLogGenerationPolicy = uint8(backenddb.ValueLogGenerationOff). Preserve every acceptance, pressure, gate, old-view, denial and explicit checkpoint-retry assertion. No production admission or threshold change.",
+    "why": "Suppress optional generation worker before Open can spawn it; prevents a permitted unrelated maintenance owner from refreshing the basis during the pressure-release assertion window. The fixture intentionally measures failed refresh lifetime until its own explicit retry.",
+    "alternative_control": "Set TREEDB_DISABLE_VLOG_GENERATION_LOOP via t.Setenv before Open; per-DB Options is narrower and avoids environment-wide scheduling control. Do not rely on sleeps, maintenance flags poked after Open, or a checkpoint hook after the refresh it must block.",
+    "validation_required": "Root owns repair/test actions. Existing whole parent is finite and covers capture/install and supported/unsupported maintenance routes; use focused normal/race plus actual Windows required job at repaired head. If a controlled fixture still returns nil with refreshRequired=true and maintenanceActive=false, product gate defect needs repair before CI acceptance.",
+    "retry_disposition": "One bounded unchanged Windows retry could observe schedule sensitivity but cannot remove the identified fixture hole or prove a flake. Prefer coherent fixture control and current-head required CI over repeated unchanged retries.",
+    "causal_evidence_if_needed": "Observe atomic capture count, basis identity and refreshRequired/maintenanceActive before/after pressure close and admitted Set, plus tagged generation-worker maintenance entry/refresh completion. Avoid unsynchronized reads of wrapper plain pressure/armed fields; use existing fixture control first rather than add broad runtime tracing.",
+    "explicit_route_applicability": "ValueLogGenerationOff is accepted by validateCOWOpenOptions; it disables startVlogGenerationLoop before goroutine creation and policy-guards optional generation entry. RunBackendMaintenance, native CompactIndex, and COW Checkpoint/required-basis refresh have no Off-policy guard, so the explicit capture/install/refused-refresh/retry lifetime routes remain supported. The two-shard COW finite budget, persistent value-log pointer threshold and compression-off settings remain configured.",
+    "fixture_profile_limit": "Off also changes default cached journal/value-log lane count from three hot/warm/cold lanes to one hot lane. This is a deliberate fixture profile change, not identical scheduling or storage-layout behavior. The assertions concern explicit maintenance/refresh lifetime rather than generation/lane coverage; focused repaired-head validation remains necessary. If preserving the prior total lane count is desired, explicitly configure JournalLanes:3, without claiming that Off preserves hot/warm/cold classification.",
+    "root_disposition": "Root adopts the minimal construction-time fixture isolation repair, subject to scoped normal/race and current-head required CI; root remains sole writer/test/CI authority. No source edit or repaired-head result is supplied by reviewer."
+  },
+  "limits": [
+    "Original red job/log remains preserved and unwaived.",
+    "Main source equality and Linux pass alone do not establish unrelated failure, performance equivalence, or Windows correctness.",
+    "No accepted Windows repaired-head or future CI result asserted.",
+    "Optional GC scheduling permits early dry-run maintenance despite rewrite quiet gating; changing that production policy is separate scope and unnecessary for this fixture repair."
+  ],
+  "finalized_utc": "2026-10-06T18:41:26.412190+00:00"
+}

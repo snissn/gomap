@@ -1,0 +1,10 @@
+ok  	github.com/snissn/gomap/TreeDB/db	0.048s
+=== RUN   TestVacuumM0WriteArtifact
+--- PASS: TestVacuumM0WriteArtifact (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.024s
+......
+----------------------------------------------------------------------
+Ran 6 tests in 0.001s
+
+OK

@@ -1,0 +1,111 @@
+{
+  "decision": "ADVISORY_ONLY_ACTUAL_ALLOCATION_INCREASE_RETAINED_CAUSAL_ATTRIBUTION_UNRESOLVED",
+  "comparison_sha256": "a7c55ffc991c8630b31dcf7fcfb08e9c63c867f635615325978dfad62f343fde",
+  "baseline_packet_sha256": "d3bcec0a4924267afeee67a13ec1e5f83c8ef930a12d1b46538c3cd71746013f",
+  "M_packet_sha256": "e5b83232a75ecb0a30b2859dd64e0ee2e1cba2a31cb922c05d1b9384e048a17b",
+  "read_only_extract_sha256": "5102c672a61441ac467d3838877dec0a9d21ceccc7b85b27a74de2f2ad2c9613",
+  "checkpoint_samples": [
+    {
+      "repetition": 0,
+      "baseline_ns": 9642662,
+      "M_ns": 38730063,
+      "baseline_bytes": 101400,
+      "M_bytes": 1121168,
+      "baseline_allocs": 5454,
+      "M_allocs": 5866
+    },
+    {
+      "repetition": 1,
+      "baseline_ns": 36816712,
+      "M_ns": 89106439,
+      "baseline_bytes": 1110048,
+      "M_bytes": 3848160,
+      "baseline_allocs": 5849,
+      "M_allocs": 6795
+    },
+    {
+      "repetition": 2,
+      "baseline_ns": 48058940,
+      "M_ns": 65689513,
+      "baseline_bytes": 1110120,
+      "M_bytes": 3829760,
+      "baseline_allocs": 5848,
+      "M_allocs": 6534
+    },
+    {
+      "repetition": 3,
+      "baseline_ns": 67636167,
+      "M_ns": 87755586,
+      "baseline_bytes": 3935272,
+      "M_bytes": 3886368,
+      "baseline_allocs": 6639,
+      "M_allocs": 6643
+    },
+    {
+      "repetition": 4,
+      "baseline_ns": 43722539,
+      "M_ns": 64431071,
+      "baseline_bytes": 1116592,
+      "M_bytes": 1109568,
+      "baseline_allocs": 5864,
+      "M_allocs": 5844
+    }
+  ],
+  "typed_checkpoint_medians": {
+    "engine": "typed-row",
+    "phase": "checkpoint",
+    "before": {
+      "repetitions": 5,
+      "ops_per_sec_median": 22.871498839534457,
+      "throughput_spread": 3.8878437222411413,
+      "noise_status": "inconclusive",
+      "ns_per_op_median": 43722539,
+      "bytes_per_op_median": 1110120,
+      "allocs_per_op_median": 5849,
+      "p50_ns_median": 43722539,
+      "p95_ns_median": 43722539,
+      "p99_ns_median": 43722539
+    },
+    "after": {
+      "repetitions": 5,
+      "ops_per_sec_median": 15.223130060349206,
+      "throughput_spread": 0.9588831177242678,
+      "noise_status": "inconclusive",
+      "ns_per_op_median": 65689513,
+      "bytes_per_op_median": 3829760,
+      "allocs_per_op_median": 6534,
+      "p50_ns_median": 65689513,
+      "p95_ns_median": 65689513,
+      "p99_ns_median": 65689513
+    },
+    "comparison": "inconclusive",
+    "throughput_ratio": 0.6655938977656904,
+    "bytes_per_op_delta": 2719640,
+    "allocs_per_op_delta": 685
+  },
+  "stable_matched_groups": 20,
+  "minimum_stable_throughput_ratio": 0.959940678535589,
+  "timing_guard_advisory": "No >15% throughput loss in 20 stable matched groups; 72 inconclusive and 1 newly enabled group remain separately labeled. Inconclusive checkpoint timing is not evidence of allocation neutrality.",
+  "allocation_advisory": "Median whole-process allocation rises +2719640B per one checkpoint (+245% approx); same ~3.8-3.9MB high-allocation values occur in baseline and M. Different frequency of existing low/high samples is observed, not a proven candidate-caused allocation regression or a proven noise explanation.",
+  "counter_findings": [
+    "Final manifest sizes match exact per-repetition:902258B then904853B; no final manifest-size inflation observed",
+    "Final manifest build counts baseline511/635/637/640/637 versusM504/630/634/625/619; cumulative encoded work roughly246-307MB on both, not systematically greater in M",
+    "Cleanup scan totals baseline1/3/3/3/3 versusM1/3/3/2/3; stats are cumulative, not checkpoint deltas",
+    "Writer append-buffer total allocation counts match by repetition17/18/19/20/21 on both; no observed extra append-buffer count",
+    "Finite end census baseline64.48-77.05MB and M60.28-72.86MB; no retained-growth or lifetime bound inferred from A"
+  ],
+  "source_evidence": {
+    "r1_measurement_and_transition": "cmd/collection_workload_bench/r1.go:259-280,520-530,827-835; same blobfec4f76df23af2cfa04522fa3e6d07a6fbb43a68 on both",
+    "checkpoint_prefix": "TreeDB/db/db.go:4275-4314 waits coordinator through visibleCommitSeq then rotates/conditionally scans cleanup; checkpointTeardownPinned body byte-identical SHA7afd6ec12785e9271669e8fa71d9e989a53966484caf118bc7fe5a9b78934cc7",
+    "cleanup_scan": "TreeDB/db/command_wal_raw.go:903-921 captures proof and scans; cleanupCommandWALCoveredSegmentsV1 body byte-identical SHAec334c09b80bf4c8ece7d764fd958ca851deef3661516cea3226be0b3f5a8c28",
+    "scanner": "TreeDB/db/command_wal_publish.go:521-541,640-740; same blobe5f5ab2994939bcc20ce82608c264f653756a641",
+    "stats": "TreeDB/db/durable_root_stats.go:48; same blob90b46341a13bdf7f5716482cb10e46ea1c36101e"
+  },
+  "limitations": [
+    "Entry-function equality does not imply all transitive runtime/source or compiled code equality",
+    "Process-wide TotalAlloc/Mallocs includes concurrent publication/background allocations; one-call phase has no goroutine isolation",
+    "No before/after phase I/O/publication/allocation-profile deltas recorded, so cumulative work cannot justify exact extra bytes",
+    "Timing spread guard cannot be applied to dismiss bytes/allocs increase",
+    "No rerun, build, tests, new measurement, change, waiver or acceptance performed"
+  ]
+}

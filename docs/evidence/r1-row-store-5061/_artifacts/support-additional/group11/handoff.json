@@ -1,0 +1,50 @@
+{
+  "A_C_harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "actual_final_cancellation_observed": false,
+  "actual_landing_observed": false,
+  "checks_exit": 0,
+  "current_required_CI_observed": false,
+  "exact_candidate": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+  "group_number": 11,
+  "hosted_review_accepted": false,
+  "metadata": {
+    "README.md": {
+      "bytes": 3525,
+      "sha256": "301b43a5627536c2760977df60ccdda81c9ffcd28d3973463a497e6a95ad60e4"
+    },
+    "checks.json": {
+      "bytes": 1617,
+      "sha256": "a667245e5e1c6667748f1967d2a326d9e4324a61f4568bf1475f34a7db94bbde"
+    },
+    "handoff.md": {
+      "bytes": 3167,
+      "sha256": "a33ee7957868ddd8295ee1d6ac00d8b71b15bcb8c448344b902ad9b32e2413d6"
+    },
+    "inventory.json": {
+      "bytes": 125185,
+      "sha256": "eebf6229644bb41b66ba00f730964ba68587e02f736f623f76c4f47a6d98fbe5"
+    },
+    "prepare.py": {
+      "bytes": 22677,
+      "sha256": "19f0a21ba98823418be7154971f30ba1c416c8ab7a57fb6f10b15bdecb03db44"
+    },
+    "readiness.json": {
+      "bytes": 539,
+      "sha256": "92fea0dd9636f1bbbb3f436c85213f5e62954753ac75d03d5a18c3e4e582a10e"
+    },
+    "selection-before-copy.json": {
+      "bytes": 76953,
+      "sha256": "0e73e9abcdc976280f9a131da283ae0af32563d3d1881cbb052ff893fd107ee5"
+    }
+  },
+  "original_bytes": 16121291,
+  "original_files": 83,
+  "prior_files_verified_unchanged": 1296,
+  "publication": false,
+  "requested_originals_missing": [],
+  "root_group_adoption": false,
+  "root_source_adoption_included": true,
+  "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION",
+  "worker_released": true
+}

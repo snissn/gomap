@@ -1,0 +1,51 @@
+{
+  "files": {
+    "README.md": {
+      "bytes": 3910,
+      "sha256": "e97286c077371dbedcb46e5bfd4d940ae52be2ebcb1d21bba9efba29d02071d6"
+    },
+    "diagnostic-details.json": {
+      "bytes": 2966104,
+      "sha256": "bb21f4e935d1c3da15eea87a28a16acc1e15de994e5c040eef3f0d19acc51244"
+    },
+    "diagnostic-format-smoke.md": {
+      "bytes": 46543,
+      "sha256": "dd9d5ebc29f071bf1cf9690e7d189b54500c70066f70525aa1a69a9d4affb97f"
+    },
+    "format.py": {
+      "bytes": 18047,
+      "sha256": "022c45de44e96014de9ef343b639be4abd92189152efd411314b829b54c4da58"
+    },
+    "frozen-r1_lifecycle_validate.py": {
+      "bytes": 61009,
+      "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968"
+    },
+    "validation.txt": {
+      "bytes": 1025,
+      "sha256": "42ea003e5d9b8f3f656c5d4b817e0ba0e14f8ebfb3bdb0d3c0afe0d86099ec87"
+    }
+  },
+  "frozen_validator_sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+  "future_invocation": "README.md; supply actual original D packet/log directory, independent validation-log link, raw publication links, and a fresh details output path after root qualification",
+  "historical_smoke": {
+    "calls_per_epoch": 8,
+    "documents": 32,
+    "epochs": 8,
+    "originals_unchanged": true,
+    "packet_sha256": "70b6e757051ffeb5932450f5a2371c07c8717746cdc7bf947ac604e29d38760c",
+    "processes": 1,
+    "qualification": "rehearsal",
+    "source": "f79616f2aeb99b43af81877f26d646cca51177b9"
+  },
+  "limitations": [
+    "descriptive only; never accepts evidence",
+    "reuse pinned raw schema parser; no full validator or binary replay",
+    "caller-supplied validation link is not interpreted",
+    "finite direct-backend hot-set scope; sampled heap, no RSS/peak/cached-wrapper equivalence",
+    "no ratios, new thresholds, per-kind timer allocation, or infinite/physical-capacity bound",
+    "all raw calibration/final values and nested overlap classes preserved separately"
+  ],
+  "selected_source": "e4e7a3032405bef141010b1c80eb0f0db1cd6f74",
+  "state": "prepared; writer released; no qualification or current measurements",
+  "work_performed": "private local Python/file writes only; no Go/remote/GitHub/capture/source changes"
+}

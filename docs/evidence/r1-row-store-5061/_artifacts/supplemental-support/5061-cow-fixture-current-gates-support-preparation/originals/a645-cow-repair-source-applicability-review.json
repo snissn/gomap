@@ -1,0 +1,801 @@
+{
+  "schema": "r1-cow-repair-final-source-applicability-v1",
+  "created_utc": "2026-10-06T18:46:42.027278+00:00",
+  "heads": {
+    "previous": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+    "repair": "275ea4f2de90cf2db2fa735234f748ef300dd564",
+    "old_main": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+    "new_main": "7649857532521db69ff4cdcf236a11377c85ab3d",
+    "integration": "17597a9758e19517b168adaeb531536e33928a7b",
+    "final": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+    "R1_tested": "8506a498346d35c635bbd0f59d99a135d6c6785d"
+  },
+  "verdict": "CLEAN_FOR_SCOPED_SOURCE_APPLICABILITY; FIXTURE_VALIDATION_AND_CURRENT_HEAD_CI_NOT_ASSERTED",
+  "material_findings": [],
+  "source": {
+    "R1_tested": {
+      "commit": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+      "runtime_input_count": 1122,
+      "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+      "harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb",
+      "harness": {
+        "cmd/collection_workload_bench/main.go": {
+          "blob": "4d43d9d2ee41167b94e778f7b126bbc7598ab4cc",
+          "sha256": "a3f09c5b57311983c96d869a3c7a2b540426792c3af67b4d318243fe4e4d082e",
+          "bytes": 41188
+        },
+        "cmd/collection_workload_bench/r1.go": {
+          "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+          "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+          "bytes": 43896
+        },
+        "cmd/collection_workload_bench/r1_sqlite.go": {
+          "blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+          "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+          "bytes": 10041
+        },
+        "scripts/r1_collection_capture.sh": {
+          "blob": "7ba56c597338b164570085037b43938f9a920c79",
+          "sha256": "063bf7178c39e5f55a4d11c0316921971d480a609309c1c7a8e70fa843160e85",
+          "bytes": 2566
+        },
+        "scripts/r1_collection_summary.py": {
+          "blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+          "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+          "bytes": 2159
+        },
+        "scripts/r1_collection_source.py": {
+          "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+          "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+          "bytes": 1994
+        }
+      }
+    },
+    "previous": {
+      "commit": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+      "runtime_input_count": 1122,
+      "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "harness": {
+        "cmd/collection_workload_bench/main.go": {
+          "blob": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+          "sha256": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+          "bytes": 41537
+        },
+        "cmd/collection_workload_bench/r1.go": {
+          "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+          "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+          "bytes": 43896
+        },
+        "cmd/collection_workload_bench/r1_mutation_sweep.go": {
+          "blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+          "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+          "bytes": 19159
+        },
+        "cmd/collection_workload_bench/r1_sqlite.go": {
+          "blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+          "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+          "bytes": 10041
+        },
+        "scripts/r1_collection_capture.sh": {
+          "blob": "abc2008715641c2133fe8958295913782f42c5a3",
+          "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+          "bytes": 3171
+        },
+        "scripts/r1_collection_summary.py": {
+          "blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+          "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+          "bytes": 2159
+        },
+        "scripts/r1_collection_source.py": {
+          "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+          "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+          "bytes": 1994
+        }
+      }
+    },
+    "repair": {
+      "commit": "275ea4f2de90cf2db2fa735234f748ef300dd564",
+      "runtime_input_count": 1122,
+      "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "harness": {
+        "cmd/collection_workload_bench/main.go": {
+          "blob": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+          "sha256": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+          "bytes": 41537
+        },
+        "cmd/collection_workload_bench/r1.go": {
+          "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+          "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+          "bytes": 43896
+        },
+        "cmd/collection_workload_bench/r1_mutation_sweep.go": {
+          "blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+          "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+          "bytes": 19159
+        },
+        "cmd/collection_workload_bench/r1_sqlite.go": {
+          "blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+          "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+          "bytes": 10041
+        },
+        "scripts/r1_collection_capture.sh": {
+          "blob": "abc2008715641c2133fe8958295913782f42c5a3",
+          "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+          "bytes": 3171
+        },
+        "scripts/r1_collection_summary.py": {
+          "blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+          "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+          "bytes": 2159
+        },
+        "scripts/r1_collection_source.py": {
+          "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+          "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+          "bytes": 1994
+        }
+      }
+    },
+    "integration": {
+      "commit": "17597a9758e19517b168adaeb531536e33928a7b",
+      "runtime_input_count": 1122,
+      "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "harness": {
+        "cmd/collection_workload_bench/main.go": {
+          "blob": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+          "sha256": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+          "bytes": 41537
+        },
+        "cmd/collection_workload_bench/r1.go": {
+          "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+          "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+          "bytes": 43896
+        },
+        "cmd/collection_workload_bench/r1_mutation_sweep.go": {
+          "blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+          "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+          "bytes": 19159
+        },
+        "cmd/collection_workload_bench/r1_sqlite.go": {
+          "blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+          "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+          "bytes": 10041
+        },
+        "scripts/r1_collection_capture.sh": {
+          "blob": "abc2008715641c2133fe8958295913782f42c5a3",
+          "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+          "bytes": 3171
+        },
+        "scripts/r1_collection_summary.py": {
+          "blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+          "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+          "bytes": 2159
+        },
+        "scripts/r1_collection_source.py": {
+          "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+          "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+          "bytes": 1994
+        }
+      }
+    },
+    "final": {
+      "commit": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+      "runtime_input_count": 1122,
+      "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+      "harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+      "harness": {
+        "cmd/collection_workload_bench/main.go": {
+          "blob": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+          "sha256": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+          "bytes": 41537
+        },
+        "cmd/collection_workload_bench/r1.go": {
+          "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+          "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+          "bytes": 43896
+        },
+        "cmd/collection_workload_bench/r1_mutation_sweep.go": {
+          "blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+          "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+          "bytes": 19159
+        },
+        "cmd/collection_workload_bench/r1_sqlite.go": {
+          "blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+          "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+          "bytes": 10041
+        },
+        "scripts/r1_collection_capture.sh": {
+          "blob": "abc2008715641c2133fe8958295913782f42c5a3",
+          "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+          "bytes": 3171
+        },
+        "scripts/r1_collection_summary.py": {
+          "blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+          "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+          "bytes": 2159
+        },
+        "scripts/r1_collection_source.py": {
+          "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+          "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+          "bytes": 1994
+        }
+      }
+    }
+  },
+  "runtime_maps_byte_equal": true,
+  "canonical_runtime_scope": "go.mod/go.sum OR prefixes TreeDB/, cmd/internal/treedbstats/ with suffix .go/.s/.S/.c/.h/.syso, excluding *_test.go; sorted path+NUL+Git blob+NUL SHA256",
+  "root_final_source_receipt": {
+    "path": "/tmp/gomap-r1-execution-20261005/5071-cow-repair-final-source.json",
+    "bytes": 105879,
+    "sha256": "f4dda7584a08fed2720eb5cca238fac9180d46ec84e4147a732417bb0cd4bffb"
+  },
+  "root_final_source_receipt_independently_matches": true,
+  "repair": {
+    "actual_changed_paths": [
+      ".github/ci/ci_impact.json",
+      "TreeDB/caching/cow_maintenance_lifetime_test.go"
+    ],
+    "diff_sha256": "f6cde502f62f64662f496a04d60e90d4c5a15734b050473e444dc4f1d8bfebbe",
+    "review": "Construction-time Off suppresses policy-guarded optional generation and periodic worker before Open; explicit JournalLanes:3 preserves prior total lanes. COW capability validation, finite two-shard configuration, pointer/compression configuration, accepted maintenance, capture/install refusal, old basis, denied writes and explicit retry assertions preserved.",
+    "worker_control_paths": [
+      "TreeDB/caching/db.go:12698",
+      "TreeDB/caching/db.go:12708",
+      "TreeDB/caching/db.go:19549",
+      "TreeDB/caching/db.go:21663"
+    ],
+    "explicit_route_paths": [
+      "TreeDB/caching/cow_open.go:28",
+      "TreeDB/caching/cow_maintenance.go:12",
+      "TreeDB/caching/cow_checkpoint.go:52",
+      "TreeDB/caching/db.go:7989"
+    ],
+    "lane_profile_limit": "Total lane count remains three; Off classifies all as hot rather than hot/warm/cold. Explicit lifetime fixture does not qualify generation behavior or tiering."
+  },
+  "inventory": {
+    "path": ".github/ci/ci_impact.json",
+    "structurally_equal_except_discovery_digest": true,
+    "versions": {
+      "previous": {
+        "discovery_source_sha256": "984e49ecfaf1131bbbb1b8803cf472cf05378d941b39fc982f0c83040bdf3093",
+        "binding": {
+          "blob": "0f7a532977108ff4936e12c1408c4ad2fa74c97d",
+          "sha256": "d69bebe3f0b92d6d5cf6ec3e132768851e75ffae334bff42c3a85a2678db7c87",
+          "bytes": 100563
+        }
+      },
+      "repair": {
+        "discovery_source_sha256": "a2276b9a1a5b3de933d19370443c561b89e7db128faa47804817ad3387dddf9d",
+        "binding": {
+          "blob": "cfb5669a5d28e758dce98ef6c30037ffc775a94a",
+          "sha256": "15bf69481f3a01ed3194f22f5e7824029a0ec661e0681115e9795d71b3d60596",
+          "bytes": 100563
+        }
+      },
+      "final": {
+        "discovery_source_sha256": "86cc9fdc2c94c3a3c04c5ea7698722362b880aee4f7177cd5a53d6ab4fb82021",
+        "binding": {
+          "blob": "b84e7e280197a955e0971e2d907937e06e05dea4",
+          "sha256": "01ee644aa54a2bdb929e02e9b778bac7188b5ccb809e21438d4d0bc3d21564ae",
+          "bytes": 100563
+        }
+      }
+    },
+    "limits": "Canonical refresh/check 14/56 is reported by root; this review verifies committed inventory delta/equality, does not independently run those tests."
+  },
+  "new_main": {
+    "production_delta_paths": [],
+    "actual_changed_paths": [
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/README.md",
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/check.py",
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/gomap-trial24-read-audit-accounting-root-v1.py",
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/instantiate.py",
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/packet.json",
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/recall_aggregation_checks.py",
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/shared_read.py",
+      "docs/benchmarks/fixed_cluster_sustained_20261005/harness/source-hashes.json"
+    ],
+    "commit_subject": "fix(bench): match Go recall aggregation order (#5074)",
+    "diff_sha256": "07bb8d1b07e4a9a7aee1a0fca59635a4e7c943a352e717360c8652038d84d6f0",
+    "source_bindings": [
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/README.md",
+        "before": {
+          "blob": "3b6a0060800d8d88a2d1e9d40eafe8c69cd59474",
+          "sha256": "134363a642b3b9eb692d777e18d6c3445ca9393333cc7a0521d1bd8fd2ac7d7a",
+          "bytes": 30893
+        },
+        "after": {
+          "blob": "1e7d4d1add8e6c58d2751674f8ff95ba27f1bac3",
+          "sha256": "0f3b764fc0ea9344d9378af5e60a349ecba2edb1d6f4e9334f90ef998c77ae2c",
+          "bytes": 32625
+        }
+      },
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/check.py",
+        "before": {
+          "blob": "0b1c224f48ff59e1bd85b5c6b091d9002fc966a2",
+          "sha256": "5e2b3305fb558a369957eb3aedc7d12f2e89f473d90e4f356ccd4488e8b3ddd7",
+          "bytes": 105259
+        },
+        "after": {
+          "blob": "9a8c6faa2c53625afcf14bfe7bcfd01061fdfa1c",
+          "sha256": "4c3dc453bcf9e6fe9d4eb9b5b95a5e9cf2ade33ae69a164f6cfc733b6c7ec7ef",
+          "bytes": 105381
+        }
+      },
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/gomap-trial24-read-audit-accounting-root-v1.py",
+        "before": {
+          "blob": "f1b313ace6aebde502ac6f36175ee3ce3fb64473",
+          "sha256": "9d3df783a607c387bc211fdb9948de536d8aa8968f51782fa69083eacbeec0d8",
+          "bytes": 27127
+        },
+        "after": {
+          "blob": "77bb0ef4ae4b11aeb1eeebe7ce19ac6bf507036f",
+          "sha256": "4603b534c431becac178eb2f3fa089285b64420ab0888b43d4e8e947a364bf49",
+          "bytes": 27127
+        }
+      },
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/instantiate.py",
+        "before": {
+          "blob": "14bc57782f834c8552e1f2c31b163aedca53ba1f",
+          "sha256": "35ca14880cf7eb9d81b442f23cd2a0a9192da1d5e8bdde8c527357de18c1ae0c",
+          "bytes": 16385
+        },
+        "after": {
+          "blob": "7a9fadbea344767a934a9ab6ed03bccdc9d502dd",
+          "sha256": "c8f5fd2717a22ac28865e094d2961550cd58d3e8bfc5f2f4918c82db82e17761",
+          "bytes": 16385
+        }
+      },
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/packet.json",
+        "before": {
+          "blob": "db3bf8eefaebf8e9b35081db72c1d10d39e7e801",
+          "sha256": "6b3b881aee33ab7a4fe6f459806669109c021a2873eb3fe942ac8ed699dc4443",
+          "bytes": 22416
+        },
+        "after": {
+          "blob": "adfc4659cb0d141a8eebceedaddb27f85a6d692e",
+          "sha256": "8b5c27c7f85008813f7b9d9c0c163e4d370dd0086aa34093b1e69ea7538a610a",
+          "bytes": 22560
+        }
+      },
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/recall_aggregation_checks.py",
+        "before": null,
+        "after": {
+          "blob": "89b2e2f8ff8594c06afaa4e1470d349b38429c7f",
+          "sha256": "f535a8f69c23894e1dd857fc981053b9ecc8d8b44f3bc5962f281201be3a52f2",
+          "bytes": 4723
+        }
+      },
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/shared_read.py",
+        "before": {
+          "blob": "773e2bc8e0584fa099fdac2d8ca5bda763138b3e",
+          "sha256": "736b15cdc11454eabad782b9993b9b71bb8a60045006f2f5ac3691ff2c445fcd",
+          "bytes": 33729
+        },
+        "after": {
+          "blob": "5f28171d3e6739b1ddab0f4d1f948b8ef8aa7294",
+          "sha256": "6f4530fa70a6bacd21cbd4ebbfd6268dff585b41e340712e9c9298e697aed28b",
+          "bytes": 34087
+        }
+      },
+      {
+        "path": "docs/benchmarks/fixed_cluster_sustained_20261005/harness/source-hashes.json",
+        "before": {
+          "blob": "c3b0ce9bce6b62dcec15cc78ff4a676224b63dbe",
+          "sha256": "d78c3d8b1b47fd4911546e551afcf14cbd5e9ae3fc70ef4b4e9e70a4b2215b04",
+          "bytes": 5577
+        },
+        "after": {
+          "blob": "a97dc3f3ff517fcf17f358f36e9ff2d8ca93936b",
+          "sha256": "d7974b051044c229882e4fdfd983bdc28c27a27a6d1cdc3d758fc5c9831fed76",
+          "bytes": 5681
+        }
+      }
+    ],
+    "disposition": "Eight fixed-cluster sustained recall-accounting docs/Python harness paths. They do not enter R1 compiled runtime, A/C source hash, D capture/validator, or selected correctness package inputs. The external fixed-cluster accounting proofs are outside this R1 review."
+  },
+  "selected_path_bindings": [
+    {
+      "path": "TreeDB/caching/cow_maintenance_lifetime_test.go",
+      "previous": {
+        "blob": "c951bb07284cf4afbdae319720ddbe3d042fa64f",
+        "sha256": "a7f108461898ba5bfd56a9f3d8f2c1300ac60d7a7c3e55858fcef2a2093ca2a5",
+        "bytes": 15329
+      },
+      "final": {
+        "blob": "d4eda66439832cf91cfeba0904acb90023f0a8df",
+        "sha256": "88aef9a7634ff8693ae790007d579dd27daeea0d2d0d25c337b1d4387fa3b054",
+        "bytes": 15662
+      }
+    },
+    {
+      "path": "TreeDB/caching/cow_open.go",
+      "previous": {
+        "blob": "738668580b950604ff5b4997dd5eec45687c9e34",
+        "sha256": "439cdb487f7941ff8279845ee0b5c807b702119e725b8b2d3750b8cb8e68b213",
+        "bytes": 1466
+      },
+      "final": {
+        "blob": "738668580b950604ff5b4997dd5eec45687c9e34",
+        "sha256": "439cdb487f7941ff8279845ee0b5c807b702119e725b8b2d3750b8cb8e68b213",
+        "bytes": 1466
+      }
+    },
+    {
+      "path": "TreeDB/caching/cow_maintenance.go",
+      "previous": {
+        "blob": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e",
+        "sha256": "41a80a482023fb306eb4f1ec221fc352a6df71d8da18db7995adad322dd887c5",
+        "bytes": 1038
+      },
+      "final": {
+        "blob": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e",
+        "sha256": "41a80a482023fb306eb4f1ec221fc352a6df71d8da18db7995adad322dd887c5",
+        "bytes": 1038
+      }
+    },
+    {
+      "path": "TreeDB/caching/cow_checkpoint.go",
+      "previous": {
+        "blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+        "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+        "bytes": 6605
+      },
+      "final": {
+        "blob": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+        "sha256": "8193c0fc411c30ecee7c42d38e9d53073a082e045342e4920ec2fa2ba3e8b3a9",
+        "bytes": 6605
+      }
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "previous": {
+        "blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+        "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+        "bytes": 1397560
+      },
+      "final": {
+        "blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+        "sha256": "1a9ed3a991107632a492949e033a81359dbec618f84d5b31ce16d7c204878882",
+        "bytes": 1397560
+      }
+    },
+    {
+      "path": "TreeDB/db/hardware_defaults.go",
+      "previous": {
+        "blob": "0bc889a236eb5f2c5323c738eef3359ae13c04f0",
+        "sha256": "84bd286f1af52394660afe7d82f09ca6e342aaa2ed9e153a2342f4ab82020974",
+        "bytes": 3748
+      },
+      "final": {
+        "blob": "0bc889a236eb5f2c5323c738eef3359ae13c04f0",
+        "sha256": "84bd286f1af52394660afe7d82f09ca6e342aaa2ed9e153a2342f4ab82020974",
+        "bytes": 3748
+      }
+    },
+    {
+      "path": "scripts/r1_lifecycle_capture.py",
+      "previous": {
+        "blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+        "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+        "bytes": 10594
+      },
+      "final": {
+        "blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+        "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+        "bytes": 10594
+      }
+    },
+    {
+      "path": "scripts/r1_lifecycle_validate.py",
+      "previous": {
+        "blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+        "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+        "bytes": 61009
+      },
+      "final": {
+        "blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+        "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+        "bytes": 61009
+      }
+    },
+    {
+      "path": "TreeDB/collections/r1_lifecycle_5060_bench_test.go",
+      "previous": {
+        "blob": "f95143eff5ca5cf0d7e9d5434088ac23ea84aa33",
+        "sha256": "1c0d069fafe30ad63bf495154dbdb8e73167ef0215c9ed945bf013a93158d7d7",
+        "bytes": 19406
+      },
+      "final": {
+        "blob": "f95143eff5ca5cf0d7e9d5434088ac23ea84aa33",
+        "sha256": "1c0d069fafe30ad63bf495154dbdb8e73167ef0215c9ed945bf013a93158d7d7",
+        "bytes": 19406
+      }
+    }
+  ],
+  "existing_validation_reuse": [
+    {
+      "original_root_review": {
+        "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-root-review.json",
+        "bytes": 3880,
+        "sha256": "f6beed1cbe170ade2a4ac785c1bb60b55eceb82933fdfa9bd0fe2505b00a1547"
+      },
+      "tested_source": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+      "actual_original_directory": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original",
+      "all_original_receipt_hashes_verified": [
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/normal-exit.json",
+          "bytes": 108295,
+          "sha256": "5632378dcc0e6229406e5b973e6ddf5eb535d78f394e659c43a5802930b65287"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/normal-start.json",
+          "bytes": 109608,
+          "sha256": "8155ef52141daeaaa538831c2685e7b3dcc20d61ea90ccdec745aac1bf8657be"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/normal.log",
+          "bytes": 116483,
+          "sha256": "8508f0707a3a5112d69bd47ca6e356fcdf28bd171ca75c90e745265e1a539b01"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/race-exit.json",
+          "bytes": 108295,
+          "sha256": "83dffd1c6bd8cf435daaaf9b501c58eb1f77d372241422aa46e189e0c3abbe63"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/race-start.json",
+          "bytes": 109621,
+          "sha256": "6b6c24a0e53b07703a55270396fd73e90f0c8502e3254a4eaad228bce33b2570"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/race.log",
+          "bytes": 116547,
+          "sha256": "7c54356f9e2fc0b318b72c59bd0f47375a6b66087e0ef06ac9ff5f1afbca1e9d"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/source-after.json",
+          "bytes": 105879,
+          "sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/source-before.json",
+          "bytes": 105879,
+          "sha256": "d95dc63380b2e665e2eff4aec802d3e6490d8211ff6722d69e6317e76509945c"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/vet-exit.json",
+          "bytes": 108295,
+          "sha256": "e28b584440726872a201c2e355994cf7f26004d06514ea0b3440ba51c776cf29"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/vet-start.json",
+          "bytes": 109389,
+          "sha256": "f99a6a25ad28c638ed96fdffd1260a3b7358e71effa21e0047fc9daaba299476"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/vet.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "selected_scopes": [
+        "TreeDB/collections/",
+        "TreeDB/db/",
+        "TreeDB/internal/valuelog/",
+        "TreeDB/internal/rootpublication/"
+      ],
+      "changed_source_inputs_in_selected_scopes": [],
+      "modes": {
+        "normal": {
+          "test_pass_rows": 114,
+          "fail_rows": 0,
+          "exit": 0,
+          "argv": [
+            "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+            "test",
+            "-json",
+            "./TreeDB/collections",
+            "./TreeDB/db",
+            "./TreeDB/internal/valuelog",
+            "./TreeDB/internal/rootpublication",
+            "-run",
+            "^(TestR1|TestLeafManifestRevisionGC|TestManager(CloseJoinsPinnedZombieRetry5066|ConcurrentRetryAdmissionAndClose5066)|TestStablePhysicalKindSelection)",
+            "-count=1",
+            "-timeout=8m"
+          ],
+          "source_before": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+          "source_after": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+          "log": {
+            "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/normal.log",
+            "bytes": 116483,
+            "sha256": "8508f0707a3a5112d69bd47ca6e356fcdf28bd171ca75c90e745265e1a539b01"
+          }
+        },
+        "race": {
+          "test_pass_rows": 114,
+          "fail_rows": 0,
+          "exit": 0,
+          "argv": [
+            "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+            "test",
+            "-race",
+            "-json",
+            "./TreeDB/collections",
+            "./TreeDB/db",
+            "./TreeDB/internal/valuelog",
+            "./TreeDB/internal/rootpublication",
+            "-run",
+            "^(TestR1|TestLeafManifestRevisionGC|TestManager(CloseJoinsPinnedZombieRetry5066|ConcurrentRetryAdmissionAndClose5066)|TestStablePhysicalKindSelection)",
+            "-count=1",
+            "-timeout=8m"
+          ],
+          "source_before": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+          "source_after": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+          "log": {
+            "path": "/tmp/gomap-r1-execution-20261005/8506-focused-validation-module-ready-original/race.log",
+            "bytes": 116547,
+            "sha256": "7c54356f9e2fc0b318b72c59bd0f47375a6b66087e0ef06ac9ff5f1afbca1e9d"
+          }
+        }
+      },
+      "disposition": "Applicable focused correctness proof by exact production and selected package/test source equality; events retain original tested-source labels. No binary/performance/required-CI acceptance inferred."
+    },
+    {
+      "original_root_review": {
+        "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-root-review.json",
+        "bytes": 3990,
+        "sha256": "a1cc50a49e54d43cd3ceb0e7db85e3e66efbec271a0f2ba46985c3b92964d45f"
+      },
+      "tested_source": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+      "actual_original_directory": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original",
+      "all_original_receipt_hashes_verified": [
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/normal-exit.json",
+          "bytes": 108295,
+          "sha256": "4b670b70232f04f92f3b05efb74b81b03016be6684a7a8e26b7c041cee571851"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/normal-start.json",
+          "bytes": 109742,
+          "sha256": "e08641cace921c19cde746859701429ca3df4096c8d78300e102a90bbbad7bc3"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/normal.log",
+          "bytes": 54612,
+          "sha256": "aa4d20c766a19dfe9a5576bc1a1fb2f4387ebcf665b0e0e48f523667fc024bd1"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/race-exit.json",
+          "bytes": 108295,
+          "sha256": "399f6c812ee4c0acd84d16ed7723458256ade38512c12ad9ae026d6dc7d8fba4"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/race-start.json",
+          "bytes": 109755,
+          "sha256": "2c89a4fb1307a867c6f06ab3d1ccfcdf0445b2711e4b893326020ddd94122cf0"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/race.log",
+          "bytes": 54717,
+          "sha256": "569ff8f367fcec17e360706ebe38bd224a437b624fae949d1c68274dbb85d2ff"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/source-after.json",
+          "bytes": 105879,
+          "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/source-before.json",
+          "bytes": 105879,
+          "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/vet-exit.json",
+          "bytes": 108295,
+          "sha256": "95c802b6b2f0b069202007338180b8774630871b0872c5d6b40aa28ba088b6ff"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/vet-start.json",
+          "bytes": 109304,
+          "sha256": "d552e0d900966b6cad922af54f8728df15c7a875968639c09e19fa35a54a70e7"
+        },
+        {
+          "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/vet.log",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "selected_scopes": [
+        "cmd/collection_workload_bench/",
+        "TreeDB/db/",
+        "TreeDB/internal/valuelog/"
+      ],
+      "changed_source_inputs_in_selected_scopes": [],
+      "modes": {
+        "normal": {
+          "test_pass_rows": 51,
+          "fail_rows": 0,
+          "exit": 0,
+          "argv": [
+            "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+            "test",
+            "-json",
+            "./cmd/collection_workload_bench",
+            "./TreeDB/db",
+            "./TreeDB/internal/valuelog",
+            "-run",
+            "^(TestR1MutationSweepSmokeAndCorruption|TestRewriteSwapPreservesWinningCurrentRevision|TestSelectedValueLogRewriteRevisionLifetime|TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle|TestCOWProducedFrameObserverMatchesEncodedFrames|TestCOWProducedFrameObserverRejectsBeforeObservation)$",
+            "-count=1",
+            "-timeout=8m"
+          ],
+          "source_before": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+          "source_after": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+          "log": {
+            "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/normal.log",
+            "bytes": 54612,
+            "sha256": "aa4d20c766a19dfe9a5576bc1a1fb2f4387ebcf665b0e0e48f523667fc024bd1"
+          }
+        },
+        "race": {
+          "test_pass_rows": 51,
+          "fail_rows": 0,
+          "exit": 0,
+          "argv": [
+            "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+            "test",
+            "-race",
+            "-json",
+            "./cmd/collection_workload_bench",
+            "./TreeDB/db",
+            "./TreeDB/internal/valuelog",
+            "-run",
+            "^(TestR1MutationSweepSmokeAndCorruption|TestRewriteSwapPreservesWinningCurrentRevision|TestSelectedValueLogRewriteRevisionLifetime|TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle|TestCOWProducedFrameObserverMatchesEncodedFrames|TestCOWProducedFrameObserverRejectsBeforeObservation)$",
+            "-count=1",
+            "-timeout=8m"
+          ],
+          "source_before": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+          "source_after": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+          "log": {
+            "path": "/tmp/gomap-r1-execution-20261005/ebe414-additive-validation-original/race.log",
+            "bytes": 54717,
+            "sha256": "569ff8f367fcec17e360706ebe38bd224a437b624fae949d1c68274dbb85d2ff"
+          }
+        }
+      },
+      "disposition": "Applicable focused correctness proof by exact production and selected package/test source equality; events retain original tested-source labels. No binary/performance/required-CI acceptance inferred."
+    }
+  ],
+  "required_next_validation": {
+    "fixture": "Root-owned finite COW maintenance lifetime parent normal/race and vet at final actual a645 head; no reviewer result claimed.",
+    "required_CI": "Current-head repo-required CI must independently accept repaired source; original ebe Windows FAIL remains preserved/unwaived.",
+    "R1_additive": "No duplicate 114/51 normal/race required by these unchanged source inputs.",
+    "A_C_D": "Planned fresh exact-landed A/C/D measurements remain necessary for prior production integration; this test/docs-only repair adds no runtime or harness invalidation. Actual landing identity, build/environment, measurements and noise acceptance stay root-owned."
+  },
+  "original_diagnosis": {
+    "md": {
+      "path": "/tmp/gomap-r1-execution-20261005/ebe414-cow-ci-diagnosis.md",
+      "bytes": 5820,
+      "sha256": "6f53316e8b0d683a829e5b0730413f3d1e84a438f40f0cbe042693a01a8eda45"
+    },
+    "json": {
+      "path": "/tmp/gomap-r1-execution-20261005/ebe414-cow-ci-diagnosis.json",
+      "bytes": 39085,
+      "sha256": "a32c40ad4aaed9ca235fc7c0d1507d8d45f2659b8aa8a6ada933934528c6f412"
+    },
+    "disposition": "Original Windows worker schedule remains untraced; this repair removes a supported test scheduling hole, not proven original-event causality or unrelatedness."
+  },
+  "limits": [
+    "No Go/build/test/capture/CI/GitHub/poller/delegation or repository write by reviewer.",
+    "No binary equivalence, capacity/performance acceptance, actual future landing, or repaired-head CI result asserted.",
+    "Originals and prior diagnostic artifacts preserved unchanged."
+  ]
+}

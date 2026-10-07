@@ -1,0 +1,20 @@
+{
+  "files": [
+    {
+      "path": "handoff.json",
+      "sha256": "1885ea4e85fd44c02698999d97da273f19b4d94a5feef22ff78bdef1bf168bc4",
+      "size_bytes": 44709
+    },
+    {
+      "path": "handoff.md",
+      "sha256": "ca7b0533da6b1b5553d885607fedbbebbf5b088aebb8cf25b66aa32b68a4060b",
+      "size_bytes": 3976
+    },
+    {
+      "path": "upstream-production-delta.patch",
+      "sha256": "030fddf581303265b7b0e0b1fe122e6545a8defa02d4a5f89d3cf4f7b4f10fe5",
+      "size_bytes": 2260
+    }
+  ],
+  "self_excluded": true
+}

@@ -1,0 +1,81 @@
+{
+  "status": "IMPLEMENTED_STAGED_UNCOMMITTED_WRITER_RELEASED",
+  "route": "gpt-6.1-sol/high",
+  "worktree": "/tmp/gomap-r1-5067",
+  "branch": "codex/5066-lifecycle-maintenance",
+  "HEAD": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "staged_tree": "ecb6d1ff66ad826e36364298b8bc08b864fd3fda",
+  "owned_files": {
+    ".github/ci/ci_impact.json": {
+      "base_blob": "5469510424af9fca495200669bd8e87153a3e908",
+      "staged_blob": "b7f50c8ca6bd99c677040865bb77b9cec309a435",
+      "sha256": "28e0ffca6160a65173abb05c1b2d6f31668547d5c8070f9eae77da2ded0480fb",
+      "bytes": 100563
+    },
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go": {
+      "base_blob": "bc3a9030a2c64aea423871c08fc3f41855544c68",
+      "staged_blob": "7b43cf502fb5aad3ba24fff565bb2abf32665013",
+      "sha256": "4cd1d1680234c08581f7e8114efe240c2aa9f8d12996d221cb724edd15dc6e24",
+      "bytes": 57606
+    }
+  },
+  "patch": {
+    "path": "/tmp/gomap-r1-execution-20261005/5071-catalog-tail-fixture-repair-0245/repair.patch",
+    "sha256": "1cb8a8eb9f50d13627bb26ea328a4f6429b70873824632fd76d54f1bfe054181",
+    "bytes": 2054
+  },
+  "change": "Existing bounded fixedPeerWaitV1 now independently waits for every voter prepared/vector/ACTIVE after DATA prefix and durable preparation reopen checks. Independent CATALOG tail completion is required; existing later nil/phase fatal and current/catalog/strict search/document/result/retry assertions preserved.",
+  "checks": [
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--with",
+        "pyyaml",
+        "python",
+        ".github/scripts/refresh_ci_impact_inventory.py"
+      ],
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit_code": 0,
+      "stdout": "Refreshed 14 workflows / 56 original members; ownership review still required.\n"
+    },
+    {
+      "argv": [
+        "uv",
+        "run",
+        "--with",
+        "pyyaml",
+        "python",
+        ".github/scripts/refresh_ci_impact_inventory.py",
+        "--check"
+      ],
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit_code": 0,
+      "stdout": "Validated reviewed manifest against intended staged sources; no authority enabled.\n"
+    },
+    {
+      "argv": [
+        "git",
+        "diff",
+        "--cached",
+        "--check"
+      ],
+      "cwd": "/tmp/gomap-r1-5067",
+      "exit_code": 0
+    },
+    {
+      "check": "Only canonical discovery_source_sha256 changed; workflows/members/owners untouched",
+      "result": "PASS"
+    },
+    {
+      "check": "Only authorized two files staged; HEAD unchanged; no unstaged changes",
+      "result": "PASS"
+    }
+  ],
+  "canonical_discovery": {
+    "before": "a6113bbf2d313340b58e11b2094b7274de555402ffa5e19ba232baf7dfef994b",
+    "after": "7b7289c82c874ab7c3aafeafc255d6fce00f1d326e58b4d6bef28543785e7c65"
+  },
+  "limits": "No Go execution/gofmt/test, runtime changes, timeout change, new retry, commit, push, remote185 action, GitHub or CI poll. Go validation/review remain coordinator-owned. No changed A/runtime/harness inputs; only test source and canonical test discovery binding.",
+  "next": "Root independent review of staged patch, focused candidate validations, commit/readiness/integration authority retained by root."
+}

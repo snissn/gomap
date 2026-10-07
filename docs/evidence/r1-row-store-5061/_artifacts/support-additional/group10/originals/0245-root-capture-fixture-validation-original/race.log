@@ -1,0 +1,12 @@
+{"Time":"2026-10-06T09:50:43.026933443-10:00","Action":"start","Package":"github.com/snissn/gomap/TreeDB/db"}
+{"Time":"2026-10-06T09:50:43.036324618-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC"}
+{"Time":"2026-10-06T09:50:43.036352223-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC","Output":"=== RUN   TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC\n"}
+{"Time":"2026-10-06T09:50:43.400795955-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC","Output":"--- PASS: TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC (0.36s)\n"}
+{"Time":"2026-10-06T09:50:43.400826364-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC","Elapsed":0.36}
+{"Time":"2026-10-06T09:50:43.40122104-10:00","Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment"}
+{"Time":"2026-10-06T09:50:43.401228789-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment","Output":"=== RUN   TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment\n"}
+{"Time":"2026-10-06T09:50:43.609150381-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment","Output":"--- PASS: TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment (0.21s)\n"}
+{"Time":"2026-10-06T09:50:43.609171218-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment","Elapsed":0.21}
+{"Time":"2026-10-06T09:50:43.609428421-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Output":"PASS\n"}
+{"Time":"2026-10-06T09:50:44.61251766-10:00","Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Output":"ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.585s\n"}
+{"Time":"2026-10-06T09:50:44.612552723-10:00","Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Elapsed":1.5859999999999999}

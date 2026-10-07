@@ -1,0 +1,9 @@
+d591390b0ca258272dc809daa98f6b628acc49dd
+=== RUN   TestR1RebuiltCurrentRootDropsUnreachablePackedDependency
+    r1_rebuilt_pack_projection_test.go:69: ordinary current vacuum: {AttemptID:2 Phase:rebuild TotalDuration:39.147783ms UserTreeDuration:8.605µs SystemReserveDuration:1.044µs CollectionBasisDuration:4.4µs PreflushDuration:559ns CutoverDuration:12.866597ms SystemTreeDuration:16.128µs FinalPagerSyncDuration:25.871055ms SwapPublishDuration:12.435687ms MaxWriterPause:38.738332ms PrecloneTraversalPages:0 RecloneTraversalPages:0 CutoverCloneTraversalPages:0 DirtyDescriptors:0 UserTailMutations:0 UserTailPointMutations:0 UserTailRangeMutations:0 DeferredCutovers:0 ConcurrentMutationAborts:0 RecoverableSetCaptureDuration:94.219µs RecoverableSetCaptureAttempts:1 RecoverableSetCaptures:1 RecoverableSetRecaptureAttempts:0 RecoverableSetRecaptures:0 RecoverableRoots:2 OlderRootRebuildDuration:102.897µs OlderRootRebuilds:1 OlderRootDurableResourceCaptureDuration:13.429µs OlderRootDurableResourceCaptures:1 OlderRootDurableResourceDescriptors:3 OlderRootDurableResourceBytes:6501 OlderRootExactCandidateScans:0 OlderRootProjections:1 OlderRootProjectionFallbacks:0 OlderRootProjectionFallbackReason: OlderRootReusedNonValueLogDescriptors:0 OlderRootUniqueExternalSegments:0 DurableResourceCaptureDuration:9.359µs DurableResourceCaptures:1 DurableResourceDescriptors:3 DurableResourceBytes:6963 DurableResourceExactCandidateScans:0 DurableResourceProjections:1 DurableResourceProjectionFallbacks:0 DurableResourceProjectionFallbackReason: OlderRootRebuiltPages:2 ReplacementPagerPages:16 ExactCandidateScan:false ReusedNonValueLogDescriptors:0 UniqueExternalSegments:0 WorkCompleted:true Canceled:false}
+    r1_rebuilt_pack_projection_test.go:71: packed current-root publication bypassed exact candidate scan
+--- FAIL: TestR1RebuiltCurrentRootDropsUnreachablePackedDependency (0.43s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.431s
+FAIL
+EXIT=1

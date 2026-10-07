@@ -1,0 +1,4586 @@
+{
+  "basis": "derived from last actual final R1_LIFECYCLE_RESULT; calibration excluded",
+  "source_commit": "d07845fd3213d6bb1eb43248be13c587b5b0343f",
+  "qualification": "nonqualifying rehearsal pre-manager-authority-hardening",
+  "census": [
+    {
+      "phase": "ingest",
+      "total_bytes": 11574280,
+      "total_files": 12,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 554,
+        "index": 8388608,
+        "other": 469,
+        "persistent_leaf_log": 1627808,
+        "persistent_vlog": 131289,
+        "redo_wal": 699916,
+        "template_store": 0,
+        "typed_assets": 725636
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 3,
+        "persistent_leaf_log": 2,
+        "persistent_vlog": 1,
+        "redo_wal": 2,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 725636
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 8388608
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 1627507
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 131289
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 28
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 699905
+        }
+      }
+    },
+    {
+      "phase": "churn-0",
+      "total_bytes": 101700729,
+      "total_files": 12,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 554,
+        "index": 92274688,
+        "other": 469,
+        "persistent_leaf_log": 7307281,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 1045462
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 3,
+        "persistent_leaf_log": 2,
+        "persistent_vlog": 1,
+        "redo_wal": 2,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1045462
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 92274688
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 7306980
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 28
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        }
+      }
+    },
+    {
+      "phase": "checkpoint-0",
+      "total_bytes": 101700729,
+      "total_files": 13,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 554,
+        "index": 92274688,
+        "other": 469,
+        "persistent_leaf_log": 7307281,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 1045462
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 3,
+        "persistent_leaf_log": 2,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1045462
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 92274688
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 7306980
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 28
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "folded-0",
+      "total_bytes": 102485302,
+      "total_files": 13,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 554,
+        "index": 92274688,
+        "other": 469,
+        "persistent_leaf_log": 7400679,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 1736637
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 3,
+        "persistent_leaf_log": 2,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1736637
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 92274688
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 7400378
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 28
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "before_vacuum-0",
+      "total_bytes": 102485627,
+      "total_files": 14,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 554,
+        "index": 92274688,
+        "other": 794,
+        "persistent_leaf_log": 7400679,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 1736637
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 2,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1736637
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 92274688
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 7400378
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "before_exhaustive-0",
+      "total_bytes": 14407625,
+      "total_files": 15,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 855,
+        "index": 4194304,
+        "other": 794,
+        "persistent_leaf_log": 7402760,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 1736637
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 3,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 2,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1736637
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000003.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 7402459
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "before_final_gc-0",
+      "total_bytes": 14661050,
+      "total_files": 24,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 4080,
+        "index": 4194304,
+        "other": 794,
+        "persistent_leaf_log": 7652960,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 1736637
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 8,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 6,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1736637
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000003.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000004.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 466
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000005.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 514
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000006.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 725
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000007.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 7402459
+        },
+        "maindb/leaf_vlog/value-l255-000001.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 59152
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000003.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3078
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "maintenance-0",
+      "total_bytes": 14661050,
+      "total_files": 24,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 4080,
+        "index": 4194304,
+        "other": 794,
+        "persistent_leaf_log": 7652960,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 1736637
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 8,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 6,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1736637
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000001.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 253
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000002.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000003.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 301
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000004.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 466
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000005.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 514
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000006.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 725
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000007.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/value-l255-000001.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 7402459
+        },
+        "maindb/leaf_vlog/value-l255-000001.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 59152
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000003.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3078
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "after_view_release",
+      "total_bytes": 6149323,
+      "total_files": 16,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1277,
+        "index": 4194304,
+        "other": 794,
+        "persistent_leaf_log": 189498,
+        "persistent_vlog": 193991,
+        "redo_wal": 878284,
+        "template_store": 0,
+        "typed_assets": 691175
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000002.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 1470
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 193991
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "churn-1",
+      "total_bytes": 15783799,
+      "total_files": 17,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1277,
+        "index": 8388608,
+        "other": 794,
+        "persistent_leaf_log": 5064602,
+        "persistent_vlog": 256821,
+        "redo_wal": 1058738,
+        "template_store": 0,
+        "typed_assets": 1012959
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 2
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 321784
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000002.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 8388608
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4876574
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000001.log": {
+          "component": "redo_wal",
+          "bytes": 878273
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 180454
+        }
+      }
+    },
+    {
+      "phase": "checkpoint-1",
+      "total_bytes": 14905526,
+      "total_files": 17,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1277,
+        "index": 8388608,
+        "other": 794,
+        "persistent_leaf_log": 5064602,
+        "persistent_vlog": 256821,
+        "redo_wal": 180465,
+        "template_store": 0,
+        "typed_assets": 1012959
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 2
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 321784
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000002.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 8388608
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4876574
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 180454
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "folded-1",
+      "total_bytes": 15702724,
+      "total_files": 17,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1277,
+        "index": 8388608,
+        "other": 794,
+        "persistent_leaf_log": 5170625,
+        "persistent_vlog": 256821,
+        "redo_wal": 180465,
+        "template_store": 0,
+        "typed_assets": 1704134
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 2
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1012959
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000002.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 8388608
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4982597
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 313
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 180454
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "before_vacuum-1",
+      "total_bytes": 15704354,
+      "total_files": 17,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1277,
+        "index": 8388608,
+        "other": 945,
+        "persistent_leaf_log": 5172104,
+        "persistent_vlog": 256821,
+        "redo_wal": 180465,
+        "template_store": 0,
+        "typed_assets": 1704134
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 2
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1012959
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000003.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 8388608
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4984076
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 464
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 180454
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "before_exhaustive-1",
+      "total_bytes": 11512622,
+      "total_files": 18,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1794,
+        "index": 4194304,
+        "other": 945,
+        "persistent_leaf_log": 5174159,
+        "persistent_vlog": 256821,
+        "redo_wal": 180465,
+        "template_store": 0,
+        "typed_assets": 1704134
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 3,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 2
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1012959
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000003.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000008.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 760
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000b.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000c.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 517
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4986131
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 464
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 180454
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "before_final_gc-1",
+      "total_bytes": 11746980,
+      "total_files": 24,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 4398,
+        "index": 4194304,
+        "other": 945,
+        "persistent_leaf_log": 5405913,
+        "persistent_vlog": 256821,
+        "redo_wal": 180465,
+        "template_store": 0,
+        "typed_assets": 1704134
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 5,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 8,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 2
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000001.tca": {
+          "component": "typed_assets",
+          "bytes": 1012959
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000003.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000d.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 684
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000e.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 732
+        },
+        "maindb/leaf_vlog/manifest.durable.000000000000000f.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 946
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000010.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1018
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000011.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1018
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 1018
+        },
+        "maindb/leaf_vlog/value-l255-000002.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186975
+        },
+        "maindb/leaf_vlog/value-l255-000002.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000004.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 4986131
+        },
+        "maindb/leaf_vlog/value-l255-000004.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 41104
+        },
+        "maindb/leaf_vlog/value-l255-000005.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186529
+        },
+        "maindb/leaf_vlog/value-l255-000005.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000006.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3084
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 464
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 180454
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "maintenance-1",
+      "total_bytes": 5515921,
+      "total_files": 16,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1540,
+        "index": 4194304,
+        "other": 945,
+        "persistent_leaf_log": 190671,
+        "persistent_vlog": 256821,
+        "redo_wal": 180465,
+        "template_store": 0,
+        "typed_assets": 691175
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000003.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000011.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1018
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000013.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 522
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 522
+        },
+        "maindb/leaf_vlog/value-l255-000005.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186529
+        },
+        "maindb/leaf_vlog/value-l255-000005.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000006.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3084
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 464
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000002.log": {
+          "component": "redo_wal",
+          "bytes": 180454
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    },
+    {
+      "phase": "reopen",
+      "total_bytes": 5335467,
+      "total_files": 16,
+      "physical_file_bytes": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 1540,
+        "index": 4194304,
+        "other": 945,
+        "persistent_leaf_log": 190671,
+        "persistent_vlog": 256821,
+        "redo_wal": 11,
+        "template_store": 0,
+        "typed_assets": 691175
+      },
+      "regular_files": {
+        "dictionary_store": 0,
+        "immutable_manifest_metadata": 2,
+        "index": 1,
+        "other": 4,
+        "persistent_leaf_log": 4,
+        "persistent_vlog": 1,
+        "redo_wal": 3,
+        "template_store": 0,
+        "typed_assets": 1
+      },
+      "files": {
+        "maindb/LOCK": {
+          "component": "other",
+          "bytes": 11
+        },
+        "maindb/column_assets/r1/column-assets/assets/segments/segment-000003.tca": {
+          "component": "typed_assets",
+          "bytes": 691175
+        },
+        "maindb/format.json": {
+          "component": "other",
+          "bytes": 430
+        },
+        "maindb/index.db": {
+          "component": "index",
+          "bytes": 4194304
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000011.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 1018
+        },
+        "maindb/leaf_vlog/manifest.durable.0000000000000013.json": {
+          "component": "immutable_manifest_metadata",
+          "bytes": 522
+        },
+        "maindb/leaf_vlog/manifest.json": {
+          "component": "persistent_leaf_log",
+          "bytes": 522
+        },
+        "maindb/leaf_vlog/value-l255-000005.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 186529
+        },
+        "maindb/leaf_vlog/value-l255-000005.log.lenidx": {
+          "component": "persistent_leaf_log",
+          "bytes": 536
+        },
+        "maindb/leaf_vlog/value-l255-000006.log": {
+          "component": "persistent_leaf_log",
+          "bytes": 3084
+        },
+        "maindb/value_vlog/value-l0-000001.log": {
+          "component": "persistent_vlog",
+          "bytes": 256821
+        },
+        "maindb/vlog_health.json": {
+          "component": "other",
+          "bytes": 464
+        },
+        "maindb/vlog_ref_counts.meta": {
+          "component": "other",
+          "bytes": 40
+        },
+        "maindb/wal/command-wal-journal-owner.lock": {
+          "component": "redo_wal",
+          "bytes": 11
+        },
+        "maindb/wal/commit-l0-000003.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        },
+        "maindb/wal/commit-l0-000004.log": {
+          "component": "redo_wal",
+          "bytes": 0
+        }
+      }
+    }
+  ],
+  "maintenance": [
+    {
+      "epoch": 0,
+      "maintenance_ns": 512026343,
+      "vacuum_ns": 117740039,
+      "vacuum_exact_scan": true,
+      "vacuum_resource_capture_ns": 2451528,
+      "vacuum_projection_reason": "replayed-outer-leaf-delta",
+      "final": {
+        "refresh_ns": 25101255,
+        "before": {
+          "commit_seq": 775,
+          "user_root": 16,
+          "system_root": 15,
+          "applied_lsn": 769,
+          "next_lsn": 770,
+          "roots": [
+            {
+              "CommitSeq": 772,
+              "UserRootPageID": 2,
+              "SystemRootPageID": 14,
+              "AppliedCommandLSN": 769,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": false
+            },
+            {
+              "CommitSeq": 775,
+              "UserRootPageID": 16,
+              "SystemRootPageID": 15,
+              "AppliedCommandLSN": 769,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": true
+            }
+          ],
+          "slots": {
+            "treedb.durable_root.commit_seq": "775",
+            "treedb.durable_root.directory.logical_count": "0",
+            "treedb.durable_root.directory.physical_count": "0",
+            "treedb.durable_root.directory.root_page": "0",
+            "treedb.durable_root.directory_build.changed_record_bytes": "0",
+            "treedb.durable_root.directory_build.changed_records": "0",
+            "treedb.durable_root.directory_build.pages_written": "0",
+            "treedb.durable_root.durable_seq": "773",
+            "treedb.durable_root.format_version": "1",
+            "treedb.durable_root.freelist.free_count": "0",
+            "treedb.durable_root.freelist.generation": "3",
+            "treedb.durable_root.freelist.header_page": "37",
+            "treedb.durable_root.freelist.high_water": "38",
+            "treedb.durable_root.freelist.retired_count": "0",
+            "treedb.durable_root.manifest.bytes": "1750",
+            "treedb.durable_root.manifest.entries": "5",
+            "treedb.durable_root.manifest.first_page": "33",
+            "treedb.durable_root.manifest.pages": "1",
+            "treedb.durable_root.manifest_build.bytes_encoded": "7956962",
+            "treedb.durable_root.manifest_build.count": "105",
+            "treedb.durable_root.manifest_build.entries_encoded": "315",
+            "treedb.durable_root.manifest_build.entries_visited": "315",
+            "treedb.durable_root.manifest_build.nanos": "15369818",
+            "treedb.durable_root.parent.commit_seq": "772",
+            "treedb.durable_root.parent.record_page": "29",
+            "treedb.durable_root.record_page": "34",
+            "treedb.durable_root.selected_slot": "1",
+            "treedb.durable_root.slot0.commit_seq": "772",
+            "treedb.durable_root.slot1.commit_seq": "775",
+            "treedb.durable_root.system_root_page": "15",
+            "treedb.durable_root.total_pages": "38",
+            "treedb.durable_root.user_root_page": "16"
+          }
+        },
+        "after": {
+          "commit_seq": 776,
+          "user_root": 16,
+          "system_root": 15,
+          "applied_lsn": 769,
+          "next_lsn": 770,
+          "roots": [
+            {
+              "CommitSeq": 776,
+              "UserRootPageID": 16,
+              "SystemRootPageID": 15,
+              "AppliedCommandLSN": 769,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": true
+            },
+            {
+              "CommitSeq": 775,
+              "UserRootPageID": 16,
+              "SystemRootPageID": 15,
+              "AppliedCommandLSN": 769,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": false
+            }
+          ],
+          "slots": {
+            "treedb.durable_root.commit_seq": "776",
+            "treedb.durable_root.directory.logical_count": "0",
+            "treedb.durable_root.directory.physical_count": "0",
+            "treedb.durable_root.directory.root_page": "0",
+            "treedb.durable_root.directory_build.changed_record_bytes": "0",
+            "treedb.durable_root.directory_build.changed_records": "0",
+            "treedb.durable_root.directory_build.pages_written": "0",
+            "treedb.durable_root.durable_seq": "774",
+            "treedb.durable_root.format_version": "1",
+            "treedb.durable_root.freelist.free_count": "0",
+            "treedb.durable_root.freelist.generation": "5",
+            "treedb.durable_root.freelist.header_page": "75",
+            "treedb.durable_root.freelist.high_water": "76",
+            "treedb.durable_root.freelist.retired_count": "8",
+            "treedb.durable_root.manifest.bytes": "1750",
+            "treedb.durable_root.manifest.entries": "5",
+            "treedb.durable_root.manifest.first_page": "56",
+            "treedb.durable_root.manifest.pages": "1",
+            "treedb.durable_root.manifest_build.bytes_encoded": "7958676",
+            "treedb.durable_root.manifest_build.count": "106",
+            "treedb.durable_root.manifest_build.entries_encoded": "320",
+            "treedb.durable_root.manifest_build.entries_visited": "320",
+            "treedb.durable_root.manifest_build.nanos": "15382024",
+            "treedb.durable_root.parent.commit_seq": "775",
+            "treedb.durable_root.parent.record_page": "34",
+            "treedb.durable_root.record_page": "57",
+            "treedb.durable_root.selected_slot": "0",
+            "treedb.durable_root.slot0.commit_seq": "776",
+            "treedb.durable_root.slot1.commit_seq": "775",
+            "treedb.durable_root.system_root_page": "15",
+            "treedb.durable_root.total_pages": "76",
+            "treedb.durable_root.user_root_page": "16"
+          }
+        },
+        "typed_gc_ns": 1814801,
+        "typed_gc": {
+          "DryRun": false,
+          "Plan": {
+            "ProtectOnly": true,
+            "Complete": true,
+            "Collection": "r1",
+            "Namespace": "r1/column-assets",
+            "ManifestRootName": "r1/column/manifest",
+            "ManifestRootID": 17,
+            "SystemRoot": 15,
+            "PlanCommitSeq": 776,
+            "ActiveManifestGeneration": 769,
+            "ActiveManifestChecksum": 13410128288227099687,
+            "RecoveryManifestGeneration": 769,
+            "RecoveryManifestChecksum": 13410128288227099687,
+            "ManifestCatalogBytes": 381,
+            "Sources": {
+              "ManifestRoots": 1,
+              "ManifestRecords": 2,
+              "ActiveManifestRefs": 1,
+              "RecoveryManifestRefs": 1,
+              "CandidateRefs": 896,
+              "PendingRefs": 0,
+              "PreparedRefs": 0,
+              "PreparedQueryRefs": 0,
+              "QuarantineRefs": 0,
+              "QuarantineSegmentRecords": 0,
+              "PinnedRefs": 896,
+              "MappedResourcePins": 128,
+              "ActiveManifestBytes": 691175,
+              "RecoveryManifestBytes": 691175,
+              "CandidateBytes": 1045462,
+              "PendingBytes": 0,
+              "PreparedBytes": 0,
+              "PreparedQueryBytes": 0,
+              "QuarantineBytes": 0,
+              "QuarantineSegmentBytes": 0,
+              "PinnedBytes": 1045462,
+              "MappedResourcePinBytes": 725636
+            },
+            "Refs": {
+              "Total": 897,
+              "Protected": 897,
+              "Reclaimable": 0,
+              "Uncertain": 0,
+              "BytesTotal": 1736637,
+              "BytesProtected": 1736637,
+              "BytesReclaimable": 0,
+              "BytesUncertain": 0
+            },
+            "Segments": {
+              "Total": 1,
+              "Protected": 1,
+              "Reclaimable": 0,
+              "Mixed": 0,
+              "Unknown": 0,
+              "Missing": 0,
+              "OutOfBoundsRefs": 0,
+              "QuarantineSegments": 0,
+              "QuarantineSegmentMismatches": 0,
+              "BytesTotal": 1736637,
+              "BytesProtected": 1736637,
+              "BytesReclaimable": 0,
+              "BytesWholeReclaimable": 0,
+              "BytesUnknown": 0,
+              "BytesQuarantined": 0
+            },
+            "MappedResources": {
+              "ActiveHandles": 128,
+              "ActiveMappedBytes": 725636,
+              "ActiveHeapCopyBytes": 0,
+              "ActiveDerivedMetadataBytes": 0,
+              "PinnedRefs": 128,
+              "PinnedBytes": 725636,
+              "UnconvertiblePins": 0,
+              "DeniedResources": 0,
+              "FallbackReads": 0
+            },
+            "RewriteDebtBytes": 0,
+            "Entries": null,
+            "SegmentEntries": null
+          },
+          "SegmentsEligible": 0,
+          "SegmentsDeleted": 0,
+          "SegmentsRetained": 1,
+          "BytesEligible": 0,
+          "BytesDeleted": 0,
+          "BytesRetained": 1736637
+        },
+        "leaf_gc_ns": 471809,
+        "leaf_gc": {
+          "GenerationsTotal": 3,
+          "GenerationsWritable": 1,
+          "GenerationsLive": 1,
+          "GenerationsRetiring": 1,
+          "GenerationsEligible": 0,
+          "GenerationsDeleted": 0,
+          "FilesDeleted": 0,
+          "BytesEligible": 0,
+          "BytesDeleted": 0,
+          "ManifestRevisionGCUnsupported": false,
+          "ManifestRevisionsTotal": 8,
+          "ManifestRevisionsProtected": 8,
+          "ManifestRevisionsEligible": 0,
+          "ManifestRevisionsDeleted": 0,
+          "ManifestRevisionBytesEligible": 0,
+          "ManifestRevisionBytesDeleted": 0
+        }
+      },
+      "full_compact": {
+        "owner": {
+          "OwnerClass": "internal owner hidden by wrapper",
+          "Status": "supported-target",
+          "Lifecycle": "quiesced maintenance",
+          "Replaceable": true,
+          "RequiresQuiescence": false,
+          "Detail": "internally owned replay-inline wrapper exposes a compact handoff restore capability"
+        },
+        "options": {
+          "leaf_pack_max_bytes_to_copy_per_pass": 1048576,
+          "leaf_pack_max_passes": 4,
+          "mode": "exhaustive",
+          "sync_each_phase": true,
+          "unsafe_value_log_reclaim_fenced_unreferenced": false,
+          "value_log_rewrite_batch_size": 32
+        },
+        "plan_ns": 1847251,
+        "plan": {
+          "mode": "exhaustive",
+          "dry_run": true,
+          "before": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 878284,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 193991,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 7403615,
+              "files": 5,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 12670194,
+              "files": 10,
+              "zero_byte_files": 1
+            }
+          ],
+          "after": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 878284,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 193991,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 7403615,
+              "files": 5,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 12670194,
+              "files": 10,
+              "zero_byte_files": 1
+            }
+          ],
+          "phases": [
+            {
+              "name": "index-vacuum",
+              "status": "not_required",
+              "reason": "none",
+              "skipped": true,
+              "skip_reason": "no index vacuum policy debt",
+              "wall_time_nanos": 0
+            }
+          ],
+          "audit": {
+            "shared_scans": 1,
+            "structural_reuse_hits": 0,
+            "structural_reuse_misses": 1,
+            "revalidation_retries": 0,
+            "root_sets": 8,
+            "pages_visited": 13,
+            "memo_hits": 0,
+            "pointer_projections": 4096,
+            "grouped_record_dedupe_hits": 3584,
+            "physical_bytes_read": 1988608,
+            "last_structural_reuse_miss_reason": "cold"
+          },
+          "value_log_rewrite_plan": {
+            "SourceFileIDs": null,
+            "SelectedSegments": null,
+            "SegmentsTotal": 1,
+            "SegmentsSelected": 0,
+            "BytesTotal": 193991,
+            "BytesLive": 176691,
+            "BytesStale": 17300,
+            "SelectedBytesTotal": 0,
+            "SelectedBytesLive": 0,
+            "SelectedBytesStale": 0,
+            "AgeBlockedSegments": 0,
+            "AgeBlockedBytesTotal": 0,
+            "AgeBlockedBytesLive": 0,
+            "AgeBlockedBytesStale": 0,
+            "AgeBlockedMinRemainingAge": 0
+          },
+          "value_log_rewrite": {
+            "SegmentsBefore": 0,
+            "SegmentsAfter": 0,
+            "BytesBefore": 0,
+            "BytesAfter": 0,
+            "RecordsCopied": 0,
+            "ValueRecordsCopied": 0,
+            "ValueBytesCopied": 0,
+            "SourceSegmentsRequested": 0,
+            "SourceChunksRequested": 0,
+            "SourceSegmentsStillReferenced": 0,
+            "SourceSegmentsUnreferenced": 0,
+            "SourceBytesRequested": 0,
+            "SourceBytesStillReferenced": 0,
+            "SourceBytesUnreferenced": 0,
+            "SourceBytesProcessed": 0,
+            "SourceFileIDsStillReferenced": null,
+            "SourceFileIDsUnreferenced": null,
+            "SourceSegmentsReclaimed": 0,
+            "SourceBytesReclaimed": 0,
+            "SourceSegmentsRetainedRecoverableRootStale": 0,
+            "SourceBytesRetainedRecoverableRootStale": 0,
+            "LeafGenerationCleanupRetainedRecoverableRootStale": false,
+            "TemplateRecordsAttempted": 0,
+            "TemplateRecordsKept": 0,
+            "TemplateInputBytes": 0,
+            "TemplateOutputBytes": 0,
+            "TemplatePointerRecordsAttempted": 0,
+            "TemplatePointerRecordsKept": 0,
+            "TemplatePointerInputBytes": 0,
+            "TemplatePointerOutputBytes": 0,
+            "TemplatePointerReasons": null,
+            "TemplateOuterLeafRecordsAttempted": 0,
+            "TemplateOuterLeafRecordsKept": 0,
+            "TemplateOuterLeafInputBytes": 0,
+            "TemplateOuterLeafOutputBytes": 0,
+            "TemplateOuterLeafReasons": null
+          },
+          "value_log_gc": {
+            "SegmentsTotal": 1,
+            "SegmentsReferenced": 1,
+            "SegmentsActive": 0,
+            "SegmentsProtected": 0,
+            "SegmentsProtectedInUse": 0,
+            "SegmentsProtectedRetained": 0,
+            "SegmentsProtectedOverlap": 0,
+            "SegmentsProtectedOther": 0,
+            "SegmentsEligible": 0,
+            "SegmentsDeleted": 0,
+            "SegmentsPending": 0,
+            "BytesTotal": 193991,
+            "BytesReferenced": 193991,
+            "BytesActive": 0,
+            "BytesProtected": 0,
+            "BytesProtectedInUse": 0,
+            "BytesProtectedRetained": 0,
+            "BytesProtectedOverlap": 0,
+            "BytesProtectedOther": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "BytesPending": 0,
+            "ObservedSourceSegments": 0,
+            "ObservedSourceSegmentsReferenced": 0,
+            "ObservedSourceSegmentsActive": 0,
+            "ObservedSourceSegmentsProtected": 0,
+            "ObservedSourceSegmentsProtectedInUse": 0,
+            "ObservedSourceSegmentsProtectedRetained": 0,
+            "ObservedSourceSegmentsProtectedOverlap": 0,
+            "ObservedSourceSegmentsProtectedOther": 0,
+            "ObservedSourceSegmentsEligible": 0,
+            "ObservedSourceSegmentsDeleted": 0,
+            "ObservedSourceSegmentsPending": 0,
+            "ObservedSourceBytes": 0,
+            "ObservedSourceBytesReferenced": 0,
+            "ObservedSourceBytesActive": 0,
+            "ObservedSourceBytesProtected": 0,
+            "ObservedSourceBytesProtectedInUse": 0,
+            "ObservedSourceBytesProtectedRetained": 0,
+            "ObservedSourceBytesProtectedOverlap": 0,
+            "ObservedSourceBytesProtectedOther": 0,
+            "ObservedSourceBytesEligible": 0,
+            "ObservedSourceBytesDeleted": 0,
+            "ObservedSourceBytesPending": 0
+          },
+          "leaf_generation_plan": {
+            "CurrentCommitSeq": 772,
+            "CurrentGenerationID": 1,
+            "Generations": [
+              {
+                "GenerationID": 1,
+                "State": "writable",
+                "FileIDs": [
+                  2139095041
+                ],
+                "FileCount": 1,
+                "BytesTotal": 7402459,
+                "BytesLive": 293634,
+                "BytesDead": 7108825,
+                "BytesToCopy": 293634,
+                "LivePages": 470,
+                "AgeCommits": 770,
+                "PinnedCount": 1,
+                "DeadRatioPPM": 960332,
+                "LiveRatioPPM": 39667,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "writable_generation"
+              }
+            ],
+            "Candidates": [],
+            "CandidateGenerationIDs": [],
+            "CandidateBytesTotal": 0,
+            "CandidateBytesLive": 0,
+            "CandidateBytesDead": 0,
+            "CandidateBytesToCopy": 0,
+            "CandidateLivePages": 0,
+            "ExpectedReclaimBytes": 0,
+            "ExpectedReclaimRatioPPM": 0,
+            "ExpectedReclaimPerByteCopiedPPM": 0,
+            "Admission": "no_candidates"
+          },
+          "leaf_generation_gc": {
+            "GenerationsTotal": 1,
+            "GenerationsWritable": 1,
+            "GenerationsLive": 0,
+            "GenerationsRetiring": 0,
+            "GenerationsEligible": 0,
+            "GenerationsDeleted": 0,
+            "FilesDeleted": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "ManifestRevisionGCUnsupported": false,
+            "ManifestRevisionsTotal": 0,
+            "ManifestRevisionsProtected": 0,
+            "ManifestRevisionsEligible": 0,
+            "ManifestRevisionsDeleted": 0,
+            "ManifestRevisionBytesEligible": 0,
+            "ManifestRevisionBytesDeleted": 0
+          },
+          "index_vacuum": {
+            "AttemptID": 0,
+            "Phase": "",
+            "TotalDuration": 0,
+            "UserTreeDuration": 0,
+            "SystemReserveDuration": 0,
+            "CollectionBasisDuration": 0,
+            "PreflushDuration": 0,
+            "CutoverDuration": 0,
+            "SystemTreeDuration": 0,
+            "FinalPagerSyncDuration": 0,
+            "SwapPublishDuration": 0,
+            "MaxWriterPause": 0,
+            "PrecloneTraversalPages": 0,
+            "RecloneTraversalPages": 0,
+            "CutoverCloneTraversalPages": 0,
+            "DirtyDescriptors": 0,
+            "UserTailMutations": 0,
+            "UserTailPointMutations": 0,
+            "UserTailRangeMutations": 0,
+            "DeferredCutovers": 0,
+            "ConcurrentMutationAborts": 0,
+            "RecoverableSetCaptureDuration": 0,
+            "RecoverableSetCaptureAttempts": 0,
+            "RecoverableSetCaptures": 0,
+            "RecoverableSetRecaptureAttempts": 0,
+            "RecoverableSetRecaptures": 0,
+            "RecoverableRoots": 0,
+            "OlderRootRebuildDuration": 0,
+            "OlderRootRebuilds": 0,
+            "OlderRootDurableResourceCaptureDuration": 0,
+            "OlderRootDurableResourceCaptures": 0,
+            "OlderRootDurableResourceDescriptors": 0,
+            "OlderRootDurableResourceBytes": 0,
+            "OlderRootExactCandidateScans": 0,
+            "OlderRootProjections": 0,
+            "OlderRootProjectionFallbacks": 0,
+            "OlderRootProjectionFallbackReason": "",
+            "OlderRootReusedNonValueLogDescriptors": 0,
+            "OlderRootUniqueExternalSegments": 0,
+            "DurableResourceCaptureDuration": 0,
+            "DurableResourceCaptures": 0,
+            "DurableResourceDescriptors": 0,
+            "DurableResourceBytes": 0,
+            "DurableResourceExactCandidateScans": 0,
+            "DurableResourceProjections": 0,
+            "DurableResourceProjectionFallbacks": 0,
+            "DurableResourceProjectionFallbackReason": "",
+            "OlderRootRebuiltPages": 0,
+            "ReplacementPagerPages": 0,
+            "ExactCandidateScan": false,
+            "ReusedNonValueLogDescriptors": 0,
+            "UniqueExternalSegments": 0,
+            "WorkCompleted": false,
+            "Canceled": false
+          },
+          "remaining_debt": {
+            "value_log_rewrite_segments": 0,
+            "value_log_rewrite_bytes": 0,
+            "value_log_gc_segments": 0,
+            "value_log_gc_bytes": 0,
+            "leaf_pack_generations": 0,
+            "leaf_pack_bytes": 0,
+            "leaf_gc_generations": 0,
+            "leaf_gc_bytes": 0,
+            "zero_byte_value_log_files": 0,
+            "index_vacuum_required": false,
+            "index_vacuum_reason": "none",
+            "index_vacuum_total_pages": 75,
+            "index_vacuum_user_pages": 1,
+            "index_vacuum_user_span": 1,
+            "index_vacuum_user_span_ratio_ppm": 1000000,
+            "index_vacuum_freelist_reclaimable_pages": 0,
+            "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+            "index_vacuum_collection_root_pages": 11,
+            "index_vacuum_collection_root_span": 11,
+            "index_vacuum_collection_root_span_ratio_ppm": 1000000
+          },
+          "fully_compacted": true,
+          "policy_fully_compacted": true,
+          "byte_minimized": true
+        },
+        "work_ns": 288722682,
+        "work": {
+          "mode": "exhaustive",
+          "dry_run": false,
+          "before": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 878284,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 193991,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 7403615,
+              "files": 5,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 12670194,
+              "files": 10,
+              "zero_byte_files": 1
+            }
+          ],
+          "after": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 878284,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 193991,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 7657040,
+              "files": 14,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 12923619,
+              "files": 19,
+              "zero_byte_files": 1
+            }
+          ],
+          "phases": [
+            {
+              "name": "checkpoint",
+              "wall_time_nanos": 4775
+            },
+            {
+              "name": "value-log-rewrite",
+              "wall_time_nanos": 1564902
+            },
+            {
+              "name": "checkpoint-after-value-log-rewrite",
+              "wall_time_nanos": 1907
+            },
+            {
+              "name": "value-log-gc",
+              "wall_time_nanos": 24958512
+            },
+            {
+              "name": "checkpoint-after-value-log-gc",
+              "wall_time_nanos": 5459
+            },
+            {
+              "name": "seal-current-leaf-generation",
+              "wall_time_nanos": 30708660
+            },
+            {
+              "name": "leaf-generation-pack-1",
+              "wall_time_nanos": 79590337
+            },
+            {
+              "name": "checkpoint-after-leaf-generation-pack-1",
+              "wall_time_nanos": 8012097
+            },
+            {
+              "name": "leaf-generation-pack-2",
+              "skipped": true,
+              "skip_reason": "plan_admission:no_candidates",
+              "wall_time_nanos": 25103
+            },
+            {
+              "name": "leaf-generation-gc",
+              "wall_time_nanos": 25392046
+            },
+            {
+              "name": "checkpoint-after-leaf-generation-gc",
+              "wall_time_nanos": 3877
+            },
+            {
+              "name": "index-vacuum",
+              "status": "succeeded",
+              "required": true,
+              "reason": "leaf_generation",
+              "wall_time_nanos": 64414115
+            },
+            {
+              "name": "checkpoint-after-index-vacuum",
+              "wall_time_nanos": 6122
+            },
+            {
+              "name": "prune-empty-value-log-files",
+              "wall_time_nanos": 85197
+            },
+            {
+              "name": "index-vacuum-settle",
+              "status": "succeeded",
+              "required": true,
+              "reason": "leaf_generation",
+              "wall_time_nanos": 43658659
+            },
+            {
+              "name": "checkpoint-after-index-vacuum-settle",
+              "wall_time_nanos": 6580
+            }
+          ],
+          "audit": {
+            "shared_scans": 4,
+            "structural_reuse_hits": 0,
+            "structural_reuse_misses": 4,
+            "revalidation_retries": 0,
+            "root_sets": 32,
+            "pages_visited": 52,
+            "memo_hits": 0,
+            "pointer_projections": 16384,
+            "grouped_record_dedupe_hits": 14336,
+            "physical_bytes_read": 7954432,
+            "last_structural_reuse_miss_reason": "cold"
+          },
+          "value_log_rewrite_plan": {
+            "SourceFileIDs": null,
+            "SelectedSegments": null,
+            "SegmentsTotal": 1,
+            "SegmentsSelected": 0,
+            "BytesTotal": 193991,
+            "BytesLive": 176691,
+            "BytesStale": 17300,
+            "SelectedBytesTotal": 0,
+            "SelectedBytesLive": 0,
+            "SelectedBytesStale": 0,
+            "AgeBlockedSegments": 0,
+            "AgeBlockedBytesTotal": 0,
+            "AgeBlockedBytesLive": 0,
+            "AgeBlockedBytesStale": 0,
+            "AgeBlockedMinRemainingAge": 0
+          },
+          "value_log_rewrite": {
+            "SegmentsBefore": 1,
+            "SegmentsAfter": 1,
+            "BytesBefore": 193991,
+            "BytesAfter": 193991,
+            "RecordsCopied": 0,
+            "ValueRecordsCopied": 0,
+            "ValueBytesCopied": 0,
+            "SourceSegmentsRequested": 0,
+            "SourceChunksRequested": 0,
+            "SourceSegmentsStillReferenced": 0,
+            "SourceSegmentsUnreferenced": 0,
+            "SourceBytesRequested": 0,
+            "SourceBytesStillReferenced": 0,
+            "SourceBytesUnreferenced": 0,
+            "SourceBytesProcessed": 0,
+            "SourceFileIDsStillReferenced": null,
+            "SourceFileIDsUnreferenced": null,
+            "SourceSegmentsReclaimed": 0,
+            "SourceBytesReclaimed": 0,
+            "SourceSegmentsRetainedRecoverableRootStale": 0,
+            "SourceBytesRetainedRecoverableRootStale": 0,
+            "LeafGenerationCleanupRetainedRecoverableRootStale": false,
+            "TemplateRecordsAttempted": 0,
+            "TemplateRecordsKept": 0,
+            "TemplateInputBytes": 0,
+            "TemplateOutputBytes": 0,
+            "TemplatePointerRecordsAttempted": 0,
+            "TemplatePointerRecordsKept": 0,
+            "TemplatePointerInputBytes": 0,
+            "TemplatePointerOutputBytes": 0,
+            "TemplatePointerReasons": null,
+            "TemplateOuterLeafRecordsAttempted": 0,
+            "TemplateOuterLeafRecordsKept": 0,
+            "TemplateOuterLeafInputBytes": 0,
+            "TemplateOuterLeafOutputBytes": 0,
+            "TemplateOuterLeafReasons": null
+          },
+          "value_log_gc": {
+            "SegmentsTotal": 1,
+            "SegmentsReferenced": 1,
+            "SegmentsActive": 0,
+            "SegmentsProtected": 0,
+            "SegmentsProtectedInUse": 0,
+            "SegmentsProtectedRetained": 0,
+            "SegmentsProtectedOverlap": 0,
+            "SegmentsProtectedOther": 0,
+            "SegmentsEligible": 0,
+            "SegmentsDeleted": 0,
+            "SegmentsPending": 0,
+            "BytesTotal": 193991,
+            "BytesReferenced": 193991,
+            "BytesActive": 0,
+            "BytesProtected": 0,
+            "BytesProtectedInUse": 0,
+            "BytesProtectedRetained": 0,
+            "BytesProtectedOverlap": 0,
+            "BytesProtectedOther": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "BytesPending": 0,
+            "ObservedSourceSegments": 0,
+            "ObservedSourceSegmentsReferenced": 0,
+            "ObservedSourceSegmentsActive": 0,
+            "ObservedSourceSegmentsProtected": 0,
+            "ObservedSourceSegmentsProtectedInUse": 0,
+            "ObservedSourceSegmentsProtectedRetained": 0,
+            "ObservedSourceSegmentsProtectedOverlap": 0,
+            "ObservedSourceSegmentsProtectedOther": 0,
+            "ObservedSourceSegmentsEligible": 0,
+            "ObservedSourceSegmentsDeleted": 0,
+            "ObservedSourceSegmentsPending": 0,
+            "ObservedSourceBytes": 0,
+            "ObservedSourceBytesReferenced": 0,
+            "ObservedSourceBytesActive": 0,
+            "ObservedSourceBytesProtected": 0,
+            "ObservedSourceBytesProtectedInUse": 0,
+            "ObservedSourceBytesProtectedRetained": 0,
+            "ObservedSourceBytesProtectedOverlap": 0,
+            "ObservedSourceBytesProtectedOther": 0,
+            "ObservedSourceBytesEligible": 0,
+            "ObservedSourceBytesDeleted": 0,
+            "ObservedSourceBytesPending": 0
+          },
+          "leaf_generation_plan": {
+            "CurrentCommitSeq": 775,
+            "CurrentGenerationID": 3,
+            "Generations": [
+              {
+                "GenerationID": 1,
+                "State": "retiring",
+                "FileIDs": [
+                  2139095041
+                ],
+                "FileCount": 1,
+                "BytesTotal": 7402459,
+                "BytesLive": 0,
+                "BytesDead": 7402459,
+                "BytesToCopy": 0,
+                "LivePages": 0,
+                "AgeCommits": 3,
+                "PinnedCount": 1,
+                "DeadRatioPPM": 1000000,
+                "LiveRatioPPM": 0,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "retiring_generation"
+              },
+              {
+                "GenerationID": 2,
+                "State": "sealed",
+                "FileIDs": [
+                  2139095042
+                ],
+                "FileCount": 1,
+                "BytesTotal": 186975,
+                "BytesLive": 184924,
+                "BytesDead": 2051,
+                "BytesToCopy": 184924,
+                "LivePages": 469,
+                "AgeCommits": 2,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 10969,
+                "LiveRatioPPM": 989030,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "compact_storage_run_created"
+              },
+              {
+                "GenerationID": 3,
+                "State": "writable",
+                "FileIDs": [
+                  2139095043
+                ],
+                "FileCount": 1,
+                "BytesTotal": 3078,
+                "BytesLive": 1026,
+                "BytesDead": 2052,
+                "BytesToCopy": 1026,
+                "LivePages": 1,
+                "AgeCommits": 2,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 666666,
+                "LiveRatioPPM": 333333,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "writable_generation"
+              }
+            ],
+            "Candidates": [],
+            "CandidateGenerationIDs": [],
+            "CandidateBytesTotal": 0,
+            "CandidateBytesLive": 0,
+            "CandidateBytesDead": 0,
+            "CandidateBytesToCopy": 0,
+            "CandidateLivePages": 0,
+            "ExpectedReclaimBytes": 0,
+            "ExpectedReclaimRatioPPM": 0,
+            "ExpectedReclaimPerByteCopiedPPM": 0,
+            "Admission": "no_candidates"
+          },
+          "leaf_generation_packs": [
+            {
+              "Plan": {
+                "CurrentCommitSeq": 772,
+                "CurrentGenerationID": 2,
+                "Generations": [
+                  {
+                    "GenerationID": 1,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095041
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 7402459,
+                    "BytesLive": 293634,
+                    "BytesDead": 7108825,
+                    "BytesToCopy": 293634,
+                    "LivePages": 470,
+                    "AgeCommits": 0,
+                    "PinnedCount": 2,
+                    "DeadRatioPPM": 960332,
+                    "LiveRatioPPM": 39667,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  },
+                  {
+                    "GenerationID": 2,
+                    "State": "writable",
+                    "FileIDs": null,
+                    "FileCount": 0,
+                    "BytesTotal": 0,
+                    "BytesLive": 0,
+                    "BytesDead": 0,
+                    "BytesToCopy": 0,
+                    "LivePages": 0,
+                    "AgeCommits": 0,
+                    "PinnedCount": 0,
+                    "DeadRatioPPM": 0,
+                    "LiveRatioPPM": 0,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "writable_generation"
+                  }
+                ],
+                "Candidates": [
+                  {
+                    "GenerationID": 1,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095041
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 7402459,
+                    "BytesLive": 293634,
+                    "BytesDead": 7108825,
+                    "BytesToCopy": 293634,
+                    "LivePages": 470,
+                    "AgeCommits": 0,
+                    "PinnedCount": 2,
+                    "DeadRatioPPM": 960332,
+                    "LiveRatioPPM": 39667,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  }
+                ],
+                "CandidateGenerationIDs": [
+                  1
+                ],
+                "CandidateBytesTotal": 7402459,
+                "CandidateBytesLive": 293634,
+                "CandidateBytesDead": 7108825,
+                "CandidateBytesToCopy": 293634,
+                "CandidateLivePages": 470,
+                "ExpectedReclaimBytes": 7108825,
+                "ExpectedReclaimRatioPPM": 960332,
+                "ExpectedReclaimPerByteCopiedPPM": 1000000,
+                "Admission": "eligible"
+              },
+              "Selection": {
+                "GenerationIDs": [
+                  1
+                ],
+                "Generations": [
+                  {
+                    "GenerationID": 1,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095041
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 7402459,
+                    "BytesLive": 293634,
+                    "BytesDead": 7108825,
+                    "BytesToCopy": 293634,
+                    "LivePages": 470,
+                    "AgeCommits": 0,
+                    "PinnedCount": 2,
+                    "DeadRatioPPM": 960332,
+                    "LiveRatioPPM": 39667,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  }
+                ],
+                "BytesTotal": 7402459,
+                "BytesLive": 293634,
+                "BytesDead": 7108825,
+                "BytesToCopy": 293634,
+                "LivePages": 470,
+                "ExpectedReclaimBytes": 7108825,
+                "ExpectedReclaimRatioPPM": 960332,
+                "ExpectedReclaimPerByteCopiedPPM": 1000000
+              },
+              "Pack": {
+                "GenerationsRequested": 1,
+                "GenerationsMatched": 1,
+                "SourceGenerationIDs": [
+                  1
+                ],
+                "SourceFilesRequested": 1,
+                "SourceFileIDs": [
+                  2139095041
+                ],
+                "SourceBytesTotal": 7402459,
+                "SourceBytesLive": 293634,
+                "SourceBytesDead": 7108825,
+                "SourceBytesToCopy": 293634,
+                "ExpectedReclaimBytes": 7108825,
+                "ExpectedReclaimRatioPPM": 960332,
+                "ExpectedReclaimPerByteCopiedPPM": 1000000,
+                "LeafPagesCopied": 471,
+                "BytesCopied": 1929216,
+                "LeafFramesWritten": 35,
+                "MaxLeafFrameK": 16,
+                "InternalPagesVisited": 12,
+                "SubtreesPruned": 1,
+                "CreatedFileIDs": [
+                  2139095042
+                ],
+                "CopyAttempts": 1,
+                "CopyAborts": 0,
+                "RetryCopyTimeNanos": 0,
+                "CopyTimeNanos": 9035373,
+                "PublishWaitNanos": 300,
+                "PublishHoldNanos": 14424437,
+                "PrivatePagesAllocated": 13,
+                "PrivatePagesDiscarded": 0,
+                "ApplyStages": {
+                  "SetupTimeNanos": 55621,
+                  "TreeRewriteTimeNanos": 2850750,
+                  "LeafSyncTimeNanos": 6125886,
+                  "CopyCloseTimeNanos": 58581,
+                  "RevalidateTimeNanos": 1698,
+                  "PromotionTimeNanos": 6096291,
+                  "RelocationTimeNanos": 67400,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 6017850,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 21400,
+                  "CollectionPublishTimeNanos": 6541197,
+                  "FinalizeTimeNanos": 1681445,
+                  "PostWorkTimeNanos": 31154055,
+                  "CleanupTimeNanos": 40878
+                },
+                "RetryApplyStages": {
+                  "SetupTimeNanos": 0,
+                  "TreeRewriteTimeNanos": 0,
+                  "LeafSyncTimeNanos": 0,
+                  "CopyCloseTimeNanos": 0,
+                  "RevalidateTimeNanos": 0,
+                  "PromotionTimeNanos": 0,
+                  "RelocationTimeNanos": 0,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 0,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 0,
+                  "CollectionPublishTimeNanos": 0,
+                  "FinalizeTimeNanos": 0,
+                  "PostWorkTimeNanos": 0,
+                  "CleanupTimeNanos": 0
+                },
+                "WallTimeNanos": 79516957
+              },
+              "Ran": true,
+              "SkipReason": ""
+            },
+            {
+              "Plan": {
+                "CurrentCommitSeq": 773,
+                "CurrentGenerationID": 3,
+                "Generations": [
+                  {
+                    "GenerationID": 1,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095041
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 7402459,
+                    "BytesLive": 0,
+                    "BytesDead": 7402459,
+                    "BytesToCopy": 0,
+                    "LivePages": 0,
+                    "AgeCommits": 1,
+                    "PinnedCount": 2,
+                    "DeadRatioPPM": 1000000,
+                    "LiveRatioPPM": 0,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "whole_generation_gc_candidate"
+                  },
+                  {
+                    "GenerationID": 2,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095042
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 186975,
+                    "BytesLive": 186975,
+                    "BytesDead": 0,
+                    "BytesToCopy": 186975,
+                    "LivePages": 1,
+                    "AgeCommits": 0,
+                    "PinnedCount": 0,
+                    "DeadRatioPPM": 0,
+                    "LiveRatioPPM": 1000000,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "compact_storage_run_created"
+                  },
+                  {
+                    "GenerationID": 3,
+                    "State": "writable",
+                    "FileIDs": [
+                      2139095043
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 1026,
+                    "BytesLive": 0,
+                    "BytesDead": 1026,
+                    "BytesToCopy": 0,
+                    "LivePages": 0,
+                    "AgeCommits": 0,
+                    "PinnedCount": 0,
+                    "DeadRatioPPM": 1000000,
+                    "LiveRatioPPM": 0,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "writable_generation"
+                  }
+                ],
+                "Candidates": [],
+                "CandidateGenerationIDs": [],
+                "CandidateBytesTotal": 0,
+                "CandidateBytesLive": 0,
+                "CandidateBytesDead": 0,
+                "CandidateBytesToCopy": 0,
+                "CandidateLivePages": 0,
+                "ExpectedReclaimBytes": 0,
+                "ExpectedReclaimRatioPPM": 0,
+                "ExpectedReclaimPerByteCopiedPPM": 0,
+                "Admission": "no_candidates"
+              },
+              "Selection": {
+                "GenerationIDs": null,
+                "Generations": null,
+                "BytesTotal": 0,
+                "BytesLive": 0,
+                "BytesDead": 0,
+                "BytesToCopy": 0,
+                "LivePages": 0,
+                "ExpectedReclaimBytes": 0,
+                "ExpectedReclaimRatioPPM": 0,
+                "ExpectedReclaimPerByteCopiedPPM": 0
+              },
+              "Pack": {
+                "GenerationsRequested": 0,
+                "GenerationsMatched": 0,
+                "SourceGenerationIDs": null,
+                "SourceFilesRequested": 0,
+                "SourceFileIDs": null,
+                "SourceBytesTotal": 0,
+                "SourceBytesLive": 0,
+                "SourceBytesDead": 0,
+                "SourceBytesToCopy": 0,
+                "ExpectedReclaimBytes": 0,
+                "ExpectedReclaimRatioPPM": 0,
+                "ExpectedReclaimPerByteCopiedPPM": 0,
+                "LeafPagesCopied": 0,
+                "BytesCopied": 0,
+                "LeafFramesWritten": 0,
+                "MaxLeafFrameK": 0,
+                "InternalPagesVisited": 0,
+                "SubtreesPruned": 0,
+                "CreatedFileIDs": null,
+                "CopyAttempts": 0,
+                "CopyAborts": 0,
+                "RetryCopyTimeNanos": 0,
+                "CopyTimeNanos": 0,
+                "PublishWaitNanos": 0,
+                "PublishHoldNanos": 0,
+                "PrivatePagesAllocated": 0,
+                "PrivatePagesDiscarded": 0,
+                "ApplyStages": {
+                  "SetupTimeNanos": 0,
+                  "TreeRewriteTimeNanos": 0,
+                  "LeafSyncTimeNanos": 0,
+                  "CopyCloseTimeNanos": 0,
+                  "RevalidateTimeNanos": 0,
+                  "PromotionTimeNanos": 0,
+                  "RelocationTimeNanos": 0,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 0,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 0,
+                  "CollectionPublishTimeNanos": 0,
+                  "FinalizeTimeNanos": 0,
+                  "PostWorkTimeNanos": 0,
+                  "CleanupTimeNanos": 0
+                },
+                "RetryApplyStages": {
+                  "SetupTimeNanos": 0,
+                  "TreeRewriteTimeNanos": 0,
+                  "LeafSyncTimeNanos": 0,
+                  "CopyCloseTimeNanos": 0,
+                  "RevalidateTimeNanos": 0,
+                  "PromotionTimeNanos": 0,
+                  "RelocationTimeNanos": 0,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 0,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 0,
+                  "CollectionPublishTimeNanos": 0,
+                  "FinalizeTimeNanos": 0,
+                  "PostWorkTimeNanos": 0,
+                  "CleanupTimeNanos": 0
+                },
+                "WallTimeNanos": 0
+              },
+              "Ran": false,
+              "SkipReason": "plan_admission:no_candidates"
+            }
+          ],
+          "leaf_generation_gc": {
+            "GenerationsTotal": 3,
+            "GenerationsWritable": 1,
+            "GenerationsLive": 1,
+            "GenerationsRetiring": 1,
+            "GenerationsEligible": 0,
+            "GenerationsDeleted": 0,
+            "FilesDeleted": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "ManifestRevisionGCUnsupported": false,
+            "ManifestRevisionsTotal": 7,
+            "ManifestRevisionsProtected": 7,
+            "ManifestRevisionsEligible": 0,
+            "ManifestRevisionsDeleted": 0,
+            "ManifestRevisionBytesEligible": 0,
+            "ManifestRevisionBytesDeleted": 0
+          },
+          "index_vacuum": {
+            "AttemptID": 3,
+            "Phase": "rebuild",
+            "TotalDuration": 43623276,
+            "UserTreeDuration": 5997,
+            "SystemReserveDuration": 615,
+            "CollectionBasisDuration": 67089,
+            "PreflushDuration": 439,
+            "CutoverDuration": 14926300,
+            "SystemTreeDuration": 4232,
+            "FinalPagerSyncDuration": 27195671,
+            "SwapPublishDuration": 13028296,
+            "MaxWriterPause": 42123452,
+            "PrecloneTraversalPages": 22,
+            "RecloneTraversalPages": 0,
+            "CutoverCloneTraversalPages": 0,
+            "DirtyDescriptors": 0,
+            "UserTailMutations": 0,
+            "UserTailPointMutations": 0,
+            "UserTailRangeMutations": 0,
+            "DeferredCutovers": 0,
+            "ConcurrentMutationAborts": 0,
+            "RecoverableSetCaptureDuration": 69228,
+            "RecoverableSetCaptureAttempts": 1,
+            "RecoverableSetCaptures": 1,
+            "RecoverableSetRecaptureAttempts": 0,
+            "RecoverableSetRecaptures": 0,
+            "RecoverableRoots": 2,
+            "OlderRootRebuildDuration": 1152433,
+            "OlderRootRebuilds": 1,
+            "OlderRootDurableResourceCaptureDuration": 15393,
+            "OlderRootDurableResourceCaptures": 1,
+            "OlderRootDurableResourceDescriptors": 5,
+            "OlderRootDurableResourceBytes": 9336925,
+            "OlderRootExactCandidateScans": 0,
+            "OlderRootProjections": 1,
+            "OlderRootProjectionFallbacks": 0,
+            "OlderRootProjectionFallbackReason": "",
+            "OlderRootReusedNonValueLogDescriptors": 0,
+            "OlderRootUniqueExternalSegments": 0,
+            "DurableResourceCaptureDuration": 1263964,
+            "DurableResourceCaptures": 1,
+            "DurableResourceDescriptors": 5,
+            "DurableResourceBytes": 2121441,
+            "DurableResourceExactCandidateScans": 1,
+            "DurableResourceProjections": 0,
+            "DurableResourceProjectionFallbacks": 1,
+            "DurableResourceProjectionFallbackReason": "current-packed-reachability",
+            "OlderRootRebuiltPages": 13,
+            "ReplacementPagerPages": 38,
+            "ExactCandidateScan": true,
+            "ReusedNonValueLogDescriptors": 3,
+            "UniqueExternalSegments": 3,
+            "WorkCompleted": true,
+            "Canceled": false
+          },
+          "remaining_debt": {
+            "value_log_rewrite_segments": 0,
+            "value_log_rewrite_bytes": 0,
+            "value_log_gc_segments": 0,
+            "value_log_gc_bytes": 0,
+            "leaf_pack_generations": 0,
+            "leaf_pack_bytes": 0,
+            "leaf_gc_generations": 0,
+            "leaf_gc_bytes": 0,
+            "zero_byte_value_log_files": 0,
+            "index_vacuum_required": true,
+            "index_vacuum_reason": "leaf_generation",
+            "index_vacuum_total_pages": 38,
+            "index_vacuum_user_pages": 1,
+            "index_vacuum_user_span": 1,
+            "index_vacuum_user_span_ratio_ppm": 1000000,
+            "index_vacuum_freelist_reclaimable_pages": 0,
+            "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+            "index_vacuum_collection_root_pages": 11,
+            "index_vacuum_collection_root_span": 11,
+            "index_vacuum_collection_root_span_ratio_ppm": 1000000
+          },
+          "fully_compacted": false,
+          "policy_fully_compacted": false,
+          "byte_minimized": false
+        }
+      }
+    },
+    {
+      "epoch": 1,
+      "maintenance_ns": 543751435,
+      "vacuum_ns": 78836736,
+      "vacuum_exact_scan": true,
+      "vacuum_resource_capture_ns": 2049509,
+      "vacuum_projection_reason": "current-packed-reachability",
+      "final": {
+        "refresh_ns": 16699372,
+        "before": {
+          "commit_seq": 1423,
+          "user_root": 16,
+          "system_root": 15,
+          "applied_lsn": 1409,
+          "next_lsn": 1410,
+          "roots": [
+            {
+              "CommitSeq": 1421,
+              "UserRootPageID": 2,
+              "SystemRootPageID": 14,
+              "AppliedCommandLSN": 1409,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": false
+            },
+            {
+              "CommitSeq": 1423,
+              "UserRootPageID": 16,
+              "SystemRootPageID": 15,
+              "AppliedCommandLSN": 1409,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": true
+            }
+          ],
+          "slots": {
+            "treedb.durable_root.commit_seq": "1423",
+            "treedb.durable_root.directory.logical_count": "0",
+            "treedb.durable_root.directory.physical_count": "0",
+            "treedb.durable_root.directory.root_page": "0",
+            "treedb.durable_root.directory_build.changed_record_bytes": "0",
+            "treedb.durable_root.directory_build.changed_records": "0",
+            "treedb.durable_root.directory_build.pages_written": "0",
+            "treedb.durable_root.durable_seq": "1422",
+            "treedb.durable_root.format_version": "1",
+            "treedb.durable_root.freelist.free_count": "0",
+            "treedb.durable_root.freelist.generation": "3",
+            "treedb.durable_root.freelist.header_page": "37",
+            "treedb.durable_root.freelist.high_water": "38",
+            "treedb.durable_root.freelist.retired_count": "0",
+            "treedb.durable_root.manifest.bytes": "1750",
+            "treedb.durable_root.manifest.entries": "5",
+            "treedb.durable_root.manifest.first_page": "33",
+            "treedb.durable_root.manifest.pages": "1",
+            "treedb.durable_root.manifest_build.bytes_encoded": "13784310",
+            "treedb.durable_root.manifest_build.count": "198",
+            "treedb.durable_root.manifest_build.entries_encoded": "598",
+            "treedb.durable_root.manifest_build.entries_visited": "868",
+            "treedb.durable_root.manifest_build.nanos": "26806389",
+            "treedb.durable_root.parent.commit_seq": "1421",
+            "treedb.durable_root.parent.record_page": "29",
+            "treedb.durable_root.record_page": "34",
+            "treedb.durable_root.selected_slot": "1",
+            "treedb.durable_root.slot0.commit_seq": "1421",
+            "treedb.durable_root.slot1.commit_seq": "1423",
+            "treedb.durable_root.system_root_page": "15",
+            "treedb.durable_root.total_pages": "38",
+            "treedb.durable_root.user_root_page": "16"
+          }
+        },
+        "after": {
+          "commit_seq": 1424,
+          "user_root": 16,
+          "system_root": 15,
+          "applied_lsn": 1409,
+          "next_lsn": 1410,
+          "roots": [
+            {
+              "CommitSeq": 1424,
+              "UserRootPageID": 16,
+              "SystemRootPageID": 15,
+              "AppliedCommandLSN": 1409,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": true
+            },
+            {
+              "CommitSeq": 1423,
+              "UserRootPageID": 16,
+              "SystemRootPageID": 15,
+              "AppliedCommandLSN": 1409,
+              "MaxEntryRevision": 0,
+              "Durable": true,
+              "Visible": false
+            }
+          ],
+          "slots": {
+            "treedb.durable_root.commit_seq": "1424",
+            "treedb.durable_root.directory.logical_count": "0",
+            "treedb.durable_root.directory.physical_count": "0",
+            "treedb.durable_root.directory.root_page": "0",
+            "treedb.durable_root.directory_build.changed_record_bytes": "0",
+            "treedb.durable_root.directory_build.changed_records": "0",
+            "treedb.durable_root.directory_build.pages_written": "0",
+            "treedb.durable_root.durable_seq": "1423",
+            "treedb.durable_root.format_version": "1",
+            "treedb.durable_root.freelist.free_count": "0",
+            "treedb.durable_root.freelist.generation": "5",
+            "treedb.durable_root.freelist.header_page": "75",
+            "treedb.durable_root.freelist.high_water": "76",
+            "treedb.durable_root.freelist.retired_count": "8",
+            "treedb.durable_root.manifest.bytes": "1750",
+            "treedb.durable_root.manifest.entries": "5",
+            "treedb.durable_root.manifest.first_page": "56",
+            "treedb.durable_root.manifest.pages": "1",
+            "treedb.durable_root.manifest_build.bytes_encoded": "13786024",
+            "treedb.durable_root.manifest_build.count": "199",
+            "treedb.durable_root.manifest_build.entries_encoded": "603",
+            "treedb.durable_root.manifest_build.entries_visited": "873",
+            "treedb.durable_root.manifest_build.nanos": "26817173",
+            "treedb.durable_root.parent.commit_seq": "1423",
+            "treedb.durable_root.parent.record_page": "34",
+            "treedb.durable_root.record_page": "57",
+            "treedb.durable_root.selected_slot": "0",
+            "treedb.durable_root.slot0.commit_seq": "1424",
+            "treedb.durable_root.slot1.commit_seq": "1423",
+            "treedb.durable_root.system_root_page": "15",
+            "treedb.durable_root.total_pages": "76",
+            "treedb.durable_root.user_root_page": "16"
+          }
+        },
+        "typed_gc_ns": 7159290,
+        "typed_gc": {
+          "DryRun": false,
+          "Plan": {
+            "ProtectOnly": true,
+            "Complete": true,
+            "Collection": "r1",
+            "Namespace": "r1/column-assets",
+            "ManifestRootName": "r1/column/manifest",
+            "ManifestRootID": 17,
+            "SystemRoot": 15,
+            "PlanCommitSeq": 1424,
+            "ActiveManifestGeneration": 1410,
+            "ActiveManifestChecksum": 12304225192953650560,
+            "RecoveryManifestGeneration": 1410,
+            "RecoveryManifestChecksum": 12304225192953650560,
+            "ManifestCatalogBytes": 381,
+            "Sources": {
+              "ManifestRoots": 1,
+              "ManifestRecords": 2,
+              "ActiveManifestRefs": 1,
+              "RecoveryManifestRefs": 1,
+              "CandidateRefs": 769,
+              "PendingRefs": 0,
+              "PreparedRefs": 0,
+              "PreparedQueryRefs": 0,
+              "QuarantineRefs": 0,
+              "QuarantineSegmentRecords": 0,
+              "PinnedRefs": 0,
+              "MappedResourcePins": 0,
+              "ActiveManifestBytes": 691175,
+              "RecoveryManifestBytes": 691175,
+              "CandidateBytes": 1012959,
+              "PendingBytes": 0,
+              "PreparedBytes": 0,
+              "PreparedQueryBytes": 0,
+              "QuarantineBytes": 0,
+              "QuarantineSegmentBytes": 0,
+              "PinnedBytes": 0,
+              "MappedResourcePinBytes": 0
+            },
+            "Refs": {
+              "Total": 770,
+              "Protected": 1,
+              "Reclaimable": 769,
+              "Uncertain": 0,
+              "BytesTotal": 1704134,
+              "BytesProtected": 691175,
+              "BytesReclaimable": 1012959,
+              "BytesUncertain": 0
+            },
+            "Segments": {
+              "Total": 2,
+              "Protected": 1,
+              "Reclaimable": 1,
+              "Mixed": 0,
+              "Unknown": 0,
+              "Missing": 0,
+              "OutOfBoundsRefs": 0,
+              "QuarantineSegments": 0,
+              "QuarantineSegmentMismatches": 0,
+              "BytesTotal": 1704134,
+              "BytesProtected": 691175,
+              "BytesReclaimable": 1012959,
+              "BytesWholeReclaimable": 1012959,
+              "BytesUnknown": 0,
+              "BytesQuarantined": 0
+            },
+            "MappedResources": {
+              "ActiveHandles": 0,
+              "ActiveMappedBytes": 0,
+              "ActiveHeapCopyBytes": 0,
+              "ActiveDerivedMetadataBytes": 0,
+              "PinnedRefs": 0,
+              "PinnedBytes": 0,
+              "UnconvertiblePins": 0,
+              "DeniedResources": 0,
+              "FallbackReads": 0
+            },
+            "RewriteDebtBytes": 0,
+            "Entries": null,
+            "SegmentEntries": null
+          },
+          "SegmentsEligible": 1,
+          "SegmentsDeleted": 1,
+          "SegmentsRetained": 1,
+          "BytesEligible": 1012959,
+          "BytesDeleted": 1012959,
+          "BytesRetained": 691175
+        },
+        "leaf_gc_ns": 82499890,
+        "leaf_gc": {
+          "GenerationsTotal": 4,
+          "GenerationsWritable": 1,
+          "GenerationsLive": 1,
+          "GenerationsRetiring": 0,
+          "GenerationsEligible": 2,
+          "GenerationsDeleted": 2,
+          "FilesDeleted": 2,
+          "BytesEligible": 5173106,
+          "BytesDeleted": 5173106,
+          "ManifestRevisionGCUnsupported": false,
+          "ManifestRevisionsTotal": 7,
+          "ManifestRevisionsProtected": 2,
+          "ManifestRevisionsEligible": 5,
+          "ManifestRevisionsDeleted": 5,
+          "ManifestRevisionBytesEligible": 4464,
+          "ManifestRevisionBytesDeleted": 4464
+        }
+      },
+      "full_compact": {
+        "owner": {
+          "OwnerClass": "internal owner hidden by wrapper",
+          "Status": "supported-target",
+          "Lifecycle": "quiesced maintenance",
+          "Replaceable": true,
+          "RequiresQuiescence": false,
+          "Detail": "internally owned replay-inline wrapper exposes a compact handoff restore capability"
+        },
+        "options": {
+          "leaf_pack_max_bytes_to_copy_per_pass": 1048576,
+          "leaf_pack_max_passes": 4,
+          "mode": "exhaustive",
+          "sync_each_phase": true,
+          "unsafe_value_log_reclaim_fenced_unreferenced": false,
+          "value_log_rewrite_batch_size": 32
+        },
+        "plan_ns": 1574649,
+        "plan": {
+          "mode": "exhaustive",
+          "dry_run": true,
+          "before": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 180465,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 256821,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 5175953,
+              "files": 7,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 9807543,
+              "files": 12,
+              "zero_byte_files": 1
+            }
+          ],
+          "after": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 180465,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 256821,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 5175953,
+              "files": 7,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 9807543,
+              "files": 12,
+              "zero_byte_files": 1
+            }
+          ],
+          "phases": [
+            {
+              "name": "index-vacuum",
+              "status": "not_required",
+              "reason": "none",
+              "skipped": true,
+              "skip_reason": "no index vacuum policy debt",
+              "wall_time_nanos": 0
+            }
+          ],
+          "audit": {
+            "shared_scans": 1,
+            "structural_reuse_hits": 0,
+            "structural_reuse_misses": 1,
+            "revalidation_retries": 0,
+            "root_sets": 8,
+            "pages_visited": 13,
+            "memo_hits": 0,
+            "pointer_projections": 4096,
+            "grouped_record_dedupe_hits": 3584,
+            "physical_bytes_read": 1996800,
+            "last_structural_reuse_miss_reason": "cold"
+          },
+          "value_log_rewrite_plan": {
+            "SourceFileIDs": null,
+            "SelectedSegments": null,
+            "SegmentsTotal": 1,
+            "SegmentsSelected": 0,
+            "BytesTotal": 256821,
+            "BytesLive": 176819,
+            "BytesStale": 80002,
+            "SelectedBytesTotal": 0,
+            "SelectedBytesLive": 0,
+            "SelectedBytesStale": 0,
+            "AgeBlockedSegments": 0,
+            "AgeBlockedBytesTotal": 0,
+            "AgeBlockedBytesLive": 0,
+            "AgeBlockedBytesStale": 0,
+            "AgeBlockedMinRemainingAge": 0
+          },
+          "value_log_rewrite": {
+            "SegmentsBefore": 0,
+            "SegmentsAfter": 0,
+            "BytesBefore": 0,
+            "BytesAfter": 0,
+            "RecordsCopied": 0,
+            "ValueRecordsCopied": 0,
+            "ValueBytesCopied": 0,
+            "SourceSegmentsRequested": 0,
+            "SourceChunksRequested": 0,
+            "SourceSegmentsStillReferenced": 0,
+            "SourceSegmentsUnreferenced": 0,
+            "SourceBytesRequested": 0,
+            "SourceBytesStillReferenced": 0,
+            "SourceBytesUnreferenced": 0,
+            "SourceBytesProcessed": 0,
+            "SourceFileIDsStillReferenced": null,
+            "SourceFileIDsUnreferenced": null,
+            "SourceSegmentsReclaimed": 0,
+            "SourceBytesReclaimed": 0,
+            "SourceSegmentsRetainedRecoverableRootStale": 0,
+            "SourceBytesRetainedRecoverableRootStale": 0,
+            "LeafGenerationCleanupRetainedRecoverableRootStale": false,
+            "TemplateRecordsAttempted": 0,
+            "TemplateRecordsKept": 0,
+            "TemplateInputBytes": 0,
+            "TemplateOutputBytes": 0,
+            "TemplatePointerRecordsAttempted": 0,
+            "TemplatePointerRecordsKept": 0,
+            "TemplatePointerInputBytes": 0,
+            "TemplatePointerOutputBytes": 0,
+            "TemplatePointerReasons": null,
+            "TemplateOuterLeafRecordsAttempted": 0,
+            "TemplateOuterLeafRecordsKept": 0,
+            "TemplateOuterLeafInputBytes": 0,
+            "TemplateOuterLeafOutputBytes": 0,
+            "TemplateOuterLeafReasons": null
+          },
+          "value_log_gc": {
+            "SegmentsTotal": 1,
+            "SegmentsReferenced": 1,
+            "SegmentsActive": 0,
+            "SegmentsProtected": 0,
+            "SegmentsProtectedInUse": 0,
+            "SegmentsProtectedRetained": 0,
+            "SegmentsProtectedOverlap": 0,
+            "SegmentsProtectedOther": 0,
+            "SegmentsEligible": 0,
+            "SegmentsDeleted": 0,
+            "SegmentsPending": 0,
+            "BytesTotal": 256821,
+            "BytesReferenced": 256821,
+            "BytesActive": 0,
+            "BytesProtected": 0,
+            "BytesProtectedInUse": 0,
+            "BytesProtectedRetained": 0,
+            "BytesProtectedOverlap": 0,
+            "BytesProtectedOther": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "BytesPending": 0,
+            "ObservedSourceSegments": 0,
+            "ObservedSourceSegmentsReferenced": 0,
+            "ObservedSourceSegmentsActive": 0,
+            "ObservedSourceSegmentsProtected": 0,
+            "ObservedSourceSegmentsProtectedInUse": 0,
+            "ObservedSourceSegmentsProtectedRetained": 0,
+            "ObservedSourceSegmentsProtectedOverlap": 0,
+            "ObservedSourceSegmentsProtectedOther": 0,
+            "ObservedSourceSegmentsEligible": 0,
+            "ObservedSourceSegmentsDeleted": 0,
+            "ObservedSourceSegmentsPending": 0,
+            "ObservedSourceBytes": 0,
+            "ObservedSourceBytesReferenced": 0,
+            "ObservedSourceBytesActive": 0,
+            "ObservedSourceBytesProtected": 0,
+            "ObservedSourceBytesProtectedInUse": 0,
+            "ObservedSourceBytesProtectedRetained": 0,
+            "ObservedSourceBytesProtectedOverlap": 0,
+            "ObservedSourceBytesProtectedOther": 0,
+            "ObservedSourceBytesEligible": 0,
+            "ObservedSourceBytesDeleted": 0,
+            "ObservedSourceBytesPending": 0
+          },
+          "leaf_generation_plan": {
+            "CurrentCommitSeq": 1421,
+            "CurrentGenerationID": 4,
+            "Generations": [
+              {
+                "GenerationID": 2,
+                "State": "sealed",
+                "FileIDs": [
+                  2139095042
+                ],
+                "FileCount": 1,
+                "BytesTotal": 186975,
+                "BytesLive": 16802,
+                "BytesDead": 170173,
+                "BytesToCopy": 16802,
+                "LivePages": 206,
+                "AgeCommits": 648,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 910137,
+                "LiveRatioPPM": 89862,
+                "WholeGenerationGCEligible": false,
+                "Eligible": true,
+                "SkipReason": ""
+              },
+              {
+                "GenerationID": 4,
+                "State": "writable",
+                "FileIDs": [
+                  2139095044
+                ],
+                "FileCount": 1,
+                "BytesTotal": 4986131,
+                "BytesLive": 275452,
+                "BytesDead": 4710679,
+                "BytesToCopy": 275452,
+                "LivePages": 266,
+                "AgeCommits": 644,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 944756,
+                "LiveRatioPPM": 55243,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "writable_generation"
+              }
+            ],
+            "Candidates": [
+              {
+                "GenerationID": 2,
+                "State": "sealed",
+                "FileIDs": [
+                  2139095042
+                ],
+                "FileCount": 1,
+                "BytesTotal": 186975,
+                "BytesLive": 16802,
+                "BytesDead": 170173,
+                "BytesToCopy": 16802,
+                "LivePages": 206,
+                "AgeCommits": 648,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 910137,
+                "LiveRatioPPM": 89862,
+                "WholeGenerationGCEligible": false,
+                "Eligible": true,
+                "SkipReason": ""
+              }
+            ],
+            "CandidateGenerationIDs": [
+              2
+            ],
+            "CandidateBytesTotal": 186975,
+            "CandidateBytesLive": 16802,
+            "CandidateBytesDead": 170173,
+            "CandidateBytesToCopy": 16802,
+            "CandidateLivePages": 206,
+            "ExpectedReclaimBytes": 170173,
+            "ExpectedReclaimRatioPPM": 910137,
+            "ExpectedReclaimPerByteCopiedPPM": 1000000,
+            "Admission": "eligible"
+          },
+          "leaf_generation_gc": {
+            "GenerationsTotal": 2,
+            "GenerationsWritable": 1,
+            "GenerationsLive": 1,
+            "GenerationsRetiring": 0,
+            "GenerationsEligible": 0,
+            "GenerationsDeleted": 0,
+            "FilesDeleted": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "ManifestRevisionGCUnsupported": false,
+            "ManifestRevisionsTotal": 0,
+            "ManifestRevisionsProtected": 0,
+            "ManifestRevisionsEligible": 0,
+            "ManifestRevisionsDeleted": 0,
+            "ManifestRevisionBytesEligible": 0,
+            "ManifestRevisionBytesDeleted": 0
+          },
+          "index_vacuum": {
+            "AttemptID": 0,
+            "Phase": "",
+            "TotalDuration": 0,
+            "UserTreeDuration": 0,
+            "SystemReserveDuration": 0,
+            "CollectionBasisDuration": 0,
+            "PreflushDuration": 0,
+            "CutoverDuration": 0,
+            "SystemTreeDuration": 0,
+            "FinalPagerSyncDuration": 0,
+            "SwapPublishDuration": 0,
+            "MaxWriterPause": 0,
+            "PrecloneTraversalPages": 0,
+            "RecloneTraversalPages": 0,
+            "CutoverCloneTraversalPages": 0,
+            "DirtyDescriptors": 0,
+            "UserTailMutations": 0,
+            "UserTailPointMutations": 0,
+            "UserTailRangeMutations": 0,
+            "DeferredCutovers": 0,
+            "ConcurrentMutationAborts": 0,
+            "RecoverableSetCaptureDuration": 0,
+            "RecoverableSetCaptureAttempts": 0,
+            "RecoverableSetCaptures": 0,
+            "RecoverableSetRecaptureAttempts": 0,
+            "RecoverableSetRecaptures": 0,
+            "RecoverableRoots": 0,
+            "OlderRootRebuildDuration": 0,
+            "OlderRootRebuilds": 0,
+            "OlderRootDurableResourceCaptureDuration": 0,
+            "OlderRootDurableResourceCaptures": 0,
+            "OlderRootDurableResourceDescriptors": 0,
+            "OlderRootDurableResourceBytes": 0,
+            "OlderRootExactCandidateScans": 0,
+            "OlderRootProjections": 0,
+            "OlderRootProjectionFallbacks": 0,
+            "OlderRootProjectionFallbackReason": "",
+            "OlderRootReusedNonValueLogDescriptors": 0,
+            "OlderRootUniqueExternalSegments": 0,
+            "DurableResourceCaptureDuration": 0,
+            "DurableResourceCaptures": 0,
+            "DurableResourceDescriptors": 0,
+            "DurableResourceBytes": 0,
+            "DurableResourceExactCandidateScans": 0,
+            "DurableResourceProjections": 0,
+            "DurableResourceProjectionFallbacks": 0,
+            "DurableResourceProjectionFallbackReason": "",
+            "OlderRootRebuiltPages": 0,
+            "ReplacementPagerPages": 0,
+            "ExactCandidateScan": false,
+            "ReusedNonValueLogDescriptors": 0,
+            "UniqueExternalSegments": 0,
+            "WorkCompleted": false,
+            "Canceled": false
+          },
+          "remaining_debt": {
+            "value_log_rewrite_segments": 0,
+            "value_log_rewrite_bytes": 0,
+            "value_log_gc_segments": 0,
+            "value_log_gc_bytes": 0,
+            "leaf_pack_generations": 1,
+            "leaf_pack_bytes": 170173,
+            "leaf_gc_generations": 0,
+            "leaf_gc_bytes": 0,
+            "zero_byte_value_log_files": 0,
+            "index_vacuum_required": false,
+            "index_vacuum_reason": "none",
+            "index_vacuum_total_pages": 38,
+            "index_vacuum_user_pages": 1,
+            "index_vacuum_user_span": 1,
+            "index_vacuum_user_span_ratio_ppm": 1000000,
+            "index_vacuum_freelist_reclaimable_pages": 0,
+            "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+            "index_vacuum_collection_root_pages": 11,
+            "index_vacuum_collection_root_span": 11,
+            "index_vacuum_collection_root_span_ratio_ppm": 1000000
+          },
+          "fully_compacted": false,
+          "policy_fully_compacted": false,
+          "byte_minimized": false
+        },
+        "work_ns": 244469124,
+        "work": {
+          "mode": "exhaustive",
+          "dry_run": false,
+          "before": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 180465,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 256821,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 5175953,
+              "files": 7,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 9807543,
+              "files": 12,
+              "zero_byte_files": 1
+            }
+          ],
+          "after": [
+            {
+              "name": "index",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/index.db",
+              "bytes": 4194304,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "wal",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/wal",
+              "bytes": 180465,
+              "files": 3,
+              "zero_byte_files": 1
+            },
+            {
+              "name": "value_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/value_vlog",
+              "bytes": 256821,
+              "files": 1,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "leaf_vlog",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb/leaf_vlog",
+              "bytes": 5410311,
+              "files": 13,
+              "zero_byte_files": 0
+            },
+            {
+              "name": "total",
+              "path": "/home/mikers/gomap-r1-pack-projection-evidence-20261005/rehearsal-2epochs/benchmark-tmp/BenchmarkR1Lifecycle50602755196777/002/maindb",
+              "bytes": 10041901,
+              "files": 18,
+              "zero_byte_files": 1
+            }
+          ],
+          "phases": [
+            {
+              "name": "checkpoint",
+              "wall_time_nanos": 4067
+            },
+            {
+              "name": "value-log-rewrite",
+              "wall_time_nanos": 1387434
+            },
+            {
+              "name": "checkpoint-after-value-log-rewrite",
+              "wall_time_nanos": 1527
+            },
+            {
+              "name": "value-log-gc",
+              "wall_time_nanos": 24746672
+            },
+            {
+              "name": "checkpoint-after-value-log-gc",
+              "wall_time_nanos": 2044
+            },
+            {
+              "name": "seal-current-leaf-generation",
+              "wall_time_nanos": 24879405
+            },
+            {
+              "name": "leaf-generation-pack-1",
+              "wall_time_nanos": 75054500
+            },
+            {
+              "name": "checkpoint-after-leaf-generation-pack-1",
+              "wall_time_nanos": 7855021
+            },
+            {
+              "name": "leaf-generation-pack-2",
+              "skipped": true,
+              "skip_reason": "plan_admission:no_candidates",
+              "wall_time_nanos": 21529
+            },
+            {
+              "name": "leaf-generation-gc",
+              "wall_time_nanos": 19506530
+            },
+            {
+              "name": "checkpoint-after-leaf-generation-gc",
+              "wall_time_nanos": 1966
+            },
+            {
+              "name": "index-vacuum",
+              "status": "succeeded",
+              "required": true,
+              "reason": "leaf_generation",
+              "wall_time_nanos": 65030688
+            },
+            {
+              "name": "checkpoint-after-index-vacuum",
+              "wall_time_nanos": 3280
+            },
+            {
+              "name": "settle-leaf-generation-gc-1",
+              "wall_time_nanos": 19348717
+            },
+            {
+              "name": "checkpoint-after-settle-leaf-generation-gc-1",
+              "wall_time_nanos": 1818
+            },
+            {
+              "name": "settle-leaf-generation-gc-2",
+              "wall_time_nanos": 453595
+            },
+            {
+              "name": "checkpoint-after-settle-leaf-generation-gc-2",
+              "wall_time_nanos": 1074
+            },
+            {
+              "name": "settle-leaf-generation-gc-3",
+              "wall_time_nanos": 460211
+            },
+            {
+              "name": "checkpoint-after-settle-leaf-generation-gc-3",
+              "wall_time_nanos": 1055
+            },
+            {
+              "name": "settle-leaf-generation-gc-4",
+              "wall_time_nanos": 434287
+            },
+            {
+              "name": "checkpoint-after-settle-leaf-generation-gc-4",
+              "wall_time_nanos": 972
+            },
+            {
+              "name": "prune-empty-value-log-files",
+              "wall_time_nanos": 55686
+            }
+          ],
+          "audit": {
+            "shared_scans": 3,
+            "structural_reuse_hits": 3,
+            "structural_reuse_misses": 3,
+            "revalidation_retries": 0,
+            "root_sets": 24,
+            "pages_visited": 39,
+            "memo_hits": 0,
+            "pointer_projections": 12288,
+            "grouped_record_dedupe_hits": 10752,
+            "physical_bytes_read": 5990400,
+            "last_structural_reuse_miss_reason": "cold"
+          },
+          "value_log_rewrite_plan": {
+            "SourceFileIDs": null,
+            "SelectedSegments": null,
+            "SegmentsTotal": 1,
+            "SegmentsSelected": 0,
+            "BytesTotal": 256821,
+            "BytesLive": 176819,
+            "BytesStale": 80002,
+            "SelectedBytesTotal": 0,
+            "SelectedBytesLive": 0,
+            "SelectedBytesStale": 0,
+            "AgeBlockedSegments": 0,
+            "AgeBlockedBytesTotal": 0,
+            "AgeBlockedBytesLive": 0,
+            "AgeBlockedBytesStale": 0,
+            "AgeBlockedMinRemainingAge": 0
+          },
+          "value_log_rewrite": {
+            "SegmentsBefore": 1,
+            "SegmentsAfter": 1,
+            "BytesBefore": 256821,
+            "BytesAfter": 256821,
+            "RecordsCopied": 0,
+            "ValueRecordsCopied": 0,
+            "ValueBytesCopied": 0,
+            "SourceSegmentsRequested": 0,
+            "SourceChunksRequested": 0,
+            "SourceSegmentsStillReferenced": 0,
+            "SourceSegmentsUnreferenced": 0,
+            "SourceBytesRequested": 0,
+            "SourceBytesStillReferenced": 0,
+            "SourceBytesUnreferenced": 0,
+            "SourceBytesProcessed": 0,
+            "SourceFileIDsStillReferenced": null,
+            "SourceFileIDsUnreferenced": null,
+            "SourceSegmentsReclaimed": 0,
+            "SourceBytesReclaimed": 0,
+            "SourceSegmentsRetainedRecoverableRootStale": 0,
+            "SourceBytesRetainedRecoverableRootStale": 0,
+            "LeafGenerationCleanupRetainedRecoverableRootStale": false,
+            "TemplateRecordsAttempted": 0,
+            "TemplateRecordsKept": 0,
+            "TemplateInputBytes": 0,
+            "TemplateOutputBytes": 0,
+            "TemplatePointerRecordsAttempted": 0,
+            "TemplatePointerRecordsKept": 0,
+            "TemplatePointerInputBytes": 0,
+            "TemplatePointerOutputBytes": 0,
+            "TemplatePointerReasons": null,
+            "TemplateOuterLeafRecordsAttempted": 0,
+            "TemplateOuterLeafRecordsKept": 0,
+            "TemplateOuterLeafInputBytes": 0,
+            "TemplateOuterLeafOutputBytes": 0,
+            "TemplateOuterLeafReasons": null
+          },
+          "value_log_gc": {
+            "SegmentsTotal": 1,
+            "SegmentsReferenced": 1,
+            "SegmentsActive": 0,
+            "SegmentsProtected": 0,
+            "SegmentsProtectedInUse": 0,
+            "SegmentsProtectedRetained": 0,
+            "SegmentsProtectedOverlap": 0,
+            "SegmentsProtectedOther": 0,
+            "SegmentsEligible": 0,
+            "SegmentsDeleted": 0,
+            "SegmentsPending": 0,
+            "BytesTotal": 256821,
+            "BytesReferenced": 256821,
+            "BytesActive": 0,
+            "BytesProtected": 0,
+            "BytesProtectedInUse": 0,
+            "BytesProtectedRetained": 0,
+            "BytesProtectedOverlap": 0,
+            "BytesProtectedOther": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "BytesPending": 0,
+            "ObservedSourceSegments": 0,
+            "ObservedSourceSegmentsReferenced": 0,
+            "ObservedSourceSegmentsActive": 0,
+            "ObservedSourceSegmentsProtected": 0,
+            "ObservedSourceSegmentsProtectedInUse": 0,
+            "ObservedSourceSegmentsProtectedRetained": 0,
+            "ObservedSourceSegmentsProtectedOverlap": 0,
+            "ObservedSourceSegmentsProtectedOther": 0,
+            "ObservedSourceSegmentsEligible": 0,
+            "ObservedSourceSegmentsDeleted": 0,
+            "ObservedSourceSegmentsPending": 0,
+            "ObservedSourceBytes": 0,
+            "ObservedSourceBytesReferenced": 0,
+            "ObservedSourceBytesActive": 0,
+            "ObservedSourceBytesProtected": 0,
+            "ObservedSourceBytesProtectedInUse": 0,
+            "ObservedSourceBytesProtectedRetained": 0,
+            "ObservedSourceBytesProtectedOverlap": 0,
+            "ObservedSourceBytesProtectedOther": 0,
+            "ObservedSourceBytesEligible": 0,
+            "ObservedSourceBytesDeleted": 0,
+            "ObservedSourceBytesPending": 0
+          },
+          "leaf_generation_plan": {
+            "CurrentCommitSeq": 1423,
+            "CurrentGenerationID": 6,
+            "Generations": [
+              {
+                "GenerationID": 2,
+                "State": "retiring",
+                "FileIDs": [
+                  2139095042
+                ],
+                "FileCount": 1,
+                "BytesTotal": 186975,
+                "BytesLive": 0,
+                "BytesDead": 186975,
+                "BytesToCopy": 0,
+                "LivePages": 0,
+                "AgeCommits": 650,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 1000000,
+                "LiveRatioPPM": 0,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "retiring_generation"
+              },
+              {
+                "GenerationID": 4,
+                "State": "retiring",
+                "FileIDs": [
+                  2139095044
+                ],
+                "FileCount": 1,
+                "BytesTotal": 4986131,
+                "BytesLive": 0,
+                "BytesDead": 4986131,
+                "BytesToCopy": 0,
+                "LivePages": 0,
+                "AgeCommits": 2,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 1000000,
+                "LiveRatioPPM": 0,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "retiring_generation"
+              },
+              {
+                "GenerationID": 5,
+                "State": "sealed",
+                "FileIDs": [
+                  2139095045
+                ],
+                "FileCount": 1,
+                "BytesTotal": 186529,
+                "BytesLive": 184474,
+                "BytesDead": 2055,
+                "BytesToCopy": 184474,
+                "LivePages": 471,
+                "AgeCommits": 1,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 11017,
+                "LiveRatioPPM": 988982,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "compact_storage_run_created"
+              },
+              {
+                "GenerationID": 6,
+                "State": "writable",
+                "FileIDs": [
+                  2139095046
+                ],
+                "FileCount": 1,
+                "BytesTotal": 3084,
+                "BytesLive": 1028,
+                "BytesDead": 2056,
+                "BytesToCopy": 1028,
+                "LivePages": 1,
+                "AgeCommits": 1,
+                "PinnedCount": 0,
+                "DeadRatioPPM": 666666,
+                "LiveRatioPPM": 333333,
+                "WholeGenerationGCEligible": false,
+                "Eligible": false,
+                "SkipReason": "writable_generation"
+              }
+            ],
+            "Candidates": [],
+            "CandidateGenerationIDs": [],
+            "CandidateBytesTotal": 0,
+            "CandidateBytesLive": 0,
+            "CandidateBytesDead": 0,
+            "CandidateBytesToCopy": 0,
+            "CandidateLivePages": 0,
+            "ExpectedReclaimBytes": 0,
+            "ExpectedReclaimRatioPPM": 0,
+            "ExpectedReclaimPerByteCopiedPPM": 0,
+            "Admission": "no_candidates"
+          },
+          "leaf_generation_packs": [
+            {
+              "Plan": {
+                "CurrentCommitSeq": 1421,
+                "CurrentGenerationID": 5,
+                "Generations": [
+                  {
+                    "GenerationID": 2,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095042
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 186975,
+                    "BytesLive": 16802,
+                    "BytesDead": 170173,
+                    "BytesToCopy": 16802,
+                    "LivePages": 206,
+                    "AgeCommits": 648,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 910137,
+                    "LiveRatioPPM": 89862,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  },
+                  {
+                    "GenerationID": 4,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095044
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 4986131,
+                    "BytesLive": 275452,
+                    "BytesDead": 4710679,
+                    "BytesToCopy": 275452,
+                    "LivePages": 266,
+                    "AgeCommits": 0,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 944756,
+                    "LiveRatioPPM": 55243,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  },
+                  {
+                    "GenerationID": 5,
+                    "State": "writable",
+                    "FileIDs": null,
+                    "FileCount": 0,
+                    "BytesTotal": 0,
+                    "BytesLive": 0,
+                    "BytesDead": 0,
+                    "BytesToCopy": 0,
+                    "LivePages": 0,
+                    "AgeCommits": 0,
+                    "PinnedCount": 0,
+                    "DeadRatioPPM": 0,
+                    "LiveRatioPPM": 0,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "writable_generation"
+                  }
+                ],
+                "Candidates": [
+                  {
+                    "GenerationID": 4,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095044
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 4986131,
+                    "BytesLive": 275452,
+                    "BytesDead": 4710679,
+                    "BytesToCopy": 275452,
+                    "LivePages": 266,
+                    "AgeCommits": 0,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 944756,
+                    "LiveRatioPPM": 55243,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  },
+                  {
+                    "GenerationID": 2,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095042
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 186975,
+                    "BytesLive": 16802,
+                    "BytesDead": 170173,
+                    "BytesToCopy": 16802,
+                    "LivePages": 206,
+                    "AgeCommits": 648,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 910137,
+                    "LiveRatioPPM": 89862,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  }
+                ],
+                "CandidateGenerationIDs": [
+                  4,
+                  2
+                ],
+                "CandidateBytesTotal": 5173106,
+                "CandidateBytesLive": 292254,
+                "CandidateBytesDead": 4880852,
+                "CandidateBytesToCopy": 292254,
+                "CandidateLivePages": 472,
+                "ExpectedReclaimBytes": 4880852,
+                "ExpectedReclaimRatioPPM": 943505,
+                "ExpectedReclaimPerByteCopiedPPM": 1000000,
+                "Admission": "eligible"
+              },
+              "Selection": {
+                "GenerationIDs": [
+                  4,
+                  2
+                ],
+                "Generations": [
+                  {
+                    "GenerationID": 4,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095044
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 4986131,
+                    "BytesLive": 275452,
+                    "BytesDead": 4710679,
+                    "BytesToCopy": 275452,
+                    "LivePages": 266,
+                    "AgeCommits": 0,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 944756,
+                    "LiveRatioPPM": 55243,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  },
+                  {
+                    "GenerationID": 2,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095042
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 186975,
+                    "BytesLive": 16802,
+                    "BytesDead": 170173,
+                    "BytesToCopy": 16802,
+                    "LivePages": 206,
+                    "AgeCommits": 648,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 910137,
+                    "LiveRatioPPM": 89862,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": true,
+                    "SkipReason": ""
+                  }
+                ],
+                "BytesTotal": 5173106,
+                "BytesLive": 292254,
+                "BytesDead": 4880852,
+                "BytesToCopy": 292254,
+                "LivePages": 472,
+                "ExpectedReclaimBytes": 4880852,
+                "ExpectedReclaimRatioPPM": 943505,
+                "ExpectedReclaimPerByteCopiedPPM": 1000000
+              },
+              "Pack": {
+                "GenerationsRequested": 2,
+                "GenerationsMatched": 2,
+                "SourceGenerationIDs": [
+                  4,
+                  2
+                ],
+                "SourceFilesRequested": 2,
+                "SourceFileIDs": [
+                  2139095042,
+                  2139095044
+                ],
+                "SourceBytesTotal": 5173106,
+                "SourceBytesLive": 292254,
+                "SourceBytesDead": 4880852,
+                "SourceBytesToCopy": 292254,
+                "ExpectedReclaimBytes": 4880852,
+                "ExpectedReclaimRatioPPM": 943505,
+                "ExpectedReclaimPerByteCopiedPPM": 1000000,
+                "LeafPagesCopied": 473,
+                "BytesCopied": 1937408,
+                "LeafFramesWritten": 35,
+                "MaxLeafFrameK": 16,
+                "InternalPagesVisited": 12,
+                "SubtreesPruned": 1,
+                "CreatedFileIDs": [
+                  2139095045
+                ],
+                "CopyAttempts": 1,
+                "CopyAborts": 0,
+                "RetryCopyTimeNanos": 0,
+                "CopyTimeNanos": 8874443,
+                "PublishWaitNanos": 125,
+                "PublishHoldNanos": 14141161,
+                "PrivatePagesAllocated": 13,
+                "PrivatePagesDiscarded": 0,
+                "ApplyStages": {
+                  "SetupTimeNanos": 51254,
+                  "TreeRewriteTimeNanos": 2693581,
+                  "LeafSyncTimeNanos": 6127222,
+                  "CopyCloseTimeNanos": 53455,
+                  "RevalidateTimeNanos": 845,
+                  "PromotionTimeNanos": 6138078,
+                  "RelocationTimeNanos": 49869,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 6088602,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 15034,
+                  "CollectionPublishTimeNanos": 6279059,
+                  "FinalizeTimeNanos": 1654129,
+                  "PostWorkTimeNanos": 33069664,
+                  "CleanupTimeNanos": 39980
+                },
+                "RetryApplyStages": {
+                  "SetupTimeNanos": 0,
+                  "TreeRewriteTimeNanos": 0,
+                  "LeafSyncTimeNanos": 0,
+                  "CopyCloseTimeNanos": 0,
+                  "RevalidateTimeNanos": 0,
+                  "PromotionTimeNanos": 0,
+                  "RelocationTimeNanos": 0,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 0,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 0,
+                  "CollectionPublishTimeNanos": 0,
+                  "FinalizeTimeNanos": 0,
+                  "PostWorkTimeNanos": 0,
+                  "CleanupTimeNanos": 0
+                },
+                "WallTimeNanos": 75004752
+              },
+              "Ran": true,
+              "SkipReason": ""
+            },
+            {
+              "Plan": {
+                "CurrentCommitSeq": 1422,
+                "CurrentGenerationID": 6,
+                "Generations": [
+                  {
+                    "GenerationID": 2,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095042
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 186975,
+                    "BytesLive": 0,
+                    "BytesDead": 186975,
+                    "BytesToCopy": 0,
+                    "LivePages": 0,
+                    "AgeCommits": 649,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 1000000,
+                    "LiveRatioPPM": 0,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "whole_generation_gc_candidate"
+                  },
+                  {
+                    "GenerationID": 4,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095044
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 4986131,
+                    "BytesLive": 0,
+                    "BytesDead": 4986131,
+                    "BytesToCopy": 0,
+                    "LivePages": 0,
+                    "AgeCommits": 1,
+                    "PinnedCount": 1,
+                    "DeadRatioPPM": 1000000,
+                    "LiveRatioPPM": 0,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "whole_generation_gc_candidate"
+                  },
+                  {
+                    "GenerationID": 5,
+                    "State": "sealed",
+                    "FileIDs": [
+                      2139095045
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 186529,
+                    "BytesLive": 186529,
+                    "BytesDead": 0,
+                    "BytesToCopy": 186529,
+                    "LivePages": 1,
+                    "AgeCommits": 0,
+                    "PinnedCount": 0,
+                    "DeadRatioPPM": 0,
+                    "LiveRatioPPM": 1000000,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "compact_storage_run_created"
+                  },
+                  {
+                    "GenerationID": 6,
+                    "State": "writable",
+                    "FileIDs": [
+                      2139095046
+                    ],
+                    "FileCount": 1,
+                    "BytesTotal": 1028,
+                    "BytesLive": 0,
+                    "BytesDead": 1028,
+                    "BytesToCopy": 0,
+                    "LivePages": 0,
+                    "AgeCommits": 0,
+                    "PinnedCount": 0,
+                    "DeadRatioPPM": 1000000,
+                    "LiveRatioPPM": 0,
+                    "WholeGenerationGCEligible": false,
+                    "Eligible": false,
+                    "SkipReason": "writable_generation"
+                  }
+                ],
+                "Candidates": [],
+                "CandidateGenerationIDs": [],
+                "CandidateBytesTotal": 0,
+                "CandidateBytesLive": 0,
+                "CandidateBytesDead": 0,
+                "CandidateBytesToCopy": 0,
+                "CandidateLivePages": 0,
+                "ExpectedReclaimBytes": 0,
+                "ExpectedReclaimRatioPPM": 0,
+                "ExpectedReclaimPerByteCopiedPPM": 0,
+                "Admission": "no_candidates"
+              },
+              "Selection": {
+                "GenerationIDs": null,
+                "Generations": null,
+                "BytesTotal": 0,
+                "BytesLive": 0,
+                "BytesDead": 0,
+                "BytesToCopy": 0,
+                "LivePages": 0,
+                "ExpectedReclaimBytes": 0,
+                "ExpectedReclaimRatioPPM": 0,
+                "ExpectedReclaimPerByteCopiedPPM": 0
+              },
+              "Pack": {
+                "GenerationsRequested": 0,
+                "GenerationsMatched": 0,
+                "SourceGenerationIDs": null,
+                "SourceFilesRequested": 0,
+                "SourceFileIDs": null,
+                "SourceBytesTotal": 0,
+                "SourceBytesLive": 0,
+                "SourceBytesDead": 0,
+                "SourceBytesToCopy": 0,
+                "ExpectedReclaimBytes": 0,
+                "ExpectedReclaimRatioPPM": 0,
+                "ExpectedReclaimPerByteCopiedPPM": 0,
+                "LeafPagesCopied": 0,
+                "BytesCopied": 0,
+                "LeafFramesWritten": 0,
+                "MaxLeafFrameK": 0,
+                "InternalPagesVisited": 0,
+                "SubtreesPruned": 0,
+                "CreatedFileIDs": null,
+                "CopyAttempts": 0,
+                "CopyAborts": 0,
+                "RetryCopyTimeNanos": 0,
+                "CopyTimeNanos": 0,
+                "PublishWaitNanos": 0,
+                "PublishHoldNanos": 0,
+                "PrivatePagesAllocated": 0,
+                "PrivatePagesDiscarded": 0,
+                "ApplyStages": {
+                  "SetupTimeNanos": 0,
+                  "TreeRewriteTimeNanos": 0,
+                  "LeafSyncTimeNanos": 0,
+                  "CopyCloseTimeNanos": 0,
+                  "RevalidateTimeNanos": 0,
+                  "PromotionTimeNanos": 0,
+                  "RelocationTimeNanos": 0,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 0,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 0,
+                  "CollectionPublishTimeNanos": 0,
+                  "FinalizeTimeNanos": 0,
+                  "PostWorkTimeNanos": 0,
+                  "CleanupTimeNanos": 0
+                },
+                "RetryApplyStages": {
+                  "SetupTimeNanos": 0,
+                  "TreeRewriteTimeNanos": 0,
+                  "LeafSyncTimeNanos": 0,
+                  "CopyCloseTimeNanos": 0,
+                  "RevalidateTimeNanos": 0,
+                  "PromotionTimeNanos": 0,
+                  "RelocationTimeNanos": 0,
+                  "PageSyncTimeNanos": 0,
+                  "DirectorySyncTimeNanos": 0,
+                  "DirectorySyncWaitTimeNanos": 0,
+                  "RegistrationTimeNanos": 0,
+                  "CollectionPublishTimeNanos": 0,
+                  "FinalizeTimeNanos": 0,
+                  "PostWorkTimeNanos": 0,
+                  "CleanupTimeNanos": 0
+                },
+                "WallTimeNanos": 0
+              },
+              "Ran": false,
+              "SkipReason": "plan_admission:no_candidates"
+            }
+          ],
+          "leaf_generation_gc": {
+            "GenerationsTotal": 4,
+            "GenerationsWritable": 1,
+            "GenerationsLive": 1,
+            "GenerationsRetiring": 2,
+            "GenerationsEligible": 0,
+            "GenerationsDeleted": 0,
+            "FilesDeleted": 0,
+            "BytesEligible": 0,
+            "BytesDeleted": 0,
+            "ManifestRevisionGCUnsupported": false,
+            "ManifestRevisionsTotal": 5,
+            "ManifestRevisionsProtected": 5,
+            "ManifestRevisionsEligible": 0,
+            "ManifestRevisionsDeleted": 0,
+            "ManifestRevisionBytesEligible": 0,
+            "ManifestRevisionBytesDeleted": 0
+          },
+          "index_vacuum": {
+            "AttemptID": 5,
+            "Phase": "rebuild",
+            "TotalDuration": 64987992,
+            "UserTreeDuration": 10604,
+            "SystemReserveDuration": 1419,
+            "CollectionBasisDuration": 82580,
+            "PreflushDuration": 498,
+            "CutoverDuration": 14341257,
+            "SystemTreeDuration": 56034,
+            "FinalPagerSyncDuration": 28758322,
+            "SwapPublishDuration": 12550110,
+            "MaxWriterPause": 62096127,
+            "PrecloneTraversalPages": 22,
+            "RecloneTraversalPages": 0,
+            "CutoverCloneTraversalPages": 0,
+            "DirtyDescriptors": 0,
+            "UserTailMutations": 0,
+            "UserTailPointMutations": 0,
+            "UserTailRangeMutations": 0,
+            "DeferredCutovers": 0,
+            "ConcurrentMutationAborts": 0,
+            "RecoverableSetCaptureDuration": 55244,
+            "RecoverableSetCaptureAttempts": 1,
+            "RecoverableSetCaptures": 1,
+            "RecoverableSetRecaptureAttempts": 0,
+            "RecoverableSetRecaptures": 0,
+            "RecoverableRoots": 2,
+            "OlderRootRebuildDuration": 2637942,
+            "OlderRootRebuilds": 1,
+            "OlderRootDurableResourceCaptureDuration": 1649453,
+            "OlderRootDurableResourceCaptures": 1,
+            "OlderRootDurableResourceDescriptors": 6,
+            "OlderRootDurableResourceBytes": 6123675,
+            "OlderRootExactCandidateScans": 1,
+            "OlderRootProjections": 0,
+            "OlderRootProjectionFallbacks": 1,
+            "OlderRootProjectionFallbackReason": "replayed-outer-leaf-delta",
+            "OlderRootReusedNonValueLogDescriptors": 3,
+            "OlderRootUniqueExternalSegments": 4,
+            "DurableResourceCaptureDuration": 1195846,
+            "DurableResourceCaptures": 1,
+            "DurableResourceDescriptors": 5,
+            "DurableResourceBytes": 1138627,
+            "DurableResourceExactCandidateScans": 1,
+            "DurableResourceProjections": 0,
+            "DurableResourceProjectionFallbacks": 1,
+            "DurableResourceProjectionFallbackReason": "current-packed-reachability",
+            "OlderRootRebuiltPages": 13,
+            "ReplacementPagerPages": 38,
+            "ExactCandidateScan": true,
+            "ReusedNonValueLogDescriptors": 3,
+            "UniqueExternalSegments": 3,
+            "WorkCompleted": true,
+            "Canceled": false
+          },
+          "remaining_debt": {
+            "value_log_rewrite_segments": 0,
+            "value_log_rewrite_bytes": 0,
+            "value_log_gc_segments": 0,
+            "value_log_gc_bytes": 0,
+            "leaf_pack_generations": 0,
+            "leaf_pack_bytes": 0,
+            "leaf_gc_generations": 2,
+            "leaf_gc_bytes": 5173106,
+            "zero_byte_value_log_files": 0,
+            "index_vacuum_required": false,
+            "index_vacuum_reason": "none",
+            "index_vacuum_total_pages": 38,
+            "index_vacuum_user_pages": 1,
+            "index_vacuum_user_span": 1,
+            "index_vacuum_user_span_ratio_ppm": 1000000,
+            "index_vacuum_freelist_reclaimable_pages": 0,
+            "index_vacuum_freelist_reclaimable_ratio_ppm": 0,
+            "index_vacuum_collection_root_pages": 11,
+            "index_vacuum_collection_root_span": 11,
+            "index_vacuum_collection_root_span_ratio_ppm": 1000000
+          },
+          "fully_compacted": false,
+          "policy_fully_compacted": false,
+          "byte_minimized": false
+        }
+      }
+    }
+  ]
+}

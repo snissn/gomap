@@ -1,0 +1,182 @@
+{
+  "utc": "2026-10-06T23:51:16.843185+00:00",
+  "state": "ROOT_REVIEWED_A_WORKLOAD_SEMANTICS_EQUIVALENCE_ONLY_PENDING_A_CAPTURE_CERTIFICATE",
+  "baseline": "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+  "M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "unchanged_A_blobs": {
+    "cmd/collection_workload_bench/r1.go": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+    "cmd/collection_workload_bench/r1_sqlite.go": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+    "scripts/r1_collection_summary.py": "2e785e8508666fc6c05f5810765c1bf76647d577",
+    "scripts/r1_collection_source.py": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496"
+  },
+  "reviewed_changed_path_diff_sha256": {
+    "cmd/collection_workload_bench/main.go": "0b9caaba8139baca71d4911fbe29c68f123a8688a96e98ee9913c96bdf62a7f9",
+    "cmd/collection_workload_bench/r1_mutation_sweep.go": "da64f5b8c5951dc6258a116431f7a36fa9bdc146e44e74221463425fbd4ab98b",
+    "scripts/r1_collection_capture.sh": "89298bda9a38c1b14cb18734afce4ee274de5086cf072d0ddfe8be675d45b82a"
+  },
+  "findings": "main adds only sibling C command dispatch. C has no init hook and is unused in A. Driver default or explicit R1_MODE=r1 retains original A argv, source drift check, original validator and summary. mode.txt and shell branching affect capture metadata only. Compiler/runtime/generated-code/performance equivalence is NOT claimed. All original comparator math and runner/SQLite guards remain required.",
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "0216e2e9ee701dee0eda96c569dc0c8facb37ca9:cmd/collection_workload_bench/r1.go"
+      ],
+      "exit": 0,
+      "stdout_sha256": "9b558e2b4fb1747c55102f05f075699bbfc2435e1303b8852a350e3687a7ac11",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:cmd/collection_workload_bench/r1.go"
+      ],
+      "exit": 0,
+      "stdout_sha256": "9b558e2b4fb1747c55102f05f075699bbfc2435e1303b8852a350e3687a7ac11",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "0216e2e9ee701dee0eda96c569dc0c8facb37ca9:cmd/collection_workload_bench/r1_sqlite.go"
+      ],
+      "exit": 0,
+      "stdout_sha256": "7990ead24effd513943310ce35b6c44bf57c74d64b54383aa4f495ede8cabf32",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:cmd/collection_workload_bench/r1_sqlite.go"
+      ],
+      "exit": 0,
+      "stdout_sha256": "7990ead24effd513943310ce35b6c44bf57c74d64b54383aa4f495ede8cabf32",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "0216e2e9ee701dee0eda96c569dc0c8facb37ca9:scripts/r1_collection_summary.py"
+      ],
+      "exit": 0,
+      "stdout_sha256": "12cdb6c9e64a31f59e125f8f7be3de38b597ace5f24e5d2e2bed04cffe4a1d94",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:scripts/r1_collection_summary.py"
+      ],
+      "exit": 0,
+      "stdout_sha256": "12cdb6c9e64a31f59e125f8f7be3de38b597ace5f24e5d2e2bed04cffe4a1d94",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "0216e2e9ee701dee0eda96c569dc0c8facb37ca9:scripts/r1_collection_source.py"
+      ],
+      "exit": 0,
+      "stdout_sha256": "16680fc2bbf3c9fbb3548e97efe270fd23b1f4178dbf7254772fc462391453dd",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "rev-parse",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:scripts/r1_collection_source.py"
+      ],
+      "exit": 0,
+      "stdout_sha256": "16680fc2bbf3c9fbb3548e97efe270fd23b1f4178dbf7254772fc462391453dd",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "--",
+        "cmd/collection_workload_bench/main.go"
+      ],
+      "exit": 0,
+      "stdout_sha256": "0b9caaba8139baca71d4911fbe29c68f123a8688a96e98ee9913c96bdf62a7f9",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "--",
+        "cmd/collection_workload_bench/r1_mutation_sweep.go"
+      ],
+      "exit": 0,
+      "stdout_sha256": "da64f5b8c5951dc6258a116431f7a36fa9bdc146e44e74221463425fbd4ab98b",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+        "--",
+        "scripts/r1_collection_capture.sh"
+      ],
+      "exit": 0,
+      "stdout_sha256": "89298bda9a38c1b14cb18734afce4ee274de5086cf072d0ddfe8be675d45b82a",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/home/mikers/gomap-r1-final-source-20261006",
+        "show",
+        "3325dfe77940fec8587d8b61b1ac4e0b2f72caca:cmd/collection_workload_bench/r1_mutation_sweep.go"
+      ],
+      "exit": 0,
+      "stdout_sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+      "stderr": ""
+    }
+  ]
+}

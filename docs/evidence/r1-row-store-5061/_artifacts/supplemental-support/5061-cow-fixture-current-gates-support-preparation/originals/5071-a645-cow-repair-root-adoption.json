@@ -1,0 +1,40 @@
+{
+  "decision": "Adopt CLEAN bounded repair/application review, accepted7normal/7racePASSrows, cachingvet/gofmt,36PythonPASS; current hosted review/requiredCI/landing notyetaccepted",
+  "head": "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+  "pins": {
+    "5071-cow-repair-final-source.json": {
+      "bytes": 105879,
+      "sha256": "f4dda7584a08fed2720eb5cca238fac9180d46ec84e4147a732417bb0cd4bffb"
+    },
+    "a645-cow-fixture-validation-root-review.json": {
+      "bytes": 2549,
+      "sha256": "c8fb1e030828694d870212e2f15d1fd9a812c2f07ce353f207c61d44adc7f7df"
+    },
+    "a645-cow-repair-source-applicability-review.json": {
+      "bytes": 36251,
+      "sha256": "0e394c0cb872d349c0e4150c9116e7736f15d9d6ae7e632b0ce0210eb03ac8f7"
+    },
+    "a645-cow-repair-source-applicability-review.md": {
+      "bytes": 3584,
+      "sha256": "eae6b7401d8c054244e239723b1dddac13917ef036e9010222d06216d1f87982"
+    },
+    "a645-test_ci_impact.py.log": {
+      "bytes": 121,
+      "sha256": "f7cff90f697460a49e6bb515d949a802fd9a975080b4d4ab8b2f1bdf8759a45b"
+    },
+    "a645-test_refresh_ci_impact_inventory.py.log": {
+      "bytes": 115,
+      "sha256": "e71606e60bc097de6866076bc8965bc74d85a28379f3b0810db23b993d9b8b1a"
+    },
+    "released-worktree-cleanup-result.json": {
+      "bytes": 101654,
+      "sha256": "2ec46b718168796182dd03eb101d454004bc0cc5e5c08ad19034c1d83f0267a4"
+    },
+    "released-worktree-cleanup-result.md": {
+      "bytes": 1922,
+      "sha256": "f1580426dbdb36fe9f4ee74c43734aff9ab37de8ddfd584a1b9aa35b38fe6383"
+    }
+  },
+  "reviewer": "/root",
+  "utc": "2026-10-06T18:47:19.185217+00:00"
+}

@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-06T23:25:57.931525+00:00",
+  "argv": [
+    "gh",
+    "api",
+    "repos/snissn/gomap/git/commits/898a7bae48f02e7067318f5165501d16ce7d47ad"
+  ],
+  "exit": 0,
+  "stdout": "{\"sha\":\"898a7bae48f02e7067318f5165501d16ce7d47ad\",\"node_id\":\"C_kwDOIdn7C9oAKDg5OGE3YmFlNDhmMDJlNzA2NzMxOGY1MTY1NTAxZDE2Y2U3ZDQ3YWQ\",\"url\":\"https://api.github.com/repos/snissn/gomap/git/commits/898a7bae48f02e7067318f5165501d16ce7d47ad\",\"html_url\":\"https://github.com/snissn/gomap/commit/898a7bae48f02e7067318f5165501d16ce7d47ad\",\"author\":{\"name\":\"Mikers\",\"email\":\"snissn@gmail.com\",\"date\":\"2026-10-06T22:04:09Z\"},\"committer\":{\"name\":\"Mikers\",\"email\":\"snissn@gmail.com\",\"date\":\"2026-10-06T22:04:09Z\"},\"tree\":{\"sha\":\"0600b47bf0a3a609917d224d7fd06c40737bcd8e\",\"url\":\"https://api.github.com/repos/snissn/gomap/git/trees/0600b47bf0a3a609917d224d7fd06c40737bcd8e\"},\"message\":\"merge main physical value-log byte accounting into R1 qualification\",\"parents\":[{\"sha\":\"45d2cf6828c50491f82ac00403f5d5328ba0c67e\",\"url\":\"https://api.github.com/repos/snissn/gomap/git/commits/45d2cf6828c50491f82ac00403f5d5328ba0c67e\",\"html_url\":\"https://github.com/snissn/gomap/commit/45d2cf6828c50491f82ac00403f5d5328ba0c67e\"},{\"sha\":\"462b3a98b90e1317fd16ce68dc78f03cd46ebbe9\",\"url\":\"https://api.github.com/repos/snissn/gomap/git/commits/462b3a98b90e1317fd16ce68dc78f03cd46ebbe9\",\"html_url\":\"https://github.com/snissn/gomap/commit/462b3a98b90e1317fd16ce68dc78f03cd46ebbe9\"}],\"verification\":{\"verified\":false,\"reason\":\"unsigned\",\"signature\":null,\"payload\":null,\"verified_at\":null}}",
+  "stderr": ""
+}

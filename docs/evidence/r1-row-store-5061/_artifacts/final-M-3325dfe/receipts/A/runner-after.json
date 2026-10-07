@@ -1,0 +1,54 @@
+{
+  "cpu_count": 16,
+  "environment": {
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-retained-20261006-go1264",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOFLAGS": "",
+    "GOGC": "100",
+    "GOMAXPROCS": "16",
+    "GOMEMLIMIT": "off",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "HOME": "/home/mikers",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "R1_GO": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/go",
+    "R1_MODE": "r1",
+    "R1_OUT": "/home/mikers/gomap-r1-evidence-20261005/r1-final-A-M-3325dfe",
+    "TMPDIR": "/home/mikers/gomap-r1-final-receipts-20261006/r1-final-A-M-3325dfe/temporary-db-roots"
+  },
+  "loadavg": [
+    3.1083984375,
+    3.30712890625,
+    3.26123046875
+  ],
+  "output_filesystem": "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme1n1p2  1920641288 1400214380 422789944      77% /\n",
+  "output_parent_device": 66306,
+  "temp_device": 66306,
+  "temp_filesystem": "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme1n1p2  1920641288 1400214380 422789944      77% /\n",
+  "top_processes": [
+    "%CPU %MEM COMMAND",
+    " 114  7.1 unified-bench-A",
+    " 0.5  0.2 codex",
+    " 0.4  1.1 gnome-shell",
+    " 0.3  0.7 codex",
+    " 0.3  5.3 tmux: server",
+    " 0.2  0.2 codex",
+    " 0.2  0.2 codex",
+    " 0.1  0.0 python3",
+    " 0.1  0.0 napi/phy0-0",
+    " 0.0  0.1 containerd",
+    " 0.0  0.0 napi/phy0-0"
+  ],
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64"
+  ],
+  "utc": "2026-10-07T00:30:47Z"
+}
