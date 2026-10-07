@@ -33,7 +33,7 @@ def draft():
         "environment": {"GOMAXPROCS": "4", "GOWORK": "off", "GOROOT": None,
             "GOGC": "100", "GOMEMLIMIT": "off", "GOFLAGS": "", "GOCACHE": None, "GOMODCACHE": None, "TMPDIR": None},
         "host": {"system": "Linux", "node": None, "machine": "x86_64", "release": None,
-            "cpu_count": None, "max_load1": None, "max_load5": None, "min_free_bytes": None, "tmpdir": None, "tmpdir_device": None},
+            "cpu_count": None, "cpu_affinity": None, "max_load1": None, "max_load5": None, "min_free_bytes": None, "tmpdir": None, "tmpdir_device": None},
         "noise_policy": {"max_spread_fraction": None, "material_regression_fraction": None,
             "minimum_effect_fraction": None, "exclusions": "none; retain and stop on contamination"},
         "comparison_metrics": ["ns/op", "B/op", "allocs/op", "writer_ops/s", "reader_ops/s"],
