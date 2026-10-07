@@ -134,7 +134,11 @@ retirement owner's control. The handle may already be closed while unlink or
 an owned retry is pending; refresh neither inspects that closed handle nor
 reopens the segment. Current snapshots continue to exclude the zombie, while
 new live segments are still discovered. A conflicting path for the same file
-ID remains an error.
+ID remains an error. Identity-gated managers also validate the current pathname
+against the captured retired identity before skipping it. A replacement inode
+is a resource conflict; a disappeared pathname is a benign deletion race. This
+check opens only the current pathname and does not access the retired handle.
+Managers without an identity registry retain their existing refresh semantics.
 
 ### 2.2 External-version logical pruning is not segment GC
 
