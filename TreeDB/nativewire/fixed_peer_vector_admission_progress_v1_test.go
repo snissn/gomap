@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/collections"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	public "github.com/snissn/gomap/TreeDB/vectorpartition"
 )
 
@@ -54,6 +56,40 @@ func TestFixedPeerVectorWaitingSearchPrecedesNextWriterRealRaftV1(t *testing.T) 
 			t.Fatal(err)
 		}
 		defer writer.Close()
+		// A leader's committed/applied reply does not prove follower application.
+		// Retain real follower publication pins to make that distinction explicit;
+		// the callback must retire them and join the acknowledged prefix before
+		// the shared helper captures each provider's snapshot.
+		type followerCut struct {
+			node *FixedPeerTCPRuntimeV1
+			root backenddb.StateToken
+			pin  *collections.VectorIndexPartitionLiveSearchPinV1
+		}
+		var followers []followerCut
+		releaseFollowers := func() {
+			for _, follower := range followers {
+				follower.pin.Release()
+			}
+		}
+		defer releaseFollowers()
+		for _, node := range nodes {
+			if node == owner {
+				continue
+			}
+			manifest := node.servingVectorConfigV1().Manifest
+			if err := node.vector.collection.EnsureVectorPartitionLiveBindingV1(ctx, manifest); err != nil {
+				t.Fatal(err)
+			}
+			pin, err := node.vector.collection.AcquireVectorPartitionLiveCoordinatorSearchPinV1(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, ok := node.vector.boundDB.StateToken()
+			followers = append(followers, followerCut{node: node, root: root, pin: pin})
+			if !ok {
+				t.Fatal("follower has no published state")
+			}
+		}
 		waiting := &fixedPeerVectorAdmissionWaitContextV1{Context: ctx, waiting: make(chan struct{}), resume: make(chan struct{})}
 		var resumeOnce, retireOnce sync.Once
 		resume := func() { resumeOnce.Do(func() { close(waiting.resume) }) }
@@ -138,8 +174,10 @@ func TestFixedPeerVectorWaitingSearchPrecedesNextWriterRealRaftV1(t *testing.T) 
 		default:
 		}
 		retire()
+		var mutation public.InsertResponseV1
 		select {
 		case result := <-inserted:
+			mutation = result.response
 			if result.err != nil {
 				t.Fatal(result.err)
 			}
@@ -149,6 +187,23 @@ func TestFixedPeerVectorWaitingSearchPrecedesNextWriterRealRaftV1(t *testing.T) 
 		case <-ctx.Done():
 			t.Fatal("next writer did not progress after reader retirement")
 		}
+		for _, follower := range followers {
+			root, ok := follower.node.vector.boundDB.StateToken()
+			if !ok || root != follower.root {
+				t.Fatalf("follower %s published through retained pin: before=%+v after=%+v", follower.node.config.NodeID, follower.root, root)
+			}
+			t.Logf("leader acknowledged commit %d while follower %s retains pre-insert root %+v", mutation.CommitIndex, follower.node.config.NodeID, root)
+		}
+		releaseFollowers()
+		fixedPeerWaitV1(t, ctx, func() bool {
+			for _, node := range nodes {
+				state, err := node.Status(ctx)
+				if err != nil || len(state.Groups) != 1 || state.Groups[0].Applied.Index < mutation.CommitIndex {
+					return false
+				}
+			}
+			return true
+		})
 	})
 }
 
