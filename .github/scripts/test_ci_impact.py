@@ -26,6 +26,11 @@ class ImpactContract(unittest.TestCase):
         for path in ('go.mod', 'go.sum', 'docs/retained/RESULTS.json', 'TreeDB/witness_test.go',
                      'HashDB/example.go', 'scripts/generate.sh', 'fixtures/data.txt'):
             self.write(path, '{}\n')
+        # Inventory bindings may include scripts outside .github. Preserve those
+        # real bytes in this Git-only fixture instead of omitting declared inputs.
+        for path in json.loads((ROOT / ci_impact.POLICY).read_text())['harness_inputs']:
+            if not (self.repo / path).exists():
+                self.write(path, (ROOT / path).read_text())
         self.git('init', '-q')
         self.git('config', 'user.email', 'fixture@example.invalid')
         self.git('config', 'user.name', 'Fixture')

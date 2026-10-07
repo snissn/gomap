@@ -1583,3 +1583,26 @@ oracles remain in force. The unbounded v2 reference has unmatched starting
 custody and stays descriptive. The driver verifies testing-owned temporary
 DB disposal only after the child releases all consumers and exits. These
 JSON/log packets are not benchprof inputs.
+
+### Standalone external MVCC COW read admission fixture
+
+`BenchmarkC3PublicReadAdmission` in `TreeDB/mvcc/cowbench` measures bounded public
+CommitAt+GetAt, CommitGroupAt+actual exact-key all-version iteration, and ordinary
+concurrent Store calls across three profiles and inline/forced-pointer values.
+Use a fresh process per leaf with fixed `-benchtime=128x` for smoke or `1024x` for
+matched collection; retain Go benchmark stdout, command, exit status, source,
+module/toolchain and binary identities. Setup/Close are excluded and history/output
+are fixed. Reproduction and allocation ownership are documented in
+[the fixture contract](../../TreeDB/docs/benchmarks/cow-c3-read-evidence.md).
+These Go package benchmark logs/profiles are not benchprof inputs.
+
+```sh
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
+  -bench '^BenchmarkC3PublicReadAdmission/command_wal_relaxed/cow_btree/inline/point$' \
+  -benchtime=1024x -count=1 -benchmem
+```
+
+The dedicated test package imports the ordinary MVCC product. Frozen fixtures
+bind every selected harness file and helper, including TestMain and file modes;
+product regression tests are outside that harness closure. Canonical matched
+counts remain 128 warmup and 1024 measured iterations per fresh process.
