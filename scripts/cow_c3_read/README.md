@@ -136,10 +136,14 @@ record must match that exact frozen version, launcher hash and inventory
 identity. A newly approved official toolchain requires fresh binaries and
 receipts; older packets keep their original toolchain identities.
 Build receipts must report integer exit zero and exactly
-`<GOROOT>/bin/go test -c -o <declared-binary> ./TreeDB/mvcc/cowbench`, plus the exact
+`<GOROOT>/bin/go test -c -trimpath -o <declared-binary> ./TreeDB/mvcc/cowbench`, plus the exact
 `go list -compiled -deps -test -json ./TreeDB/mvcc/cowbench` provenance command. Custom
 flags, package/output/launcher changes and failed builds refuse even if receipt
-hashes are rebound. Draft generation and validation share one complete literal
+hashes are rebound. Both variants use `-trimpath` so their separate checkout paths
+do not enter the compiled binaries. C4 uses the same canonical build flags.
+Earlier builds without `-trimpath` retain their original evidence scope; matched
+collection requires fresh builds made with the canonical command.
+Draft generation and validation share one complete literal
 workload contract; all fields and JSON types, exact logical work counts, latency
 groups and ACK/timed-scope descriptions must match the public fixture.
 Actual Goenv must report CGO_ENABLED=0, and build, collection and offline
