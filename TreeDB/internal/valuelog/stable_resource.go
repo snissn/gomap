@@ -656,40 +656,42 @@ func stableDeleteNamespace(path string) (string, error) {
 // prepareRetirementIdentityLocked preserves the original physical identity
 // before a handle can be closed. Registry observation and its reader-visible
 // identity remain separate: a pinned reader may access those without mu.
-func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.StableIdentity, error) {
+// An error may return a final shared-parent close token; callers must release
+// manager.mu before closing it. Successful admission always returns a nil token.
+func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.StableIdentity, *os.File, error) {
 	if file == nil || file.File == nil || file.Path == "" {
-		return rootpublication.StableIdentity{}, fmt.Errorf("%w: invalid value-log retirement target", rootpublication.ErrUnresolvedResource)
+		return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: invalid value-log retirement target", rootpublication.ErrUnresolvedResource)
 	}
 	if file.retirementIdentity != (rootpublication.StableIdentity{}) {
-		return file.retirementIdentity, nil
+		return file.retirementIdentity, nil, nil
 	}
 	if file.registeredParentIdentity == (rootpublication.StableIdentity{}) {
-		return rootpublication.StableIdentity{}, fmt.Errorf("%w: missing original registered parent proof", rootpublication.ErrUnresolvedResource)
+		return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: missing original registered parent proof", rootpublication.ErrUnresolvedResource)
 	}
 	identity := file.stableIdentity
 	if identity == (rootpublication.StableIdentity{}) {
 		var err error
 		identity, err = rootpublication.StableIdentityFromFile(file.File)
 		if err != nil {
-			return rootpublication.StableIdentity{}, err
+			return rootpublication.StableIdentity{}, nil, err
 		}
 	}
 	parentPath, err := filepath.EvalSymlinks(filepath.Dir(file.Path))
 	if err != nil {
-		return rootpublication.StableIdentity{}, err
+		return rootpublication.StableIdentity{}, nil, err
 	}
 	parent, err := rootpublication.OpenStableParentForRetention(parentPath)
 	if err != nil {
-		return rootpublication.StableIdentity{}, err
+		return rootpublication.StableIdentity{}, nil, err
 	}
 	parentIdentity, err := rootpublication.StableIdentityFromFile(parent)
 	if err != nil {
 		_ = parent.Close()
-		return rootpublication.StableIdentity{}, err
+		return rootpublication.StableIdentity{}, nil, err
 	}
 	if !rootpublication.SamePhysicalIdentity(file.registeredParentIdentity, parentIdentity) {
 		_ = parent.Close()
-		return rootpublication.StableIdentity{}, fmt.Errorf("%w: original registered segment parent was rebound", rootpublication.ErrResourceConflict)
+		return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: original registered segment parent was rebound", rootpublication.ErrResourceConflict)
 	}
 	// Verify the exact opened parent still names this handle. Resolving an alias
 	// and reopening its target must not combine two different namespaces.
@@ -697,13 +699,13 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	if err != nil {
 		_ = parent.Close()
 		if os.IsNotExist(err) {
-			return rootpublication.StableIdentity{}, fmt.Errorf("%w: retirement admission cannot prove the original linked child: %v", rootpublication.ErrResourceConflict, err)
+			return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: retirement admission cannot prove the original linked child: %v", rootpublication.ErrResourceConflict, err)
 		}
-		return rootpublication.StableIdentity{}, err
+		return rootpublication.StableIdentity{}, nil, err
 	}
 	if !rootpublication.SamePhysicalIdentity(identity, linkedIdentity) {
 		_ = parent.Close()
-		return rootpublication.StableIdentity{}, fmt.Errorf("%w: retirement parent does not name captured segment", rootpublication.ErrResourceConflict)
+		return rootpublication.StableIdentity{}, nil, fmt.Errorf("%w: retirement parent does not name captured segment", rootpublication.ErrResourceConflict)
 	}
 	if m.retirementParents == nil {
 		m.retirementParents = &retirementParentPool{}
@@ -711,9 +713,9 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	retained, temporary := m.retirementParents.acquire(parent, parentIdentity)
 	if temporary != nil {
 		if err := temporary.Close(); err != nil {
-			// Admission failed; balance the acquired owner before publishing anything.
-			_ = closeRetirementParent(retained.drop(true))
-			return rootpublication.StableIdentity{}, err
+			// Admission failed; balance the owner before publishing anything,
+			// but defer any final shared close until the caller releases mu.
+			return rootpublication.StableIdentity{}, retained.drop(true), err
 		}
 	}
 	file.retirementParentMu.Lock()
@@ -721,7 +723,7 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	file.retirementParentIdentity = parentIdentity
 	file.retirementParentMu.Unlock()
 	file.retirementIdentity = identity
-	return identity, nil
+	return identity, nil, nil
 }
 
 // retainSegmentForDeletionLocked excludes a destructive admission from new
@@ -1437,10 +1439,10 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	}
 	m.retryWorkers.Add(1)
 	defer m.retryWorkers.Done()
-	identity, err := m.prepareRetirementIdentityLocked(file)
+	identity, parentToClose, err := m.prepareRetirementIdentityLocked(file)
 	if err != nil {
 		m.mu.Unlock()
-		return err
+		return errors.Join(err, closeRetirementParent(parentToClose))
 	}
 	lease, err := m.stableDeleteLease(file)
 	if errors.Is(err, ErrFilePinned) {

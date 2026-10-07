@@ -420,8 +420,9 @@ func TestManagerDirectRetirementJoinsExternalClose(t *testing.T) {
 			// Cache the immutable identity before an external closer marks the
 			// handle closed. Hold manager.mu only for this capture, never a wait.
 			manager.mu.Lock()
-			_, err := manager.prepareRetirementIdentityLocked(file)
+			_, parentToClose, err := manager.prepareRetirementIdentityLocked(file)
 			manager.mu.Unlock()
+			err = errors.Join(err, closeRetirementParent(parentToClose))
 			if err != nil {
 				t.Fatal(err)
 			}
