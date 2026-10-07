@@ -63,7 +63,7 @@ func retirementSymlinkParentCloseZombie(t *testing.T, manager *Manager, file *Fi
 	err := func() error {
 		originalRemove := removeSegmentPath
 		defer func() { removeSegmentPath = originalRemove }()
-		removeSegmentPath = func(string) error { return wantErr }
+		removeSegmentPath = func(string, func(string) error) error { return wantErr }
 		return manager.Release(set)
 	}()
 	if !errors.Is(err, wantErr) || !file.closed.Load() {

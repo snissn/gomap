@@ -40,13 +40,13 @@ func TestManagerDirectRetirementQueuedReplacement(t *testing.T) {
 				}
 			}
 			originalRemove := removeSegmentPath
-			removeSegmentPath = func(path string) error {
+			removeSegmentPath = func(path string, remove func(string) error) error {
 				if unlinks.Add(1) != 1 {
 					return os.ErrExist
 				}
 				close(firstAtUnlink)
 				<-resumeFirst
-				if err := originalRemove(path); err != nil {
+				if err := originalRemove(path, remove); err != nil {
 					return err
 				}
 				// First removal has physically succeeded. Its delete mutex is

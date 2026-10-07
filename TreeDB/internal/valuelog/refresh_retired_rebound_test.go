@@ -27,7 +27,7 @@ func TestManagerRefreshRetiredSegmentRejectsReboundPath(t *testing.T) {
 	}
 	originalRemove := removeSegmentPath
 	wantErr := errors.New("injected unlink failure")
-	removeSegmentPath = func(string) error { return wantErr }
+	removeSegmentPath = func(string, func(string) error) error { return wantErr }
 	t.Cleanup(func() { removeSegmentPath = originalRemove })
 	err = manager.Release(set)
 	removeSegmentPath = originalRemove

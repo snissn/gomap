@@ -27,6 +27,17 @@ def role_bytes(values):
  need(isinstance(values,dict) and set(values)==set(ROLES),'exact five observed resource roles')
  need(all(type(value) is int and value>=0 for value in values.values()),'nonnegative integer observed role bytes')
  return values
+def matched_profile(report,profile):
+ # Go omits Originals when the default six-write count is selected. Match
+ # shared_read.original_count: omitted/zero means six, never infer from calls.
+ count=report.get('Originals',0)
+ need(type(count) is int and count in (0,6),'matched declared original count')
+ fixed={'Version':1,'Concurrency':profile.concurrency,'WarmupPlanned':64,'MaxAttempts':65536,'OutputBytes':134217728,'RequestedDuration':60000000000,'PaceInterval':5000000000}
+ need(all(type(report[key]) is int and report[key]==value for key,value in fixed.items()),'exact typed matched raw report profile')
+ need(report['Kind']=='fixed_cluster_mixed_window_v1' and report['Profile']=='changing-top10' and report['Admission']['RunID']==profile.query_run,'matched kind/profile/query identity')
+ for key,ordinal,size in [('Writes','Ordinal',6),('Prefixes','Prefix',7)]:
+  rows=report[key]
+  need(isinstance(rows,list) and len(rows)==size and all(isinstance(row,dict) and type(row.get(ordinal)) is int and row[ordinal]==i for i,row in enumerate(rows)),'contiguous matched '+key)
 def source_refs(raw):
  refs=strict(raw);need(isinstance(refs,dict) and refs,'explicit immutable source locator mapping')
  for original,ref in refs.items():
@@ -61,7 +72,7 @@ def build(manifest):
    need(len(events)==2 and [e['Event'] for e in events]==['planned','result'],'one-shot actual event pair')
    p,r=events[0]['Report'],events[1]['Report'];profile=workload_source.Workload(campaign,6,60,5,concurrency)
    for report in (p,r):
-    need(report['Admission']['RunID']==profile.query_run and report['Originals']==6 and report['Concurrency']==concurrency and report['RequestedDuration']==60000000000 and report['PaceInterval']==5000000000,'exact matched raw report profile')
+    matched_profile(report,profile)
    outer=strict(raw['read_audit']);resource=strict(raw['resources']);costs=strict(raw['costs']);approved=strict(raw['manifest'])
    need(set(outer)=={'population','disposition','campaign_acceptance','manifest_sha256','stdout_sha256','native_oracle_sha256','promoted_oracle_sha256','source_head','source_tree','source_pins','read','audit','derivation','limits'},'complete outer read/audit provenance')
    need(outer['disposition']=='TRIAL24_READ_AUDIT_ACCOUNTING_ONLY' and outer['campaign_acceptance'] is False,'outer accounting only')
