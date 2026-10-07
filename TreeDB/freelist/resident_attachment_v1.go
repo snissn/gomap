@@ -75,16 +75,8 @@ func residentRadixAttachmentV1[K comparable, V comparable](m *numericRadixV1[K, 
 		return
 	}
 	v.claim(&m.credit, allocationClassV1(uint64(unsafe.Sizeof(*m)), true))
-	residentRadixNodeAttachmentV1[K, V](m.root, v)
-}
-func residentRadixNodeAttachmentV1[K comparable, V comparable](node any, v *residentAttachmentV1) {
-	switch n := node.(type) {
-	case *numericRadixLeafV1[K, V]:
-		v.claim(&n.credit, allocationClassV1(uint64(unsafe.Sizeof(*n)), true))
-	case *numericRadixBranchV1:
-		v.claim(&n.credit, allocationClassV1(uint64(unsafe.Sizeof(*n)), true))
-		residentRadixNodeAttachmentV1[K, V](n.child[0], v)
-		residentRadixNodeAttachmentV1[K, V](n.child[1], v)
+	for c := m.head; c != nil; c = c.next {
+		v.claim(&c.credit, numericRadixChunkClassV1[K, V]())
 	}
 }
 

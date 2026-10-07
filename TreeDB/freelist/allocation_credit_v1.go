@@ -136,7 +136,7 @@ func (info CandidateInfoV1) GenerationRef() GenerationRefV1 { return info.Ref }
 func (info CandidateInfoV1) FreeCount() uint64              { return info.FreePages }
 func (info CandidateInfoV1) RetiredCount() uint64           { return info.RetiredPages }
 
-// allocationCreditLeaseV1 aggregates intrinsic radix-node references to one
+// allocationCreditLeaseV1 aggregates intrinsic whole-radix-chunk references to one
 // existing request facet. Node erasure releases ownership, never byte debit.
 // All node edits occur under the containing transaction or ledger lock.
 type allocationCreditLeaseV1 struct {

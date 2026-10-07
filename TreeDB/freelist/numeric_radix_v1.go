@@ -5,30 +5,45 @@ import (
 	"unsafe"
 )
 
-// numericRadixV1 replaces the existing numeric maps in both ordinary and
-// finite allocator paths. There is no hash directory or capacity growth.
-// Internal branches select the first differing bit; leaves own exact keys.
-type numericRadixLeafV1[K comparable, V comparable] struct {
-	key    K
-	value  V
-	credit *allocationCreditLeaseV1
+// Slots are private to their containing radix. One intrinsic creating-credit
+// edge owns the complete typed chunk, including its free capacity and links.
+const numericRadixChunkSlotsV1 = 32
+
+type numericRadixRefV1[K comparable, V comparable] struct {
+	chunk *numericRadixChunkV1[K, V]
+	slot  uint16
 }
-type numericRadixBranchV1 struct {
-	bit    uint8
-	child  [2]any
-	credit *allocationCreditLeaseV1
+type numericRadixNodeV1[K comparable, V comparable] struct {
+	key      K
+	value    V
+	child    [2]numericRadixRefV1[K, V]
+	nextFree uint16
+	bit      uint8
+	leaf     bool
+}
+type numericRadixChunkV1[K comparable, V comparable] struct {
+	nodes                        [numericRadixChunkSlotsV1]numericRadixNodeV1[K, V]
+	prev, next                   *numericRadixChunkV1[K, V]
+	availablePrev, availableNext *numericRadixChunkV1[K, V]
+	credit                       *allocationCreditLeaseV1
+	free                         uint16
+	used                         uint16
 }
 type numericRadixV1[K comparable, V comparable] struct {
-	root   any
-	count  int
-	bit    func(K, uint8) uint8
-	diff   func(K, K) int
-	credit *allocationCreditLeaseV1
+	root             numericRadixRefV1[K, V]
+	head, available  *numericRadixChunkV1[K, V]
+	count, freeSlots int
+	bit              func(K, uint8) uint8
+	diff             func(K, K) int
+	credit           *allocationCreditLeaseV1
 }
 
+func (r numericRadixRefV1[K, V]) node() *numericRadixNodeV1[K, V] {
+	return &r.chunk.nodes[r.slot-1]
+}
 func newPageRadixV1[V comparable]() *numericRadixV1[uint64, V] {
 	return &numericRadixV1[uint64, V]{
-		bit:  func(k uint64, b uint8) uint8 { return uint8(k>>(63-b)) & 1 },
+		bit:  func(k uint64, b uint8) uint8 { return uint8((k >> (63 - b)) & 1) },
 		diff: func(a, b uint64) int { return bits.LeadingZeros64(a ^ b) },
 	}
 }
@@ -56,17 +71,16 @@ func (m *numericRadixV1[K, V]) Get(key K) (V, bool) {
 	if m == nil {
 		return zero, false
 	}
-	node := m.root
-	for node != nil {
-		switch n := node.(type) {
-		case *numericRadixLeafV1[K, V]:
+	ref := m.root
+	for ref.chunk != nil {
+		n := ref.node()
+		if n.leaf {
 			if n.key == key {
 				return n.value, true
 			}
 			return zero, false
-		case *numericRadixBranchV1:
-			node = n.child[m.bit(key, n.bit)]
 		}
+		ref = n.child[m.bit(key, n.bit)]
 	}
 	return zero, false
 }
@@ -77,139 +91,235 @@ func (m *numericRadixV1[K, V]) Put(key K, value V) error {
 func (m *numericRadixV1[K, V]) PutWithCredit(key K, value V, credit *allocationCreditLeaseV1) error {
 	return m.putAdmittedV1(key, value, credit, nil)
 }
-
-func (m *numericRadixV1[K, V]) putAdmittedV1(key K, value V, credit *allocationCreditLeaseV1, operation *allocationOperationV1) error {
-	if m == nil {
-		return ErrGenerationFormat
-	}
-	var found *numericRadixLeafV1[K, V]
-	node := m.root
-	for node != nil {
-		switch n := node.(type) {
-		case *numericRadixLeafV1[K, V]:
-			found = n
-			node = nil
-		case *numericRadixBranchV1:
-			node = n.child[m.bit(key, n.bit)]
-		}
-	}
-	if found != nil && found.key == key {
-		found.value = value
-		return nil
-	}
-	charge := allocationClassV1(uint64(unsafe.Sizeof(numericRadixLeafV1[K, V]{})), true)
-	if found != nil {
-		charge += allocationClassV1(uint64(unsafe.Sizeof(numericRadixBranchV1{})), true)
-	}
-	refs := uint64(1)
-	if found != nil {
-		refs++
-	}
-	if err := reserveBirthV1(credit, charge, refs, operation); err != nil {
-		return err
-	}
-	leaf := &numericRadixLeafV1[K, V]{key: key, value: value, credit: credit}
-	if found == nil {
-		m.root = leaf
-		m.count++
-		return nil
-	}
-	different := uint8(m.diff(key, found.key))
-	link := &m.root
-	for {
-		branch, ok := (*link).(*numericRadixBranchV1)
-		if !ok || branch.bit >= different {
-			break
-		}
-		link = &branch.child[m.bit(key, branch.bit)]
-	}
-	branch := &numericRadixBranchV1{bit: different, credit: credit}
-	side := m.bit(key, different)
-	branch.child[side], branch.child[1-side] = leaf, *link
-	*link = branch
-	m.count++
-	return nil
-}
-
-// Set is used by ordinary mutation sites. Finite constructors must pre-admit
-// the complete operation, and use Put where a debit can fail.
 func (m *numericRadixV1[K, V]) Set(key K, value V) {
 	if err := m.Put(key, value); err != nil {
 		panic(err)
 	}
 }
+
+func (m *numericRadixV1[K, V]) addAvailableV1(c *numericRadixChunkV1[K, V]) {
+	c.availablePrev = nil
+	c.availableNext = m.available
+	if m.available != nil {
+		m.available.availablePrev = c
+	}
+	m.available = c
+}
+func (m *numericRadixV1[K, V]) removeAvailableV1(c *numericRadixChunkV1[K, V]) {
+	if c.availablePrev != nil {
+		c.availablePrev.availableNext = c.availableNext
+	} else {
+		m.available = c.availableNext
+	}
+	if c.availableNext != nil {
+		c.availableNext.availablePrev = c.availablePrev
+	}
+	c.availablePrev, c.availableNext = nil, nil
+}
+func numericRadixChunkClassV1[K comparable, V comparable]() uint64 {
+	return allocationClassV1(uint64(unsafe.Sizeof(numericRadixChunkV1[K, V]{})), true)
+}
+
+// The complete prospective backing is admitted before its first chunk birth.
+// The operation receipt and this method consume the same whole-chunk classes.
+func (m *numericRadixV1[K, V]) ensureSlotsV1(needed int, credit *allocationCreditLeaseV1, operation *allocationOperationV1) error {
+	if needed <= m.freeSlots {
+		return nil
+	}
+	deficit := uint64(needed - m.freeSlots)
+	chunks := (deficit + numericRadixChunkSlotsV1 - 1) / numericRadixChunkSlotsV1
+	charge := cowSaturatingMulV1(chunks, numericRadixChunkClassV1[K, V]())
+	if err := reserveBirthV1(credit, charge, chunks, operation); err != nil {
+		return err
+	}
+	for ; chunks != 0; chunks-- {
+		c := &numericRadixChunkV1[K, V]{credit: credit, free: 1, next: m.head}
+		for i := 0; i < numericRadixChunkSlotsV1-1; i++ {
+			c.nodes[i].nextFree = uint16(i + 2)
+		}
+		if m.head != nil {
+			m.head.prev = c
+		}
+		m.head = c
+		m.addAvailableV1(c)
+		m.freeSlots += numericRadixChunkSlotsV1
+	}
+	return nil
+}
+func (m *numericRadixV1[K, V]) allocateSlotV1() numericRadixRefV1[K, V] {
+	c := m.available
+	slot := c.free
+	n := &c.nodes[slot-1]
+	c.free = n.nextFree
+	*n = numericRadixNodeV1[K, V]{}
+	c.used++
+	m.freeSlots--
+	if c.free == 0 {
+		m.removeAvailableV1(c)
+	}
+	return numericRadixRefV1[K, V]{chunk: c, slot: slot}
+}
+func (m *numericRadixV1[K, V]) putAdmittedV1(key K, value V, credit *allocationCreditLeaseV1, operation *allocationOperationV1) error {
+	found := m.root
+	for found.chunk != nil && !found.node().leaf {
+		n := found.node()
+		found = n.child[m.bit(key, n.bit)]
+	}
+	if found.chunk != nil && found.node().key == key {
+		found.node().value = value
+		return nil
+	}
+	needed := 1
+	if found.chunk != nil {
+		needed = 2
+	}
+	if err := m.ensureSlotsV1(needed, credit, operation); err != nil {
+		return err
+	}
+	leaf := m.allocateSlotV1()
+	*leaf.node() = numericRadixNodeV1[K, V]{key: key, value: value, leaf: true}
+	if found.chunk == nil {
+		m.root = leaf
+		m.count++
+		return nil
+	}
+	different := uint8(m.diff(key, found.node().key))
+	link := &m.root
+	for !link.node().leaf && link.node().bit < different {
+		n := link.node()
+		link = &n.child[m.bit(key, n.bit)]
+	}
+	branch := m.allocateSlotV1()
+	n := branch.node()
+	n.bit = different
+	side := m.bit(key, different)
+	n.child[side], n.child[1-side] = leaf, *link
+	*link = branch
+	m.count++
+	return nil
+}
+
+// No slot refunds credit. An empty chunk is unlinked and completely cleared
+// before its creating edge is released; no historic empty capacity is retained.
+func (m *numericRadixV1[K, V]) freeSlotV1(ref numericRadixRefV1[K, V]) {
+	c, slot := ref.chunk, ref.slot
+	wasFull := c.free == 0
+	c.nodes[slot-1] = numericRadixNodeV1[K, V]{nextFree: c.free}
+	c.free = slot
+	c.used--
+	m.freeSlots++
+	if wasFull {
+		m.addAvailableV1(c)
+	}
+	if c.used != 0 {
+		return
+	}
+	m.removeAvailableV1(c)
+	if c.prev != nil {
+		c.prev.next = c.next
+	} else {
+		m.head = c.next
+	}
+	if c.next != nil {
+		c.next.prev = c.prev
+	}
+	m.freeSlots -= numericRadixChunkSlotsV1
+	creator := c.credit
+	*c = numericRadixChunkV1[K, V]{}
+	ref = numericRadixRefV1[K, V]{}
+	c = nil
+	creator.release()
+}
 func (m *numericRadixV1[K, V]) Delete(key K) {
-	if m == nil || m.root == nil {
+	if m == nil || m.root.chunk == nil {
 		return
 	}
 	link := &m.root
-	var parent *numericRadixBranchV1
-	var parentLink *any
+	var parent numericRadixRefV1[K, V]
+	var parentLink *numericRadixRefV1[K, V]
 	var side uint8
-	for {
-		switch node := (*link).(type) {
-		case *numericRadixBranchV1:
-			parent, parentLink = node, link
-			side = m.bit(key, node.bit)
-			link = &node.child[side]
-		case *numericRadixLeafV1[K, V]:
-			if node.key != key {
-				return
-			}
-			var zero V
-			node.value = zero
-			var zeroKey K
-			node.key = zeroKey
-			leafCredit := node.credit
-			node.credit = nil
-			if parent == nil {
-				m.root = nil
-			} else {
-				*parentLink = parent.child[1-side]
-				parent.child = [2]any{}
-				branchCredit := parent.credit
-				parent.credit = nil
-				branchCredit.release()
-			}
-			m.count--
-			leafCredit.release()
-			return
-		default:
-			return
-		}
+	for !link.node().leaf {
+		parent, parentLink = *link, link
+		n := link.node()
+		side = m.bit(key, n.bit)
+		link = &n.child[side]
 	}
-}
-func (m *numericRadixV1[K, V]) Range(visit func(K, V) bool) {
-	if m == nil {
+	leaf := *link
+	if leaf.node().key != key {
 		return
 	}
-	var walk func(any) bool
-	walk = func(node any) bool {
-		switch n := node.(type) {
-		case *numericRadixLeafV1[K, V]:
-			return visit(n.key, n.value)
-		case *numericRadixBranchV1:
-			return walk(n.child[0]) && walk(n.child[1])
-		default:
-			return true
-		}
+	if parent.chunk == nil {
+		m.root = numericRadixRefV1[K, V]{}
+	} else {
+		sibling := parent.node().child[1-side]
+		*parentLink = sibling
+		link, parentLink = nil, nil
+		m.freeSlotV1(parent)
+		parent = numericRadixRefV1[K, V]{}
 	}
-	walk(m.root)
+	m.count--
+	m.freeSlotV1(leaf)
+}
+func rangeNumericRadixV1[K comparable, V comparable](ref numericRadixRefV1[K, V], visit func(K, V) bool) bool {
+	if ref.chunk == nil {
+		return true
+	}
+	n := ref.node()
+	if n.leaf {
+		return visit(n.key, n.value)
+	}
+	return rangeNumericRadixV1(n.child[0], visit) && rangeNumericRadixV1(n.child[1], visit)
+}
+func (m *numericRadixV1[K, V]) Range(visit func(K, V) bool) {
+	if m != nil {
+		rangeNumericRadixV1(m.root, visit)
+	}
+}
+
+// Clone copies Patricia structure directly into packed independent chunks.
+// It never reconstructs the tree through per-key searches or Range/Put.
+func (m *numericRadixV1[K, V]) copyNodeV1(source numericRadixRefV1[K, V]) numericRadixRefV1[K, V] {
+	if source.chunk == nil {
+		return numericRadixRefV1[K, V]{}
+	}
+	ref := m.allocateSlotV1()
+	src, dst := source.node(), ref.node()
+	dst.key, dst.value, dst.bit, dst.leaf = src.key, src.value, src.bit, src.leaf
+	if !src.leaf {
+		dst.child[0] = m.copyNodeV1(src.child[0])
+		dst.child[1] = m.copyNodeV1(src.child[1])
+	}
+	return ref
 }
 func (m *numericRadixV1[K, V]) CloneWithCredit(credit *allocationCreditLeaseV1) (*numericRadixV1[K, V], error) {
 	if m == nil {
 		return nil, nil
 	}
-	if err := credit.reserve(allocationClassV1(uint64(unsafe.Sizeof(numericRadixV1[K, V]{})), true), 1); err != nil {
+	if m.count > int(^uint(0)>>1)/2 {
+		return nil, ErrAllocationCertificateIncompleteV1
+	}
+	nodes := 0
+	if m.count != 0 {
+		nodes = m.count*2 - 1
+	}
+	chunks := (uint64(nodes) + numericRadixChunkSlotsV1 - 1) / numericRadixChunkSlotsV1
+	header := allocationClassV1(uint64(unsafe.Sizeof(*m)), true)
+	bytes := cowSaturatingAddV1(header, cowSaturatingMulV1(chunks, numericRadixChunkClassV1[K, V]()))
+	operation, err := admitAllocationOperationV1(credit, bytes, chunks+1)
+	if err != nil {
+		return nil, err
+	}
+	defer operation.close()
+	if err := reserveBirthV1(credit, header, 1, &operation); err != nil {
 		return nil, err
 	}
 	clone := &numericRadixV1[K, V]{bit: m.bit, diff: m.diff, credit: credit}
-	var err error
-	m.Range(func(key K, value V) bool { err = clone.Put(key, value); return err == nil })
-	if err != nil {
+	if err := clone.ensureSlotsV1(nodes, credit, &operation); err != nil {
 		clone.Clear()
 		return nil, err
 	}
+	clone.root = clone.copyNodeV1(m.root)
+	clone.count = m.count
 	return clone, nil
 }
 func (m *numericRadixV1[K, V]) Clone() *numericRadixV1[K, V] {
@@ -219,25 +329,28 @@ func (m *numericRadixV1[K, V]) Clone() *numericRadixV1[K, V] {
 	}
 	return clone
 }
-
-// Clear destroys node aliases before releasing the creating request references.
 func (m *numericRadixV1[K, V]) Clear() {
 	if m == nil {
 		return
 	}
-	for m.root != nil {
-		node := m.root
-		for {
-			if leaf, ok := node.(*numericRadixLeafV1[K, V]); ok {
-				m.Delete(leaf.key)
-				break
-			}
-			node = node.(*numericRadixBranchV1).child[0]
-		}
+	c := m.head
+	creator := m.credit
+	m.root = numericRadixRefV1[K, V]{}
+	m.head, m.available, m.credit = nil, nil, nil
+	m.count, m.freeSlots = 0, 0
+	// First destroy all cross-chunk node and available aliases. Releasing
+	// any chunk earlier could leave a child reference in another live chunk.
+	for block := c; block != nil; block = block.next {
+		clear(block.nodes[:])
+		block.prev, block.availablePrev, block.availableNext = nil, nil, nil
 	}
-	credit := m.credit
-	m.credit = nil
-	credit.release()
+	for c != nil {
+		next, owner := c.next, c.credit
+		*c = numericRadixChunkV1[K, V]{}
+		c = next
+		owner.release()
+	}
+	creator.release()
 }
 func (m *numericRadixV1[K, V]) Equal(other *numericRadixV1[K, V]) bool {
 	if m.Len() != other.Len() {
@@ -280,29 +393,17 @@ func (m *numericRadixV1[K, V]) residentBytesV1() uint64 {
 		return 0
 	}
 	bytes := allocationClassV1(uint64(unsafe.Sizeof(*m)), true)
-	var walk func(any)
-	walk = func(node any) {
-		switch n := node.(type) {
-		case *numericRadixLeafV1[K, V]:
-			bytes = cowSaturatingAddV1(bytes, allocationClassV1(uint64(unsafe.Sizeof(*n)), true))
-			// Conservative overlap: the same lease may be counted per node. This
-			// upper bound needs no owner registry and never excludes live backing.
-			if n.credit != nil {
-				bytes = cowSaturatingAddV1(bytes, allocationClassV1(uint64(unsafe.Sizeof(*n.credit)), true))
-			}
-		case *numericRadixBranchV1:
-			bytes = cowSaturatingAddV1(bytes, allocationClassV1(uint64(unsafe.Sizeof(*n)), true))
-			if n.credit != nil {
-				bytes = cowSaturatingAddV1(bytes, allocationClassV1(uint64(unsafe.Sizeof(*n.credit)), true))
-			}
-			walk(n.child[0])
-			walk(n.child[1])
+	if m.credit != nil {
+		bytes = cowSaturatingAddV1(bytes, allocationClassV1(uint64(unsafe.Sizeof(*m.credit)), true))
+	}
+	for c := m.head; c != nil; c = c.next {
+		bytes = cowSaturatingAddV1(bytes, numericRadixChunkClassV1[K, V]())
+		if c.credit != nil {
+			bytes = cowSaturatingAddV1(bytes, allocationClassV1(uint64(unsafe.Sizeof(*c.credit)), true))
 		}
 	}
-	walk(m.root)
 	return bytes
 }
-
 func newPageRadixWithCreditV1[V comparable](credit *allocationCreditLeaseV1) (*numericRadixV1[uint64, V], error) {
 	if err := credit.reserve(allocationClassV1(uint64(unsafe.Sizeof(numericRadixV1[uint64, V]{})), true), 1); err != nil {
 		return nil, err
@@ -320,14 +421,23 @@ func newCandidateRadixWithCreditV1[V comparable](credit *allocationCreditLeaseV1
 	return result, nil
 }
 
-// insertionCapacityV1 plans new DISTINCT keys against the current radix, under
-// its existing containing lock. No old/new directory or rehash backing exists.
+// Prospective DISTINCT memberships use existing free slots first. Every new
+// chunk is charged at full actual capacity, regardless of eventual occupancy.
 func (m *numericRadixV1[K, V]) insertionCapacityV1(newKeys uint64) (uint64, uint64) {
-	branches := newKeys
-	if m.root == nil && branches != 0 {
-		branches--
+	if newKeys == 0 {
+		return 0, 0
 	}
-	bytes := cowSaturatingMulV1(newKeys, allocationClassV1(uint64(unsafe.Sizeof(numericRadixLeafV1[K, V]{})), true))
-	bytes = cowSaturatingAddV1(bytes, cowSaturatingMulV1(branches, allocationClassV1(uint64(unsafe.Sizeof(numericRadixBranchV1{})), true)))
-	return bytes, cowSaturatingAddV1(newKeys, branches)
+	nodes := cowSaturatingMulV1(newKeys, 2)
+	if m.count == 0 && nodes != ^uint64(0) {
+		nodes--
+	}
+	if nodes <= uint64(m.freeSlots) {
+		return 0, 0
+	}
+	deficit := nodes - uint64(m.freeSlots)
+	chunks := deficit / numericRadixChunkSlotsV1
+	if deficit%numericRadixChunkSlotsV1 != 0 {
+		chunks++
+	}
+	return cowSaturatingMulV1(chunks, numericRadixChunkClassV1[K, V]()), chunks
 }

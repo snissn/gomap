@@ -272,3 +272,92 @@ func managedTerminalAllocator5105(t *testing.T) *Allocator {
 	}
 	return a
 }
+
+func TestNumericRadixResidentPartialRetiredChunk5105(t *testing.T) {
+	a, old := buildCreditLease5105(t)
+	radix := newPageRadixV1[CandidateIDV1]()
+	value := candidateIDFromString("resident-chunk")
+	for _, key := range []uint64{1, 2, 3} {
+		if err := radix.PutWithCredit(key, value, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old.release()
+	radix.Delete(2)
+	block := radix.head
+	census := residentAttachmentV1{}
+	residentRadixAttachmentV1(radix, &census)
+	want := uint64(80) + numericRadixChunkClassV1[uint64, CandidateIDV1]() + 32
+	if census.bytes != want || census.refs != 1 || radix.residentBytesV1() != want {
+		t.Fatal("partial historical chunk or wrapper excluded", census.bytes, census.refs)
+	}
+	b, current := buildCreditLease5105(t)
+	if err := current.reserve(census.bytes, census.refs); err != nil {
+		t.Fatal(err)
+	}
+	attach := residentAttachmentV1{creator: current, refs: census.refs, attach: true}
+	residentRadixAttachmentV1(radix, &attach)
+	if attach.refs != 0 || radix.credit != current || block.credit != old {
+		t.Fatal("resident attachment replaced historic creator")
+	}
+	current.release()
+	before := b.bytes
+	if err := radix.PutWithCredit(4, value, current); err != nil {
+		t.Fatal(err)
+	}
+	if b.bytes != before || a.released != 0 || block.credit != old {
+		t.Fatal("new request reused whole chunk with another owner")
+	}
+	assertRadixChunks5105(t, radix)
+	radix.Clear()
+	if a.released != 1 || b.released != 1 || *block != (numericRadixChunkV1[uint64, CandidateIDV1]{}) {
+		t.Fatal("whole chunk and header not independently scrubbed/released")
+	}
+}
+
+func TestResidentChunkCloseDetachHeldOldReader5105(t *testing.T) {
+	a := managedTerminalAllocator5105(t)
+	if err := a.cow.ledger.reserve(candidateIDFromString("whole-chunk-seed"), []uint64{2}); err != nil {
+		t.Fatal(err)
+	}
+	cut, err := a.AcquirePublishedGenerationLeaseV1(a.cow.generation.ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared := ownedPrepared5105(t, a, "whole-chunk-old-reader")
+	account, creator := buildCreditLease5105(t)
+	if _, err = a.admitResidentAllocationCreditV1(creator, 91); err != nil {
+		t.Fatal(err)
+	}
+	ledger := a.cow.ledger
+	ownerChunk, candidateChunk := ledger.owners.head, ledger.candidates.head
+	if ownerChunk == nil || candidateChunk == nil || ownerChunk.credit != creator || candidateChunk.credit != creator {
+		t.Fatal("actual ledger chunks absent from resident admission")
+	}
+	if err = a.endResidentAllocationCreditV1(creator, 91); err != nil {
+		t.Fatal(err)
+	}
+	creator.release()
+	if err = a.AbortCOWCandidateV1(prepared); err != nil {
+		t.Fatal(err)
+	}
+	if err = prepared.ClearTerminalBackingV1(); err != nil {
+		t.Fatal(err)
+	}
+	authority := a.writerAuthority
+	a.CloseCOWOwnersAfterShutdownV1()
+	a.DetachManagedIndexWriterV1(authority)
+	if account.released != 0 {
+		t.Fatal("held old reader lost independent creating facet")
+	}
+	if *ownerChunk != (numericRadixChunkV1[uint64, CandidateIDV1]{}) || *candidateChunk != (numericRadixChunkV1[CandidateIDV1, *reservation]{}) {
+		t.Fatal("terminal chunk backing retained aliases")
+	}
+	if _, err = cut.SnapshotPageUnusedV1(2, 1); err != nil {
+		t.Fatal("old reader after writer detach", err)
+	}
+	cut.Close()
+	if account.released != 1 {
+		t.Fatal("last actual old reader did not release facet")
+	}
+}
