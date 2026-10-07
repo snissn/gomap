@@ -239,6 +239,13 @@ type columnPhysicalScanSnapshotView struct {
 	AssetNamespace        string
 	ManifestCatalogBytes  int64
 	snapshot              *backenddb.Snapshot
+	// Pure admission dimensions belong to validated immutable metadata, never
+	// to borrowed bytes, descriptors or a captured snapshot.
+	pointRowDimensionsPrepared bool
+	pointRowMaximumEncoded     int64
+	pointRowMaximumCredit      int64
+	pointRowWorkspaceCredit    int64
+	pointRowDimensionsErr      error
 }
 
 func columnPhysicalScanSnapshotViewAssetRefs(view columnPhysicalScanSnapshotView) []ColumnAssetRef {

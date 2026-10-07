@@ -604,11 +604,17 @@ func (c *Collection) typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCachePr
 			}
 			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column reconstruction decode generation=%d part_id=%d: %w", ref.Ref.Generation, ref.Ref.PartID, err)
 		}
-		// Only mapped payloads remain stable across read-cache calls. A serving
-		// mapped payload remains protected because the read view clears this
-		// decoded cache and its logical handles before releasing its holder/pool.
-		// The read-at fallback reuses scratch, so reconstruction owns its raw
-		// vector blocks.
+		if part.Part.Descriptor.RowCount != ref.Rows || ref.Rows < 0 {
+			if closeReadCache {
+				_ = readCache.close()
+			}
+			return typedColumnPartVisibleValues{}, fmt.Errorf("collections: typed-column row count disagrees with captured manifest")
+		}
+		// Pinned mapped or exclusively owned payloads remain stable across
+		// read-cache calls. The view clears decoded aliases and releases logical
+		// handles before reusing owned storage or releasing a serving holder/pool.
+		// The ordinary read-at fallback reuses scratch, so reconstruction owns
+		// its raw vector blocks.
 		decoded, err = part.scanDecodedValuesSelectedForReconstruction(selected, !closeReadCache && readCache.lastView)
 		var closeErr error
 		if closeReadCache {

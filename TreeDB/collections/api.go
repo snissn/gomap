@@ -1290,6 +1290,11 @@ type collectionMetaDisk struct {
 }
 
 type collectionCatalog struct {
+	// Lazy immutable materialization metadata belongs to this exact catalog.
+	// Clones intentionally start empty: numeric root equality is not authority.
+	materializerMu       sync.Mutex
+	materializerMetadata *columnPhysicalScanSnapshotView
+
 	// collectionCatalog is immutable once cached or published. Root updates must
 	// create a replacement catalog via cloneCatalogWithRootUpdates.
 	meta                   CollectionMeta
@@ -22677,15 +22682,23 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	if catalog == nil {
 		return dst[:0], false, errCollectionNotFound
 	}
-	value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, catalog.primaryRootName, documentID, dst)
-	if err != nil || !found || !columnStoreCanReconstructDocument(catalog.meta) {
-		return value, found, err
+	primaryDst := dst
+	if columnStoreCanReconstructDocument(catalog.meta) {
+		// Retained bytes cannot alias output while fields are emitted.
+		primaryDst = nil
+	}
+	value, found, err := collectionGetAppendAtCatalogRoot(snap, catalog, catalog.primaryRootName, documentID, primaryDst)
+	if err != nil || !found {
+		return dst[:0], false, err
+	}
+	if !columnStoreCanReconstructDocument(catalog.meta) {
+		return value, found, nil
 	}
 	var reconstructed []byte
 	if catalog.rootID(collectionColumnRowLocatorRootName(catalog.meta.Name)) != 0 && catalog.meta.Options.ColumnStore.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
 		view := newCollectionReadViewAtSnapshot(c, snap, catalog, false, "")
 		view.orderedPointRowRefs = true
-		reconstructed, err = view.materializeRetainedTypedDocument(documentID, value)
+		reconstructed, err = view.materializeRetainedTypedDocumentInto(documentID, value, dst[:0])
 		err = errors.Join(err, view.Close())
 	} else {
 		// Source-directory V2 already has point routing. Keep that route and the
@@ -22694,6 +22707,9 @@ func (c *Collection) GetInto(documentID []byte, dst []byte) ([]byte, bool, error
 	}
 	if err != nil {
 		return dst[:0], false, err
+	}
+	if catalog.rootID(collectionColumnRowLocatorRootName(catalog.meta.Name)) != 0 && catalog.meta.Options.ColumnStore.ActiveManifest.Format != columnSourceDirectoryFormatV2 {
+		return reconstructed, true, nil
 	}
 	return append(dst[:0], reconstructed...), true, nil
 }

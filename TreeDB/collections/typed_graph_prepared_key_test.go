@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -59,6 +60,47 @@ func TestTypedGraphServingRetainsExactPreparedKey(t *testing.T) {
 	if read.columnSnapshotView != shared {
 		t.Fatal("first asset cache creation discarded admitted metadata")
 	}
+	// A mode change must remain invalidating even if teardown returns an
+	// actual descriptor error. Close a retained request file directly; the
+	// subsequent cache close encounters os.ErrClosed without a product hook.
+	if read.rowAssetReadCache == nil {
+		t.Fatal("full fetch did not retain row source cache")
+	}
+	reader := read.rowAssetReadCache.file
+	if reader == nil {
+		for _, candidate := range read.rowAssetReadCache.files {
+			if candidate != nil && candidate.file != nil {
+				reader = candidate
+				break
+			}
+		}
+	}
+	if reader == nil || reader.file == nil {
+		t.Fatal("full fetch did not retain request descriptor")
+	}
+	if err := reader.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := read.FetchDocumentsByID(ids, DocumentFetchOptions{ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums}); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("integrity-change teardown did not return retained-descriptor error: %v", err)
+	}
+	if !read.materializerMetadataInvalidated || read.columnSnapshotView != nil || read.preparedMaterializer != nil || read.preparedMaterializerView != nil {
+		t.Fatal("cleanup error retained or restored prepared metadata authority")
+	}
+	if read.rowAssetReadCache != nil || read.typedColumnAssetReadCache != nil || read.typedColumnReconstructionCache != nil || read.pointRowBlocks != nil || read.pointRowRefs != nil || read.validatedPointRowRefs != nil || read.rowEmissionScratch != nil || read.pointRowProjection != nil {
+		t.Fatal("cleanup error retained source or derived aliases")
+	}
+	if read.pointRowCreditUsed != 0 || read.pointRowWorkspaceCredit != 0 || read.pointRowDescriptorCredit != 0 || read.pointRowCreditLimit != 0 || read.pointRowMaxBlockBytes != 0 || read.pointRowBuffersUsed != 0 || read.pointRowOpenFiles() != 0 || read.assetManager.ActiveHandles() != 0 || len(read.assetManager.PinSummary()) != 0 {
+		t.Fatal("cleanup error retained resource authority or backing credit")
+	}
+	for _, raw := range read.pointRowBuffers {
+		if raw != nil {
+			t.Fatal("cleanup error retained owned image backing")
+		}
+	}
+	// The retry below must use the independent captured-root loader and leave
+	// publication and typed prepared authority invalidated. Its original full
+	// payload equality and integrity-reset assertions remain unchanged.
 	// A cache-integrity change keeps the existing full-loader invalidation path.
 	fallback, err := read.FetchDocumentsByID(ids, DocumentFetchOptions{ColumnAssetReadIntegrity: ColumnAssetReadIntegritySkipChecksums})
 	if err != nil || !reflect.DeepEqual(full.Results, fallback.Results) {

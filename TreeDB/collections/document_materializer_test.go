@@ -126,13 +126,13 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryFai
 		t.Fatalf("OpenCollectionReadView: %v", err)
 	}
 	defer func() { _ = view.Close() }()
-	catalogWithoutLocator := *view.catalog
+	catalogWithoutLocator := cloneCatalogWithRootUpdates(view.catalog, view.catalog.meta, nil, nil)
 	catalogWithoutLocator.roots = make(map[string]uint64, len(view.catalog.roots))
 	for name, rootID := range view.catalog.roots {
 		catalogWithoutLocator.roots[name] = rootID
 	}
 	delete(catalogWithoutLocator.roots, collectionColumnRowLocatorRootName(view.catalog.meta.Name))
-	view.catalog = &catalogWithoutLocator
+	view.catalog = catalogWithoutLocator
 
 	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
 		!strings.Contains(err.Error(), "primary row locator root is absent") {
@@ -168,7 +168,7 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryOve
 	if primaryRootID == 0 {
 		t.Fatal("test requires a populated primary root")
 	}
-	catalogWithPrimaryOverlay := *view.catalog
+	catalogWithPrimaryOverlay := cloneCatalogWithRootUpdates(view.catalog, view.catalog.meta, nil, nil)
 	catalogWithPrimaryOverlay.roots = make(map[string]uint64, len(view.catalog.roots))
 	for name, rootID := range view.catalog.roots {
 		catalogWithPrimaryOverlay.roots[name] = rootID
@@ -180,7 +180,7 @@ func TestCollectionReadViewLookupDocumentRowRefsByIDMissingLocatorWithPrimaryOve
 		catalogWithPrimaryOverlay.rootOverlays[name] = append([]uint64(nil), rootIDs...)
 	}
 	catalogWithPrimaryOverlay.rootOverlays[primaryRootName] = []uint64{primaryRootID}
-	view.catalog = &catalogWithPrimaryOverlay
+	view.catalog = catalogWithPrimaryOverlay
 
 	if _, err := view.LookupDocumentRowRefsByID([][]byte{[]byte("e1")}, DocumentFetchOptions{}); err == nil ||
 		!strings.Contains(err.Error(), "primary row locator root is absent") {
@@ -1266,15 +1266,12 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef: %v", err)
 	}
-	if view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+	if view.columnSnapshotView == nil || view.preparedMaterializer == nil || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be populated before integrity change")
 	}
 	cfg := view.columnSnapshotView.Config
 	if err := view.ensureAssetReadCaches(cfg, ColumnAssetReadIntegritySkipChecksums); err != nil {
 		t.Fatalf("ensureAssetReadCaches: %v", err)
-	}
-	if view.rowLocator != nil {
-		t.Fatalf("rowLocator=%v want nil after row asset cache rebuild", view.rowLocator)
 	}
 	if view.columnSnapshotView != nil {
 		t.Fatalf("columnSnapshotView=%v want nil after row asset cache rebuild", view.columnSnapshotView)
@@ -1295,26 +1292,19 @@ func TestCollectionReadViewEnsureAssetReadCachesInvalidatesDerivedRowCaches1874(
 	if _, err := view.FetchDocumentsByRowRef([]DocumentRowRef{lookup.Results[0].RowRef}, DocumentFetchOptions{}); err != nil {
 		t.Fatalf("FetchDocumentsByRowRef after rebuild: %v", err)
 	}
-	if view.columnSnapshotView == nil || len(view.pointRowRefs) == 0 || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
+	if view.columnSnapshotView == nil || len(view.pointRowBlocks) == 0 || view.pointRowProjection == nil {
 		t.Fatalf("expected derived caches to be repopulated before close")
+	}
+	// Changing integrity retires the prepared metadata authority. A later
+	// fetch reconstructs independently rather than restoring the retired view.
+	if view.preparedMaterializer != nil || view.preparedMaterializerView != nil || !view.materializerMetadataInvalidated {
+		t.Fatalf("integrity change restored retired prepared metadata: prepared=%v bound=%v invalidated=%v", view.preparedMaterializer, view.preparedMaterializerView, view.materializerMetadataInvalidated)
 	}
 	if err := view.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if view.rowLocator != nil || view.columnSnapshotView != nil || view.pointRowRefs != nil || view.pointRowProjection != nil || view.pointRowBlocks != nil {
-		t.Fatalf("derived caches retained after Close: rowLocator=%v columnSnapshotView=%v pointRowRefs=%v pointRowProjection=%v pointRowBlocks=%v", view.rowLocator, view.columnSnapshotView, view.pointRowRefs, view.pointRowProjection, view.pointRowBlocks)
-	}
-}
-
-func TestDocumentRowLocatorCandidateNewerUsesOrdinalTieBreaker1874(t *testing.T) {
-	base := DocumentRowRef{Generation: 2, PartID: 7, RowIndex: 11, AppliedCommandLSN: 42}
-	older := documentRowLocatorCandidate{ref: base, ordinal: 3}
-	newer := documentRowLocatorCandidate{ref: base, ordinal: 4}
-	if !documentRowLocatorCandidateNewer(newer, older) {
-		t.Fatalf("higher ordinal should win exact row-ref ties")
-	}
-	if documentRowLocatorCandidateNewer(older, newer) {
-		t.Fatalf("lower ordinal should not win exact row-ref ties")
+	if view.columnSnapshotView != nil || view.pointRowRefs != nil || view.pointRowProjection != nil || view.pointRowBlocks != nil {
+		t.Fatalf("derived caches retained after Close: columnSnapshotView=%v pointRowRefs=%v pointRowProjection=%v pointRowBlocks=%v", view.columnSnapshotView, view.pointRowRefs, view.pointRowProjection, view.pointRowBlocks)
 	}
 }
 
@@ -1656,4 +1646,24 @@ func reconstructDocumentMaterializerFixtureDoc(doc []byte) ([]byte, error) {
 		{Type: ColumnStoreValueString, String: "old", Present: true},
 		{Type: ColumnStoreValueDouble, Double: 1, Present: true},
 	})
+}
+
+func TestCollectionCatalogCloneDropsMaterializerAuthority(t *testing.T) {
+	base := newCollectionCatalog(CollectionMeta{Name: "events"}, map[string]uint64{"root": 7})
+	metadata := &columnPhysicalScanSnapshotView{}
+	base.materializerMetadata = metadata
+	base.materializerMu.Lock()
+	clone := cloneCatalogWithRootUpdates(base, base.meta, nil, nil)
+	base.materializerMu.Unlock()
+	if clone == base || clone.materializerMetadata != nil {
+		t.Fatal("replacement catalog retained lazy materializer authority")
+	}
+	if !clone.materializerMu.TryLock() {
+		t.Fatal("replacement catalog copied a held mutex")
+	}
+	clone.materializerMu.Unlock()
+	clone.roots["root"] = 9
+	if base.roots["root"] != 7 || base.materializerMetadata != metadata {
+		t.Fatal("catalog cloning changed the original authority")
+	}
 }

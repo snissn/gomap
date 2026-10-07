@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -409,22 +410,39 @@ func reconstructColumnJSONDocumentProjectedInto(arena []byte, cfg ColumnStoreCon
 }
 
 func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats, resolver templateV1Resolver) ([]byte, []byte, error) {
+	return reconstructColumnJSONDocumentProjectedIntoWithScratch(arena, cfg, retained, values, projection, stats, resolver, nil)
+}
+
+func reconstructColumnJSONDocumentProjectedIntoWithScratch(arena []byte, cfg ColumnStoreConfig, retained []byte, values []columnDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats, resolver templateV1Resolver, scratch *columnDocumentReconstructionScratch) ([]byte, []byte, error) {
 	start := len(arena)
 	projectionActive := projection.active()
-	obj, err := decodeColumnRetainedPayloadObject(cfg, retained, resolver)
+	obj, err := decodeColumnRetainedPayloadObjectForEmission(cfg, retained, resolver, scratch)
 	if err != nil {
 		return arena[:start], nil, err
 	}
 	if len(values) != len(cfg.Columns) {
 		return arena[:start], nil, fmt.Errorf("collections: column reconstruction values=%d columns=%d", len(values), len(cfg.Columns))
 	}
-	declared := make([]columnReconstructedDeclaredValue, len(cfg.Columns))
+	var declared []columnReconstructedDeclaredValue
+	if scratch != nil && cap(scratch.declared) >= len(cfg.Columns) {
+		declared = scratch.declared[:len(cfg.Columns)]
+		clear(declared)
+	} else {
+		declared = make([]columnReconstructedDeclaredValue, len(cfg.Columns))
+		if scratch != nil {
+			scratch.declared = declared
+		}
+	}
 	if projectionActive {
 		for i, col := range cfg.Columns {
 			if !projection.wantsPath(col.Path) {
 				if stats != nil {
 					stats.FieldsSkipped++
 				}
+				continue
+			}
+			if !strings.Contains(col.Path, ".") && columnDeclaredJSONScalar(values[i].Type) {
+				declared[i] = columnReconstructedDeclaredValue{Scalar: &values[i], Present: values[i].Present}
 				continue
 			}
 			raw, err := columnDeclaredValueToJSON(values[i])
@@ -447,6 +465,10 @@ func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg Co
 		}
 	} else {
 		for i, col := range cfg.Columns {
+			if !strings.Contains(col.Path, ".") && columnDeclaredJSONScalar(values[i].Type) {
+				declared[i] = columnReconstructedDeclaredValue{Scalar: &values[i], Present: values[i].Present}
+				continue
+			}
 			raw, err := columnDeclaredValueToJSON(values[i])
 			if err != nil {
 				return arena[:start], nil, fmt.Errorf("collections: column reconstruction column %q: %w", col.Name, err)
@@ -466,7 +488,7 @@ func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg Co
 			}
 		}
 	}
-	arena, err = marshalColumnReconstructedJSONObjectProjectedInto(arena, cfg, obj, declared, projection, stats)
+	arena, err = marshalColumnReconstructedJSONObjectProjectedIntoWithScratch(arena, cfg, obj, declared, projection, stats, scratch)
 	if err != nil {
 		return arena[:start], nil, fmt.Errorf("collections: encode reconstructed column payload: %w", err)
 	}
@@ -476,6 +498,7 @@ func reconstructColumnJSONDocumentProjectedIntoWithResolver(arena []byte, cfg Co
 
 type columnReconstructedDeclaredValue struct {
 	Value   any
+	Scalar  *columnDeclaredValue
 	Present bool
 }
 
@@ -500,30 +523,44 @@ func marshalColumnReconstructedJSONObjectProjected(cfg ColumnStoreConfig, retain
 }
 
 func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
+	return marshalColumnReconstructedJSONObjectProjectedIntoWithScratch(arena, cfg, retained, declared, projection, stats, nil)
+}
+
+func marshalColumnReconstructedJSONObjectProjectedIntoWithScratch(arena []byte, cfg ColumnStoreConfig, retained map[string]any, declared []columnReconstructedDeclaredValue, projection *documentProjection, stats *DocumentMaterializationStats, scratch *columnDocumentReconstructionScratch) ([]byte, error) {
 	projectionActive := projection.active()
 	arena = append(arena, '{')
-	written := make(map[string]struct{}, len(cfg.Columns))
+	var written map[string]struct{}
+	if scratch != nil {
+		if scratch.written == nil {
+			scratch.written = make(map[string]struct{}, len(cfg.Columns))
+		}
+		written = scratch.written
+		clear(written)
+	} else {
+		written = make(map[string]struct{}, len(cfg.Columns))
+	}
 	first := true
 	reconstructed := uint64(0)
-	writeField := func(key string, value any) error {
+	writeField := func(key string, value any, scalar *columnDeclaredValue) error {
 		if !first {
 			arena = append(arena, ',')
 		}
 		first = false
-		keyBytes, err := json.Marshal(key)
-		if err != nil {
-			return err
-		}
-		valueBytes, err := json.Marshal(value)
-		if err != nil {
-			return err
-		}
-		arena = append(arena, keyBytes...)
+		arena = appendColumnJSONString(arena, key)
 		arena = append(arena, ':')
-		arena = append(arena, valueBytes...)
+		var err error
+		if scalar != nil {
+			arena, err = appendColumnDeclaredJSONScalar(arena, *scalar)
+		} else {
+			arena, err = appendColumnJSONValue(arena, value)
+		}
+		if err != nil {
+			return err
+		}
 		reconstructed++
 		return nil
 	}
+
 	if projectionActive {
 		for i, col := range cfg.Columns {
 			if strings.Contains(col.Path, ".") {
@@ -537,7 +574,7 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 				continue
 			}
 			before := len(arena)
-			if err := writeField(col.Path, declared[i].Value); err != nil {
+			if err := writeField(col.Path, declared[i].Value, declared[i].Scalar); err != nil {
 				return arena, err
 			}
 			if stats != nil && col.Path == "embedding" {
@@ -554,7 +591,7 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 				continue
 			}
 			before := len(arena)
-			if err := writeField(col.Path, declared[i].Value); err != nil {
+			if err := writeField(col.Path, declared[i].Value, declared[i].Scalar); err != nil {
 				return arena, err
 			}
 			if stats != nil && col.Path == "embedding" {
@@ -563,7 +600,12 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 			written[col.Path] = struct{}{}
 		}
 	}
-	keys := make([]string, 0, len(retained))
+	var keys []string
+	if scratch != nil && len(retained) <= 64 {
+		keys = scratch.keys[:0]
+	} else {
+		keys = make([]string, 0, len(retained))
+	}
 	for key := range retained {
 		if _, ok := written[key]; ok {
 			continue
@@ -576,9 +618,12 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 		}
 		keys = append(keys, key)
 	}
+	if scratch != nil && len(retained) <= 64 {
+		scratch.keys = keys
+	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		if err := writeField(key, retained[key]); err != nil {
+		if err := writeField(key, retained[key], nil); err != nil {
 			return arena, err
 		}
 	}
@@ -587,6 +632,161 @@ func marshalColumnReconstructedJSONObjectProjectedInto(arena []byte, cfg ColumnS
 		stats.FieldsReconstructed += reconstructed
 	}
 	return arena, nil
+}
+
+// appendColumnJSONString matches encoding/json with EscapeHTML enabled,
+// including invalid UTF-8 replacement and the JavaScript line separators.
+func appendColumnJSONString[S ~string | ~[]byte](dst []byte, src S) []byte {
+	const hex = "0123456789abcdef"
+	dst = append(dst, '"')
+	start := 0
+	for i := 0; i < len(src); {
+		b := src[i]
+		if b < utf8.RuneSelf {
+			if b >= 0x20 && b != '\\' && b != '"' && b != '<' && b != '>' && b != '&' {
+				i++
+				continue
+			}
+			dst = append(dst, src[start:i]...)
+			switch b {
+			case '\\', '"':
+				dst = append(dst, '\\', b)
+			case '\b':
+				dst = append(dst, '\\', 'b')
+			case '\f':
+				dst = append(dst, '\\', 'f')
+			case '\n':
+				dst = append(dst, '\\', 'n')
+			case '\r':
+				dst = append(dst, '\\', 'r')
+			case '\t':
+				dst = append(dst, '\\', 't')
+			default:
+				dst = append(dst, '\\', 'u', '0', '0', hex[b>>4], hex[b&15])
+			}
+			i++
+			start = i
+			continue
+		}
+		r, n := utf8.DecodeRuneInString(string(src[i:min(i+utf8.UTFMax, len(src))]))
+		if r == utf8.RuneError && n == 1 {
+			dst = append(dst, src[start:i]...)
+			dst = append(dst, `\ufffd`...)
+			i++
+			start = i
+			continue
+		}
+		if r == '\u2028' || r == '\u2029' {
+			dst = append(dst, src[start:i]...)
+			dst = append(dst, '\\', 'u', '2', '0', '2', hex[r&15])
+			i += n
+			start = i
+			continue
+		}
+		i += n
+	}
+	dst = append(dst, src[start:]...)
+	return append(dst, '"')
+}
+
+func appendColumnJSONFloat(dst []byte, f float64, bits int) ([]byte, error) {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		// Preserve the established encoding/json error on this exceptional path.
+		var value any = f
+		if bits == 32 {
+			value = float32(f)
+		}
+		_, err := json.Marshal(value)
+		return dst, err
+	}
+	format := byte('f')
+	abs := math.Abs(f)
+	if abs != 0 && ((bits == 64 && (abs < 1e-6 || abs >= 1e21)) || (bits == 32 && (float32(abs) < 1e-6 || float32(abs) >= 1e21))) {
+		format = 'e'
+	}
+	dst = strconv.AppendFloat(dst, f, format, -1, bits)
+	n := len(dst)
+	if format == 'e' && n >= 4 && dst[n-4] == 'e' && dst[n-3] == '-' && dst[n-2] == '0' {
+		dst[n-2] = dst[n-1]
+		dst = dst[:n-1]
+	}
+	return dst, nil
+}
+
+func appendColumnJSONValue(dst []byte, value any) ([]byte, error) {
+	switch v := value.(type) {
+	case nil:
+		return append(dst, "null"...), nil
+	case string:
+		return appendColumnJSONString(dst, v), nil
+	case bool:
+		return strconv.AppendBool(dst, v), nil
+	case int64:
+		return strconv.AppendInt(dst, v, 10), nil
+	case uint64:
+		return strconv.AppendUint(dst, v, 10), nil
+	case float32:
+		return appendColumnJSONFloat(dst, float64(v), 32)
+	case float64:
+		return appendColumnJSONFloat(dst, v, 64)
+	default:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return dst, err
+		}
+		return append(dst, raw...), nil
+	}
+}
+
+func columnDeclaredJSONScalar(t ColumnStoreValueType) bool {
+	switch t {
+	case ColumnStoreValueBool, ColumnStoreValueString, ColumnStoreValueInt64, ColumnStoreValueDouble, ColumnStoreValueFloat32,
+		ColumnStoreValueInt8, ColumnStoreValueUint8, ColumnStoreValueInt16, ColumnStoreValueUint16, ColumnStoreValueInt32, ColumnStoreValueUint32, ColumnStoreValueUint64, ColumnStoreValueFloat16, ColumnStoreValueBFloat16:
+		return true
+	default:
+		return false
+	}
+}
+
+func appendColumnDeclaredJSONScalar(dst []byte, v columnDeclaredValue) ([]byte, error) {
+	if v.Null {
+		return append(dst, "null"...), nil
+	}
+	switch v.Type {
+	case ColumnStoreValueString:
+		if v.StringBytes != nil {
+			return appendColumnJSONString(dst, v.StringBytes), nil
+		}
+		return appendColumnJSONString(dst, v.String), nil
+	case ColumnStoreValueBool:
+		return strconv.AppendBool(dst, v.Bool), nil
+	case ColumnStoreValueInt64:
+		return strconv.AppendInt(dst, v.Int64, 10), nil
+	case ColumnStoreValueInt8:
+		return strconv.AppendInt(dst, int64(v.Int8), 10), nil
+	case ColumnStoreValueInt16:
+		return strconv.AppendInt(dst, int64(v.Int16), 10), nil
+	case ColumnStoreValueInt32:
+		return strconv.AppendInt(dst, int64(v.Int32), 10), nil
+	case ColumnStoreValueUint8:
+		return strconv.AppendUint(dst, uint64(v.Uint8), 10), nil
+	case ColumnStoreValueUint16:
+		return strconv.AppendUint(dst, uint64(v.Uint16), 10), nil
+	case ColumnStoreValueUint32:
+		return strconv.AppendUint(dst, uint64(v.Uint32), 10), nil
+	case ColumnStoreValueUint64:
+		return strconv.AppendUint(dst, v.Uint64, 10), nil
+	case ColumnStoreValueFloat16:
+		return strconv.AppendUint(dst, uint64(v.Float16), 10), nil
+	case ColumnStoreValueBFloat16:
+		return strconv.AppendUint(dst, uint64(v.BFloat16), 10), nil
+	case ColumnStoreValueFloat32:
+		return appendColumnJSONFloat(dst, float64(v.Float32), 32)
+	case ColumnStoreValueDouble:
+		return appendColumnJSONFloat(dst, v.Double, 64)
+	default:
+		return dst, fmt.Errorf("unsupported declared scalar %q", v.Type)
+	}
 }
 
 func projectJSONDocument(raw []byte, projection *documentProjection, stats *DocumentMaterializationStats) ([]byte, error) {
@@ -705,6 +905,83 @@ func marshalProjectedJSONObject(obj map[string]any, projection *documentProjecti
 		stats.FieldsReconstructed += uint64(len(keys))
 	}
 	return b.Bytes(), nil
+}
+
+// This scratch belongs to one non-concurrent captured reader. The cursor is
+// the existing retained-payload parser; its fixed descriptor arena admits
+// small flat scalar objects. Larger, nested, escaped or unusual JSON keeps
+// the established UseNumber decoder and arbitrary-value writer.
+type columnDocumentReconstructionScratch struct {
+	cursor   columnRetainedSemanticStreamV1JSONCursor
+	object   map[string]any
+	declared []columnReconstructedDeclaredValue
+	written  map[string]struct{}
+	keys     []string
+}
+
+func (s *columnDocumentReconstructionScratch) clearBorrowed() {
+	if s == nil {
+		return
+	}
+	clear(s.object)
+	clear(s.declared[:cap(s.declared)])
+	clear(s.written)
+	clear(s.keys[:cap(s.keys)])
+	s.keys = s.keys[:0]
+	s.cursor.document = nil
+	s.cursor.pathInterner = nil
+	s.cursor.nodes = s.cursor.nodes[:0]
+	s.cursor.members = s.cursor.members[:0]
+	s.cursor.unescapeScratch = nil
+}
+
+func decodeColumnRetainedPayloadObjectForEmission(cfg ColumnStoreConfig, raw []byte, resolver templateV1Resolver, scratch *columnDocumentReconstructionScratch) (map[string]any, error) {
+	if scratch == nil || columnRetainedPayloadEffectiveEncoding(&cfg) != ColumnRetainedPayloadEncodingJSON {
+		return decodeColumnRetainedPayloadObject(cfg, raw, resolver)
+	}
+	// Bound the optional parse before it can grow either fixed descriptor arena.
+	scratch.cursor.maxDescriptors = 64
+	scratch.cursor.maxDepth = 64
+	root, err := scratch.cursor.parseDocument(raw, nil)
+	if err != nil {
+		return decodeColumnRetainedPayloadObject(cfg, raw, resolver)
+	}
+	for member := scratch.cursor.nodes[root].firstMember; member >= 0; member = scratch.cursor.members[member].next {
+		m := scratch.cursor.members[member]
+		n := scratch.cursor.nodes[m.node]
+		key := raw[m.keyStart:m.keyEnd]
+		if bytes.IndexByte(key, '\\') >= 0 || !utf8.Valid(key) || (n.valueType != jsonparser.String && n.valueType != jsonparser.Number && n.valueType != jsonparser.Boolean && n.valueType != jsonparser.Null) {
+			return decodeColumnRetainedPayloadObject(cfg, raw, resolver)
+		}
+		if n.valueType == jsonparser.String {
+			value := raw[n.valueStart:n.valueEnd]
+			if bytes.IndexByte(value, '\\') >= 0 || !utf8.Valid(value) {
+				return decodeColumnRetainedPayloadObject(cfg, raw, resolver)
+			}
+		}
+	}
+	if scratch.object == nil {
+		scratch.object = make(map[string]any)
+	} else {
+		clear(scratch.object)
+	}
+	for member := scratch.cursor.nodes[root].firstMember; member >= 0; member = scratch.cursor.members[member].next {
+		m := scratch.cursor.members[member]
+		n := scratch.cursor.nodes[m.node]
+		var value any
+		switch n.valueType {
+		case jsonparser.String:
+			value = string(raw[n.valueStart:n.valueEnd])
+		case jsonparser.Number:
+			value = json.Number(string(raw[n.rawStart:n.rawEnd]))
+		case jsonparser.Boolean:
+			value = raw[n.rawStart] == 't'
+		case jsonparser.Null:
+			value = nil
+		}
+		scratch.object[string(raw[m.keyStart:m.keyEnd])] = value
+	}
+	return scratch.object, nil
 }
 
 func decodeColumnJSONObject(raw []byte) (map[string]any, error) {

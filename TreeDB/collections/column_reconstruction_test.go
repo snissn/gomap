@@ -2,8 +2,12 @@ package collections
 
 import (
 	"bytes"
+	"encoding/json"
 	"math"
+	"math/rand"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -324,4 +328,82 @@ func columnReconstructionArenaTestConfig1888() ColumnStoreConfig {
 		{Name: "kind", Path: "kind", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart},
 		{Name: "note", Path: "note", ValueType: ColumnStoreValueString, Owner: TypedStorageOwnerColumnPart, Nullable: true},
 	}}
+}
+
+// Differential tests pin the adopted #1887 emitter to encoding/json rather
+// than merely asserting the implementation's own examples.
+func TestColumnSharedJSONEmitterParity1887(t *testing.T) {
+	values := []any{nil, true, false, int64(math.MinInt64), uint64(math.MaxUint64), float64(0), math.Copysign(0, -1), float32(1e-7), float32(1e-6), float64(1e21), float64(1e20), math.SmallestNonzeroFloat64, math.MaxFloat64, math.NaN(), math.Inf(1), math.Inf(-1), json.Number("9007199254740993"), []float32{1.5, 2.5}, []uint32{1, 9}, map[string]any{"nested": "<>&"}}
+	stringsToCheck := []string{"", "ascii", "\"\\\b\f\n\r\t", "<>&", "日本語", "\u2028\u2029", string([]byte{0xff, 0xc0, 0x80, 0xe2, 0x82}), "nul\x00end"}
+	rng := rand.New(rand.NewSource(1887))
+	for i := 0; i < 256; i++ {
+		raw := make([]byte, rng.Intn(256))
+		_, _ = rng.Read(raw)
+		stringsToCheck = append(stringsToCheck, string(raw))
+		values = append(values, math.Float64frombits(rng.Uint64()), math.Float32frombits(rng.Uint32()))
+	}
+	for _, text := range stringsToCheck {
+		want, _ := json.Marshal(text)
+		for _, got := range [][]byte{appendColumnJSONString(nil, text), appendColumnJSONString(nil, []byte(text))} {
+			if !bytes.Equal(got, want) {
+				t.Fatalf("string %q: got=%s want=%s", text, got, want)
+			}
+		}
+		values = append(values, text)
+	}
+	for _, value := range values {
+		want, wantErr := json.Marshal(value)
+		got, gotErr := appendColumnJSONValue(nil, value)
+		if (wantErr != nil) != (gotErr != nil) || (wantErr == nil && !bytes.Equal(got, want)) {
+			t.Fatalf("%T(%v): got=%s/%v want=%s/%v", value, value, got, gotErr, want, wantErr)
+		}
+	}
+}
+
+func TestColumnRetainedEmissionCursorParity1887(t *testing.T) {
+	cfg := ColumnStoreConfig{RetainedPayload: ColumnRetainedPayloadNonColumn, RetainedPayloadEncoding: ColumnRetainedPayloadEncodingJSON}
+	var scratch columnDocumentReconstructionScratch
+	for _, raw := range []string{`{}`, `{"a":null,"n":9007199254740993,"f":-1.00e-09,"b":true,"s":"abc"}`, `{"a":1,"a":2}`, `{"nested":{"x":1},"list":[1,null]}`, `{"escaped\\key":"\\n\u2028"}`, `{"x":1} trailing`, `{"x":01}`, `{"bad":"` + string([]byte{0xff}) + `"}`, `{"x":1,}`, `[]`, `null`, strings.Repeat(" ", 8)} {
+		want, wantErr := decodeColumnRetainedPayloadObject(cfg, []byte(raw), nil)
+		got, gotErr := decodeColumnRetainedPayloadObjectForEmission(cfg, []byte(raw), nil, &scratch)
+		if (wantErr != nil) != (gotErr != nil) || (wantErr == nil && !reflect.DeepEqual(got, want)) {
+			t.Fatalf("%s: got=%v/%v want=%v/%v", strconv.Quote(raw), got, gotErr, want, wantErr)
+		}
+		scratch.clearBorrowed()
+		if scratch.cursor.document != nil || len(scratch.object) != 0 {
+			t.Fatal("retained source escaped emission")
+		}
+	}
+}
+
+func TestColumnSharedDeclaredScalarJSONParity1887(t *testing.T) {
+	values := []columnDeclaredValue{
+		{Type: ColumnStoreValueBool, Bool: true},
+		{Type: ColumnStoreValueString, StringBytes: []byte("<>&\"" + string([]byte{0xff}) + "\u2028")},
+		{Type: ColumnStoreValueInt8, Int8: math.MinInt8}, {Type: ColumnStoreValueUint8, Uint8: math.MaxUint8},
+		{Type: ColumnStoreValueInt16, Int16: math.MinInt16}, {Type: ColumnStoreValueUint16, Uint16: math.MaxUint16},
+		{Type: ColumnStoreValueInt32, Int32: math.MinInt32}, {Type: ColumnStoreValueUint32, Uint32: math.MaxUint32},
+		{Type: ColumnStoreValueInt64, Int64: math.MinInt64}, {Type: ColumnStoreValueUint64, Uint64: math.MaxUint64},
+		{Type: ColumnStoreValueFloat16, Float16: 65535}, {Type: ColumnStoreValueBFloat16, BFloat16: 65535},
+		{Type: ColumnStoreValueFloat32, Float32: 1e-6}, {Type: ColumnStoreValueDouble, Double: math.Copysign(0, -1)},
+		{Type: ColumnStoreValueDouble, Double: math.NaN()}, {Type: ColumnStoreValueString, Null: true},
+	}
+	for _, value := range values {
+		value.Present = true
+		cfg := ColumnStoreConfig{Columns: []ColumnStoreColumn{{Name: "scalar", Path: "<field>&", ValueType: value.Type}}}
+		wantValue, err := columnDeclaredValueToJSON(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, wantErr := json.Marshal(map[string]any{"<field>&": wantValue})
+		got, gotErr := reconstructColumnJSONDocument(cfg, []byte(`{}`), []columnDeclaredValue{value})
+		if (wantErr != nil) != (gotErr != nil) || (wantErr == nil && !bytes.Equal(want, got)) {
+			t.Fatalf("%s: got=%s/%v want=%s/%v", value.Type, got, gotErr, want, wantErr)
+		}
+		value.Present = false
+		got, gotErr = reconstructColumnJSONDocument(cfg, []byte(`{}`), []columnDeclaredValue{value})
+		if gotErr != nil || string(got) != "{}" {
+			t.Fatalf("missing %s: %s %v", value.Type, got, gotErr)
+		}
+	}
 }

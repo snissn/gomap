@@ -81,7 +81,12 @@ captures a publication; later mutations are invisible to it. Opening and first
 fetch have setup costs distinct from reuse. Use one view per worker or external
 synchronization. Fetch results own their bytes after later fetches and view close;
 IDs from `VisitIndexValueIDs` are borrowed until callback return and need copying
-when retained. Closing releases the view's resource pins.
+when retained. Closing releases the view's resource pins. The captured executor shares only
+fully validated immutable metadata on the exact catalog; it keeps asset handles,
+decoded blocks and scratch local to each view. Per-view blocks, handles and private
+asset descriptors have independent 32-entry admission limits and schema-derived
+backing credits. See the [read contract](../spec/r1-row-reads.md) for fallback,
+destination ownership and accounting.
 
 Select exact-value index IDs and fetch them through the same held view when an
 old captured result is intended. An ordinary index query followed by a separately

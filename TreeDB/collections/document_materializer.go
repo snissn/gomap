@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
+	"os"
 	"slices"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -157,21 +160,13 @@ type documentRowPartKey struct {
 	PartID     uint64
 }
 
-type documentRowLocator struct {
-	byID map[string]DocumentRowRef
-}
-
-type documentRowLocatorCandidate struct {
-	ref     DocumentRowRef
-	ordinal int
-	deleted bool
-}
-
 // CollectionReadView is a closeable snapshot-bound document materializer for a
 // collection. It preserves the catalog/root visibility that existed when the
 // view was opened. Returned documents are owned by the fetch response. The view
 // is not concurrency-safe; callers that fetch concurrently should open one view
 // per worker or synchronize externally.
+const documentPointRowMaxBorrowedBlocks = 32
+
 type CollectionReadView struct {
 	collection      *Collection
 	snapshot        *backenddb.Snapshot
@@ -190,9 +185,19 @@ type CollectionReadView struct {
 	typedColumnReconstructionCache  *typedColumnPartReconstructionCache
 	columnSnapshotView              *columnPhysicalScanSnapshotView
 	preparedMaterializer            *columnPhysicalScanSnapshotView // immutable, fully validated publication metadata
-	rowLocator                      *documentRowLocator
+	preparedMaterializerView        *columnPhysicalScanSnapshotView // exact local binding of prepared metadata
+	materializerMetadataInvalidated bool                            // integrity/namespace changes use the independent loader
 	pointRowRefs                    map[documentRowPartKey]columnManifestAssetRefForScan
 	pointRowBlocks                  map[documentRowPartKey]*columnPhysicalRowReaderBlock
+	pointRowCreditLimit             int64
+	pointRowCreditUsed              int64
+	pointRowWorkspaceCredit         int64
+	pointRowDescriptorCredit        int64
+	pointRowMaxBlockBytes           int64
+	pointRowCacheEvictions          uint64
+	pointRowBuffers                 [documentPointRowMaxBorrowedBlocks][]byte
+	pointRowBuffersUsed             int
+	rowEmissionScratch              *documentRowEmissionScratch
 	pointRowProjection              *columnPhysicalScanProjection
 	orderedPointRowRefs             bool // ephemeral GetInto and bounded range views avoid a full part lookup map
 	validatedPointRowRefs           *columnPhysicalScanSnapshotView
@@ -382,6 +387,7 @@ func (v *CollectionReadView) Close() error {
 		v.typedGraphOwner = nil
 		ownerErr = owner.Close()
 	}
+	v.catalog = nil
 	return errors.Join(cacheErr, snapErr, ownerErr)
 }
 
@@ -473,18 +479,22 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 		}
 	} else {
 		if v.rowAssetReadCache != nil {
-			v.clearDerivedRowFetchCaches()
-			if err := v.rowAssetReadCache.close(); err != nil {
+			// An integrity/namespace change invalidates both source owners.
+			// Do not reset slot backing while typed handles can still alias it.
+			// Invalidation survives teardown failure: cleanup clears the old
+			// caches and aliases even when a retained descriptor close fails.
+			v.materializerMetadataInvalidated = true
+			if err := v.closeAssetReadCaches(); err != nil {
 				return err
 			}
-			v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
-			v.rowAssetReadCache = nil
 		}
 		readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(rootDir, namespace, rowIntegrity)
 		if err != nil {
 			return err
 		}
 		readCache.returnViews = true
+		readCache.boundedRangeViews = true
+		readCache.admitFile = v.admitPointRowFile
 		readCache.forceReadAtFallback = v.forceAssetReadAtFallbackForTest
 		readCache.trustCachedVerifyFileIdentity = true
 		if err := readCache.useMappedResourceManager(v.assetManager, v.assetScope(cfg, "typed-row document materializer"), "document materializer typed-row asset read"); err != nil {
@@ -516,6 +526,8 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 			return err
 		}
 		readCache.returnViews = true
+		readCache.boundedRangeViews = true
+		readCache.admitFile = v.admitPointRowFile
 		readCache.forceReadAtFallback = v.forceAssetReadAtFallbackForTest
 		readCache.trustCachedVerifyFileIdentity = true
 		if err := readCache.useMappedResourceManager(v.assetManager, v.assetScope(cfg, "typed-column document materializer"), "document materializer typed-column asset read"); err != nil {
@@ -646,12 +658,24 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 	if v == nil {
 		return
 	}
+	v.rowEmissionScratch.clearBorrowed()
+	for _, block := range v.pointRowBlocks {
+		*block = columnPhysicalRowReaderBlock{}
+	}
 	v.pointRowBlocks = nil
-	v.rowLocator = nil
+	v.rowEmissionScratch = nil
+	clear(v.pointRowBuffers[:])
+	v.pointRowBuffersUsed = 0
+	v.pointRowCreditUsed = 0
+	v.pointRowWorkspaceCredit = 0
+	v.pointRowDescriptorCredit = 0
+	v.pointRowCreditLimit = 0
+	v.pointRowMaxBlockBytes = 0
 	v.columnSnapshotView = nil
 	v.preparedMaterializer = nil
+	v.preparedMaterializerView = nil
 	if v.typedColumnReconstructionCache != nil {
-		v.typedColumnReconstructionCache.Prepared = nil
+		*v.typedColumnReconstructionCache = typedColumnPartReconstructionCache{}
 	}
 	v.pointRowRefs = nil
 	v.validatedPointRowRefs = nil
@@ -852,83 +876,67 @@ func (v *CollectionReadView) lookupDocumentRowRefsByID(ids [][]byte, opts Docume
 	return response, err
 }
 
+// materializerColumnSnapshotView certifies the entire classic manifest once on
+// the exact immutable catalog. The shared value never owns a snapshot, context,
+// reader, asset handle or decoded row. Each view binds the captured cut locally.
 func (v *CollectionReadView) materializerColumnSnapshotView(cfg ColumnStoreConfig) (columnPhysicalScanSnapshotView, error) {
-	if v == nil || v.collection == nil || v.catalog == nil || v.snapshot == nil {
-		return columnPhysicalScanSnapshotView{}, errors.New("collections: nil collection read view")
-	}
-	if v.columnSnapshotView != nil {
-		return *v.columnSnapshotView, nil
-	}
-	collectionName := v.catalog.meta.Name
-	rootID := v.catalog.rootID(collectionColumnManifestRootName(collectionName))
-	view, err := v.collection.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(v.snapshot, v.catalog, collectionName, rootID, cfg, true, columnManifestScanNoSidecars())
-	if err != nil {
+	if err := v.validateOpen(); err != nil {
 		return columnPhysicalScanSnapshotView{}, err
 	}
-	v.columnSnapshotView = &view
-	return view, nil
+	if v.columnSnapshotView != nil {
+		if v.columnSnapshotView != v.preparedMaterializerView {
+			// An uncertified/test-rebound view must validate unrelated entries
+			// before even deriving dimensions for admission.
+			if err := validateOrderedDocumentPartRefs(v.columnSnapshotView.AssetRefs); err != nil {
+				return columnPhysicalScanSnapshotView{}, err
+			}
+		}
+		return v.bindMaterializerMetadata(*v.columnSnapshotView)
+	}
+	catalog := v.catalog
+	if v.materializerMetadataInvalidated {
+		// A mode change deliberately leaves the admitted publication cache.
+		// Revalidate the captured root through the existing independent loader.
+		view, err := v.collection.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(v.snapshot, catalog, catalog.meta.Name, catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)), cfg, true, columnManifestScanNoSidecars())
+		if err != nil {
+			return view, err
+		}
+		if err := validateOrderedDocumentPartRefs(view.AssetRefs); err != nil {
+			return view, err
+		}
+		v.columnSnapshotView = &view
+		return view, nil
+	}
+	catalog.materializerMu.Lock()
+	defer catalog.materializerMu.Unlock()
+	if catalog.materializerMetadata == nil {
+		view, err := v.collection.prepareColumnPhysicalScanSnapshotViewAtSnapshotWithSidecars(v.snapshot, catalog, catalog.meta.Name, catalog.rootID(collectionColumnManifestRootName(catalog.meta.Name)), cfg, true, columnManifestScanNoSidecars())
+		if err != nil {
+			return view, err
+		}
+		if err := validateOrderedDocumentPartRefs(view.AssetRefs); err != nil {
+			return view, err
+		}
+		prepareDocumentPointRowDimensions(&view)
+		view.Catalog, view.snapshot = nil, nil
+		view.CommitSeq, view.SystemRoot = 0, 0
+		catalog.materializerMetadata = &view
+	}
+	v.columnSnapshotView = catalog.materializerMetadata
+	v.preparedMaterializer = catalog.materializerMetadata
+	v.preparedMaterializerView = v.columnSnapshotView
+	v.validatedPointRowRefs = catalog.materializerMetadata
+	return v.bindMaterializerMetadata(*catalog.materializerMetadata)
 }
 
-func (v *CollectionReadView) ensureDocumentRowLocator(cfg ColumnStoreConfig, readIntegrity ColumnAssetReadIntegrity, stats *DocumentMaterializationStats) error {
-	if v == nil {
-		return errors.New("collections: nil collection read view")
+func (v *CollectionReadView) bindMaterializerMetadata(view columnPhysicalScanSnapshotView) (columnPhysicalScanSnapshotView, error) {
+	token, ok := v.snapshot.StateToken()
+	if !ok {
+		return view, backenddb.ErrClosed
 	}
-	if v.rowLocator != nil {
-		return nil
-	}
-	if err := v.ensureAssetReadCaches(cfg, readIntegrity); err != nil {
-		return err
-	}
-	view, err := v.materializerColumnSnapshotView(cfg)
-	if err != nil {
-		return err
-	}
-	projection := noColumnPhysicalScanProjection(view.Config)
-	latest := make(map[string]documentRowLocatorCandidate, max(len(view.AssetRefs), 1))
-	var rawScratch []byte
-	buildStart := time.Now()
-	if stats != nil {
-		stats.RowLocatorBuilds++
-	}
-	for ordinal, assetRef := range view.AssetRefs {
-		if assetRef.Ref.Kind != ColumnAssetKindTCS1PartImage {
-			return fmt.Errorf("collections: document row locator unsupported asset kind %q", assetRef.Ref.Kind)
-		}
-		raw, err := v.rowAssetReadCache.read(assetRef.Ref, rawScratch)
-		if err != nil {
-			return fmt.Errorf("collections: document row locator read generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
-		}
-		rawScratch = raw
-		if stats != nil {
-			stats.RowLocatorPhysicalBytes += int64(len(raw))
-		}
-		summary, err := scanColumnPhysicalAssetRowsWithManifestOperation(raw, assetRef.Ref, view.CollectionName, &view.Config, projection, assetRef.Reason, func(row columnPhysicalScanRowView) error {
-			key := string(row.ID)
-			candidate := documentRowLocatorCandidate{ref: documentRowRefFromScanRowView(row), ordinal: ordinal, deleted: row.Deleted}
-			if existing, ok := latest[key]; !ok || documentRowLocatorCandidateNewer(candidate, existing) {
-				latest[key] = candidate
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("collections: document row locator decode generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
-		}
-		if stats != nil {
-			stats.RowLocatorRowsScanned += uint64(summary.rows)
-		}
-	}
-	locator := &documentRowLocator{byID: make(map[string]DocumentRowRef, len(latest))}
-	for key, candidate := range latest {
-		if candidate.deleted {
-			continue
-		}
-		locator.byID[key] = candidate.ref
-	}
-	v.rowLocator = locator
-	if stats != nil {
-		stats.RowLocatorNanos += time.Since(buildStart).Nanoseconds()
-	}
-	return nil
+	view.Catalog, view.snapshot = v.catalog, v.snapshot
+	view.CommitSeq, view.SystemRoot = token.CommitSeq, token.SystemRootPageID
+	return view, nil
 }
 
 func noColumnPhysicalScanProjection(cfg ColumnStoreConfig) columnPhysicalScanProjection {
@@ -1041,7 +1049,7 @@ func (v *CollectionReadView) pointRowAssetRef(view columnPhysicalScanSnapshotVie
 	key := documentRowPartKey{Generation: ref.Generation, PartID: ref.PartID}
 	var assetRef columnManifestAssetRefForScan
 	var ok bool
-	if v.preparedMaterializer != nil {
+	if v.preparedMaterializer != nil && v.columnSnapshotView == v.preparedMaterializerView {
 		assetRef, ok = materializerPartRef(v.preparedMaterializer.AssetRefs, ref.Generation, ref.PartID)
 	} else if v.orderedPointRowRefs {
 		// Manifest keys are ordered by generation/part. Validate the entire
@@ -1111,6 +1119,309 @@ func materializerPartRef(refs []columnManifestAssetRefForScan, generation, partI
 	return refs[i], true
 }
 
+// A credit is an upper envelope, not retained length. It includes page-rounded
+// encoded backing, actual offset capacity, schema-derived decoded-value/vector
+// backing, cloned headers, descriptor ownership and manager bookkeeping.
+func documentPointRowBlockCredit(ref columnManifestAssetRefForScan, cfg ColumnStoreConfig) (int64, error) {
+	if ref.Ref.Length <= 0 || ref.Rows < 0 {
+		return 0, errors.New("collections: invalid document row backing dimensions")
+	}
+	credit := uint64(ref.Ref.Length)
+	add := func(count, width uint64) bool {
+		if width != 0 && count > (math.MaxInt64-credit)/width {
+			return false
+		}
+		credit += count * width
+		return true
+	}
+	metadata := uint64(2*os.Getpagesize()) + uint64(unsafe.Sizeof(columnPhysicalRowReaderBlock{})) + mappedresource.ConservativeHandleMetadataBytes() + uint64(unsafe.Sizeof(columnPhysicalAssetSegmentReader{})) + uint64(len(cfg.AssetManager.Namespace))
+	if !add(1, metadata) {
+		return 0, errDocumentPointRowOversize
+	}
+	if ref.Ref.Kind == ColumnAssetKindTCS1PartImage {
+		// Offsets are exact-sized today; allow two backing-capacity slots per row.
+		if !add(uint64(ref.Rows), 2*uint64(unsafe.Sizeof(int(0)))) {
+			return 0, errDocumentPointRowOversize
+		}
+	} else {
+		// Existing typed reconstruction holds column-major decoded values plus
+		// primary-ID/row lookup and intermediate decoded vector backing.
+		if !add(uint64(ref.Rows), 32) {
+			return 0, errDocumentPointRowOversize
+		}
+		for _, col := range cfg.Columns {
+			if columnStoreColumnOwnerOrRowAsset(col) != TypedStorageOwnerColumnPart {
+				continue
+			}
+			width := 2*uint64(unsafe.Sizeof(columnDeclaredValue{})) + 64
+			elements := max(col.VectorDims, col.ElementsPerRow, 0)
+			if uint64(elements) > (math.MaxInt64-width)/16 {
+				return 0, errDocumentPointRowOversize
+			}
+			width += uint64(elements) * 16
+			if !add(uint64(ref.Rows), width) {
+				return 0, errDocumentPointRowOversize
+			}
+		}
+		// Variable payload decoding can transiently own two copies in addition
+		// to the pinned encoded extent; neither escapes into returned JSON.
+		if !add(uint64(ref.Ref.Length), 2) {
+			return 0, errDocumentPointRowOversize
+		}
+	}
+	return int64(credit), nil
+}
+
+// A representable schema/extent budget is required for the borrowed route.
+// Oversize arithmetic is an eligibility failure, not corrupt metadata; the
+// existing fully validated owned reconstruction remains the portable fallback.
+var errDocumentPointRowOversize = errors.New("collections: document row backing exceeds representable admission")
+
+func documentPointRowWorkspaceCredit(cfg ColumnStoreConfig, maxEncodedBytes int64) (int64, error) {
+	credit := uint64(unsafe.Sizeof(documentRowEmissionScratch{}))
+	add := func(n, width uint64) bool {
+		if width != 0 && n > (math.MaxInt64-credit)/width {
+			return false
+		}
+		credit += n * width
+		return true
+	}
+	// Three declared-value arrays, JSON scalar slots, and fixed cursor/map
+	// descriptors. Raw variable payload scratch has at most two growth spans.
+	width := 3*uint64(unsafe.Sizeof(columnDeclaredValue{})) + uint64(unsafe.Sizeof(columnReconstructedDeclaredValue{}))
+	if !add(uint64(len(cfg.Columns)), width) || !add(64, 128) || !add(uint64(maxEncodedBytes), 2) {
+		return 0, errDocumentPointRowOversize
+	}
+	for _, col := range cfg.Columns {
+		if !add(uint64(max(col.VectorDims, col.ElementsPerRow, 0)), 16) {
+			return 0, errDocumentPointRowOversize
+		}
+	}
+	return int64(credit), nil
+}
+
+// prepareDocumentPointRowDimensions derives only schema/manifest maxima. The
+// classic catalog calls it after complete validation, so ephemeral readers do
+// not repeat a scan of every historical part. Other prepared owners derive the
+// same dimensions on their local metadata copy; unsupported sizes keep the
+// existing owned fallback rather than weakening admission.
+func prepareDocumentPointRowDimensions(view *columnPhysicalScanSnapshotView) {
+	if view.pointRowDimensionsPrepared {
+		return
+	}
+	view.pointRowDimensionsPrepared = true
+	for _, refs := range [][]columnManifestAssetRefForScan{view.AssetRefs, view.TypedColumnPartRefs} {
+		for _, ref := range refs {
+			credit, err := documentPointRowBlockCredit(ref, view.FullConfig)
+			if err != nil {
+				view.pointRowDimensionsErr = err
+				return
+			}
+			view.pointRowMaximumEncoded = max(view.pointRowMaximumEncoded, ref.Ref.Length)
+			view.pointRowMaximumCredit = max(view.pointRowMaximumCredit, credit)
+		}
+	}
+	view.pointRowWorkspaceCredit, view.pointRowDimensionsErr = documentPointRowWorkspaceCredit(view.FullConfig, view.pointRowMaximumEncoded)
+}
+
+func (v *CollectionReadView) preparePointRowCredit(view columnPhysicalScanSnapshotView) error {
+	if v.pointRowCreditLimit != 0 {
+		return nil
+	}
+	// FD/cache objects and complete owned path/header text are independent
+	// of the encoded range. Charge the actual directory/name lengths too.
+	descriptorCredit := int64(len(v.rowAssetReadCache.segmentDir)) + int64(len(columnAssetSegmentFileName(^uint32(0)))) + 1 + int64(len(view.CollectionName)) + int64(2*unsafe.Sizeof(columnPhysicalAssetSegmentReader{})+2*unsafe.Sizeof(os.File{}))
+	if descriptorCredit < 0 {
+		return errDocumentPointRowOversize
+	}
+	prepareDocumentPointRowDimensions(&view)
+	if view.pointRowDimensionsErr != nil {
+		return view.pointRowDimensionsErr
+	}
+	maximum, maxCredit, workspace := view.pointRowMaximumEncoded, view.pointRowMaximumCredit, view.pointRowWorkspaceCredit
+	if maxCredit <= 0 {
+		return errors.New("collections: document row admission has no captured asset")
+	}
+	if maxCredit > math.MaxInt64-descriptorCredit {
+		return errDocumentPointRowOversize
+	}
+	maxCredit += descriptorCredit
+	if maxCredit > (math.MaxInt64-workspace)/documentPointRowMaxBorrowedBlocks {
+		return errDocumentPointRowOversize
+	}
+	v.pointRowDescriptorCredit = descriptorCredit
+	v.pointRowMaxBlockBytes = maximum
+	v.pointRowWorkspaceCredit = workspace
+	// The fixed slot descriptors are real owned backing. Their charge is
+	// separated from per-live-image padding; the total limit is unchanged.
+	v.pointRowCreditUsed = workspace + descriptorCredit*documentPointRowMaxBorrowedBlocks + v.pointRowBufferTableCredit()
+	v.pointRowCreditLimit = maxCredit*documentPointRowMaxBorrowedBlocks + workspace
+	return nil
+}
+
+func (v *CollectionReadView) pointRowOpenFiles() int {
+	n := 0
+	for _, c := range []*columnPhysicalAssetReadCache{v.rowAssetReadCache, v.typedColumnAssetReadCache} {
+		if c != nil {
+			n += len(c.files)
+			if c.file != nil {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func (v *CollectionReadView) admitPointRowFile() error {
+	if v.pointRowOpenFiles() >= documentPointRowMaxBorrowedBlocks {
+		return errors.New("collections: document file admission exhausted before open")
+	}
+	return nil
+}
+
+// borrowPointRowStorage consumes one unused slot in this emission window.
+// Idle capacities stay charged across handle release. No live slot can be
+// reused within a window; CRL2 current/preserved/typed inputs coexist.
+func (v *CollectionReadView) borrowPointRowStorage(ref ColumnAssetRef) ([]byte, error) {
+	prepared := v.columnSnapshotView
+	if prepared == nil {
+		return nil, errors.New("collections: document row admission requires captured metadata")
+	}
+	refs := prepared.AssetRefs
+	if ref.Kind != ColumnAssetKindTCS1PartImage {
+		refs = prepared.TypedColumnPartRefs
+	}
+	entry, ok := materializerPartRef(refs, ref.Generation, ref.PartID)
+	if !ok || entry.Ref != ref {
+		return nil, errors.New("collections: document row admission asset is outside captured manifest")
+	}
+	credit, err := documentPointRowBlockCredit(entry, *v.catalog.meta.Options.ColumnStore)
+	if err != nil {
+		return nil, err
+	}
+	// Each old block envelope reserves two OS pages beyond explicit raw and
+	// decoded capacities. Heap-only exclusive storage needs no mmap alignment
+	// span or cloned header. Use 32 of those padding bytes per live image for
+	// its already globally charged slot descriptor; never enlarge the limit.
+	credit -= int64(unsafe.Sizeof([]byte(nil)) + unsafe.Sizeof(int(0)))
+	if ref.Length > int64(maxCollectionInt) || v.pointRowBuffersUsed >= len(v.pointRowBuffers) {
+		return nil, errors.New("collections: document owned storage admission exhausted before load")
+	}
+	slot := &v.pointRowBuffers[v.pointRowBuffersUsed]
+	oldCapacity := int64(cap(*slot))
+	if v.pointRowCreditUsed < oldCapacity {
+		return nil, errors.New("collections: uncharged document owned storage")
+	}
+	nextUsed := v.pointRowCreditUsed - oldCapacity
+	capacity := max(oldCapacity, ref.Length)
+	extra := capacity - ref.Length
+	// A larger idle span is retained only if its actual capacity still fits.
+	// Otherwise discard it before allocating exactly the newly admitted size.
+	if extra > math.MaxInt64-credit || credit+extra > v.pointRowCreditLimit-nextUsed {
+		capacity = ref.Length
+		extra = 0
+	}
+	credit += extra
+	// Other unused slots may retain large images from an earlier window. They
+	// are not pinned or aliased; drop them before allocating a new replacement
+	// if their idle capacity would deny an otherwise representable resource.
+	for i := v.pointRowBuffersUsed + 1; credit > v.pointRowCreditLimit-nextUsed && i < len(v.pointRowBuffers); i++ {
+		nextUsed -= int64(cap(v.pointRowBuffers[i]))
+		v.pointRowBuffers[i] = nil
+	}
+	if credit > v.pointRowCreditLimit-nextUsed {
+		// Preserve truthful charge even when reclamation preceded failure.
+		v.pointRowCreditUsed = nextUsed + oldCapacity
+		return nil, errors.New("collections: document row admission exhausted before load")
+	}
+	v.pointRowCreditUsed = nextUsed + credit
+	if capacity != oldCapacity {
+		// No overlapping reachable old/new backing: slot is unused in this
+		// window, and previous handles/blocks/borrowed values were cleared.
+		*slot = nil
+		*slot = make([]byte, int(ref.Length))
+	}
+	v.pointRowBuffersUsed++
+	return (*slot)[:int(ref.Length)], nil
+}
+
+// Retained idle buffers remain owned even with no maintenance handles. Each
+// slot is lazy: ordinary one-row readers allocate only their required inputs.
+func (v *CollectionReadView) pointRowBufferTableCredit() int64 {
+	return int64(unsafe.Sizeof(v.pointRowBuffers) + unsafe.Sizeof(v.pointRowBuffersUsed) + unsafe.Sizeof(struct {
+		View        *columnPhysicalScanSnapshotView
+		Invalidated bool
+	}{}))
+}
+
+func (v *CollectionReadView) pointRowIdleCredit() int64 {
+	credit := v.pointRowWorkspaceCredit + v.pointRowDescriptorCredit*documentPointRowMaxBorrowedBlocks + v.pointRowBufferTableCredit()
+	for _, raw := range v.pointRowBuffers {
+		credit += int64(cap(raw))
+	}
+	return credit
+}
+
+// Called only between synchronous row emissions. A CRL2 row can borrow two
+// blocks and a typed-column part on the next emission; reserve all three slots.
+// No borrowed row/string/vector escapes into the owned result documents.
+func (v *CollectionReadView) preparePointRowEmission(cfg ColumnStoreConfig, integrity ColumnAssetReadIntegrity) error {
+	handles := int64(0)
+	if v.assetManager != nil {
+		handles = v.assetManager.ActiveHandles()
+	}
+	if v.pointRowBuffersUsed <= documentPointRowMaxBorrowedBlocks-3 && len(v.pointRowBlocks) <= documentPointRowMaxBorrowedBlocks-3 && handles <= documentPointRowMaxBorrowedBlocks-3 && v.pointRowOpenFiles() <= documentPointRowMaxBorrowedBlocks-3 {
+		return nil
+	}
+	// This boundary precedes row decode. Previous JSON output is fully owned;
+	// all derived strings/vectors/headers must be cleared before raw reuse.
+	v.rowEmissionScratch.clearBorrowed()
+	for _, block := range v.pointRowBlocks {
+		*block = columnPhysicalRowReaderBlock{}
+	}
+	clear(v.pointRowBlocks)
+	if v.typedColumnReconstructionCache != nil {
+		*v.typedColumnReconstructionCache = typedColumnPartReconstructionCache{}
+		v.typedColumnReconstructionCache = nil
+	}
+	var err error
+	if v.rowAssetReadCache != nil {
+		err = errors.Join(err, v.rowAssetReadCache.releaseResourceHandles())
+		v.rowAssetReadCache.lastView = false
+		v.rowAssetReadCache.hasVerifiedRowIndexKey = false
+	}
+	if v.typedColumnAssetReadCache != nil {
+		err = errors.Join(err, v.typedColumnAssetReadCache.releaseResourceHandles())
+		v.typedColumnAssetReadCache.lastView = false
+		v.typedColumnAssetReadCache.hasVerifiedRowIndexKey = false
+	}
+	if err != nil {
+		return err
+	}
+	v.pointRowBuffersUsed = 0
+	v.pointRowCreditUsed = v.pointRowIdleCredit()
+	v.pointRowCacheEvictions++
+	// Images and descriptors have independent bounds. Keep the common source
+	// file open when only image pressure forced recycling. At FD pressure all
+	// handles are already gone, so closing/recreating caches is safe.
+	if v.pointRowOpenFiles() > documentPointRowMaxBorrowedBlocks-3 {
+		if v.rowAssetReadCache != nil {
+			err = errors.Join(err, v.rowAssetReadCache.close())
+			v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
+			v.rowAssetReadCache = nil
+		}
+		if v.typedColumnAssetReadCache != nil {
+			err = errors.Join(err, v.typedColumnAssetReadCache.close())
+			v.assetClosedCounters.addReadCache(v.typedColumnAssetReadCache)
+			v.typedColumnAssetReadCache = nil
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return v.ensureAssetReadCaches(cfg, integrity)
+}
+
 func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotView, assetRef columnManifestAssetRefForScan) (*columnPhysicalRowReaderBlock, error) {
 	key := documentRowPartKey{Generation: assetRef.Ref.Generation, PartID: assetRef.Ref.PartID}
 	if block := v.pointRowBlocks[key]; block != nil {
@@ -1118,6 +1429,12 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 	}
 	if v.rowAssetReadCache == nil {
 		return nil, errors.New("collections: document row point fetch requires row asset read cache")
+	}
+	if err := v.preparePointRowCredit(view); err != nil {
+		return nil, err
+	}
+	if len(v.pointRowBlocks) >= documentPointRowMaxBorrowedBlocks {
+		return nil, errors.New("collections: document row admission exhausted before load")
 	}
 	raw, err := v.rowAssetReadCache.read(assetRef.Ref, nil)
 	if err != nil {
@@ -1130,7 +1447,14 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 	if err != nil {
 		return nil, fmt.Errorf("collections: document row point fetch header generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
 	}
-	header = cloneColumnPhysicalAssetScanHeader(header)
+	if header.RowCount != assetRef.Rows {
+		return nil, errors.New("collections: physical row count disagrees with captured manifest")
+	}
+	var headerOwnedBytes int64
+	if v.rowAssetReadCache.ownedRangeStorage == nil {
+		header = cloneColumnPhysicalAssetScanHeader(header)
+		headerOwnedBytes = int64(cap(header.Collection) + cap(header.Namespace))
+	}
 	rowIndex, err := v.rowAssetReadCache.indexRows(raw, assetRef.Ref, version, rowsOffset, header, &view.Config)
 	if err != nil {
 		return nil, fmt.Errorf("collections: document row point fetch index generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
@@ -1144,14 +1468,14 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 		rowEncoding:   rowIndex.rowEncoding,
 		fixedIDWidth:  rowIndex.fixedIDWidth,
 		denseIDBase:   rowIndex.denseIDBase,
-		residentBytes: int64(len(raw)),
+		residentBytes: int64(cap(raw)) + int64(cap(rowIndex.offsets))*int64(unsafe.Sizeof(int(0))) + headerOwnedBytes,
 	}
 	if v.pointRowBlocks == nil {
 		v.pointRowBlocks = make(map[documentRowPartKey]*columnPhysicalRowReaderBlock)
 	}
-	// A mapped raw slice may belong to the serving pool. This cache is nested
-	// under the read view: clearDerivedRowFetchCaches and the request's logical
-	// handles close before typedGraphOwner.Close releases the holder/pool.
+	// Raw bytes stay pinned by this view's image handle, including exclusively
+	// owned storage. Clear derived aliases before releasing that handle or
+	// reusing its storage, and before releasing any serving holder/pool.
 	// Retain no borrowed reader object here.
 	v.pointRowBlocks[key] = block
 	return block, nil
@@ -1397,8 +1721,31 @@ func documentFetchContextErr(ctx context.Context) error {
 }
 
 func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions, projection *documentProjection, authority documentRowRefAuthority) (out DocumentFetchResponse, err error) {
+	return v.fetchColumnStoreDocumentsByRowRefInto(response, refs, retained, opts, projection, authority, nil, false)
+}
+
+// A single worker owns this scratch. Borrowed values are cleared after each
+// synchronous emission and before cache eviction; capacity is schema-derived.
+type documentRowEmissionScratch struct {
+	row            columnPhysicalRowReaderScratch
+	typed          []columnDeclaredValue
+	merge          []columnDeclaredValue
+	reconstruction columnDocumentReconstructionScratch
+}
+
+func (s *documentRowEmissionScratch) clearBorrowed() {
+	if s == nil {
+		return
+	}
+	clear(s.row.Values[:cap(s.row.Values)])
+	clear(s.typed[:cap(s.typed)])
+	clear(s.merge[:cap(s.merge)])
+	s.reconstruction.clearBorrowed()
+}
+
+func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRefInto(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions, projection *documentProjection, authority documentRowRefAuthority, documentArena []byte, callerOutput bool) (out DocumentFetchResponse, err error) {
 	out = response
-	cfg := v.catalog.meta.Options.ColumnStore.copy()
+	cfg := *v.catalog.meta.Options.ColumnStore
 	readIntegrity := opts.ColumnAssetReadIntegrity
 	if readIntegrity == "" {
 		readIntegrity = ColumnAssetReadIntegrityVerify
@@ -1410,9 +1757,26 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	defer func() {
 		addDocumentMaterializerAssetCounterDeltas(&out.Stats, assetCountersBefore, v.assetCounters())
 	}()
+	// Failed admission/decode must release its reservation and any opened
+	// descriptors. A retry never accumulates failed pins or stale borrowed data.
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, v.closeAssetReadCaches())
+		}
+	}()
 	view, err := v.materializerColumnSnapshotView(cfg)
 	if err != nil {
 		return out, err
+	}
+	if err := v.preparePointRowCredit(view); err != nil {
+		if errors.Is(err, errDocumentPointRowOversize) {
+			return v.fetchColumnStoreDocumentsOwnedFallback(response, refs, retained, opts, projection, authority, documentArena, callerOutput)
+		}
+		return out, err
+	}
+	v.rowAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
+	if v.typedColumnAssetReadCache != nil {
+		v.typedColumnAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
 	}
 	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
 	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
@@ -1423,11 +1787,12 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 	}
 	typedColumnCache := v.typedColumnReconstructionCacheForConfig(cfg)
 	manifestRootID := v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name))
-	typedScratch := make([]columnDeclaredValue, 0, len(columnStoreTypedColumnPartFields(cfg)))
-	mergeScratch := make([]columnDeclaredValue, 0, len(cfg.Columns))
+	if v.rowEmissionScratch == nil {
+		v.rowEmissionScratch = &documentRowEmissionScratch{merge: make([]columnDeclaredValue, 0, len(cfg.Columns))}
+	}
+	worker := v.rowEmissionScratch
+	defer worker.clearBorrowed()
 	retainedTemplateResolver := columnRetainedPayloadTemplateResolver(v.snapshot, v.catalog)
-	var rowScratch columnPhysicalRowReaderScratch
-	var documentArena []byte
 	for i := range out.Results {
 		if err := documentFetchContextErr(opts.Context); err != nil {
 			return out, err
@@ -1437,6 +1802,14 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 			// require every primary row to exist before entering this shared loop.
 			continue
 		}
+		if err := v.preparePointRowEmission(cfg, readIntegrity); err != nil {
+			return out, err
+		}
+		v.rowAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
+		if v.typedColumnAssetReadCache != nil {
+			v.typedColumnAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
+		}
+		typedColumnCache = v.typedColumnReconstructionCacheForConfig(cfg)
 		ref := refs[i]
 		if authority != documentRowRefResolved {
 			ref, err = v.resolveDocumentRowRefLatest(ref, &out.Stats, authority == documentRowRefScoring)
@@ -1444,7 +1817,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 				return out, err
 			}
 		}
-		row, err := v.fetchDocumentPointRow(view, ref, pointProjection, &rowScratch, &out.Stats)
+		row, err := v.fetchDocumentPointRow(view, ref, pointProjection, &worker.row, &out.Stats)
 		if err != nil {
 			out.Stats.RowRefValidationFailures++
 			return out, err
@@ -1455,7 +1828,7 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 
 		beforeCacheHits, beforeCacheMisses, beforePartLoads, beforePartDecodes := typedColumnCacheCounters(typedColumnCache)
 		typedStart := time.Now()
-		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(v.snapshot, manifestRootID, cfg, row, typedColumnCache, typedScratch, typedProjection)
+		typedValues, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshotIntoWithCacheProjected(v.snapshot, manifestRootID, cfg, row, typedColumnCache, worker.typed, typedProjection)
 		typedElapsed := time.Since(typedStart)
 		if err != nil {
 			return out, err
@@ -1471,23 +1844,100 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRef(response Document
 		out.Stats.TypedColumnNanos += typedElapsed.Nanoseconds()
 
 		reconstructStart := time.Now()
-		fullValues, err := mergeColumnReconstructionValuesProjectedInto(cfg, row.Values, typedValues.Values, selectedColumns, mergeScratch)
+		fullValues, err := mergeColumnReconstructionValuesProjectedInto(cfg, row.Values, typedValues.Values, selectedColumns, worker.merge)
 		if err != nil {
 			return out, err
 		}
 		var document []byte
-		documentArena, document, err = reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(documentArena, cfg, retained[i], row, fullValues, projection, &out.Stats, retainedTemplateResolver)
+		worker.typed = typedValues.Values
+		worker.merge = fullValues
+		if row.Deleted {
+			return out, errors.New("collections: column reconstruction latest physical row is deleted")
+		}
+		documentArena, document, err = reconstructColumnJSONDocumentProjectedIntoWithScratch(documentArena, cfg, retained[i], fullValues, projection, &out.Stats, retainedTemplateResolver, &worker.reconstruction)
 		if err != nil {
 			return out, err
 		}
 		out.Stats.JSONReconstructionNanos += time.Since(reconstructStart).Nanoseconds()
 		out.Stats.JSONReconstructionRows++
 		out.Results[i].Document = document
+		if callerOutput {
+			out.Results[i].Document = documentArena
+		}
 		out.Stats.DocumentsFetched++
 		out.Stats.DocumentBytes += uint64(len(out.Results[i].Document))
 		out.Stats.OutputBytes += uint64(len(out.Results[i].Document))
+		worker.clearBorrowed()
 	}
 	return out, nil
+}
+
+// Only representability failures select this owned, uncached legacy route.
+// It preserves the same snapshot, strict/scoring locator validation, full
+// physical-row validation, projection writer and caller destination contract.
+// Its global visibility work is charged and has no bounded-route speed claim.
+func (v *CollectionReadView) fetchColumnStoreDocumentsOwnedFallback(response DocumentFetchResponse, refs []DocumentRowRef, retained [][]byte, opts DocumentFetchOptions, projection *documentProjection, authority documentRowRefAuthority, arena []byte, callerOutput bool) (DocumentFetchResponse, error) {
+	cfg := *v.catalog.meta.Options.ColumnStore
+	for i := range response.Results {
+		if err := documentFetchContextErr(opts.Context); err != nil {
+			return response, err
+		}
+		if !response.Results[i].Found {
+			continue
+		}
+		ref := refs[i]
+		var err error
+		if authority != documentRowRefResolved {
+			ref, err = v.resolveDocumentRowRefLatest(ref, &response.Stats, authority == documentRowRefScoring)
+			if err != nil {
+				return response, err
+			}
+		}
+		start := time.Now()
+		row, diag, found, err := v.collection.latestColumnPhysicalVisibleRowAtSnapshot(v.snapshot, v.catalog, response.Results[i].ID, nil)
+		response.Stats.RowRefFallbackScans++
+		response.Stats.VisibilityScans++
+		response.Stats.VisibilityPhysicalBytes += diag.PhysicalBytesScanned
+		response.Stats.VisibilityRows++
+		response.Stats.VisibilityRowsScanned += uint64(diag.RowsScanned)
+		response.Stats.VisibilityNanos += time.Since(start).Nanoseconds()
+		if err != nil {
+			return response, err
+		}
+		if !found {
+			return response, errors.New("collections: owned fallback has no visible physical row")
+		}
+		if err := validateDocumentRowRefMatchesVisibleRow(ref, row); err != nil {
+			response.Stats.RowRefValidationFailures++
+			return response, err
+		}
+		values, err := v.collection.typedColumnPartValuesForVisibleRowAtSnapshot(v.snapshot, v.catalog.rootID(collectionColumnManifestRootName(v.catalog.meta.Name)), cfg, row)
+		if err != nil {
+			return response, err
+		}
+		full, err := mergeColumnReconstructionValues(cfg, row.Values, values.Values)
+		if err != nil {
+			return response, err
+		}
+		start = time.Now()
+		var doc []byte
+		arena, doc, err = reconstructColumnDocumentFromVisibleRowValuesProjectedIntoWithResolver(arena, cfg, retained[i], row, full, projection, &response.Stats, columnRetainedPayloadTemplateResolver(v.snapshot, v.catalog))
+		if err != nil {
+			return response, err
+		}
+		response.Stats.JSONReconstructionNanos += time.Since(start).Nanoseconds()
+		response.Stats.JSONReconstructionRows++
+		response.Results[i].RowRef = documentRowRefCoordinatesFromVisibleRow(row)
+		response.Results[i].RowRef.DocumentID = response.Results[i].ID
+		response.Results[i].Document = doc
+		if callerOutput {
+			response.Results[i].Document = arena
+		}
+		response.Stats.DocumentsFetched++
+		response.Stats.DocumentBytes += uint64(len(doc))
+		response.Stats.OutputBytes += uint64(len(doc))
+	}
+	return response, nil
 }
 
 func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetchResponse, ids [][]byte, retained [][]byte, expected []*DocumentRowRef, opts DocumentFetchOptions, projection *documentProjection) (DocumentFetchResponse, error) {
@@ -1529,7 +1979,11 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByID(response DocumentFetc
 // materializeRetainedTypedDocument reuses this view's locator and point decoder
 // when the caller has already read the primary payload on the same snapshot.
 // The result owns its bytes; the input ID and payload are borrowed for this call.
-func (v *CollectionReadView) materializeRetainedTypedDocument(id, retained []byte) (document []byte, err error) {
+func (v *CollectionReadView) materializeRetainedTypedDocument(id, retained []byte) ([]byte, error) {
+	return v.materializeRetainedTypedDocumentInto(id, retained, nil)
+}
+
+func (v *CollectionReadView) materializeRetainedTypedDocumentInto(id, retained, dst []byte) (document []byte, err error) {
 	workstats.Output.Materialization.Attempts.Add(1)
 	var response DocumentFetchResponse
 	defer func() {
@@ -1568,9 +2022,23 @@ func (v *CollectionReadView) materializeRetainedTypedDocument(id, retained []byt
 	results := [1]DocumentFetchResult{{ID: id, Found: true}}
 	ids := [1][]byte{id}
 	payloads := [1][]byte{retained}
+	refs := [1]DocumentRowRef{}
 	response.Results = results[:]
 	response.Stats.DocumentsRequested = 1
-	response, err = v.fetchColumnStoreDocumentsByID(response, ids[:], payloads[:], nil, DocumentFetchOptions{}, nil)
+	stats, lookupErr := v.visitDocumentRowRefsByID(ids[:], func(_ []byte, ref DocumentRowRef, found bool) error {
+		if !found {
+			return fmt.Errorf("collections: primary row locator visibility disagrees for id %q", id)
+		}
+		refs[0] = ref
+		return nil
+	})
+	response.Stats.RowLocatorLookups += stats.RowLocatorLookups
+	response.Stats.RowLocatorMisses += stats.RowLocatorMisses
+	if lookupErr != nil {
+		return dst[:0], lookupErr
+	}
+	response, err = v.fetchColumnStoreDocumentsByRowRefInto(response, refs[:], payloads[:], DocumentFetchOptions{}, nil, documentRowRefResolved, dst, true)
+
 	if err != nil {
 		return nil, err
 	}
@@ -1604,34 +2072,6 @@ func documentRowRefCoordinatesFromVisibleRow(row columnPhysicalVisibleRow) Docum
 		RowIndex:          row.RowIndex,
 		AppliedCommandLSN: row.AppliedCommandLSN,
 	}
-}
-
-func documentRowRefFromScanRowView(row columnPhysicalScanRowView) DocumentRowRef {
-	// Row locators are keyed by document ID, so the stored ref only needs the
-	// physical row coordinates. Lookup callers attach an owned DocumentID to the
-	// response row ref; avoiding a per-row ID clone keeps locator builds cheap.
-	return DocumentRowRef{
-		Generation:        row.Generation,
-		PartID:            row.PartID,
-		RowIndex:          row.RowIndex,
-		AppliedCommandLSN: row.AppliedCommandLSN,
-	}
-}
-
-func documentRowLocatorCandidateNewer(a, b documentRowLocatorCandidate) bool {
-	if a.ref.AppliedCommandLSN != b.ref.AppliedCommandLSN {
-		return a.ref.AppliedCommandLSN > b.ref.AppliedCommandLSN
-	}
-	if a.ref.Generation != b.ref.Generation {
-		return a.ref.Generation > b.ref.Generation
-	}
-	if a.ref.PartID != b.ref.PartID {
-		return a.ref.PartID > b.ref.PartID
-	}
-	if a.ref.RowIndex != b.ref.RowIndex {
-		return a.ref.RowIndex > b.ref.RowIndex
-	}
-	return a.ordinal > b.ordinal
 }
 
 func columnPhysicalVisibleRowFromReaderRow(row columnPhysicalRowReaderRow) columnPhysicalVisibleRow {
@@ -1749,7 +2189,10 @@ func (v *CollectionReadView) typedColumnReconstructionCacheForConfig(cfg ColumnS
 			ReadCache: v.typedColumnAssetReadCache,
 		}
 	}
-	v.typedColumnReconstructionCache.Prepared = v.preparedMaterializer
+	v.typedColumnReconstructionCache.Prepared = nil
+	if v.columnSnapshotView == v.preparedMaterializerView {
+		v.typedColumnReconstructionCache.Prepared = v.preparedMaterializer
+	}
 	return v.typedColumnReconstructionCache
 }
 

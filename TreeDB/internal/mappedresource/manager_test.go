@@ -33,6 +33,23 @@ func TestAcquireBytesReleaseUpdatesAccountingAndPins(t *testing.T) {
 	if got := len(mgr.PinSummary()); got != 1 {
 		t.Fatalf("PinSummary entries=%d want 1", got)
 	}
+	// Maintenance receives value snapshots even though both registries share
+	// one immutable handle owner internally. A caller cannot alter authority
+	// by mutating its report, and neither registry keeps a released owner.
+	local := mgr.PinSummary()
+	local[0].Key.Namespace = "modified-report"
+	local[0].Scope.ID = "modified-report"
+	local[0].Reason = "modified-report"
+	if !h.Key().Equal(testKey()) || h.Scope() != testScope() {
+		t.Fatal("report mutation changed handle authority")
+	}
+	for _, pin := range GlobalPinSummary() {
+		if pin.Key.Equal(testKey()) && pin.ID == h.id && pin.Reason == "unit" {
+			if pin.Scope != testScope() {
+				t.Fatal("report mutation changed global scope")
+			}
+		}
+	}
 	if string(h.Bytes()) != "0123456789abcdef" {
 		t.Fatalf("handle bytes=%q", string(h.Bytes()))
 	}
@@ -593,5 +610,56 @@ func TestFakeColumnPartSectionAcquireReleaseAndMaintenancePins(t *testing.T) {
 	}
 	if got := len(mgr.PinSummary()); got != 0 {
 		t.Fatalf("pins after release=%d want 0", got)
+	}
+}
+
+func TestAcquireOpenFileRangeDescriptorLease(t *testing.T) {
+	for _, mapped := range []bool{false, true} {
+		t.Run(fmt.Sprint(mapped), func(t *testing.T) {
+			dir := t.TempDir()
+			path := dir + "/asset"
+			if err := os.WriteFile(path, []byte("0123456789abcdef"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			file, err := os.Open(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+			// Windows os.Open descriptors prevent pathname replacement here.
+			// Keep the descriptor lifetime/accounting checks below on every platform.
+			if runtime.GOOS != "windows" {
+				if err := os.Rename(path, path+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("xxxxxxxxxxxxxxxx"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			m := NewManager()
+			h, err := m.AcquireOpenFileRange(testKey(), testScope(), file, AcquireOptions{PreferMapped: mapped, AllowHeapCopy: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(h.Bytes()) != "0123456789abcdef" {
+				t.Fatal("range rebound to replacement pathname")
+			}
+			if err := h.Release(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := file.Stat(); err != nil {
+				t.Fatal("handle closed borrowed descriptor")
+			}
+			if m.Stats().ActiveHandles != 0 || m.Stats().Opens != 0 || m.Stats().Closes != 0 {
+				t.Fatal("borrowed descriptor accounting mismatch")
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if h, err := m.AcquireOpenFileRange(testKey(), testScope(), file, AcquireOptions{PreferMapped: mapped, AllowHeapCopy: true}); err == nil {
+				_ = h.Release()
+				t.Fatal("closed descriptor admitted")
+			}
+		})
 	}
 }

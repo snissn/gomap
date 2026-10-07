@@ -57,6 +57,31 @@ storage remains separate from redo WAL. See the decision for exact controls,
 remaining writer/integration/final qualification gates and concrete revisit
 conditions.
 
+## Captured complete-row comparison
+
+The [captured executor contract](../spec/r1-row-reads.md) covers ordinary points,
+bounded complete-document ranges and held-view batches. Measure all three public
+routes, including final owned JSON, separately from metadata/flush/view setup and
+first use. A warmed held batch is not an ordinary point/range result. Shared
+manifest certification has an initial allocation and retained metadata cost;
+report both alongside per-view blocks, file descriptors and resource handles.
+Go allocation bytes exclude SQLite C allocations and do not imply an RSS bound.
+
+Before comparison, freeze a clean committed runtime and the actual bytes/object
+IDs of all local compiled packages, harness/scripts, binary/build environment and
+fixture/oracle. The legacy source manifest reports runtime Git blobs at `HEAD`;
+a dirty rehearsal may therefore describe compiled bytes incompletely even when
+its harness bytes are hashed. Such captures are source-unbound diagnostics, not
+exact-head acceptance. Retain noisy/failed groups intact, report both CV and the
+legacy `(max OPS - min OPS) / median OPS` spread, and interleave fresh matched
+control/candidate processes. Final qualification belongs to reviewed landed
+harness/evidence owners; focused rehearsals establish feasibility only.
+
+The frozen #5092 goals are ordinary point/range median elapsed time and Go
+allocation bytes at most 0.50 of control at both 4k and 16k rows; warm held
+32-row batches require at most 0.80 elapsed and 0.75 allocation bytes. These goals
+are obligations, not claims that the implementation has already met them.
+
 ## Current optimized or landed paths
 
 | Path | Current status | Evidence command |
@@ -828,6 +853,20 @@ bounded document ranges return complete rows; see
 including locator acquisition, reconstruction and owned output. Opening a
 prepared view drains pending writes; distinguish setup and first fetch from
 warmed view reuse. Nullable/numeric typed batch carriers remain unsupported here.
+
+For captured classic readers, encoded ranges are bounded owned Go backing.
+Their first-load allocation and retained range residency are fully charged,
+including when `GetInto` reuses caller output storage. Descriptor identity and
+serving-holder authority do not certify file-content immutability. Shared
+validated metadata includes pure admission dimensions without retaining row
+bytes or file handles. Unrelated manifest validation precedes certification.
+
+The initial committed R rehearsal is diagnostic: all complete-row oracles
+passed, but several whole noise blocks failed and the 4k ordinary range time
+target was missed. Its mapped lifetime was subsequently corrected to owned
+ranges. No qualifying improvement is established by those timings; the owned
+source requires a fresh complete matched campaign on the reviewed public
+harness, with all original failures retained. Go B/op remains unadjusted.
 
 The [#5091 architecture decision](../design/r1-row-execution-architecture.md)
 and [source-bound diagnostic packet](../evidence/r1-architecture-5091/README.md)

@@ -101,7 +101,7 @@ type Manager struct {
 	mu     sync.Mutex
 	nextID uint64
 	stats  Stats
-	active map[uint64]Pin
+	active map[uint64]*Pin
 }
 
 type globalPinKey struct {
@@ -120,12 +120,12 @@ func ConservativeHandleMetadataBytes() uint64 {
 var globalResourceState = struct {
 	mu     sync.Mutex
 	stats  Stats
-	active map[globalPinKey]Pin
-}{active: make(map[globalPinKey]Pin)}
+	active map[globalPinKey]*Pin
+}{active: make(map[globalPinKey]*Pin)}
 
 // NewManager constructs an empty manager.
 func NewManager() *Manager {
-	return &Manager{active: make(map[uint64]Pin)}
+	return &Manager{active: make(map[uint64]*Pin)}
 }
 
 // AcquireOptions controls resource acquisition and accounting labels. ResourceRoot
@@ -147,8 +147,7 @@ type Handle struct {
 	mu         sync.Mutex
 	mgr        *Manager
 	id         uint64
-	key        Key
-	scope      Scope
+	pin        Pin
 	source     Source
 	bytes      []byte
 	accounted  int64
@@ -163,7 +162,7 @@ func (h *Handle) Key() Key {
 	if h == nil {
 		return Key{}
 	}
-	return h.key
+	return h.pin.Key
 }
 
 // Scope returns the lifetime scope.
@@ -171,7 +170,7 @@ func (h *Handle) Scope() Scope {
 	if h == nil {
 		return Scope{}
 	}
-	return h.scope
+	return h.pin.Scope
 }
 
 // Source returns the backing source.
@@ -274,6 +273,95 @@ func (m *Manager) AcquireBytes(key Key, scope Scope, source Source, data []byte,
 	return m.acquireRegistered(key, scope, source, data, int64(len(data)), nil, opts), nil
 }
 
+// AcquireExclusiveBuffer borrows caller-owned heap storage exclusively until
+// Release. The caller must keep its entire capacity live, must not mutate any
+// byte through another alias while the handle is live, and may recycle it only
+// after Release and after clearing every derived borrowed value. No copy is
+// made. Maintenance accounting charges capacity, including an unused tail.
+func (m *Manager) AcquireExclusiveBuffer(key Key, scope Scope, data []byte, opts AcquireOptions) (*Handle, error) {
+	if m == nil {
+		return nil, errors.New("mappedresource: nil manager")
+	}
+	if err := scope.ValidateForKey(key); err != nil {
+		m.recordDenied(classifyValidationDeny(err))
+		return nil, err
+	}
+	if int64(len(data)) != key.Length {
+		m.recordDenied(DenyOutOfBounds)
+		return nil, errors.New("mappedresource: exclusive buffer length disagrees with key")
+	}
+	return m.acquireRegistered(key, scope, SourceHeapCopy, data, int64(cap(data)), nil, opts), nil
+}
+
+// AcquireOpenFileRangeInto reads the complete range into exclusively borrowed
+// caller-owned storage. It never allocates or grows dst. The caller retains the
+// opened file and buffer until Release, and must quarantine dst on any failure:
+// a partial read does not publish a handle. Contents, bounds and subsequent
+// integrity checks all use these same owned bytes; this is not an mmap shortcut.
+func (m *Manager) AcquireOpenFileRangeInto(key Key, scope Scope, file *os.File, dst []byte, opts AcquireOptions) (*Handle, error) {
+	return m.acquireOpenFileRangeInto(key, scope, file, dst, opts, -1)
+}
+
+// AcquireOpenFileRangeIntoAtCapturedSize uses the size captured from this same
+// caller-owned descriptor when its reader was opened. The caller must retain
+// that exact descriptor and its captured identity; a pathname or another file's
+// size is not authority. Ranges outside the captured extent fail before touching
+// dst. A complete ReadAt remains mandatory: later truncation or descriptor close
+// fails without publishing a handle, and the caller must quarantine partial dst.
+// Integrity checks and decoding consume the resulting exclusively owned bytes.
+func (m *Manager) AcquireOpenFileRangeIntoAtCapturedSize(key Key, scope Scope, file *os.File, dst []byte, capturedSize int64, opts AcquireOptions) (*Handle, error) {
+	if capturedSize < 0 {
+		return nil, errors.New("mappedresource: negative captured descriptor size")
+	}
+	return m.acquireOpenFileRangeInto(key, scope, file, dst, opts, capturedSize)
+}
+
+func (m *Manager) acquireOpenFileRangeInto(key Key, scope Scope, file *os.File, dst []byte, opts AcquireOptions, capturedSize int64) (*Handle, error) {
+	if m == nil {
+		return nil, errors.New("mappedresource: nil manager")
+	}
+	if err := scope.ValidateForKey(key); err != nil {
+		m.recordDenied(classifyValidationDeny(err))
+		return nil, err
+	}
+	if file == nil {
+		m.recordDenied(DenyOpenFailed)
+		return nil, errors.New("mappedresource: nil open file")
+	}
+	if key.Length > int64(cap(dst)) {
+		m.recordDenied(DenyOutOfBounds)
+		return nil, errors.New("mappedresource: exclusive destination too small")
+	}
+	if capturedSize < 0 {
+		info, err := file.Stat()
+		if err != nil {
+			m.recordDenied(DenyReadFailed)
+			m.recordError()
+			return nil, err
+		}
+		capturedSize = info.Size()
+	}
+	end := key.Offset + key.Length
+	if key.Offset < 0 || end < key.Offset || end > capturedSize {
+		m.recordDenied(DenyOutOfBounds)
+		return nil, fmt.Errorf("mappedresource: range offset=%d length=%d outside file bytes=%d", key.Offset, key.Length, capturedSize)
+	}
+	raw := dst[:int(key.Length)]
+	n, err := file.ReadAt(raw, key.Offset)
+	if err != nil && err != io.EOF {
+		m.recordDenied(DenyReadFailed)
+		m.recordError()
+		return nil, err
+	}
+	if n != len(raw) {
+		m.recordDenied(DenyOutOfBounds)
+		m.recordError()
+		return nil, io.ErrUnexpectedEOF
+	}
+	opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, file.Name())
+	return m.AcquireExclusiveBuffer(key, scope, raw, opts)
+}
+
 // AcquireFileRange opens path and returns either an mmap-backed or heap-copy
 // handle for key.Offset:key.Offset+key.Length. Mmap is best-effort when
 // PreferMapped is set; AllowHeapCopy controls fallback.
@@ -300,28 +388,60 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 		return nil, err
 	}
 	m.recordOpen()
+	return m.acquireOpenFileRange(key, scope, file, opts, true)
+}
+
+// AcquireOpenFileRange borrows a caller-owned descriptor. The caller must keep
+// it open until the returned handle is released. The handle owns its mapping
+// or heap copy, but never closes the descriptor. This binds bytes to the same
+// opened file that the caller validated, including after a namespace rename.
+func (m *Manager) AcquireOpenFileRange(key Key, scope Scope, file *os.File, opts AcquireOptions) (*Handle, error) {
+	if m == nil {
+		return nil, errors.New("mappedresource: nil manager")
+	}
+	if err := scope.ValidateForKey(key); err != nil {
+		m.recordDenied(classifyValidationDeny(err))
+		return nil, err
+	}
+	if file == nil {
+		m.recordDenied(DenyOpenFailed)
+		return nil, errors.New("mappedresource: nil open file")
+	}
+	if key.Length > int64(int(^uint(0)>>1)) {
+		m.recordDenied(DenyOutOfBounds)
+		return nil, fmt.Errorf("mappedresource: length=%d exceeds host int", key.Length)
+	}
+	return m.acquireOpenFileRange(key, scope, file, opts, false)
+}
+
+func (m *Manager) acquireOpenFileRange(key Key, scope Scope, file *os.File, opts AcquireOptions, ownsFile bool) (*Handle, error) {
+	closeFile := func() error {
+		if !ownsFile {
+			return nil
+		}
+		err := file.Close()
+		m.recordClose()
+		return err
+	}
 	if opts.PreferMapped {
 		mapped, view, mapErr := mmapFileRange(file, key.Offset, key.Length)
 		if mapErr == nil {
 			accounted, accountErr := mappedPageExtentBytes(int64(len(mapped)))
 			if accountErr != nil {
 				_ = munmapFile(mapped)
-				_ = file.Close()
-				m.recordClose()
+				_ = closeFile()
 				m.recordDenied(DenyOutOfBounds)
 				return nil, accountErr
 			}
 			release := func() error {
-				err := errors.Join(munmapFile(mapped), file.Close())
-				m.recordClose()
+				err := errors.Join(munmapFile(mapped), closeFile())
 				return err
 			}
-			opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, path)
+			opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, file.Name())
 			return m.acquireRegistered(key, scope, SourceMapped, view, accounted, release, opts), nil
 		}
 		if !opts.AllowHeapCopy {
-			_ = file.Close()
-			m.recordClose()
+			_ = closeFile()
 			m.recordDenied(DenyMmapFailed)
 			m.recordError()
 			return nil, mapErr
@@ -329,30 +449,26 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 		m.recordFallback(FallbackMmapFailed)
 	}
 	if !opts.AllowHeapCopy && opts.PreferMapped {
-		_ = file.Close()
-		m.recordClose()
+		_ = closeFile()
 		m.recordDenied(DenyUnsupported)
 		return nil, errors.New("mappedresource: heap-copy fallback disabled")
 	}
 	info, err := file.Stat()
 	if err != nil {
-		_ = file.Close()
-		m.recordClose()
+		_ = closeFile()
 		m.recordDenied(DenyReadFailed)
 		m.recordError()
 		return nil, err
 	}
 	end := key.Offset + key.Length
 	if key.Offset < 0 || end < key.Offset || end > info.Size() {
-		_ = file.Close()
-		m.recordClose()
+		_ = closeFile()
 		m.recordDenied(DenyOutOfBounds)
 		return nil, fmt.Errorf("mappedresource: range offset=%d length=%d outside file bytes=%d", key.Offset, key.Length, info.Size())
 	}
 	raw := make([]byte, int(key.Length))
 	n, err := file.ReadAt(raw, key.Offset)
-	closeErr := file.Close()
-	m.recordClose()
+	closeErr := closeFile()
 	if err != nil && err != io.EOF {
 		m.recordDenied(DenyReadFailed)
 		m.recordError()
@@ -367,7 +483,7 @@ func (m *Manager) AcquireFileRange(key Key, scope Scope, path string, opts Acqui
 		m.recordError()
 		return nil, closeErr
 	}
-	opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, path)
+	opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, file.Name())
 	return m.acquireRegistered(key, scope, SourceHeapCopy, raw, int64(len(raw)), nil, opts), nil
 }
 
@@ -412,10 +528,12 @@ func (m *Manager) acquireRegistered(key Key, scope Scope, source Source, data []
 		m.stats.ActiveDerivedMetadataBytes += bytes
 		m.stats.TotalDerivedMetadataBytes += uint64(bytes)
 	}
-	pin := Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason, Root: opts.ResourceRoot, Path: opts.ResourcePath}
-	m.active[id] = pin
-	globalRegisterPin(m, id, pin, opts.ValidationMode, opts.FallbackReason)
-	return &Handle{mgr: m, id: id, key: key, scope: scope, source: source, bytes: data, accounted: bytes, release: release}
+	// One immutable owner record serves both maintenance registries. Copies
+	// are produced only for reporting, and registrations disappear at Release.
+	h := &Handle{mgr: m, id: id, pin: Pin{ID: id, Key: key, Scope: scope, Source: source, Bytes: bytes, Reason: opts.Reason, Root: opts.ResourceRoot, Path: opts.ResourcePath}, source: source, bytes: data, accounted: bytes, release: release}
+	m.active[id] = &h.pin
+	globalRegisterPin(m, id, &h.pin, opts.ValidationMode, opts.FallbackReason)
+	return h
 }
 
 func (m *Manager) release(id uint64, source Source, bytes int64, releaseErr error) {
@@ -478,7 +596,7 @@ func (m *Manager) PinSummary() []Pin {
 	defer m.mu.Unlock()
 	out := make([]Pin, 0, len(m.active))
 	for _, pin := range m.active {
-		out = append(out, pin)
+		out = append(out, *pin)
 	}
 	return out
 }
@@ -513,7 +631,7 @@ func GlobalPinSummaryWithLimit(maxPins int) ([]Pin, error) {
 	}
 	out := make([]Pin, 0, len(globalResourceState.active))
 	for _, pin := range globalResourceState.active {
-		out = append(out, pin)
+		out = append(out, *pin)
 	}
 	return out, nil
 }
@@ -588,7 +706,7 @@ func (m *Manager) recordError() {
 	globalRecordError()
 }
 
-func globalRegisterPin(manager *Manager, id uint64, pin Pin, validation ValidationMode, fallback FallbackReason) {
+func globalRegisterPin(manager *Manager, id uint64, pin *Pin, validation ValidationMode, fallback FallbackReason) {
 	globalResourceState.mu.Lock()
 	defer globalResourceState.mu.Unlock()
 	bytes := pin.Bytes
