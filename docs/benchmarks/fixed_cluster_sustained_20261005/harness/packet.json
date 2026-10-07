@@ -242,7 +242,7 @@
       },
       "output": {
         "path": "gomap-trial24-native-oracle-runner-root-v1.py",
-        "sha256": "6ab4784df6cd117d36ef5de9ffffbe46b32381e6bf541e0a6a72e9f59887573d"
+        "sha256": "97809449d5a8302c5e5d619af49713acf084ae7aed0db74fc3524c5be718278a"
       },
       "changes": [
         [
@@ -416,13 +416,13 @@
     },
     "matched_descriptive_report": {
       "path": "matched_report.py",
-      "sha256": "9ac69f4a007dac6991b6c6f9b5a0019f8ad368ef8aa49c3b4a3a5ecbcbeeef69",
+      "sha256": "405d98b3c87b06d9d5706e7b963e1b9ab3f3d8f5dc9d0e5790fb1214e4dff922",
       "purpose": "Descriptive matched-window report only; no acceptance authority"
     }
   },
   "source_path_resolver": {
     "path": "source_paths.py",
-    "sha256": "532817b7ed8768a08f000687cbb61d0b5d563c4f4ef789f652a0b1ea61fb91a3"
+    "sha256": "afc2ad34898850762f80b61ae8f1294602275b0c1e4d557a09c2c59031fd9329"
   },
   "repair_disposition": {
     "H1": "shared final frozen inventory row count, propagated remote/prepare/capture",
@@ -458,7 +458,7 @@
   },
   "workload_source": {
     "path": "workload_profile.py",
-    "sha256": "55bfcf3156faa277ba5db32c68627d88442141bd4e2c6b3785a9525d412ab6f5",
+    "sha256": "37bbbf979b31c39ee694e3498f025547db3aa8870bae9121b2efe98fc70a78e4",
     "binding": "single PROFILE tuple derived from authenticated exact declaration; resolver pins emitted bytes"
   },
   "matched_campaign": {
@@ -492,5 +492,29 @@
     "runtime_head": "484c6e131ba72357155d512ed06f2842c0a866a3",
     "runtime_tree": "5a3ff182ebe4f86aca1fcf171f7d44b90643528a",
     "original_campaign": "INCOMPLETE_RETIRED_AFTER_NO_RPC_PERMISSION_SETUP_REFUSAL"
+  },
+  "matched_continuation": {
+    "revision": "matched5068-prospective-continuation-v1",
+    "decision_sha256": "c3e32e7dff816e0b04aea7dad61be253391221fe391644b08bd5c3cc6d981b12",
+    "campaigns": [
+      "rf4matched5068r01c1",
+      "rf4matched5068r02c1",
+      "rf4matched5068r03c4"
+    ],
+    "concurrency_order": [
+      1,
+      1,
+      4
+    ],
+    "selection": [
+      "rf4matched5068w01c1",
+      "rf4matched5068w02c4",
+      "rf4matched5068w03c4",
+      "rf4matched5068r01c1",
+      "rf4matched5068r02c1",
+      "rf4matched5068r03c4"
+    ],
+    "original_attempt": "INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT",
+    "state": "PROVISIONAL_SOURCE_CONSTRUCTION_ONLY_NOT_ADMITTED"
   }
 }

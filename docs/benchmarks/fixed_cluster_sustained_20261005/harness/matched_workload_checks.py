@@ -18,8 +18,8 @@ def matched_controls():
   for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv))]:(root/(filename+'.'+suffix)).write_text(value)
   assert proc.returncode==0 and not list(folder.rglob('*.pyc')),(filename,proc.stderr)
   checks.append('matched_actual_ordinary_no_B_cli_no_packet_cache_'+filename)
- for index,concurrency in enumerate(workload_source.MATCHED_ORDER,1):
-  campaign='rf4matched5068w%02dc%d'%(index,concurrency)
+ for index,(campaign,concurrency) in enumerate(zip(workload_source.MATCHED_CAMPAIGNS+workload_source.CONTINUATION_CAMPAIGNS,workload_source.MATCHED_ORDER+workload_source.CONTINUATION_ORDER),1):
+  profile_label='w%02d'%index if index<=6 else 'r%02d'%(index-6)
   profile=workload_source.accepted(campaign,workload_source.Workload(campaign,6,60,5,concurrency).declaration())
   declaration=copy.deepcopy(d);declaration.update(campaign=campaign,workload=profile.declaration(),output_root=str(root/campaign))
   path=root/(campaign+'-declaration.json');path.write_text(json.dumps(declaration))
@@ -45,7 +45,7 @@ def matched_controls():
   actual=json.loads(child.stdout);assert actual==dict(campaign=campaign,profile=profile.declaration(),read_duration=60000000000,spacing=5000000000,concurrency=concurrency)
   assert not list(packet.rglob('*.pyc'))
   receipts.append(dict(campaign=campaign,concurrency=concurrency,instantiation=emission,actual_import=actual))
-  checks.append('matched_actual_complete_source_packet_w%02d_c%d'%(index,concurrency))
+  checks.append('matched_actual_complete_source_packet_%s_c%d'%(profile_label,concurrency))
   for flag in ('-O','-OO'):
    invalid=copy.deepcopy(declaration);invalid['output_root']=str(root/(campaign+'-optimized-'+flag[1:]))
    entry=root/(campaign+'-'+flag[1:]+'-declaration.json');entry.write_text(json.dumps(invalid))
@@ -53,7 +53,7 @@ def matched_controls():
    proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
    for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv))]:(root/(campaign+'-'+flag[1:]+'.'+suffix)).write_text(value)
    assert proc.returncode!=0 and 'ordinary Python required' in proc.stderr and not Path(invalid['output_root']).exists()
-   checks.append('matched_actual_optimized_before_output_w%02d_%s'%(index,flag[1:]))
+   checks.append('matched_actual_optimized_before_output_%s_%s'%(profile_label,flag[1:]))
   tampered=root/(campaign+'-substituted-profile');tampered.mkdir()
   for filename in ('source_paths.py','workload_profile.py'):(tampered/filename).write_bytes((packet/filename).read_bytes())
   with (tampered/'workload_profile.py').open('a') as f:f.write('\n# substituted source bytes\n')
@@ -61,7 +61,7 @@ def matched_controls():
   argv=[sys.executable,'-c',program];proc=subprocess.run(argv,capture_output=True,text=True,timeout=15)
   for suffix,value in [('stdout',proc.stdout),('stderr',proc.stderr),('exit',str(proc.returncode)+'\n'),('argv.json',json.dumps(argv))]:(root/(campaign+'-substituted.'+suffix)).write_text(value)
   assert proc.returncode!=0 and 'authenticated workload source' in proc.stderr and not list(tampered.rglob('*.pyc'))
-  checks.append('matched_actual_substituted_profile_refused_w%02d'%index)
+  checks.append('matched_actual_substituted_profile_refused_'+profile_label)
  for field,value in [('Originals',48),('Prefixes',49),('DurationSeconds',300),('MinSpacingSeconds',6),('Concurrency',True),('Concurrency',4.0),('OutputBytes',134217729)]:
   invalid=copy.deepcopy(declaration);invalid['workload'][field]=value
   bad('matched_exact_profile_rejects_'+field+'_'+repr(value),lambda invalid=invalid:x.declaration(invalid,m))
@@ -72,8 +72,8 @@ def matched_controls():
  old=(ra.rd.DURATION,ra.rd.SPACING,ra.rd.CONCURRENCY,ra.rd.c.QUERY_RUN)
  report_windows=[]
  try:
-  for window,concurrency in enumerate(workload_source.MATCHED_ORDER,1):
-   campaign='rf4matched5068w%02dc%d'%(window,concurrency)
+  for window,(campaign,concurrency) in enumerate(zip(workload_source.MATCHED_CAMPAIGNS+workload_source.CONTINUATION_CAMPAIGNS,workload_source.MATCHED_ORDER+workload_source.CONTINUATION_ORDER),1):
+   profile_label='w%02d'%window if window<=6 else 'r%02d'%(window-6)
    ra.rd.c.QUERY_RUN=workload_source.Workload(campaign,6,60,5,concurrency).query_run
    ra.rd.DURATION=60000000000;ra.rd.SPACING=5000000000;ra.rd.CONCURRENCY=concurrency
    ns,run=visibility_fixture(ra.rd,6);p,r=ns['p'],ns['r']
@@ -95,7 +95,7 @@ def matched_controls():
    r['CompletedSearchesDuringMutation']=sum(any(a['StartNS']>=w['StartNS'] and a['EndNS']<w['EndNS'] for w in r['Writes']) for a in measured)
    r['RetainedAttemptBytes']=sum(len(ns['encode'](a).encode())+1 for a in r['Attempts'])
    ns['ptext']=ns['encode'](p);r['PlannedEventBytes']=len(('{"Event":"planned","Report":'+ns['ptext']+'}\n').encode())
-   proof=run();checks.append('matched_actual_complete_read_consumer_w%02d_c%d'%(window,concurrency))
+   proof=run();checks.append('matched_actual_complete_read_consumer_%s_c%d'%(profile_label,concurrency))
    folder=root/('actual-consumer-w%02d-c%d'%(window,concurrency));folder.mkdir()
    # Add producer-shaped raw audit members; these synthetic attachments are
    # emission characterization, not an execution of the acquisition verifier.
@@ -132,7 +132,8 @@ def matched_controls():
    receipts.append(dict(concurrency=concurrency,actual_consumer_proof=proof,rejected=negative))
  finally:ra.rd.DURATION,ra.rd.SPACING,ra.rd.CONCURRENCY,ra.rd.c.QUERY_RUN=old
  report=load(R/'matched_report.py','matched_descriptive_report')
- manifest=dict(Version=1,windows=report_windows);summary=report.build(manifest)
+ manifest=dict(Version=1,windows=report_windows[:6]);summary=report.build(manifest)
+ (root/'continuation-report-rows.json').write_text(json.dumps(report_windows[6:],indent=2)+'\n')
  (root/'report-manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
  assert [w['concurrency'] for w in summary['windows']]==[1,4,4,1,1,4] and summary['campaign_acceptance'] is False
  assert all(arm['complete_windows']==3 for arm in summary['per_arm'].values())
@@ -319,3 +320,105 @@ for event in (0,1):
   # admits the same pinned input. Every malformed field still requires its
   # exact normal refusal. Mutants confer no acceptance authority.
   if event==0 and label in bypass_representatives:report_cli('bypassed_'+name,manifest,True,reporter=mutants[guard])
+
+# Prospective SOURCE controls; synthetic windows never grant artifact acceptance.
+def continuation_controls():
+ from source_paths import workload_source as w
+ root=fixtures/'continuation-controls';root.mkdir()
+ reporter=load(R/'matched_report.py','continuation_descriptive_report')
+ def pinned(name,value,raw=None):
+  raw=json.dumps(value).encode() if raw is None else raw
+  path=root/(name+'.json');path.write_bytes(raw)
+  return dict(path=str(path),sha256=sha(raw))
+ decision=pinned('accepted-source-decision',None,b'{\n  "state": "ROOT_ACCEPTED_PROSPECTIVE_CONTINUATION_DECISION_NOT_QUALIFICATION",\n  "owner": "/root",\n  "issue": "https://github.com/snissn/gomap/issues/5068",\n  "parent": "https://github.com/snissn/gomap/issues/4250",\n  "decided_at_unix": 1791345022.5741792,\n  "original_issue_body_sha256": "f14a8880aef968d4591cf69abf0b63ec8408c22e2b134d7ccd83828ab4eaf106",\n  "basis": "Three independently accepted windows retained; original fourth setup-only budget expired before measurement; original fifth/sixth unissued. Existing profile/reporter fixed-six allowlists forbid implicit renamed continuation.",\n  "source_basis_head": "3e61b3f3130975dc025c96857405d4ce6c1b33ff",\n  "source_bindings": {\n    "workload_profile.py": {\n      "sha256": "55bfcf3156faa277ba5db32c68627d88442141bd4e2c6b3785a9525d412ab6f5",\n      "bytes": 2594\n    },\n    "source_paths.py": {\n      "sha256": "532817b7ed8768a08f000687cbb61d0b5d563c4f4ef789f652a0b1ea61fb91a3",\n      "bytes": 6470\n    },\n    "matched_report.py": {\n      "sha256": "9ac69f4a007dac6991b6c6f9b5a0019f8ad368ef8aa49c3b4a3a5ecbcbeeef69",\n      "bytes": 12774\n    },\n    "instantiate.py": {\n      "sha256": "b7c6489c1aa6aa32e749fc8d8418e7c0be3a9c3207ddb1d107fd2fefb885732c",\n      "bytes": 16385\n    }\n  },\n  "advisor": "/root/checkpoint_operator_review_sol_v1",\n  "advisor_used": true,\n  "prospective_order": [\n    {\n      "campaign": "rf4matched5068r01c1",\n      "concurrency": 1\n    },\n    {\n      "campaign": "rf4matched5068r02c1",\n      "concurrency": 1\n    },\n    {\n      "campaign": "rf4matched5068r03c4",\n      "concurrency": 4\n    }\n  ],\n  "predeclared_final_selection": [\n    "rf4matched5068w01c1",\n    "rf4matched5068w02c4",\n    "rf4matched5068w03c4",\n    "rf4matched5068r01c1",\n    "rf4matched5068r02c1",\n    "rf4matched5068r03c4"\n  ],\n  "original_campaign_state": "INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT",\n  "historical": [\n    {\n      "campaign": "rf4matched5068w04c1",\n      "state": "EXPIRED_SETUP_ONLY_NOT_MEASURED"\n    },\n    {\n      "campaign": "rf4matched5068w05c1",\n      "state": "UNISSUED_PROSPECTIVELY_RETIRED"\n    },\n    {\n      "campaign": "rf4matched5068w06c4",\n      "state": "UNISSUED_PROSPECTIVELY_RETIRED"\n    }\n  ],\n  "preserved_gates": [\n    "three accepted complete windows per arm",\n    "all issued failures UNKNOWN outcomes refusals and budgets retained",\n    "fresh namespaces/stores/config/TLS and actual prerequisite acceptance",\n    "landed reviewed frozen SOURCE before collection",\n    "same60s/six-original/seven-prefix/five-spacing/RPC3/420/480/36s bounds",\n    "independent per-window acceptance and three verified durable copies",\n    "all-voter native causal population and supported-write/search-visibility checks",\n    "owned shutdown no OOM and resource/storage/setup accounting"\n  ],\n  "edges": [\n    "accepted continuation decision and verified issue revision -> provisional SOURCE construction",\n    "PR5088 merged -> continuation SOURCE merge and final-base validation",\n    "continuation SOURCE reviewed/merged/frozen + fresh r01 prerequisites -> r01 measurement",\n    "r01 independent ROOT acceptance and threecopy retention -> r02 prerequisites and measurement",\n    "r02 independent ROOT acceptance and threecopy retention -> r03 prerequisites and measurement",\n    "r03 independent ROOT acceptance and threecopy retention -> final six selected-window artifact acceptance"\n  ],\n  "stop_rule": "Stop on first failure/inconclusive; no automatic replay or replacement. ROOT reassesses only affected remaining plan.",\n  "remaining": [\n    "SOURCE continuation PR",\n    "three fresh accepted windows",\n    "final artifact selection/legacy-ledger validation and independent acceptance"\n  ],\n  "broader_recovery_limit": "#5067 unresolved; no fault/capacity/operational-readiness conclusion",\n  "qualification_claim": false\n}\n')
+ assert decision['sha256']==w.CONTINUATION_DECISION_SHA
+ old=json.loads((fixtures/'matched-source-controls/report-manifest.json').read_bytes())
+ future=json.loads((fixtures/'matched-source-controls/continuation-report-rows.json').read_bytes())
+ evidence=[]
+ for i,campaign in enumerate(w.MATCHED_CAMPAIGNS):
+  refs={'record':pinned('history-record-'+str(i),dict(synthetic_only=True,campaign=campaign))}
+  if i<4:refs['budget']=pinned('original-budget-'+str(i),dict(synthetic_only=True,campaign=campaign))
+  evidence.append(refs)
+ statuses=('complete','complete','complete','EXPIRED_SETUP_ONLY_NOT_MEASURED','UNISSUED_PROSPECTIVELY_RETIRED','UNISSUED_PROSPECTIVELY_RETIRED')
+ history=dict(Version=1,state='INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT',windows=[dict(campaign=c,status=status,pins=copy.deepcopy(old['windows'][i]['pins']) if i<3 else {},evidence=evidence[i]) for i,(c,status) in enumerate(zip(w.MATCHED_CAMPAIGNS,statuses))])
+ manifest=dict(Version=2,revision=w.CONTINUATION_REVISION,decision=decision,historical=pinned('full-original-ledger',history),windows=copy.deepcopy(old['windows'][:3]+future))
+ def cli(label,entry,reason=None,flags=()):
+  path=root/(label+'-manifest.json');path.write_text(json.dumps(entry))
+  out=root/(label+'-output.json')
+  argv=[sys.executable,*flags,'-B',str(R/'matched_report.py'),'--windows',str(path),'--windows-sha256',sha(path.read_bytes()),'--out',str(out)]
+  p=subprocess.run(argv,capture_output=True,text=True,timeout=60)
+  for suffix,value in [('argv.json',json.dumps(argv)),('stdout',p.stdout),('stderr',p.stderr),('exit',str(p.returncode)+'\n')]: (root/(label+'.'+suffix)).write_text(value)
+  if reason is None:
+   assert p.returncode==0 and out.is_file(),(label,p.stderr)
+   result=json.loads(out.read_bytes());assert result['campaign_acceptance'] is False
+  else:
+   assert p.returncode==1 and not out.exists() and p.stderr.splitlines()[-1]=='ValueError: '+reason,(label,p.returncode,p.stderr)
+   result=None
+  checks.append('continuation_actual_CLI_'+label)
+  return result
+ complete=cli('predeclared_complete_selection',manifest)
+ assert [row['campaign'] for row in complete['windows']]==list(w.SELECTED_CAMPAIGNS)
+ assert [row['concurrency'] for row in complete['windows']]==[1,4,4,1,1,4]
+ assert complete['selection_complete'] and all(a['complete_windows']==3 for a in complete['per_arm'].values())
+ assert complete['historical_ledger']==history and complete['historical_ledger']['state']=='INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT'
+ partial=copy.deepcopy(manifest)
+ for row in partial['windows'][3:]:row.update(status='incomplete',pins={})
+ result=cli('future_incomplete_stays_reportable',partial)
+ assert not result['selection_complete'] and result['per_arm']['C1']['complete_windows']==1 and result['per_arm']['C4']['complete_windows']==2
+ original=copy.deepcopy(old)
+ for row in original['windows'][3:]:row.update(status='incomplete',pins={})
+ result=cli('original_partial_ledger_unchanged',original)
+ assert [row['campaign'] for row in result['windows']]==list(w.MATCHED_CAMPAIGNS) and 'selection_complete' not in result
+ for campaign,c in zip(w.CONTINUATION_CAMPAIGNS,w.CONTINUATION_ORDER):
+  assert w.accepted(campaign,w.Workload(campaign,6,60,5,c).declaration()).concurrency==c
+  checks.append('continuation_exact_profile_'+campaign)
+ for campaign in ('rf4matched5068r01c4','rf4matched5068r02c4','rf4matched5068r03c1','rf4matched5068r04c4','rf4matched5068r1c1'):
+  bad('continuation_rejects_unapproved_profile_'+campaign,lambda campaign=campaign:w.accepted(campaign,w.Workload(campaign,6,60,5,1).declaration()))
+ for field,value in [('Originals',48),('Prefixes',49),('DurationSeconds',300),('MinSpacingSeconds',6),('RPCTimeoutSeconds',4),('OverallTimeoutSeconds',421),('CollectorOuterSeconds',481),('Concurrency',True),('Concurrency',1.0),('MaxAttempts',65537),('OutputBytes',134217729)]:
+  invalid=copy.deepcopy(d);invalid.update(campaign=w.CONTINUATION_CAMPAIGNS[0],workload=w.Workload(w.CONTINUATION_CAMPAIGNS[0],6,60,5,1).declaration(),output_root=str(root/'never-created'));invalid['workload'][field]=value
+  bad('continuation_declaration_rejects_'+field+'_'+repr(value),lambda invalid=invalid:x.declaration(invalid,m))
+ assert not (root/'never-created').exists()
+ def changed_history(label,edit):
+  z=copy.deepcopy(manifest);ledger=copy.deepcopy(history);edit(ledger)
+  z['historical']=pinned(label+'-ledger',ledger);return z
+ for label,edit,reason in [
+  ('missing_history',lambda z:z['windows'].pop(),'complete original six-window ledger'),
+  ('duplicate_history',lambda z:z['windows'].__setitem__(5,copy.deepcopy(z['windows'][4])),'exact historical campaign order and immutable outcome'),
+  ('reordered_history',lambda z:z['windows'].reverse(),'exact historical campaign order and immutable outcome'),
+  ('historical_relabel',lambda z:z['windows'][3].__setitem__('campaign',w.CONTINUATION_CAMPAIGNS[0]),'exact historical campaign order and immutable outcome'),
+  ('expired_marked_complete',lambda z:z['windows'][3].__setitem__('status','complete'),'exact historical campaign order and immutable outcome'),
+  ('retired_marked_complete',lambda z:z['windows'][4].__setitem__('status','complete'),'exact historical campaign order and immutable outcome'),
+  ('complete_original_claim',lambda z:z.__setitem__('state','COMPLETE'),'original attempt remains incomplete'),
+  ('missing_original_budget',lambda z:z['windows'][3]['evidence'].pop('budget'),'issued historical original budget reference'),
+  ('missing_history_evidence',lambda z:z['windows'][4].__setitem__('evidence',{}),'retained historical evidence references'),
+  ('unmeasured_has_selected_pins',lambda z:z['windows'][3].__setitem__('pins',copy.deepcopy(old['windows'][3]['pins'])),'unmeasured historical attempts have no selected measurements')]:
+  cli(label,changed_history(label,edit),reason)
+ for label,edit,reason in [
+  ('missing_selected',lambda z:z['windows'].pop(),'six fixed selected windows'),
+  ('duplicate_selected',lambda z:z['windows'].__setitem__(4,copy.deepcopy(z['windows'][3])),'exact campaign order and retained outcome'),
+  ('wrong_selected_arm',lambda z:z['windows'][3].__setitem__('campaign','rf4matched5068r01c4'),'exact campaign order and retained outcome'),
+  ('reordered_continuation',lambda z:z['windows'].__setitem__(3,copy.deepcopy(z['windows'][4])),'exact campaign order and retained outcome'),
+  ('old_attempt_selected',lambda z:z['windows'].__setitem__(3,copy.deepcopy(old['windows'][3])),'exact campaign order and retained outcome'),
+  ('legacy_status_relabel',lambda z:z['windows'][0].__setitem__('status','incomplete'),'unchanged selected legacy raw locators and outcomes'),
+  ('legacy_locator_substitution',lambda z:z['windows'][0]['pins']['stdout'].__setitem__('path',old['windows'][1]['pins']['stdout']['path']),'unchanged selected legacy raw locators and outcomes'),
+  ('missing_future_complete_pins',lambda z:z['windows'][3].__setitem__('pins',{}),'complete descriptive inputs and separate artifact review reference')]:
+  z=copy.deepcopy(manifest);edit(z);cli(label,z,reason)
+ wrong=copy.deepcopy(manifest);obj=json.loads(b'{\n  "state": "ROOT_ACCEPTED_PROSPECTIVE_CONTINUATION_DECISION_NOT_QUALIFICATION",\n  "owner": "/root",\n  "issue": "https://github.com/snissn/gomap/issues/5068",\n  "parent": "https://github.com/snissn/gomap/issues/4250",\n  "decided_at_unix": 1791345022.5741792,\n  "original_issue_body_sha256": "f14a8880aef968d4591cf69abf0b63ec8408c22e2b134d7ccd83828ab4eaf106",\n  "basis": "Three independently accepted windows retained; original fourth setup-only budget expired before measurement; original fifth/sixth unissued. Existing profile/reporter fixed-six allowlists forbid implicit renamed continuation.",\n  "source_basis_head": "3e61b3f3130975dc025c96857405d4ce6c1b33ff",\n  "source_bindings": {\n    "workload_profile.py": {\n      "sha256": "55bfcf3156faa277ba5db32c68627d88442141bd4e2c6b3785a9525d412ab6f5",\n      "bytes": 2594\n    },\n    "source_paths.py": {\n      "sha256": "532817b7ed8768a08f000687cbb61d0b5d563c4f4ef789f652a0b1ea61fb91a3",\n      "bytes": 6470\n    },\n    "matched_report.py": {\n      "sha256": "9ac69f4a007dac6991b6c6f9b5a0019f8ad368ef8aa49c3b4a3a5ecbcbeeef69",\n      "bytes": 12774\n    },\n    "instantiate.py": {\n      "sha256": "b7c6489c1aa6aa32e749fc8d8418e7c0be3a9c3207ddb1d107fd2fefb885732c",\n      "bytes": 16385\n    }\n  },\n  "advisor": "/root/checkpoint_operator_review_sol_v1",\n  "advisor_used": true,\n  "prospective_order": [\n    {\n      "campaign": "rf4matched5068r01c1",\n      "concurrency": 1\n    },\n    {\n      "campaign": "rf4matched5068r02c1",\n      "concurrency": 1\n    },\n    {\n      "campaign": "rf4matched5068r03c4",\n      "concurrency": 4\n    }\n  ],\n  "predeclared_final_selection": [\n    "rf4matched5068w01c1",\n    "rf4matched5068w02c4",\n    "rf4matched5068w03c4",\n    "rf4matched5068r01c1",\n    "rf4matched5068r02c1",\n    "rf4matched5068r03c4"\n  ],\n  "original_campaign_state": "INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT",\n  "historical": [\n    {\n      "campaign": "rf4matched5068w04c1",\n      "state": "EXPIRED_SETUP_ONLY_NOT_MEASURED"\n    },\n    {\n      "campaign": "rf4matched5068w05c1",\n      "state": "UNISSUED_PROSPECTIVELY_RETIRED"\n    },\n    {\n      "campaign": "rf4matched5068w06c4",\n      "state": "UNISSUED_PROSPECTIVELY_RETIRED"\n    }\n  ],\n  "preserved_gates": [\n    "three accepted complete windows per arm",\n    "all issued failures UNKNOWN outcomes refusals and budgets retained",\n    "fresh namespaces/stores/config/TLS and actual prerequisite acceptance",\n    "landed reviewed frozen SOURCE before collection",\n    "same60s/six-original/seven-prefix/five-spacing/RPC3/420/480/36s bounds",\n    "independent per-window acceptance and three verified durable copies",\n    "all-voter native causal population and supported-write/search-visibility checks",\n    "owned shutdown no OOM and resource/storage/setup accounting"\n  ],\n  "edges": [\n    "accepted continuation decision and verified issue revision -> provisional SOURCE construction",\n    "PR5088 merged -> continuation SOURCE merge and final-base validation",\n    "continuation SOURCE reviewed/merged/frozen + fresh r01 prerequisites -> r01 measurement",\n    "r01 independent ROOT acceptance and threecopy retention -> r02 prerequisites and measurement",\n    "r02 independent ROOT acceptance and threecopy retention -> r03 prerequisites and measurement",\n    "r03 independent ROOT acceptance and threecopy retention -> final six selected-window artifact acceptance"\n  ],\n  "stop_rule": "Stop on first failure/inconclusive; no automatic replay or replacement. ROOT reassesses only affected remaining plan.",\n  "remaining": [\n    "SOURCE continuation PR",\n    "three fresh accepted windows",\n    "final artifact selection/legacy-ledger validation and independent acceptance"\n  ],\n  "broader_recovery_limit": "#5067 unresolved; no fault/capacity/operational-readiness conclusion",\n  "qualification_claim": false\n}\n');obj['owner']='/synthetic-alternate'
+ wrong['decision']=pinned('substituted-decision',obj);cli('substituted_decision',wrong,'exact accepted continuation decision')
+ # Rebind the synthetic ledger so downstream raw/source refusals, rather than
+ # earlier locator mismatches, discriminate unchanged legacy validators.
+ for label,role,edit,reason in [
+  ('legacy_raw_substitution','stdout',lambda raw:raw.replace(b'planned',b'changed',1),'one-shot actual event pair'),
+  ('legacy_source_substitution','sources',lambda raw:json.dumps({k:dict(ref,sha256='0'*64) for k,ref in json.loads(raw).items()}).encode(),'actual raw reference hash')]:
+  z=copy.deepcopy(manifest);ref=z['windows'][0]['pins'][role];changed=edit(Path(ref['path']).read_bytes())
+  z['windows'][0]['pins'][role]=pinned(label+'-raw',None,changed)
+  ledger=copy.deepcopy(history);ledger['windows'][0]['pins']=copy.deepcopy(z['windows'][0]['pins']);z['historical']=pinned(label+'-ledger',ledger)
+  cli(label,z,reason)
+ for flag in ('-O','-OO'):
+  path=root/('optimized-'+flag[1:]+'-manifest.json');path.write_text(json.dumps(manifest));out=root/('optimized-'+flag[1:]+'-output.json')
+  argv=[sys.executable,flag,str(R/'matched_report.py'),'--windows',str(path),'--windows-sha256',sha(path.read_bytes()),'--out',str(out)]
+  p=subprocess.run(argv,capture_output=True,text=True,timeout=60)
+  for suffix,value in [('argv.json',json.dumps(argv)),('stdout',p.stdout),('stderr',p.stderr),('exit',str(p.returncode)+'\n')]: (root/('optimized-'+flag[1:]+'.'+suffix)).write_text(value)
+  assert p.returncode==1 and 'ordinary Python required' in p.stderr and not out.exists()
+  checks.append('continuation_actual_optimized_'+flag[1:]+'_before_output')
+continuation_controls()

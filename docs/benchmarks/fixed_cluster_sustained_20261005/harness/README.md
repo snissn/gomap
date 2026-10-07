@@ -447,3 +447,50 @@ representative input for each of the five guard predicates must succeed when
 only that predicate is bypassed in an isolated test copy. Synthetic oracle/admission identity controls likewise
 rebind dependent hashes and require the intended identity refusal. Deliberate raw
 and source substitutions remain separate controls; no measured receipt is edited.
+
+## Prospective #5068 continuation
+
+The original six-window attempt remains INCOMPLETE. Its exact profiles and
+Version1 descriptive reporting are unchanged. The accepted prospective revision
+adds only rf4matched5068r01c1, rf4matched5068r02c1 and rf4matched5068r03c4, in that
+order, with the existing six/seven/60s/5s/RPC3/420s/480s bounds and caps. Each has
+fresh stores, inputs, configuration, TLS and process identities. Source
+construction and reporting grant no admission, clock, artifact acceptance or
+retention authority.
+
+Version2 reporting requires exactly {Version, revision, decision, historical,
+windows}. Version is integer2; revision is matched5068-prospective-continuation-v1.
+decision and historical are absolute regular-file {path,sha256} references. The
+decision must hash to c3e32e7dff816e0b04aea7dad61be253391221fe391644b08bd5c3cc6d981b12.
+windows contains the fixed selection W1,W2,W3,r01,r02,r03 in order, using the
+existing {campaign,status,pins} row contract. Failed/incomplete continuation rows
+remain reportable; they cannot be replaced or counted as complete.
+
+The pinned historical JSON has exactly {Version,state,windows}, integer Version1,
+state INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT, and all six original rows in order.
+Each row has {campaign,status,pins,evidence}. W1-W3 have status complete and their
+pins must exactly equal the selected legacy rows, including original source and
+raw locators. W4 is EXPIRED_SETUP_ONLY_NOT_MEASURED; W5-W6 are
+UNISSUED_PROSPECTIVELY_RETIRED. Those three unmeasured rows have empty pins.
+evidence is a nonempty mapping of record names to exact regular-file path/SHA
+references; issued W1-W4 must include their unchanged original budget under
+budget. ROOT assembles that ledger from retained actual records; the reporter
+authenticates and retains their bytes without inventing interpretations of
+independent acceptance or three-copy receipts. Existing failures, deadlines and
+unissued attempts are never relabeled.
+
+The CLI remains python3 -B matched_report.py --windows ABSOLUTE_MANIFEST
+--windows-sha256 EXACT_SHA --out FRESH_OUTPUT. It protects the manifest, decision,
+ledger, historical evidence, window raw inputs and authenticated source copies
+against output overlap. selection_complete is descriptive: true requires all six
+selected windows complete and three per arm, while campaign_acceptance remains
+false. ROOT separately verifies independent acceptance and all three durable
+copies for each selected window. No pooled tails, significance, speedup, capacity
+or broader recovery claim follows from this report.
+
+The synthetic controls embed the exact public accepted SOURCE decision bytes,
+not future runtime receipts. They reuse the same constructors and actual read
+consumers for all nine matched profiles and authenticate the historical ledger
+before targeted reporter negatives. No additional per-attempt work or product
+hot-path change is introduced; profile validation happens at source binding and
+report history traversal is bounded to six rows.

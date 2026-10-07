@@ -57,11 +57,34 @@ def field_raw(raw,key):
   while text[pos].isspace():pos+=1
   if text[pos]==',':pos+=1
  raise ValueError('missing raw report member '+key)
+def selection(manifest):
+ need(isinstance(manifest,dict) and type(manifest.get('Version')) is int,'exact report manifest version')
+ if manifest['Version']==1:
+  need(set(manifest)=={'Version','windows'} and isinstance(manifest['windows'],list) and len(manifest['windows'])==6,'six predeclared windows; preserve failed/incomplete entries')
+  return workload_source.MATCHED_CAMPAIGNS,workload_source.MATCHED_ORDER,None
+ need(manifest['Version']==2 and set(manifest)=={'Version','revision','decision','historical','windows'} and manifest['revision']==workload_source.CONTINUATION_REVISION,'explicit prospective continuation manifest')
+ decision=strict(read_ref(manifest['decision']))
+ need(manifest['decision']['sha256']==workload_source.CONTINUATION_DECISION_SHA,'exact accepted continuation decision')
+ need(decision['state']=='ROOT_ACCEPTED_PROSPECTIVE_CONTINUATION_DECISION_NOT_QUALIFICATION' and decision['predeclared_final_selection']==list(workload_source.SELECTED_CAMPAIGNS) and decision['prospective_order']==[dict(campaign=c,concurrency=n) for c,n in zip(workload_source.CONTINUATION_CAMPAIGNS,workload_source.CONTINUATION_ORDER)],'accepted predeclared continuation selection')
+ rows=manifest['windows']
+ need(isinstance(rows,list) and len(rows)==6,'six fixed selected windows')
+ ledger=strict(read_ref(manifest['historical']))
+ need(isinstance(ledger,dict) and set(ledger)=={'Version','state','windows'} and type(ledger['Version']) is int and ledger['Version']==1 and ledger['state']=='INCOMPLETE_FOREVER_FOR_THIS_ATTEMPT','original attempt remains incomplete')
+ history=ledger['windows']
+ need(isinstance(history,list) and len(history)==6,'complete original six-window ledger')
+ statuses=('complete','complete','complete','EXPIRED_SETUP_ONLY_NOT_MEASURED','UNISSUED_PROSPECTIVELY_RETIRED','UNISSUED_PROSPECTIVELY_RETIRED')
+ for i,(row,campaign,status) in enumerate(zip(history,workload_source.MATCHED_CAMPAIGNS,statuses)):
+  need(isinstance(row,dict) and set(row)=={'campaign','status','pins','evidence'} and row['campaign']==campaign and row['status']==status,'exact historical campaign order and immutable outcome')
+  need(isinstance(row['pins'],dict) and isinstance(row['evidence'],dict) and row['evidence'] and all(isinstance(k,str) and k for k in row['evidence']),'retained historical evidence references')
+  if i<4:need('budget' in row['evidence'],'issued historical original budget reference')
+  for ref in row['evidence'].values():read_ref(ref)
+  if i<3:need(row['pins']==rows[i].get('pins') and rows[i].get('campaign')==campaign and rows[i].get('status')=='complete','unchanged selected legacy raw locators and outcomes')
+  else:need(row['pins']=={},'unmeasured historical attempts have no selected measurements')
+ return workload_source.SELECTED_CAMPAIGNS,workload_source.SELECTED_ORDER,ledger
 def build(manifest):
- need(set(manifest)=={'Version','windows'} and manifest['Version']==1 and isinstance(manifest['windows'],list) and len(manifest['windows'])==6,'six predeclared windows; preserve failed/incomplete entries')
+ campaigns,order,ledger=selection(manifest)
  windows=[];metrics={c:[] for c in (1,4)}
- for i,(row,concurrency) in enumerate(zip(manifest['windows'],workload_source.MATCHED_ORDER),1):
-  campaign='rf4matched5068w%02dc%d'%(i,concurrency)
+ for row,campaign,concurrency in zip(manifest['windows'],campaigns,order):
   need(set(row)=={'campaign','status','pins'} and row['campaign']==campaign and row['status'] in ('complete','failed','incomplete'),'exact campaign order and retained outcome')
   pins=row['pins'];need(isinstance(pins,dict),'retained raw refs')
   raw={key:read_ref(value) for key,value in pins.items()}
@@ -118,15 +141,22 @@ def build(manifest):
  summaries={}
  for c,values in metrics.items():
   summaries['C'+str(c)]=dict(complete_windows=len(values),expected_windows=3,metrics={key:describe([scalar(v[key]) for v in values]) for key in ('successful_qps','mean_recall','minimum_recall','actual_duration_ns','overlapping_searches','completed_searches_during_mutation','originals','prefixes','initial_population_rows','final_population_rows','setup_seconds','oracle_seconds','retained_bytes')},observed_role_bytes={key:{role:describe([v[key][role] for v in values]) for role in ROLES} for key in ('memory_peak_bytes','process_hwm_bytes')},window_latency_ns={key:describe([scalar(v['success_latency'][key]) for v in values]) for key in ('P50NS','P95NS','P99NS')},window_writer_latency_ns={key:describe([scalar(v['writer_latency_ns'][key]) for v in values]) for key in ('median','minimum','maximum')})
- return dict(state='DESCRIPTIVE_MATCHED_REPORT_PENDING_SEPARATE_ARTIFACT_ACCEPTANCE',campaign_acceptance=False,windows=windows,per_arm=summaries,limitations=['Latency summaries compare per-window quantiles; raw attempts are never pooled.','No significance, capacity, speedup or numeric recall gate is inferred.','Failed/incomplete windows remain in fixed order; this report does not authorize replacement or acceptance.'])
+ result=dict(state='DESCRIPTIVE_MATCHED_REPORT_PENDING_SEPARATE_ARTIFACT_ACCEPTANCE',campaign_acceptance=False,windows=windows,per_arm=summaries,limitations=['Latency summaries compare per-window quantiles; raw attempts are never pooled.','No significance, capacity, speedup or numeric recall gate is inferred.','Failed/incomplete windows remain in fixed order; this report does not authorize replacement or acceptance.'])
+ if ledger is not None:
+  result.update(revision=manifest['revision'],decision_ref=manifest['decision'],historical_ref=manifest['historical'],historical_ledger=ledger,selection_complete=all(w['status']=='complete' for w in windows) and all(arm['complete_windows']==3 for arm in summaries.values()))
+  result['limitations'].append('Original six-window attempt remains INCOMPLETE; selected continuation completeness is descriptive and is not independent acceptance or three-copy retention.')
+ return result
 def main():
  q=argparse.ArgumentParser();q.add_argument('--windows',required=True);q.add_argument('--windows-sha256',required=True);q.add_argument('--out',required=True);a=q.parse_args()
  raw=read_ref(dict(path=a.windows,sha256=a.windows_sha256));manifest=strict(raw)
+ result=build(manifest)
  protected=[Path(__file__).parent,a.windows]+[ref['path'] for row in manifest['windows'] for ref in row['pins'].values()]
  for row in manifest['windows']:
   if row['status']=='complete':protected.extend(ref['path'] for ref in source_refs(read_ref(row['pins']['sources'])).values())
+ if 'historical_ledger' in result:
+  protected.extend(manifest[key]['path'] for key in ('decision','historical'))
+  protected.extend(ref['path'] for row in result['historical_ledger']['windows'] for ref in row['evidence'].values())
  isolate_paths([a.out],protected);out=Path(a.out);need(not out.exists() and not out.is_symlink(),'fresh report output')
- result=build(manifest)
  with out.open('x') as f:json.dump(result,f,indent=2);f.write('\n')
  print(json.dumps(dict(state=result['state'],path=str(out),sha256=sha(out.read_bytes()))))
 if __name__=='__main__':main()
