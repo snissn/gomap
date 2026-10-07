@@ -450,11 +450,17 @@ def drift(source, ident):
             wrong.append(item["path"])
     return wrong + ["EXTRA:" + p for p in sorted(actual - expected)]
 
+def finite_number(value):
+    # JSON booleans are integers in Python; admission must keep them distinct.
+    # Arbitrarily large JSON integers are finite without a float conversion.
+    return type(value) is int or (type(value) is float and math.isfinite(value))
+
 def config(path):
     c = json.loads(Path(path).read_text())
     need(c["schema"] == SCHEMA and c["status"] == "frozen-approved", "unfrozen configuration")
     need(isinstance(c["coordinator_acceptance"], str) and c["coordinator_acceptance"], "missing coordinator freeze acceptance")
-    need(c["cycles"] == 3 and c["order"] == ["baseline", "candidate", "candidate", "baseline"], "requires three ABBA cycles")
+    need(type(c["cycles"]) is int and c["cycles"] == 3 and c["order"] == ["baseline", "candidate", "candidate", "baseline"], "requires three ABBA cycles")
+    need(type(c["timeout_seconds"]) is int and c["timeout_seconds"] > 0, "positive integer timeout required")
     need(c["environment"]["GOMAXPROCS"] == "4" and c["environment"]["GOWORK"] == "off", "runtime control mismatch")
     need(set(c["environment"]) == CONTROLS, "missing/extra explicit environment controls")
     need(all(isinstance(v, str) for v in c["environment"].values()), "unresolved environment controls")
@@ -464,15 +470,16 @@ def config(path):
     for key in ("go_binary_sha256", "toolchain_identity", "external_input_identity"):
         need(isinstance(c[key], str) and re.fullmatch(r"[0-9a-f]{64}", c[key]), "missing frozen " + key)
     need(c["go_binary"] == str(Path(c["environment"]["GOROOT"]) / "bin/go"), "unbound Go launcher path")
-    need(c["host"]["system"] == "Linux" and c["host"]["cpu_count"] >= 4, "Linux host contract")
+    need(c["host"]["system"] == "Linux" and type(c["host"]["cpu_count"]) is int and c["host"]["cpu_count"] >= 4, "Linux host contract")
     tmpdir = Path(c["environment"]["TMPDIR"])
     need(tmpdir.is_absolute() and str(tmpdir) == c["environment"]["TMPDIR"] and ".." not in tmpdir.parts, "unresolved TMPDIR")
     need(c["host"]["tmpdir"] == str(tmpdir) and type(c["host"]["tmpdir_device"]) is int and c["host"]["tmpdir_device"] >= 0, "unbound temporary database filesystem")
-    for key in ("max_load1", "max_load5", "min_free_bytes"):
-        need(math.isfinite(c["host"][key]) and c["host"][key] > 0, "missing host admission bound")
+    for key in ("max_load1", "max_load5"):
+        need(finite_number(c["host"][key]) and c["host"][key] > 0, "missing host admission bound")
+    need(type(c["host"]["min_free_bytes"]) is int and c["host"]["min_free_bytes"] > 0, "missing host admission bound")
     noise = c["noise_policy"]
     for key in ("max_spread_fraction", "material_regression_fraction", "minimum_effect_fraction"):
-        need(math.isfinite(noise[key]) and 0 < noise[key] < 1, "predeclare noise/regression bounds")
+        need(finite_number(noise[key]) and 0 < noise[key] < 1, "predeclare noise/regression bounds")
     need(noise["exclusions"] == "none; retain and stop on contamination", "no post-hoc exclusions")
     need(c["fixtures"] and c["comparison_metrics"] and c["cases"], "missing frozen fixture/metric/cases")
     validate_harness_fixtures(c["fixtures"])
@@ -547,7 +554,7 @@ def config(path):
         for variant in ("baseline", "candidate"):
             for unit, rule in x["rules"][variant].items():
                 need(set(rule) <= {"min", "max", "eq", "integer"} and ("eq" in rule or "min" in rule), "explicit zero/nonzero metric rule required")
-                need(all(math.isfinite(v) and v >= 0 for k, v in rule.items() if k != "integer"), "invalid metric bounds")
+                need(all(finite_number(v) and v >= 0 for k, v in rule.items() if k != "integer"), "invalid metric bounds")
         canonical_rules, canonical_directions = metric_contract(x["profile"], x["layout"], x["workload"], x["mode"])
         need(digest(x["comparison_metrics"]) == digest(canonical_directions), "canonical effect directions mismatch")
         for variant in ("baseline", "candidate"):

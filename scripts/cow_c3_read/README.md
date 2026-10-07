@@ -31,7 +31,7 @@ may be zero and cannot prove an internal publication phase. The deterministic
 prepared-cut functional test owns that invariant; paused cases have no
 throughput claim.
 
-Run the inexpensive fixture smoke before preparing retained collection:
+Run the 1x parser-input check. `parser_smoke.py` requires a one-iteration row:
 
 ```sh
 GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
@@ -45,6 +45,15 @@ python3 -B scripts/cow_c3_read/watchdog_smoke.py --out /tmp/cow-c3-watchdog-smok
 python3 -B scripts/cow_c3_read/analyzer_refusal_smoke.py --out /tmp/cow-c3-analyzer-refusal
 python3 -B scripts/cow_c3_read/build_module_smoke.py \
   --compiled-packages <real-compiled-dependencies.stdout> --out /tmp/cow-c3-module-smoke
+```
+
+Run a separate 54-leaf 128x correctness/schema smoke before preparing retained
+collection. Keep its complete stdout/stderr separate from the parser input:
+
+```sh
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
+  -bench '^BenchmarkC3PublicReadAdmission$' -benchtime=128x -benchmem -count=1 \
+  > /tmp/cow-c3-fixture-128.stdout 2> /tmp/cow-c3-fixture-128.stderr
 ```
 
 Parser framing and intentionally damaged copies are synthetic tool checks,
