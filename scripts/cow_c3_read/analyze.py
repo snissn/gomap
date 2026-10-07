@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import statistics
-from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command
+from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, retained_tooling
 from collect import host_gate
 from build import verify_git_receipt, objects
 
@@ -66,9 +66,7 @@ def main():
                      json.loads((packet / (variant + "-compiled_inputs_before.raw")).read_text()),
                      json.loads((packet / (variant + "-compiled_input_closure.raw")).read_text()),
                      json.loads((packet / (variant + "-generated_nonpersistent_inputs.raw")).read_text()), declaration["source"], observed)
-        source_files = {item["path"]: item["sha256"] for item in observed["files"]}
-        for name, value in script_hashes.items():
-            need(source_files.get("scripts/cow_c3_read/" + name) == value, "retained tooling differs from frozen source: " + name)
+        retained_tooling(packet, observed, script_hashes)
         need(not json.loads((packet / (variant + "-source-before.json")).read_text())["drift"], "initial source drift")
         need(not json.loads((packet / (variant + "-build-source-after.json")).read_text())["drift"], "build source-after drift")
     need(module_identities["baseline"] == module_identities["candidate"], "effective module graph differs")
