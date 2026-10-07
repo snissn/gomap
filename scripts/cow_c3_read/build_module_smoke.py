@@ -11,7 +11,7 @@ import subprocess
 from unittest.mock import patch
 
 from build import compiled_modules, objects, canonical_modules
-from protocol import process_environment, sha, write, selected_inputs, build_inputs, digest, harness_manifest, C3_PACKAGE, C3_PRODUCT, C3_HARNESS_FILES, HARNESS_FILES, HARNESS_PACKAGES
+from protocol import process_environment, sha, write, selected_inputs, build_inputs, digest, harness_manifest, C3_PACKAGE, C3_PRODUCT, C3_HARNESS_FILES, HARNESS_FILES, HARNESS_PACKAGES, git_object_id
 
 def environment_smoke(out):
     """Exercise the actual environment helper and a child, without invoking Go."""
@@ -78,8 +78,10 @@ def inputs_smoke(out):
     def inventory():
         return {"files": [{"path": p.relative_to(source).as_posix(), "sha256": sha(p),
                            "bytes": p.stat().st_size,
-                           "git_mode": "100755" if p.stat().st_mode & 0o111 else "100644"}
-                          for p in sorted(source.rglob("*")) if p.is_file()]}
+                           "git_mode": "100755" if p.stat().st_mode & 0o111 else "100644",
+                           "git_blob": git_object_id("blob", p.read_bytes(), "sha1")}
+                          for p in sorted(source.rglob("*")) if p.is_file()],
+                "original_manifest": {"git_object_format": "sha1"}}
     before, generated = selected_inputs(packages, source, env)
     authority = inventory()
     def receipt(inputs):
@@ -100,6 +102,16 @@ def inputs_smoke(out):
             checks.append({"label": label, "refused": str(error)})
         else:
             raise AssertionError("repository changed input accepted: " + label)
+    for label, value in (("invalid-blob-proof", "!"), ("noncanonical-blob-proof", "YR==")):
+        changed = copy.deepcopy(before)
+        changed["REPO/fixture.go"]["git_blob_bytes"] = value
+        refuse(label, changed, authority, "retained repository Git blob proof")
+    changed = copy.deepcopy(before)
+    changed["REPO/fixture.go"].pop("git_blob_bytes")
+    refuse("missing-blob-proof", changed, authority, "missing retained repository Git blob proof")
+    changed = copy.deepcopy(before)
+    changed["REPO/fixture.go"]["extra_blob_proof"] = changed["REPO/fixture.go"]["git_blob_bytes"]
+    refuse("ambiguous-blob-proof", changed, authority, "selected persistent input custody mismatch")
     for path in ("fixture.go", "fixture.s", "fixture.txt", "go.mod", "go.sum"):
         for field, replacement in (("sha256", "0" * 64), ("bytes", before["REPO/" + path]["bytes"] + 1),
                                    ("mode", 0o755), ("mode", 0o600)):
@@ -185,8 +197,10 @@ def harness_smoke(out, suite="c3"):
     def inventory():
         return {"files": [{"path": p.relative_to(source).as_posix(), "sha256": sha(p),
                            "bytes": p.stat().st_size,
-                           "git_mode": "100755" if p.stat().st_mode & 0o111 else "100644"}
-                          for p in sorted(source.rglob("*")) if p.is_file()]}
+                           "git_mode": "100755" if p.stat().st_mode & 0o111 else "100644",
+                           "git_blob": git_object_id("blob", p.read_bytes(), "sha1")}
+                          for p in sorted(source.rglob("*")) if p.is_file()],
+                "original_manifest": {"git_object_format": "sha1"}}
     def closure(): return selected_inputs(packages, source, env)[0]
     original = harness_manifest(packages, closure(), inventory(), str(source), env, suite)
     checks = [{"label": "complete-harness-positive", "passed": True}]
