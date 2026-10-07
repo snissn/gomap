@@ -33,7 +33,17 @@ the original zombie and observation, exclude it from snapshots, refuse repeated
 refresh and retry, and preserve replacement bytes and inode. Restoring the
 original permits cleanup. Companion portable tests retain ownership on ordinary
 failed unlink, preserve missing-path retry and Force's refcount behavior, and
-protect a different current owner during successful old-file finalization.
+protect a different current owner during successful old-file finalization. The
+same-pointer case first proves public eviction refuses the admitted operation,
+then privately replaces the quarantined owner with balanced zombie and registry
+bookkeeping to exercise the finalizer comparison. Both registry modes preserve
+the replacement observation, bytes and physical identity and balance the old
+admission. Parent lifetime checks retain a successful Stat during an active
+borrow and require an invalid descriptor plus released, nil, zero-borrow state
+after joined cleanup, independently of platform-specific closed-Stat errors.
+`TestRetirementParentDeletedWindows` checks actual delete-pending empty-directory
+proof against live/nonempty directories, regular files, closed/nil handles and
+unrelated errors. Permission or query failures never imply absence.
 `TestManagerDirectRetirementCloseJoinsAdmission` pauses actual direct removal
 and final-Release cleanup after the closed flag, and requires Manager.Close to
 join physical removal and ownership completion with and without a registry.

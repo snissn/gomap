@@ -1,6 +1,7 @@
 package valuelog
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -139,37 +140,75 @@ func TestManagerDirectRetirementForceWithRefs(t *testing.T) {
 }
 
 func TestManagerDirectRetirementSamePointerFinalization(t *testing.T) {
-	manager, file := directRetirementManager(t, false)
-	identity := retirementIdentityAtPath(t, file.Path)
-	var replacement *File
-	err := func() error {
-		originalRemove := removeSegmentPath
-		defer func() { removeSegmentPath = originalRemove }()
-		removeSegmentPath = func(path string, remove func(string) error) error {
-			// The old identity is already quarantined. Explicit eviction releases
-			// this manager's ownership; explicit registration may install a new identity.
-			if err := manager.EvictSegment(file.ID); err != nil {
-				return err
-			}
-			writeTestSegment(t, filepath.Dir(file.Path), 0, 1, 2, []byte("new explicit owner"))
-			if err := manager.RegisterSegment(file.Path, file.ID); err != nil {
-				return err
+	for _, registry := range []bool{false, true} {
+		name := "nil-registry"
+		if registry {
+			name = "registry"
+		}
+		t.Run(name, func(t *testing.T) {
+			manager, file := directRetirementManager(t, registry)
+			identity := retirementIdentityAtPath(t, file.Path)
+			var replacement *File
+			var replacementBytes []byte
+			var replacementIdentity rootpublication.StableIdentity
+			err := func() error {
+				originalRemove := removeSegmentPath
+				defer func() { removeSegmentPath = originalRemove }()
+				removeSegmentPath = func(path string, remove func(string) error) error {
+					if err := manager.EvictSegment(file.ID); !errors.Is(err, ErrFilePinned) {
+						return errors.New("public eviction did not refuse admitted deletion")
+					}
+					// The old identity is already quarantined. Public eviction cannot
+					// replace an admitted owner; privately inject that otherwise
+					// unreachable state to exercise the finalizer's exact-pointer
+					// check. Balance the old zombie and observation, releasing its
+					// parent outside mu; the real active borrow keeps it alive.
+					manager.mu.Lock()
+					if manager.files[file.ID] != file || file.deletionAdmissions != 1 {
+						manager.mu.Unlock()
+						return errors.New("same-pointer fixture lost admitted owner")
+					}
+					parent := manager.forgetSegmentLocked(file)
+					unobserveErr := manager.unobserveStableFileLocked(file)
+					manager.mu.Unlock()
+					if err := errors.Join(unobserveErr, closeRetirementParent(parent)); err != nil {
+						return err
+					}
+					writeTestSegment(t, filepath.Dir(file.Path), 0, 1, 2, []byte("new explicit owner"))
+					if err := manager.RegisterSegment(file.Path, file.ID); err != nil {
+						return err
+					}
+					manager.mu.RLock()
+					replacement = manager.files[file.ID]
+					manager.mu.RUnlock()
+					replacementIdentity = retirementIdentityAtPath(t, file.Path)
+					var readErr error
+					replacementBytes, readErr = os.ReadFile(file.Path)
+					if readErr != nil {
+						return readErr
+					}
+					return originalRemove(path, remove)
+				}
+				return manager.RemoveSegmentExpectedIdentity(file.ID, identity)
+			}()
+			if err != nil || replacement == nil || replacement == file {
+				t.Fatalf("same-pointer fixture failed: %v", err)
 			}
 			manager.mu.RLock()
-			replacement = manager.files[file.ID]
+			tracked, count := manager.files[file.ID], manager.retiredCount
+			observed, oldAdmissions := replacement.stableObserved, file.deletionAdmissions
 			manager.mu.RUnlock()
-			return originalRemove(path, remove)
-		}
-		return manager.RemoveSegmentExpectedIdentity(file.ID, identity)
-	}()
-	if err != nil || replacement == nil || replacement == file {
-		t.Fatalf("same-pointer fixture failed: %v", err)
-	}
-	manager.mu.RLock()
-	tracked, count := manager.files[file.ID], manager.retiredCount
-	manager.mu.RUnlock()
-	if tracked != replacement || count != 0 || !manager.HasSegment(file.ID) {
-		t.Fatal("successful old deletion forgot a different current owner")
+			if tracked != replacement || count != 0 || !manager.HasSegment(file.ID) {
+				t.Fatal("successful old deletion forgot a different current owner")
+			}
+			if observed != registry || oldAdmissions != 0 {
+				t.Fatalf("replacement observation=%t old admissions=%d", observed, oldAdmissions)
+			}
+			gotBytes, err := os.ReadFile(file.Path)
+			if err != nil || !bytes.Equal(gotBytes, replacementBytes) || !rootpublication.SamePhysicalIdentity(replacementIdentity, retirementIdentityAtPath(t, file.Path)) {
+				t.Fatalf("old finalization changed replacement bytes or physical identity: %v", err)
+			}
+		})
 	}
 }
 
@@ -259,11 +298,14 @@ func TestManagerDirectRetirementParentLifetime(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if _, err := parent.Stat(); !errors.Is(err, os.ErrClosed) {
-				t.Fatalf("retirement parent not released exactly once: %v", err)
+			if parent.Fd() != ^uintptr(0) {
+				t.Fatal("joined retirement parent still has a valid descriptor")
 			}
-			if file.retirementParent != nil {
-				t.Fatal("released retirement parent remains owned")
+			file.retirementParentMu.Lock()
+			released := file.retirementParentReleased && file.retirementParent == nil && file.retirementParentUsers == 0
+			file.retirementParentMu.Unlock()
+			if !released {
+				t.Fatal("released retirement parent remains owned or borrowed")
 			}
 			if mode == "Close" {
 				if err := manager.MarkZombie(file.ID); err != nil {

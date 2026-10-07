@@ -765,6 +765,15 @@ func requireRetirementChildAbsent(parent *os.File, name string) (bool, error) {
 		return true, nil
 	}
 	if err != nil {
+		// Windows can deny child opens through an already deleted directory.
+		// Only exact-handle delete-pending directory evidence proves absence.
+		deleted, proofErr := retirementParentDeleted(parent, err)
+		if proofErr != nil {
+			return false, errors.Join(err, proofErr)
+		}
+		if deleted {
+			return true, nil
+		}
 		return false, err
 	}
 	return false, fmt.Errorf("%w: configured retirement path is absent but physical target remains", rootpublication.ErrResourceConflict)
