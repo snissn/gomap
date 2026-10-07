@@ -42,6 +42,7 @@ python3 -B scripts/cow_c3_read/parser_smoke.py \
 python3 -B scripts/cow_c3_read/config_storage_smoke.py --out /tmp/cow-c3-config-storage-smoke
 python3 -B scripts/cow_c3_read/git_source_smoke.py --out /tmp/cow-c3-git-source-smoke
 python3 -B scripts/cow_c3_read/watchdog_smoke.py --out /tmp/cow-c3-watchdog-smoke
+python3 -B scripts/cow_c3_read/host_isolation_test.py
 python3 -B scripts/cow_c3_read/analyzer_refusal_smoke.py --out /tmp/cow-c3-analyzer-refusal
 python3 -B scripts/cow_c3_read/build_module_smoke.py \
   --compiled-packages <real-compiled-dependencies.stdout> --out /tmp/cow-c3-module-smoke
@@ -236,6 +237,67 @@ requests Go SIGQUIT stacks, then kills/reaps the owned process group after a
 bounded grace; Go's benchmark timeout alone is insufficient. Child elapsed,
 CPU and maximum RSS exclude collector postchecks and hashing. RSS is Linux
 wait4 ru_maxrss in KiB and covers setup/Close, separately from Go timed B/op.
+
+The `gomap-c3-read-matched-v2` configuration requires the exact fixed
+`host_isolation` contract emitted by `prepare_config.py`. Load bounds alone
+cannot admit performance collection. Endpoint process censuses and a census
+inside the existing owned-child wait4 loop reject any non-zombie `go`, Go tool
+(`compile`, `link`, `asm`, `cgo`, `vet`, `cover`, `test2json`, `preprofile`), or
+`comm` ending in `.test`. At Linux's 15-byte boundary, names ending in `.t`,
+`.te` or `.tes` are conservatively treated as potentially truncated test binaries
+and refused too, even if absent from the configuration. Other 15-byte names are
+not refused merely for their length. Configured benchmark basenames, truncated to Linux's 15-byte
+`comm` limit, are also classified as foreign regardless of filename suffix.
+Executable basenames must be ASCII and control-free; unsupported names refuse
+configuration admission. Sleeping/stopped Go work also refuses admission. Census rows
+retain PID, PPID, elapsed age, CPU, RSS, state, process-group ID and `comm` only;
+arguments and unrelated secrets are never captured. Linux `comm` is name based
+and can truncate long names. Unconfigured test names truncated before any of
+those suffixes is visible, arbitrary renamed/unknown long tools, and jobs shorter
+than the sampling interval can escape detection. Configured names still match
+their truncated basename even without a visible suffix. This is bounded observation, not proof
+of universal host exclusivity. The coordinator should reserve or coordinate a
+quiet window. If a dedicated runner is unavailable, retain an explicit
+`INFRASTRUCTURE_UNAVAILABLE` infrastructure receipt and describe the actual
+quiet-host census/load admission fallback and its observational limits. This
+fallback does not exempt foreign work or require killing unrelated jobs.
+
+Sampling requests one census every 100 ms. A census lasting over 500 ms or a
+gap over 500 ms refuses the packet; these fixed observation limits are not new
+benchmark/runtime controls. The only active-process exemption during the child
+is its actual PID, matching collector PPID, owned session/process-group ID and
+the configured command's truncated executable basename. The full command remains
+bound by the existing run-receipt check; names alone never exempt a process.
+Same-name siblings and children are foreign. That PID cannot be reused while
+unreaped; sampling never uses an owned exemption after wait4. Endpoint checks
+have no exemption. Zombie rows are ignored. The collector records the actual
+returned wait4 PID/status, each observation's monotonic interval, raw census
+filename/hash and final monitor hash. All raw observations remain in the packet.
+The offline analyzer audits every observation, endpoint and join, rejecting
+missing, malformed, extra, changed, contaminated or unbound monitor evidence.
+Scoped SIGTERM/SIGINT/SIGQUIT handlers record cancellation before spawn and remain
+sticky through monitor initialization and kill/wait4 cleanup. They restore only
+after joining the owned child, so repeated signals cannot abandon custody.
+Initialization failures retain a separate actual PID/wait-status join receipt.
+On contamination, the collector stops/reaps only its owned child process group,
+retains the failure and stops without automatic retry. Cancellation/KeyboardInterrupt
+also stop and reap the owned child; the existing timeout SIGQUIT/grace/SIGKILL
+contract remains in force. Go version probes run before measurement, outside
+the monitored benchmark lifetime; collection never exempts Go/tool probes.
+
+Historical v1 packets remain readable by their retained v1 descriptive analyzer;
+they cannot establish v2 quiet-host performance admission. In particular the
+original M4's 756 structurally valid rows, 22 unresolved nonnoisy flags and 209
+noisy metrics remain retained after the independent audit found foreign Go work.
+No exclusions, thresholds or benchmark shapes are changed. A fresh namespace
+and explicit coordinator grant are required after host-isolation repair; this
+tooling never authorizes a rerun or accepts performance automatically.
+
+`host_isolation_test.py` uses synthetic censuses and owned Python children only.
+It covers foreign tooling/tests, zombies, PID custody/reuse, malformed census,
+between-endpoint contamination, missing/tampered proof and join, positive quiet
+records, spawn/monitor transition cancellation, repeated signals during cleanup
+and child reaping. These tests are not Go measurements.
 
 The offline analyzer binds accepted build receipts, all twelve provenance
 artifacts (including pre-build selected inputs, Git-object source authority and Go tool inventory), source manifests, scripts,

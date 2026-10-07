@@ -10,7 +10,116 @@ import re
 import stat
 from pathlib import Path
 
-SCHEMA = "gomap-c3-read-matched-v1"
+SCHEMA = "gomap-c3-read-matched-v2"
+# Fixed observation protocol, not tunable benchmark controls. Shorter foreign
+# processes can escape sampling; no receipt asserts universal host exclusivity.
+HOST_ISOLATION = {"schema": "gomap-go-process-census-v1",
+                  "ps_fields": "pid,ppid,etimes,pcpu,rss,stat,pgid,comm",
+                  "sample_interval_seconds": 0.1, "max_observation_gap_seconds": 0.5,
+                  "claim": "sampled endpoints and owned-child lifetime; not universal detection"}
+GO_PROCESS_NAMES = frozenset(("go", "compile", "link", "asm", "cgo", "vet", "cover", "test2json", "preprofile"))
+
+def validate_host_isolation(value):
+    need(type(value) is dict and value == HOST_ISOLATION, "missing/changed host-isolation contract")
+
+def validate_owner(owner):
+    need(type(owner) is dict and set(owner) == {"pid", "ppid", "pgid", "comm"}, "invalid owned PID custody")
+    need(all(type(owner[k]) is int and owner[k] > 0 for k in ("pid", "ppid", "pgid")), "invalid owned PID custody")
+    need(owner["pid"] == owner["pgid"] and owner["pid"] != owner["ppid"], "invalid owned PID custody")
+    need(type(owner["comm"]) is str and owner["comm"] and owner["comm"].isascii() and len(owner["comm"]) <= 15
+         and not any(ord(c) < 32 for c in owner["comm"]), "invalid owned process comm")
+
+def linux_comm(binary):
+    need(type(binary) is str, "unsupported configured executable comm")
+    name = Path(binary).name
+    need(name and name.isascii() and not any(ord(c) < 32 for c in name), "unsupported configured executable comm")
+    return name[:15]
+
+def benchmark_comms(config):
+    return sorted({linux_comm(v["binary"]) for v in config["variants"].values()})
+
+def process_census(text, owner=None, benchmark_names=()):
+    """Parse comm only: never use arguments, path allowlists, or load as proof."""
+    if owner is not None:
+        validate_owner(owner)
+    need(type(text) is str and text.strip(), "empty process census")
+    seen, foreign = set(), []
+    for line in text.splitlines():
+        fields = line.split(None, 7)
+        need(len(fields) == 8, "malformed process census row")
+        pid, ppid, elapsed, cpu, rss, state, pgid, comm = fields
+        need(all(re.fullmatch(r"[0-9]+", v) for v in (pid, ppid, elapsed, rss, pgid)), "malformed process census integers")
+        pid, ppid, pgid = int(pid), int(ppid), int(pgid)
+        need(pid > 0 and pid not in seen, "invalid/duplicate census PID")
+        seen.add(pid)
+        need(re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", cpu) and math.isfinite(float(cpu)), "malformed census CPU")
+        need(re.fullmatch(r"[RSDTtZXI][<NLSsl+]*", state), "malformed census state")
+        need(comm.strip() == comm and comm and not any(ord(c) < 32 for c in comm), "malformed census comm")
+        if state.startswith("Z"):
+            continue
+        if owner is not None and pid == owner["pid"]:
+            need(ppid == owner["ppid"] and pgid == owner["pgid"] and comm == owner["comm"], "owned PID custody mismatch")
+            continue
+        # Linux comm truncates to 15 bytes. A visible partial .test suffix at
+        # that boundary is conservatively foreign even when not configured.
+        truncated_test = len(comm.encode("utf-8")) == 15 and comm.endswith((".t", ".te", ".tes"))
+        if comm in GO_PROCESS_NAMES or comm.endswith(".test") or truncated_test or comm in benchmark_names:
+            foreign.append({"pid": pid, "ppid": ppid, "pgid": pgid, "state": state, "comm": comm})
+    need(not foreign, "foreign active Go/build/test work: " + json.dumps(foreign, sort_keys=True))
+    return len(seen)
+
+def validate_census_file(path, expected_sha, owner=None, benchmark_names=()):
+    need(Path(path).is_file() and not Path(path).is_symlink(), "missing/nonregular process census")
+    need(sha(path) == expected_sha, "process census drift")
+    return process_census(Path(path).read_text(), owner, benchmark_names)
+
+def validate_monitor(packet, name, receipt, benchmark_names=()):
+    """Offline proof: every raw observation plus the actual wait4 join is bound."""
+    path = Path(packet) / (name + "-monitor.json")
+    need(path.is_file() and not path.is_symlink(), "missing/tampered monitor proof")
+    need(sha(path) == receipt.get("monitor_sha256"), "missing/tampered monitor proof")
+    value = json.loads(path.read_text())
+    fields = {"contract", "owner", "benchmark_comms", "started_monotonic_ns", "reaped_monotonic_ns", "waited_pid", "wait_status", "samples", "failure", "stopped_on_contamination"}
+    need(type(value) is dict and set(value) == fields, "invalid monitor proof fields")
+    validate_host_isolation(value["contract"])
+    owner = value["owner"]
+    need(value["benchmark_comms"] == list(benchmark_names), "unbound configured benchmark comms")
+    declared_owner = {"pid": receipt.get("child_pid"), "ppid": receipt.get("collector_pid"), "pgid": receipt.get("child_pgid"), "comm": receipt.get("child_comm")}
+    need(owner == declared_owner, "unbound owned PID custody")
+    validate_owner(owner)
+    validate_owner(declared_owner)
+    need(type(receipt.get("command")) is list and receipt["command"] and owner["comm"] == linux_comm(receipt["command"][0]), "owned child command/comm mismatch")
+    need(type(value["waited_pid"]) is int and value["waited_pid"] == owner["pid"] == receipt.get("waited_pid"), "missing/invalid child PID join")
+    need(type(receipt.get("waited_pid")) is int and type(receipt.get("wait_status")) is int and type(receipt.get("exit_code")) is int, "invalid child wait-status join")
+    need(type(value["wait_status"]) is int and value["wait_status"] == receipt["wait_status"] and os.waitstatus_to_exitcode(value["wait_status"]) == receipt["exit_code"], "invalid child wait-status join")
+    need(value["failure"] is None and value["stopped_on_contamination"] is False, "contaminated monitor proof")
+    start, end = value["started_monotonic_ns"], value["reaped_monotonic_ns"]
+    need(type(start) is int and type(end) is int and 0 < start <= end, "invalid monitor lifetime")
+    samples = value["samples"]
+    need(type(samples) is list and samples, "missing during-child census")
+    previous = start
+    for index, sample in enumerate(samples):
+        need(type(sample) is dict and set(sample) == {"index", "started_monotonic_ns", "completed_monotonic_ns", "path", "sha256"}, "invalid monitor sample")
+        need(type(sample["index"]) is int and sample["index"] == index, "missing/reordered monitor sample")
+        a, b = sample["started_monotonic_ns"], sample["completed_monotonic_ns"]
+        need(type(a) is int and type(b) is int and previous <= a <= b <= end, "invalid monitor sample interval")
+        need(a - previous <= int(HOST_ISOLATION["max_observation_gap_seconds"] * 1e9), "monitor observation gap")
+        need(b - a <= int(HOST_ISOLATION["max_observation_gap_seconds"] * 1e9), "slow census observation")
+        expected = name + "-monitor-" + format(index, "06d") + "-processes.txt"
+        need(sample["path"] == expected, "unbound monitor census path")
+        validate_census_file(Path(packet) / expected, sample["sha256"], owner, benchmark_names)
+        previous = b
+    need(end - previous <= int(HOST_ISOLATION["max_observation_gap_seconds"] * 1e9), "monitor observation gap before join")
+    expected_paths = {s["path"] for s in samples}
+    need({p.name for p in Path(packet).glob(name + "-monitor-*-processes.txt")} == expected_paths, "missing/extra monitor census files")
+    return value
+
+def validate_run_processes(packet, name, receipt, benchmark_names=()):
+    validate_monitor(packet, name, receipt, benchmark_names)
+    # No owned PID exception before spawn or after wait4: a reused PID is foreign.
+    for direction in ("before", "after"):
+        validate_census_file(Path(packet) / (name + "-" + direction + "-processes.txt"),
+                             receipt[direction]["processes_sha256"], benchmark_names=benchmark_names)
 PROFILES = {"no_wal_fast", "command_wal_relaxed", "command_wal_durable"}
 MODES = {"append_only", "btree", "cow_btree"}
 LAYOUTS = {"inline", "pointer"}
@@ -537,6 +646,7 @@ def cpu_affinity():
 def config(path):
     c = json.loads(Path(path).read_text())
     need(c["schema"] == SCHEMA and c["status"] == "frozen-approved", "unfrozen configuration")
+    validate_host_isolation(c.get("host_isolation"))
     need(isinstance(c["coordinator_acceptance"], str) and c["coordinator_acceptance"], "missing coordinator freeze acceptance")
     need(type(c["cycles"]) is int and c["cycles"] == 3 and c["order"] == ["baseline", "candidate", "candidate", "baseline"], "requires three ABBA cycles")
     need(type(c["timeout_seconds"]) is int and c["timeout_seconds"] > 0, "positive integer timeout required")
@@ -639,6 +749,7 @@ def config(path):
         need(digest(x["comparison_metrics"]) == digest(canonical_directions), "canonical effect directions mismatch")
         for variant in ("baseline", "candidate"):
             need(digest(x["rules"][variant]) == digest(canonical_rules), "canonical operational rules mismatch")
+    benchmark_comms(c)
     return c
 
 def schedule(c):
