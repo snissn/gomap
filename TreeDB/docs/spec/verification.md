@@ -6,6 +6,10 @@ This document maps specification invariants to existing tests and harnesses.
 unlink and failed-unlink ownership without scheduler timing. Refresh discovers
 new live segments while excluding the closed zombie. Companion tests preserve
 different-path ID conflicts and closed-live-handle errors.
+`TestManagerRefreshRetiredSegmentRejectsReboundPath` completes a real failed
+unlink and rollback, proves unchanged-identity refresh with the closed handle,
+then replaces the pathname. Refresh and retirement retry must report a resource
+conflict while preserving the replacement's bytes/identity and zombie ownership.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 
