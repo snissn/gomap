@@ -11,6 +11,9 @@ import (
 	"math"
 	"os"
 
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/merging"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -303,10 +306,132 @@ func ownedLeafManifestDelta(m *leafGenerationManifest, oldChunks int) (*batch.Ba
 	return delta, nil
 }
 
-func (db *DB) stageOwnedLeafManifestForCommit(idx *indexGen, root uint64, candidate *leafGenerationManifest, raw []uint32, seq uint64, limits *PreparedRootPublicationLimits) (uint64, []uint64, *leafGenerationManifest, []uint32, error) {
+// A public system-root iterator replaces caller-owned entries. Intrinsic
+// entries remain engine-owned and are merged through the existing iterator.
+type ownedManifestNamespaceGuard struct {
+	iterator.UnsafeIterator
+	err error
+}
+
+func (g *ownedManifestNamespaceGuard) Valid() bool {
+	if g.err != nil || !g.UnsafeIterator.Valid() {
+		return false
+	}
+	if bytes.HasPrefix(g.UnsafeIterator.UnsafeKey(), []byte("\x00treedb/owned-leaf-manifest/")) {
+		g.err = errors.New("system-root iterator writes private owned manifest namespace")
+		return false
+	}
+	return true
+}
+
+func (g *ownedManifestNamespaceGuard) Error() error {
+	if g.err != nil {
+		return g.err
+	}
+	return g.UnsafeIterator.Error()
+}
+
+func (g *ownedManifestNamespaceGuard) UnsafeEntryWithRevision() ([]byte, page.ValuePtr, byte, page.EntryRevision) {
+	return iterator.UnsafeEntryWithRevision(g.UnsafeIterator)
+}
+
+type ownedManifestMergedIterator struct {
+	*merging.TwoWayMerger
+	guard *ownedManifestNamespaceGuard
+}
+
+func (m *ownedManifestMergedIterator) Error() error {
+	return errors.Join(m.TwoWayMerger.Error(), m.guard.Error())
+}
+
+func (m *ownedManifestMergedIterator) UnsafeKey() []byte   { return m.Key() }
+func (m *ownedManifestMergedIterator) UnsafeValue() []byte { return m.Value() }
+func (m *ownedManifestMergedIterator) UnsafeEntry() ([]byte, page.ValuePtr, byte) {
+	value, ptr, flags, _ := m.UnsafeEntryWithRevision()
+	return value, ptr, flags
+}
+func (m *ownedManifestMergedIterator) IsDeleted() bool { return false }
+
+func (db *DB) ownedManifestPreservingSystemIterator(input iterator.UnsafeIterator) (iterator.UnsafeIterator, error) {
+	// The format admission bounds the temporary canonical payload/key set.
+	work := OwnedManifestIntrinsicWork{ByteCredits: 3 * ownedLeafManifestMaxBytes}
+	defer func() { db.addOwnedManifestPublicationWork(work) }()
 	db.mu.RLock()
 	basis := db.leafGenerationManifest
 	db.mu.RUnlock()
+	header, chunks, err := encodeOwnedLeafManifest(basis)
+	if err != nil {
+		input.Close()
+		return nil, err
+	}
+	work.EncodedObjects++
+	work.EncodedBytes += uint64(len(header))
+	for _, chunk := range chunks {
+		work.EncodedBytes += uint64(len(chunk))
+	}
+	intrinsic := memtable.NewAppendOnlyWithEntryCapacity(len(chunks) + 1)
+	intrinsic.Set(ownedLeafManifestHeaderKey, header)
+	for i, chunk := range chunks {
+		key := ownedLeafManifestChunkKey(i)
+		intrinsic.Set(key, chunk)
+	}
+	intrinsic.Freeze()
+	guarded := &ownedManifestNamespaceGuard{UnsafeIterator: input}
+	return &ownedManifestMergedIterator{TwoWayMerger: merging.NewTwoWayMerger(guarded, intrinsic.NewIterator(nil, nil), nil, nil), guard: guarded}, nil
+}
+
+// equalOwnedLeafManifest compares every logical field, including revision. The
+// engine-owned immutable basis is reusable only for this exact object.
+func equalOwnedLeafManifest(a, b *leafGenerationManifest) bool {
+	return equalOwnedLeafManifestWithWork(a, b, nil)
+}
+
+func equalOwnedLeafManifestWithWork(a, b *leafGenerationManifest, work *OwnedManifestIntrinsicWork) bool {
+	if work != nil {
+		work.LogicalComparisons++
+	}
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.Version != b.Version || a.ManifestRevision != b.ManifestRevision ||
+		a.CurrentGenerationID != b.CurrentGenerationID || a.NextGenerationID != b.NextGenerationID ||
+		len(a.Generations) != len(b.Generations) {
+		return false
+	}
+	for i := range a.Generations {
+		if work != nil {
+			work.GenerationVisits++
+		}
+		x, y := &a.Generations[i], &b.Generations[i]
+		if x.GenerationID != y.GenerationID || x.State != y.State ||
+			x.CreatedCommitSeq != y.CreatedCommitSeq || x.SealedCommitSeq != y.SealedCommitSeq ||
+			x.RetiredCommitSeq != y.RetiredCommitSeq || x.DeletedCommitSeq != y.DeletedCommitSeq ||
+			x.PublishedCommitSeq != y.PublishedCommitSeq || len(x.FileIDs) != len(y.FileIDs) {
+			return false
+		}
+		for j := range x.FileIDs {
+			if work != nil {
+				work.FileIDVisits++
+			}
+			if x.FileIDs[j] != y.FileIDs[j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (db *DB) stageOwnedLeafManifestForCommit(idx *indexGen, root uint64, candidate *leafGenerationManifest, raw []uint32, seq uint64, limits *PreparedRootPublicationLimits, forceRevision bool) (uint64, []uint64, *leafGenerationManifest, []uint32, error) {
+	var publicationWork OwnedManifestIntrinsicWork
+	defer func() { db.addOwnedManifestPublicationWork(publicationWork) }()
+	db.mu.RLock()
+	basis := db.leafGenerationManifest
+	basisRoot := db.meta.SystemRootPageID
+	basisSeq := db.meta.CommitSeq
+	db.mu.RUnlock()
+	if seq != basisSeq+1 || idx != db.idx.Load() {
+		return 0, nil, nil, nil, errors.New("owned manifest basis does not match publication")
+	}
 	if candidate == nil {
 		candidate = basis
 	}
@@ -333,6 +458,31 @@ func (db *DB) stageOwnedLeafManifestForCommit(idx *indexGen, root uint64, candid
 	if err != nil {
 		return 0, nil, nil, nil, err
 	}
+	// durablePublishMu and the finalizer's expected-base fence hold this basis.
+	// A changed system root must preserve its exact intrinsic object. This also
+	// refuses public system-root edits to the private namespace rather than
+	// silently repairing them or trusting a coincident logical revision.
+	if root != basisRoot {
+		const pages = 2 * (ownedLeafManifestMaxBytes/ownedLeafManifestChunkBytes + 2) * ownedLeafManifestMaxDepth
+		work := &publicationWork
+		work.CanonicalObjects++
+		work.PageCredits += pages
+		work.ByteCredits += pages*page.PageSize + 3*ownedLeafManifestMaxBytes
+		bounded := &ownedManifestBoundedSource{source: idx.pager, remaining: pages, work: work}
+		captured, err := loadOwnedLeafManifest(bounded, root, idx.pager.PageCount())
+		if err != nil {
+			return 0, nil, nil, nil, err
+		}
+		if !equalOwnedLeafManifestWithWork(captured, basis, &publicationWork) {
+			return 0, nil, nil, nil, errors.New("candidate system root changed owned manifest basis")
+		}
+	}
+	// All observed pending IDs are consumed at the visible publication cut,
+	// including already-known IDs that caused no manifest change.
+	raw = append(raw, staged.pendingFileIDs...)
+	if !forceRevision && equalOwnedLeafManifestWithWork(staged.manifest, basis, &publicationWork) {
+		return root, nil, nil, raw, nil
+	}
 	candidate = staged.manifest.clone()
 	if candidate.ManifestRevision < basis.ManifestRevision {
 		candidate.ManifestRevision = basis.ManifestRevision
@@ -341,13 +491,24 @@ func (db *DB) stageOwnedLeafManifestForCommit(idx *indexGen, root uint64, candid
 		return 0, nil, nil, nil, errors.New("owned manifest revision exhausted")
 	}
 	candidate.ManifestRevision++
+	// Two admitted canonical encodings plus their batch-owned copies have a
+	// finite source-derived byte allowance before allocation.
+	publicationWork.ByteCredits += 6 * ownedLeafManifestMaxBytes
 	_, old, err := encodeOwnedLeafManifest(basis)
 	if err != nil {
 		return 0, nil, nil, nil, err
 	}
+	publicationWork.EncodedObjects += 2
+	publicationWork.EncodedBytes += 64
+	for _, chunk := range old {
+		publicationWork.EncodedBytes += uint64(len(chunk))
+	}
 	delta, err := ownedLeafManifestDelta(candidate, len(old))
 	if err != nil {
 		return 0, nil, nil, nil, err
+	}
+	for _, entry := range delta.SortedEntries() {
+		publicationWork.EncodedBytes += uint64(len(entry.Value))
 	}
 	opts := systemRootOrderedPublishOptions(db)
 	// A format-local worst-case bound is charged before zipper starts. The
@@ -357,16 +518,20 @@ func (db *DB) stageOwnedLeafManifestForCommit(idx *indexGen, root uint64, candid
 	if err != nil {
 		return 0, nil, nil, nil, err
 	}
-	return next, retired, candidate, append(raw, staged.rawFileIDs...), nil
+	return next, retired, candidate, raw, nil
 }
 
 // publishOwnedLeafManifestLocked is used by existing serialized manifest
 // maintenance. It publishes the same user root and a new intrinsic system root.
 func (db *DB) publishOwnedLeafManifestLocked(m *leafGenerationManifest) error {
+	return db.publishOwnedLeafManifestWithOptionsLocked(m, false)
+}
+
+func (db *DB) publishOwnedLeafManifestWithOptionsLocked(m *leafGenerationManifest, forceRevision bool) error {
 	db.mu.RLock()
 	meta := db.meta
 	db.mu.RUnlock()
-	post, err := db.finalizeCommitLockedWithOptions(meta.UserRootPageID, meta.SystemRootPageID, nil, true, adaptive.Metrics{}, nil, false, nil, m, nil, finalizeCommitOptions{expectedBaseCommitSeq: meta.CommitSeq, hasExpectedBaseCommitSeq: true})
+	post, err := db.finalizeCommitLockedWithOptions(meta.UserRootPageID, meta.SystemRootPageID, nil, true, adaptive.Metrics{}, nil, false, nil, m, nil, finalizeCommitOptions{expectedBaseCommitSeq: meta.CommitSeq, hasExpectedBaseCommitSeq: true, forceOwnedManifestRevision: forceRevision})
 	if err != nil {
 		return err
 	}
@@ -402,7 +567,7 @@ func (db *DB) CheckpointOwnedLeafManifest() (uint64, error) {
 	db.mu.RLock()
 	m := db.leafGenerationManifest.clone()
 	db.mu.RUnlock()
-	if err := db.publishOwnedLeafManifestLocked(m); err != nil {
+	if err := db.publishOwnedLeafManifestWithOptionsLocked(m, true); err != nil {
 		return 0, err
 	}
 	db.mu.RLock()
@@ -444,6 +609,8 @@ func stageRebuiltOwnedLeafManifest(p *pager.Pager, root uint64, m *leafGeneratio
 type OwnedManifestIntrinsicWork struct {
 	CanonicalObjects, PagerReads, PagerBytes, PageCredits, ByteCredits, PhysicalIdentityChecks uint64
 	RootCaptures, RootRevalidations, PinFenceChecks, SlotModeChecks                            uint64
+	EncodedObjects, EncodedBytes                                                               uint64
+	LogicalComparisons, GenerationVisits, FileIDVisits                                         uint64
 }
 
 func (w *OwnedManifestIntrinsicWork) Add(other OwnedManifestIntrinsicWork) {
@@ -457,6 +624,32 @@ func (w *OwnedManifestIntrinsicWork) Add(other OwnedManifestIntrinsicWork) {
 	w.RootRevalidations += other.RootRevalidations
 	w.PinFenceChecks += other.PinFenceChecks
 	w.SlotModeChecks += other.SlotModeChecks
+	w.LogicalComparisons += other.LogicalComparisons
+	w.GenerationVisits += other.GenerationVisits
+	w.FileIDVisits += other.FileIDVisits
+	w.EncodedObjects += other.EncodedObjects
+	w.EncodedBytes += other.EncodedBytes
+}
+
+// OwnedLeafManifestPublicationWork returns observational cumulative intrinsic
+// validation, encoding and logical-comparison attribution for root publication.
+// Page/byte credits are pre-work allowances, not actual allocations. Reading
+// this value changes neither credits nor authority. Allocator/COW and fresh
+// root/pin/identity work remain separately charged, alongside complete setup
+// and public-call bytes/time; this API supplies no total-work exemption.
+func (db *DB) OwnedLeafManifestPublicationWork() OwnedManifestIntrinsicWork {
+	if db == nil {
+		return OwnedManifestIntrinsicWork{}
+	}
+	db.ownedManifestPublicationWorkMu.Lock()
+	defer db.ownedManifestPublicationWorkMu.Unlock()
+	return db.ownedManifestPublicationWork
+}
+
+func (db *DB) addOwnedManifestPublicationWork(work OwnedManifestIntrinsicWork) {
+	db.ownedManifestPublicationWorkMu.Lock()
+	db.ownedManifestPublicationWork.Add(work)
+	db.ownedManifestPublicationWorkMu.Unlock()
 }
 
 type ownedManifestBoundedSource struct {

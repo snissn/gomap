@@ -94,6 +94,9 @@ type finalizeCommitOptions struct {
 	// record-length indexes, but must not create a second manifest revision after
 	// the meta has selected the producer's exact one.
 	leafManifestAlreadyPersistent bool
+	// forceOwnedManifestRevision creates an explicit inventory checkpoint even
+	// when its logical content equals the captured immutable basis.
+	forceOwnedManifestRevision bool
 	// durableResourceRequirements scopes exact logical obligations for external
 	// resources whose physical files can outlive several root generations.
 	durableResourceRequirements rootpublication.StableLogicalObligationRequirements

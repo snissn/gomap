@@ -375,6 +375,9 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		}
 	}()
 
+	if db.ownedLeafManifests {
+		install.post.clearLeafGenerationPendingFileIDs = append(install.post.clearLeafGenerationPendingFileIDs[:0], leafManifestRawFileIDs...)
+	}
 	manifestBasis := db.leafGenerationManifest
 	if leafManifest != nil {
 		manifestBasis = leafManifest
@@ -460,9 +463,10 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	install.post.oldState = db.state.Load()
 	if install.installLeafManifest {
 		db.leafGenerationManifest = install.leafManifest
-		if db.ownedLeafManifests {
-			db.clearLeafGenerationPendingFileIDs(install.post.persistLeafGenerationRawFileIDs)
-		}
+	}
+	if db.ownedLeafManifests {
+		db.clearLeafGenerationPendingFileIDs(install.post.clearLeafGenerationPendingFileIDs)
+		install.post.clearLeafGenerationPendingFileIDs = nil
 	}
 	newState := &DBState{
 		CommitSeq:         install.next.CommitSeq,

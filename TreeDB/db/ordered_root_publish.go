@@ -113,6 +113,7 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
+	preserveOwnedManifest bool
 	maxWarmDeltaOps       int
 	leafPrefixCompression bool
 	leafColumnar          bool
@@ -1902,6 +1903,12 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	if iter == nil {
 		err = errors.New("nil ordered root iterator")
 		return
+	}
+	if opts.preserveOwnedManifest {
+		iter, err = db.ownedManifestPreservingSystemIterator(iter)
+		if err != nil {
+			return
+		}
 	}
 	if db.testOrderedRootPublishHook != nil {
 		db.testOrderedRootPublishHook(baseRoot)

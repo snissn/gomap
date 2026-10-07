@@ -613,6 +613,8 @@ type DB struct {
 	durableRootDirectoryPagesWritten   atomic.Uint64
 
 	ownedLeafManifests                 bool
+	ownedManifestPublicationWork       OwnedManifestIntrinsicWork
+	ownedManifestPublicationWorkMu     sync.Mutex
 	dependencyDirectoryRequiredFeature bool
 
 	commandWALStatsMu                sync.Mutex
@@ -3554,19 +3556,6 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if idx == nil {
 		return post, errors.New("missing index")
 	}
-	if db.ownedLeafManifests {
-		var ownedRetired []uint64
-		var err error
-		db.mu.RLock()
-		ownedPublicationSeq := db.meta.CommitSeq + 1
-		db.mu.RUnlock()
-		sysRootID, ownedRetired, leafManifest, leafManifestRawFileIDs, err = db.stageOwnedLeafManifestForCommit(idx, sysRootID, leafManifest, leafManifestRawFileIDs, ownedPublicationSeq, opts.preparedLimits)
-		if err != nil {
-			return post, prePublishErr(err)
-		}
-		retired = append(retired, ownedRetired...)
-		opts.leafManifestAlreadyPersistent = true
-	}
 	valueLogAppender := db.currentValueLogAppender()
 
 	debugTiming := commitTimingEnabled()
@@ -3591,6 +3580,24 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		if debugTiming {
 			durSync1 = time.Since(t0)
 		}
+	}
+	if db.ownedLeafManifests {
+		// Dependency flush precedes registration so a newly created/rotated leaf
+		// file belongs to this exact intrinsic revision, not the next ACK.
+		if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
+			return post, prePublishErr(err)
+		}
+		var ownedRetired []uint64
+		var err error
+		db.mu.RLock()
+		ownedPublicationSeq := db.meta.CommitSeq + 1
+		db.mu.RUnlock()
+		sysRootID, ownedRetired, leafManifest, leafManifestRawFileIDs, err = db.stageOwnedLeafManifestForCommit(idx, sysRootID, leafManifest, leafManifestRawFileIDs, ownedPublicationSeq, opts.preparedLimits, opts.forceOwnedManifestRevision)
+		if err != nil {
+			return post, prePublishErr(err)
+		}
+		retired = append(retired, ownedRetired...)
+		opts.leafManifestAlreadyPersistent = true
 	}
 	var watermarkWait, watermarkHold time.Duration
 
@@ -3642,8 +3649,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// immutable manifest captures its exact identity. Visible-state installation
 	// consumes that bounded registered inventory without a directory scan.
 	if db.valueLogManager != nil {
-		if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
-			return post, prePublishErr(err)
+		if !db.ownedLeafManifests {
+			if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
+				return post, prePublishErr(err)
+			}
 		}
 		if valueLogAppender != nil {
 			segments, err := valueLogAppenderCurrentSegments(valueLogAppender)
@@ -3746,11 +3755,11 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 	}
 	var leafGenerationView *leafGenerationView
+	if db.ownedLeafManifests {
+		db.clearLeafGenerationPendingFileIDs(leafManifestRawFileIDs)
+	}
 	if leafManifest != nil {
 		db.leafGenerationManifest = leafManifest
-		if db.ownedLeafManifests {
-			db.clearLeafGenerationPendingFileIDs(leafManifestRawFileIDs)
-		}
 		post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
 		post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent && !db.ownedLeafManifests
 		post.persistLeafGenerationManifestView = leafManifest

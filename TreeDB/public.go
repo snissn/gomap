@@ -963,6 +963,7 @@ func openResolved(opts Options) (*DB, error) {
 		// not inherit outer-leaf-in-value-log from the main DB, since that mode
 		// requires a leaf-page log wired by the cached layer.
 		dictOpts.IndexOuterLeavesInValueLog = false
+		dictOpts.OwnedLeafManifests = false
 		dictOpts.DisableBackgroundPrune = true
 		dictOpts.ValueLog.DictLookup = nil
 		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
@@ -1020,6 +1021,7 @@ func openResolved(opts Options) (*DB, error) {
 		// main DB's outer-leaf value-log layout (not needed here, and it adds
 		// unnecessary value-log churn).
 		templateOpts.IndexOuterLeavesInValueLog = false
+		templateOpts.OwnedLeafManifests = false
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
 		// templatedb uses batch.Set for small routing/index entries. Do not

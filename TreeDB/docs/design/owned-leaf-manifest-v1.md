@@ -37,6 +37,16 @@ recovery handoff, index generation and allocator pins retain it. Real external
 leaf/value-log dependencies remain in the same root-bound resource closure.
 No second history registry exists. PrepareLeafGenerationManifestStableClosure
 refuses owned mode; CheckpointOwnedLeafManifest durably publishes a revision.
+Normal ACKs reuse the exact immutable object when every logical field equals the
+captured basis under the existing publication fence. A changed system root is
+bounded/canonically validated against that basis. System-root full replacements
+merge the private intrinsic entries through the existing iterator merger; caller
+entries under the reserved prefix are rejected. Other keys retain replacement
+semantics. Explicit inventory checkpoints force a revision; genuine file rollover
+changes the intrinsic object in the same ACK after dependency flush/registration.
+Pending IDs are consumed atomically at visible activation, including known IDs
+when the object is reused. Failed publication retains the pending IDs.
+
 Online/offline vacuum copy both independent objects and update only the desired
 replacement root. File shrink remains a separate vacuum result.
 
@@ -56,7 +66,14 @@ A step examines at most 64 entries, promotes at most 16 pages, visits at most
 512 trie nodes and mutates one fixed-depth chunk path. Page/byte and whole-path
 credits precede traversal/mutation; intrinsic lookup/range validation has finite
 credits before reads. Metrics include actual reads/bytes, object validations,
-physical identity checks and all cumulative setup/GC pruning. Prepared callers
+physical identity checks and all cumulative setup/GC pruning.
+OwnedLeafManifestPublicationWork reports cumulative intrinsic canonical
+validation/encoding and logical comparison work. Its finite page/byte allowances
+are charged before reads/temporary canonical payload allocation; allocator/COW
+work remains in the existing profiles and complete setup/public cost is retained.
+Snapshots of these counters are observational and grant no authority. Fresh
+root/pin/fstat checks and every allocator visit/mutation remain additional charged
+work; the 2N object-authority target is not a 2N-page or total-work claim. Prepared callers
 receive a conservative 2176-page output allowance before command-WAL append.
 Existing total-output and freelist caps must admit it; no cap is enlarged and
 no conservative allowance is preallocated.
