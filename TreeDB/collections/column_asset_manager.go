@@ -2692,6 +2692,7 @@ type columnPhysicalAssetReadCache struct {
 	returnViews            bool
 	boundedRangeViews      bool
 	admitResource          func(ColumnAssetRef) error
+	ownedRangeStorage      func(ColumnAssetRef) ([]byte, error)
 	admitFile              func() error
 	forceReadAtFallback    bool
 	lastView               bool
@@ -3004,12 +3005,23 @@ func (c *columnPhysicalAssetReadCache) readBoundedRange(ref ColumnAssetRef, read
 	if c.resourceManager.ActiveHandles() >= documentPointRowMaxBorrowedBlocks {
 		return nil, errors.New("collections: document asset handle admission exhausted before load")
 	}
-	if c.admitResource != nil {
+	if c.admitResource != nil && c.ownedRangeStorage == nil {
 		if err := c.admitResource(ref); err != nil {
 			return nil, err
 		}
 	}
-	h, err := c.resourceManager.AcquireOpenFileRange(key, c.resourceScope, reader.file, mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), PreferMapped: false, AllowHeapCopy: true, ResourceRoot: c.rootDir})
+	opts := mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), PreferMapped: false, AllowHeapCopy: true, ResourceRoot: c.rootDir}
+	var h *mappedresource.Handle
+	var err error
+	if c.ownedRangeStorage != nil {
+		dst, storageErr := c.ownedRangeStorage(ref)
+		if storageErr != nil {
+			return nil, storageErr
+		}
+		h, err = c.resourceManager.AcquireOpenFileRangeInto(key, c.resourceScope, reader.file, dst, opts)
+	} else {
+		h, err = c.resourceManager.AcquireOpenFileRange(key, c.resourceScope, reader.file, opts)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -3051,7 +3063,7 @@ func (c *columnPhysicalAssetReadCache) readServingAsset(ref ColumnAssetRef, dst 
 		if c.resourceManager.ActiveHandles() >= documentPointRowMaxBorrowedBlocks {
 			return nil, errors.New("collections: document asset handle admission exhausted before borrow")
 		}
-		if c.admitResource != nil {
+		if c.admitResource != nil && c.ownedRangeStorage == nil {
 			if err := c.admitResource(ref); err != nil {
 				return nil, err
 			}
@@ -3072,7 +3084,15 @@ func (c *columnPhysicalAssetReadCache) readServingAsset(ref ColumnAssetRef, dst 
 			if ref.Length > int64(maxCollectionInt) {
 				return errDocumentPointRowOversize
 			}
-			raw = make([]byte, int(ref.Length))
+			if c.ownedRangeStorage != nil {
+				var err error
+				raw, err = c.ownedRangeStorage(ref)
+				if err != nil {
+					return err
+				}
+			} else {
+				raw = make([]byte, int(ref.Length))
+			}
 			n, err := borrowed.ReadAt(raw)
 			if err != nil && err != io.EOF {
 				return err
@@ -3083,7 +3103,13 @@ func (c *columnPhysicalAssetReadCache) readServingAsset(ref ColumnAssetRef, dst 
 			if err := c.verifyReadChecksumWithIdentity(raw, ref, identity); err != nil {
 				return err
 			}
-			h, err := c.resourceManager.AcquireBytes(mappedResourceKeyForColumnAssetRef(ref), c.resourceScope, mappedresource.SourceHeapCopy, raw, mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), ResourceRoot: c.rootDir})
+			opts := mappedresource.AcquireOptions{Reason: c.resourceReason, ValidationMode: mappedResourceValidationModeForColumnAssetIntegrity(c.readIntegrity), ResourceRoot: c.rootDir}
+			var h *mappedresource.Handle
+			if c.ownedRangeStorage != nil {
+				h, err = c.resourceManager.AcquireExclusiveBuffer(mappedResourceKeyForColumnAssetRef(ref), c.resourceScope, raw, opts)
+			} else {
+				h, err = c.resourceManager.AcquireBytes(mappedResourceKeyForColumnAssetRef(ref), c.resourceScope, mappedresource.SourceHeapCopy, raw, opts)
+			}
 			if err != nil {
 				return err
 			}
@@ -3272,7 +3298,13 @@ func (c *columnPhysicalAssetReadCache) verifyReadChecksumWithIdentity(raw []byte
 	if c == nil {
 		return errors.New("collections: nil column physical asset read cache")
 	}
-	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, c.readIntegrity, c.rootDir, identity)
+	integrity := c.readIntegrity
+	if c.ownedRangeStorage != nil && integrity == ColumnAssetReadIntegrityCachedVerify {
+		// A newly filled reusable destination must prove its own bytes. A
+		// cached stamp from a retained descriptor does not certify this read.
+		integrity = ColumnAssetReadIntegrityVerify
+	}
+	return verifyColumnPhysicalAssetReadChecksumWithIntegrityForSegment(raw, ref, c.verifyChecksum, integrity, c.rootDir, identity)
 }
 
 func (c *columnPhysicalAssetReadCache) trackResourceRead(ref ColumnAssetRef, raw []byte, source mappedresource.Source, fallback mappedresource.FallbackReason) (*mappedresource.Handle, error) {

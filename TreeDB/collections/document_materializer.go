@@ -193,6 +193,8 @@ type CollectionReadView struct {
 	pointRowDescriptorCredit        int64
 	pointRowMaxBlockBytes           int64
 	pointRowCacheEvictions          uint64
+	pointRowBuffers                 [documentPointRowMaxBorrowedBlocks][]byte
+	pointRowBuffersUsed             int
 	rowEmissionScratch              *documentRowEmissionScratch
 	pointRowProjection              *columnPhysicalScanProjection
 	orderedPointRowRefs             bool // ephemeral GetInto and bounded range views avoid a full part lookup map
@@ -476,12 +478,11 @@ func (v *CollectionReadView) ensureAssetReadCaches(cfg ColumnStoreConfig, rowInt
 		}
 	} else {
 		if v.rowAssetReadCache != nil {
-			v.clearDerivedRowFetchCaches()
-			if err := v.rowAssetReadCache.close(); err != nil {
+			// An integrity/namespace change invalidates both source owners.
+			// Do not reset slot backing while typed handles can still alias it.
+			if err := v.closeAssetReadCaches(); err != nil {
 				return err
 			}
-			v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
-			v.rowAssetReadCache = nil
 		}
 		readCache, err := newColumnPhysicalAssetReadCacheWithIntegrity(rootDir, namespace, rowIntegrity)
 		if err != nil {
@@ -653,8 +654,14 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 	if v == nil {
 		return
 	}
+	v.rowEmissionScratch.clearBorrowed()
+	for _, block := range v.pointRowBlocks {
+		*block = columnPhysicalRowReaderBlock{}
+	}
 	v.pointRowBlocks = nil
 	v.rowEmissionScratch = nil
+	clear(v.pointRowBuffers[:])
+	v.pointRowBuffersUsed = 0
 	v.pointRowCreditUsed = 0
 	v.pointRowWorkspaceCredit = 0
 	v.pointRowDescriptorCredit = 0
@@ -663,7 +670,7 @@ func (v *CollectionReadView) clearDerivedRowFetchCaches() {
 	v.columnSnapshotView = nil
 	v.preparedMaterializer = nil
 	if v.typedColumnReconstructionCache != nil {
-		v.typedColumnReconstructionCache.Prepared = nil
+		*v.typedColumnReconstructionCache = typedColumnPartReconstructionCache{}
 	}
 	v.pointRowRefs = nil
 	v.validatedPointRowRefs = nil
@@ -1226,7 +1233,9 @@ func (v *CollectionReadView) preparePointRowCredit(view columnPhysicalScanSnapsh
 	v.pointRowDescriptorCredit = descriptorCredit
 	v.pointRowMaxBlockBytes = maximum
 	v.pointRowWorkspaceCredit = workspace
-	v.pointRowCreditUsed = workspace
+	// The fixed slot descriptors are real owned backing. Their charge is
+	// separated from per-live-image padding; the total limit is unchanged.
+	v.pointRowCreditUsed = workspace + descriptorCredit*documentPointRowMaxBorrowedBlocks + v.pointRowBufferTableCredit()
 	v.pointRowCreditLimit = maxCredit*documentPointRowMaxBorrowedBlocks + workspace
 	return nil
 }
@@ -1251,10 +1260,13 @@ func (v *CollectionReadView) admitPointRowFile() error {
 	return nil
 }
 
-func (v *CollectionReadView) admitPointRowAsset(ref ColumnAssetRef) error {
+// borrowPointRowStorage consumes one unused slot in this emission window.
+// Idle capacities stay charged across handle release. No live slot can be
+// reused within a window; CRL2 current/preserved/typed inputs coexist.
+func (v *CollectionReadView) borrowPointRowStorage(ref ColumnAssetRef) ([]byte, error) {
 	prepared := v.preparedMaterializer
 	if prepared == nil {
-		return errors.New("collections: document row admission requires captured metadata")
+		return nil, errors.New("collections: document row admission requires captured metadata")
 	}
 	refs := prepared.AssetRefs
 	if ref.Kind != ColumnAssetKindTCS1PartImage {
@@ -1262,23 +1274,70 @@ func (v *CollectionReadView) admitPointRowAsset(ref ColumnAssetRef) error {
 	}
 	entry, ok := materializerPartRef(refs, ref.Generation, ref.PartID)
 	if !ok || entry.Ref != ref {
-		return errors.New("collections: document row admission asset is outside captured manifest")
+		return nil, errors.New("collections: document row admission asset is outside captured manifest")
 	}
-	// Installed serving metadata is deliberately compact and omits FullConfig.
-	// Admission binds its exact refs to this captured catalog's validated schema.
 	credit, err := documentPointRowBlockCredit(entry, *v.catalog.meta.Options.ColumnStore)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if credit > math.MaxInt64-v.pointRowDescriptorCredit {
-		return errDocumentPointRowOversize
+	// Each old block envelope reserves two OS pages beyond explicit raw and
+	// decoded capacities. Heap-only exclusive storage needs no mmap alignment
+	// span or cloned header. Use 32 of those padding bytes per live image for
+	// its already globally charged slot descriptor; never enlarge the limit.
+	credit -= int64(unsafe.Sizeof([]byte(nil)) + unsafe.Sizeof(int(0)))
+	if ref.Length > int64(maxCollectionInt) || v.pointRowBuffersUsed >= len(v.pointRowBuffers) {
+		return nil, errors.New("collections: document owned storage admission exhausted before load")
 	}
-	credit += v.pointRowDescriptorCredit
-	if credit > v.pointRowCreditLimit-v.pointRowCreditUsed {
-		return errors.New("collections: document row admission exhausted before load")
+	slot := &v.pointRowBuffers[v.pointRowBuffersUsed]
+	oldCapacity := int64(cap(*slot))
+	if v.pointRowCreditUsed < oldCapacity {
+		return nil, errors.New("collections: uncharged document owned storage")
 	}
-	v.pointRowCreditUsed += credit
-	return nil
+	nextUsed := v.pointRowCreditUsed - oldCapacity
+	capacity := max(oldCapacity, ref.Length)
+	extra := capacity - ref.Length
+	// A larger idle span is retained only if its actual capacity still fits.
+	// Otherwise discard it before allocating exactly the newly admitted size.
+	if extra > math.MaxInt64-credit || credit+extra > v.pointRowCreditLimit-nextUsed {
+		capacity = ref.Length
+		extra = 0
+	}
+	credit += extra
+	// Other unused slots may retain large images from an earlier window. They
+	// are not pinned or aliased; drop them before allocating a new replacement
+	// if their idle capacity would deny an otherwise representable resource.
+	for i := v.pointRowBuffersUsed + 1; credit > v.pointRowCreditLimit-nextUsed && i < len(v.pointRowBuffers); i++ {
+		nextUsed -= int64(cap(v.pointRowBuffers[i]))
+		v.pointRowBuffers[i] = nil
+	}
+	if credit > v.pointRowCreditLimit-nextUsed {
+		// Preserve truthful charge even when reclamation preceded failure.
+		v.pointRowCreditUsed = nextUsed + oldCapacity
+		return nil, errors.New("collections: document row admission exhausted before load")
+	}
+	v.pointRowCreditUsed = nextUsed + credit
+	if capacity != oldCapacity {
+		// No overlapping reachable old/new backing: slot is unused in this
+		// window, and previous handles/blocks/borrowed values were cleared.
+		*slot = nil
+		*slot = make([]byte, int(ref.Length))
+	}
+	v.pointRowBuffersUsed++
+	return (*slot)[:int(ref.Length)], nil
+}
+
+// Retained idle buffers remain owned even with no maintenance handles. Each
+// slot is lazy: ordinary one-row readers allocate only their required inputs.
+func (v *CollectionReadView) pointRowBufferTableCredit() int64 {
+	return int64(unsafe.Sizeof(v.pointRowBuffers) + unsafe.Sizeof(v.pointRowBuffersUsed))
+}
+
+func (v *CollectionReadView) pointRowIdleCredit() int64 {
+	credit := v.pointRowWorkspaceCredit + v.pointRowDescriptorCredit*documentPointRowMaxBorrowedBlocks + v.pointRowBufferTableCredit()
+	for _, raw := range v.pointRowBuffers {
+		credit += int64(cap(raw))
+	}
+	return credit
 }
 
 // Called only between synchronous row emissions. A CRL2 row can borrow two
@@ -1289,26 +1348,54 @@ func (v *CollectionReadView) preparePointRowEmission(cfg ColumnStoreConfig, inte
 	if v.assetManager != nil {
 		handles = v.assetManager.ActiveHandles()
 	}
-	if len(v.pointRowBlocks) <= documentPointRowMaxBorrowedBlocks-3 && handles <= documentPointRowMaxBorrowedBlocks-3 && v.pointRowOpenFiles() <= documentPointRowMaxBorrowedBlocks-3 {
+	if v.pointRowBuffersUsed <= documentPointRowMaxBorrowedBlocks-3 && len(v.pointRowBlocks) <= documentPointRowMaxBorrowedBlocks-3 && handles <= documentPointRowMaxBorrowedBlocks-3 && v.pointRowOpenFiles() <= documentPointRowMaxBorrowedBlocks-3 {
 		return nil
 	}
-	v.pointRowBlocks = nil
-	v.pointRowCreditUsed = v.pointRowWorkspaceCredit
-	v.pointRowCacheEvictions++
+	// This boundary precedes row decode. Previous JSON output is fully owned;
+	// all derived strings/vectors/headers must be cleared before raw reuse.
+	v.rowEmissionScratch.clearBorrowed()
+	for _, block := range v.pointRowBlocks {
+		*block = columnPhysicalRowReaderBlock{}
+	}
+	clear(v.pointRowBlocks)
+	if v.typedColumnReconstructionCache != nil {
+		*v.typedColumnReconstructionCache = typedColumnPartReconstructionCache{}
+		v.typedColumnReconstructionCache = nil
+	}
 	var err error
 	if v.rowAssetReadCache != nil {
-		err = errors.Join(err, v.rowAssetReadCache.close())
-		v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
-		v.rowAssetReadCache = nil
+		err = errors.Join(err, v.rowAssetReadCache.releaseResourceHandles())
+		v.rowAssetReadCache.lastView = false
+		v.rowAssetReadCache.hasVerifiedRowIndexKey = false
 	}
 	if v.typedColumnAssetReadCache != nil {
-		err = errors.Join(err, v.typedColumnAssetReadCache.close())
-		v.assetClosedCounters.addReadCache(v.typedColumnAssetReadCache)
-		v.typedColumnAssetReadCache = nil
+		err = errors.Join(err, v.typedColumnAssetReadCache.releaseResourceHandles())
+		v.typedColumnAssetReadCache.lastView = false
+		v.typedColumnAssetReadCache.hasVerifiedRowIndexKey = false
 	}
-	v.typedColumnReconstructionCache = nil
 	if err != nil {
 		return err
+	}
+	v.pointRowBuffersUsed = 0
+	v.pointRowCreditUsed = v.pointRowIdleCredit()
+	v.pointRowCacheEvictions++
+	// Images and descriptors have independent bounds. Keep the common source
+	// file open when only image pressure forced recycling. At FD pressure all
+	// handles are already gone, so closing/recreating caches is safe.
+	if v.pointRowOpenFiles() > documentPointRowMaxBorrowedBlocks-3 {
+		if v.rowAssetReadCache != nil {
+			err = errors.Join(err, v.rowAssetReadCache.close())
+			v.assetClosedCounters.addReadCache(v.rowAssetReadCache)
+			v.rowAssetReadCache = nil
+		}
+		if v.typedColumnAssetReadCache != nil {
+			err = errors.Join(err, v.typedColumnAssetReadCache.close())
+			v.assetClosedCounters.addReadCache(v.typedColumnAssetReadCache)
+			v.typedColumnAssetReadCache = nil
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return v.ensureAssetReadCaches(cfg, integrity)
 }
@@ -1341,7 +1428,11 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 	if header.RowCount != assetRef.Rows {
 		return nil, errors.New("collections: physical row count disagrees with captured manifest")
 	}
-	header = cloneColumnPhysicalAssetScanHeader(header)
+	var headerOwnedBytes int64
+	if v.rowAssetReadCache.ownedRangeStorage == nil {
+		header = cloneColumnPhysicalAssetScanHeader(header)
+		headerOwnedBytes = int64(cap(header.Collection) + cap(header.Namespace))
+	}
 	rowIndex, err := v.rowAssetReadCache.indexRows(raw, assetRef.Ref, version, rowsOffset, header, &view.Config)
 	if err != nil {
 		return nil, fmt.Errorf("collections: document row point fetch index generation=%d part_id=%d: %w", assetRef.Ref.Generation, assetRef.Ref.PartID, err)
@@ -1355,14 +1446,14 @@ func (v *CollectionReadView) loadPointRowBlock(view columnPhysicalScanSnapshotVi
 		rowEncoding:   rowIndex.rowEncoding,
 		fixedIDWidth:  rowIndex.fixedIDWidth,
 		denseIDBase:   rowIndex.denseIDBase,
-		residentBytes: int64(cap(raw)) + int64(cap(rowIndex.offsets))*int64(unsafe.Sizeof(int(0))) + int64(cap(header.Collection)+cap(header.Namespace)),
+		residentBytes: int64(cap(raw)) + int64(cap(rowIndex.offsets))*int64(unsafe.Sizeof(int(0))) + headerOwnedBytes,
 	}
 	if v.pointRowBlocks == nil {
 		v.pointRowBlocks = make(map[documentRowPartKey]*columnPhysicalRowReaderBlock)
 	}
-	// A mapped raw slice may belong to the serving pool. This cache is nested
-	// under the read view: clearDerivedRowFetchCaches and the request's logical
-	// handles close before typedGraphOwner.Close releases the holder/pool.
+	// Raw bytes stay pinned by this view's image handle, including exclusively
+	// owned storage. Clear derived aliases before releasing that handle or
+	// reusing its storage, and before releasing any serving holder/pool.
 	// Retain no borrowed reader object here.
 	v.pointRowBlocks[key] = block
 	return block, nil
@@ -1624,9 +1715,9 @@ func (s *documentRowEmissionScratch) clearBorrowed() {
 	if s == nil {
 		return
 	}
-	clear(s.row.Values)
-	clear(s.typed)
-	clear(s.merge)
+	clear(s.row.Values[:cap(s.row.Values)])
+	clear(s.typed[:cap(s.typed)])
+	clear(s.merge[:cap(s.merge)])
 	s.reconstruction.clearBorrowed()
 }
 
@@ -1661,9 +1752,9 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRefInto(response Docu
 		}
 		return out, err
 	}
-	v.rowAssetReadCache.admitResource = v.admitPointRowAsset
+	v.rowAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
 	if v.typedColumnAssetReadCache != nil {
-		v.typedColumnAssetReadCache.admitResource = v.admitPointRowAsset
+		v.typedColumnAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
 	}
 	selectedColumns := documentProjectionSelectedColumns(cfg, projection)
 	rowProjection := documentProjectionRowAssetColumns(cfg, selectedColumns)
@@ -1692,9 +1783,9 @@ func (v *CollectionReadView) fetchColumnStoreDocumentsByRowRefInto(response Docu
 		if err := v.preparePointRowEmission(cfg, readIntegrity); err != nil {
 			return out, err
 		}
-		v.rowAssetReadCache.admitResource = v.admitPointRowAsset
+		v.rowAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
 		if v.typedColumnAssetReadCache != nil {
-			v.typedColumnAssetReadCache.admitResource = v.admitPointRowAsset
+			v.typedColumnAssetReadCache.ownedRangeStorage = v.borrowPointRowStorage
 		}
 		typedColumnCache = v.typedColumnReconstructionCacheForConfig(cfg)
 		ref := refs[i]

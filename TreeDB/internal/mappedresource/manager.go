@@ -273,6 +273,74 @@ func (m *Manager) AcquireBytes(key Key, scope Scope, source Source, data []byte,
 	return m.acquireRegistered(key, scope, source, data, int64(len(data)), nil, opts), nil
 }
 
+// AcquireExclusiveBuffer borrows caller-owned heap storage exclusively until
+// Release. The caller must keep its entire capacity live, must not mutate any
+// byte through another alias while the handle is live, and may recycle it only
+// after Release and after clearing every derived borrowed value. No copy is
+// made. Maintenance accounting charges capacity, including an unused tail.
+func (m *Manager) AcquireExclusiveBuffer(key Key, scope Scope, data []byte, opts AcquireOptions) (*Handle, error) {
+	if m == nil {
+		return nil, errors.New("mappedresource: nil manager")
+	}
+	if err := scope.ValidateForKey(key); err != nil {
+		m.recordDenied(classifyValidationDeny(err))
+		return nil, err
+	}
+	if int64(len(data)) != key.Length {
+		m.recordDenied(DenyOutOfBounds)
+		return nil, errors.New("mappedresource: exclusive buffer length disagrees with key")
+	}
+	return m.acquireRegistered(key, scope, SourceHeapCopy, data, int64(cap(data)), nil, opts), nil
+}
+
+// AcquireOpenFileRangeInto reads the complete range into exclusively borrowed
+// caller-owned storage. It never allocates or grows dst. The caller retains the
+// opened file and buffer until Release, and must quarantine dst on any failure:
+// a partial read does not publish a handle. Contents, bounds and subsequent
+// integrity checks all use these same owned bytes; this is not an mmap shortcut.
+func (m *Manager) AcquireOpenFileRangeInto(key Key, scope Scope, file *os.File, dst []byte, opts AcquireOptions) (*Handle, error) {
+	if m == nil {
+		return nil, errors.New("mappedresource: nil manager")
+	}
+	if err := scope.ValidateForKey(key); err != nil {
+		m.recordDenied(classifyValidationDeny(err))
+		return nil, err
+	}
+	if file == nil {
+		m.recordDenied(DenyOpenFailed)
+		return nil, errors.New("mappedresource: nil open file")
+	}
+	if key.Length > int64(cap(dst)) {
+		m.recordDenied(DenyOutOfBounds)
+		return nil, errors.New("mappedresource: exclusive destination too small")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		m.recordDenied(DenyReadFailed)
+		m.recordError()
+		return nil, err
+	}
+	end := key.Offset + key.Length
+	if key.Offset < 0 || end < key.Offset || end > info.Size() {
+		m.recordDenied(DenyOutOfBounds)
+		return nil, fmt.Errorf("mappedresource: range offset=%d length=%d outside file bytes=%d", key.Offset, key.Length, info.Size())
+	}
+	raw := dst[:int(key.Length)]
+	n, err := file.ReadAt(raw, key.Offset)
+	if err != nil && err != io.EOF {
+		m.recordDenied(DenyReadFailed)
+		m.recordError()
+		return nil, err
+	}
+	if n != len(raw) {
+		m.recordDenied(DenyOutOfBounds)
+		m.recordError()
+		return nil, io.ErrUnexpectedEOF
+	}
+	opts.ResourcePath = mappedResourceOptionPath(opts.ResourcePath, file.Name())
+	return m.AcquireExclusiveBuffer(key, scope, raw, opts)
+}
+
 // AcquireFileRange opens path and returns either an mmap-backed or heap-copy
 // handle for key.Offset:key.Offset+key.Length. Mmap is best-effort when
 // PreferMapped is set; AllowHeapCopy controls fallback.

@@ -924,9 +924,9 @@ func (s *columnDocumentReconstructionScratch) clearBorrowed() {
 		return
 	}
 	clear(s.object)
-	clear(s.declared)
+	clear(s.declared[:cap(s.declared)])
 	clear(s.written)
-	clear(s.keys)
+	clear(s.keys[:cap(s.keys)])
 	s.keys = s.keys[:0]
 	s.cursor.document = nil
 	s.cursor.pathInterner = nil
