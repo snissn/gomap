@@ -291,11 +291,12 @@ func TestFreelistCandidateV1_WritePagesToUsesOpaqueViewsAndStopsOnError(t *testi
 	if err := candidate.WritePagesToV1(writer); err != nil {
 		t.Fatal(err)
 	}
-	if len(writer.pages) != len(candidate.pages) {
-		t.Fatalf("written pages=%d, want %d", len(writer.pages), len(candidate.pages))
+	wantPages := candidate.Pages()
+	if len(writer.pages) != len(wantPages) {
+		t.Fatalf("written pages=%d, want %d", len(writer.pages), len(wantPages))
 	}
 	for i := range writer.pages {
-		if writer.pages[i].PageID != candidate.pages[i].PageID || !bytes.Equal(writer.pages[i].Data, candidate.pages[i].Data) {
+		if writer.pages[i].PageID != wantPages[i].PageID || !bytes.Equal(writer.pages[i].Data, wantPages[i].Data) {
 			t.Fatalf("page %d differs after opaque copy", i)
 		}
 	}
@@ -304,7 +305,7 @@ func TestFreelistCandidateV1_WritePagesToUsesOpaqueViewsAndStopsOnError(t *testi
 	if err := writer.views[0].CopyTo(retainedCopy); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(retainedCopy, candidate.pages[0].Data) {
+	if !bytes.Equal(retainedCopy, wantPages[0].Data) {
 		t.Fatal("retained opaque view did not preserve read-only candidate bytes")
 	}
 	detached := candidate.Pages()

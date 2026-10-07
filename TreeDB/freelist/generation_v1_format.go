@@ -35,28 +35,63 @@ type AppendPageSink interface {
 	WritePage(pageID uint64, data []byte) error
 }
 
-// CandidatePageViewV1 is a read-only view of one candidate-owned page. It can
-// copy into caller-owned storage without exposing the candidate's byte slice.
-type CandidatePageViewV1 struct {
-	data []byte
+// indexPagePlanV1 owns the canonical fixed-width header and child descriptors.
+// It has no state-tree pointers: a retained view cannot keep a generation alive.
+type indexPagePlanV1 struct {
+	prefix [indexHeaderSize + 16*indexEntrySize]byte
 }
 
-func (view CandidatePageViewV1) Len() int { return len(view.data) }
+// CandidatePageViewV1 is a read-only view of one candidate-owned page. Index
+// pages retain an immutable encoding plan; other pages retain owned bytes.
+// Writers may retain either representation indefinitely.
+type CandidatePageViewV1 struct {
+	data  []byte
+	index *indexPagePlanV1
+}
+
+func (view CandidatePageViewV1) Len() int {
+	if view.index != nil {
+		return page.PageSize
+	}
+	return len(view.data)
+}
 
 func (view CandidatePageViewV1) CopyTo(dst []byte) error {
-	if len(view.data) != page.PageSize || len(dst) != len(view.data) {
+	if view.Len() != page.PageSize || len(dst) != page.PageSize {
 		return fmt.Errorf("%w: invalid candidate page copy", ErrGenerationFormat)
+	}
+	if view.index != nil {
+		prefix := view.index.prefix[:]
+		// The plan owns the exact canonical prefix; all remaining page bytes
+		// are logically zero. Validate that complete page before touching dst.
+		stored := binary.LittleEndian.Uint32(prefix[8:12])
+		if page.CalculateChecksumWithZeroGap(prefix, page.PageSize-len(prefix), nil) != stored {
+			return fmt.Errorf("%w: candidate index page %d", ErrGenerationChecksum, binary.LittleEndian.Uint64(prefix[:8]))
+		}
+		clear(dst)
+		copy(dst, prefix)
+		return nil
 	}
 	copy(dst, view.data)
 	return nil
 }
 
-// WriteCandidatePageToPagerV1 copies an opaque candidate page directly into
-// pager-owned mmap storage. Pager.Write holds the pager lock for the complete
-// copy, preventing a concurrent Sync from draining a partially populated page.
+// WriteCandidatePageToPagerV1 copies an opaque candidate page into pager-owned
+// mmap storage. A plan is fully encoded and checked before Pager.Write, which
+// holds the pager lock for the complete copy. Neither path retains scratch.
 func WriteCandidatePageToPagerV1(dst *pager.Pager, pageID uint64, view CandidatePageViewV1) error {
 	if dst == nil {
 		return fmt.Errorf("%w: missing candidate pager", ErrGenerationFormat)
+	}
+	if view.index != nil {
+		if pageID != binary.LittleEndian.Uint64(view.index.prefix[:8]) {
+			return fmt.Errorf("%w: candidate page identity", ErrGenerationFormat)
+		}
+		var encoded [page.PageSize]byte
+		if err := view.CopyTo(encoded[:]); err != nil {
+			return err
+		}
+		return dst.Write(pageID, encoded[:])
 	}
 	if len(view.data) != page.PageSize {
 		return fmt.Errorf("%w: invalid candidate page copy", ErrGenerationFormat)
@@ -94,7 +129,8 @@ func NewMemoryPageStoreV1() *MemoryPageStoreV1 {
 
 // CandidatePageSinkV1 validates production candidate writes without retaining
 // their bytes. It allows the materialized candidate to take ownership of each
-// freshly encoded page instead of making a validation-store copy.
+// freshly encoded non-index page or immutable index plan instead of making a
+// validation-store copy.
 type CandidatePageSinkV1 struct {
 	pageIDs map[uint64]struct{}
 }
@@ -233,17 +269,30 @@ func decodeChunkPage(b []byte, maxGeneration, expectedChunk uint64) (*stateChunk
 
 func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, error) {
 	b := make([]byte, page.PageSize)
+	if err := encodeIndexPageInto(b, id, generationID, n, depth); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// encodeIndexPageInto overwrites the complete destination, including reserved
+// bytes and unused entries, so a reused buffer encodes the same canonical page.
+func encodeIndexPageInto(b []byte, id, generationID uint64, n *stateNode, depth int) error {
+	if len(b) != page.PageSize || n == nil || depth < 0 || depth > chunkTrieDepth {
+		return ErrGenerationFormat
+	}
+	clear(b)
 	count := 0
 	if depth == chunkTrieDepth {
 		if n.chunk == nil || n.chunk.pageID == 0 {
-			return nil, ErrGenerationFormat
+			return ErrGenerationFormat
 		}
 		count = 1
 	} else {
 		for _, child := range n.child {
 			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
 				if child.pageID == 0 {
-					return nil, ErrGenerationFormat
+					return ErrGenerationFormat
 				}
 				count++
 			}
@@ -276,19 +325,19 @@ func encodeIndexPage(id, generationID uint64, n *stateNode, depth int) ([]byte, 
 	if depth == chunkTrieDepth {
 		retiredCount, minSeq := n.chunk.retiredSummary()
 		if err := write(0, 1, n.chunk.checksum, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq); err != nil {
-			return nil, err
+			return err
 		}
 	} else {
 		for slot, child := range n.child {
 			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
 				if err := write(byte(slot), 0, child.checksum, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq); err != nil {
-					return nil, err
+					return err
 				}
 			}
 		}
 	}
 	finishPage(b)
-	return b, nil
+	return nil
 }
 
 func encodeGenerationPage(id uint64, g *FreelistGenerationV1, rootCRC uint32) []byte {

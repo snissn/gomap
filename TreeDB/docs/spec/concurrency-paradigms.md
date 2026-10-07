@@ -599,3 +599,24 @@ Representative coverage includes:
 - `TreeDB/caching/backpressure_wait_test.go`.
 
 When changing concurrency behavior, these tests SHOULD be reviewed/expanded with the change.
+
+## Pager-owned manifest maintenance fences
+
+Owned-mode manifest GC schedules bounded work outside a whole-directory
+inventory scan. Its existing allocator cursor carries progress, not deletion
+authority. Each destructive step revalidates recoverable roots, exact index
+generation/epoch and held FD identity, publication and snapshot pins under the
+existing write/reuse fences before mutation. A stale basis cannot continue
+destructive work. Both durable slots and queued candidates remain protected.
+The [format contract](../design/owned-leaf-manifest-v1.md) states the cumulative
+per-step entry/page/trie/path bounds and distinguishes canonical validation
+from all additional allocator/physical checks.
+
+Measure complete public GC and concurrent durable write waits, including
+validation, sampling, bounded stale retry and final success. The shared H0 test
+identifies an actual `WriteSync` goroutine waiting at the `writeMu` RWMutex fence;
+a hook rendezvous or scheduling start alone is insufficient. Its fixed stack
+buffer and all samples remain within both layouts' measured windows.
+Standalone segment-hook duration excludes the legacy revision-GC hold, so it
+cannot be presented as the complete legacy fence. Preserve separate setup,
+first/final GC, whole-call and ACK p95/p99 attribution.

@@ -179,3 +179,26 @@ debt; it is never converted into successful compaction.
   convergence.
 - PR #3706 stable-resource tests remain the namespace identity, unlink, and
   directory-durability regression suite.
+
+## Intrinsic pager-owned leaf manifests
+
+In the [pager-owned format](../design/owned-leaf-manifest-v1.md), the system root
+itself owns the canonical inventory. Its retention follows the existing exact
+index generation, both selectable durable slots, visible/queued roots, recovery
+handoff and held-view pins. Intrinsic metadata is not an external
+`ResourceOuterLeafManifest` file token; real leaf/value-log dependencies retain
+their existing resource closure and stable-deletion authority.
+
+A whole owned-mode leaf GC validates each distinct intrinsic object against one
+pinned recoverable-root basis. Publication, relocation or epoch changes
+invalidate that basis. Every destructive allocator step freshly fences the
+root/index identity, publication, snapshot admission, held FD identity and
+opaque page-reuse capability. A scheduling cursor, old digest or counter cannot
+replace those checks. Stale captures defer or return the existing stale error;
+failures retain existing recovery-required and quarantine semantics.
+
+The format relies on TreeDB's exclusive index writer and immutable COW pages.
+Visited content receives integrity validation; unsupported external writes to
+unvisited unrelated index pages have no immediate whole-inventory detection
+guarantee. The standalone layout retains its whole-inventory corruption,
+namespace/rebind, exact child-handle, pin and directory-sync safeguards.

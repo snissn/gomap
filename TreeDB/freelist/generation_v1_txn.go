@@ -551,9 +551,14 @@ func (t *FreelistTxn) Reserve(candidate CandidateIDV1) error {
 	return nil
 }
 
+type candidatePageV1 struct {
+	PageID uint64
+	view   CandidatePageViewV1
+}
+
 type FreelistCandidateV1 struct {
 	generation *FreelistGenerationV1
-	pages      []PageImageV1
+	pages      []candidatePageV1
 	dirtyIDs   []uint64
 }
 
@@ -564,7 +569,12 @@ func (c *FreelistCandidateV1) ReservationRecord() ReservationRecordV1 { return c
 func (c *FreelistCandidateV1) Pages() []PageImageV1 {
 	out := make([]PageImageV1, len(c.pages))
 	for i := range c.pages {
-		out[i] = PageImageV1{c.pages[i].PageID, append([]byte(nil), c.pages[i].Data...)}
+		out[i] = PageImageV1{c.pages[i].PageID, make([]byte, page.PageSize)}
+		// Pages predates the fallible opaque writer API. Failure here means an
+		// internal immutable-state invariant was violated; never return bad bytes.
+		if err := c.pages[i].view.CopyTo(out[i].Data); err != nil {
+			panic(err)
+		}
 	}
 	return out
 }
@@ -583,7 +593,7 @@ func (c *FreelistCandidateV1) WritePagesToV1(writer CandidatePageWriterV1) error
 		return ErrGenerationFormat
 	}
 	for i := range c.pages {
-		view := CandidatePageViewV1{data: c.pages[i].Data}
+		view := c.pages[i].view
 		if err := writer.WriteCandidatePageV1(c.pages[i].PageID, view); err != nil {
 			return fmt.Errorf("write candidate page %d: %w", c.pages[i].PageID, err)
 		}
@@ -593,12 +603,13 @@ func (c *FreelistCandidateV1) WritePagesToV1(writer CandidatePageWriterV1) error
 
 type recordingSink struct {
 	sink             AppendPageSink
-	pages            []PageImageV1
+	pages            []candidatePageV1
+	indexScratch     []byte
 	beforeFirstWrite func() error
 	writeStarted     bool
 }
 
-func (s *recordingSink) write(id uint64, data []byte) error {
+func (s *recordingSink) beforeWrite() error {
 	if !s.writeStarted {
 		if s.beforeFirstWrite != nil {
 			if err := s.beforeFirstWrite(); err != nil {
@@ -606,6 +617,13 @@ func (s *recordingSink) write(id uint64, data []byte) error {
 			}
 		}
 		s.writeStarted = true
+	}
+	return nil
+}
+
+func (s *recordingSink) write(id uint64, data []byte) error {
+	if err := s.beforeWrite(); err != nil {
+		return err
 	}
 	sinkData := data
 	if _, ownsCandidateBytes := s.sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
@@ -616,7 +634,40 @@ func (s *recordingSink) write(id uint64, data []byte) error {
 	if err := s.sink.WritePage(id, sinkData); err != nil {
 		return err
 	}
-	s.pages = append(s.pages, PageImageV1{id, data})
+	s.pages = append(s.pages, candidatePageV1{id, CandidatePageViewV1{data: data}})
+	return nil
+}
+
+// writeIndex retains no scratch alias. Only the exact non-retaining production
+// sink receives the temporary encoding; generic sinks use isolated owned images.
+func (s *recordingSink) writeIndex(n *stateNode, depth int, generationID uint64) error {
+	if _, plans := s.sink.(*CandidatePageSinkV1); !plans {
+		b, err := encodeIndexPage(n.pageID, generationID, n, depth)
+		if err != nil {
+			return err
+		}
+		n.checksum = binary.LittleEndian.Uint32(b[8:12])
+		return s.write(n.pageID, b)
+	}
+	if s.indexScratch == nil {
+		s.indexScratch = make([]byte, page.PageSize)
+	}
+	if err := encodeIndexPageInto(s.indexScratch, n.pageID, generationID, n, depth); err != nil {
+		return err
+	}
+	n.checksum = binary.LittleEndian.Uint32(s.indexScratch[8:12])
+	if err := s.beforeWrite(); err != nil {
+		return err
+	}
+	if err := s.sink.WritePage(n.pageID, s.indexScratch); err != nil {
+		return err
+	}
+	// Copy only canonical fixed-width descriptors, never a scratch slice or
+	// a node pointer. Reserved/unused descriptor bytes are already zero.
+	plan := &indexPagePlanV1{}
+	copy(plan.prefix[:], s.indexScratch[:len(plan.prefix)])
+	view := CandidatePageViewV1{index: plan}
+	s.pages = append(s.pages, candidatePageV1{n.pageID, view})
 	return nil
 }
 
@@ -646,12 +697,7 @@ func emitStatePages(n *stateNode, depth int, generationID uint64, next *uint64, 
 	}
 	n.pageID = *next
 	*next++
-	b, err := encodeIndexPage(n.pageID, generationID, n, depth)
-	if err != nil {
-		return err
-	}
-	n.checksum = binary.LittleEndian.Uint32(b[8:12])
-	return sink.write(n.pageID, b)
+	return sink.writeIndex(n, depth, generationID)
 }
 
 func appendIDExtents(extents []ReservationExtentV1, ids []uint64, kind ReservationKindV1, seq uint64) []ReservationExtentV1 {
@@ -776,7 +822,8 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	}
 	next := metadataStart
 	recorded := &recordingSink{
-		sink: sink,
+		sink:  sink,
+		pages: make([]candidatePageV1, 0, reservedMetadataCount),
 		beforeFirstWrite: func() error {
 			return t.ledger.markTailWriteAttempted(candidateID)
 		},
@@ -785,12 +832,7 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 		// An empty tree still has one immutable exact-generation root page.
 		t.root.pageID = next
 		next++
-		b, err := encodeIndexPage(t.root.pageID, generationID, t.root, 0)
-		if err != nil {
-			return nil, err
-		}
-		t.root.checksum = binary.LittleEndian.Uint32(b[8:12])
-		if err := recorded.write(t.root.pageID, b); err != nil {
+		if err := recorded.writeIndex(t.root, 0, generationID); err != nil {
 			return nil, err
 		}
 	} else if err := emitStatePages(t.root, 0, generationID, &next, recorded); err != nil {

@@ -3904,3 +3904,38 @@ relabelled48-write runtime evidence. Actual48-outcome audit/resource costs and
 all49 native truths remain fresh qualification obligations.
 See command README for allocation ownership and planned operational bounds;
 source controls alone establish no sustained service result.
+
+## Pager-owned leaf manifest verification
+
+The optional format's principal correctness witnesses are:
+
+- `TestOwnedLeafManifestPublicationReopenAndPins`,
+  `TestOwnedLeafManifestPublicRowsDependenciesAndVacuum` and
+  `TestOwnedLeafManifestPublicationCutsKeepAuthority`: pointer visibility,
+  held roots, durable dependencies, publication cuts and vacuum.
+- `TestOwnedLeafManifestPhysicalFeatureRefusal`,
+  `TestOwnedLeafManifestFrozenOldReaderRefusesEverySlot`,
+  `TestOwnedLeafManifestOlderSlotRecoveryAndOldReaderRefusal` and
+  `TestOwnedLeafManifestQueuedBuildGroupAndMixedFormatRefusal`: both physical
+  markers, fallback slots, actual old-reader refusal and mixed-layout rejection.
+- `TestOwnedLeafManifestCanonicalCorruptionAndCeiling` and
+  `TestOwnedLeafManifestRejectsMalformedIntrinsicObjects`: canonical dimensions,
+  reserved-key intervals, integrity and malformed objects.
+- `TestOwnedLeafManifestPreparedAllowanceRejectsBeforeCommandWAL`: output credit
+  refusal before command assignment; no enlarged allocation cap.
+- `TestOwnedLeafManifestSameGenerationReuseAndRootEdits`,
+  `TestOwnedLeafManifestActualRolloverAddsRevision` and
+  `TestOwnedLeafManifestFailedStageRetainsPendingAndQueuedReuse`: exact logical
+  reuse, producer rollover, failed pending IDs and root replacement.
+- `TestOwnedLeafManifest512BoundedRetirement`,
+  `TestOwnedLeafManifestDrainedPinsReuseAndHighWaterPlateau` and
+  `TestOwnedLeafManifestCanceledAndClosedMaintenance`: actual bounded work,
+  pin drain, page reuse/debt and cancellation/shutdown.
+
+Use the retained source-bound `TestR1ManifestWholeGC5095` and
+`TestR1ManifestConcurrentACK5095` artifacts for public whole-call/setup,
+first/final retry statistics, complete returned data and observed write waits.
+Retain full multi-line error causes and first/final statistics. Passing semantic
+fixtures alone does not pass #5095's allocation, latency, noise, foreground or
+rollout objectives. Legacy standalone corruption/deletion regressions remain
+required; internal reuse must never be labelled physical file deletion.

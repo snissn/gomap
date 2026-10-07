@@ -330,3 +330,18 @@ to their owning manifest generation. Value-log and leaf-log lifecycle remain
 covered by their existing maintenance contracts. It also does not grant
 root-candidate authority, discharge command-WAL-prefix durability work, or
 declare rebuilt assets query-ready.
+
+## Pager-owned leaf manifests remain a separate resource domain
+
+The [intrinsic leaf inventory](../design/owned-leaf-manifest-v1.md) belongs to
+the existing immutable system root. Its allocator page retention/reuse is
+governed by recoverable-root, durable-slot and snapshot authority. This grants
+no typed-column, dictionary, aggregate or vector asset deletion capability:
+those external assets retain their owning manifest generations, exact physical
+references, active mappedresource pins and stable namespace/deletion checks.
+
+Operators must distinguish intrinsic internal-page debt from inactive external
+leaf/value-log/typed assets. Pin drain may allow internal reuse while external
+segments remain reachable. Report each owner and its actual retirement/rewrite
+boundary; changing leaf inventory format is not whole-database compaction or
+an accepted typed-asset plateau.
