@@ -329,6 +329,13 @@ func runFixedPeerVectorPrepareRealRaftV1(t *testing.T, loseResult, nonphysical, 
 	var configs []FixedPeerTCPConfigV1
 	if replicas == 4 {
 		configs = fourNodeInitializationTestConfigsV1(t)
+		// These four-voter fixtures synchronously persist real Raft entries.
+		// Leave room for shared CI disk/scheduler pauses without treating them
+		// as heartbeat loss; successful writes still require genuine commit/apply.
+		for i := range configs {
+			configs[i].RequestTimeout = 12 * time.Second
+			configs[i].RaftTimeout = time.Second
+		}
 	} else {
 		configs = initializationTestConfigsV1(t)
 	}
