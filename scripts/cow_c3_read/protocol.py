@@ -292,6 +292,47 @@ def workload_metrics(workload):
     return {"point_calls/op": point, "scan_calls/op": scan, "visited/op": 2 * scan,
             "output/op": point + 2 * scan}, ["writer"] + (["point"] if point else []) + (["scan"] if scan else [])
 
+def metric_contract(profile, layout, workload, mode):
+    need(profile in PROFILES and layout in LAYOUTS and mode in MODES, "unknown metric dimensions")
+    work, latency = workload_metrics(workload)
+    rules = {"ns/op": {"min": 1}, "B/op": {"min": 1}, "allocs/op": {"min": 1},
+             "writer_ops/s": {"min": 0.000001}, "reader_ops/s": {"min": 0.000001},
+             "readers_while_writer_active/op": {"min": 0, "max": 2} if workload == "concurrent" else {"eq": 0},
+             "wal_appends/op": {"eq": 0 if profile == "no_wal_fast" else 1},
+             "wal_syncs/op": {"eq": 1 if profile == "command_wal_durable" else 0},
+             "close_ok": {"eq": 1}}
+    rules.update({unit: {"eq": count} for unit, count in work.items()})
+    rules.update({"layout_expected_records": {"eq": 4},
+                  "ack_routing_before_ok": {"eq": 1}, "ack_routing_after_ok": {"eq": 1}})
+    for phase in ("before", "after"):
+        rules["layout_" + phase + "_inline"] = {"eq": 4 if layout == "inline" else 0}
+        rules["layout_" + phase + "_pointer"] = {"eq": 4 if layout == "pointer" else 0}
+        for name in ("wal_appends", "wal_syncs"):
+            rules[name + "_" + phase] = {"eq": 0} if profile == "no_wal_fast" else {"min": 0, "integer": True}
+    for name in ("snapshot_rotations/op", "rotated_shards/op", "enqueued_records/op"):
+        rules[name] = {"eq": 0} if mode == "cow_btree" else {"min": 0}
+    comparisons = {"ns/op": "lower", "B/op": "lower", "allocs/op": "lower",
+                   "writer_ops/s": "higher", "reader_ops/s": "higher"}
+    if workload == "concurrent":
+        for group in ("point", "scan"):
+            rules[group + "_phase_elapsed_ns"] = {"min": 1}
+            rules[group + "_phase_ops/s"] = {"min": 0.000001}
+            comparisons[group + "_phase_elapsed_ns"] = "lower"
+            comparisons[group + "_phase_ops/s"] = "higher"
+    for group in latency:
+        for p in (50, 95, 99):
+            name = f"{group}_p{p}_ns"
+            rules[name] = {"min": 1}
+            comparisons[name] = "lower"
+    if mode == "cow_btree":
+        for name in ("capture_calls_total", "prepare_calls_total", "publications_total"):
+            rules["cow_" + name + "/op"] = {"min": 1}
+        for name in ("total_bytes", "peak_bytes", "external_leases"):
+            rules["cow_end_" + name] = {"min": 1, "integer": True}
+        rules["cow_end_views"] = {"eq": 0}
+        rules["cow_end_active_cuts"] = {"eq": 1}
+    return rules, comparisons
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
@@ -438,6 +479,10 @@ def config(path):
             for unit, rule in x["rules"][variant].items():
                 need(set(rule) <= {"min", "max", "eq", "integer"} and ("eq" in rule or "min" in rule), "explicit zero/nonzero metric rule required")
                 need(all(math.isfinite(v) and v >= 0 for k, v in rule.items() if k != "integer"), "invalid metric bounds")
+        canonical_rules, canonical_directions = metric_contract(x["profile"], x["layout"], x["workload"], x["mode"])
+        need(digest(x["comparison_metrics"]) == digest(canonical_directions), "canonical effect directions mismatch")
+        for variant in ("baseline", "candidate"):
+            need(digest(x["rules"][variant]) == digest(canonical_rules), "canonical operational rules mismatch")
     return c
 
 def schedule(c):
