@@ -10,6 +10,11 @@ different-path ID conflicts and closed-live-handle errors.
 unlink and rollback, proves unchanged-identity refresh with the closed handle,
 then replaces the pathname. Refresh and retirement retry must report a resource
 conflict while preserving the replacement's bytes/identity and zombie ownership.
+`TestManagerRefreshRetiredSegmentRejectsSpecialPath` exercises failed-unlink
+rollback followed by a FIFO, a link to the original inode, and a link to a FIFO.
+Refresh and retirement retry must refuse promptly while retaining the special
+entry and zombie ownership; the failed-test path unblocks and joins a legacy
+FIFO open before reporting the regression.
 `BenchmarkManagerRefreshLiveSegment` reports ns/op, B/op and allocs/op for warmed
 directory refresh; segment creation, manager open and cleanup are outside the timer.
 
