@@ -1,0 +1,7 @@
+commit 7649857532521db69ff4cdcf236a11377c85ab3d
+Author:     Mikers <snissn@gmail.com>
+AuthorDate: Tue Oct 6 08:34:41 2026 -1000
+Commit:     GitHub <noreply@github.com>
+CommitDate: Tue Oct 6 08:34:41 2026 -1000
+
+    fix(bench): match Go recall aggregation order (#5074)

@@ -1,0 +1,66 @@
+# Retained text originals
+
+UNPROMOTED. Original and copy paths, modes, size and SHA256 are recorded exactly in `inventory.json`.
+
+| Original relative path | Bytes | Classification |
+| --- | ---: | --- |
+| `5071-a645-cow-repair-root-adoption.json` | 1607 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `5071-a645-postpush-original.json` | 11643 | ACTUAL_POSTPUSH_METADATA_SNAPSHOT_NOT_READINESS |
+| `5071-cow-fixture-integrated-source.json` | 105880 | HISTORICAL_17597_DIRTY_SOURCE_CLEAN_FALSE |
+| `5071-cow-repair-final-source.json` | 105879 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `5071-cow-repaired-pr-body.md` | 6802 | ACTUAL_POSTPUSH_METADATA_SNAPSHOT_NOT_READINESS |
+| `a645-cow-fixture-validation-original/format-exit.json` | 108295 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/format-start.json` | 109318 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/format.log` | 0 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/normal-exit.json` | 108295 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/normal-start.json` | 109405 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/normal.log` | 9678 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/race-exit.json` | 108295 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/race-start.json` | 109418 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/race.log` | 9678 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/source-after.json` | 105879 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/source-before.json` | 105879 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/vet-exit.json` | 108295 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/vet-start.json` | 109285 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-original/vet.log` | 0 | EXACT_SOURCE_FOCUSED_CORRECTNESS_RECEIPT |
+| `a645-cow-fixture-validation-root-review.json` | 2549 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `a645-cow-fixture-validation-ssh.log` | 2545 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `a645-cow-fixture-validation.py` | 2928 | TEXTUAL_DRIVER_COPY_DO_NOT_EXECUTE |
+| `a645-cow-repair-source-applicability-review.json` | 36251 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `a645-cow-repair-source-applicability-review.md` | 3584 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `a645-test_ci_impact.py.log` | 121 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `a645-test_refresh_ci_impact_inventory.py.log` | 115 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `cow-fixture-ci-refresh-check.log` | 83 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `cow-fixture-ci-refresh.log` | 79 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `cow-fixture-main-ci-refresh-check.log` | 83 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `cow-fixture-main-ci-refresh.log` | 79 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-ci-jobs-1832.json` | 65917 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-ci-runs-initial.json` | 2328 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-ci-diagnosis.json` | 39085 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-ci-diagnosis.md` | 5820 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-root-review.json` | 939 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-validation-ssh.log` | 379 | ORIGINAL_INITIAL_DRIVER_FAILURE_RETAINED |
+| `ebe414-cow-failure-focused-validation-v2-original/normal-exit.json` | 108295 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-validation-v2-original/normal-start.json` | 109446 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-validation-v2-original/normal.log` | 2827 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-validation-v2-original/source-after.json` | 105879 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-validation-v2-original/source-before.json` | 105879 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-validation-v2-ssh.log` | 79 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-cow-failure-focused-validation-v2.py` | 2568 | TEXTUAL_DRIVER_COPY_DO_NOT_EXECUTE |
+| `ebe414-cow-failure-focused-validation.py` | 2554 | ORIGINAL_INITIAL_DRIVER_FAILURE_RETAINED |
+| `ebe414-m0-artifacts-original.json` | 766 | HISTORICAL_EBE_M0_METADATA_NOT_NEWHEAD_OR_PERF_ACCEPTANCE |
+| `ebe414-m0-success-original.json` | 1644 | HISTORICAL_EBE_M0_METADATA_NOT_NEWHEAD_OR_PERF_ACCEPTANCE |
+| `ebe414-required-ci-before-repair-original.json` | 54170 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `ebe414-windows-caching-rest1-failed-original.log` | 555937 | ORIGINAL_WINDOWS_REQUIRED_CI_FAIL_UNWAIVED |
+| `main3cfe-ci-1835.json` | 1221 | HISTORICAL_MATCHING_MAIN_CONTROL_NOT_CAUSAL_PROOF |
+| `main3cfe-ci-jobs-original.json` | 76586 | HISTORICAL_MATCHING_MAIN_CONTROL_NOT_CAUSAL_PROOF |
+| `main3cfe-windows-caching-rest1-original.log` | 555247 | HISTORICAL_MATCHING_MAIN_CONTROL_NOT_CAUSAL_PROOF |
+| `released-worktree-cleanup-result.json` | 101654 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `released-worktree-cleanup-result.md` | 1922 | RETAINED_SOURCE_REVIEW_LOG_OR_HISTORY_NOT_QUALIFICATION |
+| `source-cli/commit-275ea.txt` | 279 | NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION |
+| `source-cli/commit-17597.txt` | 293 | NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION |
+| `source-cli/commit-a645.txt` | 282 | NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION |
+| `source-cli/commit-main-764985.txt` | 269 | NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION |
+| `source-cli/repair-fixture-diff.txt` | 1244 | NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION |
+| `source-cli/final-inventory-diff.txt` | 808 | NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION |
+| `source-cli/a645-fixture-source.go` | 15662 | NEW_READONLY_GIT_OBJECT_TEXT_OBSERVATION |

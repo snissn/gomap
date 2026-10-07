@@ -1,0 +1,23 @@
+{
+  "owner": "/root",
+  "utc": "2026-10-07T00:57:38.023655+00:00",
+  "scope": "Root read and adopted factual A/C prose fragments; complete final report composition/public proof/D acceptance remain pending. No threshold or original data changes.",
+  "selected_files": [
+    {
+      "path": "M-3325dfe-final-A-C-report-prose-preparation/A-C-interpretation.md",
+      "sha256": "3686dc25985bb25488a2c9cb51d5b57a4c51a035188e089116537373fa1c1501",
+      "bytes": 3506
+    },
+    {
+      "path": "M-3325dfe-final-A-C-report-prose-preparation/A-comparison.md",
+      "sha256": "6b71d475271e25a9e87a9e587c572cdb1799c58adf6421e6f3c5fc048cd409d3",
+      "bytes": 3131
+    },
+    {
+      "path": "M-3325dfe-final-A-C-report-prose-preparation/handoff.json",
+      "sha256": "241c821af3f1f72fe11f6baa65cff82bf7e792f961d246735d2f08938f48a3a0",
+      "bytes": 16304
+    }
+  ],
+  "archive_sha256": "9f56f81418a29c384387524ee77823a894628057b1331cbee1c5b0cf4ada6d5f"
+}

@@ -1,0 +1,24 @@
+{
+  "M": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "change": "Only the one public-replay receipt uses the separately frozen public-replay-M-3325dfe sibling path outside _artifacts. Other receipts, actual values, file verification and verbatim fragment/history checks remain byte-equivalent. Original helper retained unchanged. Prevents post-proof mutation of original artifact ledgers.",
+  "executed": false,
+  "files": {
+    "assemble.py": {
+      "bytes": 6859,
+      "sha256": "fe81e26e777e49c78fd2e7b81e2a556e0fd4b8be2facfb8be64f945278372a5f"
+    },
+    "manifest-template.json": {
+      "bytes": 2493,
+      "sha256": "fbbef4a5e78bf0e9b88708749e2ae5a9e17f36486c46d2b9daaff06ab4c2451c"
+    },
+    "report-template.md": {
+      "bytes": 1880,
+      "sha256": "ab4a4802c80b6c433736dba7ab9871b93ab04e978893c6ea17a8607f76d259bc"
+    }
+  },
+  "new_helper_sha256": "fe81e26e777e49c78fd2e7b81e2a556e0fd4b8be2facfb8be64f945278372a5f",
+  "original_helper_sha256": "ab1a24e399b34490293b54c2511dd9ccdbccae2b908f0106647c60804b105925",
+  "state": "PRIVATE_ROOT_REPORT_LAYOUT_PREPARATION_ONLY_NO_RENDER_OR_ACCEPTANCE",
+  "syntax": "AST PASS",
+  "utc": "2026-10-07T00:22:18.454214+00:00"
+}

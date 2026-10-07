@@ -1,0 +1,11 @@
+{
+  "utc": "2026-10-06T22:06:45.238010+00:00",
+  "status": "ROOT_SELECTED_PRESENTATION_PATH_ONLY_NO_STAGE_PUBLICATION_ACCEPTANCE",
+  "publication_artifact_repo_path": "docs/evidence/r1-row-store-5061/_artifacts",
+  "primary_report_repo_path": "TreeDB/docs/evidence/r1-row-store-5061/README.md",
+  "reason": "Two byte-frozen non-test-named Go evidence members belowTreeDB would enter runtime inventory and ordinaryGo package discovery. Outside runtime prefixes and beneath underscore subtree preserves originalrelativepaths/bytes/ledgers while isolating evidence from production discovery.",
+  "handoff_json_sha256": "8021f5f61897e56d62115588b663db478e39b71dc488732138516aa705aa220e",
+  "handoff_md_sha256": "4a5e59ca16d3e3a597b43e489e659df39046c8e3a59eb378de4832d29e3ac047",
+  "frozen_go_members_sha256": "88aef9a7634ff8693ae790007d579dd27daeea0d2d0d25c337b1d4387fa3b054",
+  "required_remaining": "Actual E/M runtime+distinctharness equality, Go discovery/format/currentrequiredCI, complete ledgers and fresh public replay; no frozenhelper edits or gatewaivers"
+}

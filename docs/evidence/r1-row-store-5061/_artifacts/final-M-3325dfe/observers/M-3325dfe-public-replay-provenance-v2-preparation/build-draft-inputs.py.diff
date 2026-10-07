@@ -1,0 +1,20 @@
+--- original/build-draft-inputs.py
++++ provenance-v2/build-draft-inputs.py
+@@ -13,7 +13,7 @@
+ M='3325dfe77940fec8587d8b61b1ac4e0b2f72caca'
+ TREE='0600b47bf0a3a609917d224d7fd06c40737bcd8e'
+ PREFIX='final-M-3325dfe'
+-TEMPLATE_SHA='bbcc02ef96051b79cf43b8666505ff9f98f59ca39e652988b73797d5a0869dfd'
++TEMPLATE_SHA='7386b8a571eb6c0831f8004f5e6753bd0a07a2ba970b56d2840b3599369d0ac4'
+ HIST=['comparator/baseline/0216e2e','comparator/historical-candidate/f95ea1a','comparator/final-typed-scope/00d2c370']
+ LANES={'A':'comparator/final-actual-M/3325dfe','C':'mutation-sweep/final-actual-M/3325dfe','D':'lifecycle/final-actual-M/3325dfe'}
+ OBS=['build-completed.json','build-start.json','independent-expected-source.json','independent-validation.log','observer-before.json','root-frozen-inputs.json','run-exit.json','run-start.json','runner-after.json','runner-before.json','validation-exit.json','validation-start.json']
+@@ -273,7 +273,7 @@
+         if label=='A':
+             need(end['binary_sha256']==pins['binary_sha256'] and end['packet_sha256']==pins['packet_sha256']
+                  and end['validation_log_sha256']==row['original_validation_log_sha256'],'A original independent validator binding disagrees')
+-    cert_name=PREFIX+'/results/A/root-approved-A-semantics-certificate.json'
++    cert_name=PREFIX+'/results/A/root-approved-A-semantics-and-provenance-certificate-v2.json'
+     cert=read(cert_name); certrow=c['A_certificate']
+     need(cert['schema']=='gomap-r1-A-harness-equivalence-v1' and cert['approved'] is True
+          and cert['selected']['commit']==M and cert['baseline']==certrow['baseline'], 'actual original approved semantic certificate missing/wrong M or baseline')

@@ -1,0 +1,9 @@
+39f82246d1fc8faa44293d2c6c5a22cf7039ce1a
+e241ca84dca3da947197f3f903d86cf7724b784f
+ok  	github.com/snissn/gomap/TreeDB/db	8.354s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.062s
+NORMAL_EXIT=0
+ok  	github.com/snissn/gomap/TreeDB/db	4.045s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	1.037s
+RACE_EXIT=0
+VET_EXIT=0

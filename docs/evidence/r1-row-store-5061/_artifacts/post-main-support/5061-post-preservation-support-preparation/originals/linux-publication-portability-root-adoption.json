@@ -1,0 +1,16 @@
+{
+  "utc": "2026-10-06T21:06:35.017063+00:00",
+  "handoff_sha256": "a48233e8b395bd0184c537ff351d68399ef419edb1521d9d5ff526d662dabec2",
+  "root_read_handoff": true,
+  "frozen_input_pins_verified": 14,
+  "baseline_adjacent_pins_verified": 7,
+  "Linux_snapshot_verification": "mac-evidence-preservation-verification-original.json SHA256 2156e68fd0dafe02b5307b5ff2e69505bb68153a08872182752e768161e183a4 verifies every mirrored input including baseline modes",
+  "accepted_preparation_decisions": [
+    "Override source-base on both approved assemblers",
+    "New selection relocates only original13 root fields; preserves original selection and all other fields",
+    "Nine-group replaces six-group",
+    "Verify full final publication and support ledgers separately from core restorer",
+    "Baseline and observed historical paths remain unchanged; relocated flags select bytes"
+  ],
+  "status": "ROOT_ADOPTED_PREPARATION_ONLY; no actual staging, capture or acceptance"
+}

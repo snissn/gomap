@@ -1,0 +1,38 @@
+{
+  "CPython_source": {
+    "bytes": 106673,
+    "documentation": "https://docs.python.org/3.14/using/cmdline.html#envvar-PYTHONCOERCECLOCALE",
+    "interpretation": "CPython tries C.UTF-8 first when coercing legacy C locale and updates LC_CTYPE in process environment before runtime initialization; original observer sees actual inner wrapper os.environ. This is a source-supported explanation, not traced proof of every historical child startup.",
+    "selected_lines": {
+      "241": "    {\"C.UTF-8\"},",
+      "275": "    if (setenv(\"LC_CTYPE\", newloc, 1)) {"
+    },
+    "sha256": "526cc417b4a552d58bba27f0fc73234e81d654c60ffc2be8dcbc28e1cc73b2ae",
+    "url": "https://raw.githubusercontent.com/python/cpython/v3.14.4/Python/pylifecycle.c"
+  },
+  "build_wrapper_environment_exact_effective_plus_required_locale": true,
+  "diff_sha256": "e131de0009400d810ecb9fa03a5a3b60852fdbcb198730cb13207d16af65ace5",
+  "exact_original_environment_difference": {
+    "added": {
+      "LC_CTYPE": "C.UTF-8"
+    },
+    "changed": [],
+    "missing": []
+  },
+  "helper_execution_performed": false,
+  "literal_diff_only_one_guard_replaced_by_two_exact_guards": true,
+  "new_qualifier_bytes": 17456,
+  "new_qualifier_sha256": "648f07a3135cbd2d35ac713e944d681dd2de7b7111c76a4e0ca3b10e50717953",
+  "numeric_capacity_cost_acceptance_supplied": false,
+  "original_Go_source_tool_packet_semantic_argv_ELF_repetition_hash_chronology_checks_unchanged": true,
+  "original_qualifier_bytes": 17332,
+  "original_qualifier_sha256": "82f2cbbc8288898a481edcdc099c6d5009cdf1bc77af0560ac31fa44818e81c5",
+  "original_wrapper_matches_frozen_observer_exact_body": true,
+  "run_and_validation_launch_environment_exact_effective": true,
+  "schema": "gomap-r1-D-locale-v2-static-review-v1",
+  "static_preparation_note": "An initial source-line-index assertion used web parsed numbering, failed before handoff; actual raw source line numbers241/275 were inspected and corrected. No qualifier execution occurred.",
+  "synthetic_test_or_Go_execution_performed": false,
+  "utc": "2026-10-07T01:02:04.759660+00:00",
+  "whole_module_AST_identical_outside_that_replacement": true,
+  "wrong_locale_missing_locale_additional_keys_rejected_by_complete_dictionary_equality": true
+}

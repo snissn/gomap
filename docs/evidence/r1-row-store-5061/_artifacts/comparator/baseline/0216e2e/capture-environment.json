@@ -1,0 +1,81 @@
+{
+  "coordinator_wrapper_sha256": "07302e55e65e03854870764078290be0572b540ef2e58f4badeeacad6c42126b",
+  "worktree": "/home/mikers/gomap-r1-5057",
+  "frozen_source": "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+  "output": "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e",
+  "capture_args": [
+    "-documents",
+    "4096",
+    "-batch-size",
+    "32",
+    "-operations",
+    "1000",
+    "-repetitions",
+    "5",
+    "-qualification",
+    "retained",
+    "-durability",
+    "durable",
+    "-read-state",
+    "flushed"
+  ],
+  "utc": "2026-10-06T03:56:36Z",
+  "cpu_count": 16,
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64"
+  ],
+  "go_build_environment": {
+    "CC": "gcc",
+    "CGO_CFLAGS": "-O2 -g",
+    "CGO_CPPFLAGS": "",
+    "CGO_CXXFLAGS": "-O2 -g",
+    "CGO_ENABLED": "1",
+    "CGO_LDFLAGS": "-O2 -g",
+    "CXX": "g++",
+    "GOARCH": "amd64",
+    "GOFLAGS": "",
+    "GOOS": "linux",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOTOOLCHAIN": "local"
+  },
+  "environment": {
+    "TMPDIR": "/home/mikers/gomap-r1-evidence-20261005/r1-baseline-landed-0216e2e-db-temp",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOCACHE": "/home/mikers/.cache/gomap-r1-go1264",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "16",
+    "GOGC": "100",
+    "GOMEMLIMIT": "off",
+    "GODEBUG": "",
+    "R1_GO": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go"
+  },
+  "temp_device": 66306,
+  "output_parent_device": 66306,
+  "temp_filesystem": "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme1n1p2  1920641288 1250710172 572294152      69% /\n",
+  "output_filesystem": "Filesystem     1024-blocks       Used Available Capacity Mounted on\n/dev/nvme1n1p2  1920641288 1250710172 572294152      69% /\n",
+  "loadavg": [
+    0.0224609375,
+    0.19873046875,
+    0.29541015625
+  ],
+  "top_processes": [
+    "%CPU %MEM COMMAND",
+    "50.0  0.0 python3",
+    " 0.5  0.3 codex",
+    " 0.4  1.0 gnome-shell",
+    " 0.3  0.8 codex",
+    " 0.3  5.1 tmux: server",
+    " 0.2  0.3 codex",
+    " 0.2  0.4 codex",
+    " 0.1  0.0 napi/phy0-0",
+    " 0.0  0.1 containerd",
+    " 0.0  0.0 napi/phy0-0",
+    " 0.0  0.0 dbus-daemon"
+  ]
+}

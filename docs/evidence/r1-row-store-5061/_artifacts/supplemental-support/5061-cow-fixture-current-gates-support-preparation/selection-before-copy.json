@@ -1,0 +1,565 @@
+{
+  "exclusions": [
+    {
+      "path": "/tmp/gomap-r1-execution-20261005/ebe414-windows-caching-rest1-failed.log",
+      "reason": "Zero-byte failed download placeholder; actual nonempty original log retained separately"
+    },
+    {
+      "pattern": "bundles/ZIP/binaries/mutable state.json/future CI records",
+      "reason": "Outside text-only retained original scope"
+    }
+  ],
+  "files": [
+    {
+      "bytes": 1607,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/5071-a645-cow-repair-root-adoption.json",
+      "relative": "5071-a645-cow-repair-root-adoption.json",
+      "sha256": "b9dad77ff46f7b7c8178bee93c1914e9b8b2ad84bb39af2ecc59de0b4ebd7f2e",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 11643,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/5071-a645-postpush-original.json",
+      "relative": "5071-a645-postpush-original.json",
+      "sha256": "18cd697ec3a5561e3b41791130cecae004dd5a05e3e837cbaa8d27787ca64442",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 105880,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/5071-cow-fixture-integrated-source.json",
+      "relative": "5071-cow-fixture-integrated-source.json",
+      "sha256": "58a63ee0572558728d18b2bd470ae3e150fbd4a0773a0eecf1da1be84a97f537",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 105879,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/5071-cow-repair-final-source.json",
+      "relative": "5071-cow-repair-final-source.json",
+      "sha256": "f4dda7584a08fed2720eb5cca238fac9180d46ec84e4147a732417bb0cd4bffb",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 6802,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/5071-cow-repaired-pr-body.md",
+      "relative": "5071-cow-repaired-pr-body.md",
+      "sha256": "440b916f40a331e7629110b0a5238c9581d478dfc7bcf7351b7a30ded6834a98",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 108295,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/format-exit.json",
+      "relative": "a645-cow-fixture-validation-original/format-exit.json",
+      "sha256": "a66f6d126340b864208c8ed6a672cae1738a4b529976f922e6441c2c01e0124a",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 109318,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/format-start.json",
+      "relative": "a645-cow-fixture-validation-original/format-start.json",
+      "sha256": "3b7ef91577ddf96ca01fcbd959390a7a7291958ba51fdeec5bc09de86b8a51c1",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 0,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/format.log",
+      "relative": "a645-cow-fixture-validation-original/format.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 108295,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/normal-exit.json",
+      "relative": "a645-cow-fixture-validation-original/normal-exit.json",
+      "sha256": "1e799af2f8e2f1b750569193d525eee010ac19354dff5ecbfcd047aa0081e316",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 109405,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/normal-start.json",
+      "relative": "a645-cow-fixture-validation-original/normal-start.json",
+      "sha256": "73750b23429d569f2ec5880642de62de32f1a7c7c373b4dd345ab089b32cb0f3",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 9678,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/normal.log",
+      "relative": "a645-cow-fixture-validation-original/normal.log",
+      "sha256": "ce045d58e0cdec52995840b3b3f5983d3561005c6401fde604044060f2aaf74e",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 108295,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/race-exit.json",
+      "relative": "a645-cow-fixture-validation-original/race-exit.json",
+      "sha256": "c60d559e85160d8a63bd8eabd82bb93a212297505c21a8c29c1dc6423dcbd52a",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 109418,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/race-start.json",
+      "relative": "a645-cow-fixture-validation-original/race-start.json",
+      "sha256": "8fd41416b10b7e6f6b38e0653654a9a51b07bb5bf9d499c7d37138aef05200d2",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 9678,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/race.log",
+      "relative": "a645-cow-fixture-validation-original/race.log",
+      "sha256": "2faf5da2a4c7164de607af8ca50047117342bd9ee5e55c19f29717e31927f0df",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 105879,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/source-after.json",
+      "relative": "a645-cow-fixture-validation-original/source-after.json",
+      "sha256": "f4dda7584a08fed2720eb5cca238fac9180d46ec84e4147a732417bb0cd4bffb",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 105879,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/source-before.json",
+      "relative": "a645-cow-fixture-validation-original/source-before.json",
+      "sha256": "f4dda7584a08fed2720eb5cca238fac9180d46ec84e4147a732417bb0cd4bffb",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 108295,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/vet-exit.json",
+      "relative": "a645-cow-fixture-validation-original/vet-exit.json",
+      "sha256": "7878cf8e45464e3567d75bbcb3e1c8078e75006640f902bcf6fec05a1664d2b8",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 109285,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/vet-start.json",
+      "relative": "a645-cow-fixture-validation-original/vet-start.json",
+      "sha256": "5b8d3e80863c161a1c8126e0f6bece5fd542ca28017cd38836ac2cc977261425",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 0,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-original/vet.log",
+      "relative": "a645-cow-fixture-validation-original/vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 2549,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-root-review.json",
+      "relative": "a645-cow-fixture-validation-root-review.json",
+      "sha256": "c8fb1e030828694d870212e2f15d1fd9a812c2f07ce353f207c61d44adc7f7df",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 2545,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation-ssh.log",
+      "relative": "a645-cow-fixture-validation-ssh.log",
+      "sha256": "8307c38e43d2927606e038b604844b94fb90a1076a1a5384405b223e0444ff52",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 2928,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-fixture-validation.py",
+      "relative": "a645-cow-fixture-validation.py",
+      "sha256": "72e1c525e56c456b54f202a8e8a5b98976c78f1660d22beb911131293b641413",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 36251,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-repair-source-applicability-review.json",
+      "relative": "a645-cow-repair-source-applicability-review.json",
+      "sha256": "0e394c0cb872d349c0e4150c9116e7736f15d9d6ae7e632b0ce0210eb03ac8f7",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 3584,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-cow-repair-source-applicability-review.md",
+      "relative": "a645-cow-repair-source-applicability-review.md",
+      "sha256": "eae6b7401d8c054244e239723b1dddac13917ef036e9010222d06216d1f87982",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 121,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-test_ci_impact.py.log",
+      "relative": "a645-test_ci_impact.py.log",
+      "sha256": "f7cff90f697460a49e6bb515d949a802fd9a975080b4d4ab8b2f1bdf8759a45b",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 115,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/a645-test_refresh_ci_impact_inventory.py.log",
+      "relative": "a645-test_refresh_ci_impact_inventory.py.log",
+      "sha256": "e71606e60bc097de6866076bc8965bc74d85a28379f3b0810db23b993d9b8b1a",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 83,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/cow-fixture-ci-refresh-check.log",
+      "relative": "cow-fixture-ci-refresh-check.log",
+      "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 79,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/cow-fixture-ci-refresh.log",
+      "relative": "cow-fixture-ci-refresh.log",
+      "sha256": "db37900fc1e4aa00706df4c1ef305a3f263329f3d9fdd2fe845a068b1a2f14ef",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 83,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/cow-fixture-main-ci-refresh-check.log",
+      "relative": "cow-fixture-main-ci-refresh-check.log",
+      "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 79,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/cow-fixture-main-ci-refresh.log",
+      "relative": "cow-fixture-main-ci-refresh.log",
+      "sha256": "db37900fc1e4aa00706df4c1ef305a3f263329f3d9fdd2fe845a068b1a2f14ef",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 65917,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-ci-jobs-1832.json",
+      "relative": "ebe414-ci-jobs-1832.json",
+      "sha256": "648d014a9a75e81c8795048b577df9446c10cd5be577e602910feb893733e1a3",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 2328,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-ci-runs-initial.json",
+      "relative": "ebe414-ci-runs-initial.json",
+      "sha256": "abd1a1e4ca02f58a4ea7b36e1dae6fde2c30fb996111f97a826b93e9cd9e91cd",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 39085,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-ci-diagnosis.json",
+      "relative": "ebe414-cow-ci-diagnosis.json",
+      "sha256": "a32c40ad4aaed9ca235fc7c0d1507d8d45f2659b8aa8a6ada933934528c6f412",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 5820,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-ci-diagnosis.md",
+      "relative": "ebe414-cow-ci-diagnosis.md",
+      "sha256": "6f53316e8b0d683a829e5b0730413f3d1e84a438f40f0cbe042693a01a8eda45",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 939,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-root-review.json",
+      "relative": "ebe414-cow-failure-focused-root-review.json",
+      "sha256": "5b2c21438a166ce935f4f279aafb94bce380437f5d5a7fe67e80af922f5f54da",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 379,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-ssh.log",
+      "relative": "ebe414-cow-failure-focused-validation-ssh.log",
+      "sha256": "ca2e317beeef4f9d5f4789b4282113eb9293dc4171ad32a8b5e3ac2d451752be",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 108295,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/normal-exit.json",
+      "relative": "ebe414-cow-failure-focused-validation-v2-original/normal-exit.json",
+      "sha256": "b7a39b6c62453df45d2ef5c7acc846b277eed3100a9154943baa84960a9d88bb",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 109446,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/normal-start.json",
+      "relative": "ebe414-cow-failure-focused-validation-v2-original/normal-start.json",
+      "sha256": "f3b1cbf62b6697e1b1a0618beca2b1e47e31c9c76be3bac826ce6ed2c3e5a4af",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 2827,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/normal.log",
+      "relative": "ebe414-cow-failure-focused-validation-v2-original/normal.log",
+      "sha256": "c471ac74151b4ea2a9faaf7bbc41e06c21124997ef6a6de1cd222b31d7a4bdf3",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 105879,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/source-after.json",
+      "relative": "ebe414-cow-failure-focused-validation-v2-original/source-after.json",
+      "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 105879,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-original/source-before.json",
+      "relative": "ebe414-cow-failure-focused-validation-v2-original/source-before.json",
+      "sha256": "94e94fe3b00973018616b0223e52d5b802acc8c3ecc0abada01b92a4f8e51000",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 79,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2-ssh.log",
+      "relative": "ebe414-cow-failure-focused-validation-v2-ssh.log",
+      "sha256": "7776c23e26686ea5a100fda42a5f2d54e564d0d3eea6f332a848c8645662a72f",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 2568,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation-v2.py",
+      "relative": "ebe414-cow-failure-focused-validation-v2.py",
+      "sha256": "cdfdfec94e64b713aa6bead8cda2a187cbcaffe1e4c938857d2c3dbf1a263ce8",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 2554,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-cow-failure-focused-validation.py",
+      "relative": "ebe414-cow-failure-focused-validation.py",
+      "sha256": "06c50211972f2a64e3318c6dd1866d255a72bfd8bee41ee5a6f815e7dc14f8ca",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 766,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-m0-artifacts-original.json",
+      "relative": "ebe414-m0-artifacts-original.json",
+      "sha256": "ca28e3ed7517831a503605c276093dddf6117e518f08a1587c1ab3b97f667b40",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 1644,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-m0-success-original.json",
+      "relative": "ebe414-m0-success-original.json",
+      "sha256": "f2521f615f039092d850b4c440a040fac95d2456d72f5aff20439e78f5c4d881",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 54170,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-required-ci-before-repair-original.json",
+      "relative": "ebe414-required-ci-before-repair-original.json",
+      "sha256": "d84189f36276a6f973f63507fb52a2bc96a4caf21d45355712d1ee2cc683b59c",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 555937,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/ebe414-windows-caching-rest1-failed-original.log",
+      "relative": "ebe414-windows-caching-rest1-failed-original.log",
+      "sha256": "bfc93b053e1776896e9678dff8c929c6d93be1ca4212d045843c90053d6bf06f",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 1221,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/main3cfe-ci-1835.json",
+      "relative": "main3cfe-ci-1835.json",
+      "sha256": "867ee70247dd26c6b24ef127913d74c195d4906d29be1a4e5c734ccc42257f7c",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 76586,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/main3cfe-ci-jobs-original.json",
+      "relative": "main3cfe-ci-jobs-original.json",
+      "sha256": "0e77395a09adc7762c2e267e6c4ad97ffffb79cc187e5675e187cce4af9fbfb6",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 555247,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/main3cfe-windows-caching-rest1-original.log",
+      "relative": "main3cfe-windows-caching-rest1-original.log",
+      "sha256": "02642334cea8f87bf8399c3b1e3543afece466f7d6f950ea11433429cc9a2a49",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 101654,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/released-worktree-cleanup-result.json",
+      "relative": "released-worktree-cleanup-result.json",
+      "sha256": "2ec46b718168796182dd03eb101d454004bc0cc5e5c08ad19034c1d83f0267a4",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 1922,
+      "mode": "0o644",
+      "original": "/tmp/gomap-r1-execution-20261005/released-worktree-cleanup-result.md",
+      "relative": "released-worktree-cleanup-result.md",
+      "sha256": "f1580426dbdb36fe9f4ee74c43734aff9ab37de8ddfd584a1b9aa35b38fe6383",
+      "source_kind": "PREEXISTING_RETAINED_TEXT"
+    },
+    {
+      "bytes": 279,
+      "cwd": "/tmp/gomap-r1-5067",
+      "git_argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "275ea4f2de90cf2db2fa735234f748ef300dd564"
+      ],
+      "mode": "0o644",
+      "observed_utc": "2026-10-06T18:50:16.998599+00:00",
+      "original": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/commit-275ea.txt",
+      "read_exit": 0,
+      "relative": "source-cli/commit-275ea.txt",
+      "sha256": "d7739a2c5569eefd0a0bf8fd05319b9e69bd24334daf157084e5cba23c9a9068",
+      "source_kind": "NEW_READONLY_GIT_OBJECT_OBSERVATION"
+    },
+    {
+      "bytes": 293,
+      "cwd": "/tmp/gomap-r1-5067",
+      "git_argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "17597a9758e19517b168adaeb531536e33928a7b"
+      ],
+      "mode": "0o644",
+      "observed_utc": "2026-10-06T18:50:17.032148+00:00",
+      "original": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/commit-17597.txt",
+      "read_exit": 0,
+      "relative": "source-cli/commit-17597.txt",
+      "sha256": "a3062416024f0cc24196e569dacacd9049ba8cbfef1acafcab16ac8e6e417fd3",
+      "source_kind": "NEW_READONLY_GIT_OBJECT_OBSERVATION"
+    },
+    {
+      "bytes": 282,
+      "cwd": "/tmp/gomap-r1-5067",
+      "git_argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "a64560e86f45bf28162a8ed99d0fa984e051fd02"
+      ],
+      "mode": "0o644",
+      "observed_utc": "2026-10-06T18:50:17.048634+00:00",
+      "original": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/commit-a645.txt",
+      "read_exit": 0,
+      "relative": "source-cli/commit-a645.txt",
+      "sha256": "e59ab7a7175fd8c6f2f5d3d63107ca4ae737b1002561284d85faea8d7a42c308",
+      "source_kind": "NEW_READONLY_GIT_OBJECT_OBSERVATION"
+    },
+    {
+      "bytes": 269,
+      "cwd": "/tmp/gomap-r1-5067",
+      "git_argv": [
+        "git",
+        "show",
+        "--no-patch",
+        "--format=fuller",
+        "7649857532521db69ff4cdcf236a11377c85ab3d"
+      ],
+      "mode": "0o644",
+      "observed_utc": "2026-10-06T18:50:17.065381+00:00",
+      "original": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/commit-main-764985.txt",
+      "read_exit": 0,
+      "relative": "source-cli/commit-main-764985.txt",
+      "sha256": "f9045090deae5c62d2b70a066cc9b24859f1ac1da29b81276cf122bb1c95a963",
+      "source_kind": "NEW_READONLY_GIT_OBJECT_OBSERVATION"
+    },
+    {
+      "bytes": 1244,
+      "cwd": "/tmp/gomap-r1-5067",
+      "git_argv": [
+        "git",
+        "diff",
+        "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+        "275ea4f2de90cf2db2fa735234f748ef300dd564",
+        "--",
+        "TreeDB/caching/cow_maintenance_lifetime_test.go"
+      ],
+      "mode": "0o644",
+      "observed_utc": "2026-10-06T18:50:17.081128+00:00",
+      "original": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/repair-fixture-diff.txt",
+      "read_exit": 0,
+      "relative": "source-cli/repair-fixture-diff.txt",
+      "sha256": "1c6a3101283584726cc8243f0327eef7c442032857f3c5e5b071e41a92b0b881",
+      "source_kind": "NEW_READONLY_GIT_OBJECT_OBSERVATION"
+    },
+    {
+      "bytes": 808,
+      "cwd": "/tmp/gomap-r1-5067",
+      "git_argv": [
+        "git",
+        "diff",
+        "17597a9758e19517b168adaeb531536e33928a7b",
+        "a64560e86f45bf28162a8ed99d0fa984e051fd02",
+        "--",
+        ".github/ci/ci_impact.json"
+      ],
+      "mode": "0o644",
+      "observed_utc": "2026-10-06T18:50:17.097692+00:00",
+      "original": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/final-inventory-diff.txt",
+      "read_exit": 0,
+      "relative": "source-cli/final-inventory-diff.txt",
+      "sha256": "8e8b323c9272225b142305644e387186f6744620c29ef91da8c8870657bf78f3",
+      "source_kind": "NEW_READONLY_GIT_OBJECT_OBSERVATION"
+    },
+    {
+      "bytes": 15662,
+      "cwd": "/tmp/gomap-r1-5067",
+      "git_argv": [
+        "git",
+        "show",
+        "a64560e86f45bf28162a8ed99d0fa984e051fd02:TreeDB/caching/cow_maintenance_lifetime_test.go"
+      ],
+      "mode": "0o644",
+      "observed_utc": "2026-10-06T18:50:17.112177+00:00",
+      "original": "/tmp/gomap-r1-execution-20261005/5061-cow-fixture-current-gates-support-preparation/captured-cli-originals/a645-fixture-source.go",
+      "read_exit": 0,
+      "relative": "source-cli/a645-fixture-source.go",
+      "sha256": "88aef9a7634ff8693ae790007d579dd27daeea0d2d0d25c337b1d4387fa3b054",
+      "source_kind": "NEW_READONLY_GIT_OBJECT_OBSERVATION"
+    }
+  ],
+  "status": "UNPROMOTED_ENUMERATED_BEFORE_COPY"
+}

@@ -1,0 +1,1 @@
+Exact reviewed f796 prelanding bounded rehearsal32rows/8calls/8epochs/1process; discriminate metadata window versus continued accumulation. No retained acceptance. Root lock111; no source changes. Preserve failed output.

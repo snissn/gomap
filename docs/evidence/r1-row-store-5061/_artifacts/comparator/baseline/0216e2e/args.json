@@ -1,0 +1,16 @@
+[
+  "-documents",
+  "4096",
+  "-batch-size",
+  "32",
+  "-operations",
+  "1000",
+  "-repetitions",
+  "5",
+  "-qualification",
+  "retained",
+  "-durability",
+  "durable",
+  "-read-state",
+  "flushed"
+]

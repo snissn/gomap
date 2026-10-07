@@ -1,0 +1,67 @@
+{
+  "accepted": true,
+  "actual_main_commit": "3325dfe77940fec8587d8b61b1ac4e0b2f72caca",
+  "binary_sha256": "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+  "cost_acceptance": {
+    "accepted": "Explicitly accepts these measured finite whole-call/process allocation, memory and maintenance costs; no fabricated zero-cost or numeric improvement claim.",
+    "five_epoch_maintenance_ns_median": 1695967068,
+    "mixed_call_ns_median": 6734572.72,
+    "mixed_calls_per_s_median": 148.48752,
+    "mixed_p95_ns_median": 13617892,
+    "mixed_p99_ns_median": 18148105,
+    "post_GC_retained_heap_bytes_median": 79684480,
+    "process_loop_bytes_per_call_median": 810896.537,
+    "process_loop_objects_per_call_median": 5988.6666,
+    "sampled_loop_heap_high_bytes_median": 175874240
+  },
+  "decision_url": "https://github.com/snissn/gomap/issues/5056#issuecomment-6007281596",
+  "harness_sha256": "325d5b41579a492a430da6cbb6162363ff82b42bb6553eddf2e325584fab4c13",
+  "input_pins": {
+    "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/collections.test": "4703ef19e3661b4b3368c6408ecb7b52a228645403e3c8568d64613b131e3191",
+    "/home/mikers/gomap-r1-evidence-20261005/r1-final-D-M-3325dfe/packet.json": "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc",
+    "/home/mikers/gomap-r1-final-observers-20261006/M-3325dfe-D-finite-cost-capacity-review/handoff.json": "fd9bc12eda1bab5a422d872c04ddb4d854ca4e520c16640fd32ed1076598d423",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/descriptive-projection.json": "adb797d2d8837e02b1d623c26db33d3029e6ffdf3e9a8368261c792293047fe5",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/descriptive-report.md": "37b055a03d816d0da38a8d74e9785908ed37a5b8db960d86b97f5536fe69f438",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/root-provenance-verification-original.json": "ad6d8488831de1c1e25adb2ce66aba6c78403f9938118173e2bb1cd6d49c1316",
+    "/home/mikers/gomap-r1-final-results-20261006/M-3325dfe/D/summary.json": "f93ee51b1924df0dd25dde001e5ad45c6c8ce7c07ae8276b2cd782ed0c0e4a9f"
+  },
+  "limits": [
+    "Finite 512-ID repeated hot set; does not mutate all4096 rows or prove infinite growth bound/wholeDBcapacity.",
+    "Sampled heap high is loop sample, not RSS or unsampled whole-process peak; phase/reopen heaps may be higher. Retained heap includes fixture/oracle maps and latency samples.",
+    "Whole mixed-call timers include encode/decode/oracle/callback; Go allocation deltas include concurrent process activity. Maintenance excluded from user loop; nested maintenance groups overlap.",
+    "Direct backend/profile scope differs from public cached-wrapper comparator/example; no cost equivalence inferred.",
+    "Bounded descriptor child budget18 and inventory rescans have explicit O(N*N/16) cost; no total process descriptor/capacity promise.",
+    "Original locale qualification refusal is preserved. Reviewed strict v2 requires exact compiler C.UTF-8 field only; all original source/tool/binary/six-pin checks unchanged.",
+    "No D baseline exists with equivalent supported profile; historical rejected probes remain rejected, no speed comparison or invented thresholds.",
+    "Public artifact retrieval/replay and final evidence PR CI/review/merge/parent closure remain outstanding."
+  ],
+  "owner": "root R1 coordinator explicitly assigned by repository owner",
+  "packet_sha256": "b8705425f0d3b0c8344ff9cab4d33e86fb964ace3da8fab7afb8d63b796c26dc",
+  "runtime_sha256": "eab40aaf77ed307d92a7a38adf0dd80be07a7e12bdda8a2ec3118baf9cad33ff",
+  "schema": "gomap-r1-root-finite-cost-acceptance-v1",
+  "scope": "Finite reviewed direct command-WAL durable mixed lifecycle; five fresh processes, five final epochs each, 4096 live rows, 512 revisited hot IDs, 1024 mixed calls/epoch. Original calibration results preserved separately. Complete current/held row-index oracles and final reopen passed original six-pin validator. Crash/process-cut/natural rotation/lifetime coverage bound separately to actual current normal/race CI.",
+  "storage_acceptance": {
+    "accepted_growth": "Primary persistent vlog remains one active file and grows131289B ingest ->193991B after release ->445187B last epoch/reopen. This measured finite append window is explicitly accepted; no whole-storage plateau or observed rotation claimed. Separate source-bound natural-rotation tests prove reachable pointer protection and obsolete sealed unlink.",
+    "after_release": {
+      "index": 4194304,
+      "persistent_leaf_log": 189498,
+      "typed_assets": 691175
+    },
+    "all_processes_persistent_WAL_excluded_reopen_bytes": 5525938,
+    "all_processes_reopen_component_bytes": {
+      "dictionary_store": 0,
+      "immutable_manifest_metadata": 1805,
+      "index": 4194304,
+      "other": 1094,
+      "persistent_leaf_log": 192373,
+      "persistent_vlog": 445187,
+      "redo_wal": 12,
+      "template_store": 0,
+      "typed_assets": 691175
+    },
+    "all_processes_reopen_regular_files": 16,
+    "debt": "CompactStorage fullpass fully_compacted/policy/byte_minimized remain false with pre-final-GC leaf debt; subsequent explicit fallback refresh/typed/leaf GC produces the final physical census. No stage flags rewritten or residual debt declared zero.",
+    "observed_retention": "Held view protects superseded resources during first epoch. After release typed assets and index remain fixed; selected obsolete leaf generations and immutable revisions are physically removed after convergence. Leaf192373B and two metadata revisions1805B at last maintenance/reopen. Other records reach1094B."
+  },
+  "utc": "2026-10-07T01:08:15.115283+00:00"
+}

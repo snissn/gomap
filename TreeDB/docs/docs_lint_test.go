@@ -24,6 +24,11 @@ func repoRoots(t *testing.T) (treeRoot, repoRoot string) {
 func markdownDocs(t *testing.T) []string {
 	t.Helper()
 	treeRoot, repoRoot := repoRoots(t)
+	return markdownDocsAtRoots(t, treeRoot, repoRoot)
+}
+
+func markdownDocsAtRoots(t *testing.T, treeRoot, repoRoot string) []string {
+	t.Helper()
 	roots := []string{
 		filepath.Join(treeRoot, "README.md"),
 		filepath.Join(treeRoot, "AGENTS.md"),
@@ -52,6 +57,17 @@ func markdownDocs(t *testing.T) []string {
 				return err
 			}
 			if d.IsDir() {
+				rel, err := filepath.Rel(repoRoot, path)
+				if err != nil {
+					return err
+				}
+				// Frozen original source/log text is evidence, not active guidance.
+				// Only these exact directories are excluded; current reports and
+				// similarly named neighboring directories remain in the inventory.
+				switch filepath.ToSlash(rel) {
+				case "docs/evidence/r1-row-store-5061/_artifacts", "docs/evidence/r1-row-store-5061/public-replay-M-3325dfe":
+					return filepath.SkipDir
+				}
 				if d.Name() == "benchmarks" {
 					return filepath.SkipDir
 				}

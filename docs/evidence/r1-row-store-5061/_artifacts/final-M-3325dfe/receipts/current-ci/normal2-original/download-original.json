@@ -1,0 +1,18 @@
+{
+  "utc": "2026-10-06T23:24:13.531207+00:00",
+  "argv": [
+    "gh",
+    "run",
+    "download",
+    "37539305355",
+    "--repo",
+    "snissn/gomap",
+    "--name",
+    "treedb-test-json-ubuntu-latest-2",
+    "--dir",
+    "/home/mikers/gomap-r1-final-receipts-20261006/898a-current-ci-normal2-original/artifact"
+  ],
+  "exit": 0,
+  "stdout": "",
+  "stderr": ""
+}

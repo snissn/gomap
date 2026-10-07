@@ -1,0 +1,25 @@
+# 3182 M0 independent diagnosis — UNPROMOTED
+
+All 60 retained raw samples are N=1 and PASS their benchmark correctness checks. The original hosted capture and both unchanged matched captures retain exit 1 because the unchanged legacy timing-CV gate fails. The appropriate timing classification is **INCONCLUSIVE**; this report does not replace any failed record with PASS.
+
+| Source-bound capture | Vacuum total sample CV | Maximum writer pause sample CV | Foreground p99 sample CV | Original exit |
+| --- | ---: | ---: | ---: | ---: |
+| original hosted 3182 M0 (`3182e15`) | 15.517098% | 47.118029% | 38.527154% | 1 |
+| matched 111 unchanged f2c control (`f2c93cf`) | 11.140595% | 17.745598% | 42.732487% | 1 |
+| matched 111 3182 candidate (`3182e15`) | 10.267834% | 5.064185% | 43.985115% | 1 |
+
+The threshold remains at most 10% for each of those three legacy metrics. Hosted 3182 and matched f2c fail all three; matched 3182 passes pause but fails total and p99. Every reported metric summary was independently recomputed from lexicographically ordered raw filenames (1,10,2,…,9), using arithmetic mean, median and sample standard deviation n−1. Source-bound medians and all original arrays are retained in the JSON; no noisy median ratio is accepted as improvement or regression.
+
+The three offline-ceiling fixture dictionaries and all 30 legacy fixed-work counter rows agree: 512 keys, 143 live/208 reclaimable pages, 345 preclone pages, zero reclone/cutover clone/dirty-descriptor counts, 2,176 tail mutations (128 points/2,048 ranges), and 2,048 foreground points plus 2,048 ranges with 4,096 overlap samples. Legacy abort/error/exposure counters are zero. All 30 public samples independently classify production vacuum as available with no unsupported/error/exposure result, allowed retry classification and positive overlap. The fixture's separate historical unavailable marker is preserved, not rewritten.
+
+The original hosted [run](https://github.com/snissn/gomap/actions/runs/37453671543), [job](https://github.com/snissn/gomap/actions/runs/37453671543/job/112235963721) and [artifact](https://github.com/snissn/gomap/actions/runs/37453671543/artifacts/11409646126) bind exact `3182e15dfe1aa11120db9d309ad0d590283398d6`. Its original ZIP digest, all 25 extracted file hashes and the six metrics in root's independent arithmetic agree with this recomputation. The hosted log retains exit 1.
+
+The matched receipts bind exactly one full control `f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c` followed by one full candidate `3182e15dfe1aa11120db9d309ad0d590283398d6`, under the recorded canonical lock. Both record the same hostname/device, Go 1.26.4, affinity 0,1, GOMAXPROCS=2 and GOMEMLIMIT=8GiB. All 27 exit-bound file hashes per capture and all 61 retained matched files are inventoried. This supports the bounded matched scope, not a causal infrastructure explanation or quiescence claim. Hosted Go 1.26.8/EPYC is a different execution environment.
+
+The capture script, summarizer and legacy collection benchmark are byte-identical between control and candidate. `vacuum_online.go` and `durable_root_runtime.go` differ; their exact blobs are recorded and the separate execution-path/source review remains required. The [legacy benchmark](https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_collection_bench_test.go#L112) excludes fixture setup and runs its correctness oracle after stopping timing. [Final-pager duration](https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/vacuum_online.go#L1367) wraps durable-root construction and synchronization; [Pager.Sync/SyncPages](https://github.com/snissn/gomap/blob/3182e15dfe1aa11120db9d309ad0d590283398d6/TreeDB/db/durable_root_runtime.go#L2271) establish source-level synchronization. That aggregate timing does not isolate physical fsync latency or count. Original legacy-7's large pause and final-pager timing co-occur without establishing cause.
+
+**Recommended disposition:** auxiliary M0 timing is nonblocking and INCONCLUSIVE, conditional on root accepting the separate current-head source review and the exact head passing `TreeDB required gate` plus other applicable review/merge gates. The preserved `main-rules-3182.json` lists only that required status check; it does not itself prove the gate passed. The current-main control also fails the unchanged timing gate, so these captures do not uniquely attribute a new regression to the candidate. They also do not prove absence of regression or binary equivalence.
+
+Preserve every original FAIL and every raw sample. Do not waive thresholds, drop samples or add automatic repeats. Fresh accepted fullA/C/D on the actual landed integration source and final E qualification remain separate R1 closeout requirements. No capacity or flakiness acceptance follows from this diagnosis.
+
+The four existing support groups and all inspected original evidence remain byte-identical. This bounded report performs no Go/build/test/capture/GitHub/runner/polling operation.

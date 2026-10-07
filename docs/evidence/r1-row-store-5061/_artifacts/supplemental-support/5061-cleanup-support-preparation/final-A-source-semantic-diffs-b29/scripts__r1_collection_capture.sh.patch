@@ -1,0 +1,44 @@
+diff --git a/scripts/r1_collection_capture.sh b/scripts/r1_collection_capture.sh
+index 7ba56c597..abc200871 100755
+--- a/scripts/r1_collection_capture.sh
++++ b/scripts/r1_collection_capture.sh
+@@ -12,6 +12,12 @@ mkdir -p "$R1_OUT"
+ R1_OUT=$(cd "$R1_OUT" && pwd)
+ export GOWORK=off
+ R1_GO=${R1_GO:-go}
++R1_MODE=${R1_MODE:-r1}
++case "$R1_MODE" in
++  r1|r1-mutation-sweep) ;;
++  *) echo "unsupported R1_MODE" >&2; exit 2 ;;
++esac
++printf '%s\n' "$R1_MODE" > "$R1_OUT/mode.txt"
+ python3 scripts/r1_collection_source.py > "$R1_OUT/source.json"
+ python3 - "$R1_OUT/host.json" <<'PYMETA'
+ import json,os,pathlib,sys,time
+@@ -32,14 +38,23 @@ python3 - "$R1_OUT/args.json" "$@" <<'PY'
+ import json,pathlib,sys
+ pathlib.Path(sys.argv[1]).write_text(json.dumps(sys.argv[2:],indent=2)+'\n')
+ PY
+-"$R1_OUT/collection_workload_bench" r1 -source-manifest "$R1_OUT/source.json" "$@" > "$R1_OUT/packet.json" 2> "$R1_OUT/run.stderr"
++"$R1_OUT/collection_workload_bench" "$R1_MODE" -source-manifest "$R1_OUT/source.json" "$@" > "$R1_OUT/packet.json" 2> "$R1_OUT/run.stderr"
+ python3 scripts/r1_collection_source.py > "$R1_OUT/source-after.json"
+ if ! cmp -s "$R1_OUT/source.json" "$R1_OUT/source-after.json"; then
+   echo "source drifted during capture; preserve packet as rejected, do not qualify" >&2
+   exit 1
+ fi
+-"$R1_OUT/collection_workload_bench" r1-validate -source-manifest "$R1_OUT/source.json" "$R1_OUT/packet.json" > "$R1_OUT/validation.txt"
+-python3 scripts/r1_collection_summary.py "$R1_OUT/packet.json" > "$R1_OUT/summary.json"
++if [[ "$R1_MODE" == r1-mutation-sweep ]]; then
++  # Producer artifacts cannot qualify their own source or completed-run receipt.
++  # The acceptance owner supplies independent pins only after observing capture.
++  "$R1_OUT/collection_workload_bench" r1-mutation-sweep-validate -semantic-only \
++    -source-manifest "$R1_OUT/source.json" "$R1_OUT/packet.json" > "$R1_OUT/validation.txt"
++else
++  "$R1_OUT/collection_workload_bench" r1-validate -source-manifest "$R1_OUT/source.json" "$R1_OUT/packet.json" > "$R1_OUT/validation.txt"
++fi
++if [[ "$R1_MODE" == r1 ]]; then
++  python3 scripts/r1_collection_summary.py "$R1_OUT/packet.json" > "$R1_OUT/summary.json"
++fi
+ python3 - "$R1_OUT/host.json" <<'PY'
+ import json,os,pathlib,sys,time
+ p=pathlib.Path(sys.argv[1]);data=json.loads(p.read_text());data['finished_unix']=time.time();data['loadavg_after']=list(os.getloadavg());p.write_text(json.dumps(data,indent=2)+'\n')

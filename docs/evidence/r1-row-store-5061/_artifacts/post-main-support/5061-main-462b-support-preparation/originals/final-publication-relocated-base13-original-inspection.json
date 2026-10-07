@@ -1,0 +1,112 @@
+{
+  "utc": "2026-10-06T22:18:09.104928+00:00",
+  "status": "ALL13_LOCATION_TRANSLATED_ORIGINAL_CAPTURE_CONTRACTS_PASS_NO_STAGE_OR_NEW_ACCEPTANCE",
+  "selection_sha256": "ddfa77702e3e19974c03deab5b01d40b273b05634e9d7a330b664241dbbfecd6",
+  "frozen_helper_sha256": "d03f6fe489ae7bd0296cd31dcff1785cbd25d855acb714afe1191ea73a0b426a",
+  "records": [
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-baseline-landed-0216e2e",
+      "path": "comparator/baseline/0216e2e",
+      "kind": "comparator",
+      "status": "accepted",
+      "required_member_count": 15,
+      "source_commit": "0216e2e9ee701dee0eda96c569dc0c8facb37ca9"
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/profile-postgc-7adf81c2",
+      "path": "rejected/profile-postgc-7adf81c2",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/growth-order-1e7882",
+      "path": "rejected/growth-order-1e7882",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/profile-v3-rejected",
+      "path": "rejected/profile-v3-rejected",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": "b5663870a110dd9a84a873934815d5b0bcb649cb"
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/manager-red-c4d49",
+      "path": "rejected/manager-red-c4d49",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/revision-red-a21d5",
+      "path": "rejected/revision-red-a21d5",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/source-guard-mismatch",
+      "path": "rejected/source-guard-mismatch",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/clean-runtime-604",
+      "path": "rejected/clean-runtime-604",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/frozen-validator-12f3bed",
+      "path": "rejected/frozen-validator-12f3bed",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/diagnostic-stage-inputs/original-context",
+      "path": "rejected/original-context",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": null
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-candidate-integration-f95ea1a",
+      "path": "comparator/historical-candidate/f95ea1a",
+      "kind": "comparator",
+      "status": "accepted",
+      "required_member_count": 15,
+      "source_commit": "f95ea1aac407537342214805930c8907775b777f"
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/provisional-lifecycle-size-b53e3ae",
+      "path": "rejected/actual-size-b53e3ae-physical-growth",
+      "kind": "lifecycle",
+      "status": "rejected",
+      "required_member_count": 8,
+      "source_commit": "b53e3ae98924085c3d3331dae0d821dd101bf07f"
+    },
+    {
+      "root": "/home/mikers/gomap-r1-mac-evidence-preservation-20261006/captures/r1-final-typed-scope-00d2c370",
+      "path": "comparator/final-typed-scope/00d2c370",
+      "kind": "comparator",
+      "status": "accepted",
+      "required_member_count": 15,
+      "source_commit": "00d2c370a5907225ff36f82bb92ca3ee0679ea08"
+    }
+  ]
+}

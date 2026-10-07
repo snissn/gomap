@@ -1,0 +1,150 @@
+{
+  "utc": "2026-10-06T20:23:57.728175+00:00",
+  "reviewer": "/root",
+  "status": "Exact e4e7 repaired sharedfixture normal/race/vet/format PASS; final CI pending; original failure retained",
+  "files": {
+    "format-exit.json": {
+      "sha256": "69e886fcb67a9c9ae392ec38eda41f6819859e40ac0fbe43934ad4fd156e5ce4",
+      "bytes": 108295
+    },
+    "format-start.json": {
+      "sha256": "d06645f8a13256129fc7ca3ddd7851526cef58a483d2182aa93d69980c8c8ce6",
+      "bytes": 109325
+    },
+    "format.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "normal-exit.json": {
+      "sha256": "978ae4fd40c09a51fb370757bbeab7e337378a02dd6d931584d2401c3da607b7",
+      "bytes": 108295
+    },
+    "normal-start.json": {
+      "sha256": "a451631ca614fe96f7c1f43cae7d6678147d3e9df5c1ae4a817c9b9135a1996d",
+      "bytes": 109651
+    },
+    "normal.log": {
+      "sha256": "8bcc354ba171af368aedd304fb51e81ca4689cb6a7dc568c90adfe5bcfabe5fb",
+      "bytes": 23290
+    },
+    "race-exit.json": {
+      "sha256": "34118fae0678b2ff02244c77e738c6acae6788ee0d1cc62f4d4fb9c6b6c3e1db",
+      "bytes": 108295
+    },
+    "race-start.json": {
+      "sha256": "f9c1c0564022d6a534bb67ab142cbb1ec9fb695fccb7e735cd665452740e8a4e",
+      "bytes": 109664
+    },
+    "race.log": {
+      "sha256": "73416f7d417bd8218d287485d70a93f1a5cd78fe18ac75d62b9fc0e2885a7b02",
+      "bytes": 23285
+    },
+    "source-after.json": {
+      "sha256": "c4194a6beb34a82690010658dae8285e56c0dc88055fa3f6c08ceef000b12f96",
+      "bytes": 105879
+    },
+    "source-before.json": {
+      "sha256": "c4194a6beb34a82690010658dae8285e56c0dc88055fa3f6c08ceef000b12f96",
+      "bytes": 105879
+    },
+    "vet-exit.json": {
+      "sha256": "c46d35f953e525287681d99e4c7b6d400b65ad9aeee582361601314e97cc7cee",
+      "bytes": 108295
+    },
+    "vet-start.json": {
+      "sha256": "964c846ac91f965f26cdf9b6034d28de7e3f974f88a94e38a20755fe873a116a",
+      "bytes": 109288
+    },
+    "vet.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    }
+  },
+  "commands": {
+    "normal": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerVector(Initialization(RealRaftPrepareServingSnapshotTailV1|LiveOverlaySnapshotTailRecoveryV1|RF4RealRaftPrepareServingSnapshotTailV1|RealRootWithoutResultRefusesReopenV1|RealRaftNonphysicalRefusesBeforeAppendV1|RealRaftPrepareSourceConvergenceV1)|OwnerSearchAdmissionRealRaftV1)$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "exit": 0,
+      "log_sha256": "8bcc354ba171af368aedd304fb51e81ca4689cb6a7dc568c90adfe5bcfabe5fb",
+      "actual_test_PASS_rows": 21,
+      "parent_PASS": [
+        "TestFixedPeerVectorInitializationRealRaftPrepareServingSnapshotTailV1",
+        "TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1",
+        "TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1",
+        "TestFixedPeerVectorOwnerSearchAdmissionRealRaftV1",
+        "TestFixedPeerVectorInitializationRealRootWithoutResultRefusesReopenV1",
+        "TestFixedPeerVectorInitializationRealRaftNonphysicalRefusesBeforeAppendV1",
+        "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1"
+      ],
+      "package_elapsed": [
+        [
+          "github.com/snissn/gomap/TreeDB/nativewire",
+          36.901
+        ]
+      ]
+    },
+    "race": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/nativewire",
+        "-run",
+        "^TestFixedPeerVector(Initialization(RealRaftPrepareServingSnapshotTailV1|LiveOverlaySnapshotTailRecoveryV1|RF4RealRaftPrepareServingSnapshotTailV1|RealRootWithoutResultRefusesReopenV1|RealRaftNonphysicalRefusesBeforeAppendV1|RealRaftPrepareSourceConvergenceV1)|OwnerSearchAdmissionRealRaftV1)$",
+        "-count=1",
+        "-timeout=10m"
+      ],
+      "exit": 0,
+      "log_sha256": "73416f7d417bd8218d287485d70a93f1a5cd78fe18ac75d62b9fc0e2885a7b02",
+      "actual_test_PASS_rows": 21,
+      "parent_PASS": [
+        "TestFixedPeerVectorInitializationRealRaftPrepareServingSnapshotTailV1",
+        "TestFixedPeerVectorInitializationLiveOverlaySnapshotTailRecoveryV1",
+        "TestFixedPeerVectorInitializationRF4RealRaftPrepareServingSnapshotTailV1",
+        "TestFixedPeerVectorOwnerSearchAdmissionRealRaftV1",
+        "TestFixedPeerVectorInitializationRealRootWithoutResultRefusesReopenV1",
+        "TestFixedPeerVectorInitializationRealRaftNonphysicalRefusesBeforeAppendV1",
+        "TestFixedPeerVectorInitializationRealRaftPrepareSourceConvergenceV1"
+      ],
+      "package_elapsed": [
+        [
+          "github.com/snissn/gomap/TreeDB/nativewire",
+          39.487
+        ]
+      ]
+    },
+    "vet": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/nativewire"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "actual_test_PASS_rows": 0,
+      "parent_PASS": [],
+      "package_elapsed": []
+    },
+    "format": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "actual_test_PASS_rows": 0,
+      "parent_PASS": [],
+      "package_elapsed": []
+    }
+  }
+}

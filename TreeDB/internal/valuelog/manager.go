@@ -94,6 +94,10 @@ type File struct {
 	groupedFrameCache         atomic.Pointer[groupedFrameCache]
 
 	closed atomic.Bool
+	// Close completion and physical deletion are cold-path operations.
+	closeMu         sync.Mutex
+	deleteMu        sync.Mutex
+	deleteCompleted bool // protected by deleteMu; never recheck a retired inode
 
 	// mmapData holds the current read-only mapping. Readers load it without locks.
 	mmapData         atomic.Value // stores []byte (may be nil slice)
@@ -530,6 +534,10 @@ func (f *File) Close() error {
 	if f == nil || f.File == nil {
 		return nil
 	}
+	// The early closed flag excludes new work; the mutex joins all actual
+	// cleanup before another Close caller can proceed to physical deletion.
+	f.closeMu.Lock()
+	defer f.closeMu.Unlock()
 	var scratch []byte
 	if !f.closed.CompareAndSwap(false, true) {
 		return nil
@@ -1379,7 +1387,11 @@ type Manager struct {
 	files map[uint32]*File
 	// retryWaitHook is an internal deterministic lifecycle-test barrier.
 	retryWaitHook func()
-	// Admission and WaitGroup.Add share mu with Close. Channels are lazy so
+	// Test-only cold admission barrier; set before operations and never changed
+	// while an admission is active. It runs outside mu and cleanup locks.
+	directDeleteAdmissionHook func()
+	// Retry and synchronous deletion admission share mu and this join with Close.
+	// Channels are lazy so
 	// ordinary reads and writes acquire no extra allocation or routing cost.
 	retryStop    chan struct{}
 	retryWorkers sync.WaitGroup
@@ -1819,8 +1831,8 @@ func (m *Manager) Close() error {
 		close(m.retryStop)
 	}
 	m.mu.Unlock()
-	// Workers take mu while validating identity and completing deletion. Join
-	// them before closing their file handles, without holding that same mutex.
+	// Retry workers and synchronous deletion admissions take mu while completing
+	// ownership. Join them before closing handles, without holding that mutex.
 	m.retryWorkers.Wait()
 	m.mu.Lock()
 	var err error
@@ -2953,6 +2965,10 @@ func (m *Manager) RemoveSegment(id uint32) error {
 // ordinary RemoveSegment behavior.
 func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublication.StableIdentity) error {
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return nil
+	}
 	f, ok := m.files[id]
 	if !ok {
 		m.mu.Unlock()
@@ -2981,13 +2997,10 @@ func (m *Manager) RemoveSegmentExpectedIdentity(id uint32, expected rootpublicat
 		m.mu.Unlock()
 		return err
 	}
-	m.forgetSegmentLocked(f)
-	unobserveErr := m.unobserveStableFileLocked(f)
+	m.retainSegmentForDeletionLocked(f)
+	m.retryWorkers.Add(1)
 	m.mu.Unlock()
-
-	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
-	finishStableDeleteLease(lease, deleted)
-	return errors.Join(unobserveErr, removeErr)
+	return m.finishDirectSegmentDeletion(f, identity, lease)
 }
 
 // RemoveSegmentIfUnpinned removes a tracked segment only when no live snapshot
@@ -2998,6 +3011,10 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		return false, nil
 	}
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return false, nil
+	}
 	f, ok := m.files[id]
 	if !ok {
 		m.mu.Unlock()
@@ -3029,19 +3046,21 @@ func (m *Manager) RemoveSegmentIfUnpinned(id uint32) (bool, error) {
 		m.mu.Unlock()
 		return false, err
 	}
-	m.forgetSegmentLocked(f)
-	unobserveErr := m.unobserveStableFileLocked(f)
+	m.retainSegmentForDeletionLocked(f)
+	m.retryWorkers.Add(1)
 	m.mu.Unlock()
-
-	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
-	finishStableDeleteLease(lease, deleted)
-	return true, errors.Join(unobserveErr, removeErr)
+	// Preserve the admitted-attempt result even when physical removal fails.
+	return true, m.finishDirectSegmentDeletion(f, identity, lease)
 }
 
 // RemoveSegmentForce removes a segment without refcount checks.
 // Intended for recovery cleanup before any snapshots are live.
 func (m *Manager) RemoveSegmentForce(id uint32) error {
 	m.mu.Lock()
+	if m.closing {
+		m.mu.Unlock()
+		return nil
+	}
 	f, ok := m.files[id]
 	if !ok {
 		m.mu.Unlock()
@@ -3062,13 +3081,10 @@ func (m *Manager) RemoveSegmentForce(id uint32) error {
 		m.mu.Unlock()
 		return err
 	}
-	m.forgetSegmentLocked(f)
-	unobserveErr := m.unobserveStableFileLocked(f)
+	m.retainSegmentForDeletionLocked(f)
+	m.retryWorkers.Add(1)
 	m.mu.Unlock()
-
-	deleted, removeErr := closeAndRemoveStableSegmentFileResult(f, identity)
-	finishStableDeleteLease(lease, deleted)
-	return errors.Join(unobserveErr, removeErr)
+	return m.finishDirectSegmentDeletion(f, identity, lease)
 }
 
 var removeSegmentPath = os.Remove

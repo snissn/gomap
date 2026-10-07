@@ -1477,7 +1477,7 @@ exact landing, executing-binary and original-packet receipt pins, with physical
 file-sync coverage and positive written WAL bytes; the linked contract gives
 the acceptance command.
 
-Lifecycle v2 measures logical fold, conditionally eligible typed rewrite/GC and
+The historical lifecycle v2 packet measured logical fold, conditionally eligible typed rewrite/GC and
 live direct-backend online vacuum with before/after census; cached-wrapper
 overhead is omitted. It pins Go 1.26.4 Linux amd64 and runtime settings
 GOMAXPROCS=16, GOGC=100, GOMEMLIMIT=off, GOFLAGS empty.
@@ -1487,8 +1487,12 @@ with background prune disabled. It checks effective/persisted settings at fresh
 open and reopen, inventories the full profile root (including side stores and
 immutable manifest metadata), and times exhaustive owned `CompactStorage`, final
 fallback convergence, typed GC and leaf GC separately. Older off-profile packets
-remain historical evidence and fail this schema; physical-growth acceptance is
-pending. See the [lifecycle spec](../../TreeDB/docs/spec/r1-row-lifecycle.md).
+remain historical evidence and fail this schema. The
+[integrated R1 evidence](../../TreeDB/docs/evidence/r1-row-store-5061/README.md)
+records the accepted five-process/five-epoch supported packet, component growth,
+and finite maintenance costs. Cross-route equivalence and duration-unbounded
+physical capacity remain unqualified. See the
+[lifecycle spec](../../TreeDB/docs/spec/r1-row-lifecycle.md).
 
 
 ### Opt-in retained foreground duration/fence capture

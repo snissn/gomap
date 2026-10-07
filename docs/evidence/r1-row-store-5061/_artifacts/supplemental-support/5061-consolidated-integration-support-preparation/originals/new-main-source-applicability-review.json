@@ -1,0 +1,1482 @@
+{
+  "verdict": "CLEAN_SCOPED_INTEGRATION_REVIEW_REQUIRES_FRESH_CURRENT_VALIDATION_AND_CAPTURE",
+  "utc": "2026-10-06T18:19:15.324085+00:00",
+  "scope": "Read-only Git-object applicability audit of the 56 canonical production inputs introduced by f2c -> 3cfe and their integration with reviewed R1 cleanup; not a complete review or performance qualification of COW implementation. No Go/build/test/capture/GitHub/polling/delegation performed. Only this new MD/JSON pair retained.",
+  "heads": {
+    "old_main": "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c",
+    "new_main": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+    "previous_reviewed_R1": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+    "integrated_P1": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+    "consolidated": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+    "previous_reviewed_C": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0"
+  },
+  "runtime_identities": {
+    "old_main": {
+      "commit": "f2c93cfcdf5f7ef54f6d7bc4ff9e6946fb21a72c",
+      "input_count": 1097,
+      "runtime_sha256": "53f92a2a08ddb0496e51734686b851790f79027df93e7d5a83d7f1258360248c",
+      "tree": "2fc287ad7ca501e14b7960e66abe12a68d79e262"
+    },
+    "new_main": {
+      "commit": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+      "input_count": 1121,
+      "runtime_sha256": "699a64cd9b21da1e0c4f97b4c7bbc05f1eaea8b8ecc00d1097d59a98e1089108",
+      "tree": "7a18c375ff75bdb44e4029788b7b1a9788d7aa79"
+    },
+    "previous_reviewed_R1": {
+      "commit": "3182e15dfe1aa11120db9d309ad0d590283398d6",
+      "input_count": 1098,
+      "runtime_sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873",
+      "tree": "96bd466b509cefe22b2623acc7b03374d7668be5"
+    },
+    "integrated_P1": {
+      "commit": "8506a498346d35c635bbd0f59d99a135d6c6785d",
+      "input_count": 1122,
+      "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+      "tree": "7175e23c35c08cf93e147856799cc8503e732d2b"
+    },
+    "consolidated": {
+      "commit": "ebe414b6d6a22a7f616c108157a01f8ed109e7cc",
+      "input_count": 1122,
+      "runtime_sha256": "cb5b0d7b3633666ae16752d8c353eeeb23542c71e5e25773e33359d3ffa79aa9",
+      "tree": "2864441ae1c2429f927093d80fedd3e51ba9c033"
+    },
+    "previous_reviewed_C": {
+      "commit": "90fa3dc6819dfcd6823bf68d3287252b87c1b8d0",
+      "input_count": 1098,
+      "runtime_sha256": "9bae22b48fd75c2cc38ba5b016970b6d5104f9b5ee7eae04267bbd2e49734873",
+      "tree": "e8e506c2a0aa73b550df0136c75dfb341d4d3070"
+    }
+  },
+  "canonical_runtime_filter": {
+    "exact_helper": "scripts/r1_collection_source.py",
+    "helper_blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+    "include_paths": [
+      "go.mod",
+      "go.sum"
+    ],
+    "include_prefixes": [
+      "TreeDB/",
+      "cmd/internal/treedbstats/"
+    ],
+    "include_suffixes": [
+      ".go",
+      ".s",
+      ".S",
+      ".c",
+      ".h",
+      ".syso"
+    ],
+    "exclude_suffix": "_test.go",
+    "digest": "sorted path NUL Git blob NUL, SHA256"
+  },
+  "production_delta_count": 56,
+  "added_count": 24,
+  "modified_count": 32,
+  "production_delta_bindings": [
+    {
+      "path": "TreeDB/cached_backend_maintenance.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "5518f80cdcdf012db4603569a415c3e7178be341",
+        "new_main": "6b099fc24b1e6bcf7ae4f0cd521039cdd915eb81",
+        "previous_reviewed_R1": "5518f80cdcdf012db4603569a415c3e7178be341",
+        "integrated_P1": "6b099fc24b1e6bcf7ae4f0cd521039cdd915eb81",
+        "consolidated": "6b099fc24b1e6bcf7ae4f0cd521039cdd915eb81",
+        "previous_reviewed_C": "5518f80cdcdf012db4603569a415c3e7178be341"
+      },
+      "main_delta_sha256": "b2e6c89a67c148363b46f85d992955850dc37e6ecaf2cde6005d0afc255c3942",
+      "main_delta_bytes": 620
+    },
+    {
+      "path": "TreeDB/caching/conditional_txn.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "59aa62d0c71a133b17a6fa811b037d68bc944d23",
+        "new_main": "6c9e3bd7d4731be6a59ab9dfaa11e35b9ed4e594",
+        "previous_reviewed_R1": "59aa62d0c71a133b17a6fa811b037d68bc944d23",
+        "integrated_P1": "6c9e3bd7d4731be6a59ab9dfaa11e35b9ed4e594",
+        "consolidated": "6c9e3bd7d4731be6a59ab9dfaa11e35b9ed4e594",
+        "previous_reviewed_C": "59aa62d0c71a133b17a6fa811b037d68bc944d23"
+      },
+      "main_delta_sha256": "b740468023538dd005804c2989f1aee4ca907b982e5a6c7bf87f50054bb20948",
+      "main_delta_bytes": 526
+    },
+    {
+      "path": "TreeDB/caching/cow_batch.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "56847c1f313ecd25384fd77a37230f8b03a9ef6e",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "56847c1f313ecd25384fd77a37230f8b03a9ef6e",
+        "consolidated": "56847c1f313ecd25384fd77a37230f8b03a9ef6e",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "1648bdb8c721ff843b6bf3385492dcc6eeeeca58b212bec9faaad121cceee79a",
+      "main_delta_bytes": 12438
+    },
+    {
+      "path": "TreeDB/caching/cow_batch_storage.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "533c212677fdf39311bc5ee5c793ef040f4bc564",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "533c212677fdf39311bc5ee5c793ef040f4bc564",
+        "consolidated": "533c212677fdf39311bc5ee5c793ef040f4bc564",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "90a9a448f7c01a4771e8369a854e85b52a19414152d5b245ef4fc966b1fab59f",
+      "main_delta_bytes": 8669
+    },
+    {
+      "path": "TreeDB/caching/cow_checkpoint.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+        "consolidated": "09ec3014bddd790bb955e4bab3f2bf784dc7f014",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "4a857f10bd4616e3dd7ca0067d2b43695edc168e9c93a5bbe2fd3dc973337ac4",
+      "main_delta_bytes": 7037
+    },
+    {
+      "path": "TreeDB/caching/cow_cut.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "1568701b933c818192b09b7e353318a35f9b9129",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "1568701b933c818192b09b7e353318a35f9b9129",
+        "consolidated": "1568701b933c818192b09b7e353318a35f9b9129",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "87b9888dc34bd95c346cd729ee6a307a7f1a7a21fd9c30236b0ff6331b98830c",
+      "main_delta_bytes": 17550
+    },
+    {
+      "path": "TreeDB/caching/cow_flush.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "b43a467197fc492c0e34b859bf8176fe40cea036",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "b43a467197fc492c0e34b859bf8176fe40cea036",
+        "consolidated": "b43a467197fc492c0e34b859bf8176fe40cea036",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "e3106fae51452eeba4aa82ed9bad0e365a6847581e4dc4fc2aaf5f6ceadf77bd",
+      "main_delta_bytes": 7838
+    },
+    {
+      "path": "TreeDB/caching/cow_generation_preflight.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "f67fd65a41e64d2a6b1f4b66a39cfa486a2bd971",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "f67fd65a41e64d2a6b1f4b66a39cfa486a2bd971",
+        "consolidated": "f67fd65a41e64d2a6b1f4b66a39cfa486a2bd971",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "9836ebd45b479e1bf28febc2586cafa0a017dda1da2d4c651a7b0c72267f7af5",
+      "main_delta_bytes": 2660
+    },
+    {
+      "path": "TreeDB/caching/cow_maintenance.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e",
+        "consolidated": "1cd5fe9099ff64f2200583c9fdf1ff8affdba82e",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "aa6050ceeec99000b5d0b620cc611e72a6727a49eadd92514fa70e1641ac6088",
+      "main_delta_bytes": 1276
+    },
+    {
+      "path": "TreeDB/caching/cow_metadata.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "767284221a1866523a5ea62af5c9f5f72d5df9ff",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "767284221a1866523a5ea62af5c9f5f72d5df9ff",
+        "consolidated": "767284221a1866523a5ea62af5c9f5f72d5df9ff",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "262a2cea411a700dbbe4662ff32cb752281fc9f50b6080331dc417797e5681ff",
+      "main_delta_bytes": 2353
+    },
+    {
+      "path": "TreeDB/caching/cow_open.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "738668580b950604ff5b4997dd5eec45687c9e34",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "738668580b950604ff5b4997dd5eec45687c9e34",
+        "consolidated": "738668580b950604ff5b4997dd5eec45687c9e34",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "fab56e55c65f459c6f3b2a47a595cb4edae236fe6bf339fda89471395862874e",
+      "main_delta_bytes": 1691
+    },
+    {
+      "path": "TreeDB/caching/cow_producer.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "1f6c23104e9f07676c3972a5d79e551f3e2bb226",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "1f6c23104e9f07676c3972a5d79e551f3e2bb226",
+        "consolidated": "1f6c23104e9f07676c3972a5d79e551f3e2bb226",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "ea701f4fe48c37be4ce14f8c23dad7e61de8731ab82a1bc0b61f920d347c25b3",
+      "main_delta_bytes": 4186
+    },
+    {
+      "path": "TreeDB/caching/cow_read.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "d9be3aed14928245616e94a38fcb69cf33326872",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "d9be3aed14928245616e94a38fcb69cf33326872",
+        "consolidated": "d9be3aed14928245616e94a38fcb69cf33326872",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "f02c91b110690b16efc6cbdc03e0580e2b0d867f4d30261ff2a6cc69cd63e4df",
+      "main_delta_bytes": 8532
+    },
+    {
+      "path": "TreeDB/caching/cow_read_workspace.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "8b657b3d7db5ce1fabfaad50c72db5fdcc832ea3",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "8b657b3d7db5ce1fabfaad50c72db5fdcc832ea3",
+        "consolidated": "8b657b3d7db5ce1fabfaad50c72db5fdcc832ea3",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "62d555c76fdec92a11446fbfdaec3c8239ab88d2a675afb5653e852a7de66feb",
+      "main_delta_bytes": 13472
+    },
+    {
+      "path": "TreeDB/caching/cow_resources.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "3de15631832f6b302cd484c17d689961dd16d610",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "3de15631832f6b302cd484c17d689961dd16d610",
+        "consolidated": "3de15631832f6b302cd484c17d689961dd16d610",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "d8fed2a606c7fbc921424f6ff35c982b4defea9e2574abde5f2b7c8218aff7f9",
+      "main_delta_bytes": 4784
+    },
+    {
+      "path": "TreeDB/caching/cow_rollover.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "1971efb5b351b5c1af44801322be73d5f0504b5d",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "1971efb5b351b5c1af44801322be73d5f0504b5d",
+        "consolidated": "1971efb5b351b5c1af44801322be73d5f0504b5d",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "862e418a9e9f33eceec14549b6dfc6ee9c88649564e061b24466175905034388",
+      "main_delta_bytes": 4600
+    },
+    {
+      "path": "TreeDB/caching/cow_stats.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "40ff8fbf0b95a63934eec422b2e0fad7876ed527",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "40ff8fbf0b95a63934eec422b2e0fad7876ed527",
+        "consolidated": "40ff8fbf0b95a63934eec422b2e0fad7876ed527",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "001b5d1f61f621bd2cd8904ad5500c62485700c56bf4d060b582c6a9aafd4d95",
+      "main_delta_bytes": 2017
+    },
+    {
+      "path": "TreeDB/caching/cow_table.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "0e5c4c82c7b5ebd4d2fdcb8fbccfaaf7f452bbd1",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "0e5c4c82c7b5ebd4d2fdcb8fbccfaaf7f452bbd1",
+        "consolidated": "0e5c4c82c7b5ebd4d2fdcb8fbccfaaf7f452bbd1",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "0199081f3a63e5684b3540e8fd7a06651e4b23644f7cf8225243a1f6ceb8f705",
+      "main_delta_bytes": 9330
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "0c051875a6899caec5d2e059a05a6034da2e6835",
+        "new_main": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+        "previous_reviewed_R1": "0c051875a6899caec5d2e059a05a6034da2e6835",
+        "integrated_P1": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+        "consolidated": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+        "previous_reviewed_C": "0c051875a6899caec5d2e059a05a6034da2e6835"
+      },
+      "main_delta_sha256": "c0907313de14a42c8fcf4e315009f8aaec17d42876f2fc9ccd14bd42f1929713",
+      "main_delta_bytes": 46473
+    },
+    {
+      "path": "TreeDB/caching/point_successor.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "8838a4700e4ebf9965485d739be75225b01ae6f1",
+        "new_main": "b1bf8f83c9073d53b620131908520b3f165306c1",
+        "previous_reviewed_R1": "8838a4700e4ebf9965485d739be75225b01ae6f1",
+        "integrated_P1": "b1bf8f83c9073d53b620131908520b3f165306c1",
+        "consolidated": "b1bf8f83c9073d53b620131908520b3f165306c1",
+        "previous_reviewed_C": "8838a4700e4ebf9965485d739be75225b01ae6f1"
+      },
+      "main_delta_sha256": "68417f8aa0ae2b1cf0b1e536abad2049f58a33c19dbb4d62ef877f94b9a2f416",
+      "main_delta_bytes": 687
+    },
+    {
+      "path": "TreeDB/caching/snapshot.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "85c59dfc8847f28388058b86f3834dfa0f3e16b9",
+        "new_main": "08649740d8fdf79fe97b8f302f31e48c59061f9b",
+        "previous_reviewed_R1": "85c59dfc8847f28388058b86f3834dfa0f3e16b9",
+        "integrated_P1": "08649740d8fdf79fe97b8f302f31e48c59061f9b",
+        "consolidated": "08649740d8fdf79fe97b8f302f31e48c59061f9b",
+        "previous_reviewed_C": "85c59dfc8847f28388058b86f3834dfa0f3e16b9"
+      },
+      "main_delta_sha256": "ca539e7ae3a7edf874f60b71079a250e3c1491d61fb13520260864a58da570fd",
+      "main_delta_bytes": 10425
+    },
+    {
+      "path": "TreeDB/caching/snapshot_iterator_lifetime.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "f2eb5c2b1a920c08038169ec04ccae23dacf9568",
+        "new_main": "2f6845be2d51cdfa05e40ec5e54d6cec4cef47f0",
+        "previous_reviewed_R1": "f2eb5c2b1a920c08038169ec04ccae23dacf9568",
+        "integrated_P1": "2f6845be2d51cdfa05e40ec5e54d6cec4cef47f0",
+        "consolidated": "2f6845be2d51cdfa05e40ec5e54d6cec4cef47f0",
+        "previous_reviewed_C": "f2eb5c2b1a920c08038169ec04ccae23dacf9568"
+      },
+      "main_delta_sha256": "96bfde26526ddd8ef90bbf5bec39e1e042fb21938fb382daef0b50c802c43b4e",
+      "main_delta_bytes": 6056
+    },
+    {
+      "path": "TreeDB/caching/snapshot_read_lifetime.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "0b9a1e5f1c9ebdf827a6adadb9d09236f62adf46",
+        "new_main": "8724eb59dca4c0253d1257bab323bfff8aa7093a",
+        "previous_reviewed_R1": "0b9a1e5f1c9ebdf827a6adadb9d09236f62adf46",
+        "integrated_P1": "8724eb59dca4c0253d1257bab323bfff8aa7093a",
+        "consolidated": "8724eb59dca4c0253d1257bab323bfff8aa7093a",
+        "previous_reviewed_C": "0b9a1e5f1c9ebdf827a6adadb9d09236f62adf46"
+      },
+      "main_delta_sha256": "434e8613036680c685deee1cceebbfa4fbce2b82cf8ea7ea2d7f6433f4ea417f",
+      "main_delta_bytes": 833
+    },
+    {
+      "path": "TreeDB/command_wal_public_cached.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "f80c92a2312ac4af5ac7827a1e83d6764a9b8486",
+        "new_main": "e989f3fe292918fe9431c24a0851b676f3513414",
+        "previous_reviewed_R1": "f80c92a2312ac4af5ac7827a1e83d6764a9b8486",
+        "integrated_P1": "e989f3fe292918fe9431c24a0851b676f3513414",
+        "consolidated": "e989f3fe292918fe9431c24a0851b676f3513414",
+        "previous_reviewed_C": "f80c92a2312ac4af5ac7827a1e83d6764a9b8486"
+      },
+      "main_delta_sha256": "f1c51974854043f71db7671ee47f6225876cedebd3df36e188908ee2917017af",
+      "main_delta_bytes": 14008
+    },
+    {
+      "path": "TreeDB/compact_storage.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "8d12f470d695a86eb99372921643d3673a3f6126",
+        "new_main": "ab9aa54ee3a894cfbc07a7ce00a3fe635c3522db",
+        "previous_reviewed_R1": "8d12f470d695a86eb99372921643d3673a3f6126",
+        "integrated_P1": "ab9aa54ee3a894cfbc07a7ce00a3fe635c3522db",
+        "consolidated": "ab9aa54ee3a894cfbc07a7ce00a3fe635c3522db",
+        "previous_reviewed_C": "8d12f470d695a86eb99372921643d3673a3f6126"
+      },
+      "main_delta_sha256": "18607eb1a4b705b76273ba29337fd0e9fe0460ea250cf477e0340268d1cc3940",
+      "main_delta_bytes": 1950
+    },
+    {
+      "path": "TreeDB/db/bounded_read_owner.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "e6f67a19d852561668ee4df8bc62cdeedeb72a55",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "e6f67a19d852561668ee4df8bc62cdeedeb72a55",
+        "consolidated": "e6f67a19d852561668ee4df8bc62cdeedeb72a55",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "718337569e58526a17204af09d87087948e80d6c2f0f06c4121818470e0dcbd1",
+      "main_delta_bytes": 5391
+    },
+    {
+      "path": "TreeDB/db/command_wal_raw.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "83ffc2d21603516f05470048ef08123f024a637c",
+        "new_main": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+        "previous_reviewed_R1": "83ffc2d21603516f05470048ef08123f024a637c",
+        "integrated_P1": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+        "consolidated": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+        "previous_reviewed_C": "83ffc2d21603516f05470048ef08123f024a637c"
+      },
+      "main_delta_sha256": "198ba913a6ba80708f7a360e5de250f9e3bb8b063562c185f726e8fa4906cfbf",
+      "main_delta_bytes": 7909
+    },
+    {
+      "path": "TreeDB/db/cow_options.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "b15665219887c367087c4bff62a19701c1cf0243",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "b15665219887c367087c4bff62a19701c1cf0243",
+        "consolidated": "b15665219887c367087c4bff62a19701c1cf0243",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "058d80b1bc5c3c310d85df0459a70273ea458abd2f0b492a43f1d3f505819153",
+      "main_delta_bytes": 625
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "new_main": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+        "previous_reviewed_R1": "07c79f324245d3e89b742a85ecb81bf1940c9de2",
+        "integrated_P1": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+        "consolidated": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+        "previous_reviewed_C": "07c79f324245d3e89b742a85ecb81bf1940c9de2"
+      },
+      "main_delta_sha256": "323e5c45e276576f8660951f807dc44f4ff416613141caa8dc52a5ff78607907",
+      "main_delta_bytes": 8307
+    },
+    {
+      "path": "TreeDB/db/root_publication_build_group.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "7c124705a8499269817d01395808625a72998957",
+        "new_main": "0e26a8af745f6aaf5ad8c126e6a9099dd2589468",
+        "previous_reviewed_R1": "7c124705a8499269817d01395808625a72998957",
+        "integrated_P1": "0e26a8af745f6aaf5ad8c126e6a9099dd2589468",
+        "consolidated": "0e26a8af745f6aaf5ad8c126e6a9099dd2589468",
+        "previous_reviewed_C": "7c124705a8499269817d01395808625a72998957"
+      },
+      "main_delta_sha256": "a89839f0c1e7ba067484126adf357ef31116714628f42c76560ef78b2a3d7b54",
+      "main_delta_bytes": 5068
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "new_main": "d4901447167143ae310046dc2da046221740a3f1",
+        "previous_reviewed_R1": "43860615915a14752fb6aea084d4fb4e5b8a9b8c",
+        "integrated_P1": "d4901447167143ae310046dc2da046221740a3f1",
+        "consolidated": "d4901447167143ae310046dc2da046221740a3f1",
+        "previous_reviewed_C": "43860615915a14752fb6aea084d4fb4e5b8a9b8c"
+      },
+      "main_delta_sha256": "fcca726e83f8e1baf0014dcbebe184f957b30ec67031e5b370a41033fec2ae87",
+      "main_delta_bytes": 944
+    },
+    {
+      "path": "TreeDB/internal/dictdb/read_definition.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "439852a9b0fd57600bd46d1dfe3a97cc21cae3d8",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "439852a9b0fd57600bd46d1dfe3a97cc21cae3d8",
+        "consolidated": "439852a9b0fd57600bd46d1dfe3a97cc21cae3d8",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "a5ac3bfd87a81c694ca3913452e5fb22babef0c0cbad3ccebdf0e6f58730ab61",
+      "main_delta_bytes": 8461
+    },
+    {
+      "path": "TreeDB/internal/durabilitycut/durabilitycut.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "3ee06040808884c59d34bf983615aba1f5c1fe0a",
+        "new_main": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+        "previous_reviewed_R1": "3ee06040808884c59d34bf983615aba1f5c1fe0a",
+        "integrated_P1": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+        "consolidated": "764a1fd220f757f8edee3cab63e4fdc6acd9f65d",
+        "previous_reviewed_C": "3ee06040808884c59d34bf983615aba1f5c1fe0a"
+      },
+      "main_delta_sha256": "b6e2ccda86c33098b9634363d3f815342f639a1774fe983b8e52ff563fd42630",
+      "main_delta_bytes": 2106
+    },
+    {
+      "path": "TreeDB/internal/merging/merging.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "f7ce8793b2d95316245737e81798a7c2db427749",
+        "new_main": "5500afb0baec30b68098171facde727e3815aada",
+        "previous_reviewed_R1": "f7ce8793b2d95316245737e81798a7c2db427749",
+        "integrated_P1": "5500afb0baec30b68098171facde727e3815aada",
+        "consolidated": "5500afb0baec30b68098171facde727e3815aada",
+        "previous_reviewed_C": "f7ce8793b2d95316245737e81798a7c2db427749"
+      },
+      "main_delta_sha256": "84cc68e18fddc80ce2ee207c29f97ab01922be4be9912ca896243a8a44ac303c",
+      "main_delta_bytes": 1592
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_inspection_heap.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "8968fef8ee6eac902752710755068f45366a9399",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "8968fef8ee6eac902752710755068f45366a9399",
+        "consolidated": "8968fef8ee6eac902752710755068f45366a9399",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "01a0b42092c8ee281044a56aa343e3356813097a5ecfc2b8c551d1311edb3253",
+      "main_delta_bytes": 817
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_inspection_stack.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "9a48ca86ef631d9c85587dd6761bdb551c1e3799",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "9a48ca86ef631d9c85587dd6761bdb551c1e3799",
+        "consolidated": "9a48ca86ef631d9c85587dd6761bdb551c1e3799",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "97d10718019e9e427ef18346d04bca772b1b72e6765a124604af90a46434139e",
+      "main_delta_bytes": 538
+    },
+    {
+      "path": "TreeDB/internal/valuelog/cow_reader.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "14496f75288211f91b66fdad23c766d2672514ec",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "14496f75288211f91b66fdad23c766d2672514ec",
+        "consolidated": "14496f75288211f91b66fdad23c766d2672514ec",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "9600db41f05425b8a58a3bf3aa8b3ba873e85344050e03658df1f13258c4c0bb",
+      "main_delta_bytes": 21947
+    },
+    {
+      "path": "TreeDB/internal/valuelog/leaf_page_payload.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "c52e2ba6c86ea8aaf8ed3cad7da531acd3662c28",
+        "new_main": "bbfec790d7d1bc262b9e51ca73fb0cbc235fb68b",
+        "previous_reviewed_R1": "c52e2ba6c86ea8aaf8ed3cad7da531acd3662c28",
+        "integrated_P1": "bbfec790d7d1bc262b9e51ca73fb0cbc235fb68b",
+        "consolidated": "bbfec790d7d1bc262b9e51ca73fb0cbc235fb68b",
+        "previous_reviewed_C": "c52e2ba6c86ea8aaf8ed3cad7da531acd3662c28"
+      },
+      "main_delta_sha256": "b07c93bc6d0c8b2bd06a1e2729d124758c2788fa607abad4d2b262af8c03a375",
+      "main_delta_bytes": 936
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "1a613731464df0c8a8ef3d0036fb71232ca141ac",
+        "new_main": "881b1d4bfb041c13c9210be43a2df7b9c2e24082",
+        "previous_reviewed_R1": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5",
+        "integrated_P1": "976ddd6ed35599342c134eb78ed8433c91e994f9",
+        "consolidated": "976ddd6ed35599342c134eb78ed8433c91e994f9",
+        "previous_reviewed_C": "b3254a8f7a6ca4b59d07c56e7fe568b2f8a227c5"
+      },
+      "main_delta_sha256": "c4b6d22cf2be820d457e81b474caea5f9e50cc15a452fa6b23917e804ad5c04a",
+      "main_delta_bytes": 4226
+    },
+    {
+      "path": "TreeDB/internal/valuelog/produced_frame.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "d1a5d36d0e88954a83c212c4e676dfc3b3b4cb03",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "d1a5d36d0e88954a83c212c4e676dfc3b3b4cb03",
+        "consolidated": "d1a5d36d0e88954a83c212c4e676dfc3b3b4cb03",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "281d46dade98ef0be3f8ea0f2c5fc268ca309122c95fb7e57826e8f03577e5bd",
+      "main_delta_bytes": 2191
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "d9dd7c01fd6965d3e47cf33e04a56da9d2e20534",
+        "new_main": "27af14233e201939895b1cc216f6f7419349ad6a",
+        "previous_reviewed_R1": "8cff8dea2fa0e48531775552a8782eb079cb2113",
+        "integrated_P1": "ffffe0e0e16c285def4b82b5d5287186c6bb0df6",
+        "consolidated": "ffffe0e0e16c285def4b82b5d5287186c6bb0df6",
+        "previous_reviewed_C": "8cff8dea2fa0e48531775552a8782eb079cb2113"
+      },
+      "main_delta_sha256": "c104482fbd8a4c9305f2c3a1a9a4ef541a67b5d66868e194678396fe31248776",
+      "main_delta_bytes": 990
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "e983927e76d92bccda174088e4b7020683f6103d",
+        "new_main": "86fa63914fa0573e85848b6c0c30742c0b3cd357",
+        "previous_reviewed_R1": "e983927e76d92bccda174088e4b7020683f6103d",
+        "integrated_P1": "86fa63914fa0573e85848b6c0c30742c0b3cd357",
+        "consolidated": "86fa63914fa0573e85848b6c0c30742c0b3cd357",
+        "previous_reviewed_C": "e983927e76d92bccda174088e4b7020683f6103d"
+      },
+      "main_delta_sha256": "213185e89f37808fc90367e9d0d61277f9317450597c742f6c9533b2e6c8e61a",
+      "main_delta_bytes": 4530
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer_writev.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "e5be5faf7cc2a24200a8e56a314e9b68654c9773",
+        "new_main": "520220827ed68037b039035aaa38f8d476857706",
+        "previous_reviewed_R1": "e5be5faf7cc2a24200a8e56a314e9b68654c9773",
+        "integrated_P1": "520220827ed68037b039035aaa38f8d476857706",
+        "consolidated": "520220827ed68037b039035aaa38f8d476857706",
+        "previous_reviewed_C": "e5be5faf7cc2a24200a8e56a314e9b68654c9773"
+      },
+      "main_delta_sha256": "0496485de900cccb5e77b7b453c16ac95d1a993bb642d1eae218b4b109c89210",
+      "main_delta_bytes": 763
+    },
+    {
+      "path": "TreeDB/leaf_generation_pack.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "19a4676ffd9c72fc39a9fc1b7c070fb2fd5435e3",
+        "new_main": "94648d23b607db08c14f38ede4f290eaebf46c30",
+        "previous_reviewed_R1": "19a4676ffd9c72fc39a9fc1b7c070fb2fd5435e3",
+        "integrated_P1": "94648d23b607db08c14f38ede4f290eaebf46c30",
+        "consolidated": "94648d23b607db08c14f38ede4f290eaebf46c30",
+        "previous_reviewed_C": "19a4676ffd9c72fc39a9fc1b7c070fb2fd5435e3"
+      },
+      "main_delta_sha256": "e75b2aee80b53ae48b5ab66b519358363ffd4702071ac931a5070612e635c3ec",
+      "main_delta_bytes": 971
+    },
+    {
+      "path": "TreeDB/leaf_generation_pack_from_plan.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "3dcf23202167faf5fc94ad7232532c8f43ac6287",
+        "new_main": "626ff072f196b28fb21e7222f2b056fdfab0a21a",
+        "previous_reviewed_R1": "3dcf23202167faf5fc94ad7232532c8f43ac6287",
+        "integrated_P1": "626ff072f196b28fb21e7222f2b056fdfab0a21a",
+        "consolidated": "626ff072f196b28fb21e7222f2b056fdfab0a21a",
+        "previous_reviewed_C": "3dcf23202167faf5fc94ad7232532c8f43ac6287"
+      },
+      "main_delta_sha256": "8cad88c1a055075807466c8797ad2aca8fbfc607d147e09e7b3add0b2a51c191",
+      "main_delta_bytes": 875
+    },
+    {
+      "path": "TreeDB/leaf_generation_pack_run_once.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "55edd1dde4c3e3979c6f14008ad122b707ddc021",
+        "new_main": "50946db30d54d8607acdb9047925e5197ced362c",
+        "previous_reviewed_R1": "55edd1dde4c3e3979c6f14008ad122b707ddc021",
+        "integrated_P1": "50946db30d54d8607acdb9047925e5197ced362c",
+        "consolidated": "50946db30d54d8607acdb9047925e5197ced362c",
+        "previous_reviewed_C": "55edd1dde4c3e3979c6f14008ad122b707ddc021"
+      },
+      "main_delta_sha256": "f755afc9f28301c1a3e2d146d7112e10817a41e90b2e673a1693f91a866b37b3",
+      "main_delta_bytes": 876
+    },
+    {
+      "path": "TreeDB/lifecycle/registry.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "6b49d839ba0768b803462b3275463970109a295d",
+        "new_main": "e68ef29f9ea8486ed5f4cbb1122906e40ca48b2d",
+        "previous_reviewed_R1": "6b49d839ba0768b803462b3275463970109a295d",
+        "integrated_P1": "e68ef29f9ea8486ed5f4cbb1122906e40ca48b2d",
+        "consolidated": "e68ef29f9ea8486ed5f4cbb1122906e40ca48b2d",
+        "previous_reviewed_C": "6b49d839ba0768b803462b3275463970109a295d"
+      },
+      "main_delta_sha256": "241d4500ec7debe7c936984cdd668d8f757c0499e7a79cfe681d0ddc99ea2332",
+      "main_delta_bytes": 1332
+    },
+    {
+      "path": "TreeDB/node/internal.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "b30b01260970d1f7d312b8d0fcb81d5c2073d851",
+        "new_main": "78f62980635cd31b6b416e5e520e3789e36886e8",
+        "previous_reviewed_R1": "b30b01260970d1f7d312b8d0fcb81d5c2073d851",
+        "integrated_P1": "78f62980635cd31b6b416e5e520e3789e36886e8",
+        "consolidated": "78f62980635cd31b6b416e5e520e3789e36886e8",
+        "previous_reviewed_C": "b30b01260970d1f7d312b8d0fcb81d5c2073d851"
+      },
+      "main_delta_sha256": "fc08ebd3d9add2c27c2493c3617d22c014286344ffd570a85d84e5568639358d",
+      "main_delta_bytes": 551
+    },
+    {
+      "path": "TreeDB/node/leaf.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "8e1ab3330290db5a06f7f97dbdf78695ded1669b",
+        "new_main": "22058a6261ac91d2f290f9eac1fd59509d3abe2e",
+        "previous_reviewed_R1": "8e1ab3330290db5a06f7f97dbdf78695ded1669b",
+        "integrated_P1": "22058a6261ac91d2f290f9eac1fd59509d3abe2e",
+        "consolidated": "22058a6261ac91d2f290f9eac1fd59509d3abe2e",
+        "previous_reviewed_C": "8e1ab3330290db5a06f7f97dbdf78695ded1669b"
+      },
+      "main_delta_sha256": "db4f639a6c8c78f704081833a14c9e0570d5d59228eedffa76256fbf31aec3b4",
+      "main_delta_bytes": 3014
+    },
+    {
+      "path": "TreeDB/node/node.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "0452cee5443174ef8eb00232bec8aed1df4f36cc",
+        "new_main": "0c018f9f653bff0fa9f65c92cf10076f91f16062",
+        "previous_reviewed_R1": "0452cee5443174ef8eb00232bec8aed1df4f36cc",
+        "integrated_P1": "0c018f9f653bff0fa9f65c92cf10076f91f16062",
+        "consolidated": "0c018f9f653bff0fa9f65c92cf10076f91f16062",
+        "previous_reviewed_C": "0452cee5443174ef8eb00232bec8aed1df4f36cc"
+      },
+      "main_delta_sha256": "d62e8eca24c2b47e0f3675c83103a42f4810694d697fe7d29f556c45ad0c8fc3",
+      "main_delta_bytes": 1549
+    },
+    {
+      "path": "TreeDB/public.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "c39b0cf403139984fce20cfb40c555e63517ad68",
+        "new_main": "682959be85edfb499b0b1c372a08cc0c91118644",
+        "previous_reviewed_R1": "c39b0cf403139984fce20cfb40c555e63517ad68",
+        "integrated_P1": "682959be85edfb499b0b1c372a08cc0c91118644",
+        "consolidated": "682959be85edfb499b0b1c372a08cc0c91118644",
+        "previous_reviewed_C": "c39b0cf403139984fce20cfb40c555e63517ad68"
+      },
+      "main_delta_sha256": "48cdcee769ebb932959684e169d222e4a7a3920ec6807fecdb8c4df3ec90f274",
+      "main_delta_bytes": 18172
+    },
+    {
+      "path": "TreeDB/tree/iterator.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "dd33637ab1c88b749e600b4878c7e39bdac67d00",
+        "new_main": "f5380d1ef83636eeca3170c1220801bb888e1e31",
+        "previous_reviewed_R1": "dd33637ab1c88b749e600b4878c7e39bdac67d00",
+        "integrated_P1": "f5380d1ef83636eeca3170c1220801bb888e1e31",
+        "consolidated": "f5380d1ef83636eeca3170c1220801bb888e1e31",
+        "previous_reviewed_C": "dd33637ab1c88b749e600b4878c7e39bdac67d00"
+      },
+      "main_delta_sha256": "ff14221387592f2edc50e2a2ed84e679c65479230e3505e83a89e827bb242214",
+      "main_delta_bytes": 5120
+    },
+    {
+      "path": "TreeDB/tree/owned_iterator.go",
+      "status": "added",
+      "blobs": {
+        "old_main": null,
+        "new_main": "a3e61a05747aafc49b3a815258ce813ede5948fa",
+        "previous_reviewed_R1": null,
+        "integrated_P1": "a3e61a05747aafc49b3a815258ce813ede5948fa",
+        "consolidated": "a3e61a05747aafc49b3a815258ce813ede5948fa",
+        "previous_reviewed_C": null
+      },
+      "main_delta_sha256": "b813c8b0a7bbeaf8e1dfd44cdf437cfc2c703d0533c859d0cc9aba196024b336",
+      "main_delta_bytes": 2898
+    },
+    {
+      "path": "TreeDB/tree/tree.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "e27e060315bdb96fe3002062eaa7ee63a153a22d",
+        "new_main": "1a201ac02b3e94b7af96f53eb79c2b3a8201032b",
+        "previous_reviewed_R1": "e27e060315bdb96fe3002062eaa7ee63a153a22d",
+        "integrated_P1": "1a201ac02b3e94b7af96f53eb79c2b3a8201032b",
+        "consolidated": "1a201ac02b3e94b7af96f53eb79c2b3a8201032b",
+        "previous_reviewed_C": "e27e060315bdb96fe3002062eaa7ee63a153a22d"
+      },
+      "main_delta_sha256": "65a7beb4cbb412c920ec31fc9fb781964526275c33657be977fac849dce10e27",
+      "main_delta_bytes": 2385
+    },
+    {
+      "path": "TreeDB/vlog_gc.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "22abc52f31829fb389a2382d43c385fb326fbf39",
+        "new_main": "549282932b7c44f663439c304e759730a0cd834d",
+        "previous_reviewed_R1": "22abc52f31829fb389a2382d43c385fb326fbf39",
+        "integrated_P1": "549282932b7c44f663439c304e759730a0cd834d",
+        "consolidated": "549282932b7c44f663439c304e759730a0cd834d",
+        "previous_reviewed_C": "22abc52f31829fb389a2382d43c385fb326fbf39"
+      },
+      "main_delta_sha256": "dff8fc5fd991b1ce6e0fc81d257f36118ae01b4aeeed3bc94bbcb591239a6b71",
+      "main_delta_bytes": 535
+    },
+    {
+      "path": "TreeDB/vlog_rewrite.go",
+      "status": "modified",
+      "blobs": {
+        "old_main": "63b2173a2c2feaefb03fbef364f0733d71c4e74b",
+        "new_main": "8380beb1de364ff016704bbbbf732ddd144480d1",
+        "previous_reviewed_R1": "63b2173a2c2feaefb03fbef364f0733d71c4e74b",
+        "integrated_P1": "8380beb1de364ff016704bbbbf732ddd144480d1",
+        "consolidated": "8380beb1de364ff016704bbbbf732ddd144480d1",
+        "previous_reviewed_C": "63b2173a2c2feaefb03fbef364f0733d71c4e74b"
+      },
+      "main_delta_sha256": "556e20f16945c9911a42e72bf7dc44e35ac8df553097ad802fbecf6a2435c5a8",
+      "main_delta_bytes": 794
+    }
+  ],
+  "production_full_delta_sha256": "ebac2a569a1e9204207f4c8433a71af496f35be4fd626a59fcd430ba506149bb",
+  "source_observations": [
+    {
+      "topic": "Explicit COW admission",
+      "conclusion": "cow_btree is opt-in; ordinary public blank MemtableMode still defaults to adaptive. COW limits/reverse/conditional unsupported cases apply only to explicit COW. Existing profiles and A/C/D fixture/options sources do not request COW."
+    },
+    {
+      "topic": "R1 opener reachability",
+      "conclusion": "A/C use backend root APIs with cached leaf-log wiring via OpenBackendWithCachedLeafLog, so shared lower-layer writer/manager/tree/command append paths are reachable, while public read-owner wrapper and public maintenance wrappers are not those retained workload entry points. D uses direct OpenBackend durable profile with side-store authority; no cached COW owner is constructed."
+    },
+    {
+      "topic": "Shared successful append observer",
+      "conclusion": "Writer now calls successful produced-frame observer seam. Nil observer returns without callback; ordinary batch returns nil observer and preserves pooling/flush conditions. Added branches and layout are real new runtime inputs and can affect measured cost; no performance equivalence inferred."
+    },
+    {
+      "topic": "Shared physical rewrite revision",
+      "conclusion": "Pointer match/swap now preserves revision from current winning entry, preventing maintenance from resetting logical revision. Reachable D native rewrite; current exact focused revision tests needed."
+    },
+    {
+      "topic": "Accepted root publication error cleanup",
+      "conclusion": "Accepted-error finalize releases producer-owned vlogRefDelta before observation clears it; nil-basis ordinary group registration retains existing growable path. Bounded snapshot basis and fixed registry admission are separate new APIs selected by COW."
+    },
+    {
+      "topic": "Command WAL ACK/recovery",
+      "conclusion": "Collection production source, R1 process-cut test source and non-raw recovery files remain byte-identical to previous R1. Shared raw append driver changed to add optional pre-append canonical finalizer; old prepared API passes nil and normal dependency RID-cache release remains. COW finalizer is not used by these native collection fixture operations. Byte identity of collection callers alone does not waive updated shared runtime validation."
+    },
+    {
+      "topic": "Shared default public APIs",
+      "conclusion": "Public reads capture existing lower-layer owners through TryRLock so a waiting Close denies new read capture without retaining wrapper lock through callbacks. Public ValueLogGC now also performs cached post-maintenance reconciliation in non-COW mode. Existing public online GC/read-close tests are available; retained D direct-backend entry point bypasses this wrapper. This is a behavioral delta to record, not a discovered integration defect."
+    },
+    {
+      "topic": "Default bounded-read guards",
+      "conclusion": "Ordinary tree GetEntry passes bounded=false; fixed key scratch/owned iterator/read-admission APIs are separate COW paths. Snapshot callback lease Close is nil-safe in non-COW path."
+    },
+    {
+      "topic": "Physical identity/lifetime auto-merge",
+      "conclusion": "Manager additions are frozen Set metadata envelopes and exact registered-file metadata lookup; stable-resource addition returns immutable registered identity only with live owner. R1 Manager Close/worker admission/wait/retry/delete functions are byte-identical to 3182. Existing leaf manifest bounded-FD cleanup and identity selector source are unchanged; no stale numeric identity reopen introduced."
+    },
+    {
+      "topic": "Merged specifications",
+      "conclusion": "COW recovery/lifecycle sections explicitly preserve sealed recovery, RID/revision/namespace identity authority, durable dependency custody and persistent vlog constraints. R1 guide/spec retain corrected maximum 18 GC-child descriptors and finite cost qualification pending."
+    }
+  ],
+  "preserved_R1_function_bindings": [
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "function": "Close",
+      "previous_and_current_byte_identical": true,
+      "function_sha256": [
+        "24e18ff82d756263c14bd4df96d101abbb353a0ff53a216c3b53217d4e8a26e5",
+        "64e364638eb282bd68b3a25e92b03e8b561d1772977368bac2399c5b0e0cd0f2"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "function": "startZombieRetry",
+      "previous_and_current_byte_identical": true,
+      "function_sha256": [
+        "e6261892cc9bc915f51b5a7f55186e47a505b0f506624f4f2f18bdea50e414ac"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "function": "waitZombieRetry",
+      "previous_and_current_byte_identical": true,
+      "function_sha256": [
+        "78a3db2b8331fdfd805eee57b89bb76b7fb201a63ac2574997ffa95735911833"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "function": "retryZombieDelete",
+      "previous_and_current_byte_identical": true,
+      "function_sha256": [
+        "386d531b75b7b669145ccbd52fbf05ae9561f2bca120f087bd4a51ba168e3ead"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "function": "RemoveSegmentIfUnpinned",
+      "previous_and_current_byte_identical": true,
+      "function_sha256": [
+        "a5c58331e3ba8704ad60ac370d56e17f0d8b8832a47f755b08ff0136e0984118"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "function": "Release",
+      "previous_and_current_byte_identical": true,
+      "function_sha256": [
+        "9ee74e1665ae98efcc165e5b1cfaa3f95711e97fb6320a441aa648de72208f21"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "function": "deleteZombieFile",
+      "previous_and_current_byte_identical": true,
+      "function_sha256": [
+        "f6cf6e0d73d7900a100634f4c3f9091e844e5ce503d49cd2f58c7a615ac441c5"
+      ]
+    }
+  ],
+  "unchanged_R1_path_bindings": [
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_gc.go",
+      "blob": "5c961ae4f23666e519b08307c2869adbb148df7a",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/db/leaf_manifest_revision_gc.go",
+      "blob": "eddde48dbd47b1f548a5c442b50dc27559ed0ee5",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/db/vacuum_online.go",
+      "blob": "d90483b2bb34b394570f967857b0c5f8dae3b380",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/db/wal_recovery.go",
+      "blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_selector.go",
+      "blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/docs/spec/r1-row-lifecycle.md",
+      "blob": "95333b2c958168b1ae09869ccea36b543ce920eb",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/docs/guides/typed-row-store.md",
+      "blob": "5e7bc127091be3791a6f4971c7b242c47142d294",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/collections/r1_reads_5058_test.go",
+      "blob": "9bfe9f6fe2b282e8eb623e31b71cfd763c17b692",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/collections/r1_mutation_5059_test.go",
+      "blob": "9d5178e3a69c4173b3c8ad0a979b482fbdf4ca83",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/collections/r1_lifecycle_5060_test.go",
+      "blob": "14c2dbb1ba6a35f614fef528196a2304221ab818",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/collections/r1_lifecycle_5060_maintenance_test.go",
+      "blob": "f554bafe01b317bb9ecf04e1df123e2defea033a",
+      "byte_identical_to_previous_R1": true
+    },
+    {
+      "path": "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+      "blob": "d834fe93be16047317b31b5097b304abf62ec9ff",
+      "byte_identical_to_previous_R1": true
+    }
+  ],
+  "collection_production_unchanged_count": 274,
+  "harness": {
+    "A_C_harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+    "seven_paths": [
+      {
+        "path": "cmd/collection_workload_bench/main.go",
+        "blob": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+        "sha256": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+        "byte_identical_to_previous_reviewed_C": true,
+        "line_count": 1369
+      },
+      {
+        "path": "cmd/collection_workload_bench/r1.go",
+        "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+        "sha256": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+        "byte_identical_to_previous_reviewed_C": true,
+        "line_count": 1323
+      },
+      {
+        "path": "cmd/collection_workload_bench/r1_mutation_sweep.go",
+        "blob": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+        "sha256": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+        "byte_identical_to_previous_reviewed_C": true,
+        "line_count": 502
+      },
+      {
+        "path": "cmd/collection_workload_bench/r1_sqlite.go",
+        "blob": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+        "sha256": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+        "byte_identical_to_previous_reviewed_C": true,
+        "line_count": 352
+      },
+      {
+        "path": "scripts/r1_collection_capture.sh",
+        "blob": "abc2008715641c2133fe8958295913782f42c5a3",
+        "sha256": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+        "byte_identical_to_previous_reviewed_C": true,
+        "line_count": 62
+      },
+      {
+        "path": "scripts/r1_collection_summary.py",
+        "blob": "2e785e8508666fc6c05f5810765c1bf76647d577",
+        "sha256": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+        "byte_identical_to_previous_reviewed_C": true,
+        "line_count": 42
+      },
+      {
+        "path": "scripts/r1_collection_source.py",
+        "blob": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496",
+        "sha256": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c",
+        "byte_identical_to_previous_reviewed_C": true,
+        "line_count": 47
+      }
+    ],
+    "D_scripts": [
+      {
+        "path": "scripts/r1_lifecycle_capture.py",
+        "blob": "9325036efb43e4437779e5e6f1c04be8b6ce26b1",
+        "sha256": "d04f7fc97d36058f08b641a27afa440a4a4a4ca2e924be6dd7c1d3e8463f2cc8",
+        "unchanged_from_previous_R1": true
+      },
+      {
+        "path": "scripts/r1_lifecycle_validate.py",
+        "blob": "79b0bb121c9d2c2bc3197583c4f5dd96c59960e5",
+        "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968",
+        "unchanged_from_previous_R1": true
+      }
+    ],
+    "equivalence": "Workload/fixture/operation counts/timer/analyzer source semantics only. Consolidated seven harness blobs exactly equal previously reviewed C90fa; current D scripts/test fixture blobs exactly equal reviewed3182. Other agent owns C9 whole-harness review. Runtime changed; no binary or performance equivalence.",
+    "A_four_unchanged_semantic_blobs": [
+      "cmd/collection_workload_bench/r1.go",
+      "cmd/collection_workload_bench/r1_sqlite.go",
+      "scripts/r1_collection_summary.py",
+      "scripts/r1_collection_source.py"
+    ]
+  },
+  "spec_bindings": [
+    {
+      "path": "TreeDB/docs/spec/recovery.md",
+      "blobs": {
+        "previous_reviewed_R1": "f956022692a92d83fd2e397cbc4e2e6c97907428",
+        "new_main": "03095d59c32d192cdb820f826489e799970ebdd1",
+        "consolidated": "c1d2fdd62c20db787d0803810933e2d8d5669e74"
+      },
+      "diff_sha256": "cf9ff272b181661c7ac1be8cfd42e7daeefa9bed396c03aadd275aab712ea902",
+      "review": "Adds separate explicit COW ownership/recovery sections; preserves R1 existing cleanup, current/recovery/held/prepared authority and 18-child-FD qualification."
+    },
+    {
+      "path": "TreeDB/docs/spec/value-log-lifecycle.md",
+      "blobs": {
+        "previous_reviewed_R1": "bfb6ee97d8c096d4c8ef9921e7deb3531f70c7af",
+        "new_main": "0807646e642cb799a16bf10958e070bdbeefa712",
+        "consolidated": "2ce57d6d81d37591920b21c625e34cb20cd1162d"
+      },
+      "diff_sha256": "3efb9a9b46806cdcecc2948d9cd1b1db4d5ed5b1498ff4ad6f865735f3b2df0b",
+      "review": "Adds separate explicit COW ownership/recovery sections; preserves R1 existing cleanup, current/recovery/held/prepared authority and 18-child-FD qualification."
+    }
+  ],
+  "source_path_evidence": [
+    {
+      "path": "TreeDB/public.go",
+      "blob": "682959be85edfb499b0b1c372a08cc0c91118644",
+      "lines": [
+        {
+          "line": 592,
+          "text": "func (db *DB) captureReadOwners() (*caching.DB, *db.DB, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/public.go#L592"
+        },
+        {
+          "line": 780,
+          "text": "\tif opts.MemtableMode == \"cow_btree\" {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/public.go#L780"
+        },
+        {
+          "line": 1113,
+          "text": "\t\topts.MemtableMode = \"adaptive\"",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/public.go#L1113"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/open_backend.go",
+      "blob": "a5e3e4894f1aa3b40adfa55c7c4f7e585ab4007b",
+      "lines": [
+        {
+          "line": 13,
+          "text": "func OpenBackend(opts Options) (*db.DB, func() error, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/open_backend.go#L13"
+        },
+        {
+          "line": 48,
+          "text": "\tbackend, err := db.Open(opts)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/open_backend.go#L48"
+        },
+        {
+          "line": 76,
+          "text": "func OpenBackendWithCachedLeafLog(opts Options) (*db.DB, func() error, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/open_backend.go#L76"
+        }
+      ]
+    },
+    {
+      "path": "cmd/collection_workload_bench/r1.go",
+      "blob": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+      "lines": [
+        {
+          "line": 689,
+          "text": "\topts := treedb.OptionsFor(profile, dir)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/cmd/collection_workload_bench/r1.go#L689"
+        },
+        {
+          "line": 690,
+          "text": "\tt.db, t.cleanup, err = treedb.OpenBackendWithCachedLeafLog(opts)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/cmd/collection_workload_bench/r1.go#L690"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/collections/r1_lifecycle_5060_profile_test.go",
+      "blob": "d834fe93be16047317b31b5097b304abf62ec9ff",
+      "lines": [
+        {
+          "line": 44,
+          "text": "\twant := map[string]bool{\"outer\": true, \"packed\": true, \"prefix\": true, \"columnar\": true, \"internal_base\": false, \"command_wal\": true, \"disable_background_prune\": true, \"verified_reads\": true, \"current_writable_mmap\": false}",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/collections/r1_lifecycle_5060_profile_test.go#L44"
+        },
+        {
+          "line": 56,
+          "text": "\topts := treedb.OptionsFor(treedb.ProfileCommandWALDurable, dir)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/collections/r1_lifecycle_5060_profile_test.go#L56"
+        },
+        {
+          "line": 58,
+          "text": "\tdb, closeOwner, err := treedb.OpenBackend(opts)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/collections/r1_lifecycle_5060_profile_test.go#L58"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "blob": "26285636844230d33d1b56da08c8bb8c43fe95c9",
+      "lines": [
+        {
+          "line": 3018,
+          "text": "func (db *DB) appendValueLogForRecordsObserved(l *lane, records []valuelog.Record, durability journalDurability, observer valuelog.ProducedFrameObserver) ([]page.ValuePtr, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/caching/db.go#L3018"
+        },
+        {
+          "line": 12500,
+          "text": "\tcowMode := modeStr == \"cow_btree\"",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/caching/db.go#L12500"
+        },
+        {
+          "line": 17633,
+          "text": "func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture, observer valuelog.ProducedFrameObserver) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/caching/db.go#L17633"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/caching/cow_producer.go",
+      "blob": "1f6c23104e9f07676c3972a5d79e551f3e2bb226",
+      "lines": [
+        {
+          "line": 93,
+          "text": "func (b *Batch) cowProducedFrameObserver() valuelog.ProducedFrameObserver {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/caching/cow_producer.go#L93"
+        },
+        {
+          "line": 113,
+          "text": "func installCOWProducerObserver(w valueWriter, observer valuelog.ProducedFrameObserver) (valuelog.ProducedFrameObserver, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/caching/cow_producer.go#L113"
+        },
+        {
+          "line": 124,
+          "text": "func restoreCOWProducerObserver(w valueWriter, observer, old valuelog.ProducedFrameObserver) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/caching/cow_producer.go#L124"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/cached_backend_maintenance.go",
+      "blob": "6b099fc24b1e6bcf7ae4f0cd521039cdd915eb81",
+      "lines": [
+        {
+          "line": 5,
+          "text": "func (db *DB) runCachedBackendMaintenance(fn func() error) error {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/cached_backend_maintenance.go#L5"
+        },
+        {
+          "line": 6,
+          "text": "\tif db != nil && db.cached != nil && db.cached.COWMode() {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/cached_backend_maintenance.go#L6"
+        },
+        {
+          "line": 9,
+          "text": "\treturn db.reconcileCachedBackendMaintenance(fn())",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/cached_backend_maintenance.go#L9"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/vlog_gc.go",
+      "blob": "549282932b7c44f663439c304e759730a0cd834d",
+      "lines": [
+        {
+          "line": 113,
+          "text": "\terr = db.runCachedBackendMaintenance(func() error {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/vlog_gc.go#L113"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "blob": "d4901447167143ae310046dc2da046221740a3f1",
+      "lines": [
+        {
+          "line": 3018,
+          "text": "\t\t\t_, ptr, flags, revision := iterator.UnsafeEntryWithRevision(it)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/vlog_rewrite.go#L3018"
+        },
+        {
+          "line": 3022,
+          "text": "\t\t\t\tb.AppendPointerViewNoTouchTrustedSortedWithRevision(swap.key, swap.newPtr, revision)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/vlog_rewrite.go#L3022"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/db/root_publication_build_group.go",
+      "blob": "0e26a8af745f6aaf5ad8c126e6a9099dd2589468",
+      "lines": [
+        {
+          "line": 64,
+          "text": "func (db *DB) BeginRootPublicationBuildGroup() (*RootPublicationBuildGroup, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/root_publication_build_group.go#L64"
+        },
+        {
+          "line": 75,
+          "text": "func (db *DB) BeginRootPublicationBuildGroupFromSnapshot(basis *Snapshot) (*RootPublicationBuildGroup, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/root_publication_build_group.go#L75"
+        },
+        {
+          "line": 423,
+          "text": "\t\t\treleaseValueLogRefDelta(group.vlogRefDelta)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/root_publication_build_group.go#L423"
+        },
+        {
+          "line": 475,
+          "text": "\t\treleaseValueLogRefDelta(group.vlogRefDelta)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/root_publication_build_group.go#L475"
+        },
+        {
+          "line": 506,
+          "text": "func (group *RootPublicationBuildGroup) Accepted() bool {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/root_publication_build_group.go#L506"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/db/command_wal_raw.go",
+      "blob": "81a7216cd33291f82c6b4dec3bb7b4ec06eb9ed6",
+      "lines": [
+        {
+          "line": 1529,
+          "text": "func (db *DB) appendRawKVCommandWALOrderedEntryScanWithHintPrepared(prepare func() error, scanEntries func(func(batchpkg.Entry) error) error, opHint int, mode RawKVCommandWALAppendMode, measured bool) (uint64, CommandWALRequestTiming, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/command_wal_raw.go#L1529"
+        },
+        {
+          "line": 1530,
+          "text": "\treturn db.appendRawKVCommandWALOrderedEntryScanWithHintPreparedFinalized(prepare, nil, scanEntries, opHint, mode, measured)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/command_wal_raw.go#L1530"
+        },
+        {
+          "line": 1832,
+          "text": "\tif intent.rawKVFinalize == nil {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/command_wal_raw.go#L1832"
+        },
+        {
+          "line": 2708,
+          "text": "\tif intent.rawKVFinalize != nil {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/db/command_wal_raw.go#L2708"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/produced_frame.go",
+      "blob": "d1a5d36d0e88954a83c212c4e676dfc3b3b4cb03",
+      "lines": [
+        {
+          "line": 29,
+          "text": "func (w *Writer) observeProducedFrame(header FrameHeader, first page.ValuePtr, count int) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/produced_frame.go#L29"
+        },
+        {
+          "line": 30,
+          "text": "\tif w.producedFrameObserver != nil {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/produced_frame.go#L30"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "blob": "976ddd6ed35599342c134eb78ed8433c91e994f9",
+      "lines": [
+        {
+          "line": 1233,
+          "text": "\tretentionShape      SetRetentionSizes",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/manager.go#L1233"
+        },
+        {
+          "line": 1798,
+          "text": "func (m *Manager) Close() error {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/manager.go#L1798"
+        },
+        {
+          "line": 1820,
+          "text": "\tm.retryWorkers.Wait()",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/manager.go#L1820"
+        },
+        {
+          "line": 2419,
+          "text": "func (m *Manager) startZombieRetry(f *File) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/manager.go#L2419"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "blob": "ffffe0e0e16c285def4b82b5d5287186c6bb0df6",
+      "lines": [
+        {
+          "line": 204,
+          "text": "func (f *File) RegisteredStableIdentity() (rootpublication.StableIdentity, bool) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/stable_resource.go#L204"
+        },
+        {
+          "line": 893,
+          "text": "\t\tm.startZombieRetry(file)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/stable_resource.go#L893"
+        },
+        {
+          "line": 913,
+          "text": "\t\t\tm.startZombieRetry(file)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/valuelog/stable_resource.go#L913"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/tree/tree.go",
+      "blob": "1a201ac02b3e94b7af96f53eb79c2b3a8201032b",
+      "lines": [
+        {
+          "line": 571,
+          "text": "func (t *Tree) GetEntry(key []byte) (node.LeafEntry, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/tree/tree.go#L571"
+        },
+        {
+          "line": 572,
+          "text": "\treturn t.getEntry(key, nil, nil, nil, false)",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/tree/tree.go#L572"
+        },
+        {
+          "line": 578,
+          "text": "func (t *Tree) GetEntryWithFixedScratch(key, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, error) {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/tree/tree.go#L578"
+        }
+      ]
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_budget.go",
+      "blob": "3e74967a0dbf6da57d0bd0717d13ea32dae109e4",
+      "lines": [
+        {
+          "line": 127,
+          "text": "func (l *COWExternalLease) Close() {",
+          "url": "https://github.com/snissn/gomap/blob/ebe414b6d6a22a7f616c108157a01f8ed109e7cc/TreeDB/internal/memtable/cow_budget.go#L127"
+        }
+      ]
+    }
+  ],
+  "focused_existing_validation": [
+    {
+      "package": "./TreeDB/collections",
+      "regex": "^Test(R1TypedRow|R1Mutation|R1Lifecycle)",
+      "reason": "Retains public full-row current/held read parity, indexed mutation matrix and 18 selected process cuts, D mixed lifecycle/rewrite/vacuum/reopen tests. Existing current-source execution should supply normal/race receipts, not duplicated reviewer runs."
+    },
+    {
+      "package": "./TreeDB/db",
+      "regex": "^(TestRewriteSwapPreservesWinningCurrentRevision|TestSelectedValueLogRewriteRevisionLifetime|TestRootPublicationBuildGroupCommandWALAcceptedWaitFailureDoesNotPoisonOpenHandle)$",
+      "reason": "Minimal additive shared new-main regression coverage. The selected rewrite test covers 3 WAL modes, current winning revisions, old held physical pointers and reopen; it does not explicitly run GC."
+    },
+    {
+      "package": "./TreeDB/internal/valuelog",
+      "regex": "^(TestCOWProducedFrameObserverMatchesEncodedFrames|TestCOWProducedFrameObserverRejectsBeforeObservation|TestManagerCloseJoinsPinnedZombieRetry5066|TestManagerConcurrentRetryAdmissionAndClose5066)$",
+      "reason": "Checks new successful-frame observer timing/refusal and preserved R1 worker-close/admission semantics. Root already planned retry tests; append only missing observer tests."
+    },
+    {
+      "package": "./TreeDB/db",
+      "regex": "^Test(LeafManifestRevisionGC|LeafGenerationGCReclaimsReleasedManifestRevisions5066|R1NativeAppenderCreationMetadata|R1Rebuilt)",
+      "reason": "Reuse root-planned R1 focused regression packet: bounded descriptors, late held protection, partial/error cleanup, malformed/rebound inventory, both recovery slots and metadata lifetimes."
+    }
+  ],
+  "material_correctness_findings": [],
+  "qualification_requirements": [
+    "Root owns actual current-source normal/race/vet evidence and required CI. No PASS inferred here from root status messages.",
+    "Fresh A complete retained matrix, selected C cost sweep and supported-profile D lifecycle captures must use actual accepted landed source/runtime cb5 or its actual unchanged descendant, real observer environment/build/source receipts, unchanged fixture counts and noise guards.",
+    "All old runtime9bae captures and previous runtime-bound CI evidence remain historical.",
+    "Final A strict certificate must bind actual newly landed tree/source/runtime and preserved baseline/environment pins; old pinned commit/runtime metadata may not be substituted. Exact unchanged seven harness blobs support narrowly reviewed workload-semantic exception only; no global harness/environment guard relaxation.",
+    "Future accepted head/tree/CI/capture metadata remains root responsibility; this private review does not claim actual landing, capacity, performance, power-loss proof or E closeout."
+  ]
+}

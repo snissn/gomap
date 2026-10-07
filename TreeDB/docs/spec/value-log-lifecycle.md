@@ -126,7 +126,16 @@ A manager owns every deferred zombie-deletion worker it admits. Admission and
 worker registration occur under the same manager lock that closes admission.
 `Manager.Close` cancels retry backoff and joins those workers outside the lock
 before closing tracked resources. Concurrent and repeated closes observe the
-same completion and error. Stable identity pins still prohibit deletion;
+same completion and error. Synchronous direct and final-Release deletion
+admissions use the same manager-owned join, so Close cannot return while those
+operations still own physical removal or lease finalization. A per-file mutex
+serializes physical close/quarantine outside the manager lock and rechecks the
+canonical identity after waiting while removal remains incomplete. Physical
+success marks that File complete before releasing the deletion mutex; another
+admitted operation then returns success without accessing the canonical path,
+even if a successor reuses the retired inode. File.Close joins actual handle/cache/mapping
+cleanup rather than treating its early closed flag as completion. Stable identity
+pins still prohibit deletion;
 shutdown does not bypass the gate or reclaim a pinned segment.
 
 Directory refresh leaves a tracked zombie at its original path under that
@@ -153,8 +162,18 @@ the registered identity when available, without modifying the identity exposed
 to pinned readers. Refresh, deletion and retry use that retained identity even
 without an external pin registry. Capture failure leaves ownership and zombie
 state unchanged; unsupported platforms fail explicitly. Explicit removal checks
-the pathname before forgetting ownership, and quarantine unlink checks again
-after close. External registry leases separately enforce pin exclusion. A
+the pathname before admitting retirement, then retains the exact zombie owner
+and registry observation until physical deletion succeeds, unless an explicit
+`EvictSegment` call transfers lifecycle ownership to its caller. Incomplete
+physical deletion leaves that owner excluded from new snapshots; refresh
+and explicit retries validate its captured identity rather than adopt a
+replacement. Quarantine unlink checks again after close. A successful deletion
+forgets only the same tracked file, so an explicitly evicted and newly registered
+owner cannot be removed by an older operation. External registry leases
+separately enforce pin exclusion. `RemoveSegmentIfUnpinned` retains its existing
+admitted-attempt boolean when the returned error reports a failed deletion;
+callers must check that error. Force remains limited to recovery cleanup and
+continues to bypass logical refcount checks. A
 manager-locked count skips the retirement scan when no tracked zombies exist;
 marking, ownership removal, eviction and Close balance that count.
 

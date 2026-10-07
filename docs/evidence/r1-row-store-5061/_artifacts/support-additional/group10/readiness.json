@@ -1,0 +1,16 @@
+{
+  "UTF8_regular_nonsymlink_nonexec": true,
+  "actual_landing_observed": false,
+  "all_original_copy_bytes_equal": true,
+  "bytes": 9575389,
+  "current_required_CI_observed": false,
+  "files": 113,
+  "focused_receipt_observations": 12,
+  "missing": [],
+  "prior_files_verified_unchanged": 572,
+  "publication": false,
+  "ready_for_root_byte_review": true,
+  "root_adoption": false,
+  "root_source_adoption_original_included": true,
+  "status": "UNPROMOTED_PENDING_ROOT_ADOPTION"
+}

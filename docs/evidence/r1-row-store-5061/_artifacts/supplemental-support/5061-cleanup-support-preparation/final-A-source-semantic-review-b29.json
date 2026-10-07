@@ -1,0 +1,175 @@
+{
+  "status": "CLEAN",
+  "scope": "A workload semantics only; no runtime/generated-code/performance equivalence",
+  "baseline_commit": "0216e2e9ee701dee0eda96c569dc0c8facb37ca9",
+  "reviewed_candidate_commit": "b29a3747a99681963e1799c9c303b5a502667c92",
+  "actual_landed_commit": null,
+  "selected_runtime_sha256": "31b744906a95c46b124913edb42e29df6350ec0bdcb431311f8d6cc2e364b183",
+  "baseline_runtime_sha256": "0bdca3684ca4de3ddfae5e17b96e910bc7abb86532c48c40087f453df2c1a2c1",
+  "selected_harness_sha256": "706b71f11508bf9c0075b0dd9c5463cd741a49cba83996feaf753330ace77822",
+  "baseline_harness_sha256": "8fe73a72755c4d88ff83d8587a37692419ca6625f7b05d68497e0c558ada4efb",
+  "selected_harness_blobs": {
+    "cmd/collection_workload_bench/main.go": "1849d04592f035f7e679713e34dd55c3d0bbbcb0",
+    "cmd/collection_workload_bench/r1.go": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+    "cmd/collection_workload_bench/r1_mutation_sweep.go": "5fecc4b52d705291ffca66b9714b9f74bc48df55",
+    "cmd/collection_workload_bench/r1_sqlite.go": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+    "scripts/r1_collection_capture.sh": "abc2008715641c2133fe8958295913782f42c5a3",
+    "scripts/r1_collection_summary.py": "2e785e8508666fc6c05f5810765c1bf76647d577",
+    "scripts/r1_collection_source.py": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496"
+  },
+  "selected_harness_file_sha256": {
+    "cmd/collection_workload_bench/main.go": "d6dabcd6760b631c07fd16a5111ba127aeed2519e15b996b225b1a3c0f798ca3",
+    "cmd/collection_workload_bench/r1.go": "1944406bcdf1ff6fa338c9c815d5802d4e2cb93fc80e7e63c2672a115230656e",
+    "cmd/collection_workload_bench/r1_mutation_sweep.go": "074904e558da9ad3fe5566abb621ae95e7945868a5fe924b6dfd8d6feb2c806c",
+    "cmd/collection_workload_bench/r1_sqlite.go": "91a9b37228a7f76e53325f79e771675b9b6399626ddf0914a2ab0cb234cdfebd",
+    "scripts/r1_collection_capture.sh": "cdfd58264da398ab5f186e939e41eb4311d3d9e2f3dc0ca971a500d11e5c205e",
+    "scripts/r1_collection_summary.py": "709f7c250ad957afc778c09bc9d189785df1d294e32bb53a5f7a33580231f38e",
+    "scripts/r1_collection_source.py": "b98bb4587613a11f6c45714c07c08ae8fcfbd873ea8f320db05ceb29b6d66e5c"
+  },
+  "unchanged_A_blobs": {
+    "cmd/collection_workload_bench/r1.go": "fec4f76df23af2cfa04522fa3e6d07a6fbb43a68",
+    "cmd/collection_workload_bench/r1_sqlite.go": "b4af34686b2e97b5b2715be01516cf2f6347b2c0",
+    "scripts/r1_collection_summary.py": "2e785e8508666fc6c05f5810765c1bf76647d577",
+    "scripts/r1_collection_source.py": "16e6bd4bacaf53b0f49f70e2789d0a47b3b42496"
+  },
+  "reviewed_changed_path_diff_sha256": {
+    "cmd/collection_workload_bench/main.go": "0b9caaba8139baca71d4911fbe29c68f123a8688a96e98ee9913c96bdf62a7f9",
+    "cmd/collection_workload_bench/r1_mutation_sweep.go": "da64f5b8c5951dc6258a116431f7a36fa9bdc146e44e74221463425fbd4ab98b",
+    "scripts/r1_collection_capture.sh": "89298bda9a38c1b14cb18734afce4ee274de5086cf072d0ddfe8be675d45b82a"
+  },
+  "source_contract_observations": [
+    {
+      "finding": "Four A implementation/analysis source blobs exactly equal immutable baseline. All seven selected harness blobs and all three baseline-to-selected diff SHA256s exactly match previously reviewed9e729 C source.",
+      "binding_file": "final-A-source-semantic-bindings-b29.json"
+    },
+    {
+      "finding": "main.go changes only a guarded branch for r1-mutation-sweep and r1-mutation-sweep-validate. With r1 or r1-validate, branch is false and the unchanged original handlers receive identical argv. Removing exactly that inserted branch reconstructs baseline bytes.",
+      "source": "cmd/collection_workload_bench/main.go:144"
+    },
+    {
+      "finding": "C has no init function, linkname, Cgo, Go directives or newly imported package. Only added global is r1SweepCounterKeys, a C-only static13-string slice; constants are C-only schema/scope strings. A source does not read/write those symbols. FlagSet creation, manager detailed stats, C database opens and fixture mutation occur only inside explicitly routed C functions. No A fixture/global/option/timer/counter state is changed. Static/code layout differences are outside this semantic equivalence claim.",
+      "source": "cmd/collection_workload_bench/r1_mutation_sweep.go:27,74,76,89,148"
+    },
+    {
+      "finding": "Capture adds R1_MODE default r1, validates two allowed modes and emits mode.txt. In resolved r1 mode, binary r1 argv, source-before/after drift check, r1-validate command and summary command preserve the baseline A path. Added mode-file write precedes workload timing. An inherited R1_MODE=r1-mutation-sweep is a different experiment and must not qualify as A.",
+      "source": "scripts/r1_collection_capture.sh:15,41,48,53"
+    },
+    {
+      "finding": "GOWORK=off, Go selection/version/env inventory, CC version, go build argv, module inputs go.mod/go.sum, buildinfo and binary hash collection remain unchanged. Actual compiler, CGO, runtime env, host/filesystem and binary bytes still require independent future observation/equality checks.",
+      "source": "scripts/r1_collection_capture.sh:13,26; go.mod; go.sum"
+    },
+    {
+      "finding": "A fixture/engine order/config/repetition schedule and complete-row oracles are unchanged: six engines json/template-v1/bson/typed-row/sqlite-json/sqlite-row,4096 documents,32 load/read batch,1000 read/mutation callbacks,5 fresh DB repetitions,durable/flushed retained configuration. Capability-based skip/newly-enabled handling remains unchanged and may produce legitimately new runtime results.",
+      "source": "cmd/collection_workload_bench/r1.go:31,111,135,207,328,478,518"
+    },
+    {
+      "finding": "A measurement times each callback including driver encoding/work, sums callback durations, records returned rows independently, samples allocs over the callback loop, and leaves correctness oracle/setup/cold batch separate as originally specified. A mutation update/replace request still contains one document; batch-size32 is load/complete-read width, not mutation width.",
+      "source": "cmd/collection_workload_bench/r1.go:259,350,365,388,414,540,585"
+    },
+    {
+      "finding": "SQLite A WAL/FULL durable or NORMAL relaxed ACK modes,one connection,explicit pragmas,JSON generated-column versus row schema/indexes,transaction scope and encoding remain byte-identical; no C mode touches SQLite.",
+      "source": "cmd/collection_workload_bench/r1_sqlite.go:23,72"
+    },
+    {
+      "finding": "Summary retains every raw repetition and the original throughput-spread guard:(max-min)/median>0.15 is inconclusive. Full-harness digest differs only for the reviewed C addition/routing; certificate may narrow that digest assertion only and cannot relax config/fixture/count/environment/noise/source acceptance.",
+      "source": "scripts/r1_collection_summary.py:8,24,28,34"
+    }
+  ],
+  "frozen_dimensions_denominators": {
+    "load": {
+      "callbacks": 128,
+      "returned_rows": 4096
+    },
+    "point_get_into_complete": {
+      "callbacks": 1000,
+      "returned_rows": 1000
+    },
+    "point_complete": {
+      "callbacks": 1000,
+      "returned_rows": 1000
+    },
+    "batch_complete": {
+      "callbacks": 1000,
+      "returned_rows": 32000
+    },
+    "range_complete": {
+      "callbacks": 1000,
+      "returned_rows": 10000,
+      "limit": 10
+    },
+    "range_public_complete": {
+      "callbacks": 1000,
+      "returned_rows": 10000,
+      "limit": 10,
+      "conditional": "Only where existing complete-row capability/oracle succeeds; original skip policy retained."
+    },
+    "update_nonindexed": {
+      "callbacks": 1000,
+      "returned_rows": 1000,
+      "request_documents": 1
+    },
+    "update_indexed": {
+      "callbacks": 1000,
+      "returned_rows": 1000,
+      "request_documents": 1
+    },
+    "replace": {
+      "callbacks": 1000,
+      "returned_rows": 1000,
+      "request_documents": 1
+    },
+    "delete": {
+      "callbacks": 1000,
+      "returned_rows": 1000
+    },
+    "mixed_churn": {
+      "callbacks": 1000,
+      "returned_rows": 1250,
+      "mixed_logic": "Every fourth callback delete+insert returns2,remaining750 return1; same unchanged schedule."
+    },
+    "checkpoint": {
+      "callbacks": 1,
+      "returned_rows": 0
+    },
+    "upsert": {
+      "callbacks": 1000,
+      "returned_rows": 2000,
+      "conditional": "Only where existing public atomic upsert capability exists; original skip policy retained."
+    },
+    "read_state_transition": {
+      "callbacks": 1,
+      "returned_rows": 0
+    },
+    "read_view_open_flush_setup": {
+      "callbacks": 1,
+      "returned_rows": 0
+    },
+    "first_complete_batch": {
+      "callbacks": 1,
+      "returned_rows": 32
+    }
+  },
+  "independent_checks": {
+    "four_A_bytes_equal": true,
+    "seven_selected_harness_paths": true,
+    "three_diff_hashes_equal_prior": true,
+    "main_only_guarded_sweep_insert": true,
+    "sweep_no_init": true,
+    "sweep_only_global_static_counter_slice": true,
+    "sweep_no_new_imported_packages": true,
+    "A_does_not_reference_C_globals": true,
+    "sweep_no_linkname_or_Cgo_or_go_directive": true,
+    "diffs_rechecked_with_certificate_exact_git_flags": true,
+    "go_mod_and_sum_bytes_unchanged": true,
+    "runtime_1098_input_blob_map_exact_852_equal": true
+  },
+  "material_findings": [],
+  "future_acceptance_required": [
+    "Root verifies actual5072 landing receipt and pins the actual landed commit; current candidate b29 is not treated as landed by this review.",
+    "To reuse this semantic review at actual merge, require exact selected seven harness Git blobs/bytes and all three baseline-to-landed diff hashes; separately require actual runtime inventory/source receipts and approved certificate pins. A semantic match never establishes runtime equality to baseline.",
+    "Fresh full A measurements are necessary after bounded-FD runtime852 changes. Historical full A packet/performance and static source equality do not establish current performance.",
+    "Root independently observes actual full-A mode/argv,compiler/build/runtime/environment/host/filesystem source-clean before/after,binary/packet hashes,freeze and landed source. Preserve immutable baseline metadata and original failed/noisy packets.",
+    "Use reviewed tightly scoped external certificate only for the full harness digest mismatch; preserve every original fixture/config/denominator/math/environment/noise check and actual completed-run acceptance requirement."
+  ],
+  "reviewer_operations": "Read-only Git object/source inspection and private Python binding/report generation only; no Go/capture/test/polling/GitHub/delegation."
+}

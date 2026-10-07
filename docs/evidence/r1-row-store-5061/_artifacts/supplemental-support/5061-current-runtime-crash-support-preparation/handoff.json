@@ -1,0 +1,14 @@
+{
+  "status": "PREPARATION_ONLY_RELEASED_FOR_ROOT_REVIEW",
+  "directory": "/tmp/gomap-r1-execution-20261005/5061-current-runtime-crash-support-preparation",
+  "inventory_sha256": "aebd1592fb7aa0774d73142efad9bffe0a5c03b0b6c13353b9235c0cb34d0981",
+  "readiness_sha256": "365d51a06024f52e3e8db942e83d162fd7a481a2bfeb75768434e930be077965",
+  "handoff_md_sha256": "de3a5152b4f6ffac052f858321176e0547d36be8bc83b1010a457109839374e9",
+  "copies": 13,
+  "bytes": 16537710,
+  "normal_and_race_expected_pass_rows_each": 27,
+  "original_jobs_snapshot_drift_disclosed": true,
+  "source_or_GitHub_writes": false,
+  "tests_or_captures": false,
+  "promotion_or_acceptance": false
+}

@@ -1,0 +1,171 @@
+=== RUN   TestLeafGenerationGCBenchmarkPercentile
+--- PASS: TestLeafGenerationGCBenchmarkPercentile (0.00s)
+=== RUN   TestLeafGenerationGC_LiveScanDoesNotBlockForegroundWrite
+--- PASS: TestLeafGenerationGC_LiveScanDoesNotBlockForegroundWrite (0.18s)
+=== RUN   TestLeafGenerationGC_QueuedCheckpointDoesNotGateLaterWrite
+--- PASS: TestLeafGenerationGC_QueuedCheckpointDoesNotGateLaterWrite (0.17s)
+=== RUN   TestLeafGenerationGC_LifetimeGateLockOrderStress
+--- PASS: TestLeafGenerationGC_LifetimeGateLockOrderStress (0.42s)
+=== RUN   TestLeafGenerationGC_RevalidationFailureSkipsStalePublish
+--- PASS: TestLeafGenerationGC_RevalidationFailureSkipsStalePublish (0.17s)
+=== RUN   TestLeafGenerationGC_DryRunLiveScanDoesNotBlockForegroundWrite
+--- PASS: TestLeafGenerationGC_DryRunLiveScanDoesNotBlockForegroundWrite (0.17s)
+=== RUN   TestLeafGenerationGC_DryRunRetriesInvalidatedScan
+--- PASS: TestLeafGenerationGC_DryRunRetriesInvalidatedScan (0.24s)
+=== RUN   TestLeafGenerationGC_DryRunRetryExhaustionReturnsStale
+--- PASS: TestLeafGenerationGC_DryRunRetryExhaustionReturnsStale (0.18s)
+=== RUN   TestLeafGenerationGC_CloseWaitsForUnlockedScan
+--- PASS: TestLeafGenerationGC_CloseWaitsForUnlockedScan (0.29s)
+=== RUN   TestLeafGenerationGC_DeletesFullyDeadGeneration
+--- PASS: TestLeafGenerationGC_DeletesFullyDeadGeneration (0.23s)
+=== RUN   TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration
+--- PASS: TestLeafGenerationGC_DryRunRetainsOlderRecoverableRootGeneration (0.15s)
+=== RUN   TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment
+--- PASS: TestLeafGenerationGC_RetainsCurrentUnreachableLeafLogLaneSegment (0.22s)
+=== RUN   TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen
+--- PASS: TestLeafGenerationGC_RemovesUnreachableMultiLaneSegmentsAfterReopen (0.55s)
+=== RUN   TestLeafGenerationGC_DoesNotZombieSharedActiveFileID
+--- PASS: TestLeafGenerationGC_DoesNotZombieSharedActiveFileID (0.09s)
+=== RUN   TestLeafGenerationGC_PrunePreservesPublishedManifest
+--- PASS: TestLeafGenerationGC_PrunePreservesPublishedManifest (0.00s)
+=== RUN   TestLeafGenerationGC_RetriesDeletedGenerationFileAfterReopen
+--- PASS: TestLeafGenerationGC_RetriesDeletedGenerationFileAfterReopen (0.09s)
+=== RUN   TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive
+--- PASS: TestLeafGenerationGC_ProtectedRootIDsKeepDetachedRootLive (0.16s)
+=== RUN   TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive
+--- PASS: TestLeafGenerationGC_ProtectedSystemRootDescriptorsKeepCollectionRootLive (0.17s)
+=== RUN   TestLeafGenerationGC_IgnoresStaleReachabilityCache
+--- PASS: TestLeafGenerationGC_IgnoresStaleReachabilityCache (0.17s)
+=== RUN   TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses
+=== RUN   TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=false
+=== RUN   TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=true
+--- PASS: TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses (0.52s)
+    --- PASS: TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=false (0.26s)
+    --- PASS: TestLeafGenerationGC_RetiresPinnedGenerationUntilSnapshotCloses/private=true (0.26s)
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/entries
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/bytes
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/pages
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/partial
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/entries
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/bytes
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/pages
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/partial
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/entries
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/bytes
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/pages
+=== RUN   TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/partial
+--- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork (0.11s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/entries (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/bytes (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/pages (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/plan/partial (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/entries (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/bytes (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/pages (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/pack-run-once/partial (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/entries (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/bytes (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/pages (0.00s)
+    --- PASS: TestLeafGenerationMaintenanceLimitsRejectBeforeNativeWork/gc/partial (0.00s)
+=== RUN   TestLeafGenerationMaintenanceLimitsDirectoryBoundary
+--- PASS: TestLeafGenerationMaintenanceLimitsDirectoryBoundary (0.00s)
+=== RUN   TestLeafGenerationMaintenanceLimitsManifestBeforeClone
+--- PASS: TestLeafGenerationMaintenanceLimitsManifestBeforeClone (0.00s)
+=== RUN   TestLeafGenerationMaintenanceLimitsCapturedFiles
+--- PASS: TestLeafGenerationMaintenanceLimitsCapturedFiles (0.05s)
+=== RUN   TestLeafGenerationMaintenanceLimitsPackRechecksRewriteSnapshot
+--- PASS: TestLeafGenerationMaintenanceLimitsPackRechecksRewriteSnapshot (0.17s)
+=== RUN   TestLeafGenerationMaintenanceLimitsRecoverableSnapshot
+--- PASS: TestLeafGenerationMaintenanceLimitsRecoverableSnapshot (0.11s)
+=== RUN   TestLeafGenerationMaintenanceLimitsAdmittedPackAndGC
+--- PASS: TestLeafGenerationMaintenanceLimitsAdmittedPackAndGC (0.32s)
+=== RUN   TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken
+--- PASS: TestStableLeafGenerationManifestReplacementReturnsExactSyncedToken (0.02s)
+=== RUN   TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind
+--- PASS: TestStableLeafGenerationManifestStoreRetainsParentAcrossPathRebind (0.02s)
+=== RUN   TestStableLeafGenerationManifestCrashModelRetainsParentAcrossPathRebind
+--- PASS: TestStableLeafGenerationManifestCrashModelRetainsParentAcrossPathRebind (0.02s)
+=== RUN   TestStableLeafGenerationManifestStoreLoadsOnlyRetainedParentAfterPathRebind
+--- PASS: TestStableLeafGenerationManifestStoreLoadsOnlyRetainedParentAfterPathRebind (0.01s)
+=== RUN   TestStableLeafGenerationManifestReplacementSkipsUnknownStaleTempCollision
+--- PASS: TestStableLeafGenerationManifestReplacementSkipsUnknownStaleTempCollision (0.02s)
+=== RUN   TestStableLeafGenerationManifestReplacementIncrementsSameGenerationRevision
+--- PASS: TestStableLeafGenerationManifestReplacementIncrementsSameGenerationRevision (0.04s)
+=== RUN   TestStableLeafGenerationManifestReplacementRevisionSurvivesStoreReopen
+--- PASS: TestStableLeafGenerationManifestReplacementRevisionSurvivesStoreReopen (0.04s)
+=== RUN   TestStableLeafGenerationManifestReplacementPreservesPersistedSyntaxError
+--- PASS: TestStableLeafGenerationManifestReplacementPreservesPersistedSyntaxError (0.00s)
+=== RUN   TestStableLeafGenerationManifestReplacementRetainsPinnedOlderRevision
+--- PASS: TestStableLeafGenerationManifestReplacementRetainsPinnedOlderRevision (0.04s)
+=== RUN   TestStableLeafGenerationManifestCapabilityFailsBeforeTempVisibility
+--- PASS: TestStableLeafGenerationManifestCapabilityFailsBeforeTempVisibility (0.00s)
+=== RUN   TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp
+--- PASS: TestStableLeafGenerationManifestPreRenameFailurePreservesOldAndCleansTemp (0.02s)
+=== RUN   TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence
+--- PASS: TestStableLeafGenerationManifestPostRenameFailurePoisonsAndRetainsEvidence (0.03s)
+=== RUN   TestStableLeafGenerationManifestDestinationRebindFailsClosed
+--- PASS: TestStableLeafGenerationManifestDestinationRebindFailsClosed (0.02s)
+=== RUN   TestStableLeafGenerationManifestParentSyncFailurePoisons
+--- PASS: TestStableLeafGenerationManifestParentSyncFailurePoisons (0.02s)
+=== RUN   TestStableLeafGenerationManifestAmbiguityRejectsLoadAndBootstrapScan
+--- PASS: TestStableLeafGenerationManifestAmbiguityRejectsLoadAndBootstrapScan (0.02s)
+=== RUN   TestStableLeafGenerationManifestReleaseReturnsResourcesToBaseline
+--- PASS: TestStableLeafGenerationManifestReleaseReturnsResourcesToBaseline (2.56s)
+=== RUN   TestLeafGenerationGCReclaimsReleasedManifestRevisions5066
+--- PASS: TestLeafGenerationGCReclaimsReleasedManifestRevisions5066 (0.30s)
+=== RUN   TestLeafManifestRevisionGCGates5066
+=== RUN   TestLeafManifestRevisionGCGates5066/pins
+=== RUN   TestLeafManifestRevisionGCGates5066/dry
+=== RUN   TestLeafManifestRevisionGCGates5066/canceled
+=== RUN   TestLeafManifestRevisionGCGates5066/limits
+=== RUN   TestLeafManifestRevisionGCGates5066/malformed
+=== RUN   TestLeafManifestRevisionGCGates5066/unsupported
+=== RUN   TestLeafManifestRevisionGCGates5066/syncfailure
+=== RUN   TestLeafManifestRevisionGCGates5066/retainedparent
+--- PASS: TestLeafManifestRevisionGCGates5066 (0.30s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/pins (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/dry (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/canceled (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/limits (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/malformed (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/unsupported (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/syncfailure (0.04s)
+    --- PASS: TestLeafManifestRevisionGCGates5066/retainedparent (0.04s)
+=== RUN   TestLeafManifestRevisionGCReboundChild5066
+--- PASS: TestLeafManifestRevisionGCReboundChild5066 (0.04s)
+=== RUN   TestLeafManifestRevisionGCHeldAndRecovery5066
+--- PASS: TestLeafManifestRevisionGCHeldAndRecovery5066 (0.64s)
+=== RUN   TestLeafManifestRevisionGCReadOnly5066
+--- PASS: TestLeafManifestRevisionGCReadOnly5066 (0.13s)
+=== RUN   TestLeafManifestRevisionGCCompatibility5066
+--- PASS: TestLeafManifestRevisionGCCompatibility5066 (0.05s)
+=== RUN   TestLeafManifestRevisionGCBoundedDescriptors
+    leaf_manifest_revision_gc_fd_linux_test.go:24: isolated child:
+        === RUN   TestLeafManifestRevisionGCBoundedDescriptors
+            leaf_manifest_revision_gc_fd_linux_test.go:117: RLIMIT_NOFILE=64 revisions=257 deleted=255 protected=2 descriptor_baseline=12 peak=28 remaining=1
+        --- PASS: TestLeafManifestRevisionGCBoundedDescriptors (6.54s)
+        PASS
+--- PASS: TestLeafManifestRevisionGCBoundedDescriptors (6.54s)
+=== RUN   TestLeafManifestRevisionGCPartialCancellation
+--- PASS: TestLeafManifestRevisionGCPartialCancellation (1.11s)
+=== RUN   TestLeafManifestRevisionGCLaterInventoryFailure
+--- PASS: TestLeafManifestRevisionGCLaterInventoryFailure (1.02s)
+=== RUN   TestR1RebuiltCurrentRootDropsUnreachablePackedDependency
+    r1_rebuilt_pack_projection_test.go:72: ordinary current vacuum: {AttemptID:2 Phase:rebuild TotalDuration:37.358161ms UserTreeDuration:4.421µs SystemReserveDuration:501ns CollectionBasisDuration:2.044µs PreflushDuration:371ns CutoverDuration:12.398087ms SystemTreeDuration:3.509µs FinalPagerSyncDuration:24.75075ms SwapPublishDuration:12.04803ms MaxWriterPause:37.149096ms PrecloneTraversalPages:0 RecloneTraversalPages:0 CutoverCloneTraversalPages:0 DirtyDescriptors:0 UserTailMutations:0 UserTailPointMutations:0 UserTailRangeMutations:0 DeferredCutovers:0 ConcurrentMutationAborts:0 RecoverableSetCaptureDuration:50.385µs RecoverableSetCaptureAttempts:1 RecoverableSetCaptures:1 RecoverableSetRecaptureAttempts:0 RecoverableSetRecaptures:0 RecoverableRoots:2 OlderRootRebuildDuration:69.14µs OlderRootRebuilds:1 OlderRootDurableResourceCaptureDuration:7.179µs OlderRootDurableResourceCaptures:1 OlderRootDurableResourceDescriptors:3 OlderRootDurableResourceBytes:6501 OlderRootExactCandidateScans:0 OlderRootProjections:1 OlderRootProjectionFallbacks:0 OlderRootProjectionFallbackReason: OlderRootReusedNonValueLogDescriptors:0 OlderRootUniqueExternalSegments:0 DurableResourceCaptureDuration:140.151µs DurableResourceCaptures:1 DurableResourceDescriptors:2 DurableResourceBytes:5035 DurableResourceExactCandidateScans:1 DurableResourceProjections:0 DurableResourceProjectionFallbacks:1 DurableResourceProjectionFallbackReason:current-packed-reachability OlderRootRebuiltPages:2 ReplacementPagerPages:16 ExactCandidateScan:true ReusedNonValueLogDescriptors:1 UniqueExternalSegments:1 WorkCompleted:true Canceled:false}
+    r1_rebuilt_pack_projection_test.go:127: after retained member release: {GenerationsTotal:2 GenerationsWritable:1 GenerationsLive:0 GenerationsRetiring:0 GenerationsEligible:0 GenerationsDeleted:1 FilesDeleted:1 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:3 ManifestRevisionsProtected:2 ManifestRevisionsEligible:1 ManifestRevisionsDeleted:1 ManifestRevisionBytesEligible:569 ManifestRevisionBytesDeleted:569}
+--- PASS: TestR1RebuiltCurrentRootDropsUnreachablePackedDependency (0.56s)
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id
+--- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority (0.29s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id (0.00s)
+=== RUN   TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs
+--- PASS: TestVacuumIndexOnline_RebuildsPackedInternalTreeForLeafRefs (21.19s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	40.007s

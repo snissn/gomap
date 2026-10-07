@@ -1,0 +1,16 @@
+{
+  "command": [
+    "python3",
+    "/private/tmp/gomap-r1-execution-20261005/diagnostic-stage-inputs/frozen-validator-12f3bed/r1_lifecycle_validate.py",
+    "/private/tmp/gomap-r1-execution-20261005/diagnostic-stage-inputs/profile-v3-rejected/packet.json",
+    "--expected-runtime",
+    "4d4950757e75266540c795439eb07dee77ce273015fe36b71202cdb0ecf8d396",
+    "--expected-harness",
+    "ff22c0f82c7220e23aab9793ec177c4cba43e07208096c51edbd99fb9efb0c51",
+    "--expected-commit",
+    "b5663870a110dd9a84a873934815d5b0bcb649cb"
+  ],
+  "exit_code": 1,
+  "expected": "reject missing revision-GC fields; source remains original dirty construction identity",
+  "actual_output_sha256": "62b53c1952cdf4a9e00caf6c0f3a2c7ba816d974305a3c7d63af1e87c05abcd0"
+}

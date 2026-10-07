@@ -1,0 +1,506 @@
+{
+  "schema_version": 1,
+  "review_kind": "bounded_read_only_required_ci_diagnosis",
+  "created_at_utc": "2026-10-06T19:47:57.063543+00:00",
+  "verdict": "SOURCE_SUPPORTED_FIXTURE_STABILITY_GAP; ORIGINAL_WINDOWS_CAPTURE_REASON_UNTRACED; REQUIRED_FAILURE_UNWAIVED",
+  "source_heads": {
+    "main3cfe": "3cfe2ad896cad1818f72d3d14c74e548fecc1657",
+    "base764": "7649857532521db69ff4cdcf236a11377c85ab3d",
+    "candidate": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b"
+  },
+  "reviewed_checkout": "/tmp/gomap-r1-5067",
+  "observed_head": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b",
+  "observed_clean": true,
+  "reported_workflow": {
+    "run_id": 37519676816,
+    "job_id": 112461917287,
+    "job_name": "windows-core-2",
+    "source_binding": "Exact aa8614 supplied by root; original log retained; no new GitHub query by reviewer."
+  },
+  "observed_failure": {
+    "path": "/tmp/gomap-r1-execution-20261005/aa8614-windows-core2-failure-rest-original.log",
+    "sha256": "12254287cc12e6c0c83148dacdcea4550d4ad9304e9b5204e352fa5fb928cbe8",
+    "size_bytes": 694851,
+    "target_rows": [
+      {
+        "raw_line": 2811,
+        "Time": "2026-10-06T19:42:42.2705668Z",
+        "Action": "run",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC"
+      },
+      {
+        "raw_line": 2812,
+        "Time": "2026-10-06T19:42:42.2705668Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Output": "=== RUN   TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC\n"
+      },
+      {
+        "raw_line": 2813,
+        "Time": "2026-10-06T19:42:42.4868674Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Output": "    ordered_root_span_native_correctness_test.go:297: ValueLogGC: treedb: recoverable root set changed: capture did not converge\n"
+      },
+      {
+        "raw_line": 2814,
+        "Time": "2026-10-06T19:42:42.4901928Z",
+        "Action": "output",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Output": "--- FAIL: TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC (0.22s)\n"
+      },
+      {
+        "raw_line": 2815,
+        "Time": "2026-10-06T19:42:42.4901928Z",
+        "Action": "fail",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Elapsed": 0.22
+      }
+    ],
+    "failed_test_rows": [
+      {
+        "raw_line": 2815,
+        "Time": "2026-10-06T19:42:42.4901928Z",
+        "Action": "fail",
+        "Package": "github.com/snissn/gomap/TreeDB/db",
+        "Test": "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC",
+        "Elapsed": 0.22
+      }
+    ]
+  },
+  "available_main_named_job_control": {
+    "path": "/tmp/gomap-r1-execution-20261005/main3cfe-windows-core2-original.log",
+    "sha256": "3108644f3cf8a1e8a3b0a5a6d172a4c246642ffba7889389c88a99683e4f4a2b",
+    "size_bytes": 1537744,
+    "target_rows": [],
+    "failed_test_rows": []
+  },
+  "main_control_disposition": "No exact-target rows in available main core-2 log. Main named-job green is not an observed same-case control; shard inventory changed.",
+  "source_bindings": {
+    "TreeDB/db/ordered_root_span_native_correctness_test.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "5c5a54f520294e1ab8655248d73a5a4feb2b6494",
+          "sha256": "a9a04bd518b8737b3ddc877e5e71c3265e3c5246dd55eb05579f372c0ad71268",
+          "size_bytes": 15389
+        },
+        "base764": {
+          "git_blob": "5c5a54f520294e1ab8655248d73a5a4feb2b6494",
+          "sha256": "a9a04bd518b8737b3ddc877e5e71c3265e3c5246dd55eb05579f372c0ad71268",
+          "size_bytes": 15389
+        },
+        "candidate": {
+          "git_blob": "5c5a54f520294e1ab8655248d73a5a4feb2b6494",
+          "sha256": "a9a04bd518b8737b3ddc877e5e71c3265e3c5246dd55eb05579f372c0ad71268",
+          "size_bytes": 15389
+        }
+      }
+    },
+    "TreeDB/db/ordered_root_publish.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "05538b40ac20cffe57e5d5665d1ac949875945d7",
+          "sha256": "d98eb43203903cb6c72ac9f15c32bf7c3bd0fac153b115db24ddf6c5b0f4cef8",
+          "size_bytes": 189537
+        },
+        "base764": {
+          "git_blob": "05538b40ac20cffe57e5d5665d1ac949875945d7",
+          "sha256": "d98eb43203903cb6c72ac9f15c32bf7c3bd0fac153b115db24ddf6c5b0f4cef8",
+          "size_bytes": 189537
+        },
+        "candidate": {
+          "git_blob": "05538b40ac20cffe57e5d5665d1ac949875945d7",
+          "sha256": "d98eb43203903cb6c72ac9f15c32bf7c3bd0fac153b115db24ddf6c5b0f4cef8",
+          "size_bytes": 189537
+        }
+      }
+    },
+    "TreeDB/db/recoverable_root_set.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+          "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29",
+          "size_bytes": 25147
+        },
+        "base764": {
+          "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+          "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29",
+          "size_bytes": 25147
+        },
+        "candidate": {
+          "git_blob": "f47b5a0ce33f26e963d00a2db349d3738d875c17",
+          "sha256": "2a68e939775f054075a2abd917dc664415cfd16d9d11590e67844768b9c24b29",
+          "size_bytes": 25147
+        }
+      }
+    },
+    "TreeDB/db/vlog_gc.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "35ea5228db716396785dc16a3c2c331d4b41affe",
+          "sha256": "10fdfc34d8abc2e1c87d585e0b4e1cba6dc9a1dca2846610e99b5f5afd6f73ca",
+          "size_bytes": 24826
+        },
+        "base764": {
+          "git_blob": "35ea5228db716396785dc16a3c2c331d4b41affe",
+          "sha256": "10fdfc34d8abc2e1c87d585e0b4e1cba6dc9a1dca2846610e99b5f5afd6f73ca",
+          "size_bytes": 24826
+        },
+        "candidate": {
+          "git_blob": "35ea5228db716396785dc16a3c2c331d4b41affe",
+          "sha256": "10fdfc34d8abc2e1c87d585e0b4e1cba6dc9a1dca2846610e99b5f5afd6f73ca",
+          "size_bytes": 24826
+        }
+      }
+    },
+    "TreeDB/db/db.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+          "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+          "size_bytes": 192264
+        },
+        "base764": {
+          "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+          "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+          "size_bytes": 192264
+        },
+        "candidate": {
+          "git_blob": "71c8fabaab6253675f48bf6d59f870fc104c9be8",
+          "sha256": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+          "size_bytes": 192264
+        }
+      }
+    },
+    "TreeDB/db/root_publication_activation.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+          "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+          "size_bytes": 56252
+        },
+        "base764": {
+          "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+          "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+          "size_bytes": 56252
+        },
+        "candidate": {
+          "git_blob": "ddba6e48dc4286dbce9e4ca7209acf7a20ade547",
+          "sha256": "29dd55332c6dba74ff7f89837b382034ad2040d62749fcc1116f040660f16132",
+          "size_bytes": 56252
+        }
+      }
+    },
+    "TreeDB/internal/rootpublication/coordinator.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+          "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+          "size_bytes": 40172
+        },
+        "base764": {
+          "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+          "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+          "size_bytes": 40172
+        },
+        "candidate": {
+          "git_blob": "dbff2571c1239db0d1849bd267e3d9702332dac0",
+          "sha256": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+          "size_bytes": 40172
+        }
+      }
+    },
+    "TreeDB/internal/rootpublication/resource_selector.go": {
+      "all_equal": false,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+          "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24",
+          "size_bytes": 2683
+        },
+        "base764": {
+          "git_blob": "cd9681e281434f81f747aba48e456b3c9b49bd58",
+          "sha256": "2425e88638c134de3c6ad19104aea9bd3584363ca4c4a55bc9295e7256de7e24",
+          "size_bytes": 2683
+        },
+        "candidate": {
+          "git_blob": "16e015c69a043b58bb3e11cb86506f8e04a0c2ca",
+          "sha256": "39935124f1a9859b45984e4132faf6a871fb6b2ecb849a7017ebfda0c0e8d0d4",
+          "size_bytes": 4899
+        }
+      }
+    },
+    "TreeDB/db/durable_root_runtime.go": {
+      "all_equal": false,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+          "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+          "size_bytes": 114319
+        },
+        "base764": {
+          "git_blob": "0a0ecefc05f8160dedb946a46d5835471c2d5b05",
+          "sha256": "9a9c5df95027bf0a4ecb46d47ab2d862e64384d83db4fea709d4650ffaa7db1d",
+          "size_bytes": 114319
+        },
+        "candidate": {
+          "git_blob": "d92107d88821c59497a19e3aa816b5e5ca1fbb8c",
+          "sha256": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+          "size_bytes": 117323
+        }
+      }
+    },
+    "TreeDB/internal/valuelog/manager.go": {
+      "all_equal": false,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "881b1d4bfb041c13c9210be43a2df7b9c2e24082",
+          "sha256": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+          "size_bytes": 90520
+        },
+        "base764": {
+          "git_blob": "881b1d4bfb041c13c9210be43a2df7b9c2e24082",
+          "sha256": "36996968a589020a72115023845ed509747659572468917b336d6e534417723a",
+          "size_bytes": 90520
+        },
+        "candidate": {
+          "git_blob": "976ddd6ed35599342c134eb78ed8433c91e994f9",
+          "sha256": "fc3bf7fe38eb984c8bc3397a8937adf9ad024fb075b6a0bd925c73ac4b22fbb5",
+          "size_bytes": 92214
+        }
+      }
+    },
+    "TreeDB/internal/valuelog/stable_resource.go": {
+      "all_equal": false,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "27af14233e201939895b1cc216f6f7419349ad6a",
+          "sha256": "271def2d2ecafa4871dbc0497deb71230a2d73cd00979f908b7a4bad8b5fe5c8",
+          "size_bytes": 54370
+        },
+        "base764": {
+          "git_blob": "27af14233e201939895b1cc216f6f7419349ad6a",
+          "sha256": "271def2d2ecafa4871dbc0497deb71230a2d73cd00979f908b7a4bad8b5fe5c8",
+          "size_bytes": 54370
+        },
+        "candidate": {
+          "git_blob": "ffffe0e0e16c285def4b82b5d5287186c6bb0df6",
+          "sha256": "f534ee2742eebf8b9c61fb5178992aaa73fe33ce549f580a6e9da8d02dc5e565",
+          "size_bytes": 54243
+        }
+      }
+    },
+    "TreeDB/db/wal_recovery.go": {
+      "all_equal": false,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+          "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+          "size_bytes": 45904
+        },
+        "base764": {
+          "git_blob": "de535d06d9c0844938d97c020fdc4db0bd7b5763",
+          "sha256": "d1d570585c26639f5c5c12d324f415d707c5ba0704feb81a332f1f1ca9d6ad2d",
+          "size_bytes": 45904
+        },
+        "candidate": {
+          "git_blob": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+          "sha256": "6bb969fd95fa17294d53ba49530d9e3fa30a79256ec6267d6b560d3611457e41",
+          "size_bytes": 47414
+        }
+      }
+    },
+    "TreeDB/db/vlog_gc_test.go": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "c638034a3c0cd92c4618b3882759846b4f7953b5",
+          "sha256": "f42ac95a2c7ccd82c0fb693162a460582f5fc0e2d37cc06a3578f1299fdadbb2",
+          "size_bytes": 67814
+        },
+        "base764": {
+          "git_blob": "c638034a3c0cd92c4618b3882759846b4f7953b5",
+          "sha256": "f42ac95a2c7ccd82c0fb693162a460582f5fc0e2d37cc06a3578f1299fdadbb2",
+          "size_bytes": 67814
+        },
+        "candidate": {
+          "git_blob": "c638034a3c0cd92c4618b3882759846b4f7953b5",
+          "sha256": "f42ac95a2c7ccd82c0fb693162a460582f5fc0e2d37cc06a3578f1299fdadbb2",
+          "size_bytes": 67814
+        }
+      }
+    },
+    "TreeDB/docs/spec/recoverable-root-set-maintenance-3681.md": {
+      "all_equal": true,
+      "heads": {
+        "main3cfe": {
+          "git_blob": "eb3f548e4312e3afddfad31354f5cd5630b040ec",
+          "sha256": "7f441eced7093625ae23cd7773a71184f66e232ac551f75a26fc6e4d4396a976",
+          "size_bytes": 13882
+        },
+        "base764": {
+          "git_blob": "eb3f548e4312e3afddfad31354f5cd5630b040ec",
+          "sha256": "7f441eced7093625ae23cd7773a71184f66e232ac551f75a26fc6e4d4396a976",
+          "size_bytes": 13882
+        },
+        "candidate": {
+          "git_blob": "eb3f548e4312e3afddfad31354f5cd5630b040ec",
+          "sha256": "7f441eced7093625ae23cd7773a71184f66e232ac551f75a26fc6e4d4396a976",
+          "size_bytes": 13882
+        }
+      }
+    }
+  },
+  "evidence": [
+    {
+      "path": "TreeDB/db/ordered_root_span_native_correctness_test.go",
+      "lines": [
+        19,
+        42
+      ],
+      "claim": "Direct backend helper disables prune; explicit span-native admission and pointer threshold1; no deliberate root-publisher barrier."
+    },
+    {
+      "path": "TreeDB/db/ordered_root_span_native_correctness_test.go",
+      "lines": [
+        207,
+        329
+      ],
+      "claim": "Two asynchronous ordered publications; GC call290 precedes first Checkpoint308; referenced-pointer/value/reopen assertions."
+    },
+    {
+      "path": "TreeDB/db/ordered_root_publish.go",
+      "lines": [
+        3972,
+        3972
+      ],
+      "claim": "Normal batch-group route finalizes with sync=false."
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "lines": [
+        882,
+        940
+      ],
+      "claim": "EnqueueBuilt then WaitForAdmission; WaitThrough only for preparedLimits or syncWrite && !commandWAL."
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "lines": [
+        1357,
+        1447
+      ],
+      "claim": "commitPublishedSeal updates db.durableRoot1414, releases locks1440-1441, then previous resource closure1443 before Publish returns."
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "lines": [
+        757,
+        761
+      ],
+      "claim": "Scheduler calls Publish then later opens report window and calls ReportPublishResult."
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "lines": [
+        838,
+        840
+      ],
+      "claim": "Successful result moves coordinator durable frontier and reachability epoch after backend commit."
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "lines": [
+        126,
+        179
+      ],
+      "claim": "Eight immediate fresh optimistic attempts against one index pin; exhaustion wraps ErrRecoverableRootSetStale."
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "lines": [
+        182,
+        368
+      ],
+      "claim": "Retries on index/state/epoch/frontier/durable-basis mismatches; line322 compares coordinator durable to backend selected slot."
+    },
+    {
+      "path": "TreeDB/db/vlog_gc.go",
+      "lines": [
+        230,
+        245
+      ],
+      "claim": "Failed capability capture returns before segment topology refresh, MarkZombie or unlink."
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "lines": [
+        4101,
+        4108
+      ],
+      "claim": "Checkpoint seals previously published state without advancing CommitSeq."
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "lines": [
+        4274,
+        4289
+      ],
+      "claim": "Checkpoint reads visibleCommitSeq then WaitThrough outside write/build locks."
+    },
+    {
+      "path": "TreeDB/db/vlog_gc_test.go",
+      "lines": [
+        555,
+        646
+      ],
+      "claim": "Dedicated older durable/pending-root GC test deliberately blocks publisher and asserts reachability while visible exceeds durable."
+    },
+    {
+      "path": "TreeDB/docs/spec/recoverable-root-set-maintenance-3681.md",
+      "lines": [
+        28,
+        39
+      ],
+      "claim": "Stale authority cannot mutate; narrowly bounded retry rebuilds fresh plan only if deleted no segments; does not relax GC safety."
+    }
+  ],
+  "mechanism": {
+    "known": "Normal ordered root publish returns after admission without a durability wait. Backend selected durable slot changes inside Publisher.Publish before coordinator durable report. Eight immediate capture attempts can exhaust in this allowed mismatch interval. Capture also has other legitimate rejection predicates.",
+    "inference": "The missing fixture durability barrier creates a supported transition race. Exact Windows rejection predicate, goroutine ordering and duration were not traced; this is not causal proof of the observed schedule.",
+    "safety": "ErrRecoverableRootSetStale exhausted during initial capability capture, before destructive GC work. It does not establish a data-loss or unlink regression."
+  },
+  "recommendation": {
+    "preferred": "Add one checked db.Checkpoint() immediately before the existing ValueLogGC call in this test; retain original GC referenced-segment/value and later checkpoint/close/reopen assertions.",
+    "justification": "Test asserts native pointer persistence and GC with reopen, not a deliberately pending-root concurrency case. Checkpoint WaitThrough stabilizes the already-published exact visible prefix and does not advance CommitSeq. Dedicated pending/older durable-root GC coverage remains in vlog_gc_test.go.",
+    "scope": "Test-only fixture stabilization; no global stale-error allowance, production retry/sleep, relaxed capture predicate or reduced root-protection closure.",
+    "alternative_limit": "One unchanged targeted rerun could provide another observation, but a pass would not establish original failure causality or remove the source-backed unstable precondition. No rerun by reviewer.",
+    "validation_needed": "Root should qualify changed exact test normal/race and preserve the required Windows original failure. Whole current-head required CI remains a separate gate."
+  },
+  "r1_intersection_limits": {
+    "unchanged": "Fixture, ordered publication, capture, GC, backend checkpoint, root runtime activation and coordinator are byte-identical main3cfe/base764/candidate aa8614.",
+    "changed_shared_inputs": "Manager/stable-resource zombie retry ownership and Close changed; release paths are shared and can affect scheduling. Cannot infer binary equivalence or classify unrelated from source equality alone.",
+    "other_r1_paths": "Packed rebuilt-index projection and physical manifest revision GC are not explicitly invoked by this fixture; it uses standalone raw leaf log and ValueLogGC. New WAL replay metadata is not the failure-site path (failure precedes fixture reopen).",
+    "performance": "No capacity, throughput, runtime equivalence, final A/C/D acceptance or CI waiver claim."
+  },
+  "actions": {
+    "repository_mutation": false,
+    "github_query_or_mutation": false,
+    "go_or_test_execution": false,
+    "capture_or_ci_retry": false,
+    "agents_spawned": false,
+    "writes": "Only new private diagnosis MD/JSON; originals preserved."
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "utc": "2026-10-06T20:07:34.261977+00:00",
+  "head": "0245d8e0f5835dcba2929e4f1ba8b5d7ea909133",
+  "run": 37521995513,
+  "job": 112470641985,
+  "job_conclusion": "success",
+  "bytes": 556198,
+  "log_sha256": "7dea4a04cfcb1f2b0058330185c8c69f22e7f5fa4a000b772b436ef0926644e6",
+  "fixture_PASS_rows": [
+    "2026-10-06T20:03:08.3751653Z {\"Time\":\"2026-10-06T20:03:08.3699889Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-maintenance/unsupported-native-vacuum (0.12s)\\n\"}",
+    "2026-10-06T20:03:08.5150055Z {\"Time\":\"2026-10-06T20:03:08.5031905Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/checkpoint-vacuum/unsupported-native-vacuum (0.13s)\\n\"}",
+    "2026-10-06T20:03:08.6691257Z {\"Time\":\"2026-10-06T20:03:08.6626441Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/capture (0.16s)\\n\"}",
+    "2026-10-06T20:03:08.8231139Z {\"Time\":\"2026-10-06T20:03:08.8137219Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime/central-index-compaction/install (0.15s)\\n\"}",
+    "2026-10-06T20:03:08.8236169Z {\"Time\":\"2026-10-06T20:03:08.8137219Z\",\"Action\":\"output\",\"Package\":\"github.com/snissn/gomap/TreeDB/caching\",\"Test\":\"TestCOWMaintenanceAcceptedRefreshPressureLifetime\",\"Output\":\"--- PASS: TestCOWMaintenanceAcceptedRefreshPressureLifetime (0.56s)\\n\"}"
+  ],
+  "scope": "Exact current-head Windows fixture PASS; overall requiredCIpending; originalebeFAILretained",
+  "reviewer": "/root"
+}

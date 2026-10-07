@@ -1,0 +1,62 @@
+{
+  "accepted": "focused correctness observation only",
+  "source": "aa8614ea79c63b21ca9a04580ace7f77a90b7f1b",
+  "tests": {
+    "format": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "pass_rows": [],
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/gofmt",
+        "-l",
+        "TreeDB/db/ordered_root_span_native_correctness_test.go"
+      ]
+    },
+    "normal": {
+      "exit": 0,
+      "log_sha256": "22535963fd66f6995f290c3b7738256237fc8b8eadeeb016b32f1a833c1604f3",
+      "pass_rows": [
+        "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC"
+      ],
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-json",
+        "./TreeDB/db",
+        "-run",
+        "^TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC$",
+        "-count=1",
+        "-timeout=10m"
+      ]
+    },
+    "race": {
+      "exit": 0,
+      "log_sha256": "f139c8182a33be48d1d8813e7b18a1a9797a9a18f7f16f33b5b4f813b03c873d",
+      "pass_rows": [
+        "TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC"
+      ],
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-race",
+        "-json",
+        "./TreeDB/db",
+        "-run",
+        "^TestOrderedRootSpanNativeValueLogLeavesCheckpointReopenAndGC$",
+        "-count=1",
+        "-timeout=10m"
+      ]
+    },
+    "vet": {
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "pass_rows": [],
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "vet",
+        "./TreeDB/db"
+      ]
+    }
+  },
+  "scope": "Unchanged exact case normal and race on Linux185; not a Windows retry or causal attribution; original Windows FAIL remains."
+}

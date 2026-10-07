@@ -603,6 +603,39 @@ func (m *Manager) prepareRetirementIdentityLocked(file *File) (rootpublication.S
 	return identity, nil
 }
 
+// retainSegmentForDeletionLocked excludes a destructive admission from new
+// snapshots while retaining its exact owner through close and physical unlink.
+func (m *Manager) retainSegmentForDeletionLocked(file *File) {
+	if !file.IsZombie.Load() {
+		m.retiredCount++
+		file.IsZombie.Store(true)
+	}
+}
+
+// finishDirectSegmentDeletion runs after admission releases mu. Incomplete
+// physical deletion leaves the zombie and its registry observation owned by the
+// manager, so Refresh and retries cannot adopt a replacement. Only successful
+// physical deletion releases ownership; Force deliberately has no refcount gate.
+func (m *Manager) finishDirectSegmentDeletion(file *File, identity rootpublication.StableIdentity, lease *rootpublication.IdentityDeleteLease) error {
+	defer m.retryWorkers.Done()
+	if m.directDeleteAdmissionHook != nil {
+		m.directDeleteAdmissionHook()
+	}
+	deleted, removeErr := closeAndRemoveStableSegmentFileResult(file, identity)
+	finishStableDeleteLease(lease, deleted)
+	if !deleted {
+		return removeErr
+	}
+	m.mu.Lock()
+	var unobserveErr error
+	if m.files[file.ID] == file {
+		m.forgetSegmentLocked(file)
+		unobserveErr = m.unobserveStableFileLocked(file)
+	}
+	m.mu.Unlock()
+	return errors.Join(removeErr, unobserveErr)
+}
+
 // forgetSegmentLocked balances retirement ownership at every removal site.
 func (m *Manager) forgetSegmentLocked(file *File) {
 	if file.IsZombie.Load() {
@@ -659,8 +692,23 @@ func closeAndRemoveStableSegmentFileResult(file *File, identity rootpublication.
 	if identity == (rootpublication.StableIdentity{}) {
 		return false, fmt.Errorf("%w: missing value-log retirement identity", rootpublication.ErrUnresolvedResource)
 	}
+	// All callers release manager.mu before waiting here. In particular, a
+	// second nil-registry caller must not reuse a stale preflight. Physical
+	// completion belongs to this File even before manager ownership finalizes:
+	// after unlink, the filesystem may reuse the original inode identity.
+	file.deleteMu.Lock()
+	defer file.deleteMu.Unlock()
+	if file.deleteCompleted {
+		return true, nil
+	}
+	if err := validateStableDeletePathIdentity(file.Path, identity); err != nil {
+		return false, err
+	}
 	closeErr := file.Close()
 	removed, removeErr := removeSegmentFileWithRetryStable(file.Path, identity)
+	if removed {
+		file.deleteCompleted = true
+	}
 	return removed, errors.Join(closeErr, removeErr)
 }
 
@@ -911,10 +959,12 @@ func (m *Manager) deleteZombieFile(file *File) error {
 	}
 	m.mu.Lock()
 	current, exists := m.files[file.ID]
-	if !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() {
+	if m.closing || !exists || current != file || file.RefCount.Load() != 0 || !file.IsZombie.Load() {
 		m.mu.Unlock()
 		return nil
 	}
+	m.retryWorkers.Add(1)
+	defer m.retryWorkers.Done()
 	identity, err := m.prepareRetirementIdentityLocked(file)
 	if err != nil {
 		m.mu.Unlock()

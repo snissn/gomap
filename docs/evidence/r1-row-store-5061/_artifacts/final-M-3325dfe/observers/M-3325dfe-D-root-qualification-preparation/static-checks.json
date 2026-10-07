@@ -1,0 +1,28 @@
+{
+  "actual_D_results_observed": false,
+  "actual_config_and_manifest_observed": false,
+  "all_subprocess_commands_git_only": true,
+  "ast_parse": "PASS",
+  "frozen_original_inputs": {
+    "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/format.py": {
+      "bytes": 18047,
+      "sha256": "022c45de44e96014de9ef343b639be4abd92189152efd411314b829b54c4da58"
+    },
+    "/private/tmp/gomap-r1-execution-20261005/final-D-report-preparation/frozen-r1_lifecycle_validate.py": {
+      "bytes": 61009,
+      "sha256": "dcfd45e233bc46a1c1f73ffaf2af840e5d8ab8ba312342ceb61b014e7c199968"
+    },
+    "/private/tmp/gomap-r1-execution-20261005/retained-receipt-preparation/observe.py": {
+      "bytes": 8856,
+      "sha256": "03c9807292fb42a7c09fcbafed4895703a5477a92e7f827331b93d9084282c68"
+    }
+  },
+  "method": "static AST parsing and subprocess-call surface only; helper never executed",
+  "preparation_check_correction": "Initial checking script expected four subprocess call sites, but actual AST has three, all Git. Corrected the checker count; helper unchanged.",
+  "subprocess_calls": [
+    "subprocess.check_output(['git', '-C', str(repo), *args])",
+    "subprocess.check_output(['git', '-C', str(repo), 'cat-file', '--batch'], input=('\\n'.join(ids) + '\\n').encode())",
+    "subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor', cfg['landed_tooling_commit'], M], check=True)"
+  ],
+  "validator_not_imported_or_executed": true
+}
