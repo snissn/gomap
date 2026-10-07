@@ -77,9 +77,32 @@ def validate_harness_fixtures(fixtures, suite="c3"):
         paths.append(item["path"])
     need(paths == sorted(set(paths)) and set(HARNESS_FILES[suite]) <= set(paths), message)
 
+def repository_inputs(closure, ident):
+    """Bind every selected repository input to this product's Git authority."""
+    need(isinstance(ident, dict) and isinstance(ident.get("files"), list) and ident["files"],
+         "repository compiler source authority missing")
+    need(all(isinstance(item, dict) and isinstance(item.get("path"), str) for item in ident["files"]),
+         "invalid Git source authority paths")
+    files = {item["path"]: item for item in ident["files"]}
+    need(len(files) == len(ident["files"]), "duplicate Git source authority paths")
+    for key, item in closure.items():
+        if not key.startswith("REPO/"):
+            continue
+        path = key[5:]
+        need(path in files, "repository compiler input missing from Git source authority: " + path)
+        authority = files[path]
+        mode = {"100644": 0o644, "100755": 0o755}.get(authority.get("git_mode"))
+        need(mode is not None and {"sha256", "bytes"} <= set(authority),
+             "invalid Git compiler input authority: " + path)
+        expected = {"sha256": authority["sha256"], "bytes": authority["bytes"], "mode": mode}
+        file_identity(expected)
+        need({field: item[field] for field in expected} == expected,
+             "repository compiler input differs from Git source authority: " + path)
+
 def harness_manifest(packages, closure, ident, source, environment, suite="c3"):
     """Bind all standalone harness inputs while allowing ordinary product deltas."""
     need(suite in HARNESS_ROOTS, "unknown ordinary build suite")
+    repository_inputs(closure, ident)
     roots = [p for p in packages if p.get("ImportPath") == C3_PRODUCT and not p.get("ForTest")]
     need(len(roots) == 1 and type(roots[0].get("Deps")) is list, "ordinary product dependency closure missing")
     products = set(roots[0]["Deps"]) | {C3_PRODUCT}
@@ -92,13 +115,8 @@ def harness_manifest(packages, closure, ident, source, environment, suite="c3"):
     files = {f["path"]: f for f in ident["files"]}
     inventory = {path for path in files if any(path.startswith(root) for root in HARNESS_ROOTS[suite])}
     need(repo == inventory, "complete " + suite.upper() + " harness source/selected-input closure mismatch")
-    result = []
-    for path in sorted(inventory):
-        item = closure["REPO/" + path]
-        need(item["sha256"] == files[path]["sha256"] and item["mode"] in (0o644, 0o755)
-             and ("100755" if item["mode"] & 0o111 else "100644") == files[path]["git_mode"],
-             "harness input differs from Git source authority")
-        result.append({"path": path, "sha256": item["sha256"], "mode": item["mode"]})
+    result = [{"path": path, **{field: closure["REPO/" + path][field] for field in ("sha256", "mode")}}
+              for path in sorted(inventory)]
     validate_harness_fixtures(result, suite)
     return result
 
@@ -295,6 +313,8 @@ def build_inputs(build, frozen, packages, before, after, generated, source, iden
         harness = harness_manifest(packages, after, ident, source, build["environment"], suite)
         need(harness == frozen["fixtures"] and build.get("harness_input_identity") == digest(harness),
              "complete frozen " + suite.upper() + " harness mismatch")
+    else:
+        repository_inputs(after, ident)
     return external
 
 def case_names(case):

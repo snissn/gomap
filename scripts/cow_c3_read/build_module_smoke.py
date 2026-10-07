@@ -66,25 +66,62 @@ def inputs_smoke(out):
     source, goroot, module, cache = (base / name for name in ("source", "go", "module", "cache"))
     for directory in (source, goroot / "src/standard", module, cache):
         directory.mkdir(parents=True)
-    for path in (source / "fixture.go", source / "go.mod", source / "go.sum", goroot / "src/standard/standard.go", module / "external.go", module / "go.mod"):
+    for path in (source / "fixture.go", source / "fixture.s", source / "fixture.txt", source / "go.mod", source / "go.sum", goroot / "src/standard/standard.go", module / "external.go", module / "go.mod"):
         path.write_text("selected input " + path.name + "\n")
         path.chmod(0o644)
-    packages = [{"ImportPath": "product", "Dir": str(source), "GoFiles": ["fixture.go"]},
+    packages = [{"ImportPath": "product", "Dir": str(source), "GoFiles": ["fixture.go"],
+                 "SFiles": ["fixture.s"], "EmbedFiles": ["fixture.txt"]},
                 {"ImportPath": "standard", "Standard": True, "Dir": str(goroot / "src/standard"), "GoFiles": ["standard.go"]},
                 {"ImportPath": "external", "Dir": str(module), "GoFiles": ["external.go"],
                  "Module": {"Path": "example.invalid/external", "Version": "v1.0.0", "Sum": "same checksum", "GoModSum": "same mod checksum", "Dir": str(module), "GoMod": str(module / "go.mod")}}]
     env = {"GOROOT": str(goroot), "GOCACHE": str(cache)}
+    def inventory():
+        return {"files": [{"path": p.relative_to(source).as_posix(), "sha256": sha(p),
+                           "bytes": p.stat().st_size,
+                           "git_mode": "100755" if p.stat().st_mode & 0o111 else "100644"}
+                          for p in sorted(source.rglob("*")) if p.is_file()]}
     before, generated = selected_inputs(packages, source, env)
+    authority = inventory()
     def receipt(inputs):
         external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")} for key, value in inputs.items() if not key.startswith("REPO/")}
         value = {"environment": env, "external_input_identity": digest(external), "artifacts": {}}
         for field, name in (("compiled_inputs_before_sha256", "compiled_inputs_before"), ("compiled_input_closure_sha256", "compiled_input_closure"), ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs")):
-            value[field] = "1" * 64
+            value[field] = digest(generated if name == "generated_nonpersistent_inputs" else inputs)
             value["artifacts"][name] = {"sha256": value[field]}
         return value
     frozen = receipt(before)
-    build_inputs(frozen, frozen, packages, before, before, generated, str(source))
+    build_inputs(frozen, frozen, packages, before, before, generated, str(source), authority)
     checks = [{"label": "actual-selected-files-stable", "passed": True}]
+    def refuse(label, inputs, ident, expected):
+        try:
+            build_inputs(receipt(inputs), frozen, packages, inputs, inputs, generated, str(source), ident)
+        except ValueError as error:
+            assert expected in str(error), (label, str(error))
+            checks.append({"label": label, "refused": str(error)})
+        else:
+            raise AssertionError("repository changed input accepted: " + label)
+    for path in ("fixture.go", "fixture.s", "fixture.txt", "go.mod", "go.sum"):
+        for field, replacement in (("sha256", "0" * 64), ("bytes", before["REPO/" + path]["bytes"] + 1),
+                                   ("mode", 0o755), ("mode", 0o600)):
+            changed = copy.deepcopy(before)
+            changed["REPO/" + path][field] = replacement
+            refuse(path + "-" + field + "-" + str(replacement), changed, authority,
+                   "repository compiler input differs from Git source authority: " + path)
+        absent = copy.deepcopy(authority)
+        absent["files"] = [f for f in absent["files"] if f["path"] != path]
+        refuse(path + "-missing-authority", before, absent,
+               "repository compiler input missing from Git source authority: " + path)
+        missing = copy.deepcopy(before)
+        del missing["REPO/" + path]
+        refuse(path + "-missing-selected-input", missing, authority, "selected persistent input closure mismatch")
+    refuse("missing-source-authority", before, None, "repository compiler source authority missing")
+    duplicate = copy.deepcopy(authority)
+    duplicate["files"].append(copy.deepcopy(duplicate["files"][0]))
+    refuse("ambiguous-source-authority", before, duplicate, "duplicate Git source authority paths")
+    for field in ("sha256", "bytes", "git_mode"):
+        incomplete = copy.deepcopy(authority)
+        next(f for f in incomplete["files"] if f["path"] == "fixture.go").pop(field)
+        refuse("missing-authority-" + field, before, incomplete, "invalid Git compiler input authority: fixture.go")
     for owner, path in (("GOROOT", goroot / "src/standard/standard.go"), ("module", module / "external.go"), ("module-metadata", module / "go.mod")):
         original = path.read_bytes()
         for mutation in ("bytes", "mode", "missing"):
@@ -93,16 +130,24 @@ def inputs_smoke(out):
             else: path.unlink()
             try:
                 changed, ledger = selected_inputs(packages, source, env)
-                build_inputs(receipt(changed), frozen, packages, changed, changed, ledger, str(source))
+                build_inputs(receipt(changed), frozen, packages, changed, changed, ledger, str(source), authority)
             except ValueError as error:
                 checks.append({"label": owner + "-" + mutation, "refused": str(error)})
             else: raise AssertionError("external changed input accepted")
             path.write_bytes(original); path.chmod(0o644)
+    executable = source / "fixture.go"
+    executable.chmod(0o755)
+    executable_inputs, ledger = selected_inputs(packages, source, env)
+    build_inputs(receipt(executable_inputs), frozen, packages, executable_inputs, executable_inputs,
+                 ledger, str(source), inventory())
+    checks.append({"label": "matching-git-executable-mode-allowed", "passed": True})
+    executable.chmod(0o644)
     (source / "fixture.go").write_text("candidate product change\n")
     candidate, ledger = selected_inputs(packages, source, env)
-    build_inputs(receipt(candidate), frozen, packages, candidate, candidate, ledger, str(source))
+    candidate_authority = inventory()
+    build_inputs(receipt(candidate), frozen, packages, candidate, candidate, ledger, str(source), candidate_authority)
     checks.append({"label": "repository-product-delta-allowed", "passed": True})
-    try: build_inputs(frozen, frozen, packages, before, candidate, generated, str(source))
+    try: build_inputs(frozen, frozen, packages, before, candidate, generated, str(source), candidate_authority)
     except ValueError as error: checks.append({"label": "persistent-build-drift", "refused": str(error)})
     else: raise AssertionError("build drift accepted")
     missing = copy.deepcopy(packages); missing[0]["HFiles"] = ["missing.h"]
@@ -114,7 +159,7 @@ def inputs_smoke(out):
     relocated_env = json.loads(json.dumps(env).replace(str(base), str(base) + "-relocated"))
     for value in relocated.values(): value["path"] = value["path"].replace(str(base), str(base) + "-relocated")
     relocated_build = receipt(relocated); relocated_build["environment"] = relocated_env
-    build_inputs(relocated_build, frozen, relocated_packages, relocated, relocated, [], str(source).replace(str(base), str(base) + "-relocated"))
+    build_inputs(relocated_build, frozen, relocated_packages, relocated, relocated, [], str(source).replace(str(base), str(base) + "-relocated"), candidate_authority)
     checks.append({"label": "normalized-external-relocation-allowed", "passed": True})
     write(out / "selected-input-construction.json", {"scope": "actual finite selected-input helper checks; no Go execution or performance claim", "checks": checks})
     return checks
@@ -139,6 +184,7 @@ def harness_smoke(out, suite="c3"):
                 {"ImportPath": "github.com/snissn/gomap/TreeDB/internal/cowbench", "Dir": str(source / "TreeDB/internal/cowbench"), "GoFiles": ["admission.go"]}]
     def inventory():
         return {"files": [{"path": p.relative_to(source).as_posix(), "sha256": sha(p),
+                           "bytes": p.stat().st_size,
                            "git_mode": "100755" if p.stat().st_mode & 0o111 else "100644"}
                           for p in sorted(source.rglob("*")) if p.is_file()]}
     def closure(): return selected_inputs(packages, source, env)[0]
@@ -150,21 +196,33 @@ def harness_smoke(out, suite="c3"):
             assert expected in str(error), (label, str(error))
             checks.append({"label": label, "refused": str(error)})
         else: raise AssertionError("accepted " + label)
-    def frozen_gate():
+    def frozen_gate(retained=None, authority=None):
         inputs, generated = selected_inputs(packages, source, env)
         observed = harness_manifest(packages, inputs, inventory(), str(source), env, suite)
         external = {key: {k: value[k] for k in ("sha256", "bytes", "mode")}
                     for key, value in inputs.items() if not key.startswith("REPO/")}
         build = {"environment": env, "suite": suite, "harness_input_identity": digest(observed),
                  "external_input_identity": digest(external), "artifacts": {}}
+        retained = inputs if retained is None else retained
         for field, name in (("compiled_inputs_before_sha256", "compiled_inputs_before"),
                             ("compiled_input_closure_sha256", "compiled_input_closure"),
                             ("generated_nonpersistent_inputs_sha256", "generated_nonpersistent_inputs")):
-            build[field] = "1" * 64
+            build[field] = digest(generated if name == "generated_nonpersistent_inputs" else retained)
             build["artifacts"][name] = {"sha256": build[field]}
         frozen = {"cases": [{"package": package}], "fixtures": original, "external_input_identity": digest(external)}
-        build_inputs(build, frozen, packages, inputs, inputs, generated, str(source), inventory())
+        build_inputs(build, frozen, packages, retained, retained, generated, str(source),
+                     inventory() if authority is None else authority)
     frozen_gate()
+    for path in ("TreeDB/mvcc/product.go", "go.mod", "go.sum"):
+        for field, value in (("sha256", "0" * 64), ("bytes", 0), ("mode", 0o600)):
+            retained = copy.deepcopy(closure())
+            retained["REPO/" + path][field] = value
+            refuse("rebound-" + path + "-" + field, lambda r=retained: frozen_gate(r),
+                   "repository compiler input differs from Git source authority: " + path)
+        absent = inventory()
+        absent["files"] = [item for item in absent["files"] if item["path"] != path]
+        refuse("unmanifested-" + path, lambda a=absent: frozen_gate(authority=a),
+               "repository compiler input missing from Git source authority: " + path)
     for name in harness_files:
         path = source / name; original_bytes = path.read_bytes()
         path.write_bytes(original_bytes + b"changed\n")
@@ -190,6 +248,7 @@ def harness_smoke(out, suite="c3"):
     (source / "TreeDB/mvcc/product.go").write_text("candidate production change\n")
     (source / "TreeDB/mvcc/candidate_regression_test.go").write_text("legitimate product regression test\n")
     assert harness_manifest(packages, closure(), inventory(), str(source), env, suite) == original
+    frozen_gate()
     checks.append({"label": "product-code-and-regression-test-delta-positive", "passed": True})
     bad = copy.deepcopy(packages); bad[0].pop("Deps")
     refuse("missing-normal-product-graph", lambda: harness_manifest(bad, closure(), inventory(), str(source), env, suite), "dependency closure missing")
