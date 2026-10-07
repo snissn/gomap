@@ -114,6 +114,7 @@ def main():
                         "environment": config["environment"], "effective_process_environment": process_environment(config["environment"]),
                         "go_version": config["go_version"], "go_binary_sha256": config["go_binary_sha256"], "toolchain_identity": config["toolchain_identity"],
                         "suite": "c3", "race": False, "build_tags": [], "artifacts": artifacts,
+                        "effective_module_identity": retained["effective_module_graph"]["sha256"],
                         "exit_code": 0, "command": build_command(config["go_binary"], declaration["binary"]),
                         "module_producer_command": module_command(config["go_binary"]),
                         "harness_input_identity": digest(config["fixtures"]), "external_input_identity": config["external_input_identity"],
@@ -250,6 +251,30 @@ def main():
         write(receipt, build)
         rebind_receipt(packet, receipt)
 
+    def damage_module_identity(packet, variant, missing=False, rehash_graph=False):
+        receipt = packet / (variant + "-build-receipt.json")
+        build = json.loads(receipt.read_text())
+        if rehash_graph:
+            raw = packet / (variant + "-effective_module_graph.raw")
+            raw.write_text("distinct self-consistent effective module graph\n")
+            artifacts_path = packet / (variant + "-build-artifacts.json")
+            artifacts = json.loads(artifacts_path.read_text())
+            artifacts["effective_module_graph"]["sha256"] = sha(raw)
+            build["artifacts"]["effective_module_graph"]["sha256"] = sha(raw)
+            build["effective_module_identity"] = sha(raw)
+            write(artifacts_path, artifacts)
+        elif missing:
+            del build["effective_module_identity"]
+        else:
+            build["effective_module_identity"] = "0" * 64
+        write(receipt, build)
+        frozen = json.loads((packet / "config.json").read_text())
+        frozen["variants"][variant]["build_receipt_sha256"] = sha(receipt)
+        write(packet / "config.json", frozen)
+        completion = json.loads((packet / "completion.json").read_text())
+        completion["config_sha256"] = sha(packet / "config.json")
+        write(packet / "completion.json", completion)
+
     cases = [
         ("incomplete-runs", None, "missing/extra runs"),
         ("empty-map", lambda packet: write(packet / "baseline-build-artifacts.json", {}), "missing/extra build provenance map"),
@@ -284,6 +309,13 @@ def main():
         ("changed-live-go-env", lambda p: damage_live_toolchain(p, "go-env"), "Go toolchain inventory mismatch"),
         ("changed-live-compiler", lambda p: damage_live_toolchain(p, "compiler"), "Go toolchain inventory mismatch"),
     ]
+    for variant in ("baseline", "candidate"):
+        for label, missing in (("missing", True), ("unbound", False)):
+            cases.append((variant + "-module-identity-" + label,
+                          lambda p, v=variant, m=missing: damage_module_identity(p, v, m),
+                          "unbound canonical effective module graph"))
+    cases.append(("rehashed-distinct-module-graph",
+                  lambda p: damage_module_identity(p, "candidate", rehash_graph=True), "effective module graph differs"))
     argv = build_command(config["go_binary"], config["variants"]["baseline"]["binary"])
     for label, command_value in (
             ("gcflags", argv[:2] + ["-gcflags=all=-N -l"] + argv[2:]),

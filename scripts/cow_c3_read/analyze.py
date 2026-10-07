@@ -34,6 +34,7 @@ def validate_packet(packet, suite="c3-read"):
         need(sha(packet / name) == value, "collector/analyzer script drift")
     live_toolchain = json.loads((packet / "live-toolchain.json").read_text())
     need(live_toolchain["go_version"] == c["go_version"], "live toolchain version mismatch")
+    module_identities = {}
     for variant in ("baseline", "candidate"):
         declaration = c["variants"][variant]
         receipt_path = packet / (variant + "-build-receipt.json")
@@ -50,6 +51,8 @@ def validate_packet(packet, suite="c3-read"):
         for name, artifact in artifacts.items():
             need(artifact["path"] == variant + "-" + name + ".raw" and artifact["sha256"] == build["artifacts"][name]["sha256"], "artifact receipt binding drift")
             need(sha(packet / artifact["path"]) == artifact["sha256"], "build provenance drift")
+        need(build.get("effective_module_identity") == artifacts["effective_module_graph"]["sha256"], "unbound canonical effective module graph")
+        module_identities[variant] = build["effective_module_identity"]
         go_env = json.loads((packet / (variant + "-go_env.raw")).read_text())
         validate_go_environment(go_env, env)
         build_toolchain(build, c, json.loads((packet / (variant + "-toolchain.raw")).read_text()))
@@ -71,6 +74,7 @@ def validate_packet(packet, suite="c3-read"):
             need(source_files.get("scripts/cow_c3_read/" + name) == value, "retained tooling differs from frozen source: " + name)
         need(not json.loads((packet / (variant + "-source-before.json")).read_text())["drift"], "initial source drift")
         need(not json.loads((packet / (variant + "-build-source-after.json")).read_text())["drift"], "build source-after drift")
+    need(module_identities["baseline"] == module_identities["candidate"], "effective module graph differs")
     receipts = json.loads((packet / "receipts.json").read_text())
     planned = list(selected.schedule(c))
     need(len(receipts) == len(planned) == completion["runs"], "missing/extra runs")

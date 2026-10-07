@@ -39,7 +39,8 @@ def main():
     def refuse(label, mutate, expected):
         damaged = copy.deepcopy(value)
         mutate(damaged)
-        write(path, damaged)
+        # Hostile input bypasses the producer's allow_nan=False serializer.
+        path.write_text(json.dumps(damaged, indent=2) + "\n")
         try:
             config(path)
         except ValueError as error:
@@ -47,6 +48,23 @@ def main():
             results.append({"label": label, "refused": str(error)})
         else:
             raise AssertionError(label + " was accepted")
+    for field in ("max_load1", "max_load5", "min_free_bytes"):
+        for label, replacement in (("true", True), ("false", False), ("string", "1"),
+                                   ("null", None), ("list", []), ("object", {}),
+                                   ("zero", 0), ("negative", -1), ("infinite", float("inf")),
+                                   ("nan", float("nan"))):
+            refuse("host-" + field + "-" + label,
+                   lambda c, k=field, v=replacement: c["host"].update({k: v}), "missing host admission bound")
+    refuse("host-fractional-bytes", lambda c: c["host"].update(min_free_bytes=1.5), "missing host admission bound")
+    for field in value["noise_policy"]:
+        if field != "exclusions":
+            for label, replacement in (("true", True), ("string", "0.3"), ("null", None), ("list", [])):
+                refuse("noise-" + field + "-" + label,
+                       lambda c, k=field, v=replacement: c["noise_policy"].update({k: v}), "predeclare noise/regression bounds")
+    refuse("fractional-cpu-count", lambda c: c["host"].update(cpu_count=4.5), "Linux host contract")
+    refuse("float-cycles", lambda c: c.update(cycles=3.0), "requires three ABBA cycles")
+    for label, replacement in (("boolean", True), ("float", 300.0), ("zero", 0), ("string", "300")):
+        refuse("timeout-" + label, lambda c, v=replacement: c.update(timeout_seconds=v), "positive integer timeout required")
     for index in range(54):
         for field, canonical in (("iterations", 1024), ("warmup_iterations", 128)):
             for label, replacement in (("reduced", 1), ("zero", 0), ("boolean", True), ("float", float(canonical))):
