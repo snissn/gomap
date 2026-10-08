@@ -1,0 +1,16 @@
+{
+  "acceptance_requires": "outer-finish.json after both actual joins and all outer signals",
+  "archive_bytes": 5873966,
+  "archive_sha256": "9eea9094e3d29f44510422a669230fe3305269bd025573e35ece1951ba43cac2",
+  "closure_signals": [],
+  "custody_released": true,
+  "errors": [
+    {
+      "error": "observer custody failed",
+      "scope": "closing-admission"
+    }
+  ],
+  "inner_functional_pass": false,
+  "matched_runs": 0,
+  "native_qualification": false
+}
