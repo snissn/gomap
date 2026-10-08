@@ -1,0 +1,147 @@
+{
+  "active_agents": [],
+  "authoring_base": "3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3",
+  "checkpoint_version": 95,
+  "created_utc": "2026-10-08T18:40:21Z",
+  "evidence_locations": {
+    "linux_original": "/home/mikers/quicksilver-maintenance-5028-20261006",
+    "mac_original": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005",
+    "qualification": "/home/mikers/quicksilver-maintenance-5028-20261006/qualification-v12-refresh/qualification-v10"
+  },
+  "execution_active": false,
+  "held_excluded": [
+    5004,
+    5006
+  ],
+  "historical_state_authority": "state-before-handoff.json is retained history; graph.json and current live GitHub heads supersede its stale head/active fields",
+  "matched_work": {
+    "actual_deletes": 10000,
+    "actual_sets": 60000,
+    "allocation_cut": "after BOTH reader and writer join",
+    "batch": 64,
+    "groups": 40,
+    "metric_reader_implemented": false,
+    "mutation_targets": 40000,
+    "ordinary_commits": 160,
+    "original_writer_pacing_seconds": 8,
+    "qualification": false,
+    "quarter_checkpoints": 4,
+    "reader_workers": 4,
+    "reads": 6000000
+  },
+  "mode": "user-requested-handoff",
+  "model": "gpt-6.1-sol",
+  "native_active": null,
+  "native_heavy_slot": null,
+  "nodes": [
+    {
+      "accepted": true,
+      "deliverable": "issue-update",
+      "execution_active": false,
+      "issue": 5029,
+      "next_action": "Retain the accepted investigation; do not reopen or treat later qualification as completed.",
+      "owner": "successor coordinator when explicitly assigned this graph",
+      "state": "completed",
+      "url": "https://github.com/snissn/gomap/issues/5029"
+    },
+    {
+      "branch": "codex/5116-manifest-writer-authority",
+      "deliverable": "pr",
+      "dependencies": [
+        5029
+      ],
+      "execution_active": false,
+      "head": "c3db45d456e77f002d6f474932063f4c4ce19b16",
+      "issue": 5116,
+      "native_validated": false,
+      "next_action": "Establish corrected current-main native RED, then type-check and validate/fix the preserved WIP. Decide the controlled lower-sequence expectation from the production contract before editing its unchanged oracle. Required correctness/public-path cost/CI/review gates precede merge.",
+      "owner": "successor coordinator when explicitly assigned this graph",
+      "performance_accepted": false,
+      "pr": 5121,
+      "state": "fix-needed",
+      "tree": "0248d1bf93f67cccc7ae9481b52e2244bd4735e1",
+      "url": "https://github.com/snissn/gomap/issues/5116"
+    },
+    {
+      "branch": "codex/5028-matched-work-allocation",
+      "deliverable": "pr",
+      "dependencies": [
+        5029
+      ],
+      "execution_active": false,
+      "head": "9fda35fdf0268b8165a3659f3e033cd53a874bed",
+      "issue": 5117,
+      "native_validated": false,
+      "next_action": "Validate Go compilation/normal/race, legacy-duration compatibility and incremental enabled cost; fix as needed, then current-head CI/review and merge the common harness. This is independent of the writer repair.",
+      "owner": "successor coordinator when explicitly assigned this graph",
+      "performance_accepted": false,
+      "pr": 5120,
+      "state": "fix-needed",
+      "tree": "67481c3287af7f5e8baf13c95b1bc3808d24a965",
+      "url": "https://github.com/snissn/gomap/issues/5117"
+    },
+    {
+      "branch": "codex/5015-rewrite-exact-closure",
+      "deliverable": "pr",
+      "dependencies": [
+        5116,
+        5117
+      ],
+      "execution_active": false,
+      "head": "4ba7bfad3c29d176fe7686f14cfe49276a9b3d3a",
+      "issue": 5015,
+      "native_validated": "affected common-prefix component only; new common-source qualification pending",
+      "next_action": "Rebase/integrate accepted common fixes without changing semantics. Qualify or refine from evidence. Optional prepared post-exhaustive 3M opportunity diagnostic has not run; reuse only after new artifact admission. Component wins are not product/RSS acceptance.",
+      "owner": "successor coordinator when explicitly assigned this graph",
+      "performance_accepted": false,
+      "pr": 5037,
+      "state": "fix-needed",
+      "tree": "b4be2c7e2193550282df9b287301b6d6e237acbc",
+      "url": "https://github.com/snissn/gomap/issues/5015"
+    },
+    {
+      "branch": "codex/5016-certified-prune",
+      "deliverable": "pr",
+      "dependencies": [
+        5116,
+        5117,
+        5015
+      ],
+      "execution_active": false,
+      "head": "a6b778ffeb9a401848d5eaf6d177547a5f21aef8",
+      "issue": 5016,
+      "next_action": "Keep original failed allocation/service/memory/progress evidence. Apply identical accepted common repairs and qualify/refine or explicitly retire the mechanism from evidence. Merge only after the accepted R predecessor and all own gates.",
+      "owner": "successor coordinator when explicitly assigned this graph",
+      "performance_accepted": false,
+      "pr": 5054,
+      "state": "fix-needed",
+      "tree": "06d18e9e64d1c9b010467d68068caa88b58c2ee5",
+      "url": "https://github.com/snissn/gomap/issues/5016"
+    },
+    {
+      "accepted": false,
+      "deliverable": "artifact",
+      "dependencies": [
+        5116,
+        5117,
+        5015,
+        5016
+      ],
+      "execution_active": false,
+      "issue": 5030,
+      "next_action": "Prepare and freeze a separate supplemental matched-allocation reader/definition and baseline repeats prospectively. Retain the original evaluator and eight-second ledgers. After selected changes land, prove actual source equality and complete matched final qualification with all parent gates.",
+      "owner": "successor coordinator when explicitly assigned this graph",
+      "state": "pending",
+      "url": "https://github.com/snissn/gomap/issues/5030"
+    }
+  ],
+  "original_results": "retained, nonqualifying failures remain visible",
+  "parent": 5028,
+  "parent_outcome": "UNMET",
+  "performance_accepted": false,
+  "qualification": false,
+  "runner111": "mikers@192.168.0.111",
+  "runner185": "closed; no grant",
+  "runtime_reservations": "ALL RELEASED OR CANCELLED; fresh owner agreement required",
+  "schema": 1
+}

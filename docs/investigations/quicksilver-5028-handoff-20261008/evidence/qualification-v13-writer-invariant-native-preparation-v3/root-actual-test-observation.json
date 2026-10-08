@@ -1,0 +1,58 @@
+{
+  "status": "ROOT_OBSERVED_GENUINE_ALL_THREE_PATH_ACK_MANIFEST_RED_WITH_SEPARATE_AUXILIARY_FIXTURE_ASSERTION_DEFECT",
+  "finished_ns": 1791482083198542000,
+  "frozen_head": "761e08c9eff0abadaf5bf132225f9948b83d7c57",
+  "frozen_tree": "69030ef5d37e1bca7928aed6d852589e3923141f",
+  "compiler_receipt": {
+    "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-writer-invariant-native-preparation-v3/native-actual/compiler-inputs.json",
+    "sha256": "59298c8f42d9d86feadcfaa1319d915ef31843748ed7c655b647d599abfc3719"
+  },
+  "same_selected_modules_native_environment_as_v2": true,
+  "selected_files": 2718,
+  "module_files": 45,
+  "native_input_files": 27378,
+  "testmain_actual_registered": true,
+  "testmain_receipt": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-writer-invariant-native-preparation-v3/root-readonly-testmain/testmain-readonly-run.json",
+  "actual_go_list_compile_test_rc": [
+    0,
+    0,
+    1
+  ],
+  "raw": {
+    "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-writer-invariant-native-preparation-v3/native-actual/writer-invariant-stdout.txt",
+    "bytes": 174350,
+    "sha256": "844559f9925fcc01c6bb64a20bee939abdfee66b7e8020bdd201f964abbeaab4"
+  },
+  "genuine_causal_start": [
+    "    external_manifest_writer_invariant_test.go:197: CAUSAL: genuine relocated catalog, outer-leaf pointers and exact both-slot manifest coverage established",
+    "    external_manifest_writer_invariant_test.go:197: CAUSAL: genuine relocated catalog, outer-leaf pointers and exact both-slot manifest coverage established",
+    "    external_manifest_writer_invariant_test.go:197: CAUSAL: genuine relocated catalog, outer-leaf pointers and exact both-slot manifest coverage established"
+  ],
+  "failed_cases": [
+    "--- FAIL: TestExternalManifestWriterACKCoverage/serialized/ascending (0.01s)",
+    "--- FAIL: TestExternalManifestWriterACKCoverage/queued/ascending (0.01s)",
+    "--- FAIL: TestExternalManifestWriterACKCoverage/build-group/ascending (0.01s)"
+  ],
+  "representative_missing": [
+    "    external_manifest_writer_invariant_test.go:210: new-producer-ACK slot0 commit6 page35 ptr{FileID:2139095051 Offset:4 RecordLengthHint:1073745964 SubIndex:0} manifest3 missing; currentHas=true maxRecoveredSeq=11 ptrSeq=11 filterIfCurrentMissing=[] filterErr=<nil> backing=true",
+    "    external_manifest_writer_invariant_test.go:210: new-producer-ACK slot0 commit6 page35 ptr{FileID:2139095051 Offset:4148 RecordLengthHint:1073745964 SubIndex:0} manifest3 missing; currentHas=true maxRecoveredSeq=11 ptrSeq=11 filterIfCurrentMissing=[] filterErr=<nil> backing=true"
+  ],
+  "missing_witnesses": 105,
+  "read_only_census_unknown": [
+    "    external_manifest_writer_invariant_test.go:232: unchanged ReadOnly DryRun census: leaf generation plan: missing generation for leaf file 2139095051 (raw stats={GenerationsTotal:0 GenerationsWritable:0 GenerationsLive:0 GenerationsRetiring:0 GenerationsEligible:0 GenerationsDeleted:0 FilesDeleted:0 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:0 ManifestRevisionsProtected:0 ManifestRevisionsEligible:0 ManifestRevisionsDeleted:0 ManifestRevisionBytesEligible:0 ManifestRevisionBytesDeleted:0}; UNKNOWN on error)",
+    "    external_manifest_writer_invariant_test.go:232: unchanged ReadOnly DryRun census: leaf generation plan: missing generation for leaf file 2139095051 (raw stats={GenerationsTotal:0 GenerationsWritable:0 GenerationsLive:0 GenerationsRetiring:0 GenerationsEligible:0 GenerationsDeleted:0 FilesDeleted:0 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:0 ManifestRevisionsProtected:0 ManifestRevisionsEligible:0 ManifestRevisionsDeleted:0 ManifestRevisionBytesEligible:0 ManifestRevisionBytesDeleted:0}; UNKNOWN on error)",
+    "    external_manifest_writer_invariant_test.go:232: unchanged ReadOnly DryRun census: leaf generation plan: missing generation for leaf file 2139095051 (raw stats={GenerationsTotal:0 GenerationsWritable:0 GenerationsLive:0 GenerationsRetiring:0 GenerationsEligible:0 GenerationsDeleted:0 FilesDeleted:0 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:0 ManifestRevisionsProtected:0 ManifestRevisionsEligible:0 ManifestRevisionsDeleted:0 ManifestRevisionBytesEligible:0 ManifestRevisionBytesDeleted:0}; UNKNOWN on error)"
+  ],
+  "all_258_values_per_case_verified": true,
+  "auxiliary_fixture_defect": {
+    "sites": 9,
+    "reason": "comparing marked ValuePtr/segment FileID4286578699 to unmarked LeafLogPtr FileID2139095051",
+    "correction": "use located.ptr.ValueLogFileID() canonical representation in expected-producer comparison only",
+    "does_not_invalidate": "genuine both-slot prime, actual containing page ptr, exact own-manifest omission and unchanged read-only census errors"
+  },
+  "all_runtime_groups_actual_joined_and_quiescent": true,
+  "qualification": false,
+  "performance_accepted": false,
+  "meaningful_red": true,
+  "selected_scope": "capture/stage exact immutable manifest handoff for ascending supported producer membership; no lower-sequence predicate selection"
+}

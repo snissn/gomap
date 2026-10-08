@@ -1,0 +1,27 @@
+{
+  "output": "v13-common-prefix-R-post-exhaustive-3M-opportunity-v1",
+  "repeats": 1,
+  "cells": [
+    {
+      "label": "PREFIX-post-exhaustive",
+      "source": "PREFIX_DIAGNOSTIC",
+      "engine": "treedb",
+      "case": "realistic",
+      "profile": "durable",
+      "keys": 3000000,
+      "seed": 24,
+      "mixture": "primary",
+      "working_set": "uniform",
+      "miss_percent": 90,
+      "reads": 6000000,
+      "workers": 4,
+      "updates": 40000,
+      "duration": "8s",
+      "commit": "ordinary",
+      "keep": true,
+      "profiled": true,
+      "rss_sample_interval_ms": 200,
+      "measure_dir": "/home/mikers/quicksilver-maintenance-5028-20261006/qualification-v12-refresh/qualification-v10/v13-common-prefix-R-opportunity-post-exhaustive-3M-fixture-v1/db"
+    }
+  ]
+}

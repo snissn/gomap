@@ -1,0 +1,37 @@
+{
+  "harness": {
+    "branch": "codex/5028-matched-work-allocation",
+    "draft": true,
+    "head": "9fda35fdf0268b8165a3659f3e033cd53a874bed",
+    "native_validated": false,
+    "pr": 5120,
+    "qualification": false,
+    "remote_ref_verified": true,
+    "tree": "67481c3287af7f5e8baf13c95b1bc3808d24a965",
+    "url": "https://github.com/snissn/gomap/pull/5120"
+  },
+  "writer": {
+    "branch": "codex/5116-manifest-writer-authority",
+    "draft": true,
+    "files": [
+      "TreeDB/db/batch.go",
+      "TreeDB/db/command_wal_publish.go",
+      "TreeDB/db/db.go",
+      "TreeDB/db/external_manifest_writer_invariant_test.go",
+      "TreeDB/db/root_publication_activation.go",
+      "TreeDB/db/root_publication_build_group.go",
+      "TreeDB/db/writer_manifest_preparation.go",
+      "TreeDB/db/writer_manifest_preparation_test.go",
+      "TreeDB/docs/spec/manifest-writer-authority-5116-wip-handoff.md",
+      "TreeDB/docs/spec/value-log-lifecycle.md",
+      "TreeDB/docs/spec/write-path-and-durability.md"
+    ],
+    "head": "c3db45d456e77f002d6f474932063f4c4ce19b16",
+    "native_validated": false,
+    "pr": 5121,
+    "qualification": false,
+    "remote_ref_verified": true,
+    "tree": "0248d1bf93f67cccc7ae9481b52e2244bd4735e1",
+    "url": "https://github.com/snissn/gomap/pull/5121"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "bytes": 7604361,
+  "file": "source-and-evidence.tar.gz",
+  "manifest_sha256": "4be8072809a2e2ea75885b3f6988114f63c80d8d95fd014a34f89bc9c5b5a19d",
+  "omitted": "full DBs, binaries, large raw/compiler archives; preserve and retrieve from the original Linux location",
+  "role": "source and bounded retained evidence; no runtime or qualification authority",
+  "sha256": "b602b7965152df9e65f65f8fe7a74ed3fe6e5e6d3ab3d814c64032e46d0cf3ce"
+}

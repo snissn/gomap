@@ -1,0 +1,203 @@
+{
+  "build_env": {
+    "GOROOT": "/home/mikers/quicksilver-maintenance-5028-20261006/toolchain/go1.26.3",
+    "CGO_ENABLED": "1",
+    "GOGC": "100",
+    "GOTOOLCHAIN": "local",
+    "CGO_LDFLAGS": "-L/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/lib",
+    "GOCACHE": "/home/mikers/quicksilver-maintenance-5028-20261006/cache/go-build",
+    "GOMODCACHE": "/home/mikers/quicksilver-maintenance-5028-20261006/cache/go-mod",
+    "GOFLAGS": "",
+    "GOMEMLIMIT": "off",
+    "LD_LIBRARY_PATH": "/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/lib:/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/lib/x86_64-linux-gnu",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOMAXPROCS": "12",
+    "GOWORK": "off",
+    "PATH": "/home/mikers/quicksilver-maintenance-5028-20261006/toolchain/go1.26.3/bin:/usr/local/bin:/usr/bin:/bin",
+    "CGO_CFLAGS": "-I/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/include"
+  },
+  "sources": {
+    "A": {
+      "head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "tree": "79100a06e3258caacbc127678f1a4d17bcc9f3e6",
+      "built_against_head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "binary": "treemap-A",
+      "binary_sha256": "19529ba9ab9c8db40fa9be4acc559628e49937994d37536a0230e9003ac51877",
+      "linkage": "dynamic"
+    },
+    "A_unified": {
+      "head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "tree": "79100a06e3258caacbc127678f1a4d17bcc9f3e6",
+      "built_against_head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "binary": "unified-bench-A",
+      "binary_sha256": "7c5f2bc4fedf972f217945abd83d727bcd538b6c9a80babc6e1edc85e66e1f45",
+      "linkage": "dynamic"
+    },
+    "R": {
+      "head": "6fa638b8bffa71750e1aefa0bb746bb747aa06c1",
+      "tree": "b4bbd98c74c21f7f68bce288341a0925c83e18f1",
+      "built_against_head": "6fa638b8bffa71750e1aefa0bb746bb747aa06c1",
+      "binary": "treemap-R",
+      "binary_sha256": "d294aefe392afd01d524dcaab856ce78c149dbc68ce0bc7e82e0cfdaf80d30a3",
+      "linkage": "dynamic"
+    },
+    "R_unified": {
+      "head": "6fa638b8bffa71750e1aefa0bb746bb747aa06c1",
+      "tree": "b4bbd98c74c21f7f68bce288341a0925c83e18f1",
+      "built_against_head": "6fa638b8bffa71750e1aefa0bb746bb747aa06c1",
+      "binary": "unified-bench-R",
+      "binary_sha256": "07f52b8ec99a0f263f59f4dba729cebf1ef3e4e8bdc33c2370fd7929e5c43494",
+      "linkage": "dynamic"
+    },
+    "B": {
+      "head": "73100c5b8cc2337d9cff36c60a8e4182f1820fe9",
+      "tree": "41331819ecb921ea477baf1997a652506700cf56",
+      "built_against_head": "73100c5b8cc2337d9cff36c60a8e4182f1820fe9",
+      "binary": "treemap-B",
+      "binary_sha256": "27b76ac96ab92ef3e2604995f927cd06ca3f994a3b84127cba3a5fe21e0cc3fc",
+      "linkage": "dynamic"
+    },
+    "B_unified": {
+      "head": "73100c5b8cc2337d9cff36c60a8e4182f1820fe9",
+      "tree": "41331819ecb921ea477baf1997a652506700cf56",
+      "built_against_head": "73100c5b8cc2337d9cff36c60a8e4182f1820fe9",
+      "binary": "unified-bench-B",
+      "binary_sha256": "c1c603ebd0c603c41cdc7d887f194bef907723d33a9b10205972c324ccd5902a",
+      "linkage": "dynamic"
+    },
+    "restore": {
+      "head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "tree": "79100a06e3258caacbc127678f1a4d17bcc9f3e6",
+      "built_against_head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "binary": "snapshot-restore",
+      "binary_sha256": "91a3a2bf3e4cb375dcc1b9c66354d2abb7cef8da4984d59916b38e37806275e1",
+      "linkage": "static"
+    },
+    "benchprof": {
+      "head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "tree": "79100a06e3258caacbc127678f1a4d17bcc9f3e6",
+      "built_against_head": "192e5019e579af3b98ae4fbf4ea497bb9ccd672f",
+      "binary": "benchprof",
+      "binary_sha256": "8524f15f4ea741f444d48add40522d0047a8e755e5a76a80f6092746ed3d0554",
+      "linkage": "static"
+    },
+    "ER13_unified": {
+      "head": "4b2ac03223517e0c5a393f2dd645177d07437b4a",
+      "tree": "6bc106d9a9e5e1f3d1ae42fc4daf830af229d430",
+      "built_against_head": "4b2ac03223517e0c5a393f2dd645177d07437b4a",
+      "binary": "unified-bench-R-v13-4b2a",
+      "binary_sha256": "843196665d75473f1f30068bf45b871c1817d06bdaa53f3a984785cc1829b78f",
+      "linkage": "dynamic"
+    },
+    "PREFIX_DIAGNOSTIC": {
+      "head": "4ba7bfad3c29d176fe7686f14cfe49276a9b3d3a",
+      "tree": "b4be2c7e2193550282df9b287301b6d6e237acbc",
+      "built_against_head": "4ba7bfad3c29d176fe7686f14cfe49276a9b3d3a",
+      "binary": "unified-bench-R-v13-4ba7-prefix-opportunity-v1",
+      "binary_sha256": "ace489a4e08add49b6222461038a72d6aa6d9d082ea92fe4e1bdce63916ade00",
+      "linkage": "dynamic"
+    }
+  },
+  "snapshot_restore": "restore",
+  "libraries": {
+    "/usr/lib/x86_64-linux-gnu/libc.so.6": {
+      "sha256": "85e64f97e348786a8fb4d9f3d52fec289e2fb86bba20f0731dfe61990525e0f7",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+      "bytes": 2190608
+    },
+    "/lib64/ld-linux-x86-64.so.2": {
+      "sha256": "bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14",
+      "resolved": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+      "bytes": 254864
+    },
+    "/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/lib/librocksdb.so.6.11": {
+      "sha256": "dcd497d9c4a635f8dfe0edff3e3690acb81fd85ac4fbdb1af756a0c3e9a63a2f",
+      "resolved": "/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/lib/librocksdb.so.6.11.4",
+      "bytes": 6461040
+    },
+    "/usr/lib/x86_64-linux-gnu/libpthread.so.0": {
+      "sha256": "1327fc40710691dbd94e88b6cf4efce27fefe8fbb93f7d1164a75b4dccaea696",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+      "bytes": 14408
+    },
+    "/usr/lib/x86_64-linux-gnu/librt.so.1": {
+      "sha256": "9f3cc59207bcaaac74aaf7aca961f4816f0f4d945e4bd1c3cb98ec516becf161",
+      "resolved": "/usr/lib/x86_64-linux-gnu/librt.so.1",
+      "bytes": 14624
+    },
+    "/usr/lib/x86_64-linux-gnu/libsnappy.so.1": {
+      "sha256": "7096393769ed4f8dce61c48559ff516e31e381c04ebd8c5ce5aa53962ce1caf6",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libsnappy.so.1.2.2",
+      "bytes": 47448
+    },
+    "/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/lib/x86_64-linux-gnu/libgflags.so.2.2": {
+      "sha256": "f3c7dc509e8da8f780666a7c74c92b98af95aecd26d3ef0f3e36470c7490e400",
+      "resolved": "/home/mikers/quicksilver-maintenance-5028-20261006/native/root/usr/lib/x86_64-linux-gnu/libgflags.so.2.2.2",
+      "bytes": 162808
+    },
+    "/usr/lib/x86_64-linux-gnu/libz.so.1": {
+      "sha256": "47b61967895b30e8c0c6818dd633ffeb87711cf637c688f981896f0dd84ce23b",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+      "bytes": 121272
+    },
+    "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0": {
+      "sha256": "7138aeb748f73c150b1d34d67de69139a441910cd7b269076ba3c8b986dea9a7",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4",
+      "bytes": 83120
+    },
+    "/usr/lib/x86_64-linux-gnu/liblz4.so.1": {
+      "sha256": "45729d07db6c43e524c2e69d0c4aef81148a66e272c4f4e0e64b787e17fe1731",
+      "resolved": "/usr/lib/x86_64-linux-gnu/liblz4.so.1.10.0",
+      "bytes": 166224
+    },
+    "/usr/lib/x86_64-linux-gnu/libzstd.so.1": {
+      "sha256": "060eeb79531d435306665fd78329d8a9dd579f95876c5960bb67937825362a80",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+      "bytes": 796824
+    },
+    "/usr/lib/x86_64-linux-gnu/libdl.so.2": {
+      "sha256": "59d725ca30596a9863f4fa2552a7125f834842abc86b40890231c129358965d2",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+      "bytes": 14408
+    },
+    "/usr/lib/x86_64-linux-gnu/libstdc++.so.6": {
+      "sha256": "5bb0d21308f123b6ad46c6f35b42cedfcb8d6d439a53aa3dae04d880aaffdde3",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+      "bytes": 2735712
+    },
+    "/usr/lib/x86_64-linux-gnu/libm.so.6": {
+      "sha256": "1c488db6f4fe8cecb72456bc018de000b7a9b539c2994864b0416b5e8371b3d8",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+      "bytes": 1198376
+    },
+    "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1": {
+      "sha256": "9d339ecb409578d6a5d587e6c537a8f9589b8a13fefba30d167433a4b5758bee",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+      "bytes": 187120
+    },
+    "/usr/lib/x86_64-linux-gnu/libxxhash.so.0": {
+      "sha256": "eae56344ba81fd5d25c6976028b33a53d3303848c382b04f3d5746549fb25228",
+      "resolved": "/usr/lib/x86_64-linux-gnu/libxxhash.so.0.8.3",
+      "bytes": 71832
+    }
+  },
+  "receipts": {
+    "source": {
+      "path": "/home/mikers/quicksilver-maintenance-5028-20261006/qualification-v13-common-prefix-opportunity-run-v1/source-receipt.json",
+      "sha256": "eacc751107bfc07e9f68ec283e32de4c61174278139cc3fbed1a4f4f04878019"
+    },
+    "build": {
+      "path": "/home/mikers/quicksilver-maintenance-5028-20261006/qualification-v13-common-prefix-opportunity-run-v1/compiler-inputs.json",
+      "sha256": "11adfde79418820f7c0ffef09cd550ac3fc0c35f7b75f5ba660af97ee07b46af"
+    },
+    "native": {
+      "path": "receipts/native-inventory.json",
+      "sha256": "4a6fe1bad84f07b62def5f825098b54e950a3e8f17a27163b6ebd9582c33e8d5"
+    },
+    "runner": {
+      "path": "receipts/runner-inventory.json",
+      "sha256": "13bb4a077dde0f9097a169ecebe539a598a06eb676fb69e8db18bd1b3d2397b5"
+    }
+  }
+}

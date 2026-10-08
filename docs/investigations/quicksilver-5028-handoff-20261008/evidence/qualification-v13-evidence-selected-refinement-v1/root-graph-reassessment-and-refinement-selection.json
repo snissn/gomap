@@ -1,0 +1,85 @@
+{
+  "schema": 1,
+  "kind": "GRAPH_REASSESSMENT_AND_NEXT_COMPLETION_PACKET",
+  "accepted_by_root": true,
+  "parent": 5028,
+  "qualification_node": 5030,
+  "created_ns": 1791457040922002000,
+  "actual_join": {
+    "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-evidence-selected-refinement-v1/root-all176-actual-join-and-disposition-review.json",
+    "bytes": 444952,
+    "sha256": "280a298f62b5d05a2436130c347ed9d7c8ea640c43c9cad0aae59a7577bec2f7"
+  },
+  "inquiries": [
+    {
+      "manifest": {
+        "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v12-actual-service-allocation-causal-source-inquiry-v1/source-bindings.json",
+        "bytes": 27594,
+        "sha256": "84067e2c1563ee161c8b9e317fa3d06bb3601f38239944e40b55c32923561ada"
+      },
+      "report": {
+        "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v12-actual-service-allocation-causal-source-inquiry-v1/REPORT.md",
+        "bytes": 9644,
+        "sha256": "bd5ec3a0e22ab39478d42be219d4f47756ec75411063e0c0969f65e4d2927694"
+      }
+    },
+    {
+      "manifest": {
+        "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v12-next-natural-eligibility-source-inquiry-v1/source-bindings.json",
+        "bytes": 19516,
+        "sha256": "d81223fda9a56f74078fd45e370f279daea7f0fe83c0fcaab7574e3b7fc4d761"
+      },
+      "report": {
+        "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v12-next-natural-eligibility-source-inquiry-v1/REPORT.md",
+        "bytes": 10815,
+        "sha256": "2e4587d9418dc57bd7adb3fd3340411cf275a3ba8ed44abc8454f8d08e9170ad"
+      }
+    }
+  ],
+  "verified_source_bindings": 109,
+  "verified_inputs": 6,
+  "finding": "Exhaustive 3M maintenance speed improves materially and final quiet 3M RSS improves narrowly; 22 allocation guards and numerous service/checkpoint guards fail. No full performance or merge acceptance. Ordinary useful eligible reclamation remains unproved.",
+  "next_selected_packet": {
+    "node": 5015,
+    "pr": 5037,
+    "base": "9011f52f0c7f12346254a5dbf41461ae9b4af943",
+    "worktree": "/private/tmp/gomap-qs-5015",
+    "deliverable": "pr",
+    "owner": "/root/r5015_producer_history_source_inquiry",
+    "contract_owner": "/root",
+    "mechanism": "Restore finite checkout/return of bounded merge scratch for attempt-private zipper clones while preserving private allocator/appender/capture configuration. Inspect existing scratch reset/retention; consolidate the ordinary/group cold paths where safely shared. No active mutable scratch sharing.",
+    "test_first": "Demonstrate cold clone versus owner reuse at actual Apply seam; include concurrent clone isolation, error/abort/reset, no callback/pager/reader retention and bounded retention risks. Root causal unified-bench profile separately attributes actual stacks.",
+    "stop_conditions": "If scratch ownership/reset cannot be safe, or focused allocation discriminator contradicts mechanism, report before new abstractions. No push or merge until root integration; no claims from local microbench alone.",
+    "acceptance_owner": "/root"
+  },
+  "next_inquiry": {
+    "node": 5016,
+    "owner": "/root",
+    "deliverable": "decision",
+    "question": "At original finite 3M full-refresh boundary is there an exact naturally closed source absent from all user/system/cache/both-slot/pending/ambiguous/writer/queue/pin authorities but withheld by admission?",
+    "implementation_conditional": true,
+    "preserved_defaults": "No lower pressure, format cap, forced rotation/prune, larger proof budget, artificial debt or conditional4M activation."
+  },
+  "dependency_edges": [
+    "accepted5029 -> refined5015 -> synchronized5016 -> final5030 -> parent5028"
+  ],
+  "preserved_gates": [
+    "actual public caller and complete fallback",
+    "both sealed slots and all current/pending/ambiguous roots",
+    "pointer/CRC/dictionary/template/corrupt/reopen/crash/race",
+    "material maintenance speed and credible owned process peak or sustained memory, report both",
+    "ordinary finite eligible useful progress with unchanged default budgets",
+    "service/tails/ingest/checkpoint/close/temp/final disk/allocation guards",
+    "current-head independent review/Codex policy/CI and ordered merges",
+    "actual landed-source matched qualification"
+  ],
+  "historical_campaign_immutable": true,
+  "qualification": false,
+  "performance_accepted": false,
+  "merge_authorized": false,
+  "conditional4M": false,
+  "held_excluded": [
+    5004,
+    5006
+  ]
+}
