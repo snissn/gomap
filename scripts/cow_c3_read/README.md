@@ -388,7 +388,9 @@ CPU count does not substitute for available CPUs. No CPU quota policy is inferre
 
 The manual `cow-c3-hosted-qualification.yml` workflow defaults to **capacity-only**.
 It records the first job step's aware UTC and monotonic observation before
-checkout (not an API-observed job start), then measures the actual owned TMPDIR
+checkout (not an API-observed job start), exports the namespace through
+`GITHUB_ENV` from the physical `RUNNER_TEMP` and actual run IDs, then measures
+the actual owned TMPDIR
 filesystem, runnable CPU mask and platform. Full mode refuses before Go unless
 Linux amd64, four runnable CPUs and 20 GiB free are actually present. It neither
 cleans the hosted image nor buys a larger runner. Public compute availability
@@ -399,7 +401,8 @@ Full dispatch is restricted to root account numeric ID `1981537`, landed `main`,
 and a distinct run ID, run attempt and root attempt label. This optional route
 uses baseline `2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c` and candidate
 `8d8806b495422e44f7802a96f5737f536a3fb2f0`. It exports complete Git-object-bound
-source bytes/modes, downloads the exact official Go 1.26.8 linux-amd64 archive,
+source bytes/modes using explicit `git -c tar.umask=0022 archive` (checked
+against raw Git blob/mode authority), downloads the exact official Go 1.26.8 linux-amd64 archive,
 retains all 15,036 toolchain file identities, and observes three real GCC-driver,
 assembler and linker files before/after. Construction and matched before/final
 refreshes retain the actual full Go inventory and three compiler snapshots
@@ -491,5 +494,7 @@ pass. Hosted tooling acceptance alone does not accept #5076 performance, native
 
 `python3 -B scripts/cow_c3_read/hosted_test.py` exercises capacity, authority,
 sealed-payload/archive drift, compiler identity, joins, foreign censuses,
-Go JSON grammar and cooperative deadline seams without Go, network or an
+Go JSON grammar and cooperative deadline seams, plus tiny local Git archive
+modes, the actual canonical generator and first-step environment setup, without
+Go, network or an
 operational helper main.

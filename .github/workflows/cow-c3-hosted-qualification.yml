@@ -26,13 +26,19 @@ jobs:
     timeout-minutes: 360
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      HOSTED_NAMESPACE: ${{ runner.temp }}/cow-c3-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - name: Record job admission origin before checkout
         id: origin
         run: |
           python3 -B - <<'PY'
-          import datetime, os, time
+          import datetime, os, pathlib, re, time
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          run_id, attempt = os.environ['GITHUB_RUN_ID'], os.environ['GITHUB_RUN_ATTEMPT']
+          if (not root.is_absolute() or root.resolve() != root or not root.is_dir()
+                  or not all(re.fullmatch(r'[1-9][0-9]*', x) for x in (run_id, attempt))):
+              raise ValueError('physical runner temp and positive run identity required')
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('HOSTED_NAMESPACE='+str(root / ('cow-c3-'+run_id+'-'+attempt))+'\n')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('utc='+datetime.datetime.now(datetime.timezone.utc).isoformat()+'\n')
               output.write('monotonic='+str(time.monotonic())+'\n')

@@ -10,7 +10,7 @@
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate.",
     "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification."
   ],
-  "discovery_source_sha256": "6101dcdf1f6c3119861ad4d1fcc2cf0ef65540dc6b23ec3f1e027564c5e276bb",
+  "discovery_source_sha256": "23d2d9d2d598828a97679b67e35bb3c2d2efc432f6a3eb389736306c5d5c6923",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -177,11 +177,11 @@
       "mode": "100644"
     },
     "scripts/cow_c3_read/hosted_runner.py": {
-      "git_blob": "da648713234b103fab2077283a99a49e48e9b730",
+      "git_blob": "bd47efd917d672238b6011fd81af9c362e2d5988",
       "mode": "100644"
     },
     "scripts/cow_c3_read/hosted_test.py": {
-      "git_blob": "3b4cec2b41a1cfe7593c511371e32ca8f097d0ac",
+      "git_blob": "905630a6eadd64b7a781f5e4f6ff922af0c3ea41",
       "mode": "100644"
     },
     "scripts/cow_c3_read/load_readiness_test.py": {
@@ -1409,7 +1409,7 @@
           }
         }
       },
-      "git_blob": "6e275b1a794a939b32c3e11707779cf2425c4225",
+      "git_blob": "bba97a5f5fb109374891c6d790755554f0585553",
       "jobs": {
         "qualification": {
           "checkout": [
@@ -1420,14 +1420,14 @@
           ],
           "commands": [
             {
-              "command_sha256": "f0042174e74d69b04ae72c650ecde8636022c4910b7d2c049e245d858cacb1fe",
-              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:33",
+              "command_sha256": "8dcff641011be6ba15188100198a726edf2fef4e49a4d911f61e569f6348fcd9",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:32",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Record job admission origin before checkout"
             },
             {
               "command_sha256": "2ba6f12ab766531ae81a12f25f917c5118d0571fc324c8f368d5440680886efe",
-              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:48",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:54",
               "env": {
                 "JOB_START_MONOTONIC": "${{ steps.origin.outputs.monotonic }}",
                 "JOB_START_UTC": "${{ steps.origin.outputs.utc }}"
@@ -1437,7 +1437,7 @@
             },
             {
               "command_sha256": "8f87e85d02cf17d96b3e3a6e2b1c702039bcb15d2f8b0a50fd225fb59b625f57",
-              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:59",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:65",
               "env": {
                 "CHECKOUT_SHA": "${{ github.sha }}",
                 "ROOT_ATTEMPT": "${{ inputs.attempt }}",
@@ -1449,7 +1449,7 @@
             },
             {
               "command_sha256": "7948aa59b120321e959e1eb1fdd84820a3c1edce6f7e406cbf3ee591d3d979c4",
-              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:71",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:77",
               "env": {
                 "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
               },
@@ -1459,7 +1459,7 @@
             },
             {
               "command_sha256": "6630cd6ecd5c16f4d1716418fec31f457c9e65413772d1aa85c97eec9ee1ff0c",
-              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:90",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:96",
               "env": {
                 "HOSTED_READ_TOKEN": "${{ github.token }}",
                 "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
@@ -1470,7 +1470,7 @@
             },
             {
               "command_sha256": "44eccca3ec1668ca641208cbb3528fe19ab7b577b4f76a45b244e095976bdc74",
-              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:97",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:103",
               "env": {
                 "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
               },
@@ -1480,14 +1480,13 @@
             },
             {
               "command_sha256": "bfc821a3787c2ed81926463dd71272426a965d9ac54fa353cdcdc44f58670bf6",
-              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:103",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:109",
               "if": "always()",
               "invocation": "shell block at source entrypoint; source workflow owns exact commands",
               "name": "Mandatory finite evidence closer; incomplete custody never qualifies"
             }
           ],
           "environment": {
-            "HOSTED_NAMESPACE": "${{ runner.temp }}/cow-c3-${{ github.run_id }}-${{ github.run_attempt }}",
             "PYTHONDONTWRITEBYTECODE": "1"
           },
           "matrix": null,
@@ -1496,7 +1495,7 @@
           "runs_on": "ubuntu-24.04"
         }
       },
-      "sha256": "4be7ae4d160adc600dbc75ff05b7ee82cab5541a81042198dfab7627c7c0b836"
+      "sha256": "da6b04d75bee522e4dac3a8cc0fc38d1486d2f350b1aadfdef385306aa4cf161"
     },
     "format.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

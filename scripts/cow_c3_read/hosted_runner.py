@@ -210,7 +210,7 @@ def prepare(args):
             run(state, label+'-fetch', ['git','--no-replace-objects','-C',str(args.checkout),
                 'fetch','--no-tags','origin',v['head']],args.checkout,120,bootstrap,sticky,bootstrap_env)
             archive = run(state, label+'-export', ['git','--no-replace-objects','-C',str(args.checkout),
-                'archive','--format=tar',v['head']],args.checkout,120,bootstrap,sticky,bootstrap_env)
+                '-c','tar.umask=0022','archive','--format=tar',v['head']],args.checkout,120,bootstrap,sticky,bootstrap_env)
             safe_extract(bootstrap / (label+'-export.stdout'),Path(v['source']))
             run(state,label+'-authority',[sys.executable,'-B',str(Path(__file__)),
                 'authority','--source',v['source'],'--repository',str(args.checkout),
@@ -451,7 +451,7 @@ def freeze(args):
     c['fixtures']=fixtures['baseline']
     for build in builds.values():build_toolchain(build,c,toolchain_inventory(state['controls']['GOROOT']))
     write(out/'config.json',c);config(out/'config.json')
-    need(len(schedule(c))==756,'original full schedule required')
+    need(sum(1 for _ in schedule(c))==756,'original full schedule required')
     write(out/'freeze-receipt.json',dict(config_sha256=sha(out/'config.json'),policy=POLICY,
         script_bindings=state['canonical'],state_sha256=args.state_sha256,source_heads=[BASELINE,CANDIDATE],
         matched_runs=0,native_qualification=False))

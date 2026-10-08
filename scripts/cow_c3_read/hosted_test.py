@@ -330,6 +330,85 @@ class HostedContracts(unittest.TestCase):
                     self.assertTrue(errors[0]['error']);self.assertTrue(errors[0]['error_type'])
                 self.refuse(lambda:c.snapshot_files(files))
 
+    def test_real_git_archive_modes_use_actual_prepare_export_command(self):
+        import ast, os, subprocess, tarfile
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve();repo=root/'repo';repo.mkdir()
+            env=dict(PATH=os.defpath,LC_ALL='C',GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull)
+            def git(*argv):
+                result=subprocess.run(['git','--no-replace-objects','-C',str(repo),*argv],
+                    env=env,capture_output=True,timeout=10,check=True)
+                return result.stdout
+            git('init');git('config','user.name','hosted fixture');git('config','user.email','hosted-fixture@example.invalid')
+            (repo/'ordinary').write_text('ordinary bytes');(repo/'ordinary').chmod(0o644)
+            (repo/'executable').write_text('executable bytes');(repo/'executable').chmod(0o755)
+            git('add','ordinary','executable');git('commit','-m','mode fixture')
+            head=git('rev-parse','HEAD').decode().strip()
+            default=root/'default.tar';default.write_bytes(git('archive','--format=tar',head))
+            with tarfile.open(default) as tar:
+                self.assertEqual({m.name:m.mode for m in tar},{'ordinary':0o664,'executable':0o775})
+            self.refuse(lambda:runner.safe_extract(default,root/'default-refused'))
+            # Evaluate the actual prepare run argv AST; avoid a duplicated test-only command.
+            node=next(n for n in ast.parse(Path(runner.__file__).read_text()).body
+                      if isinstance(n,ast.FunctionDef) and n.name=='prepare')
+            call=next(n for n in ast.walk(node) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)
+                      and n.func.id=='run' and isinstance(n.args[1],ast.BinOp)
+                      and isinstance(n.args[1].right,ast.Constant) and n.args[1].right.value=='-export')
+            argv=eval(compile(ast.Expression(call.args[2]),runner.__file__,'eval'),
+                dict(args=type('Args',(),{'checkout':repo})(),v={'head':head},str=str))
+            normalized=root/'normalized.tar'
+            normalized.write_bytes(subprocess.run(argv,env=env,capture_output=True,timeout=10,check=True).stdout)
+            with tarfile.open(normalized) as tar:
+                self.assertEqual({m.name:m.mode for m in tar},{'ordinary':0o644,'executable':0o755})
+            destination=root/'normalized';runner.safe_extract(normalized,destination)
+            self.assertEqual((destination/'ordinary').read_text(),'ordinary bytes')
+            self.assertEqual((destination/'executable').read_text(),'executable bytes')
+            self.assertEqual((destination/'ordinary').stat().st_mode & 0o777,0o644)
+            self.assertEqual((destination/'executable').stat().st_mode & 0o777,0o755)
+
+    def test_actual_canonical_generator_freeze_count(self):
+        import ast, inspect
+        from protocol import schedule
+        configuration=runner.draft()
+        actual=schedule(configuration);self.assertTrue(inspect.isgenerator(actual))
+        items=list(actual);self.assertEqual(len(items),756)
+        self.assertEqual(sum(x['phase']=='warmup' for x in items),108)
+        self.assertEqual(sum(x['phase']=='measured' for x in items),648)
+        node=next(n for n in ast.parse(Path(runner.__file__).read_text()).body
+                  if isinstance(n,ast.FunctionDef) and n.name=='freeze')
+        check=next(n for n in ast.walk(node) if isinstance(n,ast.Call) and isinstance(n.func,ast.Name)
+            and n.func.id=='need' and len(n.args)>1 and isinstance(n.args[1],ast.Constant)
+            and n.args[1].value=='original full schedule required')
+        def need(value,message):
+            if not value:raise ValueError(message)
+        expression=compile(ast.Expression(check),runner.__file__,'eval')
+        eval(expression,dict(c=configuration,schedule=schedule,need=need))
+        changed=copy.deepcopy(configuration);changed['cases'].pop()
+        self.refuse(lambda:eval(expression,dict(c=changed,schedule=schedule,need=need)))
+        changed=copy.deepcopy(configuration);changed['order'].pop()
+        self.refuse(lambda:eval(expression,dict(c=changed,schedule=schedule,need=need)))
+
+    def test_workflow_origin_exports_effective_namespace_before_checkout(self):
+        import os, textwrap
+        workflow=Path(runner.__file__).parents[2]/'.github/workflows/cow-c3-hosted-qualification.yml'
+        text=workflow.read_text();job_env=text.split('    env:',1)[1].split('    steps:',1)[0]
+        self.assertNotIn('runner.temp',job_env);self.assertNotIn('HOSTED_NAMESPACE',job_env)
+        code=text.split("          python3 -B - <<'PY'\n",1)[1].split('          PY',1)[0]
+        code=textwrap.dedent(code)
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d).resolve();environment=root/'github-env';output=root/'github-output'
+            with mock.patch.dict(os.environ,dict(RUNNER_TEMP=str(root),GITHUB_RUN_ID='123',
+                    GITHUB_RUN_ATTEMPT='2',GITHUB_ENV=str(environment),GITHUB_OUTPUT=str(output))):
+                exec(compile(code,str(workflow),'exec'),{})
+            self.assertEqual(environment.read_text(),'HOSTED_NAMESPACE='+str(root/'cow-c3-123-2')+'\n')
+            values=dict(line.split('=',1) for line in output.read_text().splitlines())
+            self.assertEqual(set(values),{'utc','monotonic'});c.utc(values['utc']);float(values['monotonic'])
+            environment.unlink();output.unlink()
+            with mock.patch.dict(os.environ,dict(RUNNER_TEMP=str(root),GITHUB_RUN_ID='123\ninjected',
+                    GITHUB_RUN_ATTEMPT='2',GITHUB_ENV=str(environment),GITHUB_OUTPUT=str(output))):
+                self.refuse(lambda:exec(compile(code,str(workflow),'exec'),{}))
+            self.assertFalse(environment.exists());self.assertFalse(output.exists())
+
     def test_exact_numeric_and_canonical_adapter_source(self):
         self.assertEqual((c.POLICY['cells'],c.POLICY['processes'],c.POLICY['warmups'],c.POLICY['measured']),(54,756,108,648))
         self.assertEqual((c.POLICY['leaf_seconds'],c.POLICY['readiness_total_seconds']), (300,600))
