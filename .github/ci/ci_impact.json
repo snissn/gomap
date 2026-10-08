@@ -7,9 +7,10 @@
     "Existing push-only/path-filtered workflows remain push-only/path-filtered; forecasts do not add execution.",
     "Nested modules (benchmarks/experiments/third_party) and Haystack/JavaScript clients have manual or absent qualification; changes force full existing CI, not coverage expansion.",
     "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
-    "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate."
+    "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate.",
+    "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification."
   ],
-  "discovery_source_sha256": "b0d841f7434f52265e0881e1ea81a9d2e3eb1669fb2597c08ddf8b17f0526f10",
+  "discovery_source_sha256": "0046862aeb5e59bda515b5c01aa3292cf7579ffbb8c574a51dd04f0fdb02b20e",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -128,7 +129,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "38290d9cf42c6819c3480854662f2b59517443cd",
+      "git_blob": "fc7cde6c604a0472266ae04ee8df309ef880dbd5",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
@@ -155,6 +156,34 @@
       "git_blob": "a1d623ed357995b2e1a69da6a658cc19418766d6",
       "mode": "100644"
     },
+    "scripts/cow_c3_read/hosted_census.py": {
+      "git_blob": "78073998cc0fa5714870b5112057d1d46374badb",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_collect.py": {
+      "git_blob": "5f61ef5192813bb4bc9b887053511e0a2c4eed36",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_contract.py": {
+      "git_blob": "108a17b99663006ce8362f2f4ef2f37bc1705e21",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_custody.py": {
+      "git_blob": "bcb49eba9b7c6d41f4a71d4057e63d65393b8fcc",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_functional.py": {
+      "git_blob": "2f7a0010235d18904e68cd278fe774909fe2a342",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_runner.py": {
+      "git_blob": "bd47efd917d672238b6011fd81af9c362e2d5988",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_test.py": {
+      "git_blob": "905630a6eadd64b7a781f5e4f6ff922af0c3ea41",
+      "mode": "100644"
+    },
     "scripts/cow_c3_read/load_readiness_test.py": {
       "git_blob": "d7ec9e1442e716fc498e7f0f7670a53977eeb333",
       "mode": "100644"
@@ -165,6 +194,19 @@
     }
   },
   "members": [
+    {
+      "id": "cow-c3-hosted-qualification/qualification/single",
+      "job": "qualification",
+      "owner": "C3 qualification coordinator with CI maintainer and affected harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "cow-c3-hosted-qualification.yml"
+    },
     {
       "id": "format/gofmt/single",
       "job": "gofmt",
@@ -1113,6 +1155,7 @@
   "rules": [
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1134,6 +1177,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1155,6 +1199,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1185,6 +1230,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1206,6 +1252,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1227,6 +1274,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1248,6 +1296,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1269,6 +1318,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1290,6 +1340,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1311,6 +1362,7 @@
     },
     {
       "consumers": [
+        "cow-c3-hosted-qualification.yml",
         "format.yml",
         "hashdb-tests.yml",
         "memtier-bench.yml",
@@ -1333,6 +1385,118 @@
   ],
   "schema_version": 2,
   "workflows": {
+    "cow-c3-hosted-qualification.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": {
+          "inputs": {
+            "attempt": {
+              "default": "capacity",
+              "description": "Unique root-owned attempt label (required for full)",
+              "required": false,
+              "type": "string"
+            },
+            "mode": {
+              "default": "capacity-only",
+              "description": "Capacity probe by default; full needs root construction review on issue 5076",
+              "options": [
+                "capacity-only",
+                "full"
+              ],
+              "required": true,
+              "type": "choice"
+            }
+          }
+        }
+      },
+      "git_blob": "bba97a5f5fb109374891c6d790755554f0585553",
+      "jobs": {
+        "qualification": {
+          "checkout": [
+            {
+              "fetch-depth": 1,
+              "persist-credentials": false
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "8dcff641011be6ba15188100198a726edf2fef4e49a4d911f61e569f6348fcd9",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:32",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record job admission origin before checkout"
+            },
+            {
+              "command_sha256": "2ba6f12ab766531ae81a12f25f917c5118d0571fc324c8f368d5440680886efe",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:54",
+              "env": {
+                "JOB_START_MONOTONIC": "${{ steps.origin.outputs.monotonic }}",
+                "JOB_START_UTC": "${{ steps.origin.outputs.utc }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Capacity only; refuse before Go when actual capacity is insufficient"
+            },
+            {
+              "command_sha256": "8f87e85d02cf17d96b3e3a6e2b1c702039bcb15d2f8b0a50fd225fb59b625f57",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:65",
+              "env": {
+                "CHECKOUT_SHA": "${{ github.sha }}",
+                "ROOT_ATTEMPT": "${{ inputs.attempt }}",
+                "WORKFLOW_SHA": "${{ github.workflow_sha }}"
+              },
+              "if": "inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Prepare fresh exact sources, official toolchain and declared compiler files"
+            },
+            {
+              "command_sha256": "7948aa59b120321e959e1eb1fdd84820a3c1edce6f7e406cbf3ee591d3d979c4",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:77",
+              "env": {
+                "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
+              },
+              "if": "inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Fresh twelve-command construction and strict config freeze"
+            },
+            {
+              "command_sha256": "6630cd6ecd5c16f4d1716418fec31f457c9e65413772d1aa85c97eec9ee1ff0c",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:96",
+              "env": {
+                "HOSTED_READ_TOKEN": "${{ github.token }}",
+                "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
+              },
+              "if": "success() && inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Same-VM idle wait for immutable root issue-5076 acceptance"
+            },
+            {
+              "command_sha256": "44eccca3ec1668ca641208cbb3528fe19ab7b577b4f76a45b244e095976bdc74",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:103",
+              "env": {
+                "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
+              },
+              "if": "success() && inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Full unchanged 54-cell 756-child matrix through explicit pre-child adapter"
+            },
+            {
+              "command_sha256": "bfc821a3787c2ed81926463dd71272426a965d9ac54fa353cdcdc44f58670bf6",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:109",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Mandatory finite evidence closer; incomplete custody never qualifies"
+            }
+          ],
+          "environment": {
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "da6b04d75bee522e4dac3a8cc0fc38d1486d2f350b1aadfdef385306aa4cf161"
+    },
     "format.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",
       "events": {

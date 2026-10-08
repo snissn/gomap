@@ -275,7 +275,8 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			queueStart := len(db.queue)
 			// Rotate to freeze the mutable memtables for snapshot isolation. Use the
 			// iterator prealloc policy to keep the rotation cheap for read-heavy paths.
-			if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
+			rotatedShards, err := db.rotateMemtableLockedForIterator(minMemtablePrealloc)
+			if err != nil {
 				db.mu.Unlock()
 				if db.notifyError != nil {
 					db.notifyError(err)
@@ -284,8 +285,7 @@ func (db *DB) AcquireSnapshot() *Snapshot {
 			}
 			if snapshotDebug {
 				db.snapshotRotationsTotal.Add(1)
-				// Every shard is replaced, including empty/unrelated shards.
-				db.snapshotRotatedShardsTotal.Add(uint64(len(db.mutableShards)))
+				db.snapshotRotatedShardsTotal.Add(uint64(rotatedShards))
 				for _, mt := range db.queue[queueStart:] {
 					db.snapshotEnqueuedRecordsTotal.Add(uint64(mt.Len()))
 					db.snapshotEnqueuedBytesTotal.Add(uint64(mt.Size()))
