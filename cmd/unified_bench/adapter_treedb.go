@@ -1099,6 +1099,28 @@ func treeDBResolvedOptionsText(indent string) (string, error) {
 	return rep.formatText(indent), nil
 }
 
+// Variant constructors override profiles and compression, but all configure the
+// PRIMARY selector through the same builder. Retain only that shared evidence
+// for hidden-only selections instead of labeling generic options as theirs.
+func treeDBSelectedOptionsText(indent string, canonicalSelected bool) (string, error) {
+	if canonicalSelected {
+		text, err := treeDBResolvedOptionsText(indent)
+		if err != nil {
+			return "", err
+		}
+		return indent + "report_scope=canonical_treedb_options (variant profile/compression overrides excluded)\n" + text, nil
+	}
+	opts := treedb.Options{}
+	requested := *treedbIndexPrimaryDirectory
+	if err := configureTreeDBPrimaryDirectory(reflect.ValueOf(&opts).Elem(), requested); err != nil {
+		return "", err
+	}
+	lines := []string{"report_scope=primary_directory_selector_for_selected_treedb_adapters"}
+	lines = append(lines, strings.Split(treeDBPrimaryDirectoryReport(reflect.ValueOf(opts), requested), "\n")...)
+	lines = append(lines, "configuration is not runtime path qualification")
+	return indent + strings.Join(lines, "\n"+indent), nil
+}
+
 func wrapTreeDBAdapter(db *treedb.DB, name string) kvstore.DB {
 	// Keep adapter ReadBatch worker policy aligned with -read-workers so any
 	// BatchReader consumers use the same explicit concurrency budget as the
@@ -1338,10 +1360,17 @@ func NewTreeDBVlogDictOn(dir string) (kvstore.DB, error) {
 
 func logResolvedTreeDBOptions() {
 	dbNames := resolveDBs(*dbsArg, *dbsExcludeArg)
-	if !contains(dbNames, "treedb") {
+	hasTreeDB := false
+	for _, name := range dbNames {
+		if isTreeDBAdapterName(name) {
+			hasTreeDB = true
+			break
+		}
+	}
+	if !hasTreeDB {
 		return
 	}
-	text, err := treeDBResolvedOptionsText("  ")
+	text, err := treeDBSelectedOptionsText("  ", contains(dbNames, treedbAdapterName))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "TreeDB options: (error: %v)\n\n", err)
 		return

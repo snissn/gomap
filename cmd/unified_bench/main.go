@@ -5296,6 +5296,20 @@ func hasInstance(instances []*DBInstance, name string) bool {
 const treedbAdapterName = "treedb"
 const treedbWrapperName = "TreeDB"
 
+func isTreeDBAdapterName(name string) bool {
+	name = canonicalDBName(name)
+	return name == treedbAdapterName || strings.HasPrefix(name, treedbAdapterName+"_")
+}
+
+func hasTreeDBInstance(instances []*DBInstance) bool {
+	for _, inst := range instances {
+		if isTreeDBInstance(inst) {
+			return true
+		}
+	}
+	return false
+}
+
 func isTreeDBInstance(inst *DBInstance) bool {
 	if inst == nil {
 		return false
@@ -5308,7 +5322,7 @@ func isTreeDBInstance(inst *DBInstance) bool {
 	}
 	// The adapter/registry name is "treedb", while the display wrapper name is
 	// typically "TreeDB". Keep name-based checks as a fallback.
-	if inst.Name == treedbAdapterName || strings.HasPrefix(inst.Name, treedbAdapterName+"_") {
+	if isTreeDBAdapterName(inst.Name) {
 		return true
 	}
 	if inst.Wrapper.Name() == treedbWrapperName || strings.HasPrefix(inst.Wrapper.Name(), treedbWrapperName+" ") {
@@ -6124,8 +6138,8 @@ func renderMarkdownSingle(run BenchRun) string {
 	}
 	sb.WriteString("\n")
 
-	if hasInstance(run.Instances, "treedb") {
-		if text, err := treeDBResolvedOptionsText(""); err == nil && strings.TrimSpace(text) != "" {
+	if hasTreeDBInstance(run.Instances) {
+		if text, err := treeDBSelectedOptionsText("", hasInstance(run.Instances, treedbAdapterName)); err == nil && strings.TrimSpace(text) != "" {
 			sb.WriteString("## Resolved TreeDB Options\n\n")
 			sb.WriteString("```text\n")
 			sb.WriteString(text)
@@ -7010,8 +7024,8 @@ func renderMarkdownSweep(runs []BenchRun) string {
 	}
 	sb.WriteString("\n")
 
-	if hasInstance(runs[0].Instances, "treedb") {
-		if text, err := treeDBResolvedOptionsText(""); err == nil && strings.TrimSpace(text) != "" {
+	if hasTreeDBInstance(runs[0].Instances) {
+		if text, err := treeDBSelectedOptionsText("", hasInstance(runs[0].Instances, treedbAdapterName)); err == nil && strings.TrimSpace(text) != "" {
 			sb.WriteString("## Resolved TreeDB Options\n\n")
 			sb.WriteString("```text\n")
 			sb.WriteString(text)
