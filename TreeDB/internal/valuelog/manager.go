@@ -1376,8 +1376,9 @@ type Manager struct {
 	files map[uint32]*File
 	// retryWaitHook is an internal deterministic lifecycle-test barrier.
 	retryWaitHook func()
-	// Admission and WaitGroup.Add share mu with Close. Channels are lazy so
-	// ordinary reads and writes acquire no extra allocation or routing cost.
+	// Retry and current-binding inspection admission share mu with Close.
+	// The same joined counter protects their exact handles during unlocked I/O.
+	// Channels are lazy so ordinary reads/writes gain no allocation/routing cost.
 	retryStop    chan struct{}
 	retryWorkers sync.WaitGroup
 	closing      bool

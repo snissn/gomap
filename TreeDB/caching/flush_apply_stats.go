@@ -561,6 +561,8 @@ func (db *DB) appendCacheLeafLogLaneStats(stats map[string]string) {
 	usedLanes := 0
 	var totalCalls, totalPages, totalBytes, totalWaitNs, totalHoldNs, totalErrors, totalRotations, totalIdleRotations uint64
 	for i, l := range lanes {
+		prefix := fmt.Sprintf("treedb.cache.leaf_log_lanes.lane.%02d", i)
+		stats[prefix+".installed"] = fmt.Sprint(l != nil)
 		if l == nil {
 			continue
 		}
@@ -597,7 +599,6 @@ func (db *DB) appendCacheLeafLogLaneStats(stats map[string]string) {
 		totalErrors += errors
 		totalRotations += rotations
 		totalIdleRotations += idleRotations
-		prefix := fmt.Sprintf("treedb.cache.leaf_log_lanes.lane.%02d", i)
 		stats[prefix+".append_calls_total"] = fmt.Sprintf("%d", calls)
 		stats[prefix+".append_pages_total"] = fmt.Sprintf("%d", pages)
 		stats[prefix+".append_bytes_total"] = fmt.Sprintf("%d", bytes)
@@ -625,11 +626,67 @@ func (db *DB) appendCacheLeafLogLaneStats(stats map[string]string) {
 	stats["treedb.cache.leaf_log_lanes.segment_rotations_idle_total"] = fmt.Sprintf("%d", totalIdleRotations)
 }
 
+// appendCachePhysicalValueLogWriterStats exposes existing counters for every
+// ordinary and auxiliary native-root physical writer. The snapshot has no
+// observer cap; shared logical lane IDs do not collapse physical writer indices.
+// This read-only observer adds no append-time counter, routing or rollover policy.
+func (db *DB) appendCachePhysicalValueLogWriterStats(stats map[string]string) {
+	if db == nil || stats == nil {
+		return
+	}
+	lanes := db.allValueLogWriterLanesSnapshot()
+	stats["treedb.cache.physical_vlog_writers.configured"] = fmt.Sprintf("%d", len(lanes))
+	for i, l := range lanes {
+		prefix := fmt.Sprintf("treedb.cache.physical_vlog_writers.writer.%d", i)
+		if l == nil {
+			stats[prefix+".identity_error"] = "configured physical writer is nil"
+			continue
+		}
+		var records, rawBytes uint64
+		for kind := 0; kind < vlogPayloadSplitKindCount; kind++ {
+			r, b := l.vlogPayloadSplitRecords[kind].Load(), l.vlogPayloadSplitRawBytes[kind].Load()
+			if r > ^uint64(0)-records || b > ^uint64(0)-rawBytes {
+				stats[prefix+".identity_error"] = "physical append observer counter overflow"
+				break
+			}
+			records += r
+			rawBytes += b
+		}
+		stats[prefix+".records_total"] = fmt.Sprintf("%d", records)
+		stats[prefix+".raw_bytes_total"] = fmt.Sprintf("%d", rawBytes)
+		stats[prefix+".logical_lane"] = fmt.Sprintf("%d", l.id)
+		stats[prefix+".generation_class"] = fmt.Sprintf("%d", l.vlogGenerationClass)
+		stats[prefix+".segment_target_bytes"] = fmt.Sprintf("%d", db.valueLogMaxSegmentBytesForLane(l))
+		stats[prefix+".threshold_rotations_total"] = fmt.Sprintf("%d", l.vlogRotateThresholdTotal.Load())
+		stats[prefix+".maintenance_handoffs_total"] = fmt.Sprintf("%d", l.vlogHandoffTotal.Load())
+		stats[prefix+".native_append_errors_total"] = fmt.Sprintf("%d", l.nativeRootAppendErrors.Load())
+		var seq int
+		var path string
+		l.vlogMu.Lock()
+		seq, path = l.vlogSeq, l.vlogPath
+		l.vlogMu.Unlock()
+		var fileID uint32
+		if l.id < 0 || uint64(l.id) > uint64(^uint32(0)) || seq < 0 || uint64(seq) > uint64(^uint32(0)) || (path != "" && seq == 0) {
+			stats[prefix+".identity_error"] = "unrepresentable physical writer identity"
+		} else {
+			id, err := valuelog.EncodeFileID(uint32(l.id), uint32(seq))
+			if err != nil {
+				stats[prefix+".identity_error"] = err.Error()
+			} else if seq > 0 && path != "" {
+				fileID = id
+			}
+		}
+		stats[prefix+".current_sequence"] = fmt.Sprintf("%d", seq)
+		stats[prefix+".current_file_id"] = fmt.Sprintf("%d", fileID)
+	}
+}
+
 func (db *DB) appendCacheFlushApplyStats(stats map[string]string) {
 	if db == nil || stats == nil {
 		return
 	}
 	db.appendCacheLeafLogLaneStats(stats)
+	db.appendCachePhysicalValueLogWriterStats(stats)
 	stats["treedb.cache.flush_apply.concurrency"] = fmt.Sprintf("%d", db.flushApplyConcurrency)
 	stats["treedb.cache.flush_apply.span_native"] = fmt.Sprintf("%t", db.flushApplySpanNative)
 	stats["treedb.cache.flush_apply.batches_total"] = fmt.Sprintf("%d", db.flushApplyBatches.Load())

@@ -5621,7 +5621,12 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if err != nil {
 		return stats, err
 	}
-	defer finishFence()
+	fenceHeld := true
+	defer func() {
+		if fenceHeld {
+			finishFence()
+		}
+	}()
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
 			return stats, err
@@ -5665,6 +5670,11 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if stats.ObservedSourceSegmentsDeleted > 0 {
 		db.cleanupMissingObservedValueLogRetains(seen)
 	}
+	// Value-source revalidation and reclaim are complete. Leaf GC takes its
+	// own checked producer handoff, which drains flushMu then writeMu; entering
+	// it under this write fence would reacquire writeMu and invert that order.
+	finishFence()
+	fenceHeld = false
 	if hasLeafGenerationGC {
 		if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
 			return stats, err
@@ -8051,8 +8061,9 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 }
 
 // ReconcileAfterBackendMaintenance refreshes cached-mode value-log readers and
-// advances split value-log writers past segments created directly by backend
-// maintenance.
+// advances future split-log reservation floors past segments created directly
+// by backend maintenance. Healthy installed leaf writers keep their files;
+// explicit generation retirement has a separate forced handoff.
 func (db *DB) ReconcileAfterBackendMaintenance() error {
 	return db.reconcileSplitValueLogWritersAfterBackendMaintenance()
 }
@@ -8085,12 +8096,12 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 		db.advanceNativeRootValueLogAppendSeqAtLeast(maxSeqByLane[db.nativeRootValueLogAppendLanes[0].id])
 	}
 	for i := range db.lanes {
-		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
+		if err := db.reconcileValueLogAppendWriterAfterBackendMaintenance(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
 			return err
 		}
 	}
 	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
-		if err := db.advanceValueLogWriterPastObservedSeq(l, maxSeqByLane[l.id]); err != nil {
+		if err := db.reconcileValueLogAppendWriterAfterBackendMaintenance(l, maxSeqByLane[l.id]); err != nil {
 			return err
 		}
 	}
@@ -8098,7 +8109,7 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 		observedMaxSeq := maxSeqByLane[leafLogLaneID]
 		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
 		for _, l := range db.leafLogAppendLanesSnapshot() {
-			if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+			if err := db.reconcileValueLogAppendWriterAfterBackendMaintenance(l, observedMaxSeq); err != nil {
 				return err
 			}
 		}
@@ -28881,7 +28892,7 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 		}
 	} else {
 		var w *valuelog.Writer
-		if db.isLeafLogAppendLane(l) {
+		if db.isLeafLogAppendLane(l) || db.isSharedNativeRootValueLogAppendLane(l) {
 			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 		} else {
 			w, err = valuelog.NewWriter(path, fileID)
@@ -28971,7 +28982,7 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 		return err
 	}
 	var w *valuelog.Writer
-	if db.isLeafLogAppendLane(l) {
+	if db.isLeafLogAppendLane(l) || db.isSharedNativeRootValueLogAppendLane(l) {
 		w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 	} else {
 		w, err = valuelog.NewWriter(path, fileID)
