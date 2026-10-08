@@ -6246,7 +6246,10 @@ func retainedPruneModeString(mode uint32) string {
 }
 
 type valueLogLiveIDScanStats struct {
-	Membership          backenddb.RecoverableValueLogMembershipStats
+	Membership backenddb.RecoverableValueLogMembershipStats
+	// ProofStage is the last entered certified-prune boundary, or its terminal
+	// outcome. It is diagnostic only and carries no recovery authority.
+	ProofStage          string
 	Records             int64
 	ValuePointerRecords int64
 	OuterLeafRecords    int64

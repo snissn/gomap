@@ -18,8 +18,10 @@ type retainedPruneCandidate struct {
 
 type retainedPruneMembershipCounters struct {
 	CertifiedRoots, UncoveredRoots, FullRootScans, Records, PointerProjections, PhysicalBytes uint64
+	BackendRecords, CacheRecords, GCRecords                                                   uint64
 	GCCalls, GCCaptures, Requested, Eligible, Marked, Pending, Deleted                        uint64
 	FallbackReason                                                                            string
+	ProofStage                                                                                string
 }
 
 func (db *DB) observeRetainedPruneMembership(out retainedValueLogPruneStats) {
@@ -32,6 +34,17 @@ func (db *DB) observeRetainedPruneMembership(out retainedValueLogPruneStats) {
 		Requested: uint64(len(out.GCStats.RequestedFileIDs)), Eligible: uint64(len(out.GCStats.EligibleFileIDs)),
 		Marked: uint64(len(out.GCStats.ZombieMarkedFileIDs)), Pending: uint64(len(out.PendingFileIDs)), Deleted: uint64(len(out.DeletedFileIDs)),
 		FallbackReason: a.LastFallbackReason,
+		BackendRecords: a.RecordsScanned, GCRecords: b.RecordsScanned,
+		ProofStage: out.ScanStats.ProofStage,
+	}
+	// In the certified path Records contains only detached-cache projection.
+	// Legacy full scans retain their existing record counter without claiming
+	// that all of their work belongs to this boundary.
+	if out.Mode == retainedPruneModeCertifiedMembership {
+		last.CacheRecords = uint64(out.ScanStats.Records)
+	}
+	if last.ProofStage == "" {
+		last.ProofStage = "not_started"
 	}
 	if b.LastFallbackReason != "" {
 		last.FallbackReason = b.LastFallbackReason
@@ -44,6 +57,9 @@ func (db *DB) observeRetainedPruneMembership(out retainedValueLogPruneStats) {
 	t.UncoveredRoots += last.UncoveredRoots
 	t.FullRootScans += last.FullRootScans
 	t.Records += last.Records
+	t.BackendRecords += last.BackendRecords
+	t.CacheRecords += last.CacheRecords
+	t.GCRecords += last.GCRecords
 	t.PointerProjections += last.PointerProjections
 	t.PhysicalBytes += last.PhysicalBytes
 	t.GCCalls += last.GCCalls
@@ -60,12 +76,20 @@ func (c retainedPruneMembershipCounters) appendStats(stats map[string]string, pr
 	for key, value := range map[string]uint64{
 		"certified_roots": c.CertifiedRoots, "uncovered_roots": c.UncoveredRoots, "full_root_scans": c.FullRootScans,
 		"fallback_records": c.Records, "pointer_projections": c.PointerProjections, "physical_bytes_read": c.PhysicalBytes,
+		"backend_records": c.BackendRecords, "cache_records": c.CacheRecords, "gc_records": c.GCRecords,
 		"gc_calls": c.GCCalls, "gc_captures": c.GCCaptures, "requested_ids": c.Requested, "eligible_ids": c.Eligible,
 		"marked_ids": c.Marked, "pending_ids": c.Pending, "deleted_ids": c.Deleted,
 	} {
 		stats["treedb.cache.vlog_retained_prune.membership."+prefix+key] = fmt.Sprint(value)
 	}
 	stats["treedb.cache.vlog_retained_prune.membership."+prefix+"fallback_reason"] = c.FallbackReason
+	if prefix == "last_" {
+		stage := c.ProofStage
+		if stage == "" {
+			stage = "not_started"
+		}
+		stats["treedb.cache.vlog_retained_prune.membership.last_proof_stage"] = stage
+	}
 }
 
 // collectRetainedPruneProtectedValueLogIDs returns conservative physical
@@ -75,6 +99,9 @@ func (c retainedPruneMembershipCounters) appendStats(stats map[string]string, pr
 // roots still require exact projection even when their numeric IDs match a
 // certified backend root. Destructive GC recaptures and revalidates authority.
 func (db *DB) collectRetainedPruneProtectedValueLogIDs(ctx context.Context, lastWrite int64, scanStats *valueLogLiveIDScanStats) (map[uint32]struct{}, error) {
+	if scanStats != nil {
+		scanStats.ProofStage = "backend_membership"
+	}
 	if db == nil || !db.valueLogEnabled() {
 		return make(map[uint32]struct{}), nil
 	}
@@ -112,6 +139,9 @@ func (db *DB) collectRetainedPruneProtectedValueLogIDs(ctx context.Context, last
 	publishedRoots := clonePublishedRootSet(db.rootPublishedSet)
 	db.mu.RUnlock()
 	reader := newCachedLiveScanReader(valueReaderForBackendState(state), db.valueLogReader)
+	if scanStats != nil {
+		scanStats.ProofStage = "cached_projection"
+	}
 	if err := db.collectPublishedRootValueLogLiveIDsUntil(ctx, p, reader, publishedRoots, 0, 0, nil, protected, lastWrite, scanStats); err != nil {
 		return nil, retainedPruneContextCause(ctx, err)
 	}
@@ -139,6 +169,7 @@ func (db *DB) pruneRetainedValueLogsBatch(ctx context.Context, candidates []reta
 		return false
 	}
 	out.Mode = retainedPruneModeCertifiedMembership
+	out.ScanStats.ProofStage = "backend_membership"
 	lastWrite := db.lastForegroundWriteUnixNano.Load()
 	domain := db.rootDomainVersion.Load()
 	ctx, cancel := db.retainedPruneLiveIDScanContext(ctx, lastWrite, opts.fullLiveIDScanBudget)
@@ -195,6 +226,7 @@ func (db *DB) pruneRetainedValueLogsBatch(ctx context.Context, candidates []reta
 		byID[candidate.id] = candidate
 	}
 	if len(selected) == 0 {
+		out.ScanStats.ProofStage = "no_selection"
 		return true
 	}
 	gcOpts := db.valueLogGCOptions(false)
@@ -215,6 +247,7 @@ func (db *DB) pruneRetainedValueLogsBatch(ctx context.Context, candidates []reta
 		gcOpts.ObservedSourceReclaimActive = true
 	}
 	gcOpts.BeforeMutation = func(ctx context.Context, current backenddb.StateToken, currentPager *pager.Pager) (func(), error) {
+		out.ScanStats.ProofStage = "mutation_fence"
 		if err := retainedPruneContextErr(ctx); err != nil {
 			return nil, err
 		}
@@ -242,6 +275,7 @@ func (db *DB) pruneRetainedValueLogsBatch(ctx context.Context, candidates []reta
 		}
 		return release, nil
 	}
+	out.ScanStats.ProofStage = "gc_recovery"
 	if err := db.retainedPruneScanHook(ctx, "before_batch_gc"); err != nil {
 		abort(err)
 		return true
@@ -281,6 +315,8 @@ func (db *DB) pruneRetainedValueLogsBatch(ctx context.Context, candidates []reta
 	}
 	if err != nil {
 		abort(err)
+	} else {
+		out.ScanStats.ProofStage = "completed"
 	}
 	return true
 }

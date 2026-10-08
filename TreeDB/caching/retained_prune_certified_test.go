@@ -293,6 +293,13 @@ func TestRetainedValueLogPruneBatchCutoverFences(t *testing.T) {
 				return nil
 			}
 			out := cache.pruneRetainedValueLogsWithObservedContext(ctx, false, nil)
+			wantStage := "mutation_fence"
+			if mode == "cancel" {
+				wantStage = "gc_recovery"
+			}
+			if out.ScanStats.ProofStage != wantStage {
+				t.Fatalf("abort stage mode=%s got=%s want=%s", mode, out.ScanStats.ProofStage, wantStage)
+			}
 			if held {
 				cache.writeMu.Unlock()
 				held = false
