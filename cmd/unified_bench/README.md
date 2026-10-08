@@ -1588,6 +1588,9 @@ GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
   -benchtime=1024x -count=1 -benchmem
 ```
 
+The C3-read capability and allocation audit are documented in
+[the production source guide](../../TreeDB/docs/benchmarks/cow-c3-read-5076/README.md).
+
 The dedicated test package imports the ordinary MVCC product. Frozen fixtures
 bind every selected harness file and helper, including TestMain and file modes;
 product regression tests are outside that harness closure. Canonical matched

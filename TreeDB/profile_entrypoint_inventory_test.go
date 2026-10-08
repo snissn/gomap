@@ -22,7 +22,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	treeDBDir := profileInventoryTreeDBDir(t)
 	methods := profileInventoryMethods(t, treeDBDir, "treedb", "DB")
 	want := []string{
-		"AcquireSnapshot", "Checkpoint", "Close", "CompactIndex", "CompactStorage",
+		"AcquireMVCCReadCut", "AcquireSnapshot", "Checkpoint", "Close", "CompactIndex", "CompactStorage",
 		"CompactStorageLeafPageLogOwnerClassification", "CompactStoragePlan", "Delete",
 		"DeleteRange", "DeleteSync", "DurabilityMode", "FragmentationReport", "Get",
 		"GetAppend", "GetMany", "GetManyParallelPlan", "GetManyView", "GetUnsafe",
@@ -30,8 +30,8 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
-		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetSync", "Stats",
+		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "PreflightMVCCPrune", "Print", "ResolvedProfile",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetSync", "Stats", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
@@ -61,6 +61,12 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	for _, fragment := range []string{"db.captureReadOwners()", "cached.SeekGEVersionRange(start, end)", "return seekGEBackend(backend, start, end)"} {
 		profileInventoryRequireBody(t, publicBodies, "(*DB).SeekGEVersionRange", fragment)
 	}
+	readCutBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "mvcc_read_cut.go"))
+	for _, name := range []string{"SupportsMVCCReadCut", "AcquireMVCCReadCut", "PreflightMVCCPrune"} {
+		profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "db.captureReadOwners()")
+		profileInventoryRequireBody(t, readCutBodies, "(*DB)."+name, "cached.COWMode()")
+	}
+	profileInventoryRequireBody(t, readCutBodies, "(*DB).AcquireMVCCReadCut", "cached.AcquireMVCCReadCut()")
 	profileInventoryRequireBody(t, publicBodies, "Open", "resolveOpenProfileOptions")
 	profileInventoryRequireBody(t, publicBodies, "VacuumIndexOffline", "resolveOpenProfileOptions")
 	vlogRewriteBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "vlog_rewrite.go"))

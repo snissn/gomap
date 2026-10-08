@@ -2416,8 +2416,9 @@ func seekGEBackend(backend *db.DB, start, end []byte) ([]byte, []byte, bool, err
 
 // SeekGEVersionRange is an optional capability for mvcc.Store, whose single
 // owner contract excludes raw reserved-namespace writes. Ordinary callers
-// should use SeekGE. Store also fences multi-record commits and physical pruning
-// against reads and snapshot acquisition. Results own their key/value bytes.
+// should use SeekGE. Legacy producers require Store publication/prune fences;
+// resolved atomic-cut producers use AcquireMVCCReadCut under floor admission.
+// Results own their key/value bytes.
 func (db *DB) SeekGEVersionRange(start, end []byte) ([]byte, []byte, bool, error) {
 	cached, backend, err := db.captureReadOwners()
 	if err != nil {
