@@ -480,6 +480,9 @@ func main() {
 		isSet[f.Name] = true
 	})
 	explicitFlags = isSet
+	if isSet["quicksilver-concurrent-mode"] && !strings.EqualFold(strings.TrimSpace(*suiteArg), "quicksilver") {
+		log.Fatal("-quicksilver-concurrent-mode requires -suite quicksilver")
+	}
 	if strings.TrimSpace(*quicksilverMeasureDir) != "" && strings.ToLower(strings.TrimSpace(*suiteArg)) != "quicksilver" {
 		log.Fatal("-quicksilver-measure-dir requires -suite quicksilver")
 	}

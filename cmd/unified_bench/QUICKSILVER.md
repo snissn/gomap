@@ -122,6 +122,67 @@ Generic cases have no fixed trace; historical `random4k` and `structured256`
 retain their 65,536-entry trace, 10:1 miss/hit schedule and fixed seed 24.
 Generic seed/locality/mixture/miss flags are rejected for historical cases.
 
+## Supplemental matched concurrent work
+
+The default `-quicksilver-concurrent-mode=duration` retains the timed concurrent
+reader loop and the existing reader-join allocation/latency fields. Select
+`-quicksilver-concurrent-mode=fixed-work` for an additional matched-work control:
+all readers complete exactly `-quicksilver-reads` successful reads, split by
+quotient/remainder across workers. Reads retain the existing PCG, snapshots,
+owned results, mutation oracle, sampling and cleanup. Normal reader completion
+does not cancel the writer. `-quicksilver-duration` continues to pace the same
+writer groups; it does not impose a read deadline in fixed-work mode. Errors or
+the existing wall/RSS guard cancel remaining work and join both owners.
+
+For the realistic 6,000,000-read / 40,000-target control, 40,000 mutation targets
+mean 10,000 updates, 10,000 deletes, 10,000 inserts and 10,000 overwrite targets.
+The overwrite targets incur 40,000 Set calls in total: the writer completes
+60,000 Set and 10,000 Delete calls, 160 ordinary commits, 40 groups and four
+quarter checkpoints. Targets are not a count of physical Set/Delete calls.
+The writer retains its original pacing and catch-up behavior if a group is late.
+
+The concurrent phase's `concurrent_work` schema 1 reports requested/completed
+per-worker read counts, actual successful commit/committed-operation counts,
+completed groups/targets/checkpoints, and reader/writer join and completion.
+Commit counts advance only after a successful commit return, even if a later
+batch Close or overwrite commit fails. Checkpoint-in-flight is explicit.
+Before/after coherent writer snapshots bracket the reader-cut MemStats call;
+counts are observed at completion boundaries, not inferred from a paced deadline.
+The receipt also retains an actual after-both-join progress snapshot and relative
+nanosecond cut times. A failure reports partial progress in stderr and exits
+nonzero; it cannot yield a complete capture.
+
+The original phase allocation fields and nested `reader_cut` keep the reader-join
+cut. Fixed-work additionally records `both_join` immediately after both owners
+join, before StatsAfter, quantile merge/sort or report construction, plus bytes
+and mallocs per completed read and per mutation target. These are process-wide
+Go MemStats deltas across concurrent composition, including reader setup and
+writer work. They are not engine-only allocation or native/RSS accounting.
+Heap-after may decrease across cuts due to GC; cumulative counters cannot.
+
+Concurrent CPU profiling stops at reader join in duration mode and after both
+join in fixed-work mode. The receipt labels `cpu_profile_scope`. Allocation pprof
+still ends after phase return and includes orchestration/merge/sort; its explicit
+`allocs_profile_scope` differs from the exact MemStats cut. Artifact names and
+benchprof throughput/latency fields remain unchanged; consume the raw JSON receipt
+for matched allocation. Profiled and unprofiled controls remain separate.
+
+A collector plan cell selects `"concurrent_mode": "fixed-work"`. The collector
+adds the explicit CLI selector and requires an exact schema, both joins, complete
+counts/quotas, monotone bounded progress, finite normalized allocation and mode
+agreement across plan, actual argv, registered flags and config. Omitted mode
+keeps the original duration argv and accepts original duration capture schemas.
+Fixed-work never substitutes for the duration results, full oracle, service,
+latency, storage, process-memory or qualification gates.
+
+```sh
+GOMAXPROCS=12 ./bin/unified-bench -suite quicksilver -dbs treedb -profile durable \
+  -quicksilver-case realistic -keys 3000000 -quicksilver-reads 6000000 \
+  -quicksilver-updates 40000 -read-workers 4 -quicksilver-read-batch 64 \
+  -quicksilver-duration 8s -quicksilver-concurrent-mode fixed-work \
+  -quicksilver-commit ordinary -seed 24
+```
+
 ## Correctness and measured boundaries
 
 All adapters use owned `Get` results. `-quicksilver-read-batch=1` uses ordinary
@@ -162,6 +223,14 @@ databases. At 10M keys/64 workers, bitmaps cost 406,250,000 bytes (387.4 MiB). S
 retain the existing 8,000,000-byte aggregate buffer. Generic cases retain no
 payload/key corpus and no 65,536-entry trace.
 
+Matched-work receipts allocate worker-count slices and one progress/receipt owner
+before the measured baseline. Progress updates use scalar atomics per successful
+commit/group/checkpoint; coherent snapshots occur only at allocation cuts. No new
+allocation, counter or synchronization is added inside the reader loop. The
+both-join cut object is retained after its MemStats capture, outside that delta.
+Incremental harness/escape-analysis cost still needs the native control; this
+source audit is not an allocation or RSS improvement claim.
+
 Generic writes reuse one 32 KiB value scratch and one key scratch per mutation
 or load group. `Batch.Set/Delete` retain their existing copying ownership;
 `SetView` is not used with mutable scratch. Engine batch allocations and owned
@@ -172,7 +241,7 @@ Codec/histogram allocations occur only in setup and have a separate duration.
 ```sh
 GOWORK=off go test ./cmd/unified_bench -run '^TestQuicksilver' -count=1
 GOWORK=off go test -race ./cmd/unified_bench \
-  -run '^TestQuicksilver(RealisticWorkflow|ErrorJoins|StatsAfterWriterDrain)$' -count=1
+  -run '^TestQuicksilver(RealisticWorkflow|FixedWork|WriterProgress|ErrorJoins|StatsAfterWriterDrain|ReaderTimerExcludesWriterDrain)' -count=1
 GOWORK=off go test ./cmd/unified_bench -run '^$' \
   -bench '^BenchmarkQuicksilverGenericKey$' -benchmem -count=3
 # Linux native proof (requires native headers/libraries):
