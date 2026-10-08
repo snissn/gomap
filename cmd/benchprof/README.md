@@ -445,6 +445,14 @@ go tool pprof -top -alloc_space /tmp/cached_owned.test /tmp/cached_owned_allocs.
 
 ## Canonical Quicksilver workflow
 
+Quicksilver's optional `fixed-work` concurrent mode retains these profile names.
+Its CPU scope ends after both reader and writer join; the default duration scope
+ends at reader join. Allocation pprof includes phase-return orchestration and is
+broader than the raw JSON `concurrent_work.both_join` MemStats cut. Benchprof
+continues to use the original reader elapsed/throughput fields; matched allocation
+must use the labeled raw JSON receipt. See
+[the harness boundaries](../unified_bench/QUICKSILVER.md#supplemental-matched-concurrent-work).
+
 The [canonical Quicksilver workflow](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
 uses explicit public read/update phases and a package-build freeze. Its optional
 standalone Go profiles use `go tool pprof`; their names/JSON/raw logs are not

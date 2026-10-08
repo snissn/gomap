@@ -1096,6 +1096,16 @@ before summarizing numerical comparisons. The standalone TreeDB workflow in
 [the canonical runbook](../../docs/benchmarks/treedb_quicksilver_workflow/README.md)
 remains a separate workload and artifact schema.
 
+Matched concurrent allocation is an additional default-off control:
+`-quicksilver-concurrent-mode fixed-work` completes exact worker read quotas and
+the unchanged paced writer before its new `concurrent_work.both_join` MemStats
+cut. The original allocation fields still end at reader join. Fixed-work CPU
+profiles end after both join; duration CPU profiles retain reader-join scope.
+Allocation pprof remains a broader phase-return scope, including orchestration.
+See [matched-work boundaries and counts](QUICKSILVER.md#supplemental-matched-concurrent-work)
+for the receipt, collector mode and 40,000-target / 70,000-operation distinction.
+Profile filenames and benchprof throughput fields remain unchanged.
+
 ### Owned cached snapshot microprofile
 
 The standalone `BenchmarkSnapshotPublishedOwnedRead` in `TreeDB/caching`
