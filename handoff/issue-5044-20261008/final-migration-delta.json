@@ -1,0 +1,11 @@
+{
+  "at": "2026-10-08T18:47:30.400157+00:00",
+  "comment": "https://github.com/snissn/gomap/issues/5044#issuecomment-6066758663",
+  "native": "The Native lane is now stopped and synced: [#5111 migration checkpoint](https://github.com/snissn/gomap/issues/5111#issuecomment-6066653927), draft PR #5127, **codex/5111-ordinary-data-primary-publication @ d4cbf23f9333eed79718845d3ac253c5d7fc5513**. All247 intended paths were committed/pushed; clean checkout and remote identity verified by owner. Final core test has **three actual REDs**: scoped borrower retired, merge release stole borrowed closure, repeated identity failed to coalesce. No repair followed spin-down. This is WIP, not dependency-ready/mergeable; all-19 closure, coherent tests, performance and review remain. Both Native/harness workers stopped and joined their commands; their coordinator is finishing metadata-only handoff. Read #5111/#5118 public checkpoints before resuming; no stale local path is required to recover their source.",
+  "review": "**Additional current review obligation:** PR #5082 has a second open [matched-reader overlap comparability finding](https://github.com/snissn/gomap/pull/5082#discussion_r4222743893), thread PRRT_kwDOIdn7C86qgEyz, observed on d732. Baseline/candidate overlapping_readers can differ while comparable_metrics permits timing/allocation comparisons. The successor must investigate/disposition this actual finding and preserve honest contention/comparability semantics; no fix, source review acceptance or resolution is claimed during handoff. Both this thread and the bounds thread remain open.",
+  "issues_readback_equal": [
+    5044,
+    5081
+  ],
+  "pr5082_readback_equal": true
+}

@@ -1,0 +1,48 @@
+{
+  "at": "2026-10-08T18:45:15.450393+00:00",
+  "artifact_commit": "3b671cc377f882f5bfa0a3cd1fd51b84d183a915",
+  "updates": [
+    {
+      "issue": 5044,
+      "url": "https://github.com/snissn/gomap/issues/5044",
+      "body_readback_equal": true,
+      "bytes": 43635
+    },
+    {
+      "issue": 5081,
+      "url": "https://github.com/snissn/gomap/issues/5081",
+      "body_readback_equal": true,
+      "bytes": 31025
+    },
+    {
+      "issue": 5119,
+      "url": "https://github.com/snissn/gomap/issues/5119",
+      "body_readback_equal": true,
+      "bytes": 3921
+    },
+    {
+      "issue": 5076,
+      "url": "https://github.com/snissn/gomap/issues/5076",
+      "body_readback_equal": true,
+      "bytes": 13641
+    },
+    {
+      "issue": 5047,
+      "url": "https://github.com/snissn/gomap/issues/5047",
+      "body_readback_equal": true,
+      "bytes": 9827
+    },
+    {
+      "issue": 5048,
+      "url": "https://github.com/snissn/gomap/issues/5048",
+      "body_readback_equal": true,
+      "bytes": 7495
+    },
+    {
+      "pr": 5082,
+      "body_readback_equal": true
+    }
+  ],
+  "bounds_reply": "https://github.com/snissn/gomap/pull/5082#discussion_r4222862498",
+  "parent_comment": "https://github.com/snissn/gomap/issues/5044#issuecomment-6066726320"
+}

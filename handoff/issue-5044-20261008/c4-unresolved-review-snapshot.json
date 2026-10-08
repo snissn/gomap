@@ -1,0 +1,274 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "headRefOid": "d7328c212285031e3b5dcb76573c5491e1f918fe",
+        "reviewThreads": {
+          "nodes": [
+            {
+              "id": "PRRT_kwDOIdn7C86prhm1",
+              "isResolved": true,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4201016539",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Synchronize workers to guarantee measured overlap**\n\nThe shared start channel releases the three goroutines but does not ensure that they have all reached the barrier or that either reader begins before the writer finishes. Under an unlucky scheduler\u2014especially for the faster NoWAL or cached cases\u2014the writer can complete all replacements before a reader is scheduled, leaving `OverlappingReaders` at zero and causing `c4Run` to fail, aborting an otherwise valid evidence collection. Add a readiness/operation handshake that keeps the writer active until the readers have actually entered their public calls.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "TreeDB/mvcc/cowsustained/cow_c4_public_bench_test.go",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-06T22:24:56Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4201511328",
+                    "body": "All three workers now signal readiness before the shared release in [the actual fixture](https://github.com/snissn/gomap/blob/876ab50e793a1b69a2721701484abd7f807f2030/TreeDB/mvcc/cow_c4_public_bench_test.go#L642). Readiness alone does not qualify overlap: the retained public-call intervals must show positive overlap, and zero remains a retained failure with no added writer wait, retries or exclusions. Independent replay of the frozen b30 packet verifies positive overlap in every normal (36), race (12) and calibration/eight-epoch (12) record; minima are 33, 292 and 65 overlapping readers respectively. The accepted complete tree is unchanged at published 876ab50. This repairs the worker-startup defect and retains a finite observed-overlap claim; it does not assert a universal scheduler guarantee. The contract states that limitation explicitly.",
+                    "path": "TreeDB/mvcc/cowsustained/cow_c4_public_bench_test.go",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-06T23:47:24Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86ptvd_",
+              "isResolved": true,
+              "isOutdated": true,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4201951804",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Validate the completion qualification claim**\n\nA copied packet can change `completion.json`'s `claim` to assert product/native qualification and still pass analysis: the completion file is not itself hash-bound, `validate_packet` only consumes its hashes and run count, and this check validates only `schema`. This contradicts the C4 contract that successful packets retain the pending-qualification claim; require the exact completion fields and expected C4 claim before accepting the packet.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/c4_analyze.py",
+                    "commit": {
+                      "oid": "6c1eaa935874df5f45dcb03dd4e0e83bea9592ca"
+                    },
+                    "createdAt": "2026-10-07T00:56:01Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4203762636",
+                    "body": "Fixed in [c4_protocol.py](https://github.com/snissn/gomap/blob/b7f062cb7740bb61f333e9ca9b8c6712f6ec3bdd/scripts/cow_c3_read/c4_protocol.py): completion validation requires the exact field set, schema, unsigned nonboolean run count, and pending-qualification claim. Prior actual construction covered copied/rehashed refusal cases; fresh current construction remains pending, with native qualification explicitly false.",
+                    "path": "scripts/cow_c3_read/c4_analyze.py",
+                    "commit": {
+                      "oid": "6c1eaa935874df5f45dcb03dd4e0e83bea9592ca"
+                    },
+                    "createdAt": "2026-10-07T06:25:53Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86puJlC",
+              "isResolved": true,
+              "isOutdated": true,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4202128466",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Validate all COW owners after releasing readers**\n\nFor captured `cow_btree` benchmark packets, this only requires `views == 0`, so a lifecycle that leaks an active cut or external lease at `released`, `preclose`, or `reopened` is still accepted as verified evidence. The benchmark collector runs with `-test.run=^$`, so it never executes the stricter `c4QuiescentCOWOwners` construction assertion, which also validates `active_cuts`, roots, generations, and `external_leases`; apply that same quiescent-owner relationship during raw packet validation.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "6c1eaa935874df5f45dcb03dd4e0e83bea9592ca"
+                    },
+                    "createdAt": "2026-10-07T01:27:53Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4203762847",
+                    "body": "Fixed in [c4_protocol.py](https://github.com/snissn/gomap/blob/b7f062cb7740bb61f333e9ca9b8c6712f6ec3bdd/scripts/cow_c3_read/c4_protocol.py): released/preclose/reopened boundaries enforce all six unsigned owner counters and the same quiescent ownership equation as the construction assertion, including active cuts, roots, generations, and external leases. No owner gate is relaxed; fresh current construction remains pending.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "6c1eaa935874df5f45dcb03dd4e0e83bea9592ca"
+                    },
+                    "createdAt": "2026-10-07T06:25:55Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86pubO9",
+              "isResolved": true,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4202246128",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Bind warmup receipts to their actual epoch count**\n\nWhen a matched configuration sets `warmup_iterations` differently from `iterations` (for example, a 1-epoch warmup and an 8-epoch measured run), validation binds `workload_contract` only to the measured count. The command and raw validator correctly run the warmup count, but `collect.py` still records the measured contract's hash for that warmup receipt, so an accepted packet falsely describes the warmup as an 8-epoch workload. Validate and record a phase-specific workload contract, or require both counts to match.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-07T01:51:46Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4203763117",
+                    "body": "Fixed: [c4_protocol.py](https://github.com/snissn/gomap/blob/b7f062cb7740bb61f333e9ca9b8c6712f6ec3bdd/scripts/cow_c3_read/c4_protocol.py) generates phase-specific work contracts, [collect.py](https://github.com/snissn/gomap/blob/b7f062cb7740bb61f333e9ca9b8c6712f6ec3bdd/scripts/cow_c3_read/collect.py) records that phase contract hash, and the offline analyzer validates it. A 1-epoch warmup is bound as 1 epoch; measured 8-epoch runs remain bound as 8. The contract fixture checks 1/8/8; fresh actual construction remains pending.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-07T06:25:57Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86pwP3f",
+              "isResolved": true,
+              "isOutdated": true,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4203008800",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Stop the benchmark timer before setup**\n\n`BenchmarkCOWSustainedPublicMVCC` starts timing with `b.ResetTimer()` before calling `c4Run`, but the timer is not stopped until here, after `t.TempDir()`, option construction, and allocation of the large call-recorder and boundary slices. Consequently `ns/op`, `B/op`, and `allocs/op` include setup that the documented timed scope says is excluded, with a different amortized impact for each fixed epoch count. Stop the timer at the beginning of `c4Run` (before creating the temp directory or allocating the record), then start it only around the epoch loop.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "TreeDB/mvcc/cowsustained/cow_c4_public_bench_test.go",
+                    "commit": {
+                      "oid": "0d33d60d63d3b82e2cd708be4ba44525965a577d"
+                    },
+                    "createdAt": "2026-10-07T04:18:07Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4203763383",
+                    "body": "Fixed in [cow_c4_public_bench_test.go](https://github.com/snissn/gomap/blob/b7f062cb7740bb61f333e9ca9b8c6712f6ec3bdd/TreeDB/mvcc/cowsustained/cow_c4_public_bench_test.go): c4Run stops the benchmark timer immediately on entry, before validation, TempDir, options, or recorder allocation, then resets and starts only around the epoch loop. Independent exact-diff review accepted this timer repair; the lifecycle and work statements are unchanged. Fresh runtime construction remains pending.",
+                    "path": "TreeDB/mvcc/cowsustained/cow_c4_public_bench_test.go",
+                    "commit": {
+                      "oid": "0d33d60d63d3b82e2cd708be4ba44525965a577d"
+                    },
+                    "createdAt": "2026-10-07T06:26:00Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86qCH63",
+              "isResolved": true,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4210312527",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Reject float-valued COW limits**\n\nWhen validating a copied and resealed packet, this checks only that `limits` is a dictionary before comparing it with `LIMITS`; Python considers numeric values such as `256.0` and `256` equal. Consequently, changing a limit such as `MaxViews` to an impossible-for-the-Go-struct float still passes raw validation and can be accepted as exact evidence. Validate the nested field set and require `type(value) is int` for every limit.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-07T18:08:46Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4210977178",
+                    "body": "Fixed at cd421045b4494fa82aead29a81678fd32ac2151c. c4_protocol now checks the exact limits field set and requires type(value) is int plus exact frozen equality for every limit. Serialized-domain cases retain float/bool refusals, while the canonical 36-row control and six resealed packet refusals pass. Independent repair review accepted the exact source and evidence.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-07T19:17:30Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86qCH67",
+              "isResolved": true,
+              "isOutdated": true,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4210312535",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Enforce uint64 bounds on every retained counter**\n\nFor a copied and resealed packet, required counters outside the six quiescent-owner fields are accepted as any digit string and then parsed with Python's unbounded `int`. The Go fixture's `c4Record.boundary` parses these observations with `strconv.ParseUint(..., 64)`, so, for example, an `append_only` packet can replace every `treedb.commit_seq` with `18446744073709551616`, preserve ordering and hashes, and pass offline analysis even though the producer could never emit that receipt. Apply the uint64 upper bound to every required boundary counter.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "03d37536c77947ece96a21bb61004b7b16fce386"
+                    },
+                    "createdAt": "2026-10-07T18:08:46Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4210977655",
+                    "body": "Fixed at cd421045b4494fa82aead29a81678fd32ac2151c. The canonical decimal counter parser now enforces uint64 for every retained required counter across all modes, including owner/layout/value-log fields; call timings retain the Go int64 domain. Upper-bound controls and balanced-overflow refusals are retained in the 63-case smoke and fully resealed RED/GREEN packet evidence. Independent repair review accepted the exact source and evidence.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "03d37536c77947ece96a21bb61004b7b16fce386"
+                    },
+                    "createdAt": "2026-10-07T19:17:32Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86qdCp3",
+              "isResolved": true,
+              "isOutdated": true,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4221492986",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Bind the retained raw directory to the verified packet**\n\nFor a copied and resealed C4 packet, this accepts any absolute path whose basename is `<label>-lifecycle`; the command is then validated against that arbitrary path, while `c4_analyze.py` always reads and verifies the different packet-local directory. Consequently, a packet can claim the benchmark wrote its receipts somewhere unrelated to the files being analyzed and still pass provenance validation. Bind the command path to the captured packet root, or retain a canonical relocatable directory identity.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/analyze.py",
+                    "commit": {
+                      "oid": "1a88315f0fe98555ad2b500b39fca2b31db1010b"
+                    },
+                    "createdAt": "2026-10-08T16:22:14Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4222199652",
+                    "body": "Fixed in 100ca3f775a947ff69564b97ac0c0b86a1dd2cc0. Schema v3 records the producer's actual canonical capture_root; both analyzers use the same validator to bind each receipt's exact raw_directory to that root and the corresponding packet-relative lifecycle leaf. The full command remains checked against that bound producer path. Missing, malformed, unrelated-root, and alias paths fail closed; relocated packets preserve the original capture identity.\n\nIndependent review accepted 27 source/control checks; the original 36-leaf v2 packet reproduced the unrelated-directory acceptance before the fix. Persistent tests cover the new binding. Historical v2 construction remains historical evidence: a genuine v3 capture is still pending, and this source fix makes no runtime or performance claim.",
+                    "path": "scripts/cow_c3_read/analyze.py",
+                    "commit": {
+                      "oid": "1a88315f0fe98555ad2b500b39fca2b31db1010b"
+                    },
+                    "createdAt": "2026-10-08T17:34:48Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86qe1mU",
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4222232449",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Enforce COW limits on every retained boundary**\n\nFor a copied and resealed `cow_btree` packet, these COW counters are checked only for uint64 syntax, while the owner equation is enforced only at `released`, `preclose`, and `reopened`. Changing `treedb.cache.cow.views` at `opened`, `seed`, or an epoch boundary to `257` therefore passes analysis even though the retained options set `MaxViews` to 256 and the producer refuses acquisitions once that limit is reached. Apply the configured bounds to every applicable retained COW counter at every boundary so impossible resource observations cannot be accepted as evidence.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-08T17:38:18Z"
+                  },
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4222862498",
+                    "body": "Fix d7328c212285031e3b5dcb76573c5491e1f918fe checks live budgets at every applicable lifecycle/layout-owner boundary including opened/seed.19 contract tests and41 offline controls PASS; original5RED retained.25 new refusal selections require fresh genuinev3 and are not claimed run. User requested migration handoff: independent source review and formal finding disposition remain for successor; this reply does not mark acceptance/resolution. Recovery: https://github.com/snissn/gomap/blob/3b671cc377f882f5bfa0a3cd1fd51b84d183a915/handoff/issue-5044-20261008/README.md ; graph: https://github.com/snissn/gomap/issues/5044",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-08T18:45:35Z"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOIdn7C86qgEyz",
+              "isResolved": false,
+              "isOutdated": false,
+              "comments": {
+                "nodes": [
+                  {
+                    "url": "https://github.com/snissn/gomap/pull/5082#discussion_r4222743893",
+                    "body": "**<sub><sub>![P2 Badge](https://img.shields.io/badge/P2-yellow?style=flat)</sub></sub>  Require comparable reader overlap before timing comparisons**\n\nFor `matched-supported-evidence`, baseline and candidate runs can report different `overlapping_readers` counts while still passing because this frozen list omits that metric and `c4_analyze.py` checks equality only for `comparable_metrics`. When scheduling causes one product's writer to overlap many reader calls and the other's to overlap only one, the analyzer compares `ns/op`, `B/op`, and `allocs/op` for materially different contention schedules and can attribute that difference to the product. Include the overlap observation in comparability or otherwise normalize/enforce the concurrent schedule before producing matched comparisons.\n\nUseful? React with \ud83d\udc4d\u00a0/ \ud83d\udc4e.",
+                    "path": "scripts/cow_c3_read/c4_protocol.py",
+                    "commit": {
+                      "oid": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+                    },
+                    "createdAt": "2026-10-08T18:32:50Z"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

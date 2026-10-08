@@ -1,0 +1,42 @@
+{
+  "schema": "cow-5044-final-migration-checkpoint-v1",
+  "at": "2026-10-08T18:49:07.426831+00:00",
+  "entrypoint": "https://github.com/snissn/gomap/issues/5044",
+  "mode": "handoff; execution stopped on departing host",
+  "local_implementation_and_runtime_workers": "released; no task-path processes at verified census",
+  "source": {
+    "codex/5047-floor-reopen-provisional": "72d7dcda2ad4922157e61ba8229f283c106579e9",
+    "codex/cow-5044-handoff-20261008": "3b671cc377f882f5bfa0a3cd1fd51b84d183a915",
+    "codex/cow-5044-handoff-c4-integer-domain-repair-20261008": "e568220d3c543a0891c177239ee5452f2ac60fa1",
+    "codex/cow-5044-handoff-load-readiness-20261008": "07b513893686838e0d5b1c9a20ee8a9ab7f297e5",
+    "codex/cow-5044-handoff-offline-compiler-blob-repair-20261008": "b68bb268a5ca7718d8247a135080f9ba8da06151",
+    "codex/cow-c3-mvcc-views": "04fd2951ac56af0e0473c4037e71f2bd81612f29",
+    "codex/cow-c4-sustained-tools": "d7328c212285031e3b5dcb76573c5491e1f918fe"
+  },
+  "native_wip": {
+    "5111": {
+      "branch": "codex/5111-ordinary-data-primary-publication",
+      "head": "d4cbf23f9333eed79718845d3ac253c5d7fc5513",
+      "draft_pr": 5127,
+      "checkpoint": "https://github.com/snissn/gomap/issues/5111#issuecomment-6066653927",
+      "acceptance": "NOT dependency-ready; three core REDs and all-19 closure remain"
+    },
+    "5118": {
+      "branch": "codex/5118-primary-harness-selector",
+      "head": "20e3c50511a0aeec02efd648d4257ccd312aac2c",
+      "draft_pr": 5126,
+      "checkpoint": "https://github.com/snissn/gomap/issues/5118#issuecomment-6066586311",
+      "acceptance": "WIP; Go compile not reached; fixture repair/review/CI remain"
+    }
+  },
+  "current_c3": "04fd: 55 SUCCESS, no unresolved threads, Codex clean; OPEN/unmerged",
+  "c4_review_pending": [
+    "https://github.com/snissn/gomap/pull/5082#discussion_r4222232449",
+    "https://github.com/snissn/gomap/pull/5082#discussion_r4222743893"
+  ],
+  "c4_validation": "19 contract/41 offline controls PASS; new25 refusal selections not run on fresh genuinev3; latest source independent review pending",
+  "runtime_grant": "NONE; old held plans convey no quiet owner window",
+  "parent_checkpoint": "https://github.com/snissn/gomap/issues/5044#issuecomment-6066726320",
+  "final_delta": "https://github.com/snissn/gomap/issues/5044#issuecomment-6066758663",
+  "acceptance_gates": "Preserved in live graph; handoff is not product completion"
+}
