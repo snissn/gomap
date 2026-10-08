@@ -100,6 +100,18 @@ func TestPublicCOWDiscardFloorCheckpointReopen(t *testing.T) {
 						if floor, err := store.DiscardFloor(); err != nil || floor != 20 {
 							t.Fatalf("floor=%d err=%v", floor, err)
 						}
+						// Loading the persisted floor must exercise the same observable
+						// capture path that the refused prune was required to avoid.
+						captureKey := "treedb.cache.cow.capture_calls_total"
+						capturesBefore, err := strconv.ParseUint(before[captureKey], 10, 64)
+						if err != nil {
+							t.Fatal(err)
+						}
+						capturesLoaded, err := strconv.ParseUint(db.Stats()[captureKey], 10, 64)
+						if err != nil || capturesLoaded <= capturesBefore {
+							t.Fatalf("floor loading capture witness: before=%d loaded=%d err=%v", capturesBefore, capturesLoaded, err)
+						}
+						t.Logf("floor loading increased %s: %d -> %d", captureKey, capturesBefore, capturesLoaded)
 						if _, err := store.GetAt([]byte("deleted"), 20); !errors.Is(err, mvcc.ErrReadBeforeDiscardFloor) {
 							t.Fatalf("floor-equal point read: %v", err)
 						}
