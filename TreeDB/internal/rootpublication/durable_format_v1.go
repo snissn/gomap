@@ -6,7 +6,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"sort"
+	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -65,12 +68,16 @@ type DependencyManifestRefV1 struct {
 }
 
 type DependencyManifestV1 struct {
+	metadataMu         sync.Mutex
+	allocation         *resourceAllocation
+	selected, released bool
 	// The slice is owned; its values hold immutable normalized metadata shared
 	// with retained entry caches. They contain no resource handles or pins.
-	entries    []*dependencyManifestEncodedEntryV1
-	payload    []byte
-	byteLength int
-	digest     [32]byte
+	loadedEntries []dependencyManifestEncodedEntryV1
+	entries       []*dependencyManifestEncodedEntryV1
+	payload       []byte
+	byteLength    int
+	digest        [32]byte
 }
 
 // DependencyManifestBuildWorkV1 reports canonical entry encoding work. Payload
@@ -111,8 +118,10 @@ func NewDependencyManifestV1WithWork(entries []DependencyManifestEntryV1) (*Depe
 }
 
 type dependencyManifestEncodedEntryV1 struct {
-	entry   DependencyManifestEntryV1
-	encoded []byte
+	allocation     *resourceAllocation
+	cacheCandidate *dependencyManifestEntryCacheV1
+	entry          DependencyManifestEntryV1
+	encoded        []byte
 }
 
 // newDependencyManifestV1FromEncoded consumes the pointer slice. Its normalized
@@ -261,8 +270,17 @@ func normalizeDependencyManifestLogicalObligationsV1(obligations []StableLogical
 	return normalized, nil
 }
 
+// Entries preserves generic diagnostic lifetime. Selected publisher metadata
+// cannot escape through an unowned slice; use WithEntriesV1 for a retained,
+// read-only scope, which cannot outlive its actual metadata admission.
 func (manifest *DependencyManifestV1) Entries() []DependencyManifestEntryV1 {
 	if manifest == nil {
+		return nil
+	}
+	manifest.metadataMu.Lock()
+	selected := manifest.selected
+	manifest.metadataMu.Unlock()
+	if selected {
 		return nil
 	}
 	out := make([]DependencyManifestEntryV1, len(manifest.entries))
@@ -304,6 +322,20 @@ func (manifest *DependencyManifestV1) Reference(firstPageID uint64) (DependencyM
 }
 
 func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freelist.AppendPageSink) (DependencyManifestRefV1, error) {
+	return manifest.materializeV1(firstPageID, sink, nil)
+}
+
+// MaterializeWithScratchV1 uses one caller-admitted page while preserving the
+// canonical wire encoder. The sink must copy or consume each image before
+// returning; it must not retain this reused scratch. Generic Materialize keeps
+// its independent-per-page sink lifetime.
+func (manifest *DependencyManifestV1) MaterializeWithScratchV1(firstPageID uint64, sink freelist.AppendPageSink, scratch []byte) (DependencyManifestRefV1, error) {
+	if len(scratch) != page.PageSize {
+		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
+	}
+	return manifest.materializeV1(firstPageID, sink, scratch)
+}
+func (manifest *DependencyManifestV1) materializeV1(firstPageID uint64, sink freelist.AppendPageSink, scratch []byte) (DependencyManifestRefV1, error) {
 	if sink == nil {
 		return DependencyManifestRefV1{}, ErrDependencyManifestFormat
 	}
@@ -317,7 +349,12 @@ func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freel
 	for index := uint32(0); index < pageCount; index++ {
 		start := int(index) * dependencyManifestPayloadV1
 		end := min(start+dependencyManifestPayloadV1, manifest.byteLength)
-		image := make([]byte, page.PageSize)
+		image := scratch
+		if image == nil {
+			image = make([]byte, page.PageSize)
+		} else {
+			clear(image)
+		}
 		body := image[dependencyManifestPageHeaderV1 : dependencyManifestPageHeaderV1+end-start]
 		if manifest.payload != nil {
 			copy(body, manifest.payload[start:end])
@@ -354,11 +391,16 @@ func (manifest *DependencyManifestV1) Materialize(firstPageID uint64, sink freel
 	return ref, nil
 }
 
-func LoadDependencyManifestV1(source freelist.PageSource, ref DependencyManifestRefV1) (*DependencyManifestV1, error) {
+func loadDependencyManifestPayloadV1(source freelist.PageSource, ref DependencyManifestRefV1, allocation *resourceAllocation) ([]byte, error) {
 	if source == nil || ref.FirstPageID < 2 || ref.ByteLength < 16 || ref.ByteLength > maxDependencyManifestBytesV1 || ref.PageCount == 0 ||
 		ref.Digest == [32]byte{} || uint64(ref.PageCount) != (ref.ByteLength+dependencyManifestPayloadV1-1)/dependencyManifestPayloadV1 ||
 		ref.FirstPageID > ^uint64(0)-uint64(ref.PageCount-1) {
 		return nil, ErrDependencyManifestFormat
+	}
+	if allocation != nil {
+		if err := growResourceAllocationV1(allocation, retainedalloc.AllocationCharge(ref.ByteLength)); err != nil {
+			return nil, err
+		}
 	}
 	payload := make([]byte, 0, int(ref.ByteLength))
 	for index := uint32(0); index < ref.PageCount; index++ {
@@ -398,6 +440,14 @@ func LoadDependencyManifestV1(source freelist.PageSource, ref DependencyManifest
 	if uint64(len(payload)) != ref.ByteLength || sha256.Sum256(payload) != ref.Digest {
 		return nil, ErrDependencyManifestFormat
 	}
+	return payload, nil
+}
+
+func LoadDependencyManifestV1(source freelist.PageSource, ref DependencyManifestRefV1) (*DependencyManifestV1, error) {
+	payload, err := loadDependencyManifestPayloadV1(source, ref, nil)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := decodeDependencyManifestPayloadV1(payload, ref.EntryCount)
 	if err != nil {
 		return nil, err
@@ -409,10 +459,7 @@ func LoadDependencyManifestV1(source freelist.PageSource, ref DependencyManifest
 	return manifest, nil
 }
 
-func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
-	// Reserve the canonical record once. Directory point checks use this same
-	// codec repeatedly; growing a buffer per field creates avoidable objects.
-	rids := entry.Frontier.RIDs()
+func dependencyManifestEntrySizeV1(entry DependencyManifestEntryV1, rids []uint64) int {
 	size := 124 + len(entry.Kind) + len(entry.LogicalLane) + len(entry.ResourceID) + len(entry.DiagnosticPath) + len(entry.Identity.Platform) + 8*len(rids)
 	for _, field := range entry.Reachability {
 		size += 4 + len(field)
@@ -423,7 +470,13 @@ func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
 	if namespace := entry.Namespace; namespace != nil {
 		size += 52 + len(namespace.ParentIdentity.Platform) + len(namespace.OldName) + len(namespace.NewName) + len(namespace.DiagnosticPath)
 	}
-	out := make([]byte, 0, size)
+	return size
+}
+func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
+	rids := entry.Frontier.RIDs()
+	return appendDependencyManifestEntryV1(make([]byte, 0, dependencyManifestEntrySizeV1(entry, rids)), entry, rids)
+}
+func appendDependencyManifestEntryV1(out []byte, entry DependencyManifestEntryV1, rids []uint64) []byte {
 	out = appendStringV1(out, string(entry.Kind))
 	out = appendStringV1(out, entry.LogicalLane)
 	out = appendStringV1(out, entry.ResourceID)
@@ -476,22 +529,40 @@ func encodeDependencyManifestEntryV1(entry DependencyManifestEntryV1) []byte {
 }
 
 func decodeDependencyManifestPayloadV1(payload []byte, expectedCount uint32) ([]DependencyManifestEntryV1, error) {
+	return decodeDependencyManifestPayloadAllocatedV1(payload, expectedCount, nil)
+}
+func decodeDependencyManifestPayloadAllocatedV1(payload []byte, expectedCount uint32, allocation *resourceAllocation) (result []DependencyManifestEntryV1, failure error) {
 	if len(payload) < 16 || !bytes.Equal(payload[0:8], dependencyManifestBodyMagicV1[:]) ||
 		binary.LittleEndian.Uint16(payload[8:10]) != 1 || binary.LittleEndian.Uint16(payload[10:12]) != 16 ||
 		binary.LittleEndian.Uint32(payload[12:16]) != expectedCount {
 		return nil, ErrDependencyManifestFormat
 	}
-	reader := manifestReaderV1{data: payload, offset: 16}
+	var admissionError error
+	reader := manifestReaderV1{data: payload, offset: 16, allocation: allocation, admissionError: &admissionError}
+	if uint64(expectedCount) > uint64(reader.remaining()/4) {
+		return nil, ErrDependencyManifestFormat
+	}
+	if !reader.reserve(uint64(expectedCount) * uint64(unsafe.Sizeof(DependencyManifestEntryV1{}))) {
+		return nil, admissionError
+	}
 	entries := make([]DependencyManifestEntryV1, 0, expectedCount)
+	defer func() {
+		if failure != nil {
+			clear(entries)
+		}
+	}()
 	for index := uint32(0); index < expectedCount; index++ {
 		length, ok := reader.u32()
 		if !ok || uint64(length) > uint64(reader.remaining()) {
 			return nil, ErrDependencyManifestFormat
 		}
-		entryReader := manifestReaderV1{data: reader.data[reader.offset : reader.offset+int(length)]}
+		entryReader := manifestReaderV1{data: reader.data[reader.offset : reader.offset+int(length)], allocation: allocation, admissionError: &admissionError}
 		reader.offset += int(length)
 		entry, ok := entryReader.entry()
 		if !ok || entryReader.remaining() != 0 {
+			if admissionError != nil {
+				return nil, admissionError
+			}
 			return nil, ErrDependencyManifestFormat
 		}
 		entries = append(entries, entry)
@@ -503,8 +574,23 @@ func decodeDependencyManifestPayloadV1(payload []byte, expectedCount uint32) ([]
 }
 
 type manifestReaderV1 struct {
-	data   []byte
-	offset int
+	data           []byte
+	offset         int
+	allocation     *resourceAllocation
+	admissionError *error
+}
+
+func (reader *manifestReaderV1) reserve(bytes uint64) bool {
+	if reader.allocation == nil {
+		return true
+	}
+	if err := growResourceAllocationV1(reader.allocation, retainedalloc.AllocationCharge(bytes)); err != nil {
+		if reader.admissionError != nil {
+			*reader.admissionError = err
+		}
+		return false
+	}
+	return true
 }
 
 func (reader *manifestReaderV1) remaining() int { return len(reader.data) - reader.offset }
@@ -536,6 +622,9 @@ func (reader *manifestReaderV1) str() (string, bool) {
 		return "", false
 	}
 	value, _ := reader.bytes(int(length))
+	if !reader.reserve(uint64(length)) {
+		return "", false
+	}
 	return string(value), true
 }
 func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
@@ -593,6 +682,9 @@ func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
 	if !ok || uint64(ridCount) > uint64(reader.remaining()/8) {
 		return DependencyManifestEntryV1{}, false
 	}
+	if !reader.reserve(uint64(ridCount) * 8) {
+		return DependencyManifestEntryV1{}, false
+	}
 	rids := make([]uint64, ridCount)
 	for i := range rids {
 		rids[i], ok = reader.u64()
@@ -602,6 +694,9 @@ func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
 	}
 	reachabilityCount, ok := reader.u32()
 	if !ok || uint64(reachabilityCount) > uint64(reader.remaining()/4) {
+		return DependencyManifestEntryV1{}, false
+	}
+	if !reader.reserve(uint64(reachabilityCount) * uint64(unsafe.Sizeof(ReachabilityField("")))) {
 		return DependencyManifestEntryV1{}, false
 	}
 	reachability := make([]ReachabilityField, reachabilityCount)
@@ -616,7 +711,13 @@ func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
 	if !ok || uint64(logicalCount) > uint64(reader.remaining()/4) {
 		return DependencyManifestEntryV1{}, false
 	}
-	logical := make([]StableLogicalObligation, logicalCount)
+	if !reader.reserve(uint64(logicalCount) * uint64(unsafe.Sizeof(StableLogicalObligation{}))) {
+		return DependencyManifestEntryV1{}, false
+	}
+	var logical []StableLogicalObligation
+	if logicalCount != 0 {
+		logical = make([]StableLogicalObligation, logicalCount)
+	}
 	for i := range logical {
 		class, fieldOK := reader.str()
 		if !fieldOK {
@@ -707,15 +808,32 @@ func (reader *manifestReaderV1) entry() (DependencyManifestEntryV1, bool) {
 		}
 		parentIdentity := StableIdentity{Platform: platform, VolumeID: volume, Generation: parentGeneration}
 		copy(parentIdentity.ObjectID[:], object)
+		if !reader.reserve(uint64(unsafe.Sizeof(DependencyManifestNamespaceV1{}))) {
+			return DependencyManifestEntryV1{}, false
+		}
 		namespace = &DependencyManifestNamespaceV1{ParentIdentity: parentIdentity, Operation: NamespaceOperation(operation), OldName: oldName, NewName: newName, DiagnosticPath: diagnosticPath}
 	}
 	identity := StableIdentity{Platform: platform, VolumeID: volume, Generation: identityGeneration}
 	copy(identity.ObjectID[:], object)
 	frontier := DurableFrontier{Bytes: frontierBytes, MaxLSN: maxLSN}
 	if len(rids) != 0 {
-		ridFrontier := NewRIDFrontier(rids)
-		ridFrontier.Bytes, ridFrontier.MaxLSN = frontierBytes, maxLSN
-		frontier = ridFrontier
+		if reader.allocation == nil {
+			ridFrontier := NewRIDFrontier(rids)
+			ridFrontier.Bytes, ridFrontier.MaxLSN = frontierBytes, maxLSN
+			frontier = ridFrontier
+		} else {
+			for i, rid := range rids {
+				if i > 0 && rid <= rids[i-1] {
+					return DependencyManifestEntryV1{}, false
+				}
+			}
+			if !reader.reserve(uint64(unsafe.Sizeof(exactRIDMembership{}))) {
+				return DependencyManifestEntryV1{}, false
+			}
+			frontier = exactRIDSummary(rids)
+			frontier.Bytes, frontier.MaxLSN = frontierBytes, maxLSN
+			frontier.exactRIDs = &exactRIDMembership{values: rids}
+		}
 	}
 	return DependencyManifestEntryV1{
 		Kind: ResourceKind(kind), LogicalLane: lane, ResourceID: resourceID, DiagnosticPath: path,
@@ -802,42 +920,7 @@ func (record DurableRootRecordV1) EncodePage(pageID uint64) ([]byte, [32]byte, e
 		return nil, [32]byte{}, err
 	}
 	image := make([]byte, page.PageSize)
-	header := page.PageHeader{PageID: pageID, Flags: uint16(page.PageTypeDurableRootRecord)}
-	header.Encode(image)
-	copy(image[16:24], durableRootRecordMagicV1[:])
-	binary.LittleEndian.PutUint16(image[24:26], 1)
-	binary.LittleEndian.PutUint16(image[26:28], durableRootRecordHeaderV1)
-	binary.LittleEndian.PutUint64(image[32:40], record.CommitSeq)
-	binary.LittleEndian.PutUint64(image[40:48], record.DurableSeq)
-	binary.LittleEndian.PutUint64(image[48:56], record.UserRootPageID)
-	binary.LittleEndian.PutUint64(image[56:64], record.SystemRootPageID)
-	binary.LittleEndian.PutUint64(image[64:72], record.TotalPages)
-	binary.LittleEndian.PutUint64(image[72:80], record.MaxEntryRevision)
-	binary.LittleEndian.PutUint64(image[80:88], record.AppliedCommandLSN)
-	binary.LittleEndian.PutUint64(image[88:96], record.LastCommitHeight)
-	binary.LittleEndian.PutUint64(image[96:104], record.Freelist.HeaderPageID)
-	binary.LittleEndian.PutUint64(image[104:112], record.Freelist.GenerationID)
-	binary.LittleEndian.PutUint64(image[112:120], record.Freelist.CommitSeq)
-	binary.LittleEndian.PutUint64(image[120:128], record.Freelist.HighWater)
-	copy(image[128:160], record.Freelist.Digest[:])
-	binary.LittleEndian.PutUint64(image[160:168], record.FreelistFreeCount)
-	binary.LittleEndian.PutUint64(image[168:176], record.FreelistRetiredCount)
-	binary.LittleEndian.PutUint64(image[176:184], record.Manifest.FirstPageID)
-	binary.LittleEndian.PutUint64(image[184:192], record.Manifest.ByteLength)
-	binary.LittleEndian.PutUint32(image[192:196], record.Manifest.EntryCount)
-	binary.LittleEndian.PutUint32(image[196:200], record.Manifest.PageCount)
-	copy(image[200:232], record.Manifest.Digest[:])
-	if record.Directory != (DependencyDirectoryRefV2{}) {
-		binary.LittleEndian.PutUint16(image[24:26], 2)
-		clear(image[176:232])
-		binary.LittleEndian.PutUint64(image[176:184], record.Directory.RootPageID)
-		binary.LittleEndian.PutUint64(image[184:192], record.Directory.PhysicalCount)
-		binary.LittleEndian.PutUint64(image[192:200], record.Directory.LogicalCount)
-	}
-	binary.LittleEndian.PutUint64(image[232:240], record.ParentRecordPageID)
-	binary.LittleEndian.PutUint64(image[240:248], record.ParentCommitSeq)
-	copy(image[248:280], record.ParentRecordDigest[:])
-	copy(image[280:312], record.MetaProjectionDigest[:])
+	encodeDurableRootRecordFieldsV1(image, pageID, record)
 	digest := durableRootRecordDigestV1(image)
 	copy(image[312:344], digest[:])
 	page.UpdateChecksum(image)
@@ -908,4 +991,44 @@ func durableRootRecordDigestV1(image []byte) [32]byte {
 	clear(canonical[8:12])
 	clear(canonical[312:344])
 	return sha256.Sum256(canonical)
+}
+
+// Shared field serialization preserves the strict V1 validator and byte format.
+func encodeDurableRootRecordFieldsV1(image []byte, pageID uint64, record DurableRootRecordV1) {
+	header := page.PageHeader{PageID: pageID, Flags: uint16(page.PageTypeDurableRootRecord)}
+	header.Encode(image)
+	copy(image[16:24], durableRootRecordMagicV1[:])
+	binary.LittleEndian.PutUint16(image[24:26], 1)
+	binary.LittleEndian.PutUint16(image[26:28], durableRootRecordHeaderV1)
+	binary.LittleEndian.PutUint64(image[32:40], record.CommitSeq)
+	binary.LittleEndian.PutUint64(image[40:48], record.DurableSeq)
+	binary.LittleEndian.PutUint64(image[48:56], record.UserRootPageID)
+	binary.LittleEndian.PutUint64(image[56:64], record.SystemRootPageID)
+	binary.LittleEndian.PutUint64(image[64:72], record.TotalPages)
+	binary.LittleEndian.PutUint64(image[72:80], record.MaxEntryRevision)
+	binary.LittleEndian.PutUint64(image[80:88], record.AppliedCommandLSN)
+	binary.LittleEndian.PutUint64(image[88:96], record.LastCommitHeight)
+	binary.LittleEndian.PutUint64(image[96:104], record.Freelist.HeaderPageID)
+	binary.LittleEndian.PutUint64(image[104:112], record.Freelist.GenerationID)
+	binary.LittleEndian.PutUint64(image[112:120], record.Freelist.CommitSeq)
+	binary.LittleEndian.PutUint64(image[120:128], record.Freelist.HighWater)
+	copy(image[128:160], record.Freelist.Digest[:])
+	binary.LittleEndian.PutUint64(image[160:168], record.FreelistFreeCount)
+	binary.LittleEndian.PutUint64(image[168:176], record.FreelistRetiredCount)
+	binary.LittleEndian.PutUint64(image[176:184], record.Manifest.FirstPageID)
+	binary.LittleEndian.PutUint64(image[184:192], record.Manifest.ByteLength)
+	binary.LittleEndian.PutUint32(image[192:196], record.Manifest.EntryCount)
+	binary.LittleEndian.PutUint32(image[196:200], record.Manifest.PageCount)
+	copy(image[200:232], record.Manifest.Digest[:])
+	if record.Directory != (DependencyDirectoryRefV2{}) {
+		binary.LittleEndian.PutUint16(image[24:26], 2)
+		clear(image[176:232])
+		binary.LittleEndian.PutUint64(image[176:184], record.Directory.RootPageID)
+		binary.LittleEndian.PutUint64(image[184:192], record.Directory.PhysicalCount)
+		binary.LittleEndian.PutUint64(image[192:200], record.Directory.LogicalCount)
+	}
+	binary.LittleEndian.PutUint64(image[232:240], record.ParentRecordPageID)
+	binary.LittleEndian.PutUint64(image[240:248], record.ParentCommitSeq)
+	copy(image[248:280], record.ParentRecordDigest[:])
+	copy(image[280:312], record.MetaProjectionDigest[:])
 }

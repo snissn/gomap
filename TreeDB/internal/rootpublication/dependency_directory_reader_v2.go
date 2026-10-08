@@ -6,8 +6,12 @@ import (
 	"fmt"
 	"math"
 	"sync/atomic"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 
 	"github.com/snissn/gomap/TreeDB/node"
+	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -20,6 +24,11 @@ type DependencyDirectoryV2 struct {
 	tree    *tree.Tree
 	refs    atomic.Int64
 	release func()
+	// Selected PRIMARY construction owns these allocations independently of
+	// the physical token rope. Last Retain/Release also joins active reads.
+	metadata       *retainedalloc.Owner
+	metadataCharge uint64
+	ownedRelease   func() (disposed bool, err error)
 }
 
 func NewDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, totalPages uint64, release func()) (*DependencyDirectoryV2, error) {
@@ -27,6 +36,49 @@ func NewDependencyDirectoryV2(p *pager.Pager, ref DependencyDirectoryRefV2, tota
 		return nil, ErrDependencyManifestFormat
 	}
 	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithPageLimit(p, nil, ref.RootPageID, totalPages), release: release}
+	directory.refs.Store(1)
+	return directory, nil
+}
+
+// NewPrimaryDependencyDirectoryV5 preserves the V2 record codec while giving
+// it a genuinely separate physical namespace and exact arena extent.
+func NewPrimaryDependencyDirectoryV5(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, release func()) (*DependencyDirectoryV2, error) {
+	ns := page.PrimaryBankNamespace
+	if p == nil || extent < 3 || extent > p.PrimaryBankPageCount() || ref.RootPageID < ns+2 || ref.RootPageID >= ns+extent || ref.PhysicalCount > ^uint64(0)-ref.LogicalCount || release == nil {
+		return nil, ErrDependencyManifestFormat
+	}
+	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithPrimaryBankExtent(p, ref.RootPageID, extent), release: release}
+	directory.refs.Store(1)
+	return directory, nil
+}
+
+// NewLocalPrimaryDependencyDirectoryV5 retains the independent arena mapping
+// rather than a DATA-generation pager. The caller supplies its exact lease.
+func NewLocalPrimaryDependencyDirectoryV5(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, release func()) (*DependencyDirectoryV2, error) {
+	ns := page.PrimaryBankNamespace
+	if p == nil || extent < 3 || extent > p.PageCount() || ref.RootPageID < ns+2 || ref.RootPageID >= ns+extent || ref.PhysicalCount > ^uint64(0)-ref.LogicalCount || release == nil {
+		return nil, ErrDependencyManifestFormat
+	}
+	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithLocalPrimaryBankExtent(p, ref.RootPageID, extent), release: release}
+	directory.refs.Store(1)
+	return directory, nil
+}
+
+// NewOwnedLocalPrimaryDependencyDirectoryV5 is the selected-format constructor.
+// release owns the exact transferred physical lease and must report cleanup
+// outcome. If its own physical debt remains, the directory keeps tree/callback and admitted
+// pending capacity; a failed physical release never certifies metadata disposal.
+// Callers own one Retain edge and may not use the capability after Release.
+func NewOwnedLocalPrimaryDependencyDirectoryV5(p *pager.Pager, ref DependencyDirectoryRefV2, extent uint64, metadata *retainedalloc.Owner, release func() (disposed bool, err error)) (*DependencyDirectoryV2, error) {
+	ns := page.PrimaryBankNamespace
+	if p == nil || extent < 3 || extent > p.PageCount() || ref.RootPageID < ns+2 || ref.RootPageID >= ns+extent || ref.PhysicalCount > ^uint64(0)-ref.LogicalCount || metadata == nil || release == nil {
+		return nil, ErrDependencyManifestFormat
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(DependencyDirectoryV2{}))) + retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(tree.Tree{})))
+	if err := metadata.AddPending(charge); err != nil {
+		return nil, err
+	}
+	directory := &DependencyDirectoryV2{ref: ref, tree: tree.NewWithLocalPrimaryBankExtent(p, ref.RootPageID, extent), metadata: metadata, metadataCharge: charge, ownedRelease: release}
 	directory.refs.Store(1)
 	return directory, nil
 }
@@ -56,7 +108,21 @@ func (directory *DependencyDirectoryV2) Release() {
 	for refs := directory.refs.Load(); refs > 0; refs = directory.refs.Load() {
 		if directory.refs.CompareAndSwap(refs, refs-1) {
 			if refs == 1 {
-				directory.release()
+				if directory.metadata == nil {
+					directory.release()
+				} else if disposed, _ := directory.ownedRelease(); !disposed {
+					// Only this callback's real remaining physical custody keeps
+					// its tree and charge. Earlier sibling errors live on their
+					// own producer-owned failure edge, not this completed lease.
+					directory.metadata.CleanupFailed()
+				} else {
+					metadata, charge := directory.metadata, directory.metadataCharge
+					directory.tree = nil
+					directory.ownedRelease = nil
+					directory.metadata = nil
+					directory.metadataCharge = 0
+					metadata.RemovePending(charge)
+				}
 			}
 			return
 		}

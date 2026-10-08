@@ -46,6 +46,30 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 		}
 
 		switch n.Type() {
+		case page.PageTypePrimaryDirectory:
+			if pageID != t.rootPageID {
+				return node.ErrPrimaryDirectory
+			}
+			directory, err := node.DecodePrimaryDirectory(n.Data())
+			if err != nil {
+				return err
+			}
+			base, _ := directory.Base()
+			if err = t.validatePrimaryBase(n.Data()); err != nil {
+				return err
+			}
+			stack = append(stack, base.Ref.Page)
+			for i := 0; i < directory.Count(); i++ {
+				entry, _ := directory.Entry(i)
+				if _, _, err = t.selectPrimaryOperand(n.Data(), entry.Key, nil, nil, false); err != nil {
+					return err
+				}
+				// Inline absence owns no physical component. Its zero operand
+				// must never become a DATA page-zero retirement/read edge.
+				if !entry.InlineAbsence() && entry.Operand.Ref.Kind == page.ChildRefPage {
+					stack = append(stack, entry.Operand.Ref.Page)
+				}
+			}
 		case page.PageTypeLeaf:
 			// no children
 		case page.PageTypeInternal:

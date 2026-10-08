@@ -91,6 +91,7 @@ type Writer struct {
 	stableParent           *os.File
 	stableParentErr        error
 	creationProof          *rootpublication.StableNamespaceCreationProof
+	creationProofCustody   *rootpublication.OriginalCleanupCustody
 	creationUnsupported    bool
 	creationUncertified    bool
 	pendingStableSuccessor *pendingValueLogSuccessor
@@ -1066,6 +1067,8 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		}
 		oldStableParent := w.stableParent
 		oldCreationProof := w.creationProof
+		oldCreationCustody := w.creationProofCustody
+		w.creationProofCustody = nil
 		oldObserveErr := w.releaseStableResourceObservation()
 		w.f = f
 		w.stableParent = stableParent
@@ -1085,7 +1088,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			w.stableResourceObserved = true
 		}
 		if oldCreationProof != nil {
-			oldCreationProof.Release()
+			oldObserveErr = errors.Join(oldObserveErr, releaseStableCreationProof(oldCreationProof, oldCreationCustody))
 		}
 		if oldStableParent != nil {
 			if err := w.closeRotatedResource(oldStableParent); err != nil {
@@ -1152,6 +1155,8 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 	old := w.f
 	oldStableParent := w.stableParent
 	oldCreationProof := w.creationProof
+	oldCreationCustody := w.creationProofCustody
+	w.creationProofCustody = nil
 	if w.bw != nil {
 		if err := w.bw.Flush(); err != nil {
 			if newObserved {
@@ -1190,7 +1195,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		closeParentErr = w.closeRotatedResource(oldStableParent)
 	}
 	if oldCreationProof != nil {
-		oldCreationProof.Release()
+		closeParentErr = errors.Join(closeParentErr, releaseStableCreationProof(oldCreationProof, oldCreationCustody))
 	}
 	w.trimTransientScratchBuffers()
 	if err := errors.Join(closeErr, closeParentErr, observeErr); err != nil {
@@ -2752,17 +2757,28 @@ func (w *Writer) Close() (retErr error) {
 	}
 	if pending := w.pendingStableSuccessor; pending != nil {
 		if pending.creationProof != nil {
-			pending.creationProof.Release()
-			pending.creationProof = nil
+			e := pending.creationProof.ReleaseWithError()
+			closeErrs = append(closeErrs, e)
+			pending.failure.add(e)
+			if e == nil {
+				pending.creationProof = nil
+			}
 		}
 		if pending.file != nil {
-			closeErrs = append(closeErrs, pending.file.Close())
-			pending.file = nil
+			e := pending.file.Close()
+			closeErrs = append(closeErrs, e)
+			pending.failure.add(e)
+			if e == nil || errors.Is(e, os.ErrClosed) {
+				pending.file = nil
+			}
 		}
 		if pending.stableObserved && w.stableResourcePins != nil {
-			closeErrs = append(closeErrs, w.stableResourcePins.Unobserve(pending.stableIdentity))
+			e := w.stableResourcePins.Unobserve(pending.stableIdentity)
+			closeErrs = append(closeErrs, e)
+			pending.failure.add(e)
 			pending.stableObserved = false
 		}
+		pending.disposeMetadata()
 		w.pendingStableSuccessor = nil
 	}
 	if w.f != nil {
@@ -2774,8 +2790,12 @@ func (w *Writer) Close() (retErr error) {
 		w.stableParent = nil
 	}
 	if w.creationProof != nil {
-		w.creationProof.Release()
-		w.creationProof = nil
+		e := releaseStableCreationProof(w.creationProof, w.creationProofCustody)
+		closeErrs = append(closeErrs, e)
+		if w.creationProofCustody != nil || e == nil {
+			w.creationProof = nil
+			w.creationProofCustody = nil
+		}
 	}
 	return errors.Join(closeErrs...)
 }

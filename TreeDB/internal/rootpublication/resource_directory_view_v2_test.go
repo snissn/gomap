@@ -129,7 +129,7 @@ func TestDependencyDirectoryV2ResourceClosureAppendAndLease(t *testing.T) {
 		}
 		return true
 	})
-	view := bound.kindViews[ResourceColumnAsset]
+	view := bound.kindViews.get(ResourceColumnAsset)
 	if view.logicalMembership != nil || view.logicalMembershipCount != 2 || view.directory != directory {
 		t.Fatal("binding rebuilt retained aggregate membership")
 	}

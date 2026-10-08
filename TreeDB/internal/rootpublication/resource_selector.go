@@ -33,7 +33,7 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	}
 	var entry *stableResourceEntry
 	if source.kindViews != nil {
-		view, ok := source.kindViews[selector.Kind]
+		view, ok := source.kindViews.lookup(selector.Kind)
 		if ok {
 			entry = findStableResourceLogical(view.logical, key)
 		}
@@ -64,7 +64,7 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	}
 	selected := *entry
 	selected.logicalObligations = newStableLogicalObligationView([]StableLogicalObligation{selector.Obligation})
-	selected.reachability = map[ReachabilityField]struct{}{selector.Obligation.Reachability: {}}
+	selected.reachability = newGenericResourceReachability(selector.Obligation.Reachability)
 	selected.dependencyManifestV1 = nil
 
 	builder := NewStableResourceSetBuilder()

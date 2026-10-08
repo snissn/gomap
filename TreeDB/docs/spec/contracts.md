@@ -868,3 +868,21 @@ causal prefixes, original retries, observation limits and failure consumption.
 The [runtime specification](fixed-peer-tcp-runtime-v1.md) defines the supported
 bounded projection, exact encoding, mandatory limits, source-record accounting,
 and untimed admitted-scan cost. Qualification remains owned by #4250.
+
+## V6 joint vacuum lifetime and failure boundary
+
+Successful vacuum publishes one new visible commit while preserving the
+independent older slot, revisions and command-WAL frontier. Both current roots
+and their finite parent closures retain exact persistent ValuePtr dependencies.
+Normal old Snapshots may survive replacement; independent physical cuts refuse
+cutover with `ErrResourcePinned`. Cut export retains actual physical handles and
+copied slot images through reuse and DB Close, without adding a normal Snapshot
+read guarantee after owning DB Close.
+
+Before COMMIT, failure may dispose only unpublished replacement custody. Once
+decision creation may have persisted bytes, errors retain the exact pair,
+root/dependency owners and remaining names, poisoning subsequent mutation with
+`ErrRecoveryRequired`. Valid synced COMMIT is irrevocable. Its identity-bound
+rollforward runs under LOCK before legacy cleanup; malformed markers refuse
+without cleanup. Namespace rebind and synced decision deletion precede writer
+admission. Ordinary relaxed and command-WAL ACK promises remain unchanged.

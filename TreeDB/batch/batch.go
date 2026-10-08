@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"sort"
 	"sync"
 
@@ -28,12 +29,14 @@ const (
 
 // Entry represents a single operation in the batch.
 type Entry struct {
-	Type     OpType
-	Key      []byte        // Put/Delete key, or DeleteRange start bound (nil means unbounded)
-	Value    []byte        // Inline value, or DeleteRange exclusive end bound (nil means unbounded)
-	ValuePtr page.ValuePtr // For large values
-	IsPtr    bool          // True if ValuePtr is valid
-	Revision page.EntryRevision
+	// MVCCInput is ephemeral in-memory Store input, never encoded in WAL or index.
+	MVCCInput mvccadmission.Input
+	Type      OpType
+	Key       []byte        // Put/Delete key, or DeleteRange start bound (nil means unbounded)
+	Value     []byte        // Inline value, or DeleteRange exclusive end bound (nil means unbounded)
+	ValuePtr  page.ValuePtr // For large values
+	IsPtr     bool          // True if ValuePtr is valid
+	Revision  page.EntryRevision
 }
 
 // DeleteRange describes a half-open range delete [Start, End). Nil Start or
@@ -64,6 +67,7 @@ type Interface interface {
 
 // Batch accumulates writes and deletes before committing them.
 type Batch struct {
+	mvccSummary     mvccadmission.Summary
 	entries         []Entry
 	arenaChunks     [][]byte
 	byteSize        int
@@ -212,6 +216,7 @@ func (b *Batch) Len() int {
 }
 
 func (b *Batch) resetLocked() {
+	b.mvccSummary = mvccadmission.Summary{}
 	if b.entries != nil {
 		// Avoid holding onto key/value copies from previous uses.
 		clear(b.entries)
@@ -232,6 +237,7 @@ func (b *Batch) resetLocked() {
 }
 
 func (b *Batch) resetForPool() {
+	b.mvccSummary = mvccadmission.Summary{}
 	if b.entries != nil {
 		maxEntries := b.maxPoolEntries
 		if maxEntries <= 0 {
@@ -451,6 +457,14 @@ func (b *Batch) SetView(key, value []byte) error {
 }
 
 func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevision) error {
+	return b.setViewWithMVCCInput(key, value, revision, mvccadmission.Input{})
+}
+
+// SetViewWithMVCCInput keeps the existing caller-owned immutable view contract.
+func (b *Batch) SetViewWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
+	return b.setViewWithMVCCInput(key, value, page.LegacyEntryRevision, input)
+}
+func (b *Batch) setViewWithMVCCInput(key, value []byte, revision page.EntryRevision, input mvccadmission.Input) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -458,9 +472,10 @@ func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevisi
 	value = normalizeRawKVValue(value)
 
 	entry := Entry{
-		Type:     OpPut,
-		Key:      key,
-		Revision: revision,
+		MVCCInput: input,
+		Type:      OpPut,
+		Key:       key,
+		Revision:  revision,
 	}
 
 	if len(value) > b.inlineThresholdForKey(key) {
@@ -468,6 +483,7 @@ func (b *Batch) SetViewWithRevision(key, value []byte, revision page.EntryRevisi
 	}
 	entry.Value = value
 
+	b.observeMVCCInput(entry)
 	b.entries = append(b.entries, entry)
 	b.byteSize += len(key) + len(value)
 	b.compacted = false
@@ -498,6 +514,7 @@ func (b *Batch) AppendViewTrustedSortedUniqueWithRevision(key, value []byte, rev
 		Value:    value,
 		Revision: revision,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.byteSize += len(key) + len(value)
 	if b.sorted {
 		b.lastKey = key
@@ -511,6 +528,22 @@ func (b *Batch) Set(key, value []byte) error {
 }
 
 func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
+	return b.setWithMVCCInput(key, value, revision, mvccadmission.Input{})
+}
+
+// SetWithMVCCInput stages the same ordinary operation with opaque Store input.
+func (b *Batch) SetWithRevisionAndMVCCInput(key, value []byte, revision page.EntryRevision, input mvccadmission.Input) error {
+	return b.setWithMVCCInput(key, value, revision, input)
+}
+func (b *Batch) SetViewWithRevisionAndMVCCInput(key, value []byte, revision page.EntryRevision, input mvccadmission.Input) error {
+	return b.setViewWithMVCCInput(key, value, revision, input)
+}
+func (b *Batch) MergeMVCCInputSummary(summary mvccadmission.Summary) { b.mvccSummary.Merge(summary) }
+
+func (b *Batch) SetWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
+	return b.setWithMVCCInput(key, value, page.LegacyEntryRevision, input)
+}
+func (b *Batch) setWithMVCCInput(key, value []byte, revision page.EntryRevision, input mvccadmission.Input) error {
 	if err := b.ensureOpen(); err != nil {
 		return err
 	}
@@ -528,14 +561,16 @@ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) 
 	k, valCopy := b.arenaCopyPair(key, value)
 
 	entry := Entry{
-		Type:     OpPut,
-		Key:      k,
-		Revision: revision,
+		MVCCInput: input,
+		Type:      OpPut,
+		Key:       k,
+		Revision:  revision,
 	}
 
 	// Store inline
 	entry.Value = valCopy
 
+	b.observeMVCCInput(entry)
 	b.entries = append(b.entries, entry)
 	// Approximate size tracking (optional for now)
 	b.byteSize += len(k) + len(value)
@@ -562,6 +597,7 @@ func (b *Batch) DeleteViewWithRevision(key []byte, revision page.EntryRevision) 
 		Key:      key,
 		Revision: revision,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.byteSize += len(key)
 	b.compacted = false
 	b.noteKeyOrder(key)
@@ -586,6 +622,7 @@ func (b *Batch) AppendDeleteViewTrustedSortedUniqueWithRevision(key []byte, revi
 		Key:      key,
 		Revision: revision,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.byteSize += len(key)
 	if b.sorted {
 		b.lastKey = key
@@ -616,6 +653,7 @@ func (b *Batch) SetPointerWithRevision(key []byte, ptr page.ValuePtr, revision p
 		IsPtr:    true,
 		Revision: revision,
 	}
+	b.observeMVCCInput(entry)
 	b.entries = append(b.entries, entry)
 	b.hasValueLogPointers = true
 	b.noteTouchedValueLog(ptr)
@@ -675,6 +713,7 @@ func (b *Batch) AppendPointerViewTrustedSortedUniqueWithRevision(key []byte, ptr
 		IsPtr:    true,
 		Revision: revision,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.hasValueLogPointers = true
 	b.noteTouchedValueLog(ptr)
 	if b.sorted {
@@ -702,6 +741,7 @@ func (b *Batch) AppendPointerViewNoTouchTrustedSortedWithRevision(key []byte, pt
 		IsPtr:    true,
 		Revision: revision,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.hasValueLogPointers = true
 	b.compacted = false
 	if b.sorted {
@@ -734,6 +774,7 @@ func (b *Batch) setPointerViewInternal(key []byte, ptr page.ValuePtr, noteTouche
 		IsPtr:    true,
 		Revision: revision,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.hasValueLogPointers = true
 	if noteTouched {
 		b.noteTouchedValueLog(ptr)
@@ -761,6 +802,7 @@ func (b *Batch) DeleteWithRevision(key []byte, revision page.EntryRevision) erro
 		Key:      k,
 		Revision: revision,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.byteSize += len(k)
 	b.compacted = false
 	b.noteKeyOrder(k)
@@ -809,6 +851,7 @@ func (b *Batch) deleteRangeInternal(start, end []byte, copyBounds bool) error {
 		Key:   startCopy,
 		Value: endCopy,
 	})
+	b.observeMVCCInput(b.entries[len(b.entries)-1])
 	b.byteSize += len(startCopy) + len(endCopy)
 	b.hasDeleteRanges = true
 	// Keep the point-entry sorted/compacted state intact for point-only batches;
@@ -869,6 +912,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 				continue
 			}
 			b.hasDeleteRanges = true
+			b.observeMVCCInput(op)
 			b.entries = append(b.entries, op)
 			b.byteSize += len(op.Key) + len(op.Value)
 			continue
@@ -885,6 +929,7 @@ func (b *Batch) SetOps(ops []Entry) error {
 			b.noteTouchedValueLog(op.ValuePtr)
 		}
 		b.noteKeyOrder(op.Key)
+		b.observeMVCCInput(op)
 		b.entries = append(b.entries, op)
 		b.byteSize += len(op.Key) + len(op.Value) // Value is nil for pointers.
 	}
@@ -1288,4 +1333,14 @@ func DeleteRangeOverlapsSpan(r DeleteRange, low, high []byte) bool {
 		return false
 	}
 	return true
+}
+
+// MVCCInputSummary is the actual pre-compaction logical input projection.
+func (b *Batch) MVCCInputSummary() mvccadmission.Summary { return b.mvccSummary }
+func (b *Batch) observeMVCCInput(e Entry) {
+	if e.Type == OpPut {
+		b.mvccSummary.Observe(e.Key, e.MVCCInput)
+	} else {
+		b.mvccSummary.Refuse()
+	}
 }

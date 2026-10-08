@@ -70,6 +70,48 @@ index generation, value-log files and dictionary definitions used by reads.
 Acquisition pins the existing complete cut under `cutMu`. It neither rotates
 mutable shards nor scans, copies or sorts historical records.
 
+When the backend basis uses PRIMARY, `SnapshotAllocationSizes.PrimaryRoot`
+reports the immutable root wrapper retained by that capture. Raw wrapper,
+pin-set and value-log capacities are rounded separately by the shared
+`cowSnapshotRetentionCharge`, used by startup, handoff and dictionary readers.
+`PrimaryMetadata` and `RegistryMetadata` are different: they identify the
+already-rounded producer-maintained owners of the physical arena and the
+distinct DB physical-identity/namespace registry. They are not scalar sizes to
+add to the wrapper charge. Startup, backend handoff and dictionary capture use
+one fixed arena-plus-registry pair enrolled against the SAME COW budget before
+capture effects. Partial pair refusal unwinds both handles. The same owner and
+budget share one governing lease; distinct budgets each govern that owner's
+actual closure.
+Producer growth reserves full replacement capacity before allocation, including
+old/new overlap, and refunds only storage whose actual ownership has ended.
+The existing COW limits remain the governing limits.
+
+A successful capture adopts its pair enrollment into the exact Snapshot.
+Refusal leaves both handles with the admitting caller for unwind. Actual COW
+startup/activation separately attaches producer custody before persistent
+effects; releasing a borrower cannot detach that producer governor. A temporary
+dictionary capture borrows already producer-owned storage and detaches its
+temporary governor after actual successful cleanup, allowing its budget to
+close without preventing later valid backend writes. New storage caused by
+borrowing must be admitted and transferred to an actual producer, disposed, or
+retained as cleanup debt.
+
+Snapshot Close invalidates the public wrapper; a nil Close result alone does
+not prove physical cleanup while admitted readers or finalization remain.
+The SAME original finalizer completes registry, value-log, PRIMARY and exact
+ordinary release-queue cleanup, scrubs the wrapper's actual aliases, and then
+publishes its once-only completion outcome before detaching temporary custody.
+A failed cleanup retains the exact original debt and governing charge; consumed
+physical references are never replayed. Independent adapter disposal refunds
+only its own detached metadata, not the original physical action.
+Retired generations remain governed through their last real reader and cleanup.
+Physical arena Close rejects further growth but keeps admitted runtime,
+transaction, promotion-image and callback tails until their existing owners
+clear those aliases. Cleanup may shrink a closed budget. No capture-time graph
+walk, separate publication registry or blanket generation exemption is implied.
+Existing OS mapping and backend decode/cache storage keep their own narrowly
+specified owner policies; this descriptor is not a universal RSS quota.
+
 Writers publish one complete successor cut. A reader sees the entire old or
 new command, including a command that changes multiple shards. Newer mutable
 roots and frozen sources shadow older sources and backend entries. Physical
@@ -276,3 +318,55 @@ retains its historical source identity. Snapshot gains alone do not establish wo
 
 The allocation bound and safe-build tradeoff are specified separately in
 [immutable memtable ownership](cow-memtable-ownership.md).
+
+Selected publisher manifests do not export `Entries()` snapshots: their strings,
+frontier storage and namespace metadata belong to admitted immutable encodings.
+`WithEntriesV1` is a synchronous read-only scope whose callback cannot retain or
+mutate any supplied metadata, or pass it to a constructor that borrows strings.
+The scope retains the same allocation edge and reserves its actual entry-array
+scratch before allocation. Refusal runs no callback. Release during a scope ends
+the publisher's edge but preserves the encoding and charge until the callback
+ends. Generic and recovery-loaded manifests keep their existing diagnostic
+getter lifetime; the recovery resolver refuses selected borrowed metadata when
+constructing independent long-lived resource tokens.
+
+### Selected immutable resource metadata
+
+Selected PRIMARY publication admits new token descriptors, namespace/handle
+backing, immutable resource entries, persistent obligation indexes, proof/rope
+nodes, manifests and constructor scratch before allocating them. Each distinct
+physical edge retains its original registry/operation/deletion authority.
+Importing a pre-existing generic provider admits independent selected metadata
+before its first visible clone; it does not relabel that provider's physical
+owner or copy an opaque callback as a completion certificate.
+
+The persistent obligation index is the canonical selected history. Same-identity
+coalescing retains exact existing nodes and adds admitted changed paths rather
+than cloning the whole history. Selected borrowing scopes cover actual decode,
+serialization and callback use. Long-lived selected diagnostics require their
+own admitted owner and explicit Close; raw selected getters refuse. Detached
+legacy telemetry copies only scalar values and canonical built-in kind names,
+retaining no selected strings or tokens. Generic diagnostics keep their existing
+post-release contract.
+
+Private manifest construction admits contiguous page images, one reusable
+canonical encoder page, bank-ref backing and child-first traversal frames. Full
+replacement backing is admitted during overlap. Pre-Open dependency leases use
+intrusive links in the existing index owner, and failed private bank cleanup
+remains in the SAME arena owner's preadmitted failure custody. These ordinary
+helpers and their synchronous cleanup are not bounded native prune evidence.
+
+The [ordinary PRIMARY allocation inventory](../design/ordinary-primary-allocation-5111.md)
+records the actual constructor/capacity/caller and last-alias boundaries. Public
+set wrapper disposal refunds its own admitted allocation while an active scope
+retains immutable descriptor and original physical closure. Same-identity
+coalescing updates the canonical selected index without mutating an older shared
+rope's frontier. Temporary captures and real producer enrollment are distinct.
+
+Snapshots retaining PRIMARY roots also retain the existing physical arena owner.
+Their original last-read finalizer drops the bank edge, settles original cleanup
+and releases that physical owner before detaching the paired governor. DB.Close
+cannot dispose the mapping needed by this finalizer. Cleanup failure retains the
+exact Snapshot at that owner; private one-shot reads cannot reuse a failed owner.
+This extends physical cleanup custody without adding a Snapshot read-after-close
+promise.

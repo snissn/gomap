@@ -3,7 +3,12 @@
 package treedb
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"fmt"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math/rand"
 	"sync"
 	"testing"
@@ -258,5 +263,107 @@ func TestTemplateKVStableCaptureSerializesConcurrentCloseThroughTokenConstructio
 	result.resources.Release()
 	if closeErr := <-closeDone; closeErr != nil {
 		t.Fatalf("close after stable capture: %v", closeErr)
+	}
+}
+
+func TestTemplateSuppliedMetadataActualLegacyCapturers(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		for _, pointer := range []bool{false, true} {
+			t.Run(fmt.Sprintf("cached=%v/pointer=%v", cached, pointer), func(t *testing.T) {
+				definition := []byte("selected-template-definition")
+				if pointer {
+					definition = bytes.Repeat(definition, 128)
+				}
+				var id uint64
+				var kv templatedb.KV
+				var registry *rootpublication.IdentityPinRegistry
+				if cached {
+					opts := Options{Dir: t.TempDir()}
+					opts.ValueLog.ForcePointers = pointer
+					database, err := Open(opts)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer database.Close()
+					kv = templateKV{db: database}
+					registry = database.backend.StableResourceIdentityPinRegistry()
+				} else {
+					directory := t.TempDir()
+					// Seed a persistent pointer through the public producer;
+					// direct backend Set only accepts inline values.
+					if pointer {
+						producer, err := Open(Options{Dir: directory})
+						if err != nil {
+							t.Fatal(err)
+						}
+						directory = producer.backend.Dir()
+						id, err = templatedb.New(templateKV{db: producer}, templatedb.Config{}).PutTemplateDef(context.Background(), definition, nil)
+						if err != nil {
+							producer.Close()
+							t.Fatal(err)
+						}
+						if err = producer.Checkpoint(); err != nil {
+							producer.Close()
+							t.Fatal(err)
+						}
+						if err = producer.Close(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					backendOptions := backenddb.Options{Dir: directory, ChunkSize: 64 * 1024}
+					if pointer {
+						backendOptions.ResolvedProfile = backenddb.ProfileCommandWALDurable
+						backendOptions.CommandWAL = true
+					}
+					database, err := backenddb.Open(backendOptions)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer database.Close()
+					kv = templateBackendKV{db: database}
+					registry = database.StableResourceIdentityPinRegistry()
+				}
+				store := templatedb.New(kv, templatedb.Config{})
+				if id == 0 {
+					var err error
+					id, err = store.PutTemplateDef(context.Background(), definition, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				var err error
+				var metadata retainedalloc.Owner
+				metadata.Initialize(0)
+				resources, err := store.CaptureTemplateResourcesWithMetadata(context.Background(), id, &metadata)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := 1
+				if pointer {
+					want = 2
+				}
+				if resources.Len() != want || resources.MetadataOwner() != &metadata || metadata.Bytes() == 0 {
+					resources.Release()
+					t.Fatalf("wrong closure len=%d want=%d", resources.Len(), want)
+				}
+				if err = resources.SyncThrough(); err != nil {
+					resources.Release()
+					t.Fatal(err)
+				}
+				resources.Release()
+				if metadata.Bytes() != 0 || registry.CleanupError() != nil {
+					t.Fatalf("borrow leaked bytes=%d err=%v", metadata.Bytes(), registry.CleanupError())
+				}
+				metadata.Close()
+				if _, err = store.PutTemplateDef(context.Background(), []byte("future-valid-template"), nil); err != nil {
+					t.Fatal(err)
+				}
+				before := registry.ActivePins()
+				refused, err := store.CaptureTemplateResourcesWithMetadata(context.Background(), id, &metadata)
+				if refused != nil || !errors.Is(err, retainedalloc.ErrClosed) || registry.ActivePins() != before {
+					t.Fatalf("refusal effects resource=%v err=%v", refused, err)
+				}
+			})
+		}
 	}
 }

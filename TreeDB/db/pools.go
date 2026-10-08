@@ -61,6 +61,11 @@ func (r *oneShotRead) close() error {
 	// Close shares all registry, value-log, and leaf-generation release logic.
 	// The read has returned, so there are no outstanding readers or iterators.
 	err := r.snapshot.Close()
+	if err != nil {
+		// The exact Snapshot may now be linked to its original cleanup owner.
+		// Reusing it would overwrite that owner's surviving physical debt.
+		return err
+	}
 	// Do not keep an index pager or its reader interfaces alive in the pool.
 	r.snapshot.tree.Reset(nil, nil, 0)
 	r.snapshot.treePager = nil
@@ -86,7 +91,17 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	if s == nil {
 		return
 	}
-	s.tree.SetNegativeFilter(nil)
+	// Exported handles are never reused: scrub all tree/pager aliases before
+	// publishing completion of their original cleanup owner.
+	s.tree.Reset(nil, nil, 0)
+	s.treePager = nil
+	s.treeRoot = 0
+	for i := range s.rootTrees {
+		s.rootTrees[i].tree.Reset(nil, nil, 0)
+		s.rootTrees[i].root = 0
+	}
+	clear(s.rootTrees)
+	s.rootTrees = nil
 	s.db = nil
 	s.idx = nil
 	s.state = nil

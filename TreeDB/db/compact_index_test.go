@@ -5,6 +5,8 @@ import (
 	"errors"
 	"runtime"
 	"testing"
+
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 )
 
 func TestCompactIndexPrepareFailureRollsBackOldTreeRetirements(t *testing.T) {
@@ -82,6 +84,65 @@ func TestCompactIndexPrepareFailureRollsBackOldTreeRetirements(t *testing.T) {
 	}
 	defer reopened.Close()
 	assertOriginal(reopened)
+}
+
+func TestPrimaryCompactIndexMaterializationAndRollback(t *testing.T) {
+	opts := Options{Dir: t.TempDir(), IndexPrimaryDirectory: true, DisableBackgroundPrune: true}
+	d, err := Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { d.Close() }()
+	b := d.NewBatch().(*Batch)
+	for i := 0; i < 128; i++ {
+		if err := b.Set([]byte{byte(i)}, bytes.Repeat([]byte{byte(i)}, 32)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := b.WriteSync(); err != nil {
+		t.Fatal(err)
+	}
+	b.Close()
+	old := d.AcquireSnapshot()
+	defer old.Close()
+	before := d.State()
+	d.testFailDurableRootAfterCOWPrepare.Store(true)
+	err = d.CompactIndex()
+	d.testFailDurableRootAfterCOWPrepare.Store(false)
+	if !errors.Is(err, errTestDurableRootAfterCOWPrepareFailpoint) || d.State().RootPageID != before.RootPageID || d.State().CommitSeq != before.CommitSeq || d.publicationPoisoned.Load() {
+		t.Fatalf("failed compact changed publication: %v", err)
+	}
+	if err = d.CompactIndex(); err != nil {
+		t.Fatal(err)
+	}
+	if d.State().CommitSeq != before.CommitSeq+1 || !primaryarena.IsPage(d.State().RootPageID) {
+		t.Fatal("compact did not publish one selected PRIMARY root")
+	}
+	if err = d.SetSync([]byte{3}, []byte("new")); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := old.Get([]byte{3}); err != nil || !bytes.Equal(value, bytes.Repeat([]byte{3}, 32)) {
+		t.Fatalf("old compact reader=%x %v", value, err)
+	}
+	if err = old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	d, err = Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 128; i++ {
+		want := bytes.Repeat([]byte{byte(i)}, 32)
+		if i == 3 {
+			want = []byte("new")
+		}
+		if value, err := d.Get([]byte{byte(i)}); err != nil || !bytes.Equal(value, want) {
+			t.Fatalf("reopened compact key%d=%x %v", i, value, err)
+		}
+	}
 }
 
 func TestCompactIndexRetiresOldPages(t *testing.T) {

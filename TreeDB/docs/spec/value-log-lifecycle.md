@@ -859,3 +859,16 @@ current-segment reporting, pending-pointer protection, root resource closures,
 and segment retirement still use their existing owners. Standalone rewrite
 writers retain their complete created-file history for publication and cleanup.
 This bookkeeping bound does not establish a whole-database physical-space bound.
+
+## Constructor-owned mappings and parent handles
+
+Files retain constructor-owned mapping descriptors alongside their immutable read views.
+The descriptor records the genuine mapping address, extent and remaining owned range;
+ad-hoc slices retain the legacy whole-mapping validation path. Ordinary remap and Close
+release only the exact owned mappings, after the existing File reader edges permit it.
+
+The manager's existing stable-parent pool uses fixed bucket heads and intrusive entries.
+Each File retains its actual physical parent; exact removal does not rebuild a global
+parent map. Physical aliases share identity, borrowers retain the parent handle, and
+value/outer-leaf/foreign parents remain supported. This ordinary lifetime path does not
+qualify bounded native Set or Snapshot retirement.

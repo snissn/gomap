@@ -830,7 +830,7 @@ Page types (`Flags` low bits):
 
 ## 3. Durable Root Publication V1
 
-TreeDB keeps exactly two fixed meta pages, at page IDs 0 and 1. A meta page is
+The DATA-selector format keeps exactly two fixed meta pages, at page IDs 0 and 1. A meta page is
 the single authoritative publication point for one independently recoverable
 root generation. Roots, allocator state, the command-WAL frontier, and external
 resource reachability live in immutable pages that the meta page binds by page
@@ -843,6 +843,105 @@ volatile ordinary-ACK and durable boundary contracts.
 
 This is a pre-alpha format cutover. A non-empty legacy meta body fails open with
 `ErrLegacyFormatRebuildRequired`; recovery does not reinterpret or migrate it.
+
+### 3.0 Selected PRIMARY capsules V6 (construction)
+
+Fresh `no_wal_fast` backend stores, and fresh stores explicitly selecting
+`IndexPrimaryDirectory`, use `index.db.primary`. Its checked arena header is
+`TDPRCAPB`, version 6. Existing arena identity and version are checked on open;
+opening never relabels a V1 bank arena as a capsule arena. Other fresh profiles
+retain the DATA-selector format below. The selected format is pre-alpha and
+its native bounded-publication qualification remains incomplete.
+
+The PRIMARY file reserves local pages 0 through 7. Exactly two eligible fixed
+capsules occupy local pages `[2,5)` and `[5,8)`; allocator banks begin at 8.
+Each capsule is 12288 bytes: one metadata page and two canonical directory
+pages. It contains the current complete root and, except for bootstrap, the
+previous complete root's metadata and directory **by value**. Recovery never
+follows another root record or scans old records for a replacement candidate.
+The embedded parent is a one-hop durable-frontier proof, not a third eligible
+recovery slot. A child also requires its parent's physical dependency closure.
+
+| Capsule bytes | Meaning |
+| --- | --- |
+| `0:16` | Common page header, page type `0x0c`, physical capsule page ID and CRC |
+| `16:24` | Magic `TDPRCAP6` |
+| `24:28` | Little-endian version 6 and header size 128 |
+| `28:30` | Slot index and embedded-parent presence |
+| `32:48` | Exact PRIMARY arena UUID |
+| `48:80` | SHA-256 of the complete capsule with CRC and digest fields cleared |
+| `80:96` | Current commit sequence and durable sequence |
+| `128:640` | Current root metadata |
+| `640:1152` | Embedded parent metadata, or zero at bootstrap |
+| `4096:8192` | Current independently complete directory |
+| `8192:12288` | Embedded parent independently complete directory, or zero |
+
+Canonical zero padding, page IDs, directory CRC/digests, arena identity,
+sequences and contiguous durable parent frontier are validated together.
+Root metadata binds the actual immutable DATA user/system roots, allocator
+header/generation/extent/digest, revisions and applied command-WAL frontier,
+and the exact dependency manifest or required V2 directory. Bank-only
+publication does not relabel the retained DATA generation. The strict V1
+freelist-generation/commit validator remains unchanged.
+
+Directory codec V3 (`TDPRDIR3`) contains the exact sorted raw keys over the
+materialized immutable DATA base. Empty keys are legal. Each canonical cell is
+either a put with a checked immutable bank operand or inline absence with a
+zero operand; partial zero operands and zero put operands are rejected.
+Inline absence allocates no component page. Put components and dependency
+metadata use distinct physical bank identities with checksums and digests.
+
+Publication makes required DATA and external dependencies durable before
+installing the alternate complete capsule and fencing the actual PRIMARY
+file. This is the selected format's durable authority: DATA META pages 0 and 1
+are not rewritten as a second selector. Ordinary `DurabilityNoWALFast` visibility
+and ACK still may precede this sealed root; explicit Sync, Checkpoint and clean
+Close require a complete eligible publication. A failure after capsule bytes
+are installed is ambiguous, poisons later writes and requires reopen.
+
+Readers use independently owned immutable copies of directory bytes. Their
+RAM-only addresses never enter the physical extent, DATA freelist or recovery
+selector. Actual current/A/B/parent readers and physical cuts retain their
+component, DATA and persistent value-log closures. Deferred physical export
+copies fixed capsule images under publication exclusion and exports those
+captured images after slot reuse or owner Close. Snapshot installation rebinds
+both current and embedded-parent closures in unpublished two-file copies;
+read-only recovery never performs this mutation.
+
+Online and offline vacuum rebuild `index.db.new` and
+`index.db.primary.new` privately. Both eligible current roots and their finite
+embedded parents bind one actual replacement DATA generation, preserving
+revisions, command-WAL frontiers and exact persistent dependencies. DATA,
+PRIMARY banks, external resources and staging names are fenced before COMMIT.
+
+The immutable joint COMMIT occupies `index.db.new.ready`: magic `TDJCOM06`
+(8 bytes), little-endian payload length (4), payload SHA-256 (32), then UTF-8
+JSON (at most 4096 bytes; total at most 4140). Version 6 binds the retained
+parent directory and both physical `StableIdentity` values, PRIMARY UUID,
+replacement DATA generation reference and four fixed canonical/staging names.
+It does not fingerprint whole capsules or make an embedded parent eligible.
+The decision file and parent are synced before any replacement rename.
+
+DATA replaces its canonical name and the parent is synced; PRIMARY follows
+with its own parent barrier. The prepared runtime exists before COMMIT;
+canonical namespace rebind and synced decision deletion finish under writer
+exclusion before in-memory installation and writer admission. No `.bak`
+selector or post-COMMIT rollback participates. Post-COMMIT ambiguity or
+cancellation retains exact unpublished pair/root/dependency custody and
+remaining names, poisons mutation and requires reopen.
+
+Under LOCK, writable Open and offline vacuum recover COMMIT before legacy
+cleanup or pager Open. Read-only refuses repair. Structured invalid,
+truncated, unknown-version, checksum-invalid or identity-missing markers
+fail closed without cleanup. Only exact legacy `ready\n` enters the legacy
+DATA-only protocol. A corrupt capsule still falls back to the exact other
+complete eligible slot.
+
+Normal Snapshots retain their old physical pair across replacement.
+Independent physical cuts block cutover because their namespace must not
+rebind. Later cuts duplicate actual retained handles and export captured
+DATA and PRIMARY after slot reuse or DB Close. Normal Snapshot reads gain
+no guarantee after the owning DB closes.
 
 ### 3.1 Durable meta body V1
 
@@ -3970,6 +4069,40 @@ binaries need not accept this added format; no migration support is promised.
 See [the split insert contract](vector-partition-split-source-insert-v1.md) for
 the fixed lifetime capacity and local-WAL versus consensus trust boundary.
 
+### PRIMARY constructor certificates and the shared V6 codec
+
+The selected ordinary V6 producer takes a constructor-owned read-directory
+certificate under the arena lock. It checks the exact sealed bank's CRC, digest,
+address and private publication claim before transfer. The certificate borrows
+the bank's owned physical image and canonical directory view; it never borrows
+caller scratch and adds no independent reference or lifetime registry.
+
+A DATA certificate binds the exact retained pager, immutable freelist generation,
+base operand and sequence, and system root. Construction charges the real
+generation classification, mapping reads, CRC/type/address checks and hashes.
+Directory-only ordinary publications reuse this proof. Actual DATA materialization
+or a changed base/system identity reconstructs it. The runtime's existing
+index/generation and slot owners supply physical retention; this certificate
+grants neither durability nor post-owner-close access.
+
+Ordinary publication and the typed constructor API use one capsule codec core.
+The typed path consumes these exact certificates, freshly binds record sequence,
+freelist counts, command frontier and revision, verifies the retained parent's
+complete image and one-hop frontier, then copies/checksums/hashes both physical
+directory operands and the complete capsule. Its returned typed view records the
+metadata actually encoded. Preparation, materialization and commit reuse that
+owned view rather than decode freshly constructed bytes again. Recovery still
+decodes and independently validates both eligible physical slots and each
+current/parent resource closure; no historical selector or parent promotion is
+introduced.
+
+Required DATA and external dependencies, including newly referenced PRIMARY
+component/dependency banks and their namespaces, still become durable before
+alternate capsule installation. The final PRIMARY capsule fence is additional.
+An immutable validation certificate is not a completed durability-cut authority
+and cannot remove these sync obligations. Relaxed ordinary ACK remains a visible
+publication; explicit durable operations retain the existing seal boundary.
+
 ### Nativewire collection metadata physical schema (version 6)
 
 Collection metadata without ColumnStore retains the exact version-5 encoding,
@@ -4018,3 +4151,19 @@ coverage and excluded from replica hashing. No ApplyResult format change or
 migration scaffold is introduced.
 Conditional collection WAL payload v2 is specified in `user-command-wal.md`.
 Old binaries reject this pre-alpha extension; rebuild experimental directories.
+
+V6 ordinary promotion copies the logical read directory into a separately owned
+immutable RAM root before attaching coalesced dependency-bank custody. This extra
+image and its independent component-group references belong to the existing
+publication transaction and transfer to the selected slot on successful report.
+Logical reader roots do not acquire those later metadata edges. Recovery still
+copies both eligible capsule directories and their embedded parents by value;
+RAM root addresses are never physical file offsets or recovery eligibility.
+
+Every queued ordinary PRIMARY publication constructs an independently owned
+logical directory before dependency capture. A system-only publication copies
+its existing directory; a bulk/manual DATA-root builder, including CompactIndex,
+wraps its actual new DATA root through the same owned construction boundary.
+PRIMARY bank IDs retire through their original physical closure and never enter
+the DATA freelist. This uses the existing format and does not add a recovery or
+native capability variant.

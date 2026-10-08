@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -57,7 +58,8 @@ type Pager struct {
 	// durableFileSize is the file length covered by a completed file-wide
 	// durability fence. Sparse range durability is restricted to this prefix.
 	durableFileSize atomic.Int64
-	dirtyChunks     map[int]struct{}
+	dirtyChunks     dirtyChunkBits
+	closing         bool
 	mu              sync.RWMutex
 	allocMu         sync.Mutex
 	path            string
@@ -65,10 +67,13 @@ type Pager struct {
 	memoryOnly      bool
 	// pageIDBase gives private overlay pagers a disjoint logical ID namespace.
 	// IDs below the base are read through fallback and are never writable here.
-	pageIDBase   uint64
-	fallback     *Pager
-	verified     atomic.Pointer[verifiedBitset]
-	verifyOnRead atomic.Bool
+	pageIDBase         uint64
+	fallback           *Pager
+	primaryBanks       atomic.Pointer[Pager]
+	metadataReadMu     sync.RWMutex
+	immutableReadRoots primaryReadRootTableV6 // Single accountable address/custody index.
+	verified           atomic.Pointer[verifiedBitset]
+	verifyOnRead       atomic.Bool
 
 	growMu       sync.Mutex
 	growStopOnce sync.Once
@@ -120,11 +125,10 @@ func NewOverlay(chunkSize int64, pageIDBase uint64, fallback *Pager) (*Pager, er
 		return nil, errors.New("pager: overlay fallback is required")
 	}
 	p := &Pager{
-		chunkSize:   chunkSize,
-		dirtyChunks: make(map[int]struct{}),
-		memoryOnly:  true,
-		pageIDBase:  pageIDBase,
-		fallback:    fallback,
+		chunkSize:  chunkSize,
+		memoryOnly: true,
+		pageIDBase: pageIDBase,
+		fallback:   fallback,
 	}
 	p.syncConcurrency.Store(1)
 	p.verifyOnRead.Store(fallback.VerifyOnRead())
@@ -185,7 +189,6 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 		file:           f,
 		chunkSize:      chunkSize,
 		path:           path,
-		dirtyChunks:    make(map[int]struct{}),
 		mmapPopulate:   opts.MmapPopulate,
 		prefetchOnRead: opts.PrefetchOnRead,
 	}
@@ -206,6 +209,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 		numChunks := size / chunkSize
 		p.chunks = make([][]byte, numChunks)
 		p.ensurePrefetchCapacityLocked(int(numChunks))
+		p.dirtyChunks.grow(int(numChunks))
 
 		for i := int64(0); i < numChunks; i++ {
 			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize), opts.MmapPopulate)
@@ -375,6 +379,21 @@ func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) {
 // but Pager methods usually hold lock).
 // Currently Pager.Get holds RLock.
 func (p *Pager) IsVerified(pageID uint64) bool {
+	if p.immutableReadRoots.retention != nil {
+		p.metadataReadMu.RLock()
+		defer p.metadataReadMu.RUnlock()
+	}
+
+	if isPrimaryBankID(pageID) {
+		if companion := p.primaryBanks.Load(); companion != nil {
+			return companion.IsVerified(pageID - page.PrimaryBankNamespace)
+		}
+	}
+	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
+		_, ok := p.primaryReadRootImageV6(pageID)
+		return ok
+	}
+
 	localID, local := p.localPageID(pageID)
 	if !local {
 		return p.fallback != nil && p.fallback.IsVerified(pageID)
@@ -402,10 +421,23 @@ func (p *Pager) VerifyOnRead() bool {
 // SetVerifyOnRead enables or disables checksum verification on every read.
 func (p *Pager) SetVerifyOnRead(always bool) {
 	p.verifyOnRead.Store(always)
+	if companion := p.primaryBanks.Load(); companion != nil {
+		companion.SetVerifyOnRead(always)
+	}
 }
 
 // MarkVerified marks a page as verified.
 func (p *Pager) MarkVerified(pageID uint64) {
+	if isPrimaryBankID(pageID) {
+		if companion := p.primaryBanks.Load(); companion != nil {
+			companion.MarkVerified(pageID - page.PrimaryBankNamespace)
+			return
+		}
+	}
+	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
+		return
+	}
+
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -414,6 +446,14 @@ func (p *Pager) MarkVerified(pageID uint64) {
 		return
 	}
 	pageID = localID
+	if p.immutableReadRoots.retention != nil {
+		p.metadataReadMu.RLock()
+		defer p.metadataReadMu.RUnlock()
+		vb := p.verified.Load()
+		if vb == nil || pageID/verifiedChunkPages >= uint64(len(vb.chunks)) {
+			return
+		}
+	}
 	for {
 		vb := p.verified.Load()
 		if vb == nil {
@@ -447,6 +487,16 @@ func (p *Pager) MarkVerified(pageID uint64) {
 
 // MarkUnverified marks a page as unverified (dirty/reused).
 func (p *Pager) MarkUnverified(pageID uint64) {
+	if isPrimaryBankID(pageID) {
+		if companion := p.primaryBanks.Load(); companion != nil {
+			companion.MarkUnverified(pageID - page.PrimaryBankNamespace)
+			return
+		}
+	}
+	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
+		return
+	}
+
 	localID, local := p.localPageID(pageID)
 	if !local {
 		return
@@ -500,15 +550,20 @@ func (p *Pager) PageCount() uint64 {
 // Close closes the pager and unmaps memory.
 func (p *Pager) Close() error {
 	p.stopGrower()
-
+	p.growMu.Lock()
+	defer p.growMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
+	p.closing = true // Includes a partial-unmap failure; no pending install may pass.
 	if !p.memoryOnly {
-		for _, chunk := range p.chunks {
+		for i, chunk := range p.chunks {
+			if chunk == nil {
+				continue
+			}
 			if err := munmapFile(chunk); err != nil {
 				return err
 			}
+			p.chunks[i] = nil
 		}
 	}
 	p.chunks = nil
@@ -567,32 +622,44 @@ func (p *Pager) Alloc(count int) (uint64, error) {
 }
 
 func (p *Pager) allocLocked(count int) (uint64, error) {
-	p.mu.Lock()
-	startID := p.numPages.Load()
-	newTotal := startID + uint64(count)
-	localTotal := p.localPageCount(newTotal)
-
-	// Check if we need to grow physical file
-	requiredBytes := int64(localTotal) * int64(page.PageSize)
-	currentCapacity := int64(len(p.chunks)) * p.chunkSize
-	p.mu.Unlock()
-
-	if requiredBytes > currentCapacity {
-		if err := p.growToCapacity(requiredBytes); err != nil {
-			return 0, err
+	if count < 0 {
+		return 0, fmt.Errorf("pager: negative allocation")
+	}
+	start := p.numPages.Load()
+	if uint64(count) > ^uint64(0)-start {
+		return 0, fmt.Errorf("pager: page count overflow")
+	}
+	g, _, e := NewGrowthForPager(p, start+uint64(count), nil)
+	if e != nil {
+		return 0, e
+	}
+	for {
+		done, e := g.stepLocked(p, nil, 0, 0, nil)
+		if e == ErrGrowthStale {
+			g, _, e = NewGrowthForPager(p, start+uint64(count), nil)
+			if e != nil {
+				return 0, e
+			}
+			continue
+		}
+		if e != nil {
+			return 0, e
+		}
+		if done {
+			break
 		}
 	}
-
-	p.mu.Lock()
-	p.numPages.Store(newTotal)
-	p.ensureVerifiedCapacityLocked(localTotal)
-	p.mu.Unlock()
-	p.maybeSchedulePreGrow(requiredBytes)
-	return startID, nil
+	p.maybeSchedulePreGrow(int64(p.localPageCount(start+uint64(count))) * page.PageSize)
+	return start, nil
 }
 
 // GetForWrite returns the byte slice for the given page ID and marks the chunk dirty.
 func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
+	if isPrimaryBankID(pageID) {
+		if companion := p.primaryBanks.Load(); companion != nil {
+			return companion.GetForWrite(pageID - page.PrimaryBankNamespace)
+		}
+	}
 	if p.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -614,7 +681,7 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 		return nil, ErrPageOutOfBounds
 	}
 
-	p.dirtyChunks[chunkIdx] = struct{}{}
+	p.dirtyChunks.set(chunkIdx)
 
 	chunk := p.chunks[chunkIdx]
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
@@ -624,12 +691,48 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 // CAUTION: The returned slice points directly to mmapped memory.
 // Do not hold references to it after closing the pager.
 func (p *Pager) Get(pageID uint64) ([]byte, error) {
+	data, _, err := p.GetWithWork(pageID, nil)
+	return data, err
+}
+
+// GetWithWork admits the actual mapping owner, page limit and chunk slot before
+// reading them. The returned view belongs only to the caller's guarded cut.
+// Ordinary nil work uses exactly the same mapping/fallback implementation.
+func (p *Pager) GetWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	if ok, err := pagerReserve(work, 3, 512); !ok || err != nil {
+		return nil, false, err
+	}
+	return p.getWithWork(pageID, work)
+}
+
+func (p *Pager) getWithWork(pageID uint64, work *iterator.OrdinalScanWork) ([]byte, bool, error) {
+	if isPrimaryBankID(pageID) {
+		if companion := p.primaryBanks.Load(); companion != nil {
+			return companion.GetWithWork(pageID-page.PrimaryBankNamespace, work)
+		}
+		// A speculative overlay borrows read authority from its retained source
+		// pager. It has no bank write or allocation authority of its own.
+		if p.fallback != nil {
+			return p.fallback.GetWithWork(pageID, work)
+		}
+		return nil, false, ErrPageOutOfBounds
+	}
+	if pageID >= PrimaryReadRootLocalBaseV6 && pageID < page.PrimaryBankNamespace {
+		if ok, err := pagerReserve(work, 1, 64); !ok || err != nil {
+			return nil, ok, err
+		}
+		value, ok := p.primaryReadRootImageV6(pageID)
+		if !ok {
+			return nil, false, ErrPageOutOfBounds
+		}
+		return value, true, nil
+	}
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
-			return p.fallback.Get(pageID)
+			return p.fallback.GetWithWork(pageID, work)
 		}
-		return nil, ErrPageOutOfBounds
+		return nil, false, ErrPageOutOfBounds
 	}
 	// Optimization: Lock-free read path
 	// p.numPages is atomic. p.atomicChunks is atomic.
@@ -648,9 +751,13 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	// If chunkIdx=9, OK.
 	// So order in Reader doesn't strictly matter as long as bounds check uses the loaded chunks len.
 
+	if p.immutableReadRoots.retention != nil {
+		p.metadataReadMu.RLock()
+		defer p.metadataReadMu.RUnlock()
+	}
 	limit := p.numPages.Load()
 	if pageID >= limit {
-		return nil, ErrPageOutOfBounds
+		return nil, false, ErrPageOutOfBounds
 	}
 
 	byteOffset := int64(localID) * int64(page.PageSize)
@@ -659,21 +766,27 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 
 	cl := p.atomicChunks.Load()
 	if cl == nil {
-		return nil, ErrPageOutOfBounds
+		return nil, false, ErrPageOutOfBounds
 	}
 	chunks := cl.data
 
 	if chunkIdx >= len(chunks) {
-		return nil, ErrPageOutOfBounds
+		return nil, false, ErrPageOutOfBounds
 	}
 
 	chunk := chunks[chunkIdx]
-	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
+	return chunk[offsetInChunk : offsetInChunk+page.PageSize], true, nil
 }
 
 // PrefetchPage issues a best-effort prefetch hint for the chunk containing
 // pageID. It is safe for concurrent use.
 func (p *Pager) PrefetchPage(pageID uint64) {
+	if isPrimaryBankID(pageID) {
+		if companion := p.primaryBanks.Load(); companion != nil {
+			companion.PrefetchPage(pageID - page.PrimaryBankNamespace)
+			return
+		}
+	}
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -683,6 +796,10 @@ func (p *Pager) PrefetchPage(pageID uint64) {
 	}
 	if !p.prefetchOnRead {
 		return
+	}
+	if p.immutableReadRoots.retention != nil {
+		p.metadataReadMu.RLock()
+		defer p.metadataReadMu.RUnlock()
 	}
 	limit := p.numPages.Load()
 	if pageID >= limit {
@@ -755,34 +872,8 @@ func (p *Pager) ReadPage(pageID uint64) ([]byte, error) {
 // Write copies data into the page.
 // The data slice must be exactly PageSize bytes (or less, but we usually write full pages).
 func (p *Pager) Write(pageID uint64, data []byte) error {
-	if p.readOnly {
-		return ErrReadOnly
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	localID, local := p.localPageID(pageID)
-	if !local || pageID >= p.numPages.Load() {
-		return ErrPageOutOfBounds
-	}
-
-	p.markUnverifiedLocked(localID) // Invalidate cache
-
-	byteOffset := int64(localID) * int64(page.PageSize)
-	chunkIdx := byteOffset / p.chunkSize
-	offsetInChunk := byteOffset % p.chunkSize
-
-	if int(chunkIdx) >= len(p.chunks) {
-		return ErrPageOutOfBounds
-	}
-
-	// Mark chunk as dirty
-	p.dirtyChunks[int(chunkIdx)] = struct{}{}
-
-	chunk := p.chunks[chunkIdx]
-	dst := chunk[offsetInChunk : offsetInChunk+page.PageSize]
-	copy(dst, data)
-	return nil
+	_, err := p.WriteWithWork(pageID, data, nil)
+	return err
 }
 
 // FlushDirtyChunksFrom synchronously writes dirty memory-map chunks at or
@@ -816,26 +907,35 @@ func (p *Pager) SyncIndexData() error {
 // the retained handle still supplies the file
 // durability fence required by an outstanding stable-resource token.
 func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
+	_, err := p.SyncIndexDataWithStableFileWithWork(file, nil)
+	return err
+}
+
+// Admission is bound to the actual dirty snapshot under mu. Refusal occurs
+// before dirty detachment or durability observation; no prior writes are replayed.
+func (p *Pager) SyncIndexDataWithStableFileWithWork(file *os.File, w *iterator.OrdinalScanWork) (bool, error) {
+	return p.SyncIndexDataWithStableFileWithCallerControl(file, w, 0, 0)
+}
+
+// Caller controls were already reserved on this same grant. They contribute to
+// fresh impossibility without charging the native snapshot a second time.
+func (p *Pager) SyncIndexDataWithStableFileWithCallerControl(file *os.File, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
 	if file == nil {
-		return errors.New("pager: stable index file unavailable")
+		return false, errors.New("pager: stable index file unavailable")
 	}
-	if !p.readOnly && !p.memoryOnly {
-		if err := durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
-			return err
-		}
+	done, err := p.syncDirtyChunksWithFileWork(true, 0, file, w, true, callerRecords, callerBytes)
+	if !done || err != nil {
+		return done, err
 	}
-	if err := p.syncDirtyChunksWithFile(true, 0, file); err != nil {
-		return err
-	}
-	if info, err := file.Stat(); err == nil {
+	if info, e := file.Stat(); e == nil {
 		p.durableFileSize.Store(info.Size())
 	}
 	if !p.readOnly && !p.memoryOnly {
-		if err := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
-			return err
+		if e := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); e != nil {
+			return false, e
 		}
 	}
-	return nil
+	return true, nil
 }
 
 func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
@@ -843,32 +943,52 @@ func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
 }
 
 func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarget *os.File) error {
+	_, err := p.syncDirtyChunksWithFileWork(syncFile, firstChunk, syncTarget, nil, false, 0, 0)
+	return err
+}
+func (p *Pager) syncDirtyChunksWithFileWork(syncFile bool, firstChunk int, syncTarget *os.File, w *iterator.OrdinalScanWork, indexCut bool, callerRecords, callerBytes uint64) (bool, error) {
 	if p.readOnly {
-		return ErrReadOnly
+		return false, ErrReadOnly
 	}
 	if p.memoryOnly {
-		return nil
+		return true, nil
 	}
 	p.mu.Lock()
+	// takeFrom scans the actual dirty word span, writes selected membership,
+	// allocates its owned ordinal snapshot, then rechecks range hints. Include
+	// the restoration path and the ordinary parallel worker/channel control.
+	n := uint64(p.dirtyChunks.count)
+	span := uint64(p.dirtyChunks.high - p.dirtyChunks.low)
+	concurrency := int(p.syncConcurrency.Load())
+	workers := min(uint64(max(1, concurrency)), n)
+	records := uint64(5) + 4*span + 5*n + workers
+	traffic := uint64(4096) + 128*span + 256*n + 1024*workers
+	if indexCut {
+		traffic += uint64(len(p.path))*8 + 2048
+	}
+	if err := pagerCallerMinimum(w, records, traffic, callerRecords, callerBytes); err != nil {
+		p.mu.Unlock()
+		return false, err
+	}
+	if ok, err := pagerReserve(w, records, traffic); !ok || err != nil {
+		p.mu.Unlock()
+		return false, err
+	}
 	// Move the selected dirty chunks into this sync attempt. Lower chunks can be
 	// intentionally retained for a later durability-boundary Sync.
-	toSync := make([]int, 0, len(p.dirtyChunks))
-	for idx := range p.dirtyChunks {
-		if idx < firstChunk {
-			continue
-		}
-		toSync = append(toSync, idx)
-		delete(p.dirtyChunks, idx)
-	}
+	toSync := p.dirtyChunks.takeFrom(firstChunk)
 	p.mu.Unlock()
 
-	// Hold the mappings stable through mapped-range and file sync.
+	var syncErr error
+	if indexCut {
+		syncErr = durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path)
+	}
+	// Hold mappings stable through mapped-range and file sync.
 	p.mu.RLock()
 
-	var syncErr error
 	// The file data barrier covers Linux mapped writes. Flush-only calls still
 	// need msync, and other platforms retain their explicit mapped-write fence.
-	if !syncFile || mappedRangeSyncRequired() {
+	if syncErr == nil && (!syncFile || mappedRangeSyncRequired()) {
 		concurrency := int(p.syncConcurrency.Load())
 		if concurrency <= 1 || len(toSync) <= 1 {
 			for _, idx := range toSync {
@@ -932,13 +1052,13 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 	if syncErr != nil {
 		p.mu.Lock()
 		for _, idx := range toSync {
-			p.dirtyChunks[idx] = struct{}{}
+			p.dirtyChunks.set(idx)
 		}
 		p.mu.Unlock()
-		return syncErr
+		return false, syncErr
 	}
 
-	return nil
+	return true, nil
 }
 
 type syncPageRange struct {
@@ -1024,42 +1144,70 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 // is the scoped primitive used for the durability-critical meta-page cut: it
 // never reopens the diagnostic path and it fails closed on a rebound handle.
 func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
+	_, err := p.SyncPagesWithStableFileWithWork(file, pageIDs, nil)
+	return err
+}
+func (p *Pager) SyncPagesWithStableFileWithWork(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork) (bool, error) {
+	return p.SyncPagesWithStableFileWithCallerControl(file, pageIDs, w, 0, 0)
+}
+func (p *Pager) SyncPagesWithStableFileWithCallerControl(file *os.File, pageIDs []uint64, w *iterator.OrdinalScanWork, callerRecords, callerBytes uint64) (bool, error) {
 	if p.readOnly {
-		return ErrReadOnly
+		return false, ErrReadOnly
 	}
 	if p.memoryOnly {
+		if ok, err := pagerReserve(w, uint64(len(pageIDs))+1, uint64(len(pageIDs))*64+512); !ok || err != nil {
+			return false, err
+		}
 		for _, pageID := range pageIDs {
 			if _, local := p.localPageID(pageID); !local || pageID >= p.numPages.Load() {
-				return ErrPageOutOfBounds
+				return false, ErrPageOutOfBounds
 			}
 		}
-		return nil
+		return true, nil
 	}
 	if file == nil {
-		return errors.New("pager: stable index file unavailable")
+		return false, errors.New("pager: stable index file unavailable")
 	}
 	if len(pageIDs) == 0 {
-		return nil
+		return true, nil
 	}
 
 	p.mu.RLock()
+	n, c := uint64(len(pageIDs)), uint64(len(p.chunks))
+	// The existing planner copies/sorts IDs, builds owned ranges and reads the
+	// full mapped directory. n*n covers the existing sort's comparisons/shifts
+	// conservatively. Oversized inputs are refused before allocation or I/O.
+	records := uint64(5) + c + 8*n + 2*n*n
+	traffic := uint64(4096) + 64*c + 512*n + 64*n*n
+	// Exact selected page traffic, including alignment expansion. Fdatasync
+	// may persist unrelated kernel pages, but performs no product-side copy of
+	// that historical mapping. Kernel scheduling is not a byte-copy admission.
+	traffic += n * uint64(page.PageSize+2*mmapOffsetGranularity())
+	if err := pagerCallerMinimum(w, records, traffic, callerRecords, callerBytes); err != nil {
+		p.mu.RUnlock()
+		return false, err
+	}
+	if ok, err := pagerReserve(w, records, traffic); !ok || err != nil {
+		p.mu.RUnlock()
+		return false, err
+	}
 	if p.file == nil {
 		p.mu.RUnlock()
-		return errors.New("pager: stable index file unavailable")
+		return false, errors.New("pager: stable index file unavailable")
 	}
 	ownedInfo, err := p.file.Stat()
 	if err != nil {
 		p.mu.RUnlock()
-		return err
+		return false, err
 	}
 	stableInfo, err := file.Stat()
 	if err != nil {
 		p.mu.RUnlock()
-		return err
+		return false, err
 	}
 	if !os.SameFile(ownedInfo, stableInfo) {
 		p.mu.RUnlock()
-		return errors.New("pager: stable index file identity mismatch")
+		return false, errors.New("pager: stable index file identity mismatch")
 	}
 	chunkLengths := make([]int, len(p.chunks))
 	for i := range p.chunks {
@@ -1068,14 +1216,14 @@ func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
 	ranges, err := planSyncPageRanges(pageIDs, p.pageIDBase, p.numPages.Load(), p.chunkSize, mmapOffsetGranularity(), chunkLengths)
 	if err != nil {
 		p.mu.RUnlock()
-		return err
+		return false, err
 	}
 	handled := false
 	if syncPageRangesWithinDurableFileSize(ranges, p.chunkSize, p.durableFileSize.Load()) {
 		handled, err = syncPageRangesFn(file, p.chunks, ranges, p.chunkSize)
 		if err != nil {
 			p.mu.RUnlock()
-			return err
+			return false, err
 		}
 	}
 	if !handled && mappedRangeSyncRequired() {
@@ -1083,7 +1231,7 @@ func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
 			err := msyncFile(p.chunks[r.chunk][r.start:r.end])
 			if err != nil {
 				p.mu.RUnlock()
-				return err
+				return false, err
 			}
 		}
 	}
@@ -1094,5 +1242,52 @@ func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
 		}
 	}
 	p.mu.RUnlock()
-	return err
+	return err == nil, err
+}
+
+func pagerCallerMinimum(w *iterator.OrdinalScanWork, r, b, cr, cb uint64) error {
+	if w == nil {
+		return nil
+	}
+	add := func(a, b uint64) uint64 {
+		if ^uint64(0)-a < b {
+			return ^uint64(0)
+		}
+		return a + b
+	}
+	r, b = add(r, cr), add(b, cb)
+	if r > w.RecordLimit || b > w.ByteLimit {
+		return &iterator.OrdinalUnitTooLarge{Records: r, Bytes: b}
+	}
+	return nil
+}
+
+func isPrimaryBankID(id uint64) bool {
+	return id >= page.PrimaryBankNamespace && id < 2*page.PrimaryBankNamespace
+}
+
+// AttachPrimaryBankPager installs the immutable physical routing owner once.
+// The containing index generation owns both pager lifetimes. Attachment does
+// not alter DATA extent, allocation or durability; resource fences cover the
+// two exact physical files separately.
+func (p *Pager) AttachPrimaryBankPager(companion *Pager) error {
+	if p == nil || companion == nil || p == companion || p.memoryOnly || companion.memoryOnly || companion.pageIDBase != 0 {
+		return errors.New("pager: invalid primary bank attachment")
+	}
+	if !p.primaryBanks.CompareAndSwap(nil, companion) {
+		return errors.New("pager: primary bank owner already attached")
+	}
+	companion.SetVerifyOnRead(p.VerifyOnRead())
+	return nil
+}
+
+// PrimaryBankPageCount reports only the attached companion's physical extent.
+func (p *Pager) PrimaryBankPageCount() uint64 {
+	if p == nil {
+		return 0
+	}
+	if bank := p.primaryBanks.Load(); bank != nil {
+		return bank.PageCount()
+	}
+	return 0
 }

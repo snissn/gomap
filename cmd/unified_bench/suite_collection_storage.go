@@ -1069,6 +1069,9 @@ func prepareCollectionStorageMode(baseCfg BenchConfig, mode string, rows, batchS
 }
 
 func openCollectionStorageDB(dir string) (*backenddb.DB, error) {
+	if err := validateTreeDBPrimaryDirectoryRequest("collection_storage"); err != nil {
+		return nil, err
+	}
 	return backenddb.Open(backenddb.Options{
 		Dir:                    dir,
 		CommandWAL:             true,

@@ -134,8 +134,8 @@ func cloneStableResourceEntryDirectoryV2(entry *stableResourceEntry, directory *
 	if err := token.namespace.validateStable(); err != nil {
 		return stableResourceEntry{}, err
 	}
-	fields := make([]ReachabilityField, 0, len(entry.reachability))
-	for field := range entry.reachability {
+	fields := make([]ReachabilityField, 0, entry.reachability.reachableCount())
+	for field := range entry.reachability.reachableFields() {
 		fields = append(fields, field)
 	}
 	if len(fields) == 0 {
@@ -150,17 +150,14 @@ func cloneStableResourceEntryDirectoryV2(entry *stableResourceEntry, directory *
 			return stableResourceEntry{}, err
 		}
 	}
-	cloned, err := token.cloneSharedPinnedDirectory(entry.logicalLane, entry.resourceID, entry.diagnosticPath, entry.frontier, fields[0], nil, directory, func() {
-		if registry != nil {
-			_ = registry.Unobserve(identity)
-		}
-	})
+	cloned, err := token.cloneSharedPinnedDirectory(entry.logicalLane, entry.resourceID, entry.diagnosticPath, entry.frontier, fields[0], nil, directory, nil)
 	if err != nil {
 		if registry != nil {
 			_ = registry.Unobserve(identity)
 		}
 		return stableResourceEntry{}, err
 	}
+	cloned.releaseObservation = registry
 	if err := cloned.claim(ResourceOwnerBuilder); err != nil {
 		cloned.Release()
 		return stableResourceEntry{}, err

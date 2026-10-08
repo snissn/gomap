@@ -26,7 +26,18 @@ TreeDB's value log is the only value storage path for values.
 - Stores either:
   - inline value bytes, or
   - a fixed-size `ValuePtr` reference into the value log.
-- Uses copy-on-write page rewrites and dual meta pages for commit visibility.
+- Uses copy-on-write page rewrites and dual complete root selectors for durability.
+- Fresh `no_wal_fast` stores select a top-level exact-key immutable delta
+  directory over a materialized DATA B-tree base, with fixed complete A/B
+  capsules in `index.db.primary`. Other fresh profiles retain DATA dual-meta
+  selection. See [selected capsule format](storage-format.md#30-selected-primary-capsules-v6-construction).
+- Capsule readers own immutable copied directory bytes and actual component
+  references. Recovery, physical export and Snapshot restore use the same
+  complete capsule authority. Vacuum commits an identity-bound private
+  DATA/PRIMARY pair under writer exclusion, retains old Snapshot owners and
+  refuses namespace cutover with independently retained physical cuts.
+  Joint recovery runs under LOCK before legacy cleanup. Native whole-cost,
+  semantic materialization progress and performance remain unqualified.
 
 ### 2.2 Value Log
 
@@ -80,6 +91,7 @@ Default root layout:
 
 - `<root>/maindb/`
   - `index.db`
+  - `index.db.primary` (selected PRIMARY format)
   - `LOCK`
   - `wal/`
     - `commit-l<lane>-<seq>.log`
@@ -148,3 +160,77 @@ A compatible implementation should preserve:
    - commit-log replay,
    - replay log cleanup.
 5. Single-writer + multi-reader snapshot behavior.
+
+
+The selected V6 ordinary producer shares constructor-to-capsule machinery with
+the typed bounded construction API. Its directory certificate borrows the
+actual immutable arena image; its DATA certificate is reusable only for the
+identical retained generation/pager/base/system identities. The existing
+runtime and root owners retain physical custody. Typed codec output is reused
+inside the same guarded publication, while Open/recovery validate raw physical
+bytes independently. This introduces no additional ownership lifecycle or
+scheduler. Native producer admission, protected semantic floor proof and
+same-Request materialization progress are still construction obligations.
+
+### Ordinary transaction ownership from logical construction
+
+For selected V6 writes, the existing DurableRootTransaction is created by the
+ordinary zipper before its immutable logical directory and components are
+constructed. The arena bank retains that transaction as constructor
+discoverability. The visible member, candidate and later promotion refer to the
+same transaction; they do not each allocate a new control owner. After binding,
+the existing resource set's owner cell controls handoff. Independent physical
+root references are still necessary: the constructor holds one reference through
+Finish, visible state holds its own, and durable current/parent closures acquire
+their actual references at promotion.
+
+Relaxed visibility does not select a durable slot or parent. Each logical root
+remains independently immutable while later relaxed writes replace visible
+state. Fresh promotion binds the actual current parent and alternate fixed slot,
+encodes the complete three-page capsule, and retains its two closures in the
+same transaction. The existing DATA and PRIMARY dependency syncs precede capsule
+installation; the final PRIMARY fence remains separate. Durable report runs the
+same transaction's ordinary Finish, detaches constructor discoverability,
+releases the actual resource set and drops the constructor edge. Old readers
+retain their independently owned immutable roots after that detach.
+
+Ordinary Finish remains synchronous and uses ordinary resource callbacks.
+The selected experiment does not connect the native private producer or its
+typed Accepted retirement cursor. Native admission, complete accounting and a
+protected semantic-floor/materialization adapter remain unqualified.
+
+### Ordinary publication views and producer input
+
+Selected V6 DB current state and visible runtime membership borrow the existing
+DurableRootTransaction's immutable publication projection. Its candidate and
+single-member group are views of the same construction owner; the resource-set
+owner cell controls transferred custody. Constructor, visible-state, durable-slot,
+parent and reader references remain distinct physical edges.
+
+Store inputs describe their actual accepted logical postimage. A constant-size
+pre-compaction summary survives ordinary batch and cache backend-bypass routes;
+existing physical flushes retain their physical semantics. Raw or mixed input
+remains unqualified. Combiner input binds to a validated owned key copy because
+the queue can survive the caller's stop result. Exact floor metadata follows the
+same ordinary Write or WriteSync route without changing its ACK boundary.
+
+This ordinary prerequisite exports no Request, Capture, protected-floor issuer
+or protected-version proof. It does not connect native Accepted/Finish, semantic
+materialization adaptation or same-Request rank.
+
+The SAME ordinary transaction remains the identity of its candidate/current
+views through publication. After successful synchronous Finish it drops
+completed callback, prepared-root, candidate, resource-set and promotion scratch
+references. Independently owned state, slot, reader and cut references retain the
+immutable roots and persistent value resources; a consumed transaction is not an
+extra owner of its former mutable publication projection.
+
+The published V6 logical root has no backpointer to mutable publication work.
+Private constructor discovery ends at successful Bind before visibility; the
+runtime and coordinator retain the same transaction until its once-only Finish.
+Promotion owns an additional immutable 4096-byte RAM directory and genuine
+component-group references. Coalesced dependency banks attach only to that
+promotion/slot root, so an admitted relaxed reader's immutable closure cannot grow
+when later durable publication selects the physical slot. The capsule codec
+continues to validate the original constructor's exact logical operand; the
+separate RAM address is slot custody, never an extra durable selector.

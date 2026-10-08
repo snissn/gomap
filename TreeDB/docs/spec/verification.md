@@ -4047,3 +4047,155 @@ relabelled48-write runtime evidence. Actual48-outcome audit/resource costs and
 all49 native truths remain fresh qualification obligations.
 See command README for allocation ownership and planned operational bounds;
 source controls alone establish no sustained service result.
+
+### Selected PRIMARY capsule construction witnesses
+
+`TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6` proves actual unchanged
+NoWALFast selection, no DATA META rewrite, copied old-reader visibility and
+exact prior-commit fallback after newest-capsule corruption.
+`TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6` injects uncertainty
+after actual installation, checks retained prior custody, and requires later
+Set and SetSync to return ErrRecoveryRequired without changing either fixed
+capsule image. `TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6`
+holds actual A/B/parent Snapshot views through repeated fixed-slot reuse.
+`TestOwnedFinishFirstCallbackCloseRefusesBeforeHooksV6` exercises the actual DB
+publisher's charged transient caller scope and FIRST Close refusal before hook
+or teardown admission. The ordinary report releases the same constructed
+transaction synchronously. Native private-cursor transfer and finite charged
+retirement are deferred.
+
+`TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6` checks retained
+physical-cut exclusion without replacing successful-vacuum/crash gates.
+Actual restore/rebind and deferred physical-cut tests exercise captured fixed
+images and independently retained physical closures. These focused witnesses
+are not original 33/80, 4096, whole32-record/1MiB, semantic materialization-rank,
+command-WAL route, power-loss or performance qualification.
+
+
+### Shared ordinary V6 constructor boundary witnesses
+
+`TestPrimarySharedTransactionV6ReusesExactDataCertificate` exercises the actual
+unchanged NoWALFast ordinary path: directory-only durable writes reuse one DATA
+certificate, a real oversized-key DATA materialization replaces it, and a held
+old Snapshot remains readable. `TestPrimarySharedTransactionV6FreshOwnedDirectoryRefusal`
+checks fresh owned-image corruption refusal, under-admitted private-claim
+refusal, and once-only transfer without losing the private root.
+
+`TestPrimarySharedTransactionV6TypedCodecOwnedOperandAndRefusal` uses an actual
+relaxed ordinary visible member and its retained durable parent. It checks
+corrupt-parent, mismatched fresh record revision and under-admitted destination
+refusal, and compares the shared codec's typed metadata with raw recovery decode.
+The next ordinary durable write preserves the earlier relaxed member. The codec
+case charges five distinct operands; this is component cost, not whole publication.
+
+These witnesses preserve the existing independent A/B fallback, post-install
+uncertainty/overwrite refusal and copied-reader tests. They do not establish
+32-record/1MiB public fit, finite immutable preparation after changed DATA,
+protected-floor semantic proof, same-Request materialization rank, atomic native
+Accepted transfer or Finish completion. Generic pre-capsule dependency/index sync,
+actual DB/common/public admission and retirement remain part of the whole cost.
+The current disjoint subtotal remains over the original record cap; no original
+33/80, 4096 or performance qualification is claimed.
+
+### Ordinary owned construction and promotion witnesses
+
+TestPrimaryOwnedPromotionV6ConstructorSurvivesVisibilityAndPromotion checks
+that an ordinary copied root is already owned by the existing transaction,
+aborts that private constructor, then publishes two independent relaxed roots
+before selecting any new durable capsule. Their visible members retain the
+same constructor transactions through promotion and once-only ordinary Finish.
+Missing-parent and pre-codec admission refusals preserve constructor custody.
+
+TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut uses unchanged
+NoWALFast outer-leaf defaults and forced persistent value pointers. It exercises
+two relaxed writes, explicit checkpoint, real oversized-key DATA materialization,
+both physical value/leaf parents, repeated capsule slot reuse, an old reader and
+a captured physical cut. The cut exports after DB.Close. Its namespace lock and
+the old Snapshot are released before reopening; this adds no normal Snapshot
+read-after-DB.Close promise.
+
+TestPrimaryOwnedPromotionV6RoutingEmission checks retained, streamed and
+discarded exact-key routing census bounds at the shared emission point. Actual
+recursive reads and touched counts agree, and the plan remains non-exact for
+physical span execution.
+
+These focused normal/race witnesses also retain the existing exact older-slot
+fallback and post-install uncertainty/overwrite-refusal gates. They do not prove
+a complete native 32-record/1MiB return, private Accepted transfer, typed ordinary
+callback replacement, protected-floor issuance, or same-Request progress through
+materialization. Ordinary full directory construction still validates all 49
+physical class slots. Constructor/state/slot/parent references, dependency sync,
+retirement queues and callbacks remain real charged obligations; their distinct
+ownership cannot be removed for budget fit.
+
+### Joint DATA/PRIMARY vacuum component witnesses
+
+`TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut` uses
+unchanged NoWALFast options, forced persistent values, real DATA materialization
+and both leaf/value physical parents. An old reader survives replacement; a
+later cut exports DATA and PRIMARY after slot reuse and DB Close.
+`TestPrimaryJointVacuumV6PointersAndIndependentFallback` covers manifest and
+required-V2 closures, exact prior-slot recovery and pointer survival.
+
+`TestPrimaryJointVacuumV6UncleanPublicationAndRecovery` exits subprocesses
+without DB.Close at 18 publication and 12 recovery phases around COMMIT, both
+direct renames, each directory barrier and deletion. Subsequent Open finishes
+the same pair and accepts later writes. These are process-interruption tests,
+not power-loss/device-flush measurements.
+
+`TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody` inspects real retained
+unpublished selection/runtime, copied root, both handles and physical closure.
+Observer/cancellation failures poison later writes. Malformed-marker tests
+compare all canonical/staging/decision bytes after writable/read-only/offline
+refusals. The committed-pair corruption test damages either actual capsule
+while COMMIT remains, requiring the exact other slot.
+
+The post-publication retirement-error case injects failure after the new pair is
+installed. It checks the new published owner, the independently retained old
+pointer reader, writer poison and exact clean-Open recovery without COMMIT replay.
+
+The command-WAL/revision case Checkpoints each acknowledged command to establish
+two complete eligible frontiers; production ACK routing is unchanged. Saved V5
+fixtures use the production V5 initializer and preserve same-arena, failure,
+independent-slot and bank-reuse assertions. Legacy ready uses actual `ready\n`.
+
+Focused normal/race checks and package compilation qualify this ordinary
+maintenance component only. Original 33/80/4096, whole native 32-record/1MiB cost,
+protected-floor/materialization rank, owned Accepted/once-ACK/finite Finish,
+power-loss and performance remain unqualified.
+
+### Ordinary producer-input witnesses
+
+TestCommitCombinerQueuedStopOwnsQualifiedInput checks queued-stop key lifetime
+and refuses an originally mismatched input. Ordinary Store point, batch and
+typed floor routes retain command-WAL and relaxed ACK behavior. Request/Capture,
+protected semantic issuance, native Accepted/Finish and same-Request progress
+are deferred; component results do not qualify those APIs.
+
+### Ordinary PRIMARY allocation and maintenance closure
+
+The [source/caller inventory](../design/ordinary-primary-allocation-5111.md)
+separates all nineteen allocation/lifetime groups from their final qualification
+receipts. `TestRegistryKeyPayloadRefusalPreservesBacking` checks refusal before
+rehash/key allocation. `TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease`
+isolates wrapper admission using real reused bank capacity.
+`TestPrimaryScratchRefusalAndExactAliasRefund` checks scratch refusal and alias
+scrub; `TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow`
+checks actual replacement capacity and original member custody.
+
+`TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead` exercises ordinary
+and bounded captures with the real paired governor, active read and original
+last-read finalizer. `TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot`
+checks the exact failed original object rather than a copied error alone.
+`TestPrimaryCompactIndexMaterializationAndRollback` exercises actual CompactIndex,
+pre-publication refusal/retry, selected PRIMARY output, old reader and reopen.
+Existing public materialization/vacuum/cut/provider/dictionary tests remain
+independent obligations; these component witnesses do not replace whole-route
+normal/race, current-head CI/review or retained performance gates.
+
+`BenchmarkPublishPrimaryDurableRootV1` is the opt-in variant of the existing
+complete synchronous publication benchmark. It uses actual SetSync/WriteSync,
+sets `IndexPrimaryDirectory`, asserts selected PRIMARY output and reports separate
+arena/registry retained metadata and DATA/PRIMARY extents after the timed work.
+Setup is outside the timer. It introduces no performance threshold and grants
+no acceptance until the matched source/harness packet is frozen and measured.

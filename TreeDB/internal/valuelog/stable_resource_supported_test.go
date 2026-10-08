@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"unsafe"
 )
 
 func TestCertifyStableCreationNamespaceRetainsProofAfterCompletedSyncCut(t *testing.T) {
@@ -509,4 +511,52 @@ func TestStableValueLogRollbackDoesNotUnlinkReplacement(t *testing.T) {
 
 func BenchmarkStableValueLogRotation(b *testing.B) {
 	benchmarkStableValueLogRotation(b)
+}
+
+func TestOuterLeafRegistrationScratchParityAndAdmission(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "leaf_vlog", "000001.vlog")
+	var owner retainedalloc.Owner
+	for _, op := range []rootpublication.NamespaceOperation{rootpublication.NamespaceNone, rootpublication.NamespaceCreate} {
+		generic, _, err := NewOuterLeafStableRegistration(root, path, 17, 2, op, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		selected, charge, err := NewOuterLeafStableRegistration(root, path, 17, 2, op, nil, &owner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if selected.Kind != generic.Kind || selected.LogicalLane != generic.LogicalLane || selected.DiagnosticPath != generic.DiagnosticPath || selected.NewName != generic.NewName || selected.NamespaceOperation != generic.NamespaceOperation {
+			t.Fatal("selected registration changed original fields")
+		}
+		if charge == 0 || owner.Bytes() != charge {
+			t.Fatal("actual scratch not admitted")
+		}
+		relative := path[len(root)+1:]
+		if unsafe.StringData(selected.DiagnosticPath) == unsafe.StringData(relative) {
+			t.Fatal("selected scratch borrowed producer path")
+		}
+		selected = StableResourceRegistration{}
+		owner.RemovePending(charge)
+	}
+	// The filesystem root is a valid canonical producer parent.
+	filesystemRoot := filepath.VolumeName(path) + string(filepath.Separator)
+	selected, charge, err := NewOuterLeafStableRegistration(filesystemRoot, path, 1, 2, rootpublication.NamespaceNone, nil, &owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.NewName != "" {
+		t.Fatal("NamespaceNone acquired create metadata")
+	}
+	selected = StableResourceRegistration{}
+	owner.RemovePending(charge)
+	if owner.Bytes() != 0 {
+		t.Fatal("scratch cleanup leaked")
+	}
+	if err = owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = NewOuterLeafStableRegistration(root, path, 17, 2, rootpublication.NamespaceNone, nil, &owner); !errors.Is(err, retainedalloc.ErrClosed) {
+		t.Fatalf("refusal=%v", err)
+	}
 }

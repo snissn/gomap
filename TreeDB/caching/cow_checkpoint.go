@@ -200,7 +200,7 @@ func (db *DB) closeCOWFrontier() error {
 	}
 	db.writeMu.Unlock()
 	p.drain()
-	defer c.close()
+	defer c.closeWithBudget(false)
 	if err != nil {
 		return err
 	}

@@ -119,7 +119,9 @@ type File struct {
 	remapMu        sync.Mutex
 	remapRequested atomic.Bool
 
-	deadMappings           [][]byte
+	currentMappingV6       ownedMmapV6
+	legacyMappingV6        bool
+	deadMappings           []ownedMmapV6
 	deadMappedBytes        atomic.Uint64
 	remapCount             atomic.Uint64
 	deadMappingsCount      atomic.Uint64
@@ -596,11 +598,16 @@ func (f *File) Close() error {
 
 	f.remapMu.Lock()
 	data, _ := f.mmapData.Load().([]byte)
-	if data != nil {
+	owner := f.detachMmapOwnerV6Locked(data)
+	ownedView := owner.matchesViewV6(data)
+	_ = owner.closeV6()
+	// An injected/read-only view has no pointer authority. Legacy Munmap safely
+	// rejects heap-backed and partial slices, preserving the old test contract.
+	if owner.constructor && len(data) != 0 && !ownedView {
 		_ = munmap(data)
 	}
-	for _, b := range f.deadMappings {
-		_ = munmap(b)
+	for i := range f.deadMappings {
+		_ = f.deadMappings[i].closeV6()
 	}
 	f.deadMappings = nil
 	f.deadMappingsCount.Store(0)

@@ -111,3 +111,10 @@ newer allocation, then validates that the physical tail remains allocator-owned.
 
 - `*hashdb.DB` (opened by `hashdb.OpenSingle`) is not goroutine-safe.
 - Use it only when single-threaded access is guaranteed.
+
+An ordinary TreeDB Snapshot that retains a PRIMARY root also retains the existing
+physical PRIMARY owner through its original last-read finalizer. DB.Close may end
+public operation admission while that independent cleanup edge remains live.
+Failed original cleanup preserves the exact Snapshot at that owner; private
+one-shot reads may be reused only after successful cleanup. This custody rule
+does not add a public Snapshot read-after-DB.Close guarantee.

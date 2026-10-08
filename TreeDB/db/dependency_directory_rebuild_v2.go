@@ -77,12 +77,27 @@ func (it *dependencyDirectoryRecordIteratorV2) UnsafeEntry() ([]byte, page.Value
 }
 
 func rebuildDependencyDirectoryV2(p *pager.Pager, allocator bulk.Allocator, resources *rootpublication.StableResourceSet) (rootpublication.DependencyDirectoryRefV2, error) {
+	return rebuildDependencyDirectoryWithRequirementV2(p, allocator, resources, false)
+}
+
+// Required-format rebuilds also encode independently imported direct obligations.
+// Import preserves their complete logical authority without retaining an inherited
+// directory as the representation of that authority.
+func rebuildDependencyDirectoryWithRequirementV2(p *pager.Pager, allocator bulk.Allocator, resources *rootpublication.StableResourceSet, required bool) (rootpublication.DependencyDirectoryRefV2, error) {
 	base, err := resources.DependencyDirectoryBaseV2()
-	if err != nil || base == nil {
+	if err != nil || (base == nil && !required) {
 		return rootpublication.DependencyDirectoryRefV2{}, err
 	}
+	if resources == nil {
+		return rootpublication.DependencyDirectoryRefV2{}, rootpublication.ErrResourceOwnership
+	}
 	var reference rootpublication.DependencyDirectoryRefV2
-	for _, descriptor := range resources.PhysicalDescriptors() {
+	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		return rootpublication.DependencyDirectoryRefV2{}, captureErr
+	}
+	defer diagnostics.Close()
+	for _, descriptor := range diagnostics.Physical() {
 		if !descriptor.LogicalObligationCountAvailable || descriptor.LogicalObligationCount > ^uint64(0)-reference.LogicalCount {
 			return reference, rootpublication.ErrDependencyManifestFormat
 		}

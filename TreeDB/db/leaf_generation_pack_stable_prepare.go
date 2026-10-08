@@ -360,7 +360,12 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	frontiers := make(map[uint32]uint64, len(want))
 	var namespaceSyncs uint64
 	var namespaceObligations uint64
-	for _, descriptor := range authority.resources.PhysicalDescriptors() {
+	diagnostics, captureErr := authority.resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		return fail(captureErr)
+	}
+	defer diagnostics.Close()
+	for _, descriptor := range diagnostics.Physical() {
 		if descriptor.Kind != rootpublication.ResourceOuterLeafPack {
 			continue
 		}
@@ -398,7 +403,12 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 	if len(referenced) != len(frontiers) {
 		return fail(fmt.Errorf("%w: packed closure pointers cover %d of %d promoted segments", rootpublication.ErrUnresolvedResource, len(referenced), len(frontiers)))
 	}
-	for _, stats := range authority.resources.Stats(time.Now()) {
+	statistics, statsErr := authority.resources.AcquireStats(time.Now())
+	if statsErr != nil {
+		return fail(statsErr)
+	}
+	defer statistics.Close()
+	for _, stats := range statistics.Stats() {
 		if stats.Kind == rootpublication.ResourceOuterLeafPack {
 			namespaceSyncs += stats.NamespaceSyncs
 		}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"io"
 	"log"
 	"math"
@@ -14685,11 +14686,12 @@ const (
 )
 
 type domainIngressRequest struct {
-	op    domainIngressOp
-	key   []byte
-	value []byte
-	sync  bool
-	done  chan error
+	mvccInput mvccadmission.Input
+	op        domainIngressOp
+	key       []byte
+	value     []byte
+	sync      bool
+	done      chan error
 }
 
 type walWriteRequest struct {
@@ -15568,7 +15570,7 @@ func (db *DB) processDomainIngressBatch(reqs []domainIngressRequest) {
 		var err error
 		switch req.op {
 		case domainIngressOpSet:
-			err = db.setDirect(req.key, req.value, false)
+			err = db.setDirectWithMVCCInput(req.key, req.value, false, req.mvccInput)
 		case domainIngressOpDelete:
 			err = db.deleteDirect(req.key, false)
 		default:
@@ -15588,7 +15590,7 @@ func (db *DB) processDomainIngressBatch(reqs []domainIngressRequest) {
 		req := reqs[i]
 		switch req.op {
 		case domainIngressOpSet:
-			err = b.Set(req.key, req.value)
+			err = b.SetWithMVCCInput(req.key, req.value, req.mvccInput)
 		case domainIngressOpDelete:
 			err = b.Delete(req.key)
 		default:
@@ -15631,6 +15633,10 @@ func (db *DB) observeDomainIngressDepth(depth int) {
 }
 
 func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync bool) (bool, error) {
+	return db.enqueueDomainIngressWithMVCCInput(op, key, value, sync, mvccadmission.Input{})
+}
+
+func (db *DB) enqueueDomainIngressWithMVCCInput(op domainIngressOp, key, value []byte, sync bool, input mvccadmission.Input) (bool, error) {
 	if db == nil {
 		return false, nil
 	}
@@ -15652,11 +15658,12 @@ func (db *DB) enqueueDomainIngress(op domainIngressOp, key, value []byte, sync b
 		return false, nil
 	}
 	req := domainIngressRequest{
-		op:    op,
-		key:   key,
-		value: value,
-		sync:  sync,
-		done:  make(chan error, 1),
+		mvccInput: input,
+		op:        op,
+		key:       key,
+		value:     value,
+		sync:      sync,
+		done:      make(chan error, 1),
 	}
 	shardID := db.shardIndex(key)
 	workerID := shardID % len(db.domainIngressCh)
@@ -17613,7 +17620,10 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 }
 
 func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
-	capture := newStableOuterLeafCapture(db, l)
+	capture, err := newStableOuterLeafCapture(db, l)
+	if err != nil {
+		return nil, nil, err
+	}
 	ptrs, resources, err := db.appendValueLogInternal(l, dictID, dict, records, durability, capture)
 	if err != nil {
 		capture.abandon()
@@ -17900,7 +17910,23 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		if !ok {
 			return nil, nil, fmt.Errorf("%w: dictionary %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, dictID)
 		}
-		dictionaryResources, captureErr := provider.CaptureDictionaryResources(context.Background(), dictID)
+		var dictionaryResources *rootpublication.StableResourceSet
+		var captureErr error
+		if capture.metadata != nil {
+			if selected, ok := db.dictStore.(backenddb.StableDictionaryMetadataResourceProvider); ok {
+				dictionaryResources, captureErr = selected.CaptureDictionaryResourcesWithMetadata(context.Background(), dictID, capture.metadata)
+			} else {
+				original, originalErr := provider.CaptureDictionaryResources(context.Background(), dictID)
+				if originalErr != nil {
+					captureErr = originalErr
+				} else {
+					dictionaryResources, captureErr = rootpublication.ImportStableResourceSetMetadata(capture.metadata, original)
+				}
+				original.Release()
+			}
+		} else {
+			dictionaryResources, captureErr = provider.CaptureDictionaryResources(context.Background(), dictID)
+		}
 		if captureErr != nil {
 			return nil, nil, captureErr
 		}
@@ -26359,6 +26385,11 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 }
 
 func (db *DB) Close() error {
+	// Keep actual producer governors live through the final backend checkpoint,
+	// arena/registry disposal and dictionary cleanup. Failed cleanup retains debt.
+	if db.cow != nil {
+		defer db.cow.budget.Close()
+	}
 	var errs []error
 	if runner, ok := db.backend.(backendCloseHookRunner); ok {
 		if err := runner.RunCloseHooks(); err != nil {
@@ -26663,6 +26694,10 @@ func (db *DB) SetAfterCommandWALAppendWithRevision(key, value []byte, appendComm
 // appendCommand invokes assignRevision. Command-WAL callers use this to assign
 // the exact revision while holding their WAL append serialization boundary.
 func (db *DB) SetAfterCommandWALAppendWithPreparedRevision(key, value []byte, appendCommand func(assignRevision func() page.EntryRevision) error) error {
+	return db.setAfterCommandWALAppendWithMVCCInput(key, value, mvccadmission.Input{}, appendCommand)
+}
+
+func (db *DB) setAfterCommandWALAppendWithMVCCInput(key, value []byte, input mvccadmission.Input, appendCommand func(func() page.EntryRevision) error) error {
 	if db.cow != nil {
 		return ErrCOWUnsupported
 	}
@@ -26674,7 +26709,7 @@ func (db *DB) SetAfterCommandWALAppendWithPreparedRevision(key, value []byte, ap
 	db.waitForCheckpointForWrite()
 	guard := db.lockUpdateKey(key)
 	defer guard.Unlock()
-	return db.setDirectAfterCommandWALAppendWithPreparedRevision(key, value, appendCommand)
+	return db.setDirectAfterCommandWALAppendWithMVCCInput(key, value, input, appendCommand)
 }
 
 // Update applies fn to the current value for key and writes the returned
@@ -26814,13 +26849,21 @@ func (db *DB) syncBarrierAfterWrite(sync bool) error {
 }
 
 func (db *DB) set(key, value []byte, sync bool) error {
-	if handled, err := db.enqueueDomainIngress(domainIngressOpSet, key, value, sync); handled {
+	return db.setWithMVCCInput(key, value, sync, mvccadmission.Input{})
+}
+
+func (db *DB) setWithMVCCInput(key, value []byte, sync bool, input mvccadmission.Input) error {
+	if handled, err := db.enqueueDomainIngressWithMVCCInput(domainIngressOpSet, key, value, sync, input); handled {
 		return err
 	}
-	return db.setDirect(key, value, sync)
+	return db.setDirectWithMVCCInput(key, value, sync, input)
 }
 
 func (db *DB) setDirect(key, value []byte, sync bool) error {
+	return db.setDirectWithMVCCInput(key, value, sync, mvccadmission.Input{})
+}
+
+func (db *DB) setDirectWithMVCCInput(key, value []byte, sync bool, input mvccadmission.Input) error {
 	if err := db.beginDirectWrite(); err != nil {
 		return err
 	}
@@ -26943,6 +26986,8 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 
 	db.conditionalRecordPointWrite(batch.OpPut, key)
 
+	admission := db.beginMVCCInputCut()
+	admission.Observe(key, input)
 	shard.mu.Lock()
 	if usePointer {
 		memVal := []byte(nil)
@@ -26970,6 +27015,7 @@ func (db *DB) setDirect(key, value []byte, sync bool) error {
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
+	admission.Commit()
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -27009,6 +27055,10 @@ func (db *DB) setDirectAfterCommandWALAppendWithRevision(key, value []byte, appe
 }
 
 func (db *DB) setDirectAfterCommandWALAppendWithPreparedRevision(key, value []byte, appendCommand func(func() page.EntryRevision) error) error {
+	return db.setDirectAfterCommandWALAppendWithMVCCInput(key, value, mvccadmission.Input{}, appendCommand)
+}
+
+func (db *DB) setDirectAfterCommandWALAppendWithMVCCInput(key, value []byte, input mvccadmission.Input, appendCommand func(func() page.EntryRevision) error) error {
 	if !db.externalCommandWAL {
 		return fmt.Errorf("cachingdb: command wal point writes require external command wal cached mode")
 	}
@@ -27116,6 +27166,8 @@ func (db *DB) setDirectAfterCommandWALAppendWithPreparedRevision(key, value []by
 
 	db.conditionalRecordPointWrite(batch.OpPut, key)
 
+	admission := db.beginMVCCInputCut()
+	admission.Observe(key, input)
 	shard.mu.Lock()
 	if usePointer {
 		memVal := []byte(nil)
@@ -27143,6 +27195,7 @@ func (db *DB) setDirectAfterCommandWALAppendWithPreparedRevision(key, value []by
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
+	admission.Commit()
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -28141,8 +28194,11 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 
 	db.conditionalRecordPointWrite(batch.OpDelete, key)
 
+	admission := db.beginMVCCInputCut()
+	admission.Refuse()
 	shard.mu.Lock()
 	if err := memtableBatchDelete(shard.mem, false, key, revision); err != nil {
+		admission.Commit()
 		shard.mu.Unlock()
 		db.writeMu.RUnlock()
 		db.reportError(fmt.Errorf("cachingdb: WAL apply failed: %w", err))
@@ -28158,6 +28214,7 @@ func (db *DB) deleteDirect(key []byte, sync bool) error {
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
+	admission.Commit()
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -28228,8 +28285,11 @@ func (db *DB) deleteDirectAfterCommandWALAppendWithPreparedRevision(key []byte, 
 
 	db.conditionalRecordPointWrite(batch.OpDelete, key)
 
+	admission := db.beginMVCCInputCut()
+	admission.Refuse()
 	shard.mu.Lock()
 	if err := memtableBatchDelete(shard.mem, false, key, revision); err != nil {
+		admission.Commit()
 		shard.mu.Unlock()
 		db.writeMu.RUnlock()
 		db.reportError(fmt.Errorf("cachingdb: post-command-wal delete failed: %w", err))
@@ -28240,6 +28300,7 @@ func (db *DB) deleteDirectAfterCommandWALAppendWithPreparedRevision(key []byte, 
 	delta := newBytes - shard.bytes
 	shard.bytes = newBytes
 	db.mutableBytes.Add(delta)
+	admission.Commit()
 	shard.mu.Unlock()
 	db.noteWriteKey(key)
 
@@ -35035,6 +35096,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 
 type Batch struct {
 	cowState                  *cowBatchState
+	mvccSummary               mvccadmission.Summary
 	db                        *DB
 	entries                   []batch.Entry
 	backend                   batch.Interface
@@ -36144,6 +36206,7 @@ func (b *Batch) Reset() {
 	if b == nil {
 		return
 	}
+	b.mvccSummary = mvccadmission.Summary{}
 	if b.backend != nil {
 		_ = b.backend.Close()
 		b.backend = nil
@@ -36207,6 +36270,14 @@ func (b *Batch) Reset() {
 func (b *Batch) noteEntryAppend() {
 	if b == nil {
 		return
+	}
+	if len(b.entries) > 0 {
+		e := b.entries[len(b.entries)-1]
+		if e.Type == batch.OpPut {
+			b.mvccSummary.Observe(e.Key, e.MVCCInput)
+		} else {
+			b.mvccSummary.Refuse()
+		}
 	}
 	if n := len(b.entries); n > b.maxEntries {
 		b.maxEntries = n
@@ -36727,8 +36798,16 @@ func (b *Batch) Set(key, value []byte) error {
 }
 
 func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) error {
+	return b.setWithMVCCInput(key, value, revision, mvccadmission.Input{})
+}
+
+func (b *Batch) SetWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
+	return b.setWithMVCCInput(key, value, page.LegacyEntryRevision, input)
+}
+
+func (b *Batch) setWithMVCCInput(key, value []byte, revision page.EntryRevision, input mvccadmission.Input) error {
 	if b.cowState != nil {
-		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: normalizeRawKVPointKey(key), Value: normalizeRawKVValue(value), Revision: revision}, true)
+		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: normalizeRawKVPointKey(key), Value: normalizeRawKVValue(value), Revision: revision, MVCCInput: input}, true)
 	}
 	if b.closed {
 		return ErrBatchClosed
@@ -36756,7 +36835,11 @@ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) 
 		revision = b.revisionForBackendPoint(revision)
 		var err error
 		// Use the backend's view method with owned copies to avoid aliasing.
-		if revision != page.LegacyEntryRevision {
+		if writer, ok := b.backend.(interface {
+			SetWithRevisionAndMVCCInput([]byte, []byte, page.EntryRevision, mvccadmission.Input) error
+		}); ok && input.Present() {
+			err = writer.SetWithRevisionAndMVCCInput(keyCopy, valCopy, revision, input)
+		} else if revision != page.LegacyEntryRevision {
 			if sv, ok := b.backend.(interface {
 				SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
 			}); ok {
@@ -36796,10 +36879,11 @@ func (b *Batch) SetWithRevision(key, value []byte, revision page.EntryRevision) 
 	// The backend will handle promotion to the value log if needed during
 	// writeBypass, or standard write will handle it via the journal/memtable.
 	b.entries = append(b.entries, batch.Entry{
-		Type:     batch.OpPut,
-		Key:      keyCopy,
-		Value:    valCopy,
-		Revision: revision,
+		Type:      batch.OpPut,
+		Key:       keyCopy,
+		Value:     valCopy,
+		Revision:  revision,
+		MVCCInput: input,
 	})
 	b.noteEntryAppend()
 	b.size += len(keyCopy) + len(valCopy)
@@ -36833,8 +36917,21 @@ func (b *Batch) SetViewValidated(key, value []byte) error {
 }
 
 func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.EntryRevision) error {
+	return b.setViewValidatedWithMVCCInput(key, value, revision, mvccadmission.Input{})
+}
+
+func (b *Batch) SetViewWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
+	if b.closed {
+		return ErrBatchClosed
+	}
+	key = normalizeRawKVPointKey(key)
+	value = normalizeRawKVValue(value)
+	return b.setViewValidatedWithMVCCInput(key, value, page.LegacyEntryRevision, input)
+}
+
+func (b *Batch) setViewValidatedWithMVCCInput(key, value []byte, revision page.EntryRevision, input mvccadmission.Input) error {
 	if b.cowState != nil {
-		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: key, Value: value, Revision: revision}, false)
+		return b.cowAddEntry(batch.Entry{Type: batch.OpPut, Key: key, Value: value, Revision: revision, MVCCInput: input}, false)
 	}
 	if hotPathStatsEnabled {
 		batchSetViewCallsTotal.Add(1)
@@ -36846,7 +36943,11 @@ func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.En
 		b.size += len(key) + len(value)
 		revision = b.revisionForBackendPoint(revision)
 		var err error
-		if revision != page.LegacyEntryRevision {
+		if writer, ok := b.backend.(interface {
+			SetViewWithRevisionAndMVCCInput([]byte, []byte, page.EntryRevision, mvccadmission.Input) error
+		}); ok && input.Present() {
+			err = writer.SetViewWithRevisionAndMVCCInput(key, value, revision, input)
+		} else if revision != page.LegacyEntryRevision {
 			if sv, ok := b.backend.(interface {
 				SetViewWithRevision(key, value []byte, revision page.EntryRevision) error
 			}); ok {
@@ -36883,10 +36984,11 @@ func (b *Batch) SetViewValidatedWithRevision(key, value []byte, revision page.En
 		}
 	}
 	b.entries = append(b.entries, batch.Entry{
-		Type:     batch.OpPut,
-		Key:      key,
-		Value:    value,
-		Revision: revision,
+		Type:      batch.OpPut,
+		Key:       key,
+		Value:     value,
+		Revision:  revision,
+		MVCCInput: input,
 	})
 	b.hasViewOps = true
 	b.noteEntryAppend()
@@ -37631,6 +37733,9 @@ func (b *Batch) writeBackendBatchSerialized(backendBatch batch.Interface, sync b
 		recordBeforePublish()
 	}
 	var err error
+	if producer, ok := backendBatch.(interface{ MergeMVCCInputSummary(mvccadmission.Summary) }); ok {
+		producer.MergeMVCCInputSummary(b.mvccSummary)
+	}
 	if sync && !b.db.relaxedSync {
 		err = backendBatch.WriteSync()
 	} else {
@@ -37984,6 +38089,8 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 	var retainStableViewValueMems []memtable.Table
 	var stableViewValueLeaseBytes int64
 	stableViewValueLeaseFinalized := false
+	admission := mvccadmission.Cut{}
+	defer admission.Abort()
 	finalizeStableViewValueLease := func() {
 		if stableViewValueLeaseFinalized || len(retainStableViewValueMems) == 0 {
 			return
@@ -37996,6 +38103,13 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		stableViewValueLeaseFinalized = true
 	}
 	failMemtableApply := func(shard *memShard, err error) error {
+		// Partial apply still changes the physical source, including a failed batch.
+		admission.Refuse()
+		admission.Commit()
+		// Account it before releasing the shard/public publication authority.
+		newBytes := shard.mem.Size()
+		b.db.mutableBytes.Add(newBytes - shard.bytes)
+		shard.bytes = newBytes
 		finalizeStableViewValueLease()
 		shard.mu.Unlock()
 		unlockWriteMu()
@@ -38566,6 +38680,8 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		// entry slices. This converts a large retained tail into tight slices.
 		b.maybeCompactUnderfilledArenaTails()
 	}
+	admission = b.db.beginMVCCInputCut()
+	admission.ObserveSummary(b.mvccSummary)
 	b.db.conditionalRecordCommittedEntries(b.entries, nil, b.conditionalTxnID)
 
 	if allDeletes {
@@ -38823,6 +38939,7 @@ func (b *Batch) writeRegularLocked(syncWrite bool, unlockWriteMu func()) error {
 		}
 	}
 
+	admission.Commit()
 	// 3. Threshold Check
 	if b.db.mutableBytes.Load() > b.db.mutableFlushThreshold() {
 		needRotate = true

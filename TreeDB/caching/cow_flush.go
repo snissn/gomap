@@ -8,6 +8,7 @@ import (
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 )
@@ -29,12 +30,13 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 		return nil, ErrCOWUnsupported
 	}
 	// Admit the callback and both captured reservation/count cells before creation.
-	scratch, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(4*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))))
+	scratch, err := c.budget.AcquireExternal(memtable.COWAllocationCharge(5*uint64(unsafe.Sizeof(uintptr(0)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*memtable.COWExternalLease)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof((*retainedalloc.Enrollment)(nil)))) + memtable.COWAllocationCharge(uint64(unsafe.Sizeof(int(0)))))
 	if err != nil {
 		return nil, err
 	}
 	defer scratch.Close()
 	var lease *memtable.COWExternalLease
+	var metadata *retainedalloc.Enrollment
 	var count int
 	snapshot, err := bounded.AcquireSnapshotWithAllocationAdmission(func(s backenddb.SnapshotAllocationSizes) error {
 		if s.ValueLog.MapHint > c.budget.Limits().MaxResources || s.ValueLog.FileCount > c.budget.Limits().MaxResources {
@@ -42,23 +44,32 @@ func (c *cowCache) captureBackendBasis(provider backendSnapshotProvider) (*cowBa
 		}
 		count = s.ValueLog.FileCount
 		var err error
-		lease, err = c.budget.AcquireExternal(cowBasisCharge(s))
+		lease, metadata, err = admitCOWSnapshotRetention(c.budget, cowBasisCharge(s), s)
 		return err
 	})
 	if err != nil {
+		metadata.Close()
 		lease.Close()
 		if err == backenddb.ErrSnapshotCapacity {
 			err = memtable.ErrCOWCapacity
 		}
 		return nil, err
 	}
-	pins := make([]*rootpublication.IdentityPin, count)
-	if err = snapshot.PinValueLogReadFiles(pins); err != nil {
+	if err = snapshot.AdoptPrimaryMetadataEnrollment(metadata); err != nil {
 		_ = snapshot.Close()
+		metadata.Close()
 		lease.Close()
 		return nil, err
 	}
-	return newCOWBackendBasis(snapshot, lease, pins), nil
+	metadata = nil
+	pins := make([]*rootpublication.IdentityPin, count)
+	if err = snapshot.PinValueLogReadFiles(pins); err != nil {
+		_ = snapshot.Close()
+		metadata.Close()
+		lease.Close()
+		return nil, err
+	}
+	return newCOWBackendBasis(snapshot, lease, pins, metadata), nil
 }
 
 // installCOWBasis preserves every newer mutable and frozen source. For a flush,
@@ -86,6 +97,10 @@ func (c *cowCache) installCOWBasis(basis *cowBackendBasis, covered *cowReadCut) 
 	}
 	lease, err := c.budget.AcquireExternal(cowCutCharge(len(old.shards), len(old.frozen)-n))
 	if err != nil {
+		return nil, err
+	}
+	if err = basis.snapshot.ActivatePrimaryMetadataProducer(); err != nil {
+		lease.Close()
 		return nil, err
 	}
 	next := &cowReadCut{refs: 1, cache: c, lease: lease, basis: basis, shards: make([]cowTable, len(old.shards)), frozen: make([]cowTable, len(old.frozen)-n)}

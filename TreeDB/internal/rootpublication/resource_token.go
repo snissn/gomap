@@ -8,13 +8,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
+	"unsafe"
 )
 
 var (
@@ -327,19 +330,29 @@ func (frontier DurableFrontier) RIDs() []uint64 {
 }
 
 func newExactRIDFrontier(sortedUnique []uint64) DurableFrontier {
-	frontier := DurableFrontier{RIDCount: uint64(len(sortedUnique))}
-	if len(sortedUnique) == 0 {
+	frontier := exactRIDSummary(sortedUnique)
+	if len(sortedUnique) != 0 {
+		frontier.exactRIDs = &exactRIDMembership{values: append([]uint64(nil), sortedUnique...)}
+	}
+	return frontier
+}
+
+// exactRIDSummary validates/digests actual operands using fixed local byte
+// storage. Constructors and validators share this exact encoding.
+func exactRIDSummary(values []uint64) DurableFrontier {
+	frontier := DurableFrontier{RIDCount: uint64(len(values))}
+	if len(values) == 0 {
 		return frontier
 	}
-	frontier.exactRIDs = &exactRIDMembership{values: append([]uint64(nil), sortedUnique...)}
-	frontier.RIDMin = sortedUnique[0]
-	frontier.RIDMax = sortedUnique[len(sortedUnique)-1]
+	frontier.RIDMin, frontier.RIDMax = values[0], values[len(values)-1]
 	frontier.MaxRID = frontier.RIDMax
-	raw := make([]byte, 8*len(sortedUnique))
-	for i, rid := range sortedUnique {
-		binary.LittleEndian.PutUint64(raw[8*i:], rid)
+	h := sha256.New()
+	var raw [8]byte
+	for _, rid := range values {
+		binary.LittleEndian.PutUint64(raw[:], rid)
+		_, _ = h.Write(raw[:])
 	}
-	frontier.RIDSetDigest = sha256.Sum256(raw)
+	h.Sum(frontier.RIDSetDigest[:0])
 	return frontier
 }
 
@@ -358,7 +371,7 @@ func validateDurableFrontier(frontier DurableFrontier) error {
 		}
 		return nil
 	}
-	want := newExactRIDFrontier(frontier.exactRIDs.values)
+	want := exactRIDSummary(frontier.exactRIDs.values)
 	if want.RIDCount != frontier.RIDCount || want.RIDMin != frontier.RIDMin || want.RIDMax != frontier.RIDMax ||
 		want.MaxRID != frontier.MaxRID || want.RIDSetDigest != frontier.RIDSetDigest {
 		return fmt.Errorf("%w: exact RID membership disagrees with summary", ErrUnresolvedResource)
@@ -389,19 +402,36 @@ const (
 
 type resourceOperation func(*os.File, DurableFrontier) error
 
+// StableResourceOwnedOperations is an exact producer-owned callback backing.
+// The producer reserves its actual storage before construction. Each token
+// descriptor independently retains it; Release must preserve real cleanup
+// debt in that producer's existing error authority. Generic callbacks remain
+// on the nil-MetadataOwner route.
+type StableResourceOwnedOperations interface {
+	MetadataOwner() *retainedalloc.Owner
+	Retain() error
+	Release()
+	FlushThrough(*os.File, DurableFrontier) error
+	SyncThrough(*os.File, DurableFrontier) error
+}
+
 // StableResourceSpec is consumed by NewStableResourceToken. File is duplicated
 // immediately; later operations never reopen DiagnosticPath.
 type StableResourceSpec struct {
-	Kind           ResourceKind
-	LogicalLane    string
-	ResourceID     string
-	Generation     uint64
-	DiagnosticPath string
-	File           *os.File
-	Frontier       DurableFrontier
-	Digest         [32]byte
-	Reachability   ReachabilityField
-	Namespace      *StableNamespaceToken
+	// MetadataOwner selects scoped constructor-owned storage. Nil preserves generic diagnostics.
+	MetadataOwner   *retainedalloc.Owner
+	OwnedOperations StableResourceOwnedOperations
+	physicalBacking *resourcePinnedBacking
+	Kind            ResourceKind
+	LogicalLane     string
+	ResourceID      string
+	Generation      uint64
+	DiagnosticPath  string
+	File            *os.File
+	Frontier        DurableFrontier
+	Digest          [32]byte
+	Reachability    ReachabilityField
+	Namespace       *StableNamespaceToken
 	// LogicalObligations retains immutable logical references that share this
 	// physical resource and must survive physical pin coalescing.
 	LogicalObligations []StableLogicalObligation
@@ -412,6 +442,13 @@ type StableResourceSpec struct {
 	// must still execute SyncThrough on the pinned identity.
 	ContentSynced bool
 	OnRelease     func()
+	// OriginalObservation transfers one already-observed producer edge on
+	// successful construction. Its typed cleanup stays at this exact registry;
+	// arbitrary legacy callbacks retain their existing void contract.
+	OriginalObservation *IdentityPinRegistry
+	// Internal clones transfer one exact observation to the existing token.
+	// This field replaces their allocated Unobserve callback environments.
+	releaseObservation *IdentityPinRegistry
 	// PinRegistry is the DB-scoped physical deletion gate. When set, token
 	// construction acquires a pin for the exact handle identity before return.
 	PinRegistry *IdentityPinRegistry
@@ -432,6 +469,12 @@ type resourceTokenMetrics struct {
 }
 
 type StableResourceToken struct {
+	importedSource     *StableResourceToken
+	importedFields     *resourceFieldBacking
+	metadata           *resourceAllocation
+	obligationBacking  *resourceObligationBacking
+	physicalBacking    *resourcePinnedBacking
+	ownedOperations    StableResourceOwnedOperations
 	kind               ResourceKind
 	logicalLane        string
 	resourceID         string
@@ -444,23 +487,37 @@ type StableResourceToken struct {
 	logicalObligations []StableLogicalObligation
 	// directory pins the exact index generation/root backing this token's
 	// logical view. It never retains a predecessor resource set or token.
-	directory         *DependencyDirectoryV2
-	stability         ResourceStability
-	namespace         *StableNamespaceToken
-	pinned            *os.File
-	pinnedRefs        *atomic.Int64
-	flush             resourceOperation
-	sync              resourceOperation
-	syncedFrontier    DurableFrontier
-	hasSyncedFrontier bool
-	onRelease         func()
-	identityPin       *IdentityPin
-	owner             atomic.Uint32
-	released          atomic.Bool
-	metrics           resourceTokenMetrics
+	directory          *DependencyDirectoryV2
+	stability          ResourceStability
+	namespace          *StableNamespaceToken
+	pinned             *os.File
+	pinnedRefs         *atomic.Int64
+	flush              resourceOperation
+	sync               resourceOperation
+	syncedFrontier     DurableFrontier
+	hasSyncedFrontier  bool
+	onRelease          func()
+	releaseObservation *IdentityPinRegistry
+	observationCleanup *resourcePinnedBacking
+	identityPin        *IdentityPin
+	owner              atomic.Uint32
+	released           atomic.Bool
+	metrics            resourceTokenMetrics
 }
 
 func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, error) {
+	if spec.MetadataOwner != nil {
+		if spec.OriginalObservation != nil {
+			return newOwnedOriginalObservedStableResourceToken(spec)
+		}
+		return newOwnedStableResourceToken(spec, spec.MetadataOwner)
+	}
+	if spec.OwnedOperations != nil {
+		return nil, ErrResourceOwnership
+	}
+	if spec.OriginalObservation != nil {
+		return newOriginalObservedStableResourceToken(spec)
+	}
 	return newStableResourceToken(spec, nil)
 }
 
@@ -468,6 +525,17 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 // for exact-handle clones produced inside this package. Public producers always
 // pass nil and retain the full validation/copy boundary above.
 func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalObligation) (*StableResourceToken, error) {
+	if spec.OriginalObservation != nil {
+		return newOriginalObservedStableResourceTokenNormalized(spec, normalized)
+	}
+	physicalTransferred := false
+	if spec.physicalBacking != nil {
+		defer func() {
+			if !physicalTransferred {
+				spec.physicalBacking.release()
+			}
+		}()
+	}
 	if spec.Kind == "" || spec.ResourceID == "" || spec.Generation == 0 || spec.Reachability == "" || spec.File == nil {
 		return nil, fmt.Errorf("%w: incomplete resource registration", ErrUnresolvedResource)
 	}
@@ -492,7 +560,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		return nil, fmt.Errorf("%w: no stability policy for reachability field %q", ErrUnresolvedResource, spec.Reachability)
 	}
 	duplicate := duplicateStableFile
-	if spec.SyncThrough == nil {
+	if spec.SyncThrough == nil && spec.OwnedOperations == nil {
 		// The default Windows durability barrier needs a private write-capable
 		// reopen even when the producer retains only a read handle. A custom
 		// sync callback owns its handle contract, so preserve the source access
@@ -503,11 +571,17 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	if err != nil {
 		return nil, fmt.Errorf("duplicate stable resource handle: %w", err)
 	}
-	pinnedRefs := &atomic.Int64{}
-	pinnedRefs.Store(1)
+	var pinnedRefs *atomic.Int64
+	if spec.physicalBacking != nil {
+		spec.physicalBacking.file = pinned
+		pinnedRefs = &spec.physicalBacking.refs
+	} else {
+		pinnedRefs = &atomic.Int64{}
+		pinnedRefs.Store(1)
+	}
 	closeOnError := true
 	defer func() {
-		if closeOnError {
+		if closeOnError && spec.physicalBacking == nil {
 			_ = pinned.Close()
 		}
 	}()
@@ -562,6 +636,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		reachability: spec.Reachability, logicalObligations: logicalObligations,
 		stability: stability, namespace: spec.Namespace, pinned: pinned, pinnedRefs: pinnedRefs,
 		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, identityPin: identityPin,
+		releaseObservation: spec.releaseObservation, physicalBacking: spec.physicalBacking, ownedOperations: spec.OwnedOperations,
 	}
 	if spec.ContentSynced {
 		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
@@ -578,6 +653,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		}
 	}
 	closeOnError = false
+	physicalTransferred = true
 	return token, nil
 }
 
@@ -588,6 +664,23 @@ func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, dia
 }
 
 func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func()) (*StableResourceToken, error) {
+	if token.metadata != nil {
+		return token.cloneOwnedPinnedDirectory(logicalLane, resourceID, diagnosticPath, frontier, reachability, logicalObligations, directory, onRelease)
+	}
+	var observation *resourcePinnedBacking
+	if token.observationCleanup != nil {
+		var err error
+		observation, err = newOriginalObservationCleanup(token.observationCleanup.registry)
+		if err != nil {
+			return nil, err
+		}
+	}
+	transferredObservation := false
+	defer func() {
+		if observation != nil && !transferredObservation {
+			observation.release()
+		}
+	}()
 	if err := token.retainPinned(); err != nil {
 		return nil, err
 	}
@@ -634,7 +727,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 		stability: token.stability, namespace: token.namespace, pinned: token.pinned, pinnedRefs: token.pinnedRefs,
 		flush: token.flush, sync: token.sync,
 		syncedFrontier: cloneDurableFrontier(token.syncedFrontier), hasSyncedFrontier: token.hasSyncedFrontier,
-		onRelease: onRelease, identityPin: identityPin,
+		onRelease: onRelease, identityPin: identityPin, physicalBacking: token.physicalBacking, observationCleanup: observation,
 	}
 	cloned.owner.Store(uint32(ResourceOwnerToken))
 	cloned.metrics.registeredNanos = time.Now().UnixNano()
@@ -642,6 +735,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 		cloned.metrics.physicalFileSyncs.Store(1)
 	}
 	retainedPinned = false
+	transferredObservation = true
 	return cloned, nil
 }
 
@@ -681,7 +775,14 @@ func (token *StableResourceToken) flushThrough(frontier DurableFrontier) error {
 		return ErrResourceOwnership
 	}
 	started := time.Now()
-	err := token.flush(token.pinned, frontier)
+	var err error
+	if token.importedSource != nil {
+		err = token.importedSource.flushThrough(frontier)
+	} else if token.ownedOperations != nil {
+		err = token.ownedOperations.FlushThrough(token.pinned, frontier)
+	} else {
+		err = token.flush(token.pinned, frontier)
+	}
 	token.metrics.flushes.Add(1)
 	token.metrics.flushNanos.Add(uint64(time.Since(started)))
 	return err
@@ -699,7 +800,13 @@ func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
 	var err error
 	if !token.hasSyncedFrontier || !durableFrontierCovers(token.syncedFrontier, frontier) {
 		physicalStarted := time.Now()
-		err = token.sync(token.pinned, frontier)
+		if token.importedSource != nil {
+			err = token.importedSource.syncThrough(frontier)
+		} else if token.ownedOperations != nil {
+			err = token.ownedOperations.SyncThrough(token.pinned, frontier)
+		} else {
+			err = token.sync(token.pinned, frontier)
+		}
 		if err == nil {
 			token.metrics.physicalFileSyncs.Add(1)
 			token.metrics.physicalFileSyncNanos.Add(uint64(time.Since(physicalStarted)))
@@ -788,7 +895,7 @@ func (token *StableResourceToken) releasePinned() {
 		return
 	}
 	token.releasePinnedReference()
-	if token.namespace != nil {
+	if token.namespace != nil && token.importedSource == nil {
 		token.namespace.release()
 	}
 	token.identityPin.Release()
@@ -798,9 +905,28 @@ func (token *StableResourceToken) releasePinned() {
 	if token.onRelease != nil {
 		token.onRelease()
 	}
+	if token.observationCleanup != nil {
+		cleanup := token.observationCleanup
+		token.observationCleanup = nil
+		cleanup.finishOriginalObservation(token.releaseObservation, token.identity, token.namespace)
+	} else if token.releaseObservation != nil {
+		_ = token.releaseObservation.Unobserve(token.identity)
+	}
+	if token.metadata != nil {
+		token.pinned, token.pinnedRefs, token.physicalBacking, token.namespace, token.directory = nil, nil, nil, nil, nil
+		token.releaseMetadata()
+	} else if token.physicalBacking != nil {
+		// Added original physical backing has explicit disposal. Legacy scalar
+		// descriptors survive, but no refunded shared-handle alias may survive.
+		token.pinned, token.pinnedRefs, token.physicalBacking = nil, nil, nil
+	}
 }
 
 func (token *StableResourceToken) releasePinnedReference() {
+	if token.physicalBacking != nil {
+		token.physicalBacking.release()
+		return
+	}
 	if token.pinnedRefs == nil || token.pinnedRefs.Add(-1) == 0 {
 		_ = token.pinned.Close()
 	}
@@ -1139,7 +1265,33 @@ func StableNamespaceParentGeneration(parent *os.File) (uint64, error) {
 	return generation, nil
 }
 
+// Owned namespace errors use constructor-admitted embedded storage. Generic
+// namespace callers retain their existing errors.Join diagnostic semantics.
+type ownedNamespaceCleanupFailure struct {
+	causes [3]error
+	count  uint8
+}
+
+func (failure *ownedNamespaceCleanupFailure) Error() string { return "owned namespace cleanup failed" }
+func (failure *ownedNamespaceCleanupFailure) Unwrap() []error {
+	return failure.causes[:failure.count:failure.count]
+}
+func (failure *ownedNamespaceCleanupFailure) add(err error) {
+	if err != nil && failure.count < uint8(len(failure.causes)) {
+		failure.causes[failure.count] = err
+		failure.count++
+	}
+}
+
 type StableNamespaceToken struct {
+	cleanupFailure         ownedNamespaceCleanupFailure
+	cleanupRegistry        *IdentityPinRegistry
+	originalCleanup        *resourcePinnedBacking
+	failedNext             *StableNamespaceToken
+	metadata               *retainedalloc.Owner
+	metadataCharge         uint64
+	metadataScoped         bool
+	cleanupErr             error
 	parent                 *os.File
 	parentIdentity         StableIdentity
 	persistence            *os.File
@@ -1168,16 +1320,20 @@ type StableNamespaceToken struct {
 // to carry that one creation sync to later resource registration, where the
 // logical parent generation is finally known.
 type StableNamespaceCreationProof struct {
-	parent      *os.File
-	persistence *os.File
-	parentID    StableIdentity
-	childID     StableIdentity
-	name        string
-	adapter     namespacePersistenceAdapter
-	released    atomic.Bool
-	syncs       atomic.Uint64
-	syncNanos   atomic.Uint64
-	mu          sync.Mutex
+	cleanupFailure ownedNamespaceCleanupFailure
+	metadata       *retainedalloc.Owner
+	metadataCharge uint64
+	cleanupErr     error
+	parent         *os.File
+	persistence    *os.File
+	parentID       StableIdentity
+	childID        StableIdentity
+	name           string
+	adapter        namespacePersistenceAdapter
+	released       atomic.Bool
+	syncs          atomic.Uint64
+	syncNanos      atomic.Uint64
+	mu             sync.Mutex
 }
 
 // NewStableNamespaceCreationProof validates the exact parent/child link and
@@ -1186,7 +1342,37 @@ func NewStableNamespaceCreationProof(parent, child *os.File, name string) (*Stab
 	return newStableNamespaceCreationProof(parent, child, name, nativeNamespaceAdapter{})
 }
 
+// namespaceProofDiagnosticPath produces one owned backing, including slash
+// normalization, rather than retaining caller storage or an unpriced temporary.
+func namespaceProofDiagnosticPath(path string, owned bool) string {
+	if !owned {
+		return filepath.ToSlash(path)
+	}
+	var b strings.Builder
+	b.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		value := path[i]
+		if value == byte(filepath.Separator) {
+			value = '/'
+		}
+		b.WriteByte(value)
+	}
+	return b.String()
+}
+
+// NewOwnedStableNamespaceCreationProof admits added PRIMARY proof storage in
+// its existing arena owner. A nonnil proof returned with an error retains exact
+// failed-cleanup handles and must remain in the caller's existing custody field.
+func NewOwnedStableNamespaceCreationProof(parent, child *os.File, name string, metadata *retainedalloc.Owner) (*StableNamespaceCreationProof, error) {
+	if metadata == nil {
+		return nil, ErrResourceOwnership
+	}
+	return newStableNamespaceCreationProofWithMetadata(parent, child, name, nativeNamespaceAdapter{}, metadata)
+}
 func newStableNamespaceCreationProof(parent, child *os.File, name string, adapter namespacePersistenceAdapter) (*StableNamespaceCreationProof, error) {
+	return newStableNamespaceCreationProofWithMetadata(parent, child, name, adapter, nil)
+}
+func newStableNamespaceCreationProofWithMetadata(parent, child *os.File, name string, adapter namespacePersistenceAdapter, metadata *retainedalloc.Owner) (*StableNamespaceCreationProof, error) {
 	if parent == nil || child == nil || !stableChildBaseName(name) {
 		return nil, fmt.Errorf("%w: incomplete namespace creation proof", ErrUnresolvedResource)
 	}
@@ -1204,44 +1390,80 @@ func newStableNamespaceCreationProof(parent, child *os.File, name string, adapte
 	if err != nil {
 		return nil, err
 	}
-	pinned, err := duplicateStableFile(parent)
-	if err != nil {
-		return nil, fmt.Errorf("duplicate namespace proof parent: %w", err)
+	var charge uint64
+	if metadata != nil {
+		fileCharge, e := StableFileMetadataCharge(uint64(len(parent.Name()) + len("#stable-pin")))
+		if e != nil {
+			return nil, e
+		}
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableNamespaceCreationProof{}))) + retainedalloc.AllocationCharge(uint64(len(name))) + fileCharge
+		if stableNamespaceCreationPersistsThroughChild() {
+			childCharge, e := StableFileMetadataCharge(uint64(len(child.Name()) + len("#stable-pin")))
+			if e != nil {
+				return nil, e
+			}
+			charge += childCharge
+		}
+		if e := metadata.AddPending(charge); e != nil {
+			return nil, e
+		}
 	}
-	persistence := pinned
+	proof := &StableNamespaceCreationProof{parentID: parentID, childID: childID, name: name, adapter: adapter, metadata: metadata, metadataCharge: charge}
+	if metadata != nil {
+		proof.name = strings.Clone(name)
+	}
+	fail := func(cause error) (*StableNamespaceCreationProof, error) {
+		closeErr := proof.ReleaseWithError()
+		if closeErr != nil && metadata != nil {
+			proof.cleanupFailure.add(cause)
+			return proof, &proof.cleanupFailure
+		}
+		return nil, errors.Join(cause, closeErr)
+	}
+	proof.parent, err = duplicateStableFile(parent)
+	if err != nil {
+		return fail(fmt.Errorf("duplicate namespace proof parent: %w", err))
+	}
+	proof.persistence = proof.parent
 	if stableNamespaceCreationPersistsThroughChild() {
-		persistence, err = duplicateStableFile(child)
+		proof.persistence, err = duplicateStableFile(child)
 		if err != nil {
-			_ = pinned.Close()
-			return nil, fmt.Errorf("duplicate namespace proof child: %w", err)
+			return fail(fmt.Errorf("duplicate namespace proof child: %w", err))
 		}
 	}
 	started := time.Now()
-	err = adapter.Sync(persistence)
-	syncNanos := uint64(time.Since(started))
+	err = adapter.Sync(proof.persistence)
 	if err != nil {
-		if persistence != pinned {
-			_ = persistence.Close()
-		}
-		_ = pinned.Close()
-		return nil, err
+		return fail(err)
 	}
-	proof := &StableNamespaceCreationProof{parent: pinned, persistence: persistence, parentID: parentID, childID: childID, name: name, adapter: adapter}
 	proof.syncs.Store(1)
-	proof.syncNanos.Store(syncNanos)
+	proof.syncNanos.Store(uint64(time.Since(started)))
 	return proof, nil
 }
 
 // Bind returns an already-stable normal namespace token after proving the
 // retained parent still links the original child. It never syncs again.
 func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*StableNamespaceToken, error) {
+	return proof.bindWithMetadata(parent, parentGeneration, name, diagnosticPath, nil, false)
+}
+
+// BindWithMetadata admits only the new independent descriptor/duplicate handle.
+// The retained proof keeps its original owner; actual identity validation and
+// the completed namespace sync remain the same core used by ordinary Bind.
+func (proof *StableNamespaceCreationProof) BindWithMetadata(parent *os.File, parentGeneration uint64, name, diagnosticPath string, metadata *retainedalloc.Owner) (*StableNamespaceToken, error) {
+	if metadata == nil {
+		return nil, ErrResourceOwnership
+	}
+	return proof.bindWithMetadata(parent, parentGeneration, name, diagnosticPath, metadata, true)
+}
+func (proof *StableNamespaceCreationProof) bindWithMetadata(parent *os.File, parentGeneration uint64, name, diagnosticPath string, metadata *retainedalloc.Owner, supplied bool) (*StableNamespaceToken, error) {
 	if proof == nil || proof.released.Load() {
 		return nil, ErrResourceOwnership
 	}
 	if parentGeneration == 0 {
 		return nil, fmt.Errorf("%w: namespace creation proof binding requires a parent generation", ErrUnresolvedResource)
 	}
-	if parent == nil || name != proof.name || !stableChildBaseName(name) {
+	if parent == nil || !stableChildBaseName(name) {
 		return nil, fmt.Errorf("%w: namespace creation proof binding differs from the exact parent or child name", ErrResourceConflict)
 	}
 	if err := validateDiagnosticPath(diagnosticPath); err != nil {
@@ -1251,6 +1473,12 @@ func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneratio
 	defer proof.mu.Unlock()
 	if proof.released.Load() {
 		return nil, ErrResourceOwnership
+	}
+	if !supplied {
+		metadata = proof.metadata
+	}
+	if name != proof.name {
+		return nil, ErrResourceConflict
 	}
 	parentID, err := proof.adapter.Identity(parent)
 	if err != nil {
@@ -1262,42 +1490,100 @@ func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneratio
 	if err := proof.adapter.ValidateIdentity(proof.parent, proof.childID, proof.name); err != nil {
 		return nil, err
 	}
+	var charge uint64
+	if metadata != nil {
+		fileCharge, e := StableFileMetadataCharge(uint64(len(proof.parent.Name()) + len("#stable-pin")))
+		if e != nil {
+			return nil, e
+		}
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableNamespaceToken{}))) + fileCharge + retainedalloc.AllocationCharge(uint64(len(proof.name))) + retainedalloc.AllocationCharge(uint64(len(diagnosticPath)))
+		if e = metadata.AddPending(charge); e != nil {
+			return nil, e
+		}
+	}
+	admitted := false
+	defer func() {
+		if !admitted && charge != 0 {
+			metadata.RemovePending(charge)
+		}
+	}()
 	pinned, err := duplicateStableFile(proof.parent)
 	if err != nil {
 		return nil, err
 	}
-	parentID, err = proof.adapter.Identity(pinned)
-	if err != nil {
-		_ = pinned.Close()
-		return nil, err
-	}
+	// duplicateStableFile preserves the exact already-validated parent object.
+	// Do not introduce a second fallible identity operation after duplication.
+	parentID = proof.parentID
 	parentID.Generation = parentGeneration
 	persistenceID := parentID
 	persistenceID.Generation = 0
-	token := &StableNamespaceToken{parent: pinned, parentIdentity: parentID, persistence: pinned, persistenceIdentity: persistenceID, linkedResourceIdentity: proof.childID, hasLinkedResource: true, operation: NamespaceCreate, newName: proof.name, diagnosticPath: filepath.ToSlash(diagnosticPath), adapter: proof.adapter}
+	token := &StableNamespaceToken{parent: pinned, parentIdentity: parentID, persistence: pinned, persistenceIdentity: persistenceID, linkedResourceIdentity: proof.childID, hasLinkedResource: true, operation: NamespaceCreate, newName: proof.name, diagnosticPath: namespaceProofDiagnosticPath(diagnosticPath, metadata != nil), adapter: proof.adapter, metadata: metadata, metadataCharge: charge, metadataScoped: metadata != nil}
+	if metadata != nil {
+		token.newName = strings.Clone(proof.name)
+	}
+	admitted = true
 	token.state.Store(namespaceStable)
 	token.syncs.Store(proof.syncs.Load())
 	token.syncNanos.Store(proof.syncNanos.Load())
 	return token, nil
 }
 
-func (proof *StableNamespaceCreationProof) Release() {
+func (proof *StableNamespaceCreationProof) Release() { _ = proof.ReleaseWithError() }
+
+// ReleaseWithError keeps failed physical custody in this SAME proof. There is
+// no retry worker, replacement registry or post-release authorization.
+func (proof *StableNamespaceCreationProof) ReleaseWithError() error {
 	if proof == nil {
-		return
+		return nil
 	}
 	proof.mu.Lock()
 	defer proof.mu.Unlock()
 	if proof.released.Swap(true) {
-		return
+		return proof.cleanupErr
 	}
 	parent, persistence := proof.parent, proof.persistence
-	proof.parent, proof.persistence = nil, nil
 	if persistence != nil && persistence != parent {
-		_ = persistence.Close()
+		e := persistence.Close()
+		if e == nil || errors.Is(e, os.ErrClosed) {
+			proof.persistence = nil
+		} else {
+			if proof.metadata != nil {
+				proof.cleanupFailure.add(e)
+				proof.cleanupErr = &proof.cleanupFailure
+			} else {
+				proof.cleanupErr = errors.Join(proof.cleanupErr, e)
+			}
+		}
 	}
 	if parent != nil {
-		_ = parent.Close()
+		e := parent.Close()
+		if e == nil || errors.Is(e, os.ErrClosed) {
+			proof.parent = nil
+			if persistence == parent {
+				proof.persistence = nil
+			}
+		} else {
+			if proof.metadata != nil {
+				proof.cleanupFailure.add(e)
+				proof.cleanupErr = &proof.cleanupFailure
+			} else {
+				proof.cleanupErr = errors.Join(proof.cleanupErr, e)
+			}
+		}
 	}
+	if proof.metadata != nil {
+		if proof.cleanupErr != nil {
+			proof.metadata.CleanupFailed()
+			return proof.cleanupErr
+		}
+		metadata, charge := proof.metadata, proof.metadataCharge
+		proof.name = ""
+		proof.adapter = nil
+		proof.metadata = nil
+		proof.metadataCharge = 0
+		metadata.RemovePending(charge)
+	}
+	return proof.cleanupErr
 }
 
 const (
@@ -1328,7 +1614,32 @@ func NewRecoveredStableNamespaceToken(spec StableNamespaceSpec, expectedParent S
 	return token, nil
 }
 
+// NewRecoveredStableNamespaceTokenWithMetadata shares exact recovery validation
+// with the legacy route, but admits newly retained descriptor/handle backing.
+func NewRecoveredStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, expectedParent StableIdentity, metadata *retainedalloc.Owner, registry *IdentityPinRegistry) (*StableNamespaceToken, error) {
+	if metadata == nil {
+		return NewRecoveredStableNamespaceToken(spec, expectedParent)
+	}
+	token, err := newStableNamespaceTokenWithMetadata(spec, nativeNamespaceAdapter{}, metadata, registry)
+	if err != nil {
+		return nil, err
+	}
+	if token.parentIdentity.Generation != expectedParent.Generation || !SamePhysicalIdentity(token.parentIdentity, expectedParent) {
+		cause := ErrResourceConflict
+		if cleanupErr := token.ReleaseWithError(); cleanupErr != nil {
+			token.cleanupFailure.add(cause)
+			return nil, &token.cleanupFailure
+		}
+		return nil, cause
+	}
+	token.state.Store(namespaceStable)
+	return token, nil
+}
+
 func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersistenceAdapter) (*StableNamespaceToken, error) {
+	return newStableNamespaceTokenWithMetadata(spec, adapter, nil, nil)
+}
+func newStableNamespaceTokenWithMetadata(spec StableNamespaceSpec, adapter namespacePersistenceAdapter, metadata *retainedalloc.Owner, registry *IdentityPinRegistry) (*StableNamespaceToken, error) {
 	if spec.Parent == nil || spec.ParentGeneration == 0 || spec.Operation == NamespaceNone || spec.NewName == "" || adapter == nil {
 		return nil, fmt.Errorf("%w: incomplete namespace registration", ErrUnresolvedResource)
 	}
@@ -1354,14 +1665,66 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 		}
 		linkedIdentity.Generation = 0
 	}
+	// The exact constructor reserves all independently allocated descriptor and
+	// duplicate-handle storage before either exists. Its original registry is
+	// the failure authority; selected ownership never changes physical identity.
+	var charge uint64
+	if metadata != nil {
+		if registry == nil {
+			return nil, ErrResourceOwnership
+		}
+		fileCharge, err := StableFileMetadataCharge(uint64(len(spec.Parent.Name()) + len("#stable-pin")))
+		if err != nil {
+			return nil, err
+		}
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableNamespaceToken{}))) + fileCharge
+		for _, text := range [...]string{spec.OldName, spec.NewName, spec.DiagnosticPath} {
+			charge += retainedalloc.AllocationCharge(uint64(len(text)))
+		}
+		if stableNamespaceCreationPersistsThroughChild() && spec.Operation == NamespaceCreate && spec.LinkedResource != nil {
+			suffix := len("#stable-pin")
+			if runtime.GOOS == "windows" {
+				suffix = len("#stable-sync-pin")
+			}
+			childCharge, err := StableFileMetadataCharge(uint64(len(spec.LinkedResource.Name()) + suffix))
+			if err != nil {
+				return nil, err
+			}
+			charge += childCharge
+		}
+		if err := metadata.AddPending(charge); err != nil {
+			return nil, err
+		}
+		spec.OldName, spec.NewName = strings.Clone(spec.OldName), strings.Clone(spec.NewName)
+	}
+	token := &StableNamespaceToken{metadata: metadata, metadataCharge: charge, metadataScoped: metadata != nil, cleanupRegistry: registry,
+		linkedResourceIdentity: linkedIdentity, hasLinkedResource: hasLinkedResource, operation: spec.Operation,
+		oldName: spec.OldName, newName: spec.NewName, diagnosticPath: namespaceProofDiagnosticPath(spec.DiagnosticPath, metadata != nil), adapter: adapter}
+	fail := func(cause error) (*StableNamespaceToken, error) {
+		if metadata == nil {
+			return nil, cause
+		}
+		cleanupErr := token.ReleaseWithError()
+		if cleanupErr != nil {
+			token.cleanupFailure.add(cause)
+			return nil, &token.cleanupFailure
+		}
+		return nil, cause
+	}
 	pinned, err := duplicateStableFile(spec.Parent)
 	if err != nil {
-		return nil, fmt.Errorf("duplicate namespace handle: %w", err)
+		if metadata != nil {
+			return fail(err)
+		}
+		return fail(fmt.Errorf("duplicate namespace handle: %w", err))
 	}
+	token.parent = pinned
 	identity, err := adapter.Identity(pinned)
 	if err != nil {
-		_ = pinned.Close()
-		return nil, err
+		if metadata == nil {
+			_ = pinned.Close()
+		}
+		return fail(err)
 	}
 	identity.Generation = spec.ParentGeneration
 	persistence := pinned
@@ -1370,23 +1733,27 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 	if stableNamespaceCreationPersistsThroughChild() && spec.Operation == NamespaceCreate && spec.LinkedResource != nil {
 		persistence, err = duplicateStableSyncFile(spec.LinkedResource)
 		if err != nil {
-			_ = pinned.Close()
-			return nil, fmt.Errorf("duplicate namespace creation resource: %w", err)
+			if metadata == nil {
+				_ = pinned.Close()
+			}
+			if metadata != nil {
+				return fail(err)
+			}
+			return fail(fmt.Errorf("duplicate namespace creation resource: %w", err))
 		}
+		token.persistence = persistence
 		persistenceIdentity, err = adapter.Identity(persistence)
 		if err != nil {
-			_ = persistence.Close()
-			_ = pinned.Close()
-			return nil, err
+			if metadata == nil {
+				_ = persistence.Close()
+				_ = pinned.Close()
+			}
+			return fail(err)
 		}
 		persistenceIdentity.Generation = 0
 	}
-	return &StableNamespaceToken{
-		parent: pinned, parentIdentity: identity, persistence: persistence, persistenceIdentity: persistenceIdentity, linkedResourceIdentity: linkedIdentity,
-		hasLinkedResource: hasLinkedResource, operation: spec.Operation,
-		oldName: spec.OldName, newName: spec.NewName,
-		diagnosticPath: filepath.ToSlash(spec.DiagnosticPath), adapter: adapter,
-	}, nil
+	token.parentIdentity, token.persistence, token.persistenceIdentity = identity, persistence, persistenceIdentity
+	return token, nil
 }
 
 // OpenStableChildFile opens or creates name relative to the exact already-open
@@ -1775,14 +2142,14 @@ func (token *StableNamespaceToken) validateStable() error {
 	if token == nil {
 		return nil
 	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.metadataScoped && token.released.Load() {
+		return ErrResourceOwnership
+	}
 	switch token.state.Load() {
 	case namespaceStable:
 		if token.hasLinkedResource {
-			token.mu.Lock()
-			defer token.mu.Unlock()
-			if token.state.Load() == namespaceFailed {
-				return token.stabilizeErr
-			}
 			if err := token.adapter.ValidateIdentity(token.parent, token.linkedResourceIdentity, token.newName); err != nil {
 				token.stabilizeErr = err
 				token.state.Store(namespaceFailed)
@@ -1791,10 +2158,7 @@ func (token *StableNamespaceToken) validateStable() error {
 		}
 		return nil
 	case namespaceFailed:
-		token.mu.Lock()
-		err := token.stabilizeErr
-		token.mu.Unlock()
-		return err
+		return token.stabilizeErr
 	default:
 		return ErrNamespaceUnstable
 	}
@@ -1818,6 +2182,23 @@ func (token *StableNamespaceToken) cloneStable() (*StableNamespaceToken, error) 
 	if token.released.Load() || token.state.Load() != namespaceStable || token.parent == nil {
 		return nil, ErrResourceOwnership
 	}
+	var charge uint64
+	if token.metadata != nil {
+		fileCharge, e := StableFileMetadataCharge(uint64(len(token.parent.Name()) + len("#stable-pin")))
+		if e != nil {
+			return nil, e
+		}
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(StableNamespaceToken{}))) + fileCharge + retainedalloc.AllocationCharge(uint64(len(token.oldName))) + retainedalloc.AllocationCharge(uint64(len(token.newName))) + retainedalloc.AllocationCharge(uint64(len(token.diagnosticPath)))
+		if e = token.metadata.AddPending(charge); e != nil {
+			return nil, e
+		}
+	}
+	admitted := false
+	defer func() {
+		if !admitted && charge != 0 {
+			token.metadata.RemovePending(charge)
+		}
+	}()
 	pinned, err := duplicateStableFile(token.parent)
 	if err != nil {
 		return nil, fmt.Errorf("duplicate stable namespace handle: %w", err)
@@ -1832,11 +2213,36 @@ func (token *StableNamespaceToken) cloneStable() (*StableNamespaceToken, error) 
 		diagnosticPath:         token.diagnosticPath,
 		adapter:                token.adapter,
 	}
+	clone.metadata, clone.metadataCharge, clone.metadataScoped = token.metadata, charge, token.metadataScoped
+	if token.metadata != nil {
+		clone.oldName = strings.Clone(token.oldName)
+		clone.newName = strings.Clone(token.newName)
+		clone.diagnosticPath = strings.Clone(token.diagnosticPath)
+	}
+	admitted = true
 	clone.state.Store(namespaceStable)
 	return clone, nil
 }
 
 func (token *StableNamespaceToken) compatible(other *StableNamespaceToken) bool {
+	if token == nil || other == nil {
+		return token == other
+	}
+	// Names belong to the exact token allocation and selected tokens clear them
+	// on successful cleanup. Join both existing locks in stable address order.
+	first, second := token, other
+	if uintptr(unsafe.Pointer(first)) > uintptr(unsafe.Pointer(second)) {
+		first, second = second, first
+	}
+	first.mu.Lock()
+	defer first.mu.Unlock()
+	if second != first {
+		second.mu.Lock()
+		defer second.mu.Unlock()
+	}
+	if (token.metadataScoped && token.released.Load()) || (other.metadataScoped && other.released.Load()) {
+		return false
+	}
 	if token.parentIdentity != other.parentIdentity || token.operation != other.operation ||
 		token.oldName != other.oldName || token.newName != other.newName ||
 		token.hasLinkedResource != other.hasLinkedResource {
@@ -1848,6 +2254,11 @@ func (token *StableNamespaceToken) compatible(other *StableNamespaceToken) bool 
 func (token *StableNamespaceToken) validateLinkedResource(identity StableIdentity) error {
 	if token == nil {
 		return nil
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.metadataScoped && token.released.Load() {
+		return ErrResourceOwnership
 	}
 	if !token.hasLinkedResource {
 		return fmt.Errorf("%w: namespace operation %s for %q has no exact linked child", ErrUnresolvedResource, token.operation, token.newName)
@@ -1884,27 +2295,117 @@ func (token *StableNamespaceToken) release() {
 	if token.refs.Add(-1) > 0 {
 		return
 	}
-	if !token.released.Swap(true) {
-		if token.persistence != nil && token.persistence != token.parent {
-			_ = token.persistence.Close()
-		}
-		_ = token.parent.Close()
-	}
+	token.releaseLocked()
 }
 
-func (token *StableNamespaceToken) Release() {
-	if token == nil {
-		return
+// BindCleanupRegistry is a one-time attachment to the DB's existing physical
+// identity authority, before a selected token can acquire/release this edge.
+func (token *StableNamespaceToken) BindCleanupRegistry(registry *IdentityPinRegistry) error {
+	if token == nil || registry == nil {
+		return ErrResourceOwnership
 	}
 	token.mu.Lock()
 	defer token.mu.Unlock()
-	if token.refs.Load() != 0 || token.released.Swap(true) {
+	if token.released.Load() || (token.cleanupRegistry != nil && token.cleanupRegistry != registry) {
+		return ErrResourceOwnership
+	}
+	if token.metadata == nil && token.cleanupRegistry == nil {
+		cleanup, err := newOriginalObservationCleanup(registry)
+		if err != nil {
+			return err
+		}
+		token.originalCleanup = cleanup
+	}
+	token.cleanupRegistry = registry
+	return nil
+}
+func (token *StableNamespaceToken) Release() { _ = token.ReleaseWithError() }
+
+// ReleaseWithError preserves the original void API while construction callers
+// can propagate an actual failed final handle cleanup. Nonlast release does
+// not certify completion; the retaining token remains its physical authority.
+func (token *StableNamespaceToken) ReleaseWithError() error {
+	if token == nil {
+		return nil
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.refs.Load() != 0 {
+		return nil
+	}
+	token.releaseLocked()
+	return token.cleanupErr
+}
+func (token *StableNamespaceToken) releaseLocked() {
+	if token.released.Swap(true) {
 		return
 	}
-	if token.persistence != nil && token.persistence != token.parent {
-		_ = token.persistence.Close()
+	if token.metadata == nil && token.cleanupRegistry == nil {
+		if token.persistence != nil && token.persistence != token.parent {
+			_ = token.persistence.Close()
+		}
+		if token.parent != nil {
+			_ = token.parent.Close()
+		}
+		return
 	}
-	_ = token.parent.Close()
+	parent, persistence := token.parent, token.persistence
+	if persistence != nil && persistence != parent {
+		e := persistence.Close()
+		if e == nil || errors.Is(e, os.ErrClosed) {
+			token.persistence = nil
+		} else {
+			token.cleanupFailure.add(e)
+			token.cleanupErr = &token.cleanupFailure
+		}
+	}
+	if parent != nil {
+		e := parent.Close()
+		if e == nil || errors.Is(e, os.ErrClosed) {
+			token.parent = nil
+			if persistence == parent {
+				token.persistence = nil
+			}
+		} else {
+			token.cleanupFailure.add(e)
+			token.cleanupErr = &token.cleanupFailure
+		}
+	}
+	if token.cleanupErr != nil {
+		if token.metadata != nil {
+			token.metadata.CleanupFailed()
+		}
+		if token.originalCleanup != nil {
+			cleanup := token.originalCleanup
+			token.originalCleanup = nil
+			cleanup.failure = token.cleanupErr
+			cleanup.namespace = token
+			cleanup.refs.Store(0)
+			cleanup.owner.CleanupFailed()
+			token.cleanupRegistry.retainFailedPinnedBacking(cleanup)
+		}
+		if token.cleanupRegistry != nil {
+			token.cleanupRegistry.retainFailedNamespace(token)
+		}
+		return
+	}
+	// Original generic namespace descriptors preserve their legacy diagnostic
+	// lifetime; only their consumed physical handles are cleared.
+	if token.metadata == nil {
+		cleanup := token.originalCleanup
+		token.originalCleanup, token.cleanupRegistry = nil, nil
+		cleanup.release()
+		return
+	}
+	metadata, charge := token.metadata, token.metadataCharge
+	token.metadata = nil
+	token.metadataCharge = 0
+	token.oldName = ""
+	token.newName = ""
+	token.diagnosticPath = ""
+	token.adapter = nil
+	token.cleanupRegistry = nil
+	metadata.RemovePending(charge)
 }
 
 type ResourceKindStats struct {
@@ -1932,3 +2433,5 @@ type ResourceKindStats struct {
 }
 
 var _ io.ReaderAt = (*StableResourceToken)(nil)
+
+func DuplicateStableFile(file *os.File) (*os.File, error) { return duplicateStableFile(file) }

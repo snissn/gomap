@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -135,7 +136,12 @@ func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpubl
 			required[generation] = minimumBytes
 		}
 	}
-	descriptors := resources.PhysicalDescriptors()
+	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		return captureErr
+	}
+	defer diagnostics.Close()
+	descriptors := diagnostics.Physical()
 	for _, descriptor := range descriptors {
 		fields := descriptor.ReachabilityFields()
 		if len(fields) != 1 {
@@ -231,6 +237,9 @@ type leafPageLogProtectedRootPairSnapshotProvider interface {
 	ProtectedLeafGenerationRootIDPairSnapshot() (rootIDs []uint64, systemRootIDs []uint64, version uint64)
 }
 
+type leafPageLogStableMetadataBinder interface {
+	bindStableResourceMetadata(*retainedalloc.Owner) error
+}
 type leafPageLogStableRegistryBinder interface {
 	bindStableResourcePinRegistry(*rootpublication.IdentityPinRegistry) error
 }
@@ -979,6 +988,13 @@ func (db *DB) setLeafPageLog(log LeafPageLog, wrap bool) {
 	}
 	if binder, ok := log.(leafPageLogStableDictionaryBinder); ok {
 		_ = binder.bindStableDictionaryResourceProvider(db.stableDictionaryResourceProvider)
+	}
+	if binder, ok := log.(leafPageLogStableMetadataBinder); ok {
+		if err := binder.bindStableResourceMetadata(db.StableResourceMetadataOwner()); err != nil {
+			if writer, ok := log.(*rewriteWriter); ok {
+				writer.stableRegistryErr = err
+			}
+		}
 	}
 	installed := log
 	if wrap {

@@ -64,7 +64,7 @@ func (p *Pager) growLoop() {
 				break
 			}
 			if err := p.growToCapacity(target); err != nil {
-				p.growTarget.Store(0)
+				p.growTarget.CompareAndSwap(target, 0)
 				break
 			}
 
@@ -96,70 +96,32 @@ func (p *Pager) currentCapacityBytes() int64 {
 	return int64(len(p.chunks)) * p.chunkSize
 }
 
-func (p *Pager) growToCapacity(targetCapacity int64) error {
-	if targetCapacity < 0 {
-		return fmt.Errorf("invalid target capacity: %d", targetCapacity)
+// Capacity-only and logical growth drain the same private operation. A stale
+// ordinary attempt cancels before retry, without exposing a new Busy outcome.
+func (p *Pager) growToCapacity(target int64) error {
+	p.allocMu.Lock()
+	defer p.allocMu.Unlock()
+	if target < 0 {
+		return fmt.Errorf("invalid target capacity: %d", target)
 	}
-
-	p.growMu.Lock()
-	defer p.growMu.Unlock()
-
-	currentCapacity := p.currentCapacityBytes()
-	if targetCapacity <= currentCapacity {
-		return nil
-	}
-
-	targetCapacity = ((targetCapacity + p.chunkSize - 1) / p.chunkSize) * p.chunkSize
-	if p.memoryOnly {
-		chunksNeeded := (targetCapacity - currentCapacity) / p.chunkSize
-		newChunks := make([][]byte, chunksNeeded)
-		for i := range newChunks {
-			newChunks[i] = make([]byte, p.chunkSize)
-		}
-		p.mu.Lock()
-		p.chunks = append(p.chunks, newChunks...)
-		updated := make([][]byte, len(p.chunks))
-		copy(updated, p.chunks)
-		p.atomicChunks.Store(&chunkList{data: updated})
-		p.ensurePrefetchCapacityLocked(len(p.chunks))
-		p.mu.Unlock()
-		return nil
-	}
-
-	// Best-effort preallocation to fail fast on ENOSPC and reduce SIGBUS risk
-	// on mmap writes (platform/filesystem dependent).
-	if err := preallocateFile(p.file, targetCapacity); err != nil {
-		return err
-	}
-	if err := p.file.Truncate(targetCapacity); err != nil {
-		return err
-	}
-
-	chunksNeeded := (targetCapacity - currentCapacity) / p.chunkSize
-	if chunksNeeded <= 0 {
-		return nil
-	}
-
-	newChunks := make([][]byte, 0, chunksNeeded)
-	for i := int64(0); i < chunksNeeded; i++ {
-		offset := currentCapacity + (i * p.chunkSize)
-		data, err := mmapFile(p.file.Fd(), offset, int(p.chunkSize), p.mmapPopulate)
+	for {
+		g, _, err := NewGrowthForPager(p, 0, nil)
 		if err != nil {
-			for _, c := range newChunks {
-				_ = munmapFile(c)
-			}
 			return err
 		}
-		madviseChunk(data)
-		newChunks = append(newChunks, data)
+		g.logical = false
+		g.capacityTarget = target
+		for {
+			done, e := g.stepLocked(p, nil, 0, 0, nil)
+			if e == ErrGrowthStale {
+				break
+			}
+			if e != nil {
+				return e
+			}
+			if done {
+				return nil
+			}
+		}
 	}
-
-	p.mu.Lock()
-	p.chunks = append(p.chunks, newChunks...)
-	updated := make([][]byte, len(p.chunks))
-	copy(updated, p.chunks)
-	p.atomicChunks.Store(&chunkList{data: updated})
-	p.ensurePrefetchCapacityLocked(len(p.chunks))
-	p.mu.Unlock()
-	return nil
 }

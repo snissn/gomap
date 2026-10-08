@@ -141,6 +141,33 @@ recovery-required error unless the caller explicitly requests a stale read-only
 mode. Silent stale read-only open is incompatible with durable-at-ack command
 semantics.
 
+## Selected PRIMARY capsule recovery
+
+For a checked V6 `index.db.primary` arena, Open decodes exactly the two fixed
+complete three-page capsules. It independently validates each current root
+and its embedded one-hop parent: complete capsule/directory integrity, actual
+DATA allocator and system/base generation, physical component closure, exact
+external-file identities and persistent value-log dependencies. Selection
+uses descending valid commit order; corruption of the newest capsule selects
+the valid older slot, with that older slot's own view and applied frontier.
+If both eligible slots are invalid, Open fails. An embedded parent or older
+bank record is never promoted into an additional recovery candidate.
+DATA META pages supply no fallback authority in this selected format.
+
+Arena bank recovery runs once at Open from the actual eligible slot and parent
+closures. Open then constructs genuinely owned copied read roots. Live slot
+reuse cannot change an old Snapshot or captured recoverable-root read operand.
+Read-only opens validate without repairing slots. Restore rebinds both
+independent capsules and all current/parent dependencies in unpublished
+copies before namespace installation; plain filesystem copying does not
+rebind external identities.
+
+An uncertain live capsule install keeps prior reader/slot custody and refuses
+subsequent writes with `ErrRecoveryRequired` until normal reopen. Deferred
+physical cuts retain independent file/namespace ownership and captured fixed
+images through slot reuse and DB.Close. Public Snapshot reads after owning
+DB.Close remain outside the normal Snapshot lifetime contract.
+
 ## 2. Backend Index Recovery
 
 ### 2.1 New DB bootstrap
@@ -774,3 +801,28 @@ parent directory sync; ambiguous deletion poisons the handle. Recovery does not
 interpret leftover private `manifest.gc.*.tmp` evidence as an unreferenced
 revision to delete. Further revision maintenance refuses that evidence pending
 explicit recovery investigation.
+
+## Joint DATA/PRIMARY capsule vacuum recovery
+
+V6 vacuum fences the complete private pair, current/parent dependencies and
+staging names before a checksummed `TDJCOM06` COMMIT in `index.db.new.ready`.
+The decision binds retained directory, both physical identities, PRIMARY UUID
+and actual DATA generation. It selects those files, not historical records.
+
+Under LOCK, writable Open and offline vacuum inspect COMMIT before legacy
+cleanup and writable pager Open. Resolve each committed file at its exact
+canonical or staging name, validate at least one of the two complete eligible
+capsules and parent closure, replace DATA then PRIMARY, and sync the parent
+after each replacement. Recovery interruption is idempotent. Durably delete
+the decision before admitting writers. Read-only refuses repair.
+
+Invalid/truncated structured markers, unknown magic/version, bad checksums
+or missing identities preserve all operands and return `ErrRecoveryRequired`.
+They never enter legacy `.new`/`.bak` cleanup. Legacy accepts its actual exact
+`ready\n` payload. Single-slot corruption preserves the exact other slot's
+eligibility; embedded parents remain one-hop proofs.
+
+Post-COMMIT errors poison mutation and retain unpublished root/dependency
+custody with the exact generation through teardown. Reopen rolls forward
+the committed pair. Process-exit cutpoint tests do not constitute device or
+power-loss persistence qualification.

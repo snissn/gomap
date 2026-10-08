@@ -3,6 +3,7 @@ package memtable
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"math"
 	"sync"
 	"unsafe"
@@ -122,6 +123,49 @@ func (b *COWBudget) AcquireExternal(bytes uint64) (*COWExternalLease, error) {
 	return &COWExternalLease{budget: b, charge: charge}, nil
 }
 
+// AcquireRetention lets the existing storage owner share one governing lease
+// across basis/dictionary captures from this exact budget.
+func (b *COWBudget) AcquireRetention(bytes uint64) (retainedalloc.Lease, error) {
+	return b.AcquireExternal(bytes)
+}
+
+// Resize admits producer growth before allocation. Shrink is always permitted,
+// including after budget Close, and follows actual storage cleanup.
+func (l *COWExternalLease) Resize(bytes uint64) error {
+	if l == nil {
+		return ErrCOWClosed
+	}
+	target, ok := cowAdd(bytes, cowAllocation(uint64(unsafe.Sizeof(COWExternalLease{}))))
+	if !ok {
+		return ErrCOWCapacity
+	}
+	b := l.budget
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if l.closed {
+		return ErrCOWClosed
+	}
+	if target > l.charge {
+		delta := target - l.charge
+		if b.closed {
+			return ErrCOWClosed
+		}
+		if !cowFits(b.limits.MaxInFlightBytes, b.stats.ReservedBytes, delta) ||
+			!b.retirementFitsLocked(delta) || !b.addLocked(delta) {
+			return ErrCOWCapacity
+		}
+		b.stats.ReservedBytes += delta
+		b.stats.ExternalBytes += delta
+	} else {
+		delta := l.charge - target
+		b.stats.TotalBytes -= delta
+		b.stats.ReservedBytes -= delta
+		b.stats.ExternalBytes -= delta
+	}
+	l.charge = target
+	return nil
+}
+
 // Close is idempotent and may race another Close. The owning caller releases
 // all charged buffers/wrappers/resources before closing this allocation lease.
 func (l *COWExternalLease) Close() {
@@ -164,28 +208,7 @@ func cowAdd(a, c uint64) (uint64, bool) {
 // capacity. Include conservative space for pointer-bearing small-object GC
 // headers before rounding; callers apply this once to raw allocation capacities.
 // This deliberately also charges the allowance for pointer-free payload bytes.
-func cowAllocation(n uint64) uint64 {
-	if n == 0 {
-		return 0
-	}
-	if n > math.MaxInt64-8192-16 {
-		return math.MaxUint64
-	}
-	// Go1.26 gc.MinSizeForMallocHeader is PtrSize*PtrBits; its header is
-	// eight bytes. Sixteen bytes conservatively covers it before rounding.
-	ptrSize := uint64(unsafe.Sizeof(uintptr(0)))
-	if n > ptrSize*ptrSize*8 && n < 32768 {
-		n += 16
-	}
-	if n <= 32768 {
-		c := uint64(16)
-		for c < n {
-			c *= 2
-		}
-		return c
-	}
-	return (n + 8191) &^ uint64(8191)
-}
+func cowAllocation(n uint64) uint64 { return retainedalloc.AllocationCharge(n) }
 
 func (b *COWBudget) addLocked(n uint64) bool {
 	total, ok := cowAdd(b.stats.TotalBytes, n)

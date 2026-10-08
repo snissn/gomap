@@ -248,3 +248,75 @@ func TestFlushSpanRunChunkSplitFixtureEntryChunksSplitTargetLeaf(t *testing.T) {
 		t.Fatalf("leaf-aware chunking split target leaves: %+v", leafAware)
 	}
 }
+
+func TestPrimaryAbsenceFlushSpanChunksPreserveLogicalCoverage(t *testing.T) {
+	d, err := Open(Options{Dir: t.TempDir(), IndexPrimaryDirectory: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	for _, key := range []string{"b", "d"} {
+		if err := d.SetSync([]byte(key), []byte("prior")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range []string{"a", "c", "e"} {
+		if err := d.DeleteSync([]byte(key)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ops := []batch.Entry{{Key: []byte("a"), Type: batch.OpPut, Value: []byte("one")}, {Key: []byte("b"), Type: batch.OpPut, Value: []byte("two")}, {Key: []byte("c"), Type: batch.OpPut, Value: []byte("three")}, {Key: []byte("d"), Type: batch.OpPut, Value: []byte("four")}, {Key: []byte("e"), Type: batch.OpPut, Value: []byte("five")}}
+	for _, only := range []bool{false, true} {
+		selected := ops
+		physical := 2
+		if only {
+			selected = []batch.Entry{ops[0], ops[2], ops[4]}
+			physical = 0
+		}
+		req := FlushSpanRunPlanRequest{SourceMemtables: 2, SourcePointOps: len(selected), PlannedPointOps: len(selected), PointOps: selected}
+		if _, err := d.PlanFlushSpanRun(req); err == nil {
+			t.Fatal("exact physical metadata accepted logical absence")
+		}
+		for _, capOps := range []int{1, 2, 3} {
+			plan, err := d.PlanFlushSpanRunChunks(req, capOps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if plan.TargetLeafSpans != physical || plan.SingleOpSpans != physical || plan.SpanOps != physical || plan.SplitSummary.TargetLeafSpans != physical {
+				t.Fatalf("false physical summary %+v", plan)
+			}
+			cursor, totalBytes := 0, 0
+			for _, chunk := range plan.BackendChunks {
+				if chunk.PointOpStart != cursor || chunk.PointOpEnd <= cursor || chunk.PointOpEnd-cursor > capOps {
+					t.Fatalf("chunk coverage/bound %+v", chunk)
+				}
+				want := 0
+				for _, op := range selected[chunk.PointOpStart:chunk.PointOpEnd] {
+					want += flushSpanRunEntryByteCount(op)
+				}
+				if chunk.ByteCount != want {
+					t.Fatalf("chunk bytes %d want %d", chunk.ByteCount, want)
+				}
+				totalBytes += chunk.ByteCount
+				cursor = chunk.PointOpEnd
+			}
+			wantBytes := 0
+			for _, op := range selected {
+				wantBytes += flushSpanRunEntryByteCount(op)
+			}
+			if cursor != len(selected) || totalBytes != wantBytes {
+				t.Fatal("lost logical work/bytes", plan)
+			}
+			if only && (plan.SpanBytes != 0 || plan.SplitSummary.MaxChunksPerTargetLeaf != 0) {
+				t.Fatal("absence claimed leaf bytes/splits", plan)
+			}
+		}
+	}
+	for _, position := range []int{-1, 1, 5} {
+		builder := newReadOnlyFlushSpanRunChunkBuilder(ops, 2)
+		builder.AddLogicalAbsencePoint(position)
+		if builder.err == nil {
+			t.Fatal("accepted invalid streaming cursor", position)
+		}
+	}
+}

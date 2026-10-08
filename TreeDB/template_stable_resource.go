@@ -2,9 +2,11 @@ package treedb
 
 import (
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"path/filepath"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -32,6 +34,8 @@ type templateStableSnapshot struct {
 	dir                 string
 	captureLeaseOnce    sync.Once
 	captureLeaseRelease func()
+	metadata            *retainedalloc.Owner
+	metadataCharge      uint64
 }
 
 func (snapshot *templateStableSnapshot) Get(key []byte) ([]byte, error) {
@@ -106,6 +110,13 @@ func (snapshot *templateStableSnapshot) ReleaseCaptureLease() {
 	snapshot.captureLeaseOnce.Do(func() {
 		if snapshot.captureLeaseRelease != nil {
 			snapshot.captureLeaseRelease()
+			snapshot.captureLeaseRelease = nil
+		}
+		if snapshot.metadata != nil {
+			metadata, charge := snapshot.metadata, snapshot.metadataCharge
+			snapshot.metadata, snapshot.metadataCharge = nil, 0
+			snapshot.snapshot, snapshot.dir = nil, ""
+			metadata.RemovePending(charge)
 		}
 	})
 }
@@ -120,4 +131,15 @@ func (snapshot *templateStableSnapshot) Close() error {
 	err := snapshot.snapshot.Close()
 	snapshot.ReleaseCaptureLease()
 	return err
+}
+
+func admitTemplateSnapshotMetadata(metadata *retainedalloc.Owner) (uint64, error) {
+	if metadata == nil {
+		return 0, rootpublication.ErrResourceOwnership
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(templateStableSnapshot{})))
+	if err := metadata.AddPending(charge); err != nil {
+		return 0, err
+	}
+	return charge, nil
 }

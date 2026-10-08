@@ -472,20 +472,25 @@ func TestManagerSharedRetirementParentMapShrink(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if len(m.retirementParents.entries) != 8 {
+			if m.retirementParents.count != 8 {
 				t.Fatal("distinct physical parents were coalesced")
 			}
 			for _, id := range ids {
 				if err := m.EvictSegment(id); err != nil {
 					t.Fatal(err)
 				}
-				live := len(m.retirementParents.entries)
-				if m.retirementParents.highWater > 2*live {
-					t.Fatal("pool map retained unbounded historical high-water")
+				nodes := 0
+				for _, head := range m.retirementParents.heads {
+					for node := head; node != nil; node = node.next {
+						nodes++
+					}
+				}
+				if nodes != m.retirementParents.count {
+					t.Fatal("fixed directory retained departed parents")
 				}
 			}
-			if m.retirementParents.entries != nil || m.retirementParents.highWater != 0 {
-				t.Fatal("empty pool retained map capacity")
+			if m.retirementParents.count != 0 || m.retirementParents.heads != [retirementParentBuckets]*retirementParentHandle{} {
+				t.Fatal("empty pool retained departed handles")
 			}
 		})
 	}
@@ -539,7 +544,7 @@ func TestManagerSharedRetirementParentDistinctHardlinkParents(t *testing.T) {
 			if !rootpublication.SamePhysicalIdentity(identityPinTestIdentity(t, pathA), identityPinTestIdentity(t, pathB)) {
 				t.Fatal("fixture does not share a physical child")
 			}
-			if first.Fd() == second.Fd() || len(m.retirementParents.entries) != 2 {
+			if first.Fd() == second.Fd() || m.retirementParents.count != 2 {
 				t.Fatal("shared child incorrectly coalesced distinct physical parent handles")
 			}
 			if err := releaseFirst(); err != nil {

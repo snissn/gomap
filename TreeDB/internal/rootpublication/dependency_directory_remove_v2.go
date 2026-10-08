@@ -90,12 +90,12 @@ func cloneDirectoryRemovingV2(source *StableResourceSet, mutation StableLogicalO
 				view.count--
 			}
 		}
-		for field := range fields {
+		for field := range fields.reachableFields() {
 			if _, inScope := scoped[field]; inScope && view.commitments[field].count == 0 {
-				delete(fields, field)
+				fields.removeReachable(field)
 			}
 		}
-		if len(fields) == 0 {
+		if fields.reachableCount() == 0 {
 			work.DroppedEntries++
 			work.DroppedObligations += uint64(entry.logicalObligations.count)
 			continue
@@ -162,7 +162,12 @@ func validateDirectoryRequirementsV2(resources *StableResourceSet, index stableL
 		field    ReachabilityField
 	}
 	fields := make(map[fieldKey]bool)
-	for _, physical := range resources.PhysicalDescriptors() {
+	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		return work, captureErr
+	}
+	defer diagnostics.Close()
+	for _, physical := range diagnostics.Physical() {
 		work.SourceEntriesInspected++
 		key := stableLogicalResourceKey{kind: physical.Kind, lane: physical.logicalLane, resourceID: physical.resourceID, generation: physical.Generation}
 		for _, field := range physical.reachability {

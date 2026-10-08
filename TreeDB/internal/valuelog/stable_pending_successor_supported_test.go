@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
 
@@ -857,5 +858,63 @@ func TestStableValueLogRetryDescriptorPlateau(t *testing.T) {
 	}
 	if writer.FileID() != 65 {
 		t.Fatalf("final file id=%d want 65", writer.FileID())
+	}
+}
+
+func TestSelectedStableRotationRetainsPendingAndContainerMetadata(t *testing.T) {
+	dir := t.TempDir()
+	registry := rootpublication.NewIdentityPinRegistry()
+	writer, err := NewWriterWithStableResourcePinRegistry(filepath.Join(dir, "000001.vlog"), 1, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	appendStablePendingValue(t, writer, 1)
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	closed, active := stablePendingRegistrations(1, 2)
+	closed.MetadataOwner, active.MetadataOwner = &owner, &owner
+	generation, err := writer.StableNamespaceParentGeneration()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed.ParentGeneration, active.ParentGeneration = generation, generation
+	injected := errors.New("selected pending observation failure")
+	restore := durabilitycut.Install(func(e durabilitycut.Event) error {
+		if e.Resource == durabilitycut.ResourceValueLog && e.Namespace == durabilitycut.NamespaceCreate {
+			return injected
+		}
+		return nil
+	})
+	rotation, err := writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, false, closed, active)
+	restore()
+	if rotation != nil || !errors.Is(err, injected) {
+		t.Fatalf("pending failure=%v %v", rotation, err)
+	}
+	if owner.Bytes() == 0 {
+		t.Fatal("exact pending registration and successor metadata escaped admission")
+	}
+	rotation, err = writer.RotateToWithStableResources(filepath.Join(dir, "000002.vlog"), 2, false, closed, active)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotation.TakeClosed().Release()
+	rotation.TakeActive().Release()
+	if owner.Bytes() == 0 {
+		t.Fatal("live rotation container escaped admission")
+	}
+	beforeContainer := owner.Bytes()
+	rotation.Release()
+	if owner.Bytes() >= beforeContainer {
+		t.Fatal("rotation did not dispose its actual container")
+	}
+	if err = writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() != 0 {
+		t.Fatalf("successful writer/proof/container disposal retained %d", owner.Bytes())
+	}
+	if got := writer.DurabilityStats().DirectorySyncCalls; got != 2 {
+		t.Fatalf("creation proof reuse syncs=%d want2", got)
 	}
 }
