@@ -1,0 +1,82 @@
+{
+  "head": "6b97452b914ca7911f247008eb2f260e1eabee23",
+  "tree": "5ebe6154e6d31d9bb8f2eb9833f1420592d49efc",
+  "scope": "selected/domain/SYSTEM/pin/API consumer checkpoint only; not whole PR qualification",
+  "dirty": false,
+  "active_commands": 0,
+  "receipts": [
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/selected-physical-clone-baseline-green.log",
+      "sha256": "47fb0d13aae1978f1e10ca3258c6b2c0aafc2e8dbc64dadb48900b7e3e5d34b3",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/selected-physical-clone-race.log",
+      "sha256": "762d4aeb602944771b8f44193ea06bc9fe7eedac2f3f58d8809d07863c1186aa",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/domain-census-green.log",
+      "sha256": "391abedd15c7c8769af5122d21327b4d3cfc222f74f90122b109aa67a6e5c4e8",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/domain-system-final-race.log",
+      "sha256": "3e3c005cc0c3c4f7d0195895f09b1dc808f071fe97f31252f31f41f6e0ca9868",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/public-inventory-complete-green.log",
+      "sha256": "8a0ba246c58140dfc353a2775ec006859a4b193266036ebe0bf8349a32ec5f96",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/pin-inventory-final-race.log",
+      "sha256": "9a4733516c6a48221d41d2f98a2bad192a392f83b60ae52b086ae29a8269642f",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/consumer-rootpublication-docs-normal.log",
+      "sha256": "6b43e8d84897d419c6bb6a10091d3e74144187b7fd6604b6edc7cce63aca8070",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/consumer-vet.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/consumer-policy-check.log",
+      "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+      "result": "PASS"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/consumer-policy-tests.log",
+      "sha256": "48cbe53719e2562211d50509064423e9f0fece263488e110ed1b519c3cdc80af",
+      "result": "PASS"
+    }
+  ],
+  "preserved_failed_attempts": [
+    "selected-physical-clone-red.log",
+    "selected-physical-clone-green.log",
+    "selected-physical-clone-complete-green.log",
+    "selected-clone-actual-callers.log",
+    "domain-census-red.log",
+    "domain-census-causal-red.log",
+    "domain-census-actual-background.log",
+    "system-leafpack-causal-red.log",
+    "system-leafpack-green.log",
+    "pin-inventory-consumer-green.log"
+  ],
+  "open_gates": [
+    "V6 Linux offline joint replacement/all root pointers",
+    "Windows unsupported exact-parent offline authority",
+    "packed-source physical GC/horizon",
+    "missing raw-log recovery settle",
+    "inline M4 actual freelist debt prerequisite",
+    "unchanged 40percent and8fold shrink/output numeric gates",
+    "actual postClose ExternalLease1 owner trace",
+    "remaining current-format fault/poison/recovery consumer failures",
+    "full independent whole-PR review/CI/performance"
+  ]
+}

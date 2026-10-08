@@ -110,7 +110,7 @@
       "owner": "/root/ordinary_5111",
       "acceptance_owner": "/root",
       "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
-      "next_action": "One coherent actual consumer/ownership/format correction including strict historical archive and current V5/V6 evidence; review, fresh full CI and landed-harness matched performance before maturity.",
+      "next_action": "Sole ordinary writer repairs shared Linux V6 offline pair replacement with all eligible pointers; Windows namespace reconciliation and other physical/fault/lease/performance gates stay open. Immutable checkpoints are component-only, not mature PR acceptance.",
       "decisions": [
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
@@ -127,7 +127,12 @@
           "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
           "next_action": "Accepted supported exact-parent closed-file rename/remove/persistence producer with identity/rebind/crash evidence; no path fallback or typed-error suppression"
         }
-      ]
+      ],
+      "consumer_source_freeze": "8d0b7a1a0882e3ec0ddc4d6b961167c682244519",
+      "consumer_tree": "5ebe6154e6d31d9bb8f2eb9833f1420592d49efc",
+      "consumer_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071082310",
+      "landed_harness_source_freeze": "f2ff79bd4b06118f4006d4ca48bcdab4adce0e9d",
+      "landed_harness_tree": "27325b1bc8abe3e7924d7d6bb19db6b65def067f"
     },
     {
       "issue": "snissn/gomap#5118",
