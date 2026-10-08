@@ -1,0 +1,125 @@
+name: C3 hosted qualification (#5114)
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Capacity probe by default; full needs root construction review on issue 5076
+        required: true
+        type: choice
+        options: [capacity-only, full]
+        default: capacity-only
+      attempt:
+        description: Unique root-owned attempt label (required for full)
+        required: false
+        type: string
+        default: capacity
+permissions:
+  contents: read
+  actions: read
+  issues: read
+concurrency:
+  group: cow-c3-hosted-qualification
+  cancel-in-progress: false
+jobs:
+  qualification:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      HOSTED_NAMESPACE: ${{ runner.temp }}/cow-c3-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Record job admission origin before checkout
+        id: origin
+        run: |
+          python3 -B - <<'PY'
+          import datetime, os, time
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('utc='+datetime.datetime.now(datetime.timezone.utc).isoformat()+'\n')
+              output.write('monotonic='+str(time.monotonic())+'\n')
+          PY
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Capacity only; refuse before Go when actual capacity is insufficient
+        env:
+          JOB_START_UTC: ${{ steps.origin.outputs.utc }}
+          JOB_START_MONOTONIC: ${{ steps.origin.outputs.monotonic }}
+        run: |
+          python3 -B scripts/cow_c3_read/hosted_runner.py capacity \
+            --namespace "$HOSTED_NAMESPACE" --job-started-utc "$JOB_START_UTC" \
+            --job-started-monotonic "$JOB_START_MONOTONIC"
+      - name: Prepare fresh exact sources, official toolchain and declared compiler files
+        if: inputs.mode == 'full'
+        id: prepare
+        env:
+          ROOT_ATTEMPT: ${{ inputs.attempt }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CHECKOUT_SHA: ${{ github.sha }}
+        run: |
+          python3 -B scripts/cow_c3_read/hosted_runner.py prepare \
+            --namespace "$HOSTED_NAMESPACE" --repository "$GITHUB_REPOSITORY" \
+            --actor-id "$GITHUB_ACTOR_ID" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --ref "$GITHUB_REF" \
+            --event "$GITHUB_EVENT_NAME" --workflow-sha "$WORKFLOW_SHA" \
+            --checkout-sha "$CHECKOUT_SHA" --checkout "$GITHUB_WORKSPACE" \
+            --attempt "$ROOT_ATTEMPT" --github-output "$GITHUB_OUTPUT"
+      - name: Fresh twelve-command construction and strict config freeze
+        if: inputs.mode == 'full'
+        env:
+          STATE_SHA: ${{ steps.prepare.outputs.state_sha256 }}
+        run: |
+          python3 -B scripts/cow_c3_read/hosted_runner.py construct \
+            --state "$HOSTED_NAMESPACE/state.json" --state-sha256 "$STATE_SHA"
+      - name: Export construction for independent root review while this VM waits idle
+        if: always() && inputs.mode == 'full'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: c3-hosted-construction-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.HOSTED_NAMESPACE }}/construction.tar.gz
+            ${{ env.HOSTED_NAMESPACE }}/construction-result.json
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0
+      - name: Same-VM idle wait for immutable root issue-5076 acceptance
+        if: success() && inputs.mode == 'full'
+        env:
+          HOSTED_READ_TOKEN: ${{ github.token }}
+          STATE_SHA: ${{ steps.prepare.outputs.state_sha256 }}
+        run: |
+          python3 -B scripts/cow_c3_read/hosted_runner.py accept \
+            --state "$HOSTED_NAMESPACE/state.json" --state-sha256 "$STATE_SHA"
+      - name: Full unchanged 54-cell 756-child matrix through explicit pre-child adapter
+        if: success() && inputs.mode == 'full'
+        env:
+          STATE_SHA: ${{ steps.prepare.outputs.state_sha256 }}
+        run: |
+          python3 -B scripts/cow_c3_read/hosted_runner.py matched \
+            --state "$HOSTED_NAMESPACE/state.json" --state-sha256 "$STATE_SHA"
+      - name: Mandatory finite evidence closer; incomplete custody never qualifies
+        id: close
+        if: always()
+        run: |
+          python3 -B scripts/cow_c3_read/hosted_runner.py close --namespace "$HOSTED_NAMESPACE"
+      - name: Export sealed success or failure evidence
+        if: always() && steps.close.outcome == 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: c3-hosted-final-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ env.HOSTED_NAMESPACE }}/final-evidence.tar.gz
+            ${{ env.HOSTED_NAMESPACE }}/final-manifest.json
+            ${{ env.HOSTED_NAMESPACE }}/final-export.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+      - name: Raw failure fallback when the closer did not finish
+        if: always() && steps.close.outcome != 'success'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: c3-hosted-incomplete-raw-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.HOSTED_NAMESPACE }}/evidence/**
+          if-no-files-found: warn
+          retention-days: 7
+          compression-level: 0
