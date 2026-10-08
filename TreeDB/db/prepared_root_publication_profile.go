@@ -136,7 +136,7 @@ func (db *DB) PreparedRootPublicationBaseProfile() PreparedRootPublicationBasePr
 	if runtime := db.rootPublication; runtime != nil {
 		runtime.mu.Lock()
 		profile.VisibleResources = uint64(runtime.visibleResources.Len())
-		profile.VisibleMembers = uint64(len(runtime.visibleMembers))
+		profile.VisibleMembers = uint64(len(runtime.visibleMembers) - runtime.visibleHead)
 		profile.AllocatorDebt = uint64(len(runtime.debt))
 		profile.Seals = uint64(len(runtime.seals))
 		for _, seal := range runtime.seals {

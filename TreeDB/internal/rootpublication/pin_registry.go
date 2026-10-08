@@ -3,8 +3,11 @@ package rootpublication
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
+	"strings"
 	"sync"
+	"unsafe"
 )
 
 var (
@@ -17,11 +20,16 @@ var (
 // part of this key: deleting an inode must be blocked by every alias of it.
 type IdentityPinRegistry struct {
 	mu                   sync.Mutex
-	states               map[StableIdentity]*identityPinState
-	namespaces           map[string]bool
-	stableLinks          map[stableNamespaceLink]struct{}
-	stableDirectoryLinks map[stableNamespaceLink]stableDirectoryLinkAuthority
+	states               registryTable[StableIdentity, *identityPinState]
+	namespaces           registryTable[string, bool]
+	stableLinks          registryTable[stableNamespaceLink, struct{}]
+	stableDirectoryLinks registryTable[stableNamespaceLink, stableDirectoryLinkAuthority]
 	activePins           uint64
+	metadata             retainedalloc.Owner
+	closing              bool
+	failedPinned         *resourcePinnedBacking
+	failedNamespace      *StableNamespaceToken
+	cleanupFailure       registryCleanupFailure
 }
 
 // IdentityPinRegistryStats is an atomic snapshot of the live physical-identity
@@ -46,17 +54,53 @@ type stableNamespaceLink struct {
 // identities alone are insufficient because the filesystem may recycle them
 // after deletion.
 type stableDirectoryLinkAuthority struct {
-	parent *os.File
-	child  *os.File
+	parent                    *os.File
+	child                     *os.File
+	parentCharge, childCharge uint64
+	retired                   bool
 }
 
-func (authority stableDirectoryLinkAuthority) close() {
+func (authority *stableDirectoryLinkAuthority) close() error {
+	var err error
 	if authority.child != nil {
-		_ = authority.child.Close()
+		e := authority.child.Close()
+		if e == nil || errors.Is(e, os.ErrClosed) {
+			authority.child = nil
+		} else {
+			err = errors.Join(err, e)
+		}
 	}
 	if authority.parent != nil {
-		_ = authority.parent.Close()
+		e := authority.parent.Close()
+		if e == nil || errors.Is(e, os.ErrClosed) {
+			authority.parent = nil
+		} else {
+			err = errors.Join(err, e)
+		}
 	}
+	return err
+}
+func (registry *IdentityPinRegistry) closeDirectoryAuthorityLocked(link stableNamespaceLink, authority stableDirectoryLinkAuthority) error {
+	authority.retired = true
+	err := authority.close()
+	if authority.child == nil && authority.childCharge != 0 {
+		registry.metadata.Remove(authority.childCharge)
+		authority.childCharge = 0
+	}
+	if authority.parent == nil && authority.parentCharge != 0 {
+		registry.metadata.Remove(authority.parentCharge)
+		authority.parentCharge = 0
+	}
+	if authority.child == nil && authority.parent == nil {
+		registry.stableDirectoryLinks.remove(link)
+	} else {
+		// Updating an existing cell allocates nothing and cannot refuse cleanup.
+		if e := registry.stableDirectoryLinks.set(link, authority); e != nil {
+			panic("directory cleanup update refused")
+		}
+		registry.metadata.CleanupFailed()
+	}
+	return err
 }
 
 type identityPinState struct {
@@ -83,12 +127,30 @@ type IdentityPin struct {
 }
 
 func NewIdentityPinRegistry() *IdentityPinRegistry {
-	return &IdentityPinRegistry{
-		states:               make(map[StableIdentity]*identityPinState),
-		namespaces:           make(map[string]bool),
-		stableLinks:          make(map[stableNamespaceLink]struct{}),
-		stableDirectoryLinks: make(map[stableNamespaceLink]stableDirectoryLinkAuthority),
+	r := &IdentityPinRegistry{}
+	r.cleanupFailure.registry = r
+	r.metadata.Initialize(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(*r))))
+	r.states.owner = &r.metadata
+	r.states.hash = registryIdentityHash
+	r.namespaces.owner = &r.metadata
+	r.namespaces.hash = registryStringHash
+	r.namespaces.keyCharge = func(k string) uint64 { return retainedalloc.AllocationCharge(uint64(len(k))) }
+	r.namespaces.cloneKey = strings.Clone
+	r.stableLinks.owner = &r.metadata
+	r.stableLinks.hash = registryLinkHash
+	r.stableLinks.keyCharge = registryLinkNameCharge
+	r.stableLinks.cloneKey = registryCloneLink
+	r.stableDirectoryLinks.owner = &r.metadata
+	r.stableDirectoryLinks.hash = registryLinkHash
+	r.stableDirectoryLinks.keyCharge = registryLinkNameCharge
+	r.stableDirectoryLinks.cloneKey = registryCloneLink
+	return r
+}
+func (registry *IdentityPinRegistry) MetadataOwner() *retainedalloc.Owner {
+	if registry == nil {
+		return nil
 	}
+	return &registry.metadata
 }
 
 func physicalStableIdentity(identity StableIdentity) StableIdentity {
@@ -132,7 +194,7 @@ func (registry *IdentityPinRegistry) Pin(identity StableIdentity) (*IdentityPin,
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	state := registry.states[identity]
+	state := registry.states.get(identity)
 	if state == nil {
 		return nil, ErrResourceConflict
 	}
@@ -160,7 +222,7 @@ func (registry *IdentityPinRegistry) release(identity StableIdentity) error {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	state := registry.states[identity]
+	state := registry.states.get(identity)
 	if state == nil || state.pins == 0 {
 		return ErrUnbalancedResourcePin
 	}
@@ -193,7 +255,10 @@ func (registry *IdentityPinRegistry) Observe(identity StableIdentity) error {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	state := registry.stateLocked(identity)
+	state, err := registry.stateLocked(identity)
+	if err != nil {
+		return err
+	}
 	if state.retired || state.deleting {
 		return ErrResourceConflict
 	}
@@ -211,7 +276,7 @@ func (registry *IdentityPinRegistry) Unobserve(identity StableIdentity) error {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	state := registry.states[identity]
+	state := registry.states.get(identity)
 	if state == nil || state.observers == 0 {
 		return ErrUnbalancedResourcePin
 	}
@@ -241,17 +306,23 @@ func (registry *IdentityPinRegistry) beginDelete(identity StableIdentity, namesp
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	state := registry.stateLocked(identity)
-	if state.pins != 0 || state.deleting || (namespace != "" && registry.namespaces[namespace]) {
+	state, err := registry.stateLocked(identity)
+	if err != nil {
+		return nil, err
+	}
+	if state.pins != 0 || state.deleting || (namespace != "" && registry.namespaces.get(namespace)) {
 		return nil, ErrResourcePinned
 	}
 	if state.retired {
 		return nil, ErrResourceConflict
 	}
-	state.deleting = true
 	if namespace != "" {
-		registry.namespaces[namespace] = true
+		if err := registry.namespaces.set(namespace, true); err != nil {
+			registry.deleteIdleStateLocked(identity, state)
+			return nil, err
+		}
 	}
+	state.deleting = true
 	return &IdentityDeleteLease{registry: registry, identity: identity, namespace: namespace}, nil
 }
 
@@ -263,7 +334,7 @@ func (registry *IdentityPinRegistry) WaitUnpinned(identity StableIdentity) <-cha
 		return ready
 	}
 	registry.mu.Lock()
-	state := registry.states[identity]
+	state := registry.states.get(identity)
 	if state == nil || state.pins == 0 {
 		registry.mu.Unlock()
 		close(ready)
@@ -284,7 +355,7 @@ func (registry *IdentityPinRegistry) PinCount(identity StableIdentity) uint64 {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if state := registry.states[identity]; state != nil {
+	if state := registry.states.get(identity); state != nil {
 		return state.pins
 	}
 	return 0
@@ -300,7 +371,7 @@ func (registry *IdentityPinRegistry) ObserverCount(identity StableIdentity) uint
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if state := registry.states[identity]; state != nil {
+	if state := registry.states.get(identity); state != nil {
 		return state.observers
 	}
 	return 0
@@ -322,7 +393,7 @@ func (registry *IdentityPinRegistry) ActiveIdentities() int {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	return len(registry.states)
+	return registry.states.count
 }
 
 // Stats reports one internally consistent snapshot for lifecycle and leak
@@ -336,8 +407,8 @@ func (registry *IdentityPinRegistry) Stats() IdentityPinRegistryStats {
 	defer registry.mu.Unlock()
 	return IdentityPinRegistryStats{
 		ActivePins:                 registry.activePins,
-		ActiveIdentities:           len(registry.states),
-		ActiveStableNamespaceLinks: len(registry.stableLinks),
+		ActiveIdentities:           registry.states.count,
+		ActiveStableNamespaceLinks: registry.stableLinks.count,
 	}
 }
 
@@ -376,7 +447,7 @@ func (registry *IdentityPinRegistry) StableNamespaceLinkKnown(parent, child *os.
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	_, known := registry.stableLinks[link]
+	_, known := registry.stableLinks.lookup(link)
 	return known, nil
 }
 
@@ -397,8 +468,8 @@ func (registry *IdentityPinRegistry) StableDirectoryLinkKnown(parent, child *os.
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	_, known := registry.stableDirectoryLinks[link]
-	return known, nil
+	authority, known := registry.stableDirectoryLinks.lookup(link)
+	return known && !authority.retired, nil
 }
 
 // RememberStableDirectoryLink records a directory-ancestry proof only after
@@ -412,38 +483,59 @@ func (registry *IdentityPinRegistry) RememberStableDirectoryLink(parent, child *
 	if err != nil {
 		return err
 	}
-	retainedParent, err := duplicateStableFile(parent)
-	if err != nil {
-		return fmt.Errorf("retain stable directory parent: %w", err)
-	}
-	retainedChild, err := duplicateStableFile(child)
-	if err != nil {
-		_ = retainedParent.Close()
-		return fmt.Errorf("retain stable directory child: %w", err)
-	}
-	retained := stableDirectoryLinkAuthority{parent: retainedParent, child: retainedChild}
-	var retired []stableDirectoryLinkAuthority
 	registry.mu.Lock()
-	if registry.stableDirectoryLinks == nil {
-		registry.stableDirectoryLinks = make(map[stableNamespaceLink]stableDirectoryLinkAuthority)
+	defer registry.mu.Unlock()
+	if registry.closing {
+		return retainedalloc.ErrClosed
 	}
-	if _, known := registry.stableDirectoryLinks[link]; known {
-		registry.mu.Unlock()
-		retained.close()
+	if authority, known := registry.stableDirectoryLinks.lookup(link); known {
+		if authority.retired {
+			return ErrResourceConflict
+		}
 		return nil
 	}
-	for prior, authority := range registry.stableDirectoryLinks {
+	// Refuse before duplicating actual handles or replacing prior proof custody.
+	pc, err := StableFileMetadataCharge(uint64(len(parent.Name()) + len("#stable-pin")))
+	if err != nil {
+		return err
+	}
+	cc, err := StableFileMetadataCharge(uint64(len(child.Name()) + len("#stable-pin")))
+	if err != nil {
+		return err
+	}
+	if err = registry.metadata.Add(pc + cc); err != nil {
+		return err
+	}
+	// Install only an invalid private cell before acquiring handles. It is
+	// inaccessible under this lock and is also exact custody for failure cleanup.
+	if err = registry.stableDirectoryLinks.set(link, stableDirectoryLinkAuthority{retired: true}); err != nil {
+		registry.metadata.Remove(pc + cc)
+		return err
+	}
+	rp, err := duplicateStableFile(parent)
+	if err != nil {
+		registry.stableDirectoryLinks.remove(link)
+		registry.metadata.Remove(pc + cc)
+		return err
+	}
+	rc, err := duplicateStableFile(child)
+	if err != nil {
+		retained := stableDirectoryLinkAuthority{parent: rp, parentCharge: pc, retired: true}
+		registry.metadata.Remove(cc)
+		_ = registry.stableDirectoryLinks.set(link, retained)
+		return errors.Join(err, registry.closeDirectoryAuthorityLocked(link, retained))
+	}
+	retained := stableDirectoryLinkAuthority{parent: rp, child: rc, parentCharge: pc, childCharge: cc}
+	if err = registry.stableDirectoryLinks.set(link, retained); err != nil {
+		panic("existing directory cell update refused")
+	}
+	// Each table key owns its copied name. No retirement slice is allocated.
+	for prior, authority := range registry.stableDirectoryLinks.all {
 		if prior.parent == link.parent && prior.name == link.name && prior.child != link.child {
-			delete(registry.stableDirectoryLinks, prior)
-			retired = append(retired, authority)
+			err = errors.Join(err, registry.closeDirectoryAuthorityLocked(prior, authority))
 		}
 	}
-	registry.stableDirectoryLinks[link] = retained
-	registry.mu.Unlock()
-	for _, authority := range retired {
-		authority.close()
-	}
-	return nil
+	return err
 }
 
 // NewStableNamespaceTokenForKnownLink binds a publication token to an exact
@@ -466,7 +558,7 @@ func (registry *IdentityPinRegistry) NewStableNamespaceTokenForKnownLink(spec St
 		return nil, err
 	}
 	registry.mu.Lock()
-	_, known := registry.stableLinks[link]
+	_, known := registry.stableLinks.lookup(link)
 	registry.mu.Unlock()
 	if !known {
 		return nil, fmt.Errorf("%w: exact namespace link is not known durable", ErrNamespaceUnstable)
@@ -490,15 +582,21 @@ func (registry *IdentityPinRegistry) RememberStableNamespaceLink(parent, child *
 		return err
 	}
 	registry.mu.Lock()
-	if registry.stableLinks == nil {
-		registry.stableLinks = make(map[stableNamespaceLink]struct{})
+
+	if registry.closing {
+		registry.mu.Unlock()
+		return retainedalloc.ErrClosed
 	}
-	for prior := range registry.stableLinks {
+	if err := registry.stableLinks.set(link, struct{}{}); err != nil {
+		registry.mu.Unlock()
+		return err
+	}
+	for prior, _ := range registry.stableLinks.all {
 		if prior.parent == link.parent && prior.name == link.name && prior.child != link.child {
-			delete(registry.stableLinks, prior)
+			registry.stableLinks.remove(prior)
 		}
 	}
-	registry.stableLinks[link] = struct{}{}
+
 	registry.mu.Unlock()
 	return nil
 }
@@ -514,7 +612,7 @@ func (registry *IdentityPinRegistry) ForgetStableNamespaceLink(parent, child *os
 		return err
 	}
 	registry.mu.Lock()
-	delete(registry.stableLinks, link)
+	registry.stableLinks.remove(link)
 	registry.mu.Unlock()
 	return nil
 }
@@ -538,7 +636,7 @@ func (registry *IdentityPinRegistry) ForgetStableNamespaceLinkIdentity(parent, c
 		return fmt.Errorf("%w: empty stable child name", ErrUnresolvedResource)
 	}
 	registry.mu.Lock()
-	delete(registry.stableLinks, stableNamespaceLink{parent: parent, child: child, name: name})
+	registry.stableLinks.remove(stableNamespaceLink{parent: parent, child: child, name: name})
 	registry.mu.Unlock()
 	return nil
 }
@@ -551,7 +649,7 @@ func (registry *IdentityPinRegistry) ActiveStableNamespaceLinks() int {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	return len(registry.stableLinks)
+	return registry.stableLinks.count
 }
 
 // CachedStableDirectoryLinks reports the DB-lifetime ancestry proofs retained
@@ -563,7 +661,7 @@ func (registry *IdentityPinRegistry) CachedStableDirectoryLinks() int {
 	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	return len(registry.stableDirectoryLinks)
+	return registry.stableDirectoryLinks.count
 }
 
 // ClearStableNamespaceLinks retires DB-lifetime namespace-sync proofs and
@@ -575,33 +673,38 @@ func (registry *IdentityPinRegistry) ClearStableNamespaceLinks() {
 		return
 	}
 	registry.mu.Lock()
-	clear(registry.stableLinks)
-	authorities := make([]stableDirectoryLinkAuthority, 0, len(registry.stableDirectoryLinks))
-	for link, authority := range registry.stableDirectoryLinks {
-		authorities = append(authorities, authority)
-		delete(registry.stableDirectoryLinks, link)
+	defer registry.mu.Unlock()
+	registry.stableLinks.clear()
+	for link, authority := range registry.stableDirectoryLinks.all {
+		_ = registry.closeDirectoryAuthorityLocked(link, authority)
 	}
-	registry.mu.Unlock()
-	for _, authority := range authorities {
-		authority.close()
-	}
+	registry.closeIfIdleLocked()
 }
 
-func (registry *IdentityPinRegistry) stateLocked(identity StableIdentity) *identityPinState {
-	if registry.states == nil {
-		registry.states = make(map[StableIdentity]*identityPinState)
+func (registry *IdentityPinRegistry) stateLocked(identity StableIdentity) (*identityPinState, error) {
+	if registry.closing {
+		return nil, retainedalloc.ErrClosed
 	}
-	state := registry.states[identity]
+	state := registry.states.get(identity)
 	if state == nil {
+		charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(identityPinState{})))
+		if err := registry.metadata.Add(charge); err != nil {
+			return nil, err
+		}
 		state = &identityPinState{}
-		registry.states[identity] = state
+		if err := registry.states.set(identity, state); err != nil {
+			registry.metadata.Remove(charge)
+			return nil, err
+		}
 	}
-	return state
+	return state, nil
 }
 
 func (registry *IdentityPinRegistry) deleteIdleStateLocked(identity StableIdentity, state *identityPinState) {
 	if state != nil && state.pins == 0 && state.observers == 0 && !state.deleting {
-		delete(registry.states, identity)
+		registry.states.remove(identity)
+		registry.metadata.Remove(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(identityPinState{}))))
+		registry.closeIfIdleLocked()
 	}
 }
 
@@ -612,12 +715,13 @@ func (lease *IdentityDeleteLease) Abort() {
 	lease.once.Do(func() {
 		registry := lease.registry
 		registry.mu.Lock()
-		state := registry.states[lease.identity]
+		state := registry.states.get(lease.identity)
 		if state != nil {
 			state.deleting = false
 			registry.deleteIdleStateLocked(lease.identity, state)
 		}
-		delete(registry.namespaces, lease.namespace)
+		registry.namespaces.remove(lease.namespace)
+		registry.closeIfIdleLocked()
 		registry.mu.Unlock()
 	})
 }
@@ -629,19 +733,105 @@ func (lease *IdentityDeleteLease) CommitDeleted() {
 	lease.once.Do(func() {
 		registry := lease.registry
 		registry.mu.Lock()
-		state := registry.stateLocked(lease.identity)
+		state := registry.states.get(lease.identity)
+		if state == nil {
+			panic("missing deletion owner")
+		}
 		state.deleting = false
 		state.retired = true
-		for link := range registry.stableLinks {
+		for link, _ := range registry.stableLinks.all {
 			if link.child == lease.identity {
-				delete(registry.stableLinks, link)
+				registry.stableLinks.remove(link)
 			}
 		}
 		registry.deleteIdleStateLocked(lease.identity, state)
-		delete(registry.namespaces, lease.namespace)
+		registry.namespaces.remove(lease.namespace)
+		registry.closeIfIdleLocked()
 		registry.mu.Unlock()
 	})
 }
 
 // Commit is the deletion-owner spelling used after a successful unlink.
 func (lease *IdentityDeleteLease) Commit() { lease.CommitDeleted() }
+
+// Close marks the existing authority terminal. Captured pins and observers keep
+// its backing and producer governor until their real last release.
+func (registry *IdentityPinRegistry) Close() {
+	if registry == nil {
+		return
+	}
+	registry.ClearStableNamespaceLinks()
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	registry.closing = true
+	registry.closeIfIdleLocked()
+}
+func (registry *IdentityPinRegistry) closeIfIdleLocked() {
+	if !registry.closing || registry.failedPinned != nil || registry.failedNamespace != nil || registry.states.count != 0 || registry.namespaces.count != 0 || registry.stableDirectoryLinks.count != 0 {
+		return
+	}
+	registry.states.close()
+	registry.namespaces.close()
+	registry.stableLinks.close()
+	registry.stableDirectoryLinks.close()
+	_ = registry.metadata.Close()
+}
+
+func registryLinkNameCharge(k stableNamespaceLink) uint64 {
+	return retainedalloc.AllocationCharge(uint64(len(k.name)))
+}
+func registryCloneLink(k stableNamespaceLink) stableNamespaceLink {
+	k.name = strings.Clone(k.name)
+	return k
+}
+
+// Failed physical cleanup remains intrusive custody in this SAME authority.
+func (registry *IdentityPinRegistry) retainFailedPinnedBacking(backing *resourcePinnedBacking) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	backing.failedNext = registry.failedPinned
+	registry.failedPinned = backing
+}
+func (registry *IdentityPinRegistry) retainFailedNamespace(token *StableNamespaceToken) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	token.failedNext = registry.failedNamespace
+	registry.failedNamespace = token
+}
+func (registry *IdentityPinRegistry) CleanupError() error {
+	if registry == nil {
+		return nil
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if registry.failedPinned != nil || registry.failedNamespace != nil {
+		return &registry.cleanupFailure
+	}
+	return nil
+}
+
+// The registry already owns these exact intrusive failure nodes. Outward
+// diagnostics traverse their causes without creating an unadmitted join/slice
+// or losing later siblings. The embedded error has the registry's lifetime.
+type registryCleanupFailure struct{ registry *IdentityPinRegistry }
+
+func (*registryCleanupFailure) Error() string { return "stable resource registry cleanup failed" }
+func (failure *registryCleanupFailure) Is(target error) bool {
+	if failure == nil || failure.registry == nil {
+		return false
+	}
+	registry := failure.registry
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	for node := registry.failedPinned; node != nil; node = node.failedNext {
+		if errors.Is(node.failure, target) {
+			return true
+		}
+	}
+	for node := registry.failedNamespace; node != nil; node = node.failedNext {
+		if errors.Is(node.cleanupErr, target) {
+			return true
+		}
+	}
+	return false
+}

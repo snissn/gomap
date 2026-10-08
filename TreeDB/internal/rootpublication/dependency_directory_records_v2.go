@@ -13,6 +13,9 @@ func WalkDependencyDirectoryRecordsV2(source *StableResourceSet, visit func(key,
 	if source == nil || source.physicalOnly || visit == nil {
 		return ErrResourceOwnership
 	}
+	if source.hasSelectedMetadata() {
+		return source.walkOwnedDependencyDirectoryRecordsV2(visit)
+	}
 	owned, _, err := cloneStableResourceSetKindView(source)
 	if err != nil {
 		return err

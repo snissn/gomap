@@ -825,7 +825,17 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
 			if set := entry.candidate.resourceSet(); set != nil {
 				set.adjustActivePinsByKind(c.resourceActivePins, false)
-				set.releaseFrom(ResourceOwnerCoordinator)
+				if txn := entry.candidate.DurableRoot(); txn.isConstructedPrimaryV6() {
+					if err := c.finishOrdinaryPrimaryWithScopeV6(txn); err != nil {
+						c.poison = errors.Join(c.poison, err, ErrRecoveryRequired)
+						c.failWaitersLocked(c.poison)
+						c.clearPublishRequestLocked()
+						c.notifyLocked()
+						return
+					}
+				} else {
+					set.releaseFrom(ResourceOwnerCoordinator)
+				}
 			}
 		}
 		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
@@ -1136,11 +1146,10 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 			sets = append(sets, set)
 		}
 	}
-	union, err := unionStableResourceSets(stableResourceViewPhysicalPinned, sets...)
+	current, err := StableResourceTelemetryStats(c.clock.Now(), true, sets...)
 	if err != nil {
 		return nil
 	}
-	current := union.Stats(c.clock.Now())
 	byKind := make(map[ResourceKind]ResourceKindStats, len(current)+len(c.resourcePinHighWater))
 	for _, stats := range current {
 		stats.ActivePins = c.resourceActivePins[stats.Kind]
@@ -1156,6 +1165,9 @@ func (c *Coordinator) resourceStatsLocked() []ResourceKindStats {
 	}
 	result := make([]ResourceKindStats, 0, len(byKind))
 	for _, stats := range byKind {
+		if kind, builtin := canonicalTelemetryKind(stats.Kind); builtin {
+			stats.Kind = kind
+		}
 		result = append(result, stats)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Kind < result[j].Kind })

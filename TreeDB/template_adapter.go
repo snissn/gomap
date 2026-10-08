@@ -1,6 +1,10 @@
 package treedb
 
-import "github.com/snissn/gomap/TreeDB/internal/templatedb"
+import (
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/internal/templatedb"
+)
 
 var testBeforeStableTemplateSnapshotAcquire func()
 
@@ -62,5 +66,25 @@ func (kv templateKV) AcquireStableTemplateSnapshot() (templatedb.StablePhysicalS
 	}
 	snapshot.captureLeaseRelease = kv.db.lifecycleMu.RUnlock
 	releaseLifecycle = false
+	return snapshot, nil
+}
+
+func (kv templateKV) AcquireStableTemplateSnapshotWithMetadata(metadata *retainedalloc.Owner) (templatedb.StablePhysicalSnapshot, error) {
+	charge, err := admitTemplateSnapshotMetadata(metadata)
+	if err != nil {
+		return nil, err
+	}
+	captured, err := kv.AcquireStableTemplateSnapshot()
+	if err != nil || captured == nil {
+		metadata.RemovePending(charge)
+		return captured, err
+	}
+	snapshot, ok := captured.(*templateStableSnapshot)
+	if !ok {
+		captured.Close()
+		metadata.RemovePending(charge)
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	snapshot.metadata, snapshot.metadataCharge = metadata, charge
 	return snapshot, nil
 }

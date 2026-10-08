@@ -445,14 +445,10 @@ func stableColumnAssetResourceTokenWithPolicy(file *os.File, ref ColumnAssetRef,
 		Generation: uint64(ref.FileID), DiagnosticPath: stableColumnAssetDiagnosticPath(ref), File: file,
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(ref.Offset + ref.Length)},
 		Digest:   stableColumnSegmentDigest(ref), Reachability: reachability, Namespace: namespace,
-		LogicalObligations: logicalObligations,
-		PinRegistry:        registry,
-		SyncThrough:        syncStableColumnAssetResourceForPublish,
-		OnRelease: func() {
-			if observed {
-				_ = registry.Unobserve(identity)
-			}
-		},
+		LogicalObligations:  logicalObligations,
+		PinRegistry:         registry,
+		SyncThrough:         syncStableColumnAssetResourceForPublish,
+		OriginalObservation: registry,
 		// The producer synchronizes the exact registered frontier before capture.
 		// A later coalesced frontier still performs a real sync.
 		ContentSynced: true,

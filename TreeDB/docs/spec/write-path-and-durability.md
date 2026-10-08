@@ -720,3 +720,53 @@ its active frame state. No durable progress or recovery coverage is invented.
 The [production and benchmark profile audit](no-wal-fast-audit.md) records public KV and
 collection boundary coverage, persistent closure, both recoverable generations,
 benchmark profile mapping, and the allocation consequences of explicit drains.
+
+### Selected V6 ordinary constructor and promotion ownership
+
+Selected V6 ordinary writes construct their independently immutable logical
+directory under the existing durable-root transaction. Relaxed visibility and
+later durable promotion use that same transaction. Relaxed ACK may still precede
+durable slot selection. Explicit Checkpoint and a successful clean Close wait
+for the complete sealed root. With command WAL enabled, WriteSync/Sync may
+establish the durable command-prefix boundary before the sealed capsule frontier
+advances; they do not promise a per-write Checkpoint or full memtable flush.
+
+Promotion freshly selects the alternate capsule and actual current parent.
+DATA and external/PRIMARY dependency obligations remain durable before capsule
+installation, followed by the PRIMARY fence. Constructor reuse does not make
+those syncs redundant. Post-install uncertainty preserves actual prior custody,
+poisons publication, and refuses later writes until recovery. Durable report
+finishes the ordinary transaction synchronously; this ordinary callback path is
+not bounded native Accepted/Finish qualification.
+
+## Capsule-format joint vacuum durability
+
+Vacuum rebuilds private DATA/PRIMARY files, both eligible roots and their finite
+parent closures against one genuine DATA generation. Each actual external
+resource, DATA pages, PRIMARY banks and staging namespace are fenced before
+installing/fencing the two complete capsules. COMMIT file and parent are then
+synced before canonical replacement. DATA replacement, PRIMARY replacement
+and COMMIT deletion each have a separate actual parent-directory barrier.
+
+Replacement runtime and closures are prepared before COMMIT. Writer exclusion
+spans canonical rebind, deletion/barrier and in-memory installation.
+Post-COMMIT observer, cancellation, rename or barrier error retains custody
+and poisons mutation; recovery rolls forward exact identities without rollback.
+
+This maintenance protocol adds no fsync to ordinary relaxed no-WAL ACKs.
+Command-WAL WriteSync may acknowledge the durable command before sealed capsule
+frontier advances; explicit Checkpoint establishes the complete root boundary.
+Vacuum preserves each slot's actual `AppliedCommandLSN` and revision frontier.
+Ordinary maintenance is not a bounded native prune accounting witness.
+
+### Typed floor input preserves ordinary ACK
+
+The Store's exact floor metadata operation uses ordinary batch Write or WriteSync
+with typed producer input. Ordinary command-WAL DURABLE ACK retains grouped
+WAL/value-log prefix synchronization plus atomic memtable publication, without
+forcing Checkpoint. Command-WAL RELAXED ACK retains kernel-drained WAL buffers
+plus atomic memtable publication without fsync; it is not a userspace-only or
+memtable-only ACK. NoWALFast retains its later Checkpoint/safe-Close durability
+boundary. Neither floor metadata nor an ordinary ACK
+certifies a completed maintenance source cut. Protected-floor issuance and
+bounded native retirement are deferred from this ordinary prerequisite.

@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/limits"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"github.com/snissn/gomap/TreeDB/internal/templatedb"
 	publiciterator "github.com/snissn/gomap/TreeDB/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -2079,40 +2080,48 @@ func (db *DB) HasPrefixes(prefixes [][]byte) ([]bool, error) {
 // command_wal_durable makes the command-WAL prefix durable before returning;
 // relaxed profiles do not force a durability boundary here.
 func (db *DB) Set(key, value []byte) error {
+	return db.setWithMVCCInput(key, value, mvccadmission.Input{})
+}
+
+func (db *DB) setWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
 	if db.cached != nil && db.cached.COWMode() {
-		return db.writeCOWPointAdmitted(key, value, true, false)
+		return db.writeCOWPointAdmittedWithMVCCInput(key, value, true, false, input)
 	}
 	defer db.lifecycleMu.RUnlock()
 	if db.cached != nil {
 		if db.commandWALCached {
 			var publication publicCommandWALPublication
-			err := db.cached.SetAfterCommandWALAppendWithPreparedRevision(key, value, func(assignRevision func() page.EntryRevision) error {
+			err := db.cached.SetAfterCommandWALAppendWithMVCCInput(key, value, input, func(assignRevision func() page.EntryRevision) error {
 				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, assignRevision, db.commandWALOrdinaryWriteRequiresSync(), &publication)
 			})
 			db.finishPublicCommandWALGroupPublication(publication, err)
 			return err
 		}
-		return db.cached.Set(key, value)
+		return db.cached.SetPointWithMVCCInput(key, value, false, input)
 	}
-	return db.backend.Set(key, value)
+	return db.backend.SetPointWithMVCCInput(key, value, false, input)
 }
 
 // SetSync writes a key/value pair and forces a durability boundary.
 // When the command WAL is enabled, explicit sync operations opt up to durable
 // V2 publication even when the configured default durability is relaxed.
 func (db *DB) SetSync(key, value []byte) error {
+	return db.setSyncWithMVCCInput(key, value, mvccadmission.Input{})
+}
+
+func (db *DB) setSyncWithMVCCInput(key, value []byte, input mvccadmission.Input) error {
 	key = normalizeRawKVPointKey(key)
 	value = normalizeRawKVValue(value)
 	if err := db.beginPublicOperation(); err != nil {
 		return err
 	}
 	if db.cached != nil && db.cached.COWMode() {
-		return db.writeCOWPointAdmitted(key, value, true, true)
+		return db.writeCOWPointAdmittedWithMVCCInput(key, value, true, true, input)
 	}
 	// Select the route before appending any value/WAL bytes. Never retry an
 	// ambiguous point error. Construct the fallback under the admission lock
@@ -2122,7 +2131,7 @@ func (db *DB) SetSync(key, value []byte) error {
 		// WriteSync takes its own admission lock. Release this read lock first
 		// so a pending Close writer cannot deadlock a nested read acquisition.
 		db.lifecycleMu.RUnlock()
-		if err := batch.Set(key, value); err != nil {
+		if err := batch.SetWithMVCCInput(key, value, input); err != nil {
 			return errors.Join(err, batch.Close())
 		}
 		return errors.Join(batch.WriteSync(), batch.Close())
@@ -2131,15 +2140,15 @@ func (db *DB) SetSync(key, value []byte) error {
 	if db.cached != nil {
 		if db.commandWALCached {
 			var publication publicCommandWALPublication
-			err := db.cached.SetAfterCommandWALAppendWithPreparedRevision(key, value, func(assignRevision func() page.EntryRevision) error {
+			err := db.cached.SetAfterCommandWALAppendWithMVCCInput(key, value, input, func(assignRevision func() page.EntryRevision) error {
 				return db.appendPublicRawKVPointCommand(commitlog.RawKVOpSet, key, value, assignRevision, true, &publication)
 			})
 			db.finishPublicCommandWALGroupPublication(publication, err)
 			return err
 		}
-		return db.cached.SetSync(key, value)
+		return db.cached.SetPointWithMVCCInput(key, value, true, input)
 	}
-	return db.backend.SetSync(key, value)
+	return db.backend.SetPointWithMVCCInput(key, value, true, input)
 }
 
 // Update applies fn to the current value for key and writes the returned
@@ -2907,6 +2916,9 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 // writeCOWPointAdmitted consumes the caller's public admission. Batch writes
 // acquire their own admission, so release this lock before invoking them.
 func (db *DB) writeCOWPointAdmitted(key, value []byte, put, syncWrite bool) error {
+	return db.writeCOWPointAdmittedWithMVCCInput(key, value, put, syncWrite, mvccadmission.Input{})
+}
+func (db *DB) writeCOWPointAdmittedWithMVCCInput(key, value []byte, put, syncWrite bool, input mvccadmission.Input) error {
 	var b Batch = db.cached.NewBatchWithSize(1)
 	if db.commandWALCached {
 		b = newCommandWALPublicBatch(db, b, 1)
@@ -2914,7 +2926,13 @@ func (db *DB) writeCOWPointAdmitted(key, value []byte, put, syncWrite bool) erro
 	db.lifecycleMu.RUnlock()
 	var err error
 	if put {
-		err = b.Set(key, value)
+		if qualified, ok := b.(interface {
+			SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+		}); ok {
+			err = qualified.SetWithMVCCInput(key, value, input)
+		} else {
+			err = b.Set(key, value)
+		}
 	} else {
 		err = b.Delete(key)
 	}
@@ -2926,4 +2944,19 @@ func (db *DB) writeCOWPointAdmitted(key, value []byte, put, syncWrite bool) erro
 		}
 	}
 	return errors.Join(err, b.Close())
+}
+
+// NewMVCCAdmission binds a Store to the actual backend publication authority.
+func (db *DB) NewMVCCAdmission() *mvccadmission.Capability {
+	if err := db.beginPublicOperation(); err != nil {
+		return nil
+	}
+	defer db.lifecycleMu.RUnlock()
+	return db.backend.NewMVCCAdmission()
+}
+func (db *DB) SetPointWithMVCCInput(key, value []byte, sync bool, input mvccadmission.Input) error {
+	if sync {
+		return db.setSyncWithMVCCInput(key, value, input)
+	}
+	return db.setWithMVCCInput(key, value, input)
 }

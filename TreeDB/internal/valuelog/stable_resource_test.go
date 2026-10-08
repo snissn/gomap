@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -958,5 +959,78 @@ func benchmarkStableValueLogRotation(b *testing.B) {
 				})
 			}
 		})
+	}
+}
+
+func TestSelectedStableValueLogCaptureOwnsExactRIDAndRefusesBeforePin(t *testing.T) {
+	dir := t.TempDir()
+	fileID, err := EncodeFileID(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(SegmentPath(dir, fileID), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	registry := rootpublication.NewIdentityPinRegistry()
+	manager, err := NewManagerWithStableResourcePinRegistry(dir, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	var owner retainedalloc.Owner
+	owner.Initialize(0)
+	rids := []uint64{9, 2, 9, 4}
+	registration := StableResourceRegistration{MetadataOwner: &owner, Kind: rootpublication.ResourceCommandWALExternalRID, LogicalLane: "main", Generation: 1, DiagnosticPath: "maindb/value_vlog/value-l0-000001.log", Reachability: rootpublication.ReachabilityCommandWALExternalRIDFence, ExternalRIDs: rids, Digest: sha256.Sum256([]byte("selected-rid"))}
+	token, err := manager.StableResourceToken(fileID, registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owner.Bytes() == 0 {
+		t.Fatal("live capture has no admitted metadata")
+	}
+	for i := range rids {
+		rids[i] = 99
+	}
+	frontier := token.Frontier()
+	if frontier.RIDCount != 3 || frontier.RIDMin != 2 || frontier.RIDMax != 9 {
+		t.Fatalf("borrowed caller RID mutation changed exact frontier: %+v", frontier)
+	}
+	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(&owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = builder.Add(token); err != nil {
+		builder.Abandon()
+		token.Release()
+		t.Fatal(err)
+	}
+	set, err := builder.Freeze()
+	if err != nil {
+		builder.Abandon()
+		t.Fatal(err)
+	}
+	clone, err := rootpublication.CloneStableResourceSetExcludingKinds(set)
+	if err != nil {
+		set.Release()
+		t.Fatal(err)
+	}
+	set.Release()
+	if owner.Bytes() == 0 {
+		t.Fatal("live clone lost its admitted backing")
+	}
+	clone.Release()
+	if owner.Bytes() != 0 {
+		t.Fatalf("capture cleanup retains %d metadata bytes", owner.Bytes())
+	}
+	owner.Close()
+	if _, err = manager.StableResourceToken(fileID, registration); err == nil {
+		t.Fatal("closed admission accepted fresh capture")
+	}
+	if owner.Bytes() != 0 {
+		t.Fatal("refused capture changed metadata debt")
+	}
+	// Refusal leaves the actual manager file available, rather than consuming it.
+	if _, ok := manager.StableSegmentIdentity(fileID); !ok {
+		t.Fatal("refused capture consumed manager file")
 	}
 }

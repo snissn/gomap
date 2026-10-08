@@ -3517,7 +3517,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		})
 	}
 	// Alias and logical coverage is directional, independently of byte coverage.
-	prior := &stableResourceEntry{token: &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}, frontier: DurableFrontier{Bytes: 16}, reachability: map[ReachabilityField]struct{}{ReachabilityColumnManifest: {}}}
+	prior := &stableResourceEntry{token: &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}, frontier: DurableFrontier{Bytes: 16}, reachability: newGenericResourceReachability(ReachabilityColumnManifest)}
 	candidate := *prior
 	candidate.token = &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}
 	candidate.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
@@ -3545,7 +3545,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		}
 	}
 	candidate.token.namespace = nil
-	candidate.reachability = map[ReachabilityField]struct{}{ReachabilityTypedColumnValue: {}}
+	candidate.reachability = newGenericResourceReachability(ReachabilityTypedColumnValue)
 	if stableResourceEntryCoversPublication(prior, &candidate) {
 		t.Fatal("new reachability credited")
 	}

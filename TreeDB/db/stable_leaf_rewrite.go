@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"path/filepath"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -12,26 +14,33 @@ import (
 )
 
 type rewriteStableOuterLeafCapture struct {
-	writer           *rewriteWriter
-	builder          *rootpublication.StableResourceSetBuilder
-	tokens           []*rootpublication.StableResourceToken
-	parentGeneration uint64
-	dictionaryIDs    map[uint64]struct{}
-	templateIDs      map[uint64]struct{}
+	writer                                                                             *rewriteWriter
+	builder                                                                            *rootpublication.StableResourceSetBuilder
+	tokens                                                                             []*rootpublication.StableResourceToken
+	parentGeneration                                                                   uint64
+	dictionaryIDs                                                                      []uint64
+	templateIDs                                                                        []uint64
+	metadata                                                                           *retainedalloc.Owner
+	metadataCharge, tokensCharge, registrationCharge, dictionaryCharge, templateCharge uint64
 }
 
 func (capture *rewriteStableOuterLeafCapture) captureDictionary(ctx context.Context, dictID uint64, dictionary []byte) error {
 	if capture == nil || dictID == 0 || len(dictionary) == 0 {
 		return nil
 	}
-	if _, ok := capture.dictionaryIDs[dictID]; ok {
-		return nil
+	for _, id := range capture.dictionaryIDs {
+		if id == dictID {
+			return nil
+		}
+	}
+	if err := capture.reserveID(&capture.dictionaryIDs, &capture.dictionaryCharge); err != nil {
+		return err
 	}
 	var provider StableDictionaryResourceProvider
 	if capture.writer != nil && capture.writer.stableDictionaryResourceProvider != nil {
 		provider = capture.writer.stableDictionaryResourceProvider()
 	}
-	resources, err := captureStableDictionaryResources(ctx, provider, dictID, dictionary)
+	resources, err := captureStableDictionaryResources(ctx, provider, dictID, dictionary, capture.metadata)
 	if err != nil {
 		return err
 	}
@@ -42,10 +51,7 @@ func (capture *rewriteStableOuterLeafCapture) captureDictionary(ctx context.Cont
 		resources.Release()
 		return err
 	}
-	if capture.dictionaryIDs == nil {
-		capture.dictionaryIDs = make(map[uint64]struct{})
-	}
-	capture.dictionaryIDs[dictID] = struct{}{}
+	capture.dictionaryIDs = append(capture.dictionaryIDs, dictID)
 	return nil
 }
 
@@ -57,14 +63,19 @@ func (capture *rewriteStableOuterLeafCapture) captureEncodedTemplatePayload(stor
 	if err != nil {
 		return err
 	}
-	if _, ok := capture.templateIDs[templateID]; ok {
-		return nil
+	for _, id := range capture.templateIDs {
+		if id == templateID {
+			return nil
+		}
+	}
+	if err := capture.reserveID(&capture.templateIDs, &capture.templateCharge); err != nil {
+		return err
 	}
 	provider, ok := store.(StableTemplateResourceProvider)
 	if !ok {
 		return fmt.Errorf("%w: template %d lacks stable resource provider", rootpublication.ErrUnresolvedResource, templateID)
 	}
-	resources, err := captureStableTemplateResources(provider, store, templateID)
+	resources, err := captureStableTemplateResources(provider, store, templateID, capture.metadata)
 	if err != nil {
 		return err
 	}
@@ -72,10 +83,7 @@ func (capture *rewriteStableOuterLeafCapture) captureEncodedTemplatePayload(stor
 		resources.Release()
 		return err
 	}
-	if capture.templateIDs == nil {
-		capture.templateIDs = make(map[uint64]struct{})
-	}
-	capture.templateIDs[templateID] = struct{}{}
+	capture.templateIDs = append(capture.templateIDs, templateID)
 	return nil
 }
 
@@ -89,10 +97,25 @@ func newRewriteStableOuterLeafCapture(writer *rewriteWriter) (*rewriteStableOute
 	if writer.stableResourcePins == nil {
 		return nil, fmt.Errorf("%w: raw outer-leaf producer lacks the DB-scoped pin registry", rootpublication.ErrUnresolvedResource)
 	}
-	capture := &rewriteStableOuterLeafCapture{
-		writer:  writer,
-		builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer),
+	metadata := writer.stableResourceMetadata
+	var charge uint64
+	var builder *rootpublication.StableResourceSetBuilder
+	if metadata != nil {
+		charge = retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(rewriteStableOuterLeafCapture{})))
+		if err := metadata.AddPending(charge); err != nil {
+			return nil, err
+		}
+		var err error
+		builder, err = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata, rootpublication.ReachabilityOuterLeafRawPointer)
+		if err != nil {
+			metadata.RemovePending(charge)
+			return nil, err
+		}
+	} else {
+		builder = rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer)
 	}
+	capture := &rewriteStableOuterLeafCapture{writer: writer, builder: builder, metadata: metadata, metadataCharge: charge}
+
 	return capture, nil
 }
 
@@ -118,29 +141,34 @@ func (capture *rewriteStableOuterLeafCapture) registration(path string, fileID u
 	if capture == nil || capture.writer == nil || path == "" || fileID == 0 || capture.parentGeneration == 0 {
 		return valuelog.StableResourceRegistration{}, fmt.Errorf("%w: incomplete standalone outer-leaf registration", rootpublication.ErrUnresolvedResource)
 	}
-	diagnosticPath, err := filepath.Rel(filepath.Dir(capture.writer.leafDir), path)
-	if err != nil || diagnosticPath == "." || filepath.IsAbs(diagnosticPath) {
-		return valuelog.StableResourceRegistration{}, fmt.Errorf("%w: standalone outer-leaf diagnostic path: %v", rootpublication.ErrUnresolvedResource, err)
+	registration, charge, err := valuelog.NewOuterLeafStableRegistration(filepath.Dir(capture.writer.leafDir), path, uint32(capture.writer.leafLane), capture.parentGeneration, operation, capture.writer.stableResourcePins, capture.metadata)
+	if err != nil {
+		return valuelog.StableResourceRegistration{}, err
 	}
-	registration := valuelog.StableResourceRegistration{
-		Kind:               rootpublication.ResourceOuterLeafLog,
-		LogicalLane:        fmt.Sprintf("outer-leaf-%d", capture.writer.leafLane),
-		Generation:         uint64(fileID),
-		DiagnosticPath:     filepath.ToSlash(diagnosticPath),
-		Reachability:       rootpublication.ReachabilityOuterLeafRawPointer,
-		ParentGeneration:   capture.parentGeneration,
-		NamespaceOperation: operation,
-		PinRegistry:        capture.writer.stableResourcePins,
-	}
-	if operation != rootpublication.NamespaceNone {
-		registration.NewName = filepath.Base(path)
-	}
+	capture.registrationCharge += charge
+	registration.Generation = uint64(fileID)
 	return registration, nil
 }
 
 func (capture *rewriteStableOuterLeafCapture) add(token *rootpublication.StableResourceToken) error {
 	if capture == nil || capture.builder == nil || token == nil {
 		return rootpublication.ErrResourceOwnership
+	}
+	if capture.metadata != nil && len(capture.tokens) == cap(capture.tokens) {
+		capacity := cap(capture.tokens) * 2
+		if capacity == 0 {
+			capacity = 2
+		}
+		charge := retainedalloc.AllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(token)))
+		if err := capture.metadata.AddPending(charge); err != nil {
+			return err
+		}
+		next := make([]*rootpublication.StableResourceToken, len(capture.tokens), capacity)
+		copy(next, capture.tokens)
+		clear(capture.tokens)
+		old := capture.tokensCharge
+		capture.tokens, capture.tokensCharge = next, charge
+		capture.metadata.RemovePending(old)
 	}
 	capture.tokens = append(capture.tokens, token)
 	return nil
@@ -233,29 +261,32 @@ func (capture *rewriteStableOuterLeafCapture) freeze(ptrs []page.LeafLogPtr) (*r
 	if capture == nil || capture.builder == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
-	required := make(map[uint64]struct{}, len(ptrs))
-	for _, ptr := range ptrs {
-		required[uint64(ptr.ValueLogFileID())] = struct{}{}
-	}
-	for _, token := range capture.tokens {
-		if _, ok := required[token.Generation()]; !ok {
+	for i, token := range capture.tokens {
+		required := false
+		for _, ptr := range ptrs {
+			if uint64(ptr.ValueLogFileID()) == token.Generation() {
+				required = true
+				break
+			}
+		}
+		capture.tokens[i] = nil
+		if !required {
 			token.Release()
 			continue
 		}
 		if err := capture.builder.Add(token); err != nil {
 			token.Release()
-			capture.builder.Abandon()
-			capture.releaseTokens()
-			capture.builder = nil
+			capture.abandon()
 			return nil, err
 		}
 	}
-	capture.tokens = nil
+	capture.disposeTokens()
 	set, err := capture.builder.Freeze()
 	if err != nil {
 		capture.builder.Abandon()
 	}
 	capture.builder = nil
+	capture.disposeMetadata()
 	return set, err
 }
 
@@ -268,11 +299,61 @@ func (capture *rewriteStableOuterLeafCapture) abandon() {
 	}
 	capture.releaseTokens()
 	capture.builder = nil
+	capture.disposeMetadata()
 }
 
 func (capture *rewriteStableOuterLeafCapture) releaseTokens() {
 	for _, token := range capture.tokens {
 		token.Release()
 	}
+	capture.disposeTokens()
+}
+
+// reserveID retains only the producer dedup keys. Growth admits the full new
+// backing during overlap; the old backing ends before its refund.
+func (capture *rewriteStableOuterLeafCapture) reserveID(ids *[]uint64, admitted *uint64) error {
+	if len(*ids) < cap(*ids) {
+		return nil
+	}
+	capacity := cap(*ids) * 2
+	if capacity == 0 {
+		capacity = 2
+	}
+	var charge uint64
+	if capture.metadata != nil {
+		charge = retainedalloc.AllocationCharge(uint64(capacity) * 8)
+		if err := capture.metadata.AddPending(charge); err != nil {
+			return err
+		}
+	}
+	next := make([]uint64, len(*ids), capacity)
+	copy(next, *ids)
+	clear(*ids)
+	old := *admitted
+	*ids = next
+	*admitted = charge
+	if capture.metadata != nil {
+		capture.metadata.RemovePending(old)
+	}
+	return nil
+}
+func (capture *rewriteStableOuterLeafCapture) disposeTokens() {
+	clear(capture.tokens)
 	capture.tokens = nil
+	if capture.metadata != nil {
+		capture.metadata.RemovePending(capture.tokensCharge)
+	}
+	capture.tokensCharge = 0
+}
+func (capture *rewriteStableOuterLeafCapture) disposeMetadata() {
+	owner := capture.metadata
+	charge := capture.metadataCharge + capture.registrationCharge + capture.dictionaryCharge + capture.templateCharge
+	clear(capture.dictionaryIDs)
+	clear(capture.templateIDs)
+	capture.dictionaryIDs, capture.templateIDs = nil, nil
+	capture.writer, capture.metadata = nil, nil
+	capture.metadataCharge, capture.registrationCharge, capture.dictionaryCharge, capture.templateCharge = 0, 0, 0, 0
+	if owner != nil {
+		owner.RemovePending(charge)
+	}
 }

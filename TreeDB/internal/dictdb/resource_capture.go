@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -34,6 +35,18 @@ var addDictionaryStableResourceToken = func(builder *rootpublication.StableResou
 // until Release; callers must merge it into the parent publication before the
 // dictionary ID becomes reachable.
 func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (*rootpublication.StableResourceSet, error) {
+	return s.captureDictionaryResources(ctx, dictID, nil)
+}
+
+// CaptureDictionaryResourcesWithMetadata admits new descriptor/callback storage
+// against the supplied parent owner while preserving the child physical owner.
+func (s *Store) CaptureDictionaryResourcesWithMetadata(ctx context.Context, dictID uint64, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+	if metadata == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	return s.captureDictionaryResources(ctx, dictID, metadata)
+}
+func (s *Store) captureDictionaryResources(ctx context.Context, dictID uint64, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
 	if s == nil || s.backend == nil {
 		return nil, errStoreUnavailable
 	}
@@ -78,15 +91,24 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 		Digest:       digest,
 	}
 
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
+	var builder *rootpublication.StableResourceSetBuilder
+	if metadata == nil {
+		builder = rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
+	} else {
+		builder, err = rootpublication.NewStableResourceSetBuilderWithMetadata(metadata, rootpublication.ReachabilityDictionaryGeneration)
+		if err != nil {
+			return nil, err
+		}
+	}
 	defer builder.Abandon()
 
 	indexToken, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
-		Kind:         rootpublication.ResourceDictionary,
-		LogicalLane:  "dictdb/index",
-		ResourceID:   "index",
-		Digest:       dictionaryIndexPhysicalDigest,
-		Reachability: rootpublication.ReachabilityDictionaryGeneration,
+		MetadataOwner: metadata,
+		Kind:          rootpublication.ResourceDictionary,
+		LogicalLane:   "dictdb/index",
+		ResourceID:    "index",
+		Digest:        dictionaryIndexPhysicalDigest,
+		Reachability:  rootpublication.ReachabilityDictionaryGeneration,
 		LogicalObligations: []rootpublication.StableLogicalObligation{
 			logical,
 		},
@@ -119,6 +141,7 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 			return nil, fmt.Errorf("dictdb: dictionary %d has invalid value-log frontier", dictID)
 		}
 		token, tokenErr := snapshot.NewStableValueLogPhysicalResourceToken(entry.ValuePtr.FileID, rootpublication.StableResourceSpec{
+			MetadataOwner:  metadata,
 			Kind:           rootpublication.ResourceDictionary,
 			LogicalLane:    "dictdb/value-log",
 			ResourceID:     "value-log/" + strconv.FormatUint(uint64(entry.ValuePtr.FileID), 10),
@@ -157,7 +180,12 @@ func validateCapturedDictionaryPhysicalClosure(resources *rootpublication.Stable
 		return fmt.Errorf("%w: dictionary capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}
 	var index, valueLog bool
-	for _, descriptor := range resources.PhysicalDescriptors() {
+	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		return captureErr
+	}
+	defer diagnostics.Close()
+	for _, descriptor := range diagnostics.Physical() {
 		if descriptor.Kind != rootpublication.ResourceDictionary {
 			return fmt.Errorf("%w: dictionary closure contains kind %q", rootpublication.ErrResourceConflict, descriptor.Kind)
 		}

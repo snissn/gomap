@@ -512,6 +512,14 @@ func (t *Tree) IteratorWithOptions(start, end []byte, opts IteratorOptions) iter
 		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, false)
+	p := new(primaryIterator)
+	if selected, err := t.initPrimaryIterator(p, it, start, end, opts, false, nil, nil, false); selected || err != nil {
+		if err != nil {
+			it.err = err
+			return it
+		}
+		return p
+	}
 	it.Seek(start)
 	if start == nil {
 		it.prefetchArmed = true
@@ -531,6 +539,14 @@ func (t *Tree) ReverseIteratorWithOptions(start, end []byte, opts IteratorOption
 		return t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
 	}
 	it := t.acquireIterator(start, end, mode, opts.IncludeTombstones, true)
+	p := new(primaryIterator)
+	if selected, err := t.initPrimaryIterator(p, it, start, end, opts, true, nil, nil, false); selected || err != nil {
+		if err != nil {
+			it.err = err
+			return it
+		}
+		return p
+	}
 	it.Seek(nil)
 
 	// Check Start bound

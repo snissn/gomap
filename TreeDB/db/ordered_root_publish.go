@@ -539,10 +539,18 @@ func (db *DB) orderedRootZipperForOptionsWithAllocator(idx *indexGen, opts order
 	if alloc == nil {
 		return nil, errors.New("missing allocator")
 	}
-	if db != nil && alloc == idx.allocator && db.orderedRootOptionsUseDefaultZipper(opts) && !opts.rejectDictionaryReads {
+	if db != nil && idx.primary == nil && alloc == idx.allocator && db.orderedRootOptionsUseDefaultZipper(opts) && !opts.rejectDictionaryReads {
 		return idx.zipper, nil
 	}
 	z := idx.zipper.CloneWithAllocator(alloc)
+	// Ordered roots include system and collection DATA trees. Only an actual
+	// directory input selects the primary route; the ordinary main user-root
+	// preference must not wrap every unrelated DATA root.
+	z.SetPrimaryDirectory(false)
+	if _, bank := alloc.(*primaryDependencyAllocatorV5); bank {
+		z.SetPrimaryArena(nil)
+		z.SetPrimaryDirectory(false)
+	}
 	z.SetOuterLeavesInValueLog(opts.outerLeavesInValueLog)
 	z.SetIndexInternalBaseDelta(opts.internalBaseDelta && !opts.outerLeavesInValueLog)
 	if opts.outerLeavesInValueLog {

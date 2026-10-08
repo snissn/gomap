@@ -411,7 +411,7 @@ func (s *leafGenerationManifestStore) replaceStable(manifest *leafGenerationMani
 		Frontier: rootpublication.DurableFrontier{Bytes: uint64(len(data))}, Digest: digest,
 		Reachability: rootpublication.ReachabilityOuterLeafGeneration, Namespace: namespace,
 		ContentSynced: true, PinRegistry: s.registry,
-		OnRelease: func() { _ = s.registry.Unobserve(newIdentity) },
+		OriginalObservation: s.registry,
 	})
 	if err != nil {
 		return nil, s.ambiguous(err)

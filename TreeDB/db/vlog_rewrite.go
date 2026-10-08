@@ -29,6 +29,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/outerleaf"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -3573,6 +3574,7 @@ type rewriteWriter struct {
 	leafCurrentPath                  string
 	leafCurrentFileID                uint32
 	stableResourcePins               *rootpublication.IdentityPinRegistry
+	stableResourceMetadata           *retainedalloc.Owner
 	stableRegistryErr                error
 	stableDictionaryResourceProvider func() StableDictionaryResourceProvider
 	leafStaging                      bool
@@ -3691,6 +3693,17 @@ func (w *rewriteWriter) bindStableDictionaryResourceProvider(provider func() Sta
 	return nil
 }
 
+func (w *rewriteWriter) bindStableResourceMetadata(owner *retainedalloc.Owner) error {
+	if w == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	if w.leafW != nil && w.stableResourceMetadata != owner {
+		return rootpublication.ErrResourceOwnership
+	}
+	w.stableResourceMetadata = owner
+	return nil
+}
+
 func (w *rewriteWriter) configureLeafStaging(stagingRoot string) {
 	if w != nil {
 		w.leafStaging = true
@@ -3745,6 +3758,7 @@ func (w *rewriteWriter) cloneLeafPageLogLane(seqAlloc *leafLogSeqAllocator, ridA
 	clone.leafSeqAllocator = seqAlloc
 	clone.ridAlloc = ridAlloc
 	clone.stableResourcePins = w.stableResourcePins
+	clone.stableResourceMetadata = w.stableResourceMetadata
 	clone.stableDictionaryResourceProvider = w.stableDictionaryResourceProvider
 	clone.stableRegistryErr = w.stableRegistryErr
 	clone.blockCompression = w.blockCompression

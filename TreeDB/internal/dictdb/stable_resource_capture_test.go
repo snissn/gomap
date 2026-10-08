@@ -8,12 +8,14 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -511,6 +513,59 @@ func BenchmarkCaptureDictionaryResources(b *testing.B) {
 			} else {
 				b.ReportMetric(0, "vlog_file_syncs/op")
 				b.ReportMetric(0, "vlog_namespace_syncs/op")
+			}
+		})
+	}
+}
+
+func TestDictionarySuppliedMetadataCapturesLegacyInlineAndPointer(t *testing.T) {
+	for _, pointer := range []bool{false, true} {
+		t.Run(fmt.Sprint(pointer), func(t *testing.T) {
+			store, err := Open(t.TempDir(), db.Options{ChunkSize: 64 * 1024})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			payload := []byte("selected-dictionary")
+			if pointer {
+				payload = bytes.Repeat(payload, 128)
+			}
+			id, err := store.PutDictBytes(context.Background(), payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var metadata retainedalloc.Owner
+			metadata.Initialize(0)
+			registry := store.backend.StableResourceIdentityPinRegistry()
+			before := registry.ActivePins()
+			resources, err := store.CaptureDictionaryResourcesWithMetadata(context.Background(), id, &metadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := 1
+			if pointer {
+				want = 2
+			}
+			if resources.Len() != want || resources.MetadataOwner() != &metadata || metadata.Bytes() == 0 {
+				resources.Release()
+				t.Fatalf("wrong selected closure len=%d want=%d", resources.Len(), want)
+			}
+			if err = resources.SyncThrough(); err != nil {
+				resources.Release()
+				t.Fatal(err)
+			}
+			resources.Release()
+			if metadata.Bytes() != 0 || registry.ActivePins() != before || registry.CleanupError() != nil {
+				t.Fatalf("borrow leaked bytes=%d pins=%d error=%v", metadata.Bytes(), registry.ActivePins(), registry.CleanupError())
+			}
+			metadata.Close()
+			if _, err = store.PutDictBytes(context.Background(), []byte("future-valid-dictionary")); err != nil {
+				t.Fatal(err)
+			}
+			before = registry.ActivePins()
+			refused, err := store.CaptureDictionaryResourcesWithMetadata(context.Background(), id, &metadata)
+			if refused != nil || !errors.Is(err, retainedalloc.ErrClosed) || registry.ActivePins() != before {
+				t.Fatalf("refusal effects resource=%v err=%v pins=%d", refused, err, registry.ActivePins())
 			}
 		})
 	}

@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 	"sync"
 
 	treedb "github.com/snissn/gomap/TreeDB"
@@ -110,7 +111,8 @@ type versionRangeSuccessorDB interface {
 
 // Store owns the external-version namespace of one TreeDB handle.
 type Store struct {
-	db treeDB
+	db        treeDB
+	admission *mvccadmission.Capability
 
 	// maintenanceMu serializes floor advancement and pruning. The lock order is
 	// maintenanceMu then mu; foreground reads and commits never take it.
@@ -133,11 +135,17 @@ func New(db *treedb.DB) *Store {
 	if db == nil {
 		return &Store{}
 	}
-	return newStore(db)
+	s := newStore(db)
+	s.admission = db.NewMVCCAdmission()
+	return s
 }
 
 func newStore(db treeDB) *Store {
-	return &Store{db: db}
+	s := &Store{db: db}
+	// Only New's concrete TreeDB producer adopts typed input. Internal
+	// decorators can override Set/SetSync; an inherited input method must not
+	// bypass those point-writer contracts or their injected storage errors.
+	return s
 }
 
 // CommitAt atomically writes all mutations at one caller-assigned timestamp.
@@ -254,6 +262,17 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 			return fmt.Errorf("%w: group index %d timestamp %d is not above floor %d", ErrVersionBelowDiscardFloor, entry.group, entry.timestamp, floor)
 		}
 	}
+	if s.admission != nil && len(staged) == 1 {
+		if writer, ok := s.db.(interface {
+			SetPointWithMVCCInput([]byte, []byte, bool, mvccadmission.Input) error
+		}); ok {
+			entry := staged[0]
+			if err := writer.SetPointWithMVCCInput(entry.physical, entry.record, mode == CommitDurable, s.admission.Input(entry.physical, entry.timestamp, floor)); err != nil {
+				return storageError("commit point", err)
+			}
+			return nil
+		}
+	}
 	if mode == CommitRelaxed && len(staged) == 1 {
 		if writer, ok := s.db.(pointWriter); ok {
 			if err := writer.Set(staged[0].physical, staged[0].record); err != nil {
@@ -276,7 +295,16 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 		return storageError("create batch", treedb.ErrClosed)
 	}
 	for i := range staged {
-		if err := batch.Set(staged[i].physical, staged[i].record); err != nil {
+		var err error
+		if writer, ok := batch.(interface {
+			SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+		}); ok && s.admission != nil {
+			e := staged[i]
+			err = writer.SetWithMVCCInput(e.physical, e.record, s.admission.Input(e.physical, e.timestamp, floor))
+		} else {
+			err = batch.Set(staged[i].physical, staged[i].record)
+		}
+		if err != nil {
 			stageErr := storageError(fmt.Sprintf("stage group index %d key index %d", staged[i].group, staged[i].key), err)
 			return errors.Join(stageErr, storageError("close batch", batch.Close()))
 		}

@@ -16,7 +16,7 @@ func TestPreparedRootPublicationBaseProfileCountsHistoricalManifest(t *testing.T
 		}},
 		leafGenerationPendingFileIDs: []uint32{7, 8},
 		rootPublication: &rootPublicationRuntimeV1{
-			visibleMembers: map[uint64]*rootPublicationVisibleMemberV1{1: {}, 2: {}},
+			visibleMembers: []*rootPublicationVisibleMemberV1{{sequence: 1}, {sequence: 2}},
 			debt:           make([]*freelist.PreparedCOWCandidateV1, 3),
 			seals: []*rootPublicationSealV1{
 				{prefix: make([]*freelist.PreparedCOWCandidateV1, 2)},

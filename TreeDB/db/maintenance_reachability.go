@@ -396,6 +396,48 @@ func (db *DB) maintenanceReachabilityScan(ctx context.Context, snap *Snapshot, o
 
 		entry := memoEntry{valueLogComplete: valueLogProjection}
 		switch n.Type() {
+		case page.PageTypePrimaryDirectory:
+			directory, err := node.DecodePrimaryDirectory(data)
+			if err != nil {
+				return nil, err
+			}
+			base, _ := directory.Base()
+			baseImage, err := snap.idx.pager.Get(base.Ref.Page)
+			if err != nil {
+				return nil, err
+			}
+			if !node.VerifyPrimaryOperand(base, baseImage) {
+				return nil, fmt.Errorf("maintenance primary %d base %d: %w", pageID, base.Ref.Page, node.ErrPrimaryDirectory)
+			}
+			entry.children = append(entry.children, base.Ref.Page)
+			for i := 0; i < directory.Count(); i++ {
+				component, _ := directory.Entry(i)
+				if component.InlineAbsence() {
+					continue
+				}
+				if component.Operand.Ref.Kind != page.ChildRefPage {
+					return nil, node.ErrPrimaryDirectory
+				}
+				image, err := snap.idx.pager.Get(component.Operand.Ref.Page)
+				if err != nil {
+					return nil, err
+				}
+				result.counters.PagesVisited++
+				result.counters.PhysicalBytesRead += uint64(len(image))
+				if err = node.ValidatePrimaryComponent(component, image); err != nil {
+					return nil, fmt.Errorf("maintenance primary %d component %d key %q: %w", pageID, component.Operand.Ref.Page, component.Key, err)
+				}
+				entry.children = append(entry.children, component.Operand.Ref.Page)
+			}
+			result.counters.PagesVisited++
+			result.counters.PhysicalBytesRead += uint64(len(baseImage))
+			for _, child := range entry.children {
+				totals, err := walk(child, depth+1, valueLogProjection)
+				if err != nil {
+					return nil, err
+				}
+				entry.leafTotals = mergeLeafGenerationTotals(entry.leafTotals, totals)
+			}
 		case page.PageTypeLeaf:
 			if valueLogProjection {
 				if err := scanLeafValues(n, &entry); err != nil {

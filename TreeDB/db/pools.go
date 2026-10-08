@@ -86,7 +86,17 @@ func (p *SnapshotPool) Put(s *Snapshot) {
 	if s == nil {
 		return
 	}
-	s.tree.SetNegativeFilter(nil)
+	// Exported handles are never reused: scrub all tree/pager aliases before
+	// publishing completion of their original cleanup owner.
+	s.tree.Reset(nil, nil, 0)
+	s.treePager = nil
+	s.treeRoot = 0
+	for i := range s.rootTrees {
+		s.rootTrees[i].tree.Reset(nil, nil, 0)
+		s.rootTrees[i].root = 0
+	}
+	clear(s.rootTrees)
+	s.rootTrees = nil
 	s.db = nil
 	s.idx = nil
 	s.state = nil

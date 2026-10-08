@@ -240,3 +240,84 @@ func TestCOWDictionaryCleanupPrivateCutOwnership(t *testing.T) {
 		}
 	}
 }
+
+func TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ChunkSize: 65536, IndexPrimaryDirectory: true, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	store := dictdb.New(backend)
+	id, err := store.PutDictBytes(context.Background(), []byte("primary-dictionary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &cowCache{budget: budget}
+	before := budget.Stats()
+	definition, err := store.PrepareDictionaryReadDefinition(id, c.readLimits(), budget.Limits().MaxResources, c.admitDictionaryRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held := budget.Stats()
+	if held.ExternalLeases != before.ExternalLeases+5 {
+		t.Fatalf("missing temporary PRIMARY governor: %+v", held)
+	}
+	definition.ReleaseCapture()
+	after := budget.Stats()
+	if after.ExternalLeases != before.ExternalLeases+2 {
+		t.Fatalf("temporary snapshot/governor not settled: %+v", after)
+	}
+	if string(definition.Bytes) != "primary-dictionary" {
+		t.Fatal("capture release damaged immutable dictionary")
+	}
+	definition.Close()
+	definition.Close()
+	if budget.Stats().ExternalBytes != before.ExternalBytes {
+		t.Fatal("definition cleanup leaked")
+	}
+	budget.Close()
+	// Closing a completed temporary budget must not govern future arena growth.
+	for i := 0; i < 8; i++ {
+		if err = backend.Set([]byte(fmt.Sprintf("later-%d", i)), []byte("value")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err = backend.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Startup attaches actual producer custody, unlike a dictionary borrow. The
+// last basis can end before the final backend checkpoint/physical teardown.
+func TestCOWPrimaryProducerSurvivesBasisUntilPhysicalDisposal(t *testing.T) {
+	backend, err := backenddb.Open(backenddb.Options{Dir: t.TempDir(), ChunkSize: 65536, IndexPrimaryDirectory: true, Durability: backenddb.DurabilityWALOffRelaxed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	c, err := newCOWCache(backend, 1, memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.budget.Close()
+	c.closeWithBudget(false)
+	if c.budget.Stats().ExternalLeases != 2 || c.budget.Stats().ExternalBytes == 0 {
+		t.Fatalf("producer lost exact pair after last basis: %+v", c.budget.Stats())
+	}
+	if err = backend.Set([]byte("final"), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
+	if err = backend.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+	if err = backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if c.budget.Stats().ExternalBytes != 0 || c.budget.Stats().ExternalLeases != 0 {
+		t.Fatalf("actual pair disposal retained governor: %+v", c.budget.Stats())
+	}
+}

@@ -2,7 +2,9 @@ package caching
 
 import (
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"path/filepath"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -19,41 +21,50 @@ type stableValueWriter interface {
 }
 
 type stableOuterLeafCapture struct {
-	db               *DB
-	lane             *lane
-	builder          *rootpublication.StableResourceSetBuilder
-	tokens           []*rootpublication.StableResourceToken
-	parentGeneration uint64
+	db                                               *DB
+	lane                                             *lane
+	builder                                          *rootpublication.StableResourceSetBuilder
+	tokens                                           []*rootpublication.StableResourceToken
+	parentGeneration                                 uint64
+	metadata                                         *retainedalloc.Owner
+	metadataCharge, tokensCharge, registrationCharge uint64
 }
 
-func newStableOuterLeafCapture(db *DB, lane *lane) *stableOuterLeafCapture {
-	return &stableOuterLeafCapture{
-		db: db, lane: lane,
-		builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer),
+type stableResourceMetadataProvider interface {
+	StableResourceMetadataOwner() *retainedalloc.Owner
+}
+
+func newStableOuterLeafCapture(db *DB, lane *lane) (*stableOuterLeafCapture, error) {
+	var metadata *retainedalloc.Owner
+	if provider, ok := db.backend.(stableResourceMetadataProvider); ok {
+		metadata = provider.StableResourceMetadataOwner()
 	}
+	if metadata == nil {
+		return &stableOuterLeafCapture{db: db, lane: lane,
+			builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer)}, nil
+	}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(stableOuterLeafCapture{})))
+	if err := metadata.AddPending(charge); err != nil {
+		return nil, err
+	}
+	builder, err := rootpublication.NewStableResourceSetBuilderWithMetadata(metadata, rootpublication.ReachabilityOuterLeafRawPointer)
+	if err != nil {
+		metadata.RemovePending(charge)
+		return nil, err
+	}
+	return &stableOuterLeafCapture{db: db, lane: lane, builder: builder, metadata: metadata, metadataCharge: charge}, nil
 }
 
 func (capture *stableOuterLeafCapture) registration(path string, fileID uint32, namespace rootpublication.NamespaceOperation) (valuelog.StableResourceRegistration, error) {
 	if capture == nil || capture.db == nil || capture.lane == nil || path == "" || fileID == 0 {
 		return valuelog.StableResourceRegistration{}, fmt.Errorf("%w: incomplete outer-leaf stable registration", rootpublication.ErrUnresolvedResource)
 	}
-	diagnosticPath, err := filepath.Rel(filepath.Dir(capture.db.dir), path)
-	if err != nil || diagnosticPath == "." || filepath.IsAbs(diagnosticPath) {
-		return valuelog.StableResourceRegistration{}, fmt.Errorf("%w: outer-leaf diagnostic path: %v", rootpublication.ErrUnresolvedResource, err)
+	registration, charge, err := valuelog.NewOuterLeafStableRegistration(filepath.Dir(capture.db.dir), path, uint32(capture.lane.id), capture.parentGeneration, namespace, capture.db.valueLogIdentityPins, capture.metadata)
+	if err != nil {
+		return valuelog.StableResourceRegistration{}, err
 	}
-	registration := valuelog.StableResourceRegistration{
-		Kind:               rootpublication.ResourceOuterLeafLog,
-		LogicalLane:        fmt.Sprintf("outer-leaf-%d", capture.lane.id),
-		Generation:         uint64(fileID),
-		DiagnosticPath:     filepath.ToSlash(diagnosticPath),
-		Reachability:       rootpublication.ReachabilityOuterLeafRawPointer,
-		ParentGeneration:   capture.parentGeneration,
-		NamespaceOperation: namespace,
-		PinRegistry:        capture.db.valueLogIdentityPins,
-	}
-	if namespace != rootpublication.NamespaceNone {
-		registration.NewName = filepath.Base(path)
-	}
+	capture.registrationCharge += charge
+	registration.Generation = uint64(fileID)
 	return registration, nil
 }
 
@@ -78,6 +89,22 @@ func (capture *stableOuterLeafCapture) bindParentGeneration(writer stableValueWr
 func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableResourceToken) error {
 	if capture == nil || capture.builder == nil || token == nil {
 		return rootpublication.ErrResourceOwnership
+	}
+	if capture.metadata != nil && len(capture.tokens) == cap(capture.tokens) {
+		capacity := cap(capture.tokens) * 2
+		if capacity == 0 {
+			capacity = 2
+		}
+		charge := retainedalloc.AllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(token)))
+		if err := capture.metadata.AddPending(charge); err != nil {
+			return err
+		}
+		next := make([]*rootpublication.StableResourceToken, len(capture.tokens), capacity)
+		copy(next, capture.tokens)
+		clear(capture.tokens)
+		old := capture.tokensCharge
+		capture.tokens, capture.tokensCharge = next, charge
+		capture.metadata.RemovePending(old)
 	}
 	capture.tokens = append(capture.tokens, token)
 	return nil
@@ -145,29 +172,32 @@ func (capture *stableOuterLeafCapture) freeze(ptrs []page.ValuePtr) (*rootpublic
 	if capture == nil || capture.builder == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}
-	required := make(map[uint64]struct{}, len(ptrs))
-	for _, ptr := range ptrs {
-		required[uint64(ptr.FileID)] = struct{}{}
-	}
-	for _, token := range capture.tokens {
-		if _, ok := required[token.Generation()]; !ok {
+	for i, token := range capture.tokens {
+		required := false
+		for _, ptr := range ptrs {
+			if uint64(ptr.FileID) == token.Generation() {
+				required = true
+				break
+			}
+		}
+		capture.tokens[i] = nil
+		if !required {
 			token.Release()
 			continue
 		}
 		if err := capture.builder.Add(token); err != nil {
 			token.Release()
-			capture.builder.Abandon()
-			capture.releaseTokens()
-			capture.builder = nil
+			capture.abandon()
 			return nil, err
 		}
 	}
-	capture.tokens = nil
+	capture.disposeTokens()
 	set, err := capture.builder.Freeze()
 	if err != nil {
 		capture.builder.Abandon()
 	}
 	capture.builder = nil
+	capture.disposeMetadata()
 	return set, err
 }
 
@@ -180,11 +210,33 @@ func (capture *stableOuterLeafCapture) abandon() {
 	}
 	capture.releaseTokens()
 	capture.builder = nil
+	capture.disposeMetadata()
 }
 
 func (capture *stableOuterLeafCapture) releaseTokens() {
 	for _, token := range capture.tokens {
 		token.Release()
 	}
+	capture.disposeTokens()
+}
+
+// disposeTokens ends the capture's array aliases; transferred entries retain
+// their own token metadata independently.
+func (capture *stableOuterLeafCapture) disposeTokens() {
+	clear(capture.tokens)
 	capture.tokens = nil
+	if capture.metadata != nil {
+		capture.metadata.RemovePending(capture.tokensCharge)
+		capture.tokensCharge = 0
+	}
+}
+func (capture *stableOuterLeafCapture) disposeMetadata() {
+	if capture.metadata == nil {
+		return
+	}
+	metadata, charge := capture.metadata, capture.metadataCharge+capture.registrationCharge
+	capture.db, capture.lane, capture.metadata = nil, nil, nil
+	capture.metadataCharge = 0
+	capture.registrationCharge = 0
+	metadata.RemovePending(charge)
 }

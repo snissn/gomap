@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -48,15 +49,18 @@ func recoverableRootIdentity(root RecoverableRoot) recoverableRootKey {
 }
 
 type recoverableDurableBasis struct {
-	slot       uint64
-	slotCommit [2]uint64
-	slotRecord [2]rootpublication.DurableRootRecordV1
-	pending    *durableRootPublishCandidateV1
-	ambiguous  []*durableRootPublishCandidateV1
+	slot             uint64
+	slotCommit       [2]uint64
+	slotRecord       [2]rootpublication.DurableRootRecordV1
+	primaryProof     [2]rootpublication.DurablePrimaryRootRecordV5
+	primaryReadRoots [4]uint64
+	dataFloor        [4]uint64
+	pending          *durableRootPublishCandidateV1
+	ambiguous        []*durableRootPublishCandidateV1
 }
 
 func (basis recoverableDurableBasis) equal(other recoverableDurableBasis) bool {
-	if basis.slot != other.slot || basis.slotCommit != other.slotCommit || basis.slotRecord != other.slotRecord || basis.pending != other.pending || len(basis.ambiguous) != len(other.ambiguous) {
+	if basis.slot != other.slot || basis.slotCommit != other.slotCommit || basis.slotRecord != other.slotRecord || basis.primaryProof != other.primaryProof || basis.primaryReadRoots != other.primaryReadRoots || basis.dataFloor != other.dataFloor || basis.pending != other.pending || len(basis.ambiguous) != len(other.ambiguous) {
 		return false
 	}
 	for i := range basis.ambiguous {
@@ -65,6 +69,21 @@ func (basis recoverableDurableBasis) equal(other recoverableDurableBasis) bool {
 		}
 	}
 	return true
+}
+
+func (db *DB) recoverableDurableBasisLocked() recoverableDurableBasis {
+	basis := recoverableDurableBasis{slot: db.durableRoot.slot, slotCommit: db.durableRoot.slotCommit, slotRecord: db.durableRoot.slotRecord, pending: db.durableRoot.pending, ambiguous: append([]*durableRootPublishCandidateV1(nil), db.durableRoot.ambiguous...)}
+	if primary := db.durableRoot.primary; primary != nil {
+		basis.primaryProof = primary.proofRecords
+		basis.dataFloor = primary.dataFloor
+		if db.idx.Load().primary.CapsuleFormatV6() {
+			for i := 0; i < 2; i++ {
+				basis.primaryReadRoots[i] = primary.records[i].PageID
+				basis.primaryReadRoots[i+2] = primary.proofs[i].PageID
+			}
+		}
+	}
+	return basis
 }
 
 type recoverableIdentityPin struct {
@@ -89,6 +108,8 @@ type RecoverableRootSet struct {
 	oldestRegistryID    int64
 	systemRootEpoch     uint64
 	resources           []*rootpublication.StableResourceSet
+	primaryArena        *primaryarena.Arena
+	primaryRefs         []primaryarena.Ref
 	rootResources       map[recoverableRootKey]*rootpublication.StableResourceSet
 	rootResourceIndexID uint64
 	rootResourceIndex   rootpublication.StableIdentity
@@ -223,13 +244,12 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 
 	db.durablePublishMu.Lock()
 	db.rootReuseMu.RLock()
-	durable := recoverableDurableBasis{
-		slot: db.durableRoot.slot, slotCommit: db.durableRoot.slotCommit,
-		slotRecord: db.durableRoot.slotRecord, pending: db.durableRoot.pending,
-		ambiguous: append([]*durableRootPublishCandidateV1(nil), db.durableRoot.ambiguous...),
-	}
+	durable := db.recoverableDurableBasisLocked()
 	sources := make([]*rootpublication.StableResourceSet, 0, 5+len(db.durableRoot.ambiguous))
 	sources = append(sources, db.durableRoot.slotResources[:]...)
+	if primary := db.durableRoot.primary; primary != nil {
+		sources = append(sources, primary.proofResources[:]...)
+	}
 	if pending := db.durableRoot.pending; pending != nil {
 		sources = append(sources, pending.resources)
 	}
@@ -242,11 +262,22 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	rootResources := make(map[recoverableRootKey]*rootpublication.StableResourceSet, 3)
 	rootResourceSets := make([]*rootpublication.StableResourceSet, 0, 2)
 	if cloneErr == nil {
-		for slot, record := range db.durableRoot.slotRecord {
+		records := append([]rootpublication.DurableRootRecordV1(nil), db.durableRoot.slotRecord[:]...)
+		recordResources := append([]*rootpublication.StableResourceSet(nil), db.durableRoot.slotResources[:]...)
+		if primary := db.durableRoot.primary; primary != nil {
+			for i, proof := range primary.proofRecords {
+				records = append(records, proof.Record)
+				recordResources = append(recordResources, primary.proofResources[i])
+			}
+		}
+		for slot, record := range records {
+			if durable.primaryReadRoots[slot] != 0 {
+				record.UserRootPageID = durable.primaryReadRoots[slot]
+			}
 			if record.CommitSeq == 0 {
 				continue
 			}
-			resources, resourceErr := rootpublication.CloneStableResourceSetExcludingKinds(db.durableRoot.slotResources[slot])
+			resources, resourceErr := rootpublication.CloneStableResourceSetExcludingKinds(recordResources[slot])
 			if resourceErr != nil {
 				cloneErr = resourceErr
 				break
@@ -262,6 +293,31 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 			}
 		}
 	}
+	var primaryArena *primaryarena.Arena
+	var primaryRefs []primaryarena.Ref
+	if cloneErr == nil && db.durableRoot.primary != nil {
+		primaryArena = stable.idx.primary
+		primary := db.durableRoot.primary
+		for _, ref := range append(append([]primaryarena.Ref(nil), primary.records[:]...), primary.proofs[:]...) {
+			if ref.PageID == 0 {
+				continue
+			}
+			ready, e := primaryArena.Acquire(ref, nil)
+			if e != nil || !ready {
+				cloneErr = errors.Join(e, errors.New("treedb: primary capture ownership unavailable"))
+				break
+			}
+			primaryRefs = append(primaryRefs, ref)
+		}
+	}
+	primaryTransferred := false
+	defer func() {
+		if !primaryTransferred {
+			for _, ref := range primaryRefs {
+				_, _ = primaryArena.Drop(ref, nil)
+			}
+		}
+	}()
 	db.durablePublishMu.Unlock()
 	if cloneErr != nil {
 		db.rootReuseMu.RUnlock()
@@ -286,6 +342,11 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	for _, root := range roots {
 		if root.CommitSeq != 0 && (oldest == 0 || root.CommitSeq < oldest) {
 			oldest = root.CommitSeq
+		}
+	}
+	for _, floor := range durable.dataFloor {
+		if floor != 0 && (oldest == 0 || floor < oldest) {
+			oldest = floor
 		}
 	}
 	oldestRegistryID, _ := stable.idx.registry.RegisterWithHint(oldest, -1)
@@ -320,11 +381,7 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		return nil, true, nil
 	}
 	db.durablePublishMu.Lock()
-	currentDurable := recoverableDurableBasis{
-		slot: db.durableRoot.slot, slotCommit: db.durableRoot.slotCommit,
-		slotRecord: db.durableRoot.slotRecord, pending: db.durableRoot.pending,
-		ambiguous: append([]*durableRootPublishCandidateV1(nil), db.durableRoot.ambiguous...),
-	}
+	currentDurable := db.recoverableDurableBasisLocked()
 	db.durablePublishMu.Unlock()
 	if !durable.equal(currentDurable) {
 		cleanupRetry()
@@ -355,7 +412,8 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	resources = append(resources, rootResourceSets...)
 	releaseCoordinator = false
 	releaseVisible = false
-	return &RecoverableRootSet{
+	primaryTransferred = true
+	return &RecoverableRootSet{primaryArena: primaryArena, primaryRefs: primaryRefs,
 		db: db, roots: roots, visible: state, durable: durable,
 		coordinator: coordinator, coordinatorEpoch: coordinatorView.Epoch,
 		idx: stable.idx, stableSnapshot: stable, oldestRegistryID: oldestRegistryID,
@@ -433,11 +491,21 @@ func recoverableRootsForBasis(state StateToken, durable recoverableDurableBasis,
 		}
 		roots = append(roots, root)
 	}
-	for _, record := range durable.slotRecord {
+	for slot, record := range durable.slotRecord {
+		if durable.primaryReadRoots[slot] != 0 {
+			record.UserRootPageID = durable.primaryReadRoots[slot]
+		}
 		add(RecoverableRoot{
 			CommitSeq: record.CommitSeq, UserRootPageID: record.UserRootPageID, SystemRootPageID: record.SystemRootPageID,
 			AppliedCommandLSN: record.AppliedCommandLSN, MaxEntryRevision: record.MaxEntryRevision, Durable: true,
 		})
+	}
+	for slot, proof := range durable.primaryProof {
+		record := proof.Record
+		if durable.primaryReadRoots[slot+2] != 0 {
+			record.UserRootPageID = durable.primaryReadRoots[slot+2]
+		}
+		add(RecoverableRoot{CommitSeq: record.CommitSeq, UserRootPageID: record.UserRootPageID, SystemRootPageID: record.SystemRootPageID, AppliedCommandLSN: record.AppliedCommandLSN, MaxEntryRevision: record.MaxEntryRevision, Durable: true})
 	}
 	if durable.pending != nil {
 		next := durable.pending.next
@@ -527,35 +595,40 @@ func (set *RecoverableRootSet) leafGenerationIDsForFiles(fileIDs map[uint32]stru
 	}
 	seen := make(map[rootpublication.StableIdentity]struct{})
 	for _, resources := range set.resources {
-		for _, token := range resources.Tokens() {
-			if token == nil || token.Kind() != rootpublication.ResourceOuterLeafManifest {
-				continue
+		if err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+			for _, token := range tokens {
+				if token == nil || token.Kind() != rootpublication.ResourceOuterLeafManifest {
+					continue
+				}
+				identity := token.Identity()
+				if _, ok := seen[identity]; ok {
+					continue
+				}
+				seen[identity] = struct{}{}
+				frontier := token.Frontier()
+				if frontier.Bytes == 0 || frontier.Bytes > math.MaxInt64 {
+					return fmt.Errorf("%w: recoverable outer-leaf manifest has invalid frontier", rootpublication.ErrFrontierBeyondResource)
+				}
+				var data []byte
+				if err := token.WithPinnedFile(func(file *os.File) error {
+					var readErr error
+					data, readErr = io.ReadAll(io.NewSectionReader(file, 0, int64(frontier.Bytes)))
+					return readErr
+				}); err != nil {
+					return err
+				}
+				manifest, err := decodeLeafGenerationManifest(data, token.ResourceID())
+				if err != nil {
+					return err
+				}
+				// A recycled file ID can legitimately map to different generations in
+				// independently recoverable manifests. Preserve every matching
+				// generation rather than collapsing by the scalar file ID.
+				consumeManifest(manifest)
 			}
-			identity := token.Identity()
-			if _, ok := seen[identity]; ok {
-				continue
-			}
-			seen[identity] = struct{}{}
-			frontier := token.Frontier()
-			if frontier.Bytes == 0 || frontier.Bytes > math.MaxInt64 {
-				return nil, fmt.Errorf("%w: recoverable outer-leaf manifest has invalid frontier", rootpublication.ErrFrontierBeyondResource)
-			}
-			var data []byte
-			if err := token.WithPinnedFile(func(file *os.File) error {
-				var readErr error
-				data, readErr = io.ReadAll(io.NewSectionReader(file, 0, int64(frontier.Bytes)))
-				return readErr
-			}); err != nil {
-				return nil, err
-			}
-			manifest, err := decodeLeafGenerationManifest(data, token.ResourceID())
-			if err != nil {
-				return nil, err
-			}
-			// A recycled file ID can legitimately map to different generations in
-			// independently recoverable manifests. Preserve every matching
-			// generation rather than collapsing by the scalar file ID.
-			consumeManifest(manifest)
+			return nil
+		}); err != nil {
+			return nil, err
 		}
 	}
 	if len(unresolved) != 0 {
@@ -568,10 +641,20 @@ func (set *RecoverableRootSet) leafGenerationIDsForFiles(fileIDs map[uint32]stru
 // capability's oldest-sequence registry pin prevents page reuse while this
 // bounded traversal is in progress.
 func (set *RecoverableRootSet) AcquireSnapshotForRoot(root RecoverableRoot) *Snapshot {
+	return set.acquireSnapshotForRoot(root, false)
+}
+
+// acquireSnapshotForRootWithDurablePublishLockHeld retains the same exact root
+// and fresh guards while the vacuum cutover gate already holds durablePublishMu.
+func (set *RecoverableRootSet) acquireSnapshotForRootWithDurablePublishLockHeld(root RecoverableRoot) *Snapshot {
+	return set.acquireSnapshotForRoot(root, true)
+}
+
+func (set *RecoverableRootSet) acquireSnapshotForRoot(root RecoverableRoot, durablePublishLockHeld bool) *Snapshot {
 	if set == nil || set.released.Load() || set.db == nil || !set.containsRoot(root) {
 		return nil
 	}
-	if err := set.Revalidate(); err != nil {
+	if err := set.revalidate(durablePublishLockHeld); err != nil {
 		return nil
 	}
 	snapshot := set.db.AcquireSnapshot()
@@ -586,6 +669,23 @@ func (set *RecoverableRootSet) AcquireSnapshotForRoot(root RecoverableRoot) *Sna
 	if state == nil {
 		_ = snapshot.Close()
 		return nil
+	}
+	if snapshot.idx.primary != nil {
+		ref, ready, e := snapshot.idx.primary.BorrowDirectory(root.UserRootPageID, nil)
+		if e != nil || !ready {
+			_ = snapshot.Close()
+			return nil
+		}
+		ready, e = snapshot.idx.primary.Acquire(ref, nil)
+		if e != nil || !ready {
+			_ = snapshot.Close()
+			return nil
+		}
+		if snapshot.primaryRoot != nil {
+			_, _ = snapshot.primaryRoot.arena.Drop(snapshot.primaryRoot.ref, nil)
+		}
+		snapshot.primaryRoot = &primaryStateRootV5{arena: snapshot.idx.primary, ref: ref}
+		state.primaryRoot = snapshot.primaryRoot
 	}
 	state.CommitSeq = root.CommitSeq
 	state.RootPageID = root.UserRootPageID
@@ -673,11 +773,7 @@ func (set *RecoverableRootSet) revalidate(durablePublishLockHeld bool) error {
 	if !durablePublishLockHeld {
 		set.db.durablePublishMu.Lock()
 	}
-	current := recoverableDurableBasis{
-		slot: set.db.durableRoot.slot, slotCommit: set.db.durableRoot.slotCommit,
-		slotRecord: set.db.durableRoot.slotRecord, pending: set.db.durableRoot.pending,
-		ambiguous: append([]*durableRootPublishCandidateV1(nil), set.db.durableRoot.ambiguous...),
-	}
+	current := set.db.recoverableDurableBasisLocked()
 	if !durablePublishLockHeld {
 		set.db.durablePublishMu.Unlock()
 	}
@@ -693,6 +789,11 @@ func (set *RecoverableRootSet) Release() {
 	if set == nil || !set.released.CompareAndSwap(false, true) {
 		return
 	}
+	for _, ref := range set.primaryRefs {
+		_, _ = set.primaryArena.Drop(ref, nil)
+	}
+	set.primaryRefs = nil
+	set.primaryArena = nil
 	set.mu.Lock()
 	pins := make([]recoverableIdentityPin, 0, len(set.identityPins))
 	for _, pin := range set.identityPins {

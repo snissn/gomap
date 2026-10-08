@@ -54,6 +54,8 @@ const (
 	PageTypeFreelistReservation PageType = 0x08
 	PageTypeDependencyManifest  PageType = 0x09
 	PageTypeDurableRootRecord   PageType = 0x0a
+	PageTypePrimaryDirectory    PageType = 0x0b
+	PageTypePrimaryCapsule      PageType = 0x0c
 )
 
 // PageHeader represents the 16-byte header of a page.
@@ -272,3 +274,8 @@ func UnsafeCastHeader(data []byte) *PageHeader {
 	}
 	return (*PageHeader)(unsafe.Pointer(&data[0]))
 }
+
+// PrimaryBankNamespace separates complete immutable primary banks from DATA
+// page IDs. The physical bank file uses the low local page ID; native page
+// headers and directory operands retain this exact logical namespace.
+const PrimaryBankNamespace uint64 = 1 << 62

@@ -109,6 +109,9 @@ type PreparedRootCandidate struct {
 	indexBytes      uint64
 	obligations     []ObligationID
 	extensions      extensionSlots
+	// Single-member physical/lineage authority is prepared once against immutable
+	// constructor inputs. It conveys no mutable DB-current authority.
+	durableValidated bool
 }
 
 func NewPreparedRootCandidate(spec CandidateSpec) (*PreparedRootCandidate, error) {
@@ -146,18 +149,33 @@ func newPreparedRootCandidateWithExtensions(spec CandidateSpec, extensions exten
 			}
 			return nil, fmt.Errorf("%w: transfer durable-root transaction: %w", ErrInvalidCandidate, err)
 		}
-		extensions.durableRootRecord = newDurableRootGroupExtension(spec.DurableRoot)
+		if !spec.DurableRoot.isConstructedPrimaryV6() {
+			extensions.durableRootRecord = newDurableRootGroupExtension(spec.DurableRoot)
+		}
 	}
-	return &PreparedRootCandidate{
+	candidate := PreparedRootCandidate{
 		frontier: spec.Frontier, freelistHeadID: spec.FreelistHeadID,
 		totalPages: spec.TotalPages, dependencyBytes: spec.DependencyBytes,
-		indexBytes: spec.IndexBytes, obligations: normalizeObligations(spec.Obligations), extensions: extensions,
-	}, nil
+		indexBytes: spec.IndexBytes, obligations: normalizeObligations(spec.Obligations), extensions: extensions, durableValidated: spec.DurableRoot != nil,
+	}
+	if spec.DurableRoot != nil && spec.DurableRoot.isConstructedPrimaryV6() {
+		return spec.DurableRoot.adoptPrimaryCandidateV6(candidate), nil
+	}
+	return &candidate, nil
 }
 
 func validateCandidateDurableRoot(spec CandidateSpec, transaction *DurableRootTransaction) error {
 	if transaction.Owner() != ResourceOwnerBuilder || transaction.Sequence() != spec.Frontier.commitSeq {
 		return ErrDurableRootOwnership
+	}
+	if primary := transaction.PreparedPrimary(); primary != nil {
+		if err := primary.validateSequence(spec.Frontier.commitSeq); err != nil {
+			return err
+		}
+		if spec.FreelistHeadID != 0 || spec.TotalPages != primary.generation.HighWater() || spec.Frontier != primary.frontier {
+			return errors.New("candidate frontier does not match exact primary authority")
+		}
+		return nil
 	}
 	prepared := transaction.PreparedCOW()
 	if prepared == nil || prepared.Candidate() == nil || prepared.Candidate().Generation() == nil {
@@ -218,7 +236,11 @@ func (c *PreparedRootCandidate) DurableRootGroup() DurableRootGroup {
 // DurableRoot returns the latest exact transaction, or nil for a legacy
 // candidate without an activated durable-root payload.
 func (c *PreparedRootCandidate) DurableRoot() *DurableRootTransaction {
-	return c.DurableRootGroup().Latest()
+	group := c.durableRootGroup()
+	if len(group.members) == 0 {
+		return nil
+	}
+	return group.members[len(group.members)-1]
 }
 
 // Resources exposes the immutable candidate-scoped token union to the

@@ -54,8 +54,8 @@ func TestDirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier(t *testing.T) {
 	if err := p.FlushDirtyChunksFrom(1); err != nil {
 		t.Fatal(err)
 	}
-	_, lowerDirty := p.dirtyChunks[0]
-	_, upperDirty := p.dirtyChunks[1]
+	lowerDirty := p.dirtyChunks.contains(0)
+	upperDirty := p.dirtyChunks.contains(1)
 	if !lowerDirty || upperDirty || fileCalls != 0 || p.durableFileSize.Load() != beforeSize {
 		t.Fatalf("flush-only state: lower=%t upper=%t file_calls=%d durable_size=%d", lowerDirty, upperDirty, fileCalls, p.durableFileSize.Load())
 	}
@@ -66,15 +66,15 @@ func TestDirtyChunkSyncRetainsFlushAndRetriesStableFileBarrier(t *testing.T) {
 	if err := p.SyncIndexDataWithStableFile(stable); !errors.Is(err, wantErr) {
 		t.Fatalf("failed file barrier=%v want %v", err, wantErr)
 	}
-	if len(p.dirtyChunks) != 2 || fileCalls != 1 || p.durableFileSize.Load() != beforeSize {
-		t.Fatalf("failed barrier: dirty=%d file_calls=%d durable_size=%d", len(p.dirtyChunks), fileCalls, p.durableFileSize.Load())
+	if p.dirtyChunks.count != 2 || fileCalls != 1 || p.durableFileSize.Load() != beforeSize {
+		t.Fatalf("failed barrier: dirty=%d file_calls=%d durable_size=%d", p.dirtyChunks.count, fileCalls, p.durableFileSize.Load())
 	}
 	failSync = false
 	if err := p.SyncIndexDataWithStableFile(stable); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.dirtyChunks) != 0 || fileCalls != 2 {
-		t.Fatalf("retry barrier: dirty=%d file_calls=%d", len(p.dirtyChunks), fileCalls)
+	if p.dirtyChunks.count != 0 || fileCalls != 2 {
+		t.Fatalf("retry barrier: dirty=%d file_calls=%d", p.dirtyChunks.count, fileCalls)
 	}
 	info, err := stable.Stat()
 	if err != nil {
@@ -138,7 +138,7 @@ func TestSyncIndexDataWithStableFileDrainsLiveMappingsAndSurvivesClose(t *testin
 		_ = p.Close()
 		t.Fatal(err)
 	}
-	if len(p.dirtyChunks) == 0 {
+	if p.dirtyChunks.count == 0 {
 		_ = p.Close()
 		t.Fatal("live pager has no dirty mmap chunk before index-data barrier")
 	}
@@ -152,9 +152,9 @@ func TestSyncIndexDataWithStableFileDrainsLiveMappingsAndSurvivesClose(t *testin
 		_ = p.Close()
 		t.Fatalf("live stable-file barrier: %v", err)
 	}
-	if len(p.dirtyChunks) != 0 {
+	if p.dirtyChunks.count != 0 {
 		_ = p.Close()
-		t.Fatalf("dirty chunks after live barrier=%d want 0", len(p.dirtyChunks))
+		t.Fatalf("dirty chunks after live barrier=%d want 0", p.dirtyChunks.count)
 	}
 	info, err := stable.Stat()
 	if err != nil {
@@ -182,7 +182,7 @@ func TestSyncIndexDataWithStableFileDrainsLiveMappingsAndSurvivesClose(t *testin
 		_ = p.Close()
 		t.Fatal("closed stable target unexpectedly completed durability barrier")
 	}
-	if len(p.dirtyChunks) == 0 {
+	if p.dirtyChunks.count == 0 {
 		_ = p.Close()
 		t.Fatal("failed stable-file sync did not restore dirty mmap bookkeeping")
 	}

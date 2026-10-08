@@ -22,8 +22,18 @@ func (db *DB) loadSelectedDurableLeafGenerationManifest() (*leafGenerationManife
 	if resources == nil {
 		return nil, false, nil
 	}
+	var manifest *leafGenerationManifest
+	var found bool
+	err := resources.WithScopedTokens(func(tokens []*rootpublication.StableResourceToken) error {
+		var err error
+		manifest, found, err = loadSelectedDurableLeafGenerationManifestTokens(tokens)
+		return err
+	})
+	return manifest, found, err
+}
+func loadSelectedDurableLeafGenerationManifestTokens(tokens []*rootpublication.StableResourceToken) (*leafGenerationManifest, bool, error) {
 	var selected *rootpublication.StableResourceToken
-	for _, token := range resources.Tokens() {
+	for _, token := range tokens {
 		if token == nil || token.Kind() != rootpublication.ResourceOuterLeafManifest {
 			continue
 		}
@@ -267,7 +277,13 @@ func (db *DB) prepareLeafGenerationManifestStableCandidate(candidate *leafGenera
 		builder.Abandon()
 		return nil, nil, err
 	}
-	descriptors := resources.PhysicalDescriptors()
+	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		resources.Release()
+		return nil, nil, captureErr
+	}
+	defer diagnostics.Close()
+	descriptors := diagnostics.Physical()
 	if len(descriptors) != 1 || descriptors[0].Kind != rootpublication.ResourceOuterLeafManifest || descriptors[0].Generation != candidate.ManifestRevision || descriptors[0].Digest() == ([32]byte{}) {
 		resources.Release()
 		return nil, nil, fmt.Errorf("%w: manifest replacement token does not match persisted revision %d", rootpublication.ErrResourceConflict, candidate.ManifestRevision)

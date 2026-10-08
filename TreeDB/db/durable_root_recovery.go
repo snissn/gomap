@@ -51,6 +51,13 @@ type durableRootSelectionV1 struct {
 	SlotMetas   [2]page.DurableMetaV1
 	SlotRecords [2]rootpublication.DurableRootRecordV1
 	resources   *rootpublication.StableResourceSet
+	Primary     rootpublication.PrimaryProjectionV5
+	SlotPrimary [2]rootpublication.PrimaryProjectionV5
+	// Parent records are fixed one-hop frontier evidence, never lookup ancestry.
+	ParentRecords         [2]rootpublication.DurablePrimaryRootRecordV5
+	primaryPhysicalDigest [2][32]byte
+	parentPhysicalDigest  [2][32]byte
+	ParentResources       [2]*rootpublication.StableResourceSet
 }
 
 type durableManifestValidatorV1 func(*rootpublication.DependencyManifestV1) (*rootpublication.StableResourceSet, error)
@@ -66,6 +73,14 @@ type durableMetaCandidateV1 struct {
 // does not recurse through the B-tree or scan value-log contents: checksummed
 // COW pages and the deterministic manifest are the recovery inventory.
 func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (durableRootSelectionV1, error) {
+	return selectDurableRootCandidates(source, func(candidate durableMetaCandidateV1) (durableRootSelectionV1, error) {
+		return validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest, directoryValidators...)
+	})
+}
+
+// Both format validators use the same independent two-slot selection policy.
+// Each validator retains its own exact format and physical ownership rules.
+func selectDurableRootCandidates(source freelist.PageSource, validate func(durableMetaCandidateV1) (durableRootSelectionV1, error)) (durableRootSelectionV1, error) {
 	if source == nil {
 		return durableRootSelectionV1{}, &NoRecoverableMetaError{SlotReasons: [2]error{errors.New("meta page source unavailable"), errors.New("meta page source unavailable")}}
 	}
@@ -79,6 +94,11 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 		}
 		candidates = append(candidates, durableMetaCandidateV1{slot: slot, meta: meta})
 	}
+	return selectDurableRootCandidateSetV1(candidates, reasons, validate)
+}
+
+// Both authorities use the same independent two-slot resource installation.
+func selectDurableRootCandidateSetV1(candidates []durableMetaCandidateV1, reasons [2]error, validate func(durableMetaCandidateV1) (durableRootSelectionV1, error)) (durableRootSelectionV1, error) {
 	sort.SliceStable(candidates, func(i, j int) bool {
 		if candidates[i].meta.CommitSeq != candidates[j].meta.CommitSeq {
 			return candidates[i].meta.CommitSeq > candidates[j].meta.CommitSeq
@@ -94,26 +114,35 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 		}
 	}
 	var chosen *durableRootSelectionV1
-	var slotResources [2]*rootpublication.StableResourceSet
+	var slotResources, parentResources [2]*rootpublication.StableResourceSet
 	var slotMetas [2]page.DurableMetaV1
 	var slotRecords [2]rootpublication.DurableRootRecordV1
+	var slotPrimary [2]rootpublication.PrimaryProjectionV5
+	var parentRecords [2]rootpublication.DurablePrimaryRootRecordV5
+	var primaryPhysicalDigest, parentPhysicalDigest [2][32]byte
 	seenGenerations := make(map[uint64]uint64, len(candidates))
 	for _, candidate := range candidates {
 		if conflictingGenerations[candidate.meta.CommitSeq] {
 			reasons[candidate.slot] = fmt.Errorf("conflicting recovery generation: commit %d appears with different roots", candidate.meta.CommitSeq)
 			continue
 		}
-		selected, err := validateDurableMetaCandidateV1(source, physicalPageCount, candidate, validateManifest, directoryValidators...)
+		selected, err := validate(candidate)
 		if err == nil {
 			if priorSlot, duplicate := seenGenerations[selected.Meta.CommitSeq]; duplicate {
 				selected.resources.Release()
+				selected.ParentResources[candidate.slot].Release()
 				reasons[candidate.slot] = fmt.Errorf("duplicate recovery generation: commit %d already selected from slot %d", selected.Meta.CommitSeq, priorSlot)
 				continue
 			}
 			seenGenerations[selected.Meta.CommitSeq] = candidate.slot
 			slotResources[candidate.slot] = selected.resources
+			parentResources[candidate.slot] = selected.ParentResources[candidate.slot]
 			slotMetas[candidate.slot] = selected.Meta
 			slotRecords[candidate.slot] = selected.Record
+			slotPrimary[candidate.slot] = selected.Primary
+			parentRecords[candidate.slot] = selected.ParentRecords[candidate.slot]
+			primaryPhysicalDigest[candidate.slot] = selected.primaryPhysicalDigest[candidate.slot]
+			parentPhysicalDigest[candidate.slot] = selected.parentPhysicalDigest[candidate.slot]
 			selected.resources = nil
 			if chosen == nil {
 				copy := selected
@@ -128,11 +157,19 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 	}
 	if chosen != nil {
 		chosen.SlotResources = slotResources
+		chosen.ParentResources = parentResources
 		chosen.SlotMetas = slotMetas
 		chosen.SlotRecords = slotRecords
+		chosen.SlotPrimary = slotPrimary
+		chosen.ParentRecords = parentRecords
+		chosen.primaryPhysicalDigest = primaryPhysicalDigest
+		chosen.parentPhysicalDigest = parentPhysicalDigest
 		return *chosen, nil
 	}
 	for _, resources := range slotResources {
+		resources.Release()
+	}
+	for _, resources := range parentResources {
 		resources.Release()
 	}
 	detail := &NoRecoverableMetaError{SlotReasons: reasons}
@@ -278,6 +315,40 @@ func validateDurableRootPageV1(source freelist.PageSource, pageID, totalPages ui
 	}
 	switch node.NewNode(image).Type() {
 	case page.PageTypeLeaf, page.PageTypeInternal:
+		return nil
+	case page.PageTypePrimaryDirectory:
+		directory, err := node.DecodePrimaryDirectory(image)
+		if err != nil {
+			return err
+		}
+		base, _ := directory.Base()
+		if base.Ref.Kind != page.ChildRefPage || base.Ref.Page >= totalPages {
+			return node.ErrPrimaryDirectory
+		}
+		baseImage, err := source.ReadPage(base.Ref.Page)
+		if err != nil {
+			return err
+		}
+		baseNode := node.NewNode(baseImage)
+		if !node.VerifyPrimaryOperand(base, baseImage) || page.DecodeHeader(baseImage).PageID != base.Ref.Page || (baseNode.Type() != page.PageTypeLeaf && baseNode.Type() != page.PageTypeInternal) {
+			return node.ErrPrimaryDirectory
+		}
+		for i := 0; i < directory.Count(); i++ {
+			entry, _ := directory.Entry(i)
+			if entry.InlineAbsence() {
+				continue
+			}
+			if entry.Operand.Ref.Kind != page.ChildRefPage || entry.Operand.Ref.Page >= totalPages {
+				return node.ErrPrimaryDirectory
+			}
+			component, err := source.ReadPage(entry.Operand.Ref.Page)
+			if err != nil {
+				return err
+			}
+			if err = node.ValidatePrimaryComponent(entry, component); err != nil {
+				return err
+			}
+		}
 		return nil
 	default:
 		return errors.New("invalid root page type")

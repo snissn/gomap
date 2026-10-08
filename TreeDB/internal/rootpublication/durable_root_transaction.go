@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/freelist"
+	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -38,10 +39,14 @@ type DurableRootPayload struct {
 // callback. PreparedCOW is immutable until Consume, Abort, or Fail transfers
 // its allocator ownership according to the callback contract.
 type DurableRootCallbackInput struct {
-	Lineage     DurableRootLineageID
-	Sequence    uint64
-	Payload     DurableRootPayload
-	PreparedCOW *freelist.PreparedCOWCandidateV1
+	Lineage         DurableRootLineageID
+	Sequence        uint64
+	Payload         DurableRootPayload
+	PreparedCOW     *freelist.PreparedCOWCandidateV1
+	PreparedPrimary *PreparedPrimaryRootV5
+	// PublicationProjection is the immutable DB descriptor owned by this member.
+	// It supplies no second lifecycle or callback authority.
+	PublicationProjection any
 }
 
 // DurableRootTransactionSpec binds one visible lineage member to the exact COW
@@ -56,14 +61,19 @@ type DurableRootCallbackInput struct {
 // close/recovery after ambiguous publish or shutdown. Lifecycle callbacks must
 // not perform stable publication I/O.
 type DurableRootTransactionSpec struct {
-	Lineage     DurableRootLineageID
-	Sequence    uint64
-	Payload     DurableRootPayload
-	PreparedCOW *freelist.PreparedCOWCandidateV1
-	Activate    func(DurableRootCallbackInput) error
-	Consume     func(DurableRootCallbackInput) error
-	Abort       func(DurableRootCallbackInput) error
-	Fail        func(DurableRootCallbackInput, error) error
+	// PrimaryMetadataBytesV6 transfers already admitted DB projection/callback
+	// storage to this SAME constructor; ordinary Finish/Abort refunds it.
+	PrimaryMetadataBytesV6 uint64
+	Lineage                DurableRootLineageID
+	Sequence               uint64
+	Payload                DurableRootPayload
+	PreparedCOW            *freelist.PreparedCOWCandidateV1
+	PreparedPrimary        *PreparedPrimaryRootV5
+	Activate               func(DurableRootCallbackInput) error
+	Consume                func(DurableRootCallbackInput) error
+	Abort                  func(DurableRootCallbackInput) error
+	Fail                   func(DurableRootCallbackInput, error) error
+	PublicationProjection  any
 }
 
 type durableRootTransactionPhase uint8
@@ -72,7 +82,9 @@ const (
 	durableRootPrepared durableRootTransactionPhase = iota + 1
 	durableRootActivated
 	durableRootConsumed
+	durableRootFinishing
 	durableRootFailed
+	durableRootConstructingV6
 )
 
 // DurableRootTransaction is a move-only ownership wrapper. Construction owns
@@ -82,18 +94,20 @@ const (
 type DurableRootTransaction struct {
 	mu sync.Mutex
 
-	input    DurableRootCallbackInput
-	activate func(DurableRootCallbackInput) error
-	consume  func(DurableRootCallbackInput) error
-	abort    func(DurableRootCallbackInput) error
-	fail     func(DurableRootCallbackInput, error) error
-	owner    ResourceOwnerState
-	phase    durableRootTransactionPhase
+	input          DurableRootCallbackInput
+	activate       func(DurableRootCallbackInput) error
+	consume        func(DurableRootCallbackInput) error
+	abort          func(DurableRootCallbackInput) error
+	fail           func(DurableRootCallbackInput, error) error
+	owner          ResourceOwnerState
+	phase          durableRootTransactionPhase
+	finishBusy     bool
+	constructionV6 *primaryTransactionConstructionV6
 }
 
 func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTransaction, error) {
-	if spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 || spec.PreparedCOW == nil ||
-		spec.Activate == nil || spec.Consume == nil || spec.Abort == nil || spec.Fail == nil {
+	if spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 || (spec.PreparedCOW == nil && spec.PreparedPrimary == nil) ||
+		spec.Abort == nil || spec.Fail == nil || (spec.Activate == nil || spec.Consume == nil) {
 		return nil, fmt.Errorf("%w: incomplete durable-root transaction", ErrInvalidCandidate)
 	}
 	if err := validateDurableRootTransactionSpec(spec); err != nil {
@@ -102,7 +116,7 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 	return &DurableRootTransaction{
 		input: DurableRootCallbackInput{
 			Lineage: spec.Lineage, Sequence: spec.Sequence, Payload: spec.Payload,
-			PreparedCOW: spec.PreparedCOW,
+			PreparedCOW: spec.PreparedCOW, PreparedPrimary: spec.PreparedPrimary, PublicationProjection: spec.PublicationProjection,
 		},
 		activate: spec.Activate, consume: spec.Consume, abort: spec.Abort, fail: spec.Fail,
 		owner: ResourceOwnerBuilder, phase: durableRootPrepared,
@@ -110,6 +124,12 @@ func NewDurableRootTransaction(spec DurableRootTransactionSpec) (*DurableRootTra
 }
 
 func validateDurableRootTransactionSpec(spec DurableRootTransactionSpec) error {
+	if spec.PreparedPrimary != nil {
+		if spec.PreparedCOW != nil || !durableRootPayloadIsZero(spec.Payload) {
+			return errors.New("primary transaction cannot carry V1 COW or payload authority")
+		}
+		return spec.PreparedPrimary.validateSequence(spec.Sequence)
+	}
 	prepared := spec.PreparedCOW
 	candidate := prepared.Candidate()
 	if candidate == nil || candidate.Generation() == nil || prepared.CandidateID() == (freelist.CandidateIDV1{}) {
@@ -151,7 +171,7 @@ func (transaction *DurableRootTransaction) Owner() ResourceOwnerState {
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	return transaction.owner
+	return transaction.ownerLockedV6()
 }
 
 func (transaction *DurableRootTransaction) Lineage() DurableRootLineageID {
@@ -182,6 +202,13 @@ func (transaction *DurableRootTransaction) PreparedCOW() *freelist.PreparedCOWCa
 	return transaction.input.PreparedCOW
 }
 
+func (transaction *DurableRootTransaction) PreparedPrimary() *PreparedPrimaryRootV5 {
+	if transaction == nil {
+		return nil
+	}
+	return transaction.input.PreparedPrimary
+}
+
 // Abort releases a transaction that has not yet been moved into a candidate.
 // Once candidate construction succeeds, use PreparedRootCandidate.Abandon if
 // Enqueue is not accepted.
@@ -195,7 +222,13 @@ func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState)
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.owner != from || transaction.phase == durableRootConsumed || transaction.owner == ResourceOwnerReleased {
+	if transaction.constructionV6 != nil && transaction.constructionV6.resources != nil {
+		if transaction.constructionV6.resources.Owner() != to || transaction.phase == durableRootConsumed || transaction.phase == durableRootFinishing {
+			return ErrDurableRootOwnership
+		}
+		return nil
+	}
+	if transaction.ownerLockedV6() != from || (transaction.phase == durableRootConsumed || transaction.phase == durableRootFinishing) || transaction.ownerLockedV6() == ResourceOwnerReleased {
 		return ErrDurableRootOwnership
 	}
 	transaction.owner = to
@@ -208,26 +241,35 @@ func (transaction *DurableRootTransaction) abortFrom(owner ResourceOwnerState) e
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.owner == ResourceOwnerReleased {
+	if transaction.ownerLockedV6() == ResourceOwnerReleased {
 		return nil
 	}
-	if transaction.owner != owner || transaction.phase != durableRootPrepared {
+	if transaction.ownerLockedV6() != owner || (transaction.phase != durableRootPrepared && transaction.phase != durableRootConstructingV6) {
 		return ErrDurableRootOwnership
+	}
+	if transaction.phase == durableRootConstructingV6 {
+		return transaction.abortConstructionLockedV6()
 	}
 	if err := transaction.abort(transaction.input); err != nil {
 		return err
 	}
-	transaction.owner = ResourceOwnerReleased
+	if transaction.isConstructedPrimaryV6() {
+		return transaction.abortConstructionLockedV6()
+	}
+	transaction.releaseOwnerLockedV6()
 	return nil
 }
 
 func (transaction *DurableRootTransaction) activateFromCoordinator() error {
+	return transaction.activateFromCoordinatorWithWork(nil)
+}
+func (transaction *DurableRootTransaction) activateFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
 	if transaction == nil {
 		return nil
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.owner != ResourceOwnerCoordinator || transaction.phase != durableRootPrepared {
+	if transaction.ownerLockedV6() != ResourceOwnerCoordinator || transaction.phase != durableRootPrepared {
 		return ErrDurableRootOwnership
 	}
 	if err := transaction.activate(transaction.input); err != nil {
@@ -238,19 +280,28 @@ func (transaction *DurableRootTransaction) activateFromCoordinator() error {
 }
 
 func (transaction *DurableRootTransaction) consumeFromCoordinator() error {
+	return transaction.consumeFromCoordinatorWithWork(nil)
+}
+func (transaction *DurableRootTransaction) consumeFromCoordinatorWithWork(w *iterator.OrdinalScanWork) error {
 	if transaction == nil {
 		return nil
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.owner != ResourceOwnerCoordinator || transaction.phase != durableRootActivated {
+	if transaction.ownerLockedV6() != ResourceOwnerCoordinator || transaction.phase != durableRootActivated {
 		return ErrDurableRootOwnership
 	}
-	if err := transaction.consume(transaction.input); err != nil {
-		return err
+	{
+		if err := transaction.consume(transaction.input); err != nil {
+			return err
+		}
+		if transaction.isConstructedPrimaryV6() {
+			transaction.phase = durableRootFinishing
+		} else {
+			transaction.phase = durableRootConsumed
+			transaction.releaseOwnerLockedV6()
+		}
 	}
-	transaction.phase = durableRootConsumed
-	transaction.owner = ResourceOwnerReleased
 	return nil
 }
 
@@ -260,10 +311,10 @@ func (transaction *DurableRootTransaction) failFromCoordinator(cause error) erro
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.owner == ResourceOwnerReleased || transaction.phase == durableRootConsumed {
+	if transaction.ownerLockedV6() == ResourceOwnerReleased || transaction.phase == durableRootConsumed || transaction.phase == durableRootFinishing {
 		return nil
 	}
-	if transaction.owner != ResourceOwnerCoordinator {
+	if transaction.ownerLockedV6() != ResourceOwnerCoordinator {
 		return ErrDurableRootOwnership
 	}
 	if transaction.phase == durableRootFailed {
@@ -285,8 +336,10 @@ func (transaction *DurableRootTransaction) releaseFromRecovery() {
 	}
 	transaction.mu.Lock()
 	defer transaction.mu.Unlock()
-	if transaction.owner == ResourceOwnerRecovery {
-		transaction.owner = ResourceOwnerReleased
+	if transaction.constructionV6 != nil {
+		transaction.releasePrimaryRecoveryLockedV6()
+	} else if transaction.ownerLockedV6() == ResourceOwnerRecovery {
+		transaction.releaseOwnerLockedV6()
 	}
 }
 

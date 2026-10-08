@@ -45,6 +45,10 @@ func recoverIndexSwap(dir string) error {
 		return fmt.Errorf("recover index swap: empty dir")
 	}
 
+	if handled, err := recoverPrimaryJointSwapV6(dir, false); handled || err != nil {
+		return err
+	}
+
 	indexPath := filepath.Join(dir, indexFileName)
 	newPath := filepath.Join(dir, indexNewFileName)
 	bakPath := filepath.Join(dir, indexBakFileName)
@@ -73,6 +77,13 @@ func recoverIndexSwap(dir string) error {
 			}
 			namespaceChanged = namespaceChanged || removed
 		}
+		// No joint decision exists: the old canonical pair still owns publication.
+		// A pre-COMMIT private companion is never an eligible root.
+		removedPrimary, err := removePersistentFileBestEffortResult(dir, filepath.Join(dir, primaryNewFileName), durabilitycut.ResourceIndex)
+		if err != nil {
+			return err
+		}
+		namespaceChanged = namespaceChanged || removedPrimary
 		if readyExists {
 			removed, err := removePersistentFileBestEffortResult(dir, readyPath, durabilitycut.ResourceIndex)
 			if err != nil {

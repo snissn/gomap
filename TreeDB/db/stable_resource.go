@@ -5,13 +5,16 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"os"
 	"sync"
 	"sync/atomic"
 
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	templ "github.com/snissn/gomap/TreeDB/template"
+	"strings"
 )
 
 // StableDictionaryResourceProvider captures the exact durable transitive
@@ -24,6 +27,15 @@ type StableDictionaryResourceProvider interface {
 // needed to decode one template generation.
 type StableTemplateResourceProvider interface {
 	CaptureTemplateResources(context.Context, uint64) (*rootpublication.StableResourceSet, error)
+}
+
+// StableDictionaryMetadataResourceProvider admits new capture metadata using
+// the parent request owner, independent of the child's physical authority.
+type StableDictionaryMetadataResourceProvider interface {
+	CaptureDictionaryResourcesWithMetadata(context.Context, uint64, *retainedalloc.Owner) (*rootpublication.StableResourceSet, error)
+}
+type StableTemplateMetadataResourceProvider interface {
+	CaptureTemplateResourcesWithMetadata(context.Context, uint64, *retainedalloc.Owner) (*rootpublication.StableResourceSet, error)
 }
 
 // StableResourceCaptureLease admits a producer that must retain DB-scoped
@@ -150,7 +162,12 @@ func validateStableEncodedResourceClosure(resources *rootpublication.StableResou
 		return key{descriptor.Kind, descriptor.LogicalLane(), descriptor.ResourceID(), descriptor.Generation}
 	}
 	matched := make(map[key]bool)
-	for _, descriptor := range resources.PhysicalDescriptors() {
+	diagnostics, captureErr := resources.AcquirePhysicalDiagnostics()
+	if captureErr != nil {
+		return captureErr
+	}
+	defer diagnostics.Close()
+	for _, descriptor := range diagnostics.Physical() {
 		for _, reachable := range descriptor.ReachabilityFields() {
 			if reachable == field {
 				matched[keyOf(descriptor)] = false
@@ -200,7 +217,7 @@ func (db *DB) stableDictionaryResourceProvider() StableDictionaryResourceProvide
 	return provider
 }
 
-func captureStableDictionaryResources(ctx context.Context, provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte) (*rootpublication.StableResourceSet, error) {
+func captureStableDictionaryResources(ctx context.Context, provider StableDictionaryResourceProvider, dictID uint64, dictionary []byte, owners ...*retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
 	if dictID == 0 || len(dictionary) == 0 {
 		return nil, nil
 	}
@@ -210,7 +227,24 @@ func captureStableDictionaryResources(ctx context.Context, provider StableDictio
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	resources, err := provider.CaptureDictionaryResources(ctx, dictID)
+	var resources *rootpublication.StableResourceSet
+	var err error
+	if len(owners) == 0 || owners[0] == nil {
+		resources, err = provider.CaptureDictionaryResources(ctx, dictID)
+	} else {
+		if admitted, ok := provider.(StableDictionaryMetadataResourceProvider); ok {
+			resources, err = admitted.CaptureDictionaryResourcesWithMetadata(ctx, dictID, owners[0])
+		} else {
+			// Retain the original foreign producer's physical/deletion authority;
+			// admit independent metadata before exposing its first selected clone.
+			resources, err = provider.CaptureDictionaryResources(ctx, dictID)
+			if err == nil && resources != nil {
+				original := resources
+				resources, err = rootpublication.ImportStableResourceSetMetadata(owners[0], original)
+				original.Release()
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -221,7 +255,7 @@ func captureStableDictionaryResources(ctx context.Context, provider StableDictio
 	return resources, nil
 }
 
-func captureStableTemplateResources(provider StableTemplateResourceProvider, store templ.Store, templateID uint64) (*rootpublication.StableResourceSet, error) {
+func captureStableTemplateResources(provider StableTemplateResourceProvider, store templ.Store, templateID uint64, owners ...*retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
 	if templateID == 0 {
 		return nil, nil
 	}
@@ -232,7 +266,21 @@ func captureStableTemplateResources(provider StableTemplateResourceProvider, sto
 	if err != nil {
 		return nil, err
 	}
-	resources, err := provider.CaptureTemplateResources(context.Background(), templateID)
+	var resources *rootpublication.StableResourceSet
+	if len(owners) == 0 || owners[0] == nil {
+		resources, err = provider.CaptureTemplateResources(context.Background(), templateID)
+	} else {
+		if admitted, ok := provider.(StableTemplateMetadataResourceProvider); ok {
+			resources, err = admitted.CaptureTemplateResourcesWithMetadata(context.Background(), templateID, owners[0])
+		} else {
+			resources, err = provider.CaptureTemplateResources(context.Background(), templateID)
+			if err == nil && resources != nil {
+				original := resources
+				resources, err = rootpublication.ImportStableResourceSetMetadata(owners[0], original)
+				original.Release()
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -244,39 +292,145 @@ func captureStableTemplateResources(provider StableTemplateResourceProvider, sto
 }
 
 func (generation *indexGen) stableIndexNamespaceToken(dir string) (*rootpublication.StableNamespaceToken, error) {
-	if generation == nil || generation.pager == nil || dir == "" {
+	return generation.stablePagerNamespaceToken(dir, indexFileName, generation.pager)
+}
+func (generation *indexGen) stablePagerNamespaceToken(dir, name string, p *pager.Pager) (*rootpublication.StableNamespaceToken, error) {
+	if generation == nil || p == nil || dir == "" {
 		return nil, fmt.Errorf("%w: stable index namespace unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	var namespace *rootpublication.StableNamespaceToken
-	err := generation.pager.WithStableResourceFile(func(indexFile *os.File) error {
-		generation.stableNamespaceMu.Lock()
-		defer generation.stableNamespaceMu.Unlock()
-		if generation.stableNamespaceProof == nil {
-			parent, err := os.Open(dir)
-			if err != nil {
-				return err
-			}
-			proof, err := rootpublication.NewStableNamespaceCreationProof(parent, indexFile, indexFileName)
-			if err != nil {
-				_ = parent.Close()
-				return err
-			}
-			generation.stableNamespaceParent = parent
-			generation.stableNamespaceProof = proof
+	err := p.WithStableResourceFile(func(file *os.File) error {
+		mutex := &generation.stableNamespaceMu
+		parent, proof := &generation.stableNamespaceParent, &generation.stableNamespaceProof
+		var metadata *retainedalloc.Owner
+		var parentCharge *uint64
+		if generation.primaryOwner != nil {
+			metadata = generation.primaryOwner.arena.MetadataOwner()
+			parentCharge = &generation.stableNamespaceParentCharge
 		}
-		parentGeneration, err := rootpublication.StableNamespaceParentGeneration(generation.stableNamespaceParent)
-		if err != nil {
-			return err
+		if name == primaryIndexFileName || name == primaryNewFileName {
+			if generation.primaryOwner == nil {
+				return rootpublication.ErrResourceOwnership
+			}
+			mutex = &generation.primaryOwner.namespaceMu
+			parent, proof = &generation.primaryOwner.namespaceParent, &generation.primaryOwner.namespaceProof
+			metadata = generation.primaryOwner.arena.MetadataOwner()
+			parentCharge = &generation.primaryOwner.namespaceParentCharge
 		}
-		namespace, err = generation.stableNamespaceProof.Bind(
-			generation.stableNamespaceParent,
-			parentGeneration,
-			indexFileName,
-			indexFileName,
-		)
-		return err
+		mutex.Lock()
+		defer mutex.Unlock()
+		if mutex == &generation.stableNamespaceMu && metadata != nil {
+			generation.stableNamespaceMetadata = metadata
+		}
+		if *proof == nil {
+			if *parent != nil {
+				return rootpublication.ErrResourceOwnership
+			}
+			var charge uint64
+			parentName := dir
+			if metadata != nil {
+				var e error
+				charge, e = rootpublication.StableFileMetadataCharge(uint64(len(dir)))
+				if e != nil {
+					return e
+				}
+				if e = metadata.AddPending(charge); e != nil {
+					return e
+				}
+				parentName = strings.Clone(dir)
+			}
+			f, e := os.Open(parentName)
+			if e != nil {
+				if metadata != nil {
+					metadata.RemovePending(charge)
+				}
+				return e
+			}
+			var v *rootpublication.StableNamespaceCreationProof
+			if metadata != nil {
+				v, e = rootpublication.NewOwnedStableNamespaceCreationProof(f, file, name, metadata)
+			} else {
+				v, e = rootpublication.NewStableNamespaceCreationProof(f, file, name)
+			}
+			if e != nil && v == nil {
+				closeErr := f.Close()
+				if closeErr == nil || errors.Is(closeErr, os.ErrClosed) {
+					if metadata != nil {
+						metadata.RemovePending(charge)
+					}
+				} else {
+					if metadata != nil {
+						metadata.CleanupFailed()
+						*parent = f
+						*parentCharge = charge
+					}
+					return errors.Join(e, closeErr)
+				}
+				return e
+			}
+			*parent, *proof = f, v
+			if metadata != nil {
+				*parentCharge = charge
+			}
+			if e != nil {
+				return e
+			}
+		}
+		pg, e := rootpublication.StableNamespaceParentGeneration(*parent)
+		if e != nil {
+			return e
+		}
+		namespace, e = (*proof).Bind(*parent, pg, name, name)
+		return e
 	})
 	return namespace, err
+}
+
+// borrowStablePagerNamespaceToken retains independent selected descriptor
+// storage while reusing an eligible original creation proof under its owner
+// mutex. It neither installs supplied metadata on the original proof nor
+// changes the original namespace lifetime.
+func (generation *indexGen) borrowStablePagerNamespaceToken(dir, name string, p *pager.Pager, metadata *retainedalloc.Owner, registry *rootpublication.IdentityPinRegistry) (token *rootpublication.StableNamespaceToken, err error) {
+	if generation == nil || p == nil || metadata == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	err = p.WithStableResourceFile(func(file *os.File) error {
+		mutex := &generation.stableNamespaceMu
+		parent, proof := &generation.stableNamespaceParent, &generation.stableNamespaceProof
+		if name == primaryIndexFileName || name == primaryNewFileName {
+			if generation.primaryOwner == nil {
+				return rootpublication.ErrResourceOwnership
+			}
+			mutex = &generation.primaryOwner.namespaceMu
+			parent, proof = &generation.primaryOwner.namespaceParent, &generation.primaryOwner.namespaceProof
+		}
+		mutex.Lock()
+		defer mutex.Unlock()
+		if *proof == nil {
+			// An independent fresh capture is necessary when the original producer
+			// has not supplied a complete creation proof.
+			var e error
+			token, e = rootpublication.CaptureStableNamespaceWithMetadata(metadata, registry, dir, file, name, name)
+			return e
+		}
+		if *parent == nil {
+			return rootpublication.ErrResourceOwnership
+		}
+		pg, e := rootpublication.StableNamespaceParentGeneration(*parent)
+		if e != nil {
+			return e
+		}
+		token, e = (*proof).BindWithMetadata(*parent, pg, name, name, metadata)
+		if e == nil {
+			e = token.BindCleanupRegistry(registry)
+		}
+		if e != nil && token != nil {
+			token.Release()
+			token = nil
+		}
+		return e
+	})
+	return token, err
 }
 
 // NewStableValueLogPhysicalResourceToken binds a producer-specific token to
@@ -335,6 +489,9 @@ func (snapshot *Snapshot) StableValueLogRecordLength(ptr page.ValuePtr) (uint32,
 // index handle and namespace owned by this stable snapshot. The token takes
 // ownership of the snapshot maintenance pin on success.
 func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)) (*rootpublication.StableResourceToken, error) {
+	return snapshot.newStablePagerResourceToken(spec, constructor, indexFileName)
+}
+func (snapshot *Snapshot) newStablePagerResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error), name string) (*rootpublication.StableResourceToken, error) {
 	if snapshot == nil || constructor == nil {
 		return nil, fmt.Errorf("%w: stable index snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
@@ -345,14 +502,40 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 	if !snapshot.stableIndexCapture || snapshot.idx == nil || snapshot.idx.pager == nil || snapshot.db == nil {
 		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
 	}
-	if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
-		pager := snapshot.idx.pager
+	p := snapshot.idx.pager
+	if name == primaryIndexFileName || name == primaryNewFileName {
+		if snapshot.idx.primary == nil {
+			return nil, rootpublication.ErrUnresolvedResource
+		}
+		p = snapshot.idx.primary.Pager()
+	}
+	var ownedOperations *stablePagerOwnedOperations
+	if spec.MetadataOwner != nil {
+		if spec.OnRelease != nil || spec.FlushThrough != nil || spec.SyncThrough != nil || spec.OwnedOperations != nil {
+			return nil, rootpublication.ErrResourceOwnership
+		}
+		var e error
+		ownedOperations, e = newStablePagerOwnedOperations(snapshot, p, spec.MetadataOwner)
+		if e != nil {
+			return nil, e
+		}
+		defer ownedOperations.Release()
+		spec.OwnedOperations = ownedOperations
+	}
+	if ownedOperations == nil && spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
+		pager := p
 		spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
 			return pager.SyncIndexDataWithStableFile(file)
 		}
 	}
 	database := snapshot.db
-	namespace, err := snapshot.idx.stableIndexNamespaceToken(snapshot.db.dir)
+	var namespace *rootpublication.StableNamespaceToken
+	var err error
+	if spec.MetadataOwner == nil || (snapshot.idx.primary != nil && spec.MetadataOwner == snapshot.idx.primary.MetadataOwner()) {
+		namespace, err = snapshot.idx.stablePagerNamespaceToken(snapshot.db.dir, name, p)
+	} else {
+		namespace, err = snapshot.idx.borrowStablePagerNamespaceToken(database.dir, name, p, spec.MetadataOwner, database.StableResourceIdentityPinRegistry())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -363,7 +546,7 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		leaseTransferred atomic.Bool
 	)
 	captureCounter := snapshot.stableIndexCaptureCounter
-	err = snapshot.idx.pager.WithStableResourceFile(func(file *os.File) error {
+	err = p.WithStableResourceFile(func(file *os.File) error {
 		info, err := file.Stat()
 		if err != nil {
 			return err
@@ -378,18 +561,20 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		}
 		spec.File = file
 		spec.Generation = snapshot.idx.id
-		spec.DiagnosticPath = indexFileName
+		spec.DiagnosticPath = name
 		spec.Frontier.Bytes = uint64(info.Size())
 		spec.Namespace = namespace
 		spec.PinRegistry = registry
-		callerRelease := spec.OnRelease
-		spec.OnRelease = func() {
-			_ = snapshot.Close()
-			if leaseTransferred.CompareAndSwap(true, false) && captureCounter != nil {
-				captureCounter.Add(-1)
-			}
-			if callerRelease != nil {
-				callerRelease()
+		if ownedOperations == nil {
+			callerRelease := spec.OnRelease
+			spec.OnRelease = func() {
+				_ = snapshot.Close()
+				if leaseTransferred.CompareAndSwap(true, false) && captureCounter != nil {
+					captureCounter.Add(-1)
+				}
+				if callerRelease != nil {
+					callerRelease()
+				}
 			}
 		}
 		token, err = constructor(spec)
@@ -414,7 +599,12 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 	case snapshot.stableIndexCaptureTransferred:
 		err = fmt.Errorf("%w: stable index maintenance lease already transferred", rootpublication.ErrResourceOwnership)
 	default:
-		leaseTransferred.Store(true)
+		if ownedOperations != nil {
+			ownedOperations.transferred.Store(true)
+			snapshot.stablePagerCompletion = ownedOperations
+		} else {
+			leaseTransferred.Store(true)
+		}
 		snapshot.stableIndexCaptureTransferred = true
 	}
 	snapshot.iteratorMu.Unlock()
@@ -434,7 +624,34 @@ func (snapshot *Snapshot) CaptureStableIndexFileResource() (*rootpublication.Sta
 	if snapshot == nil {
 		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
 	}
+	if err := snapshot.beginRead(); err != nil {
+		return nil, err
+	}
+	defer snapshot.endRead()
 	return snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
+		Kind:          rootpublication.ResourceIndex,
+		LogicalLane:   "db/index",
+		ResourceID:    indexFileName,
+		Digest:        sha256.Sum256([]byte("treedb/index-file/v1")),
+		Reachability:  rootpublication.ReachabilityIndexFile,
+		ContentSynced: false,
+	}, NewStableDBResourceToken)
+}
+
+func (snapshot *Snapshot) captureOwnedStableIndexFileResource() (*rootpublication.StableResourceToken, error) {
+	if snapshot == nil {
+		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
+	}
+	if err := snapshot.beginRead(); err != nil {
+		return nil, err
+	}
+	defer snapshot.endRead()
+	var metadata *retainedalloc.Owner
+	if snapshot.idx != nil && snapshot.idx.primary != nil {
+		metadata = snapshot.idx.primary.MetadataOwner()
+	}
+	return snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
+		MetadataOwner: metadata,
 		Kind:          rootpublication.ResourceIndex,
 		LogicalLane:   "db/index",
 		ResourceID:    indexFileName,
@@ -457,6 +674,24 @@ func (db *DB) ValueLogIdentityPinRegistry() *rootpublication.IdentityPinRegistry
 // gate to non-value-log producers and deleters that share durable files.
 func (db *DB) StableResourceIdentityPinRegistry() *rootpublication.IdentityPinRegistry {
 	return db.ValueLogIdentityPinRegistry()
+}
+
+// StableResourceMetadataOwner supplies allocation admission for new selected
+// ordinary resource captures. It does not transfer physical deletion authority:
+// each capture keeps its original producer registry and exact handle owner.
+// The DB-scoped registry survives index replacement; its closed Owner refuses
+// any capture racing terminal shutdown before added storage is allocated.
+func (db *DB) StableResourceMetadataOwner() *retainedalloc.Owner {
+	if db == nil {
+		return nil
+	}
+	db.idxMu.Lock()
+	defer db.idxMu.Unlock()
+	idx := db.idx.Load()
+	if idx == nil || idx.primary == nil {
+		return nil
+	}
+	return db.valueLogIdentityPins.MetadataOwner()
 }
 
 // NewStableDBResourceToken registers the exact already-open index handle.
@@ -538,4 +773,18 @@ func (lease *StableResourceCaptureLease) ValidateCommandWALStagingCaptureDBV1(db
 		return ErrClosed
 	}
 	return lease.ValidateCommandWALStagingCaptureV1(db, lease.borrowedIntent)
+}
+
+func (snapshot *Snapshot) captureStablePrimaryIndexResource() (*rootpublication.StableResourceToken, error) {
+	if snapshot == nil {
+		return nil, ErrClosed
+	}
+	if err := snapshot.beginRead(); err != nil {
+		return nil, err
+	}
+	defer snapshot.endRead()
+	if snapshot.idx == nil || snapshot.idx.primary == nil {
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	return snapshot.newStablePagerResourceToken(rootpublication.StableResourceSpec{MetadataOwner: snapshot.idx.primary.MetadataOwner(), Kind: rootpublication.ResourceIndex, LogicalLane: "db/primary", ResourceID: primaryIndexFileName, Digest: sha256.Sum256([]byte("treedb/primary-bank/v1")), Reachability: rootpublication.ReachabilityIndexFile}, NewStableDBResourceToken, primaryIndexFileName)
 }

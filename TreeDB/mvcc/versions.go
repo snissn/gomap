@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/mvccadmission"
 
 	treedb "github.com/snissn/gomap/TreeDB"
 	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
@@ -694,7 +695,15 @@ func (s *Store) persistDiscardFloorLocked(floor uint64, mode CommitMode) error {
 	if batch == nil {
 		return storageError("create discard floor batch", treedb.ErrClosed)
 	}
-	if err := batch.Set(discardFloorKey, record); err != nil {
+	var stageErr error
+	if qualified, ok := batch.(interface {
+		SetWithMVCCInput([]byte, []byte, mvccadmission.Input) error
+	}); ok && s.admission != nil {
+		stageErr = qualified.SetWithMVCCInput(discardFloorKey, record, s.admission.FloorInput(discardFloorKey, record, floor))
+	} else {
+		stageErr = batch.Set(discardFloorKey, record)
+	}
+	if err := stageErr; err != nil {
 		return errors.Join(storageError("stage discard floor", err), storageError("close discard floor batch", batch.Close()))
 	}
 	var err error
