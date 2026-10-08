@@ -1,0 +1,5 @@
+--- FAIL: TestOwnedPhysicalKindSelectionPreservesAdmissionAndLastBorrow (0.00s)
+    resource_physical_selection_test.go:160: selection lost admitted owner: owner=0x0 expected=0x267e6be82980 entries=2
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.003s
+FAIL

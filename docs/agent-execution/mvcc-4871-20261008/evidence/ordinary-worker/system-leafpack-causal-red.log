@@ -1,0 +1,7 @@
+go: downloading github.com/ajroetker/go-highway v0.0.12
+2026/10/08 13:14:26 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=131072 stored=1761 ratio=0.013
+--- FAIL: TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes (0.09s)
+    api_test.go:699: LeafGenerationPackFromPlan: leaf generation pack: rewrite leaf refs: vlog-rewrite: rewrite system collection descriptors: node: invalid primary directory
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/collections	0.105s
+FAIL

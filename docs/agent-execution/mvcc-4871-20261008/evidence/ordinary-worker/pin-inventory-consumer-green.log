@@ -1,0 +1,7 @@
+--- FAIL: TestDurabilityProfilePublicEntrypointInventory (0.02s)
+    profile_entrypoint_inventory_test.go:50: command-WAL public batch entrypoint inventory changed
+         got: [Close Delete DeleteRange DeleteView DeleteViewWithReplayBytes GetByteSize Replay Reset Set SetView SetViewWithReplayBytes SetWithMVCCInput Write WriteSync]
+        want: [Close Delete DeleteRange DeleteView DeleteViewWithReplayBytes GetByteSize Replay Reset Set SetView SetViewWithReplayBytes Write WriteSync]
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.210s
+FAIL

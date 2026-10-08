@@ -1,0 +1,5 @@
+--- FAIL: TestPrimaryFragmentationCensusKeepsPhysicalDomainsDistinct (0.01s)
+    fragmentation_trigger_test.go:281: DATA debt mixed domains: {CommitSeq:4 UserPages:5 UserMinPageID:2 UserMaxPageID:5764607523034234886 UserSpan:5764607523034234885 UserSpanRatioPPM:1000000 TotalPages:7 FreelistHead:6 FreelistPages:0 FreelistFreeIDs:0 FreelistReclaimablePages:0 FreelistReclaimableRatioPPM:0 FreelistReclaimableValid:true FreelistAllocPagesTotal:0 FreelistAppendAllocPagesTotal:0 FreelistReuseAllocPagesTotal:0 FreelistFreePagesTotal:0 CollectionRootCount:0 CollectionRootPagerRoots:0 CollectionRootPages:0 CollectionRootMinPageID:0 CollectionRootMaxPageID:0 CollectionRootSpan:0 CollectionRootSpanRatioPPM:0 CollectionRootSpanRatioValid:false CollectionRootDuplicatePageRefs:0 CollectionRootLeafPages:0 CollectionRootInternalPages:0}; expected pages=1 bounds=[2,2]
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.013s
+FAIL

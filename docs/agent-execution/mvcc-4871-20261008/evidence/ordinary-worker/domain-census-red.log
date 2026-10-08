@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/fragmentation_trigger_test.go:236:55: undefined: DurabilityNoWALFast
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

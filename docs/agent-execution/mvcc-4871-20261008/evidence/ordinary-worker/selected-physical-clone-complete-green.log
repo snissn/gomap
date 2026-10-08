@@ -1,0 +1,5 @@
+--- FAIL: TestOwnedPhysicalKindSelectionPreservesAdmissionAndLastBorrow (0.00s)
+    resource_physical_selection_test.go:198: last borrower leaked 96 metadata bytes
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.006s
+FAIL

@@ -1,0 +1,30 @@
+--- FAIL: TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters (3.78s)
+    compact_storage_cached_internal_test.go:579: CompactStorage: index-vacuum-settle: treedb: no recoverable durable meta: slot 0: stable resource dependency unresolved: outer-leaf-log file 4286578689 is missing; slot 1: stable resource dependency unresolved: outer-leaf-log file 4286578689 is missing
+--- FAIL: TestIndexVacuumM4CertificationMatrix (1.30s)
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/inline-values/background-freelist (0.02s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason="user" want one/"freelist"
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/pointer-values/background-freelist (0.02s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason="user" want one/"freelist"
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/backend-vacuum-online (0.04s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-noncached-vacuum-online (0.04s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-cached-vacuum-online (0.06s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-full (0.04s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: index-vacuum-settle: treedb: no recoverable durable meta: slot 0: stable resource dependency unresolved: outer-leaf-log file 4286578689 is missing; slot 1: stable resource dependency unresolved: outer-leaf-log file 4286578689 is missing
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum (0.04s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/close-opt-in-vacuum (0.05s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-user (0.04s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist (0.03s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason="user" want one/"freelist"
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/collection-root/background-freelist (0.02s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason="user" want one/"freelist"
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/collection-root/background-collection-roots (0.02s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason="user" want one/"collection_roots"
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	5.103s
+FAIL

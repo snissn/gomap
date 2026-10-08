@@ -1,0 +1,7 @@
+2026/10/08 13:16:35 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=1707 ratio=0.013
+2026/10/08 13:16:35 treedb: value-log dict published class=single_value dict_id=6386913181006964121 k=32 payload_ratio=0.005 total_ratio=0.008
+--- FAIL: TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes (0.10s)
+    api_test.go:727: LeafGenerationGC stats={GenerationsTotal:9 GenerationsWritable:1 GenerationsLive:7 GenerationsRetiring:1 GenerationsEligible:0 GenerationsDeleted:0 FilesDeleted:0 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:5 ManifestRevisionsProtected:2 ManifestRevisionsEligible:3 ManifestRevisionsDeleted:3 ManifestRevisionBytesEligible:2290 ManifestRevisionBytesDeleted:2290}, want deleted packed source generation bytes/files
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/collections	0.340s
+FAIL

@@ -1,0 +1,8 @@
+--- FAIL: TestIndexVacuumM4CertificationMatrix (0.18s)
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/inline-values/background-freelist (0.03s)
+        index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=0 reason="none" want one/"freelist"
+    --- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist (0.05s)
+        index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.187s
+FAIL
