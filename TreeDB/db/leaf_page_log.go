@@ -1036,7 +1036,14 @@ func (db *DB) ValidateCurrentWritableValueLogBinding(path string, fileID uint32,
 	if err := db.CheckStorageMaintenanceReady(); err != nil {
 		return err
 	}
-	return db.valueLogManager.ValidateCurrentWritableBinding(path, fileID, identity, pins)
+	db.mu.RLock()
+	manager := db.valueLogManager
+	closing := db.closing.Load()
+	db.mu.RUnlock()
+	if closing {
+		return ErrClosed
+	}
+	return manager.ValidateCurrentWritableBinding(path, fileID, identity, pins)
 }
 
 // SetMultiCurrentWritableValueLogLane allows cached mode to keep independent
