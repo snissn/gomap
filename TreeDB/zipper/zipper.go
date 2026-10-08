@@ -382,7 +382,13 @@ func (s *mergeScratch) reset() {
 		s.leafRefCachePages = s.leafRefCachePages[:mergeLeafRefCachePageKeep]
 	}
 	clear(s.leafRefCacheActivePages)
-	s.leafRefCacheActivePages = s.leafRefCacheActivePages[:0]
+	// Active work is unbounded; idle bookkeeping follows the cache page
+	// retention scale instead of retaining the largest attempt's pointer array.
+	if cap(s.leafRefCacheActivePages) > mergeLeafRefCachePageKeep {
+		s.leafRefCacheActivePages = nil
+	} else {
+		s.leafRefCacheActivePages = s.leafRefCacheActivePages[:0]
+	}
 	if n := len(s.childRefBatchScratch); n > mergeChildRefBatchKeep {
 		extra := s.childRefBatchScratch[mergeChildRefBatchKeep:]
 		for i := range extra {
@@ -761,7 +767,11 @@ func (s *mergeScratch) releaseLeafRefCachePages() {
 		putGlobalLeafRefCachePages(active[keep:])
 	}
 	clear(active)
-	s.leafRefCacheActivePages = active[:0]
+	if cap(active) > mergeLeafRefCachePageKeep {
+		s.leafRefCacheActivePages = nil
+	} else {
+		s.leafRefCacheActivePages = active[:0]
+	}
 	s.mu.Unlock()
 }
 

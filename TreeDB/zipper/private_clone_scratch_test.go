@@ -1,6 +1,7 @@
 package zipper
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -63,6 +64,118 @@ type privateCloneFailingLeafLog struct{ err error }
 
 func (l privateCloneFailingLeafLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
 	return page.LeafLogPtr{}, l.err
+}
+
+type privateClonePanickingLeafLog struct{ value any }
+
+func (l privateClonePanickingLeafLog) AppendLeafPage([]byte) (page.LeafLogPtr, error) {
+	panic(l.value)
+}
+
+func TestPrivateCloneApplyCanceledAllocatorReturnsScratch(t *testing.T) {
+	owner, root, updates, _ := privateCloneApplyFixture(t)
+	seed := owner.acquireApplyScratch()
+	owner.releaseApplyScratch(seed)
+	clone := owner.CloneWithAllocator(privateCloneFailingAllocator{context.Canceled})
+	if _, _, _, err := clone.Apply(root, updates); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Apply error=%v, want canceled allocator", err)
+	}
+	returned := owner.acquireApplyScratch()
+	defer owner.releaseApplyScratch(returned)
+	if returned != seed {
+		t.Fatal("canceled allocator lost original scratch")
+	}
+}
+
+func TestPrivateCloneApplyPanicEndsLeafCache(t *testing.T) {
+	owner, root, _, allocator := privateCloneApplyFixture(t)
+	seed := owner.acquireApplyScratch()
+	owner.releaseApplyScratch(seed)
+	clone := owner.CloneWithAllocator(allocator)
+	clone.SetOuterLeavesInValueLog(true)
+	wantPanic := errors.New("private append panic")
+	clone.SetLeafPageLog(privateClonePanickingLeafLog{wantPanic})
+	deletes := batch.NewRetainingLargeEntries(panicValueReader{}, page.DefaultInlineThreshold)
+	defer deletes.Close()
+	deletes.Delete([]byte("k000"))
+	func() {
+		defer func() {
+			if got := recover(); got != wantPanic {
+				t.Fatalf("panic=%v, want original append panic", got)
+			}
+		}()
+		_, _, _, _ = clone.Apply(root, deletes)
+	}()
+	if clone.leafRefCacheActive.Load() || clone.leafRefCache != nil || clone.leafRefCacheScratch != nil {
+		t.Fatal("panic left the private leaf cache active")
+	}
+	returned := owner.acquireApplyScratch()
+	defer owner.releaseApplyScratch(returned)
+	if returned != seed || len(returned.leafRefCacheActivePages) != 0 || len(returned.splitArena) != 0 {
+		t.Fatal("panic did not return reset original scratch")
+	}
+}
+
+func TestPrivateCloneApplyDoesNotRetainBorrowedSnapshotPages(t *testing.T) {
+	owner, root, updates, allocator := privateCloneApplyFixture(t)
+	clone := owner.CloneWithAllocator(&MockAllocator{p: owner.pager})
+	clone.SetOuterLeavesInValueLog(true)
+	snapshot := newMemoryLeafPageStore(clone)
+	clone.SetLeafPageLog(snapshot)
+	clone.SetLeafPageReader(snapshot)
+	snapshotRoot := buildOuterLeafInternalRoot(t, clone)
+	// Keep the immutable input snapshot reader separate from this attempt's
+	// output appender. Its ReadUnsafe returns borrowed snapshot page bytes.
+	output := newMemoryLeafPageStore(clone)
+	output.next = snapshot.next
+	clone.SetLeafPageLog(output)
+	snapshot.readCalls = 0
+	seed := owner.acquireApplyScratch()
+	owner.releaseApplyScratch(seed)
+	delta := batch.New(panicValueReader{}, page.DefaultInlineThreshold)
+	defer delta.Close()
+	delta.Delete([]byte("key-050"))
+	if _, _, _, err := clone.Apply(snapshotRoot, delta); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.readCalls == 0 {
+		t.Fatal("Apply did not exercise borrowed snapshot reads")
+	}
+	returned := owner.acquireApplyScratch()
+	if returned != seed {
+		t.Fatal("snapshot Apply lost original scratch")
+	}
+	borrowed := make(map[*byte]bool)
+	for _, data := range snapshot.pages {
+		for i := range data {
+			borrowed[&data[i]] = true
+		}
+	}
+	for _, buffers := range [][][]byte{returned.leafPageScratch, returned.nodeKeyScratch} {
+		for _, buf := range buffers {
+			if cap(buf) > 0 && borrowed[&buf[:cap(buf)][0]] {
+				t.Error("returned scratch retained borrowed snapshot bytes")
+			}
+		}
+	}
+	if clone.leafRefCache != nil || clone.leafRefCacheScratch != nil || owner.leafPageReader != nil || owner.leafPageLog != nil {
+		t.Error("snapshot reader/appender/cache escaped into original owner")
+	}
+	owner.releaseApplyScratch(returned)
+	// Retire the snapshot's transient pages, then reuse scratch against the
+	// original pager. Output from a later Apply must not depend on those bytes.
+	for _, data := range snapshot.pages {
+		clear(data)
+	}
+	allocator.reset()
+	newRoot, _, _, err := owner.Apply(root, updates)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := tree.New(owner.pager, panicValueReader{}, newRoot).Get([]byte("k000"))
+	if err != nil || string(got) != "new value" {
+		t.Fatalf("output after retiring snapshot=%q error=%v", got, err)
+	}
 }
 
 func TestPrivateCloneApplyScratchReturnsToOriginalOwner(t *testing.T) {
@@ -170,6 +283,48 @@ func TestPrivateCloneScratchConcurrentCheckoutIsBounded(t *testing.T) {
 	}
 	if retained != applyScratchKeep+1 {
 		t.Fatalf("original owner retained %d scratches, want existing bound %d", retained, applyScratchKeep+1)
+	}
+}
+
+func TestPrivateCloneLeafCacheActiveBookkeepingIsBoundedAfterClose(t *testing.T) {
+	owner := New(nil, nil)
+	clone := owner.CloneWithAllocator(nil)
+	s := clone.acquireApplyScratch()
+	clone.beginLeafRefCache(s)
+	const activePages = mergeLeafRefCachePageKeep + 1
+	seen := make(map[*byte]bool, activePages)
+	for i := 0; i < activePages; i++ {
+		data := s.acquireLeafRefCacheBuildPage()
+		if seen[&data[0]] {
+			t.Fatal("active cache reused a page before close")
+		}
+		seen[&data[0]] = true
+		data[0] = byte(i)
+	}
+	if len(s.leafRefCacheActivePages) != activePages {
+		t.Fatal("retention bound limited active work")
+	}
+	for i, p := range s.leafRefCacheActivePages {
+		if p.buf[0] != byte(i) {
+			t.Fatal("active cache page was modified before close")
+		}
+	}
+	clone.endLeafRefCache()
+	if cap(s.leafRefCacheActivePages) > mergeLeafRefCachePageKeep {
+		t.Fatal("closed cache retained oversized active bookkeeping")
+	}
+	clone.releaseApplyScratch(s)
+	returned := owner.acquireApplyScratch()
+	defer owner.releaseApplyScratch(returned)
+	if returned != s || len(returned.leafRefCacheActivePages) != 0 || len(returned.leafRefCachePages) > mergeLeafRefCachePageKeep {
+		t.Fatal("closed cache did not return bounded idle scratch")
+	}
+	// Reset also discards oversized inactive bookkeeping, independently of
+	// cache close. It must not preserve capacity left by a prior attempt.
+	returned.leafRefCacheActivePages = make([]*leafRefCachePage, 0, activePages)
+	returned.reset()
+	if cap(returned.leafRefCacheActivePages) > mergeLeafRefCachePageKeep {
+		t.Fatal("reset retained oversized inactive bookkeeping")
 	}
 }
 
