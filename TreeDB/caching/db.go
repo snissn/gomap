@@ -8086,12 +8086,12 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 		db.advanceNativeRootValueLogAppendSeqAtLeast(maxSeqByLane[db.nativeRootValueLogAppendLanes[0].id])
 	}
 	for i := range db.lanes {
-		if err := db.advanceValueLogWriterPastObservedSeq(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
+		if err := db.reconcileValueLogAppendWriterAfterBackendMaintenance(&db.lanes[i], maxSeqByLane[db.lanes[i].id]); err != nil {
 			return err
 		}
 	}
 	for _, l := range db.nativeRootValueLogAppendAuxLanesSnapshot() {
-		if err := db.advanceValueLogWriterPastObservedSeq(l, maxSeqByLane[l.id]); err != nil {
+		if err := db.reconcileValueLogAppendWriterAfterBackendMaintenance(l, maxSeqByLane[l.id]); err != nil {
 			return err
 		}
 	}
@@ -8099,7 +8099,7 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 		observedMaxSeq := maxSeqByLane[leafLogLaneID]
 		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
 		for _, l := range db.leafLogAppendLanesSnapshot() {
-			if err := db.reconcileLeafLogAppendWriterAfterBackendMaintenance(l, observedMaxSeq); err != nil {
+			if err := db.reconcileValueLogAppendWriterAfterBackendMaintenance(l, observedMaxSeq); err != nil {
 				return err
 			}
 		}
@@ -28882,7 +28882,7 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 		}
 	} else {
 		var w *valuelog.Writer
-		if db.isLeafLogAppendLane(l) {
+		if db.isLeafLogAppendLane(l) || db.isSharedNativeRootValueLogAppendLane(l) {
 			w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 		} else {
 			w, err = valuelog.NewWriter(path, fileID)
@@ -28972,7 +28972,7 @@ func (db *DB) restoreValueLogWriterMuHeld(l *lane, path string, seq int) error {
 		return err
 	}
 	var w *valuelog.Writer
-	if db.isLeafLogAppendLane(l) {
+	if db.isLeafLogAppendLane(l) || db.isSharedNativeRootValueLogAppendLane(l) {
 		w, err = valuelog.NewWriterWithStableResourcePinRegistry(path, fileID, db.valueLogIdentityPins)
 	} else {
 		w, err = valuelog.NewWriter(path, fileID)
