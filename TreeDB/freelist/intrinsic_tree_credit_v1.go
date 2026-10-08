@@ -2,13 +2,17 @@ package freelist
 
 import "sync/atomic"
 
-// Each allocation retains one creator reference. Intrusive references count
-// actual owning root/tree edges; stack borrows never become lifetime authority.
-func retainStateNodeV1(n *stateNode) *stateNode {
-	if n != nil && atomic.LoadUint64(&n.ownedRefs) != 0 {
-		atomic.AddUint64(&n.ownedRefs, 1)
+// Value refs are the sole owning tree edges; borrowed refs do not retain.
+func retainStateNodeV1(r stateRefV1) stateRefV1 {
+	if r.branch != nil {
+		if atomic.LoadUint64(&r.branch.ownedRefs) != 0 {
+			atomic.AddUint64(&r.branch.ownedRefs, 1)
+		}
 	}
-	return n
+	if r.chunk != nil {
+		retainStateChunkV1(r.chunk)
+	}
+	return r
 }
 func retainStateChunkV1(c *stateChunk) *stateChunk {
 	if c != nil && atomic.LoadUint64(&c.ownedRefs) != 0 {
@@ -16,7 +20,7 @@ func retainStateChunkV1(c *stateChunk) *stateChunk {
 	}
 	return c
 }
-func replaceStateNodeV1(slot **stateNode, owned *stateNode) {
+func replaceStateNodeV1(slot *stateRefV1, owned stateRefV1) {
 	old := *slot
 	*slot = owned
 	releaseStateNodeV1(old)
@@ -26,21 +30,24 @@ func replaceStateChunkV1(slot **stateChunk, owned *stateChunk) {
 	*slot = owned
 	releaseStateChunkV1(old)
 }
-func releaseStateNodeV1(n *stateNode) {
+func releaseStateNodeV1(r stateRefV1) {
+	if r.chunk != nil {
+		releaseStateChunkV1(r.chunk)
+	}
+	n := r.branch
 	if n == nil || atomic.LoadUint64(&n.ownedRefs) == 0 {
 		return
 	}
 	if atomic.AddUint64(&n.ownedRefs, ^uint64(0)) != 0 {
 		return
 	}
-	children, chunk, creator := n.child, n.chunk, n.creator
-	n.child = [16]*stateNode{}
-	n.chunk, n.creator = nil, nil
-	n.pageID, n.freeCount, n.retiredCount, n.minRetiredSeq, n.minChunk, n.maxChunk, n.checksum = 0, 0, 0, 0, 0, 0, 0
+	children, creator := n.child, n.creator
+	n.child = [16]stateRefV1{}
+	n.creator = nil
+	n.pageID, n.checksum, n.depth, n.prefix, n.freePages, n.retiredPages, n.minSeq, n.lowChunk, n.highChunk = 0, 0, 0, 0, 0, 0, 0, 0, 0
 	for _, child := range children {
 		releaseStateNodeV1(child)
 	}
-	releaseStateChunkV1(chunk)
 	creator.release()
 }
 func releaseStateChunkV1(c *stateChunk) {
@@ -52,52 +59,58 @@ func releaseStateChunkV1(c *stateChunk) {
 	}
 	creator := c.creator
 	c.creator = nil
-	c.pageID, c.checksum, c.chunkNo = 0, 0, 0
+	c.pageID, c.checksum, c.chunkNo, c.retiredPages, c.minSeq = 0, 0, 0, 0, 0
 	c.free = [4]uint64{}
 	c.retired = [freelistChunkSize]uint64{}
 	creator.release()
 }
-func cloneStateNodeOwnedV1(n *stateNode, preserveIdentity bool, creator *allocationCreditLeaseV1, operations ...*allocationOperationV1) (*stateNode, error) {
-	if err := reserveBirthV1(creator, stateNodeCopyCapacityV1, 1, operations...); err != nil {
+func cloneStateRefOwnedV1(r stateRefV1, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (stateRefV1, error) {
+	if r.chunk != nil {
+		c, err := cloneStateChunkOwnedV1(r.chunk, preserve, creator, ops...)
+		return stateRefV1{chunk: c}, err
+	}
+	n, err := cloneStateBranchOwnedV1(r.branch, preserve, creator, ops...)
+	return stateRefV1{branch: n}, err
+}
+func cloneStateBranchOwnedV1(n *stateNode, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (*stateNode, error) {
+	if err := reserveBirthV1(creator, stateNodeCopyCapacityV1, 1, ops...); err != nil {
 		return nil, err
 	}
 	out := &stateNode{ownedRefs: 1, creator: creator}
 	if n != nil {
-		out.pageID, out.checksum = n.pageID, n.checksum
-		out.freeCount, out.retiredCount, out.minRetiredSeq, out.minChunk, out.maxChunk = n.freeCount, n.retiredCount, n.minRetiredSeq, n.minChunk, n.maxChunk
+		out.pageID, out.checksum, out.depth, out.prefix = n.pageID, n.checksum, n.depth, n.prefix
+		out.freePages, out.retiredPages, out.minSeq, out.lowChunk, out.highChunk = n.freePages, n.retiredPages, n.minSeq, n.lowChunk, n.highChunk
 		for i, child := range n.child {
 			out.child[i] = retainStateNodeV1(child)
 		}
-		out.chunk = retainStateChunkV1(n.chunk)
 	}
-	if !preserveIdentity {
+	if !preserve {
 		out.pageID, out.checksum = 0, 0
 	}
 	return out, nil
 }
-func cloneStateChunkOwnedV1(c *stateChunk, preserveIdentity bool, creator *allocationCreditLeaseV1, operations ...*allocationOperationV1) (*stateChunk, error) {
-	if err := reserveBirthV1(creator, stateChunkCopyCapacityV1, 1, operations...); err != nil {
+func cloneStateChunkOwnedV1(c *stateChunk, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (*stateChunk, error) {
+	if err := reserveBirthV1(creator, stateChunkCopyCapacityV1, 1, ops...); err != nil {
 		return nil, err
 	}
 	out := &stateChunk{ownedRefs: 1, creator: creator}
 	if c != nil {
-		out.pageID, out.checksum, out.chunkNo, out.free, out.retired = c.pageID, c.checksum, c.chunkNo, c.free, c.retired
+		out.pageID, out.checksum, out.chunkNo, out.free, out.retired, out.retiredPages, out.minSeq = c.pageID, c.checksum, c.chunkNo, c.free, c.retired, c.retiredPages, c.minSeq
 	}
-	if !preserveIdentity {
+	if !preserve {
 		out.pageID, out.checksum = 0, 0
 	}
 	return out, nil
 }
-func stateTreeFiniteV1(n *stateNode) bool {
-	if n == nil {
-		return false
-	}
-	if n.creator != nil || n.chunk != nil && n.chunk.creator != nil {
+func stateTreeFiniteV1(r stateRefV1) bool {
+	if r.creator() != nil {
 		return true
 	}
-	for _, child := range n.child {
-		if stateTreeFiniteV1(child) {
-			return true
+	if r.branch != nil {
+		for _, child := range r.branch.child {
+			if stateTreeFiniteV1(child) {
+				return true
+			}
 		}
 	}
 	return false
@@ -116,7 +129,10 @@ func releaseGenerationV1(g *FreelistGenerationV1) {
 		return
 	}
 	root, creator := g.root, g.creator
-	g.root, g.creator = nil, nil
+	g.root, g.creator = stateRefV1{}, nil
+	clear(g.record.Extents[:cap(g.record.Extents)])
+	clear(g.record.pageIDs[:cap(g.record.pageIDs)])
+	clear(g.metadataPages[:cap(g.metadataPages)])
 	g.record = ReservationRecordV1{}
 	g.metadataPages = nil
 	releaseStateNodeV1(root)
@@ -145,7 +161,7 @@ func releaseTxnV1(t *FreelistTxn) {
 	root, base, creator, buildCreator := t.root, t.base, t.creator, t.buildCreator
 	ledger, ledgerOwned := t.ledger, t.ledgerOwned
 	t.ledger, t.ledgerOwned = nil, false
-	t.root, t.base, t.creator, t.buildCreator = nil, nil, nil, nil
+	t.root, t.base, t.creator, t.buildCreator = stateRefV1{}, nil, nil, nil
 	t.allocationCredit = nil
 	t.privatePreparation = false
 	allocatedCreator, abandonedCreator := t.allocatedCreator, t.abandonedCreator

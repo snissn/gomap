@@ -22,6 +22,7 @@ const (
 	RequiredFeatureCommandWALV2          = "command_wal_v2"
 	RequiredFeatureDependencyDirectoryV2 = "dependency_directory_v2"
 	RequiredFeatureOwnedLeafManifestV1   = "owned_leaf_manifest_v1"
+	RequiredFeatureFreelistPatriciaV2    = "freelist_patricia_v2"
 	// RequiredFeatureCommandWALV1 is retained as a source-compatibility alias
 	// during the pre-alpha cutover. Newly persisted configs always require V2.
 	RequiredFeatureCommandWALV1       = RequiredFeatureCommandWALV2
@@ -94,6 +95,15 @@ func normalizeFormatConfigMode(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
+func (cfg FormatConfig) RequiresFreelistPatriciaV2() bool {
+	for _, feature := range cfg.RequiredFeatures {
+		if normalizeFormatConfigMode(feature) == RequiredFeatureFreelistPatriciaV2 {
+			return true
+		}
+	}
+	return false
+}
+
 func formatConfigFromOptions(opts Options) FormatConfig {
 	cfg := FormatConfig{
 		Version:           formatConfigVersion,
@@ -117,6 +127,8 @@ func formatConfigFromOptions(opts Options) FormatConfig {
 	if cfg.IndexOuterLeavesInValueLog && cfg.IndexInternalBaseDelta {
 		cfg.IndexInternalBaseDelta = false
 	}
+	cfg.Version = formatConfigRequiredFeaturesVersion
+	cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureFreelistPatriciaV2)
 	if opts.OwnedLeafManifests {
 		cfg.Version = formatConfigRequiredFeaturesVersion
 		cfg.RequiredFeatures = appendRequiredFormatFeature(cfg.RequiredFeatures, RequiredFeatureOwnedLeafManifestV1)
@@ -479,6 +491,18 @@ func SaveFormatConfig(dir string, cfg FormatConfig) error {
 			return err
 		}
 	}
+	if ok && existing.RequiresFreelistPatriciaV2() && !cfg.RequiresFreelistPatriciaV2() {
+		return fmt.Errorf("%w: cannot remove freelist_patricia_v2", ErrLegacyFormatRebuildRequired)
+	}
+	if cfg.RequiresFreelistPatriciaV2() && (!ok || !existing.RequiresFreelistPatriciaV2()) {
+		if info, statErr := os.Stat(filepath.Join(dir, indexFileName)); statErr == nil {
+			if info.Size() != 0 {
+				return fmt.Errorf("%w: freelist_patricia_v2 requires a new store", ErrLegacyFormatRebuildRequired)
+			}
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+	}
 	return writeFormatConfig(dir, cfg)
 }
 
@@ -672,7 +696,7 @@ func validateRequiredFormatFeatures(features []string) error {
 		}
 		seen[feature] = struct{}{}
 		switch feature {
-		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureOwnedLeafManifestV1:
+		case RequiredFeatureCommandWALV1, RequiredFeatureDependencyDirectoryV2, RequiredFeatureOwnedLeafManifestV1, RequiredFeatureFreelistPatriciaV2:
 			// Current command WAL and incremental dependency directory.
 		case legacyRequiredFeatureCommandWALV1:
 			return fmt.Errorf("%w: %s", commitlog.ErrCommandWALV1RebuildRequired, raw)
@@ -681,4 +705,24 @@ func validateRequiredFormatFeatures(features []string) error {
 		}
 	}
 	return nil
+}
+
+// validateFreelistTopologyGateV2 runs before any index decode or storage cleanup.
+// A nonempty index cannot acquire the new marker through an open or fallback.
+func validateFreelistTopologyGateV2(dir string) (bool, error) {
+	enabled, err := requiredFormatFeatureEnabled(dir, RequiredFeatureFreelistPatriciaV2)
+	if err != nil || enabled {
+		return enabled, err
+	}
+	info, err := os.Stat(filepath.Join(dir, indexFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if info.Size() != 0 {
+		return false, fmt.Errorf("%w: freelist_patricia_v2 marker missing on nonempty index; rebuild required", ErrLegacyFormatRebuildRequired)
+	}
+	return false, nil
 }

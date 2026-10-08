@@ -24,8 +24,8 @@ func TestFreelistGenerationV1_100KLogicalChurnConverges(t *testing.T) {
 		}
 		txn.Prune(RecoveryHorizon{OldestRecoverableCommitSeq: seq, MinPinnedSnapshotCommitSeq: seq - 1, HistoryFloorCommitSeq: seq})
 		g = &FreelistGenerationV1{generationID: seq + 1, commitSeq: seq + 1, parentGenerationID: g.generationID, parentCommitSeq: g.commitSeq, highWater: txn.highWater, root: txn.root}
-		if g.root.freeCount+g.root.retiredCount > 4 {
-			t.Fatalf("seq %d retained state=%d", seq, g.root.freeCount+g.root.retiredCount)
+		if g.root.freeCount()+g.root.retiredCount() > 4 {
+			t.Fatalf("seq %d retained state=%d", seq, g.root.freeCount()+g.root.retiredCount())
 		}
 	}
 	if g.HighWater() > 67 {

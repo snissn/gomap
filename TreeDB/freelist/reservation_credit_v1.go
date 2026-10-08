@@ -21,6 +21,10 @@ func grownCapacityV1(current, needed int) int {
 	return max(needed, max(1, current*2))
 }
 func (l *ReservationLedger) admitReservationV1(candidate CandidateIDV1, r *reservation, dataCount, newOwners, coverageCount int, creator *allocationCreditLeaseV1, extra ...allocationOperationV1) (reservationAdmissionV1, error) {
+	maximum := int(^uint(0) >> 1)
+	if dataCount < 0 || newOwners < 0 || coverageCount < 0 || len(extra) > 1 {
+		return reservationAdmissionV1{}, ErrNoAllocatablePage
+	}
 	plan := reservationAdmissionV1{creator: creator, newReservation: r == nil}
 	bytes, refs := l.owners.insertionCapacityV1(uint64(newOwners))
 	if r == nil {
@@ -36,6 +40,9 @@ func (l *ReservationLedger) admitReservationV1(candidate CandidateIDV1, r *reser
 	}
 	plan.idsCapacity = grownCapacityV1(oldIDs, dataCount)
 	plan.coverageCapacity = grownCapacityV1(oldCoverage, coverageCount)
+	if plan.idsCapacity > maximum/8 || plan.coverageCapacity > maximum/int(unsafe.Sizeof(reservationInterval{})) {
+		return reservationAdmissionV1{}, ErrNoAllocatablePage
+	}
 	if plan.idsCapacity > oldIDs {
 		bytes = cowSaturatingAddV1(bytes, allocationClassV1(uint64(plan.idsCapacity)*8, false))
 		refs++
@@ -69,7 +76,7 @@ func (plan *reservationAdmissionV1) prepare(r *reservation) (*reservation, error
 		next := make([]uint64, len(r.ids), plan.idsCapacity)
 		copy(next, r.ids)
 		old := r.idsCreator
-		clear(r.ids)
+		clear(r.ids[:cap(r.ids)])
 		r.ids, r.idsCreator = next, plan.creator
 		old.release()
 	}
@@ -80,7 +87,7 @@ func (plan *reservationAdmissionV1) prepare(r *reservation) (*reservation, error
 		next := make([]reservationInterval, len(r.abandonedCoverage), plan.coverageCapacity)
 		copy(next, r.abandonedCoverage)
 		old := r.coverageCreator
-		clear(r.abandonedCoverage)
+		clear(r.abandonedCoverage[:cap(r.abandonedCoverage)])
 		r.abandonedCoverage, r.coverageCreator = next, plan.creator
 		old.release()
 	}
@@ -91,8 +98,8 @@ func releaseReservationBackingV1(r *reservation) {
 		return
 	}
 	creator, idsCreator, coverageCreator := r.creator, r.idsCreator, r.coverageCreator
-	clear(r.ids)
-	clear(r.abandonedCoverage)
+	clear(r.ids[:cap(r.ids)])
+	clear(r.abandonedCoverage[:cap(r.abandonedCoverage)])
 	r.ids, r.abandonedCoverage = nil, nil
 	r.creator, r.idsCreator, r.coverageCreator = nil, nil, nil
 	creator.release()

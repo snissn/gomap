@@ -720,3 +720,26 @@ its active frame state. No durable progress or recovery coverage is invented.
 The [production and benchmark profile audit](no-wal-fast-audit.md) records public KV and
 collection boundary coverage, persistent closure, both recoverable generations,
 benchmark profile mapping, and the allocation consequences of explicit drains.
+
+### Patricia allocator publication
+
+Allocator Patricia V2 changes state representation and emitted page counts.
+Owned-manifest preparation remains inside the existing finalization path and
+joins that checkpoint or typed durable publication. Visible activation and
+durable sealing retain separate candidates, generations, and reuse horizons.
+An explicit `CheckpointOwnedLeafManifest` still requests its existing forced
+durable revision. No separate publication round is introduced by the topology,
+and page counts alone cannot attribute an ACK regression or establish a
+performance improvement. See [storage format](storage-format.md#freelist-patricia-v2-active-durable-root-allocator-format)
+and [verification](verification.md#canonical-allocator-patricia-topology-5108).
+
+The root record being overwritten is protected through every immediate-parent
+check performed by either fixed recoverable slot. Its retirement horizon can
+therefore exceed the overwritten manifest's own commit. The direct candidate
+and queued coordinator seal share the same fixed-slot validation and inventory
+partition; they do not create another publication transaction. Retry retains
+its exact already-prepared candidate and the original opaque reuse capability.
+The full caller includes the visible prefix, separate seal, rollback trees,
+physical-cut leases and all output/control backing described in the
+[allocator accounting contract](allocator-patricia-v2-accounting.md). A smaller
+state-page count does not authorize finite admission.

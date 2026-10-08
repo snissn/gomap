@@ -3431,36 +3431,76 @@ reconcile cached split value-log writers after backend maintenance so later
 writes advance past backend-created `value_vlog`/`leaf_vlog` segments instead of
 reusing segment file names.
 
-# Freelist Generation V1 (active durable-root allocator format)
+# Freelist Patricia V2 (active durable-root allocator format)
 
-`TreeDB/freelist.FreelistGenerationV1` is the immutable allocator view bound by
-the active two-meta durable-root recovery path. It is encoded as 4096-byte pager
-pages using the normal page header and CRC32 convention. Page types `0x05`
-through `0x08` are reserved for the generation header, radix index, state
-chunk, and candidate reservation record. `DurableRootRecordV1` binds the exact
-generation header identity, counts, high-water boundary, and digest.
+The source API retains the name `TreeDB/freelist.FreelistGenerationV1`, while
+its active physical state format is version 2. Fresh public stores persist the
+required feature `freelist_patricia_v2` before initializing the index. All open
+routes check required features before storage decoding. A nonempty index
+without this marker requires rebuilding; adding or removing the marker on a
+populated store is refused. There is no V1 decoder or migration fallback.
+A corrupt newest slot can fall back only to an independently complete V2 slot.
 
-The sparse state tree uses 14 four-bit radix levels over 256-page chunks. An
-index page contains up to 16 ordered child summaries: page identity, child CRC,
-free and retired counts, and the minimum `lastReachableCommitSeq`. A chunk
-contains a 256-bit free bitmap and 256 retirement sequences. Free means bitmap
-bit 1 and sequence 0; retired means bit 0 and sequence non-zero; live or
-reserved means both zero. A one-chunk mutation therefore emits one chunk, one
-immutable index path, one or more reservation pages, and one generation header.
-Reservation pages form a contiguous, ordered chain so fragmented transactions
-are not bounded by one page. Unchanged paths retain their existing page
-identities and bytes.
+The immutable allocator view uses 4096-byte pager pages and the ordinary page
+header/CRC32. Page types `0x05` through `0x08` identify the generation header,
+Patricia branch, state chunk, and candidate reservation record.
+`DurableRootRecordV1` binds the exact generation header identity, counts,
+high-water boundary, and digest. Reservation-chain encoding remains version 1;
+the generation, branch, and chunk magics are `FLGENV2`, `FLIDXV2`, and
+`FLCHKV2`, each followed by a zero byte and an explicit uint16 version 2.
 
-The generation header binds its exact root page identity and CRC; every index
-entry recursively binds its child page CRC. The header also binds the
-reservation chain digest, generation/parent identity, commit sequences, high-water
-boundary, and free/retired summaries with SHA-256. The reservation chain binds
-a 128-bit candidate identity and canonical extents for reused data pages,
-appended data pages, target metadata pages, and replaced metadata pending
-retirement. Its SHA-256 covers every ordered chain page, including page IDs and
-successor links. Every decoder validates the pager ID/type/CRC, magic/version,
-canonical zero tail, chain order and cardinality, sorted entries, acyclic page
-graph, bounds below high-water, summary counts, and semantic digest.
+Mutable and physical state share one typed 16-way Patricia topology over
+56-bit chunk keys (page IDs divided by 256). A value edge contains either one
+branch pointer or one chunk pointer; a single chunk is the direct root.
+Branches record a normalized common prefix and the first differing nibble
+(depth 0 through 13), and contain at least two ordered children. Each child
+occupies the slot selected by that nibble. Child branch depths strictly
+increase. Deletion immediately collapses unary branches and removes empty
+chunks; an empty state has one exact-generation root branch sentinel with
+depth/prefix/count zero. Empty non-root branches and historical empty chains
+are invalid.
+
+A branch has an 80-byte header and up to sixteen 32-byte child descriptors.
+The header stores depth at byte 28, the empty-root flag at 29, descriptor width
+at 30, generation at 32, free/retired/minimum-retirement summaries at
+40/48/56, and prefix at 64. Bytes 72 through 79, unused descriptors, and the
+page tail are zero. Each descriptor binds its ordered slot, explicit branch/chunk kind,
+child identity, child CRC, free/retired counts, and minimum retirement sequence.
+The generation header retains its 192-byte layout with explicit root kind at
+byte 29. A chunk retains its 96-byte header, 256-bit free bitmap, and 256
+retirement sequences. Free means bitmap bit 1 and sequence 0; retired means
+bit 0 and sequence nonzero; live/reserved means both zero.
+
+A full dirty state containing one chunk emits one state page; two separated
+chunks emit two chunks and one branch. Three chunks under one differing
+nibble emit three chunks and one branch; the low/adjacent/high-bit fixture
+emits three chunks and two branches. In general, state pages equal chunk count
+plus actual canonical branch count. Emission adds the normalized reservation-chain pages and one
+generation header. An empty state emits one sentinel state page. An unchanged
+nonempty candidate rewrites only its root state page, subject to the existing
+metadata-reuse edits. Unchanged child identities and bytes are retained. These
+are physical page counts, not latency or allocation-savings claims.
+
+The generation header binds root identity/CRC, reservation digest,
+generation/parent identity, commit sequences, high-water, and summaries with
+SHA-256. The reservation chain binds a 128-bit candidate and canonical reused
+data, appended data, target metadata, and replaced-metadata extents. Its digest
+covers every ordered page ID and successor link. Decoders validate ID/type/CRC,
+magic/version, zero reserved fields/tails, chain order/cardinality, high-water,
+digest, exact root generation, child generations no newer than their parents,
+typed descriptors, canonical prefixes/depths/slots, nonempty chunks, summaries,
+and graph uniqueness. Header and reservation-page identities are also excluded
+from the state graph, so they cannot be introduced as aliases or cycles.
+
+V2 recovery also requires one contiguous target metadata extent. Header, reservation record pages, and all state pages stamped with the current generation must belong to and exactly exhaust that extent; inherited older-generation state pages must remain outside it. A scalar interval/count witness checks this ownership without creating a second page inventory.
+
+Whole creator classes are admitted before births: branches charge 352 bytes,
+chunks 2304 bytes, and opaque branch plans 640 bytes. A creator retains its full
+class across partial deletion and shared old-reader aliases. Immediate collapse
+transfers the sole surviving child reference before releasing the branch.
+Final release clears all pointers and summaries before creator credit returns.
+Pinned-toolchain tests check actual classes and plan backing; the class constants
+do not themselves establish a passing allocation witness.
 
 Freelist metadata first attempts a bounded reusable interval: at most four
 free radix chunks, each containing 256 page bits, are inspected. The interval
@@ -3482,7 +3522,15 @@ atomically owns the candidate's complete contiguous metadata range as well as
 its data-page allocations. A competing candidate skips an owned tail range;
 its durable reservation record classifies the skipped prefix as abandoned
 append space instead of silently treating those page IDs as its own data or
-metadata. A candidate transaction is single-use once materialization begins:
+metadata.
+Tail reservation sizing counts the actual assembled extent cardinality,
+including coalescence of a contiguous abandoned prefix with the last base
+extent. The fixed point is recomputed after each ledger conflict. Its normalized
+base extents end no later than the original minimum and contain no target
+metadata extent; therefore normalization cannot merge the new target range or
+introduce another coalescence. Boundary tests distinguish this production
+precondition from arbitrary extent lists. Reservation and emitted chain page
+counts must agree, including the 163-entry chain-page boundary. A candidate transaction is single-use once materialization begins:
 after any page-sink failure, retry starts from the immutable base rather than
 reusing a partially assigned COW tree. Once the first metadata write is
 attempted, ordinary abandonment cannot release its reservation. Pre-visible
@@ -3511,8 +3559,21 @@ lower. Reuse avoids some extension; physical file shrink still requires the
 existing vacuum/rewrite mechanism. Issue #4627 additionally qualifies real
 durable-slot and process-failure integration before sustained-workload claims.
 
-Pages enter the free set only through an explicit recovery capability. Their
-`lastReachableCommitSeq` must be strictly before the oldest recoverable root,
+Pages enter the free set only through an explicit recovery capability. Overwritten
+durable-root records and dependency-manifest pages have distinct retirement
+horizons. Each of the two fixed recoverable slots binds its exact root page,
+commit sequence and digest. A root record remains retired through the maximum
+commit of its own slot and any recoverable slot that names it as its immediate
+parent. Its manifest pages remain retired through their own slot commit.
+Conflicting or incomplete fixed-slot bindings refuse candidate preparation
+before resource capture or allocator mutation. Both direct preparation and
+the queued public seal use the same binding and inventory-partition helpers;
+prior-seal overlap retires last at the selected current commit. No transitive
+history scan or age-based reclaim rule is introduced. See the
+[accounting contract](allocator-patricia-v2-accounting.md) for retained backing
+and the unchanged admission gates.
+
+A retired page's `lastReachableCommitSeq` must be strictly before the oldest recoverable root,
 every snapshot pin, and the retained history floor. Visible, retryable,
 poisoned, and shutdown candidates retain ownership until confirmed durable
 publication. Reopen reconstructs surviving ownership from the selected

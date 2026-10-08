@@ -62,8 +62,15 @@ func (t *FreelistTxn) endBuildCreatorV1(creator *allocationCreditLeaseV1) error 
 // edges as one operation before high-water/extent edits. Ordinary and finite
 // transactions use the same explicit capacity growth.
 func (t *FreelistTxn) growAppendVectorsV1(allocatedAdditional, abandonedAdditional int) error {
+	maximum := int(^uint(0) >> 1)
+	if allocatedAdditional < 0 || abandonedAdditional < 0 || allocatedAdditional > maximum-len(t.allocated) || abandonedAdditional > maximum-len(t.abandonedAppends) {
+		return ErrNoAllocatablePage
+	}
 	allocatedCapacity := grownCapacityV1(cap(t.allocated), len(t.allocated)+allocatedAdditional)
 	abandonedCapacity := grownCapacityV1(cap(t.abandonedAppends), len(t.abandonedAppends)+abandonedAdditional)
+	if allocatedCapacity > maximum/int(unsafe.Sizeof(allocatedPage{})) || abandonedCapacity > maximum/int(unsafe.Sizeof(ReservationExtentV1{})) {
+		return ErrNoAllocatablePage
+	}
 	bytes, refs := uint64(0), uint64(0)
 	if allocatedCapacity > cap(t.allocated) {
 		bytes += allocationClassV1(uint64(allocatedCapacity)*uint64(unsafe.Sizeof(allocatedPage{})), false)

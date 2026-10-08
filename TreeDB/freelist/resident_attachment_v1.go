@@ -35,15 +35,16 @@ func (v *residentAttachmentV1) claim(slot **allocationCreditLeaseV1, bytes uint6
 		v.refs--
 	}
 }
-func (v *residentAttachmentV1) tree(n *stateNode) {
-	if n == nil {
+func (v *residentAttachmentV1) tree(r stateRefV1) {
+	if r.zero() {
 		return
 	}
-	v.claim(&n.creator, allocationClassV1(uint64(unsafe.Sizeof(*n)), true))
-	if n.chunk != nil {
-		v.claim(&n.chunk.creator, allocationClassV1(uint64(unsafe.Sizeof(*n.chunk)), true))
+	if r.chunk != nil {
+		v.claim(&r.chunk.creator, allocationClassV1(uint64(unsafe.Sizeof(*r.chunk)), true))
+		return
 	}
-	for _, child := range n.child {
+	v.claim(&r.branch.creator, allocationClassV1(uint64(unsafe.Sizeof(*r.branch)), true))
+	for _, child := range r.branch.child {
 		v.tree(child)
 	}
 }
@@ -333,7 +334,14 @@ func (a *Allocator) growActivatedBackingLockedV1(creator *allocationCreditLeaseV
 	if len(state.activated) < cap(state.activated) {
 		return nil
 	}
+	maximum := int(^uint(0) >> 1)
+	if len(state.activated) == maximum {
+		return ErrNoAllocatablePage
+	}
 	capacity := grownCapacityV1(cap(state.activated), len(state.activated)+1)
+	if capacity > maximum/8 {
+		return ErrNoAllocatablePage
+	}
 	bytes := allocationClassV1(uint64(capacity)*8, true)
 	operation, err := admitAllocationOperationV1(creator, bytes, 1)
 	if err != nil {

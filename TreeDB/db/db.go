@@ -2228,6 +2228,10 @@ func Open(opts Options) (*DB, error) {
 	if err := validateOptions(opts); err != nil {
 		return nil, err
 	}
+	patriciaFeature, err := validateFreelistTopologyGateV2(opts.Dir)
+	if err != nil {
+		return nil, err
+	}
 	warnInsecureDir(opts.Dir, opts.NotifyError)
 	if err := ensureNoLegacyMixedWALValueSegments(opts.Dir); err != nil {
 		return nil, err
@@ -2245,10 +2249,29 @@ func Open(opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if opts.OwnedLeafManifests && !ownedFeature {
-		if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil {
+	if !patriciaFeature {
+		// Recheck under the store lock before persisting a fresh-store marker.
+		if _, gateErr := validateFreelistTopologyGateV2(opts.Dir); gateErr != nil {
 			_ = lock.Close()
-			return nil, err
+			return nil, gateErr
+		}
+		cfg, configErr := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+		if configErr == nil {
+			configErr = SaveFormatConfig(opts.Dir, cfg)
+		}
+		if configErr != nil {
+			_ = lock.Close()
+			return nil, configErr
+		}
+	}
+	if opts.OwnedLeafManifests && !ownedFeature {
+		cfg, configErr := formatConfigFromOptionsPreservingRequiredFeatures(opts)
+		if configErr == nil {
+			configErr = SaveFormatConfig(opts.Dir, cfg)
+		}
+		if configErr != nil {
+			_ = lock.Close()
+			return nil, configErr
 		}
 	}
 	db, err := openWithLock(opts, lock)

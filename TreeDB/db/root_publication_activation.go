@@ -609,7 +609,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 		capability,
 		retirements,
 		0,
-		freelist.NewCandidatePageSinkV1(),
+		freelist.NewOwnedCandidatePageSinkV1(),
 		cowLimits,
 	)
 	if timing != nil {
@@ -1070,6 +1070,14 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if base.pending != nil || len(base.ambiguous) != 0 || base.record.CommitSeq >= member.next.CommitSeq {
 		return fmt.Errorf("%w: durable=%d visible=%d", errDurableRootCandidateStale, base.record.CommitSeq, member.next.CommitSeq)
 	}
+	target := uint64(MetaPage0ID)
+	if base.slot == MetaPage0ID {
+		target = MetaPage1ID
+	}
+	recordHorizon, err := durableRootOverwrittenRecordHorizonV1(base, target)
+	if err != nil {
+		return err
+	}
 	// The durable slot names only the latest visible root. A coalesced candidate's
 	// aggregate resource set also contains dependencies reachable exclusively
 	// from superseded intermediate roots; retaining that union in the slot would
@@ -1120,20 +1128,24 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		}
 	}()
 
-	target := uint64(MetaPage0ID)
-	if base.slot == MetaPage0ID {
-		target = MetaPage1ID
-	}
 	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(base.slotMeta[target], base.slotRecord[target])
 	if err != nil {
 		return err
 	}
-	retirements := make([]freelist.COWRetirementV1, 0, 2)
-	if len(overwrittenPages) != 0 {
-		retirements = append(retirements, freelist.COWRetirementV1{
-			PageIDs: overwrittenPages, LastReachableCommitSeq: base.slotCommit[target],
-		})
+	manifestPages, recordPages := durableRootPartitionAuxiliaryPagesV1(overwrittenPages)
+	// Fixed transient descriptors share the existing inventory backing. The
+	// private allocator charges the same pages/tree mutations before births.
+	var retirementStorage [3]freelist.COWRetirementV1
+	retirements := retirementStorage[:0]
+	if len(manifestPages) != 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{PageIDs: manifestPages, LastReachableCommitSeq: base.slotCommit[target]})
 	}
+	if len(recordPages) != 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{PageIDs: recordPages, LastReachableCommitSeq: recordHorizon})
+	}
+
+	// Any overlap with a prior seal is retired last at the current (maximum
+	// recoverable) commit, so it cannot lower the exact root-record horizon.
 	if previous := runtime.activeSeal; previous != nil {
 		info, infoErr := previous.prepared.InfoV1()
 		if infoErr != nil {
@@ -1173,7 +1185,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		capability,
 		retirements,
 		auxiliaryCount,
-		freelist.NewCandidatePageSinkV1(),
+		freelist.NewOwnedCandidatePageSinkV1(),
 		cowLimits,
 	)
 	if err != nil {

@@ -34,7 +34,7 @@ func TestAllocatorTerminalCutLastEdgeReleasesFiniteCredit5105(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			root, err := cloneStateNodeOwnedV1(nil, false, creator)
+			root, err := cloneStateRefOwnedV1(stateRefV1{}, false, creator)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -64,7 +64,7 @@ func TestAllocatorTerminalCutLastEdgeReleasesFiniteCredit5105(t *testing.T) {
 			}
 			a.CloseCOWOwnersAfterShutdownV1()
 			a.CloseCOWOwnersAfterShutdownV1()
-			if account.released != 0 || g.root == nil {
+			if account.released != 0 || g.root.zero() {
 				t.Fatal("allocator close revoked held physical generation edge")
 			}
 			if _, err = lease.SnapshotPageUnusedV1(2, 1); err != nil {
@@ -75,7 +75,7 @@ func TestAllocatorTerminalCutLastEdgeReleasesFiniteCredit5105(t *testing.T) {
 			}
 			lease.Close()
 			lease.Close()
-			if account.released != 1 || g.root != nil || root.creator != nil {
+			if account.released != 1 || !g.root.zero() || root.creator() != nil {
 				t.Fatal("last real cut edge did not scrub and release credit exactly once")
 			}
 		})

@@ -16,26 +16,38 @@ func TestIntrinsicTreeCreatingCreditOutlivesTransferredParent5105(t *testing.T) 
 		t.Fatal(err)
 	}
 	chunk.setFree(2, true)
-	leaf, err := cloneStateNodeOwnedV1(nil, false, first)
+	leaf, err := cloneStateBranchOwnedV1(nil, false, first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaf.chunk = chunk
+	chunk.chunkNo = 0
+	refreshChunkSummaryV1(chunk)
+	other, err := cloneStateChunkOwnedV1(nil, false, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.chunkNo = 1
+	other.setFree(2, true)
+	refreshChunkSummaryV1(other)
+	leaf.depth = 13
+	leaf.child[0] = stateRefV1{chunk: chunk}
+	leaf.child[1] = stateRefV1{chunk: other}
+	recomputeStateNode(leaf, 13)
 	first.release()
 	second, err := newAllocationCreditLeaseV1(b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	copied, err := cloneStateNodeOwnedV1(leaf, false, second)
+	copied, err := cloneStateBranchOwnedV1(leaf, false, second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	second.release()
-	releaseStateNodeV1(leaf)
-	if a.released != 0 || copied.chunk != chunk || !chunk.isFree(2) {
+	releaseStateNodeV1(stateRefV1{branch: leaf})
+	if a.released != 0 || copied.child[0].chunk != chunk || !chunk.isFree(2) {
 		t.Fatal("old creating credit released while descendant alias survived")
 	}
-	g := &FreelistGenerationV1{ownedRefs: 1, root: copied}
+	g := &FreelistGenerationV1{ownedRefs: 1, root: stateRefV1{branch: copied}}
 	if !g.hasFiniteBackingV1() {
 		t.Fatal("ordinary successor lost transitive finite origin")
 	}
@@ -49,7 +61,7 @@ func TestIntrinsicTreeCreatingCreditOutlivesTransferredParent5105(t *testing.T) 
 		t.Fatal("physical generation lease failed to retain backing")
 	}
 	releaseGenerationV1(retained)
-	if a.released != 1 || b.released != 1 || chunk.creator != nil || copied.chunk != nil || leaf.chunk != nil {
+	if a.released != 1 || b.released != 1 || chunk.creator != nil || !copied.child[0].zero() || !leaf.child[0].zero() {
 		t.Fatal("last edges failed to scrub/release both creating credits")
 	}
 }
@@ -60,20 +72,20 @@ func TestIntrinsicTreeBirthDeniedBeforeAliasOrMutation5105(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := cloneStateNodeOwnedV1(nil, false, creator)
+	original, err := cloneStateBranchOwnedV1(nil, false, creator)
 	if err != nil {
 		t.Fatal(err)
 	}
-	original.freeCount = 23
+	original.freePages = 23
 	account.limit = account.bytes
 	refs := original.ownedRefs
-	if copied, err := cloneStateNodeOwnedV1(original, false, creator); err == nil || copied != nil {
+	if copied, err := cloneStateBranchOwnedV1(original, false, creator); err == nil || copied != nil {
 		t.Fatal("denied node birth succeeded")
 	}
-	if original.freeCount != 23 || original.ownedRefs != refs {
+	if original.freePages != 23 || original.ownedRefs != refs {
 		t.Fatal("denial changed original or published an alias")
 	}
-	finite := &FreelistGenerationV1{ownedRefs: 1, root: original}
+	finite := &FreelistGenerationV1{ownedRefs: 1, root: stateRefV1{branch: original}}
 	if _, err = BeginCandidateV1(finite, GenerationRefV1{}, nil); !errors.Is(err, ErrFiniteAllocationExportV1) {
 		t.Fatal("finite raw builder accepted")
 	}
@@ -153,7 +165,7 @@ func TestReusedMetadataJointAdmissionBeforeClaim5105(t *testing.T) {
 			}
 			txn.buildCreator = creator
 			defer releaseTxnV1(txn)
-			root, count := txn.root, txn.root.freeCount
+			root, count := txn.root, txn.root.freeCount()
 			beforeCalls := account.calls
 			if deny {
 				account.limit = account.bytes
@@ -163,12 +175,12 @@ func TestReusedMetadataJointAdmissionBeforeClaim5105(t *testing.T) {
 				t.Fatalf("calls=%d afterClaim=%v", account.calls-beforeCalls, account.afterClaim)
 			}
 			if deny {
-				if ok || txn.allocationErr == nil || ledger.candidates.Len() != 0 || ledger.owners.Len() != 0 || txn.root != root || txn.root.freeCount != count {
+				if ok || txn.allocationErr == nil || ledger.candidates.Len() != 0 || ledger.owners.Len() != 0 || txn.root != root || txn.root.freeCount() != count {
 					t.Fatal("denied admission changed tree/ledger authority")
 				}
 			}
 			if !deny {
-				if !ok || txn.allocationErr != nil || ledger.candidates.Len() != 1 || txn.root.freeCount >= count {
+				if !ok || txn.allocationErr != nil || ledger.candidates.Len() != 1 || txn.root.freeCount() >= count {
 					t.Fatal("admitted operation failed")
 				}
 				if err = ledger.Abandon(candidateIDFromString("joint-admission")); err != nil {

@@ -4062,13 +4062,46 @@ They also check dirty rollback aliases, persistent clone permission revocation
 with edits on both sides, candidate/fork retained views, generic retaining/
 mutating sinks, materialization-error permission clearing, partial sink failure,
 abort and idempotent prepared retries without erasing incurred work.
-`TestPrivatePreparationHiddenEmptyRebirthPersistentOracle5105` first creates
-empty descendants through ordinary allocation and materialization, verifies a
-durable-to-zero-ID edge, then compares rebirth with the persistent oracle at
-three trie depths. It retains every backing node/chunk, including objects that
-logical scans skip, plus generic bytes and opaque page views. The companion
-abort/failure test checks retained base/rollback graphs and cumulative work;
-the durable-leaf fixture checks zero-ID chunk isolation independently.
+The historical V1 identical-byte evidence remains frozen in its original
+packet. The Patricia child adds an independent logical/page-count oracle,
+immediate empty/unary collapse and rebirth, dirty chunk isolation under a
+durable branch, and retained base/rollback graphs. It does not reuse V1 byte
+identity as evidence for the incompatible V2 physical format.
+
+### Canonical allocator Patricia topology (#5108)
+
+`generation_compressed_5108_test.go` freezes public emission cases before the
+implementation. Empty, one-chunk, adjacent, high-bit, and three-chunk cases
+check actual pager writes, normalized reservations, reopen, and logical free
+state. The witness suite checks pinned raw/scannable classes and actual runtime
+class births, whole-branch preadmission refusal, and abandoned-prefix
+coalescence around 163 reservation entries. The topology suite applies 1000
+mutations against an independent prefix/count model, preserves held aliases,
+and rejects malformed prefixes/depths, unary/empty children, typed descriptors,
+reserved fields, summaries, generations, and header/reservation/cycle aliases
+after recomputing enclosing CRCs and digests. Unchanged-root cases check actual
+emission rather than a forecast.
+
+`db/freelist_patricia_feature_v2_test.go` checks fresh absent/empty index marker
+timing, read-only/no-lock reopen, missing-marker refusal before malformed
+storage decode, marker removal/retrofit refusal, incompatible V1 pages, and
+complete V2 fallback when the newest generation is corrupt. These tests join
+the existing allocator/model/reuse/prune/private preparation, retained sink,
+durable dual-slot, held-reader, crash and owned-manifest suites. Normal/race
+results and actual class witnesses require a separately granted compiler/test
+lease; source-written tests establish no runtime acceptance.
+
+`db/freelist_patricia_publication_v2_test.go` follows actual public physical
+build groups in both legacy and owned manifest modes, then the public owned
+manifest checkpoint. At the existing before-seal-write cut it reloads each
+visible generation and the separate seal through owned handles, counts actual
+emitted branch/chunk/sentinel/reservation/header pages against their exact
+metadata intervals, and compares pending-retirement counts. It preserves
+separate visible/seal parent and commit authority, captured alternating-slot
+horizons, the held reader generation header and complete rows across repeated
+publications and reopen. Its scalar resident census must not escape raw
+allocator authority. This source-written witness awaits an exact-source test
+run; it is not a full caller allocation-fit or performance certificate.
 
 The existing allocator/prefix/metadata-reuse and owned-manifest dual-slot/
 held-root/recovery fault tests remain required. New attribution reads must not
@@ -4076,3 +4109,35 @@ change credits or authority. These source-written tests require a separately
 granted semantic/compiler lease before claiming results; no allocation savings,
 noise waiver, foreground acceptance or parent completion follows from this
 representation correction.
+
+The V2 metadata ownership cases recompute CRCs and record/header digests while relocating a current child or reservation page outside its interval, stamping an inside child as older, or extending the target with an orphan page. Each must fail format validation.
+
+`durable_root_parent_lifetime_v1_test.go` exercises the actual queued public
+seal, holds preparation before seal I/O, retries, verifies both recoverable
+slots and held rows, and falls back after newest-slot corruption. It also
+rejects incomplete/conflicting fixed-slot page/commit/digest bindings before
+allocator mutation or candidate/resource births. The direct and queued callers
+share the same root-record horizon helper; manifest retirement stays at its
+own commit. The existing metadata-reuse/crash-slot and physical snapshot tests
+keep their two-slot and lineage assertions, including the exact `format.json`
+copy needed by the incompatible V2 feature gate.
+
+The scalar resident census counts shared representations conservatively, while
+retained slices are charged by their full backing capacities. Its total is not
+whole-call cumulative allocation: transient sorting/normalization buffers,
+sink-isolation copies, decode/encode scratch and caller resource/control births
+remain separate. The [accounting contract](allocator-patricia-v2-accounting.md)
+records these obligations. Mac semantic evidence cannot satisfy the Linux/amd64
+Go 1.26.3 creator/class gate. The full Linux normal/race inventory, exact-source
+public emission/horizons, all-caller 128 MiB fit, causal ACK attribution and
+matched performance gates remain separate acceptance requirements.
+
+The #5108 creator completion witnesses also cover current-creator propagation
+through direct publication and activation, prune admission before PublishBatch,
+abort isolation refusal with exact retry, reserve/retire/full-vector overflow,
+zero-field exact production sinks and scalar reserved-ID refusal before sink
+callbacks or tail-write marking. Ordinary duplicate sinks retain their API.
+Append and reuse must emit the complete contiguous reserved interval; partial
+materialization refusal preserves rollback and conservatively burned tails.
+Actual control-class witnesses and unchanged normal/race source are component
+checks. They do not open the unconditional finite allocation-certificate gate.

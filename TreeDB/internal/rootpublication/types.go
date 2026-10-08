@@ -160,10 +160,13 @@ func validateCandidateDurableRoot(spec CandidateSpec, transaction *DurableRootTr
 		return ErrDurableRootOwnership
 	}
 	prepared := transaction.PreparedCOW()
-	if prepared == nil || prepared.Candidate() == nil || prepared.Candidate().Generation() == nil {
+	// Validation borrows only immutable scalar authority. Candidate/Generation
+	// are raw exporters: calling them here would permanently retain and taint
+	// the publisher-owned generation even though no raw backing leaves this call.
+	generation, generationErr := prepared.InfoV1()
+	if generationErr != nil {
 		return errors.New("candidate has no exact COW generation")
 	}
-	generation := prepared.Candidate().Generation()
 	if generation.CommitSeq() != spec.Frontier.commitSeq || spec.FreelistHeadID != 0 || spec.TotalPages != generation.HighWater() {
 		return errors.New("candidate frontier does not match exact COW generation")
 	}

@@ -39,7 +39,7 @@ func TestPrivatePreparationCopiesDirtyPathOnce5105(t *testing.T) {
 	}
 	r, p := reference.Stats(), private.Stats()
 	t.Logf("actual copies: persistent nodes=%d chunks=%d bytes=%d; private isolation nodes=%d chunks=%d bytes=%d visits=%d; repeated private copies nodes=%d chunks=%d", r.StateNodeCopies-beforeReference.StateNodeCopies, r.StateChunkCopies-beforeReference.StateChunkCopies, r.StateCopyBytes-beforeReference.StateCopyBytes, beforePrivate.StateNodeCopies-beforeReference.StateNodeCopies, beforePrivate.StateChunkCopies-beforeReference.StateChunkCopies, beforePrivate.StateCopyBytes-beforeReference.StateCopyBytes, beforePrivate.StateIsolationVisits-beforeReference.StateIsolationVisits, p.StateNodeCopies-beforePrivate.StateNodeCopies, p.StateChunkCopies-beforePrivate.StateChunkCopies)
-	if r.StateNodeCopies-beforeReference.StateNodeCopies != 24*(chunkTrieDepth+1) || r.StateChunkCopies-beforeReference.StateChunkCopies != 24 {
+	if r.StateNodeCopies-beforeReference.StateNodeCopies != 0 || r.StateChunkCopies-beforeReference.StateChunkCopies != 24 {
 		t.Fatal("persistent reference did not reproduce repeated path/chunk copies")
 	}
 	if p.StateNodeCopies != beforePrivate.StateNodeCopies || p.StateChunkCopies != beforePrivate.StateChunkCopies {
@@ -56,20 +56,20 @@ func TestPrivatePreparationCopiesDirtyPathOnce5105(t *testing.T) {
 func snapshotPrivateState5105(t *testing.T, txn *FreelistTxn) map[uint64]stateChunk {
 	t.Helper()
 	result := make(map[uint64]stateChunk)
-	if err := walkState(txn.root, 0, func(c *stateChunk) error { result[c.chunkNo] = *c; return nil }); err != nil {
+	if err := walkState(txn.root, 0, func(c *stateChunk) error { copy := *c; copy.ownedRefs = 0; result[c.chunkNo] = copy; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	return result
 }
 
 func TestPrivatePreparationCapacityAndNoTreeOwner5105(t *testing.T) {
-	// The frozen e52d transaction had this same pointer/slice/map prefix and
-	// 21 uint64 statistics. Keep the structural capacity delta explicit:
-	// ownership adds no per-node field and the new counters add exactly 32 B.
+	// Compare the pre-copy-counter layout using the new 16-byte value root.
+	// The separate pinned witness accounts for the incompatible root/class
+	// change; this assertion isolates the existing counter/creator overhead.
 	type previousTxnLayout struct {
 		base             *FreelistGenerationV1
 		ledger           *ReservationLedger
-		root             *stateNode
+		root             stateRefV1
 		highWater        uint64
 		allocated        []allocatedPage
 		abandonedAppends []ReservationExtentV1
@@ -83,7 +83,7 @@ func TestPrivatePreparationCapacityAndNoTreeOwner5105(t *testing.T) {
 		unsafe.Sizeof(FreelistTxn{})-unsafe.Sizeof(previousTxnLayout{}) != unsafe.Sizeof(FreelistStateCopyWorkV1{})+unsafe.Sizeof(AllocationCreditV1(nil))+4*unsafe.Sizeof((*allocationCreditLeaseV1)(nil))+unsafe.Sizeof(error(nil)) {
 		t.Fatal("transaction capacity grew beyond the admitted fixed copy counters")
 	}
-	t.Logf("measured frozen-layout/current txn=%d/%d delta=%d; allocator state=%d profile=%d", unsafe.Sizeof(previousTxnLayout{}), unsafe.Sizeof(FreelistTxn{}), unsafe.Sizeof(FreelistTxn{})-unsafe.Sizeof(previousTxnLayout{}), unsafe.Sizeof(allocatorCOWStateV1{}), unsafe.Sizeof(COWPrepareProfileV1{}))
+	t.Logf("measured counter-only-layout/current txn=%d/%d delta=%d; allocator state=%d profile=%d", unsafe.Sizeof(previousTxnLayout{}), unsafe.Sizeof(FreelistTxn{}), unsafe.Sizeof(FreelistTxn{})-unsafe.Sizeof(previousTxnLayout{}), unsafe.Sizeof(allocatorCOWStateV1{}), unsafe.Sizeof(COWPrepareProfileV1{}))
 	t.Logf("unsafe layout bytes: stateNode=%d stateChunk=%d txn=%d stats=%d work=%d; consumed/private/map offsets=%d/%d/%d; state allocation classes=%d/%d", unsafe.Sizeof(stateNode{}), unsafe.Sizeof(stateChunk{}), unsafe.Sizeof(FreelistTxn{}), unsafe.Sizeof(FreelistTxnStats{}), unsafe.Sizeof(FreelistStateCopyWorkV1{}), unsafe.Offsetof(FreelistTxn{}.consumed), unsafe.Offsetof(FreelistTxn{}.privatePreparation), unsafe.Offsetof(FreelistTxn{}.changedChunks), stateNodeCopyCapacityV1, stateChunkCopyCapacityV1)
 	// The capacities include allocator rounding; the transaction flag uses
 	// existing bool padding rather than adding one pointer per state node.
@@ -298,7 +298,7 @@ func TestPrivatePreparationDirtyRollbackAfterSinkFailure5105(t *testing.T) {
 	}
 	t.Logf("failed preparation: active candidates=%d owners=%d burned ranges=%d reserved burned pages=%d", a.cow.ledger.candidates.Len(), a.cow.ledger.owners.Len(), len(a.cow.ledger.burnedTails), a.cow.ledger.Reservations())
 	profile := a.COWPrepareProfileV1()
-	if profile.PreparationCopyWork.StateNodeCopies == 0 || profile.PreparationCopyWork.StateCopyBytes == 0 {
+	if profile.PreparationCopyWork.StateNodeCopies+profile.PreparationCopyWork.StateChunkCopies == 0 || profile.PreparationCopyWork.StateCopyBytes == 0 {
 		t.Fatal("failed preparation work disappeared with rollback")
 	}
 	if again := a.COWPrepareProfileV1(); again != profile {
@@ -372,28 +372,29 @@ func TestPrivatePreparationAbortKeepsWorkAndRetainedViews5105(t *testing.T) {
 	assertRetainedPlanViews(t, writer)
 }
 
-// Logical scans omit empty summaries. Retain every backing object instead so
-// rebirth cannot silently change an old generation or its rollback graph.
+// Retain every physical backing object so collapse/rebirth cannot silently
+// change an old generation or its rollback graph.
 type retainedPrivateGraph5105 struct {
 	nodes  map[*stateNode]stateNode
 	chunks map[*stateChunk]stateChunk
 }
 
-func retainPrivateGraph5105(t *testing.T, root *stateNode) retainedPrivateGraph5105 {
+func retainPrivateGraph5105(t *testing.T, root stateRefV1) retainedPrivateGraph5105 {
 	t.Helper()
 	retainStateNodeV1(root)
 	t.Cleanup(func() { releaseStateNodeV1(root) })
 	held := retainedPrivateGraph5105{make(map[*stateNode]stateNode), make(map[*stateChunk]stateChunk)}
-	var visit func(*stateNode)
-	visit = func(n *stateNode) {
-		if n == nil {
+	var visit func(stateRefV1)
+	visit = func(r stateRefV1) {
+		if r.chunk != nil {
+			held.chunks[r.chunk] = *r.chunk
 			return
 		}
-		held.nodes[n] = *n
-		if n.chunk != nil {
-			held.chunks[n.chunk] = *n.chunk
+		if r.branch == nil {
+			return
 		}
-		for _, child := range n.child {
+		held.nodes[r.branch] = *r.branch
+		for _, child := range r.branch.child {
 			visit(child)
 		}
 	}
@@ -407,7 +408,7 @@ func (held retainedPrivateGraph5105) assertUnchanged(t *testing.T) {
 		actual := *n
 		actual.ownedRefs, before.ownedRefs = 0, 0
 		if actual != before {
-			t.Fatal("retained node backing changed, including hidden empty descendants")
+			t.Fatal("retained node backing changed, including all fixed child edges")
 		}
 	}
 	for chunk, before := range held.chunks {
@@ -419,7 +420,7 @@ func (held retainedPrivateGraph5105) assertUnchanged(t *testing.T) {
 	}
 }
 
-func hiddenEmptyGeneration5105(t *testing.T, target uint64) *FreelistCandidateV1 {
+func collapsedGeneration5108(t *testing.T, target uint64) *FreelistCandidateV1 {
 	t.Helper()
 	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, target+8192, []uint64{2, target, target + 256}, nil), 2, NewMemoryPageStoreV1())
 	txn := NewFreelistTxn(base, NewReservationLedger())
@@ -427,32 +428,23 @@ func hiddenEmptyGeneration5105(t *testing.T, target uint64) *FreelistCandidateV1
 	if err != nil || chosen != target {
 		t.Fatalf("empty fixture allocation = %d, %v; want %d", chosen, err, target)
 	}
-	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("hidden-empty-base"), NewCandidatePageSinkV1())
+	candidate, err := txn.MaterializeCandidate(3, 3, candidateIDFromString("collapsed-base"), NewCandidatePageSinkV1())
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := candidate.Generation().root
-	boundary := false
-	for depth := 0; depth < chunkTrieDepth; depth++ {
-		child := n.child[chunkNibble(target>>freelistChunkShift, depth)]
-		if child == nil {
-			t.Fatal("materialization dropped fixture empty path")
-		}
-		if n.pageID != 0 && child.pageID == 0 && child.freeCount+child.retiredCount == 0 {
-			boundary = true
-		}
-		n = child
+	if lookupChunk(candidate.Generation().root, target>>freelistChunkShift) != nil {
+		t.Fatal("canonical deletion retained an empty chunk or history path")
 	}
-	if !boundary || n.pageID != 0 || n.chunk != nil {
-		t.Fatal("fixture lacks hidden empty descendants below durable ancestor")
+	if err := candidate.Generation().Validate(); err != nil {
+		t.Fatal(err)
 	}
 	return candidate
 }
 
-func TestPrivatePreparationHiddenEmptyRebirthPersistentOracle5105(t *testing.T) {
+func TestPrivatePreparationCollapsedRebirthPersistentOracle5108(t *testing.T) {
 	for _, target := range []uint64{257, 4098, 65538} {
 		t.Run(fmt.Sprint(target), func(t *testing.T) {
-			baseCandidate := hiddenEmptyGeneration5105(t, target)
+			baseCandidate := collapsedGeneration5108(t, target)
 			base := baseCandidate.Generation()
 			heldBase := retainPrivateGraph5105(t, base.root)
 			basePages := baseCandidate.Pages()
@@ -479,11 +471,11 @@ func TestPrivatePreparationHiddenEmptyRebirthPersistentOracle5105(t *testing.T) 
 				heldRollback.assertUnchanged(t)
 				if private {
 					work := staged.Stats()
-					if work.StateIsolationVisits <= before.StateIsolationVisits || work.StateNodeCopies <= before.StateNodeCopies {
-						t.Fatal("durable first-copy isolation omitted visits or copies")
+					if work.StateNodeCopies+work.StateChunkCopies <= before.StateNodeCopies+before.StateChunkCopies {
+						t.Fatal("canonical first-copy/split omitted actual copies")
 					}
 					if work.StateCopyBytes != work.StateNodeCopies*stateNodeCopyCapacityV1+work.StateChunkCopies*stateChunkCopyCapacityV1 {
-						t.Fatal("hidden-subtree copy capacity omitted")
+						t.Fatal("collapsed-rebirth copy capacity omitted")
 					}
 					staged.Retire(target+1, 3)
 					if staged.Stats().FreelistStateCopyWorkV1 != work.FreelistStateCopyWorkV1 {
@@ -492,7 +484,7 @@ func TestPrivatePreparationHiddenEmptyRebirthPersistentOracle5105(t *testing.T) 
 				} else {
 					staged.Retire(target+1, 3)
 				}
-				candidate, err := staged.MaterializeCandidate(4, 4, candidateIDFromString("hidden-empty-rebirth"), NewCandidatePageSinkV1())
+				candidate, err := staged.MaterializeCandidate(4, 4, candidateIDFromString("collapsed-rebirth"), NewCandidatePageSinkV1())
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -503,7 +495,7 @@ func TestPrivatePreparationHiddenEmptyRebirthPersistentOracle5105(t *testing.T) 
 			reference, want := run(false)
 			private, got := run(true)
 			if want.GenerationRef() != got.GenerationRef() || !pageImagesEqual(want.Pages(), got.Pages()) || !slices.Equal(want.DirtyPageIDs(), got.DirtyPageIDs()) || !slices.Equal(want.Generation().record.Extents, got.Generation().record.Extents) || !maps.Equal(snapshotPrivateState5105(t, reference), snapshotPrivateState5105(t, private)) {
-				t.Fatal("hidden-empty rebirth differs from persistent page/CRC/order/reservation/state oracle")
+				t.Fatal("collapsed rebirth differs from persistent page/CRC/order/reservation/state oracle")
 			}
 			a, b := reference.Stats(), private.Stats()
 			if a.COWPages != b.COWPages || a.COWBytes != b.COWBytes || a.StateMutationPaths != b.StateMutationPaths || a.StateMutationItems != b.StateMutationItems || a.PageVisits != b.PageVisits {
@@ -517,11 +509,11 @@ func TestPrivatePreparationHiddenEmptyRebirthPersistentOracle5105(t *testing.T) 
 	}
 }
 
-func TestPrivatePreparationHiddenEmptyRebirthAbortAndFailure5105(t *testing.T) {
+func TestPrivatePreparationCollapsedRebirthAbortAndFailure5108(t *testing.T) {
 	for _, fail := range []bool{false, true} {
 		t.Run(fmt.Sprint(fail), func(t *testing.T) {
 			const target = uint64(4098)
-			baseCandidate := hiddenEmptyGeneration5105(t, target)
+			baseCandidate := collapsedGeneration5108(t, target)
 			base := baseCandidate.Generation()
 			heldBase := retainPrivateGraph5105(t, base.root)
 			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 64*1024)
@@ -546,7 +538,7 @@ func TestPrivatePreparationHiddenEmptyRebirthAbortAndFailure5105(t *testing.T) {
 			if fail {
 				sink = failingPageSinkV1{}
 			}
-			prepared, err := a.PrepareCOWCandidateRetiringV1(4, 4, candidateIDFromString("hidden-empty-abort"), cap, []COWRetirementV1{{PageIDs: []uint64{target}, LastReachableCommitSeq: 3}}, 0, sink)
+			prepared, err := a.PrepareCOWCandidateRetiringV1(4, 4, candidateIDFromString("collapsed-abort"), cap, []COWRetirementV1{{PageIDs: []uint64{target}, LastReachableCommitSeq: 3}}, 0, sink)
 			if fail {
 				if err == nil {
 					t.Fatal("missing sink failure")
@@ -577,29 +569,23 @@ func TestPrivatePreparationHiddenEmptyRebirthAbortAndFailure5105(t *testing.T) {
 	}
 }
 
-func TestPrivatePreparationDurableLeafZeroIDChunk5105(t *testing.T) {
-	// A direct ownership-boundary fixture covers the leaf rule independently
-	// of today's emitter, which normally removes an emptied chunk pointer.
-	root := mutateChunk(nil, 0, 0, func(c *stateChunk) { c.setFree(2, true) })
-	n := root
-	var path [chunkTrieDepth + 1]*stateNode
-	for depth := 0; depth <= chunkTrieDepth; depth++ {
-		path[depth] = n
-		n.pageID = uint64(depth + 1)
-		if depth < chunkTrieDepth {
-			n = n.child[0]
-		}
-	}
-	n.chunk.free = [4]uint64{}
-	n.chunk.pageID = 0
-	for depth := chunkTrieDepth; depth >= 0; depth-- {
-		recomputeStateNode(path[depth], depth)
-	}
+func TestPrivatePreparationDurableBranchDirtyChunk5108(t *testing.T) {
+	// A durable ancestor may hold a zero-ID nonempty child in private staging.
+	root := mutateChunk(stateRefV1{}, 0, 0, func(c *stateChunk) { c.setFree(2, true) })
+	next := mutateChunk(root, 1, 0, func(c *stateChunk) { c.setFree(2, true) })
+	releaseStateNodeV1(root)
+	root = next
+	root.branch.pageID = 20
 	held := retainPrivateGraph5105(t, root)
+	before := lookupChunk(root, 0)
 	var stats FreelistTxnStats
 	private := mutateChunkForPreparation(root, 0, 0, func(c *stateChunk) { c.setFree(3, true) }, true, &stats)
+	defer releaseStateNodeV1(private)
+	defer releaseStateNodeV1(root)
 	held.assertUnchanged(t)
-	if lookupChunk(private, 0) == n.chunk || !lookupChunk(private, 0).isFree(3) || stats.StateChunkCopies != 1 || stats.StateCopyBytes != stats.StateNodeCopies*stateNodeCopyCapacityV1+stateChunkCopyCapacityV1 {
-		t.Fatal("durable leaf failed to isolate/charge zero-ID chunk")
+	if lookupChunk(private, 0) == before || !lookupChunk(private, 0).isFree(3) ||
+		stats.StateChunkCopies != 2 || stats.StateNodeCopies != 1 ||
+		stats.StateCopyBytes != stateNodeCopyCapacityV1+2*stateChunkCopyCapacityV1 {
+		t.Fatal("durable branch failed to isolate all dirty child aliases")
 	}
 }

@@ -1,13 +1,15 @@
 package freelist
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"github.com/snissn/gomap/TreeDB/pager"
 	"math"
-	"sort"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/page"
@@ -20,7 +22,7 @@ type FreelistGenerationV1 struct {
 	generationID, commitSeq             uint64
 	parentGenerationID, parentCommitSeq uint64
 	highWater                           uint64
-	root                                *stateNode
+	root                                stateRefV1
 	ref                                 GenerationRefV1
 	record                              ReservationRecordV1
 	metadataPages                       []uint64
@@ -38,7 +40,7 @@ func newFreelistGenerationOwnedV1(generationID, highWater uint64, free []uint64,
 	if generationID == 0 || highWater < 2 {
 		return nil, ErrGenerationFormat
 	}
-	g := &FreelistGenerationV1{generationID: generationID, commitSeq: generationID, highWater: highWater, root: cloneStateNode(nil), ownedRefs: 1}
+	g := &FreelistGenerationV1{generationID: generationID, commitSeq: generationID, highWater: highWater, ownedRefs: 1}
 	accepted := false
 	defer func() {
 		if !accepted {
@@ -101,16 +103,16 @@ func (g *FreelistGenerationV1) HighWater() uint64 {
 	return g.highWater
 }
 func (g *FreelistGenerationV1) FreeCount() uint64 {
-	if g == nil || g.root == nil {
+	if g == nil {
 		return 0
 	}
-	return g.root.freeCount
+	return g.root.freeCount()
 }
 func (g *FreelistGenerationV1) RetiredCount() uint64 {
-	if g == nil || g.root == nil {
+	if g == nil {
 		return 0
 	}
-	return g.root.retiredCount
+	return g.root.retiredCount()
 }
 func (g *FreelistGenerationV1) GenerationRef() GenerationRefV1 {
 	if g == nil {
@@ -134,8 +136,11 @@ func (g *FreelistGenerationV1) Allocatable(id uint64) bool {
 }
 
 func (g *FreelistGenerationV1) Validate() error {
-	if g == nil || g.generationID == 0 || g.highWater < 2 || g.root == nil {
+	if g == nil || g.generationID == 0 || g.highWater < 2 {
 		return ErrGenerationFormat
+	}
+	if err := validateCanonicalStateV2(g.root, true); err != nil {
+		return err
 	}
 	var freeCount, retiredCount uint64
 	err := walkState(g.root, 0, func(c *stateChunk) error {
@@ -160,7 +165,7 @@ func (g *FreelistGenerationV1) Validate() error {
 	if err != nil {
 		return err
 	}
-	if freeCount != g.root.freeCount || retiredCount != g.root.retiredCount {
+	if freeCount != g.root.freeCount() || retiredCount != g.root.retiredCount() {
 		return ErrGenerationFormat
 	}
 	return nil
@@ -219,7 +224,7 @@ type allocatedPage struct {
 type FreelistTxn struct {
 	base             *FreelistGenerationV1
 	ledger           *ReservationLedger
-	root             *stateNode
+	root             stateRefV1
 	highWater        uint64
 	allocated        []allocatedPage
 	abandonedAppends []ReservationExtentV1
@@ -260,7 +265,15 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 	if len(t.abandonedAppends) != 0 {
 		refs++
 	}
-	if err := t.buildCreator.reserve(allocationClassV1(uint64(unsafe.Sizeof(*t)), true)+allocationClassV1(uint64(len(t.allocated))*uint64(unsafe.Sizeof(allocatedPage{})), false)+allocationClassV1(uint64(len(t.abandonedAppends))*uint64(unsafe.Sizeof(ReservationExtentV1{})), false), refs); err != nil {
+	maximum := uint64(^uint(0) >> 1)
+	if uint64(len(t.allocated)) > maximum/uint64(unsafe.Sizeof(allocatedPage{})) || uint64(len(t.abandonedAppends)) > maximum/uint64(unsafe.Sizeof(ReservationExtentV1{})) {
+		return nil, ErrNoAllocatablePage
+	}
+	bytes := cowSaturatingAddV1(allocationClassV1(uint64(unsafe.Sizeof(*t)), true), cowSaturatingAddV1(allocationClassV1(uint64(len(t.allocated))*uint64(unsafe.Sizeof(allocatedPage{})), false), allocationClassV1(uint64(len(t.abandonedAppends))*uint64(unsafe.Sizeof(ReservationExtentV1{})), false)))
+	if bytes == ^uint64(0) {
+		return nil, ErrNoAllocatablePage
+	}
+	if err := t.buildCreator.reserve(bytes, refs); err != nil {
 		return nil, err
 	}
 	clone := *t
@@ -278,8 +291,10 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 	}
 	clone.base = retainGenerationV1(t.base)
 	clone.root = retainStateNodeV1(t.root)
-	clone.allocated = append([]allocatedPage(nil), t.allocated...)
-	clone.abandonedAppends = append([]ReservationExtentV1(nil), t.abandonedAppends...)
+	clone.allocated = make([]allocatedPage, len(t.allocated))
+	copy(clone.allocated, t.allocated)
+	clone.abandonedAppends = make([]ReservationExtentV1, len(t.abandonedAppends))
+	copy(clone.abandonedAppends, t.abandonedAppends)
 	clone.changedChunks, clone.replacedMetadata = nil, nil
 	var err error
 	clone.changedChunks, err = t.changedChunks.CloneWithCredit(t.buildCreator)
@@ -296,7 +311,7 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 }
 
 // cloneForPrivateAllocatorPrepare preserves the rollback tree before enabling
-// copy-on-first-write; durable first copies isolate hidden zero-ID descendants.
+// copy-on-first-write; durable first copies isolate dirty zero-ID descendants.
 // The existing persistent clone remains the reference;
 // its shared dirty aliases alone do not establish private ownership.
 //
@@ -333,27 +348,96 @@ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1
 	return beginCandidateOwnedV1(base, expectedParent, ledger)
 }
 
-func beginCandidateOwnedV1(base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger) (*FreelistTxn, error) {
-	if base == nil || base.root == nil {
+func beginCandidateOwnedV1(base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger, creators ...*allocationCreditLeaseV1) (*FreelistTxn, error) {
+	if base == nil || len(creators) > 1 {
 		return nil, ErrGenerationFormat
 	}
 	if base.ref.HeaderPageID != 0 && (expectedParent.GenerationID != base.ref.GenerationID || expectedParent.Digest != base.ref.Digest || expectedParent.HeaderPageID != base.ref.HeaderPageID) {
 		return nil, ErrGenerationParent
 	}
+	var creator *allocationCreditLeaseV1
+	if len(creators) != 0 {
+		creator = creators[0]
+	}
+	if creator != nil {
+		// Active birth authority is valid only for the already managed graph.
+		// Ordinary initialization still creates its ledger before admission.
+		if ledger == nil || atomic.LoadUint32(&base.escaped) != 0 {
+			return nil, ErrFiniteAllocationExportV1
+		}
+		ledger.mu.Lock()
+		escaped := ledger.rawEscaped
+		ledger.mu.Unlock()
+		if escaped {
+			return nil, ErrFiniteAllocationExportV1
+		}
+	}
 	if ledger == nil {
 		ledger = newReservationLedgerOwnedV1()
 	}
+	if err := creator.reserve(allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true), 2); err != nil {
+		return nil, err
+	}
 	retainReservationLedgerV1(ledger)
-	t := &FreelistTxn{base: retainGenerationV1(base), ledger: ledger, ledgerOwned: true, root: retainStateNodeV1(base.root), highWater: base.highWater, changedChunks: newPageRadixV1[struct{}](), replacedMetadata: newPageRadixV1[struct{}]()}
-	replaceStateNodeV1(&t.root, detachUnmaterializedWithStats(t.root, 0, &t.stats))
+	t := &FreelistTxn{creator: creator, buildCreator: creator, base: retainGenerationV1(base), ledger: ledger, ledgerOwned: true, root: retainStateNodeV1(base.root), highWater: base.highWater}
+	complete := false
+	defer func() {
+		if !complete {
+			releaseTxnV1(t)
+		}
+	}()
+	if creator != nil {
+		creator.mu.Lock()
+		t.allocationCredit = creator.facet
+		creator.mu.Unlock()
+	}
+	var err error
+	t.changedChunks, err = newPageRadixWithCreditV1[struct{}](creator)
+	if err != nil {
+		return nil, err
+	}
+	t.replacedMetadata, err = newPageRadixWithCreditV1[struct{}](creator)
+	if err != nil {
+		return nil, err
+	}
+	root, err := detachUnmaterializedOwnedV1(t.root, 0, &t.stats, creator)
+	if err != nil {
+		return nil, err
+	}
+	replaceStateNodeV1(&t.root, root)
 	t.privatePreparation = true
 	if base.ref.HeaderPageID != 0 {
-		t.replacedMetadata.Set(base.ref.HeaderPageID, struct{}{})
+		if err := t.replacedMetadata.PutWithCredit(base.ref.HeaderPageID, struct{}{}, creator); err != nil {
+			return nil, err
+		}
 	}
 	for _, id := range base.record.pageIDs {
-		t.replacedMetadata.Set(id, struct{}{})
+		if err := t.replacedMetadata.PutWithCredit(id, struct{}{}, creator); err != nil {
+			return nil, err
+		}
 	}
-	t.retireMany(base.record.pendingMetadata())
+	retirementCount := base.record.pendingMetadataCountV1()
+	if retirementCount > uint64(^uint(0)>>1)/uint64(unsafe.Sizeof(retiredPage{})) {
+		return nil, ErrNoAllocatablePage
+	}
+	if err := reserveMaterializationBackingV1(creator, retirementCount, uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
+		return nil, err
+	}
+	// Exact capacity avoids implicit growth while replaying pending retirement.
+	retired := make([]retiredPage, 0, int(retirementCount))
+	for _, extent := range base.record.Extents {
+		if extent.Kind != ReservationPendingMetadataRetirement {
+			continue
+		}
+		for i := uint64(0); i < uint64(extent.Count); i++ {
+			retired = append(retired, retiredPage{extent.StartPageID + i, extent.LastReachableCommitSeq})
+		}
+	}
+	t.retireMany(retired)
+	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	complete = true
 	return t, nil
 }
 
@@ -368,7 +452,7 @@ func NewFreelistTxn(base *FreelistGenerationV1, ledger *ReservationLedger) *Free
 }
 
 func (t *FreelistTxn) valid() error {
-	if t == nil || t.base == nil || t.root == nil || t.changedChunks == nil {
+	if t == nil || t.base == nil || t.changedChunks == nil {
 		return ErrGenerationFormat
 	}
 	if t.consumed {
@@ -393,10 +477,15 @@ type transactionMutationPlanV1 struct {
 	bytes, refs                uint64
 	replaced                   [chunkTrieDepth + 2]uint64
 	replacementCount, capacity int
+	err                        error
 	vectorBytes                uint64
 }
 
 func (t *FreelistTxn) planMutationV1(chunkNo uint64, allocatedGrowth int) transactionMutationPlanV1 {
+	maximum := int(^uint(0) >> 1)
+	if allocatedGrowth < 0 || allocatedGrowth > maximum-len(t.allocated) {
+		return transactionMutationPlanV1{err: ErrNoAllocatablePage}
+	}
 	tree := mutationStateBirthPlanV1(t.root, chunkNo, 0, t.privatePreparation, false, false)
 	plan := transactionMutationPlanV1{bytes: tree.nodes*stateNodeCopyCapacityV1 + tree.chunks*stateChunkCopyCapacityV1, refs: tree.nodes + tree.chunks}
 	add := func(id uint64) {
@@ -414,15 +503,17 @@ func (t *FreelistTxn) planMutationV1(chunkNo uint64, allocatedGrowth int) transa
 		plan.replaced[plan.replacementCount] = id
 		plan.replacementCount++
 	}
-	for n, depth := t.root, 0; n != nil; depth++ {
-		add(n.pageID)
-		if depth == chunkTrieDepth {
-			if n.chunk != nil {
-				add(n.chunk.pageID)
-			}
+	// A durable empty sentinel is replaced outright by the first chunk.
+	// Prefix-mismatching nonempty roots instead remain reachable as a child.
+	if t.root.freeCount()+t.root.retiredCount() == 0 {
+		add(t.root.pageID())
+	}
+	for r := t.root; !r.zero() && r.containsChunk(chunkNo); {
+		add(r.pageID())
+		if r.chunk != nil {
 			break
 		}
-		n = n.child[chunkNibble(chunkNo, depth)]
+		r = r.branch.child[chunkNibble(chunkNo, int(r.branch.depth))]
 	}
 	b, n := t.replacedMetadata.insertionCapacityV1(uint64(plan.replacementCount))
 	plan.bytes += b
@@ -433,6 +524,10 @@ func (t *FreelistTxn) planMutationV1(chunkNo uint64, allocatedGrowth int) transa
 		plan.refs += n
 	}
 	plan.capacity = grownCapacityV1(cap(t.allocated), len(t.allocated)+allocatedGrowth)
+	if plan.capacity > maximum/int(unsafe.Sizeof(allocatedPage{})) {
+		plan.err = ErrNoAllocatablePage
+		return plan
+	}
 	if plan.capacity > cap(t.allocated) {
 		plan.vectorBytes = allocationClassV1(uint64(plan.capacity)*uint64(unsafe.Sizeof(allocatedPage{})), false)
 		plan.bytes += plan.vectorBytes
@@ -445,6 +540,9 @@ func (t *FreelistTxn) mutateManyOwnedV1(chunkNo, items uint64, f func(*stateChun
 		return t.allocationErr
 	}
 	plan := t.planMutationV1(chunkNo, allocatedGrowth)
+	if plan.err != nil {
+		return plan.err
+	}
 	operation, err := admitAllocationOperationV1(t.buildCreator, plan.bytes, plan.refs)
 	if err != nil {
 		return err
@@ -523,7 +621,7 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
 	}
 	abandonedGrowth := 0
 	if id > start {
-		abandonedGrowth = 1
+		abandonedGrowth = int((id-start-1)/uint64(^uint32(0)) + 1)
 	}
 	if err := t.growAppendVectorsV1(1, abandonedGrowth); err != nil {
 		return 0, err
@@ -552,6 +650,9 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 	if ids, ok := t.allocateReusedRange(count); ok {
 		return ids, nil
 	}
+	if t.allocationErr != nil {
+		return nil, t.allocationErr
+	}
 	width := uint64(count)
 	start := t.highWater
 	for {
@@ -575,7 +676,10 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 		}
 		abandonedGrowth := 0
 		if candidate > t.highWater {
-			abandonedGrowth = 1
+			abandonedGrowth = int((candidate-t.highWater-1)/uint64(^uint32(0)) + 1)
+		}
+		if err := reserveMaterializationBackingV1(t.buildCreator, uint64(count), 8, false); err != nil {
+			return nil, err
 		}
 		if err := t.growAppendVectorsV1(count, abandonedGrowth); err != nil {
 			return nil, err
@@ -651,8 +755,8 @@ func (t *FreelistTxn) retireMany(retired []retiredPage) {
 	}
 	// Stable ordering preserves last-writer behavior for duplicate IDs with
 	// different retirement sequences while making every chunk one run.
-	sort.SliceStable(valid, func(i, j int) bool {
-		return valid[i].id>>freelistChunkShift < valid[j].id>>freelistChunkShift
+	slices.SortStableFunc(valid, func(a, b retiredPage) int {
+		return cmp.Compare(a.id>>freelistChunkShift, b.id>>freelistChunkShift)
 	})
 	for start := 0; start < len(valid); {
 		chunkNo := valid[start].id >> freelistChunkShift
@@ -688,21 +792,21 @@ func capabilityThreshold(c ReuseCapability) uint64 {
 	return threshold
 }
 
-func collectPrunable(n *stateNode, depth int, cap ReuseCapability, out *[]retiredPage, visits *uint64) {
-	if n == nil || n.retiredCount == 0 || n.minRetiredSeq == 0 || n.minRetiredSeq >= capabilityThreshold(cap) {
+func collectPrunable(r stateRefV1, _ int, cap ReuseCapability, out *[]retiredPage, visits *uint64) {
+	if r.zero() || r.retiredCount() == 0 || r.minRetiredSeq() == 0 || r.minRetiredSeq() >= capabilityThreshold(cap) {
 		return
 	}
 	*visits++
-	if depth == chunkTrieDepth {
-		for offset, seq := range n.chunk.retired {
+	if r.chunk != nil {
+		for offset, seq := range r.chunk.retired {
 			if seq != 0 && cap.permits(seq) {
-				*out = append(*out, retiredPage{n.chunk.chunkNo<<freelistChunkShift | uint64(offset), seq})
+				*out = append(*out, retiredPage{r.chunk.chunkNo<<freelistChunkShift | uint64(offset), seq})
 			}
 		}
 		return
 	}
-	for _, child := range n.child {
-		collectPrunable(child, depth+1, cap, out, visits)
+	for _, child := range r.branch.child {
+		collectPrunable(child, 0, cap, out, visits)
 	}
 }
 
@@ -710,10 +814,24 @@ func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
 	if t == nil || t.consumed || cap.oldestRecoverableCommitSeq == 0 {
 		return
 	}
+	// The legacy whole-tree API admits one full promotion capacity before
+	// collection. The prepared production caller keeps the bounded API below.
+	var promote []retiredPage
+	if t.buildCreator != nil {
+		capacity := t.root.retiredCount()
+		if err := reserveMaterializationBackingV1(t.buildCreator, capacity, uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
+			t.allocationErr = err
+			return
+		}
+		if capacity > uint64(^uint(0)>>1) {
+			t.allocationErr = ErrNoAllocatablePage
+			return
+		}
+		promote = make([]retiredPage, 0, int(capacity))
+	}
 	t.stats.OldestRecoverableCommitSeq = cap.oldestRecoverableCommitSeq
 	t.stats.MinPinnedSnapshotCommitSeq = cap.minPinnedSnapshotCommitSeq
 	t.stats.HistoryFloorCommitSeq = cap.historyFloorCommitSeq
-	var promote []retiredPage
 	collectPrunable(t.root, 0, cap, &promote, &t.stats.PageVisits)
 	for _, retired := range promote {
 		if lag := cap.oldestRecoverableCommitSeq - retired.lastReachableCommitSeq; lag > t.stats.ReuseLag {
@@ -729,8 +847,8 @@ func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
 		})
 		return
 	}
-	sort.SliceStable(promote, func(i, j int) bool {
-		return promote[i].id>>freelistChunkShift < promote[j].id>>freelistChunkShift
+	slices.SortStableFunc(promote, func(a, b retiredPage) int {
+		return cmp.Compare(a.id>>freelistChunkShift, b.id>>freelistChunkShift)
 	})
 	for start := 0; start < len(promote); {
 		chunkNo := promote[start].id >> freelistChunkShift
@@ -754,6 +872,9 @@ func (t *FreelistTxn) Prune(h RecoveryHorizon) { t.PruneWithCapability(h.capabil
 
 func (t *FreelistTxn) Reserve(candidate CandidateIDV1) error {
 	if err := t.valid(); err != nil {
+		return err
+	}
+	if err := reserveMaterializationBackingV1(t.buildCreator, uint64(len(t.allocated)), 8, false); err != nil {
 		return err
 	}
 	ids := make([]uint64, len(t.allocated))
@@ -901,17 +1022,37 @@ func (c *FreelistCandidateV1) writePagesV1(writer CandidatePageWriterV1, dst *pa
 }
 
 type recordingSink struct {
-	sink             AppendPageSink
-	pages            []candidatePageV1
-	indexScratch     []byte
-	beforeFirstWrite func() error
-	writeStarted     bool
+	sink          AppendPageSink
+	pages         []candidatePageV1
+	indexScratch  []byte
+	ledger        *ReservationLedger
+	candidate     CandidateIDV1
+	writeStarted  bool
+	metadataStart uint64
+	reservedCount uint64
+}
+
+// checkNext refuses malformed, repeated, skipped and overflowing IDs before
+// invoking any sink or marking a reserved tail as physically attempted.
+func (s *recordingSink) checkNext(id uint64) error {
+	count := uint64(len(s.pages))
+	if s.metadataStart == 0 || s.reservedCount == 0 || s.metadataStart > ^uint64(0)-s.reservedCount || count >= s.reservedCount || len(s.pages) >= cap(s.pages) || id != s.metadataStart+count {
+		return ErrGenerationFormat
+	}
+	return nil
+}
+
+func (s *recordingSink) complete() error {
+	if s.metadataStart == 0 || s.reservedCount == 0 || s.metadataStart > ^uint64(0)-s.reservedCount || uint64(len(s.pages)) != s.reservedCount {
+		return ErrGenerationFormat
+	}
+	return nil
 }
 
 func (s *recordingSink) beforeWrite() error {
 	if !s.writeStarted {
-		if s.beforeFirstWrite != nil {
-			if err := s.beforeFirstWrite(); err != nil {
+		if s.ledger != nil {
+			if err := s.ledger.markTailWriteAttempted(s.candidate); err != nil {
 				return err
 			}
 		}
@@ -921,11 +1062,17 @@ func (s *recordingSink) beforeWrite() error {
 }
 
 func (s *recordingSink) write(id uint64, data []byte) error {
+	if len(data) != page.PageSize {
+		return ErrGenerationFormat
+	}
+	if err := s.checkNext(id); err != nil {
+		return err
+	}
 	if err := s.beforeWrite(); err != nil {
 		return err
 	}
 	sinkData := data
-	if _, ownsCandidateBytes := s.sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
+	if !candidateOwnedImagesV1(s.sink) {
 		// Arbitrary sinks may retain or mutate their input. Give them an
 		// isolated copy while the candidate keeps the fresh encoded buffer.
 		sinkData = append([]byte(nil), data...)
@@ -940,7 +1087,13 @@ func (s *recordingSink) write(id uint64, data []byte) error {
 // writeIndex retains no scratch alias. Only the exact non-retaining production
 // sink receives the temporary encoding; generic sinks use isolated owned images.
 func (s *recordingSink) writeIndex(n *stateNode, depth int, generationID uint64) error {
-	if _, plans := s.sink.(*CandidatePageSinkV1); !plans {
+	if n == nil {
+		return ErrGenerationFormat
+	}
+	if err := s.checkNext(n.pageID); err != nil {
+		return err
+	}
+	if !candidateOwnedImagesV1(s.sink) {
 		b, err := encodeIndexPage(n.pageID, generationID, n, depth)
 		if err != nil {
 			return err
@@ -970,33 +1123,25 @@ func (s *recordingSink) writeIndex(n *stateNode, depth int, generationID uint64)
 	return nil
 }
 
-func emitStatePages(n *stateNode, depth int, generationID uint64, next *uint64, sink *recordingSink) error {
-	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
+func emitStatePages(r stateRefV1, _ int, generationID uint64, next *uint64, sink *recordingSink) error {
+	if r.zero() || r.pageID() != 0 {
 		return nil
 	}
-	if depth == chunkTrieDepth {
-		if n.chunk == nil {
-			return ErrGenerationFormat
-		}
-		if n.chunk.pageID == 0 {
-			n.chunk.pageID = *next
-			*next++
-			b := encodeChunkPage(n.chunk.pageID, generationID, n.chunk)
-			n.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
-			if err := sink.write(n.chunk.pageID, b); err != nil {
-				return err
-			}
-		}
-	} else {
-		for _, child := range n.child {
-			if err := emitStatePages(child, depth+1, generationID, next, sink); err != nil {
-				return err
-			}
+	if r.chunk != nil {
+		r.chunk.pageID = *next
+		*next++
+		b := encodeChunkPage(r.chunk.pageID, generationID, r.chunk)
+		r.chunk.checksum = binary.LittleEndian.Uint32(b[8:12])
+		return sink.write(r.chunk.pageID, b)
+	}
+	for _, child := range r.branch.child {
+		if err := emitStatePages(child, 0, generationID, next, sink); err != nil {
+			return err
 		}
 	}
-	n.pageID = *next
+	r.branch.pageID = *next
 	*next++
-	return sink.writeIndex(n, depth, generationID)
+	return sink.writeIndex(r.branch, int(r.branch.depth), generationID)
 }
 
 // Adjacent homogeneous runs are combined BEFORE growing the backing slice.
@@ -1026,19 +1171,15 @@ func appendReservationRange(extents []ReservationExtentV1, start, count uint64, 
 	return extents
 }
 
-func countUnmaterializedStatePages(n *stateNode, depth int) uint64 {
-	if n == nil || n.freeCount+n.retiredCount == 0 || n.pageID != 0 {
+func countUnmaterializedStatePages(r stateRefV1, _ int) uint64 {
+	if r.zero() || r.pageID() != 0 {
 		return 0
 	}
-	count := uint64(1) // This index page.
-	if depth == chunkTrieDepth {
-		if n.chunk != nil && n.chunk.pageID == 0 {
-			count++
+	count := uint64(1)
+	if r.branch != nil {
+		for _, child := range r.branch.child {
+			count += countUnmaterializedStatePages(child, 0)
 		}
-		return count
-	}
-	for _, child := range n.child {
-		count += countUnmaterializedStatePages(child, depth+1)
 	}
 	return count
 }
@@ -1046,14 +1187,25 @@ func countUnmaterializedStatePages(n *stateNode, depth int) uint64 {
 // The allocated vector is sorted once in private scratch; reused/appended ID
 // vectors and sortedUnique copies are unnecessary. Radix traversal is ordered.
 func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
-	allocated := append([]allocatedPage(nil), t.allocated...)
-	sort.Slice(allocated, func(i, j int) bool {
-		if allocated[i].kind != allocated[j].kind {
-			return allocated[i].kind < allocated[j].kind
+	if err := reserveMaterializationBackingV1(t.buildCreator, uint64(len(t.allocated)), uint64(unsafe.Sizeof(allocatedPage{})), false); err != nil {
+		return nil, err
+	}
+	allocated := make([]allocatedPage, len(t.allocated))
+	copy(allocated, t.allocated)
+	slices.SortFunc(allocated, func(a, b allocatedPage) int {
+		if a.kind != b.kind {
+			return cmp.Compare(a.kind, b.kind)
 		}
-		return allocated[i].id < allocated[j].id
+		return cmp.Compare(a.id, b.id)
 	})
-	var extents []ReservationExtentV1
+	capacity := uint64(len(allocated)) + uint64(len(t.abandonedAppends)) + uint64(t.replacedMetadata.Len())
+	if err := reserveMaterializationBackingV1(t.buildCreator, capacity, uint64(unsafe.Sizeof(ReservationExtentV1{})), false); err != nil {
+		return nil, err
+	}
+	if capacity > uint64(^uint(0)>>1) {
+		return nil, ErrNoAllocatablePage
+	}
+	extents := make([]ReservationExtentV1, 0, int(capacity))
 	for i, allocation := range allocated {
 		if i > 0 && allocation == allocated[i-1] {
 			continue
@@ -1096,6 +1248,11 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	if t.base.ref.HeaderPageID != 0 && generationID <= t.base.generationID {
 		return nil, ErrGenerationParent
 	}
+	if t.buildCreator != nil {
+		if _, owned := sink.(ownedCandidatePageSinkV1); !owned {
+			return nil, ErrFiniteAllocationExportV1
+		}
+	}
 	metadataStart, reservedMetadataCount, extents, reusedMetadata := t.tryReusedMetadata(candidateID)
 	if t.allocationErr != nil {
 		return nil, t.allocationErr
@@ -1104,19 +1261,27 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	// or failure consumes this transaction; retry must begin from the immutable
 	// base so a partial sink failure cannot retain unwritten page identities.
 	t.consumed = true
-	if !t.privatePreparation && reusedMetadata {
-		// tryReusedMetadata just copied this complete, nonempty path. Isolate
-		// only its dirty siblings before emission assigns page identities.
-		replaceStateNodeV1(&t.root, detachMetadataSiblingsWithStats(t.root, 0, metadataStart>>freelistChunkShift, &t.stats))
-	} else if !t.privatePreparation {
-		replaceStateNodeV1(&t.root, detachUnmaterializedWithStats(t.root, 0, &t.stats))
+	if !t.privatePreparation {
+		var isolated stateRefV1
+		var err error
+		if reusedMetadata {
+			// tryReusedMetadata copied the selected path; charge and isolate
+			// only its dirty siblings before assigning emitted identities.
+			isolated, err = detachMetadataSiblingsOwnedV1(t.root, 0, metadataStart>>freelistChunkShift, &t.stats, t.buildCreator)
+		} else {
+			isolated, err = detachUnmaterializedOwnedV1(t.root, 0, &t.stats, t.buildCreator)
+		}
+		if err != nil {
+			return nil, err
+		}
+		replaceStateNodeV1(&t.root, isolated)
 	}
 	// Exclusive builder ownership ends before any sink receives candidate data.
 	// consumed prevents later mutation on both success and partial-write failure.
 	t.privatePreparation = false
-	if t.root.pageID != 0 {
-		bytes, refs := uint64(stateNodeCopyCapacityV1), uint64(1)
-		if _, exists := t.replacedMetadata.Get(t.root.pageID); !exists {
+	if t.root.pageID() != 0 {
+		bytes, refs := t.root.class(), uint64(1)
+		if _, exists := t.replacedMetadata.Get(t.root.pageID()); !exists {
 			b, n := t.replacedMetadata.insertionCapacityV1(1)
 			bytes += b
 			refs += n
@@ -1125,18 +1290,17 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 		if err != nil {
 			return nil, err
 		}
-		if err = t.replacedMetadata.putAdmittedV1(t.root.pageID, struct{}{}, t.buildCreator, &operation); err != nil {
+		if err = t.replacedMetadata.putAdmittedV1(t.root.pageID(), struct{}{}, t.buildCreator, &operation); err != nil {
 			operation.close()
 			return nil, err
 		}
-		root, err := cloneStateNodeOwnedV1(t.root, false, t.buildCreator, &operation)
+		root, err := cloneStateRefOwnedV1(t.root, false, t.buildCreator, &operation)
 		operation.close()
 		if err != nil {
 			return nil, err
 		}
 		replaceStateNodeV1(&t.root, root)
-		t.stats.StateNodeCopies++
-		t.stats.StateCopyBytes += stateNodeCopyCapacityV1
+		noteStateBirthV1(root, &t.stats)
 	}
 
 	// The target metadata extent includes the COW pages, the reservation chain,
@@ -1148,10 +1312,13 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	}
 	var err error
 	statePageCount := countUnmaterializedStatePages(t.root, 0)
-	if t.root.freeCount+t.root.retiredCount == 0 {
+	if t.root.freeCount()+t.root.retiredCount() == 0 {
 		statePageCount = 1
 	}
 	if !reusedMetadata {
+		if err := reserveMaterializationBackingV1(t.buildCreator, uint64(len(t.allocated)), 8, false); err != nil {
+			return nil, err
+		}
 		dataIDs := make([]uint64, 0, len(t.allocated))
 		for _, allocation := range t.allocated {
 			dataIDs = append(dataIDs, allocation.id)
@@ -1165,6 +1332,22 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 			return nil, err
 		}
 	}
+	// Copy once into exact append capacity. Normalization below consumes this
+	// private backing; it cannot grow or retain an alias to a placement plan.
+	skippedEntries := uint64(0)
+	if metadataStart > minimumMetadataStart {
+		skippedEntries = (metadataStart-minimumMetadataStart-1)/uint64(^uint32(0)) + 1
+	}
+	capacity := uint64(len(extents)) + skippedEntries + 1
+	if capacity < uint64(len(extents)) || capacity > uint64(^uint(0)>>1) {
+		return nil, ErrNoAllocatablePage
+	}
+	if err := reserveMaterializationBackingV1(t.buildCreator, capacity, uint64(unsafe.Sizeof(ReservationExtentV1{})), false); err != nil {
+		return nil, err
+	}
+	ownedExtents := make([]ReservationExtentV1, len(extents), int(capacity))
+	copy(ownedExtents, extents)
+	extents = ownedExtents
 	if metadataStart > minimumMetadataStart {
 		extents = appendReservationRange(extents, minimumMetadataStart, metadataStart-minimumMetadataStart, ReservationAbandonedAppend, 0)
 	}
@@ -1173,24 +1356,28 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	if pageCount > uint64(^uint16(0)) || statePageCount+pageCount+1 != reservedMetadataCount {
 		return nil, ErrGenerationFormat
 	}
-	next := metadataStart
-	recorded := &recordingSink{
-		sink:  sink,
-		pages: make([]candidatePageV1, 0, reservedMetadataCount),
-		beforeFirstWrite: func() error {
-			return t.ledger.markTailWriteAttempted(candidateID)
-		},
-	}
-	if t.root.freeCount+t.root.retiredCount == 0 {
-		// An empty tree still has one immutable exact-generation root page.
-		t.root.pageID = next
-		next++
-		if err := recorded.writeIndex(t.root, 0, generationID); err != nil {
-			return nil, err
-		}
-	} else if err := emitStatePages(t.root, 0, generationID, &next, recorded); err != nil {
+	if err := t.reserveMaterializationOutputsV1(reservedMetadataCount, pageCount); err != nil {
 		return nil, err
 	}
+	next := metadataStart
+	recorded := &recordingSink{
+		sink:   sink,
+		pages:  make([]candidatePageV1, 0, reservedMetadataCount),
+		ledger: t.ledger, candidate: candidateID,
+		metadataStart: metadataStart, reservedCount: reservedMetadataCount,
+	}
+	if t.root.zero() {
+		root, birthErr := cloneStateRefOwnedV1(stateRefV1{}, false, t.buildCreator)
+		if birthErr != nil {
+			return nil, birthErr
+		}
+		replaceStateNodeV1(&t.root, root)
+		noteStateBirthV1(root, &t.stats)
+	}
+	if err := emitStatePages(t.root, 0, generationID, &next, recorded); err != nil {
+		return nil, err
+	}
+
 	reservationID := next
 	headerID := reservationID + pageCount
 	next = headerID + 1
@@ -1204,7 +1391,7 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 			break
 		}
 	}
-	extents, err = normalizeExtents(extents)
+	extents, err = normalizeOwnedExtentsV1(extents)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,8 +1413,12 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	for id := metadataStart; id < next; id++ {
 		g.metadataPages = append(g.metadataPages, id)
 	}
-	header := encodeGenerationPage(headerID, g, g.root.checksum)
+	header := encodeGenerationPage(headerID, g, g.root.checksum())
 	if err := recorded.write(headerID, header); err != nil {
+		releaseGenerationV1(g)
+		return nil, err
+	}
+	if err := recorded.complete(); err != nil {
 		releaseGenerationV1(g)
 		return nil, err
 	}
@@ -1237,15 +1428,15 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	t.stats.COWChunks = uint64(t.changedChunks.Len())
 	t.stats.COWPages = uint64(len(recorded.pages))
 	t.stats.COWBytes = t.stats.COWPages * page.PageSize
-	if _, ownsCandidateBytes := sink.(*CandidatePageSinkV1); !ownsCandidateBytes {
+	if !candidateOwnedImagesV1(sink) {
 		t.stats.CandidatePageIsolationCopies = t.stats.COWPages
 		t.stats.CandidatePageIsolationBytes = t.stats.COWBytes
 	}
-	t.stats.FreeIDs, t.stats.RetiredIDs = g.root.freeCount, g.root.retiredCount
+	t.stats.FreeIDs, t.stats.RetiredIDs = g.root.freeCount(), g.root.retiredCount()
 	t.stats.GenerationID = generationID
 	t.stats.ReservationRecords = uint64(len(record.pageIDs))
 	t.stats.Reservations = uint64(len(t.allocated)) + (next - metadataStart)
-	t.stats.PendingMetadataRetirements = uint64(len(record.pendingMetadata()))
+	t.stats.PendingMetadataRetirements = record.pendingMetadataCountV1()
 	dirty := make([]uint64, len(recorded.pages))
 	for i := range recorded.pages {
 		dirty[i] = recorded.pages[i].PageID

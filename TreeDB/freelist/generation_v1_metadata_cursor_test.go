@@ -77,7 +77,7 @@ func TestMetadataChunkRunMatchesReservationOracle4627(t *testing.T) {
 func TestMetadataFreshPathDoesNotDetachTwice4627(t *testing.T) {
 	base := MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4, 5}, nil)
 	root := mutateChunk(base.root, 0, 0, func(c *stateChunk) { c.setFree(2, false) })
-	var detached *stateNode
+	var detached stateRefV1
 	if allocs := testing.AllocsPerRun(100, func() {
 		detached = detachMetadataSiblings(root, 0, 0)
 	}); allocs != 0 {
@@ -120,7 +120,13 @@ func TestMetadataLosingClaimPreservesTransaction4627(t *testing.T) {
 
 func TestMetadataImpossibleRunDoesNotAllocate4627(t *testing.T) {
 	ledger := NewReservationLedger()
-	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4, 5}, nil), ledger)
+	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4, 5, 300}, nil), ledger)
+	// Two chunks and their branch require three state pages. The four-page
+	// contiguous run cannot fit these plus reservation and header (five),
+	// even before enforcing the rule that the selected chunk stays nonempty.
+	if count := countUnmaterializedStatePages(txn.root, 0); count != 3 {
+		t.Fatalf("compressed fixture state pages=%d want 3", count)
+	}
 	root := txn.root
 	id := candidateIDFromString("too-small")
 	allocs := testing.AllocsPerRun(100, func() {

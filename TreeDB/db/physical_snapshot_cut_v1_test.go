@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type physicalCutPausedWriterV1 struct {
@@ -41,10 +43,38 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 				t.Fatal(err)
 			}
 			defer database.Close()
+			// Keep exact images of parents while they serve the inactive slot.
+			// A later cut can safely reuse this historical role only after its
+			// last child is strictly older than the cut's registry boundary.
+			type historicalParent struct {
+				childCommit uint64
+				image       [page.PageSize]byte
+			}
+			historicalParents := make(map[uint64]historicalParent)
+			source, err := os.Open(filepath.Join(dir, indexFileName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer source.Close()
 			for i := 0; i < 24; i++ {
 				if err := database.SetSync([]byte("key"), []byte("warm")); err != nil {
 					t.Fatal(err)
 				}
+				record := database.durableRoot.slotRecord[1-database.durableRoot.slot]
+				if record.ParentRecordPageID == 0 {
+					continue
+				}
+				if err := validateDurableRootLineageV1(&snapshotIndexPageStoreV1{file: source, pageCount: record.TotalPages}, record); err != nil {
+					t.Fatalf("historical inactive-slot lineage: %v", err)
+				}
+				parent := historicalParent{childCommit: record.CommitSeq}
+				if _, err := source.ReadAt(parent.image[:], int64(record.ParentRecordPageID)*page.PageSize); err != nil {
+					t.Fatal(err)
+				}
+				historicalParents[record.ParentRecordPageID] = parent
+			}
+			if err := source.Close(); err != nil {
+				t.Fatal(err)
 			}
 			if err := database.SetSync([]byte("key"), []byte("older")); err != nil {
 				t.Fatal(err)
@@ -84,9 +114,33 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 					t.Fatal(err)
 				}
 				t.Logf("slot=%d commit=%d parentPage=%d parentCommit=%d oldest=%d classifiedUnused=%v free=%v", slot, record.CommitSeq, record.ParentRecordPageID, record.ParentCommitSeq, cut.oldest, unused, cut.generation.Allocatable(record.ParentRecordPageID))
-				if uint64(slot) != active && !unused {
-					t.Fatal("fixture did not exercise reusable older-slot parent")
+				if unused || cut.generation.Allocatable(record.ParentRecordPageID) {
+					t.Fatalf("captured slot %d parent is reusable at its recovery boundary", slot)
 				}
+			}
+			eligibleParents := make(map[uint64]historicalParent)
+			for id, parent := range historicalParents {
+				unused, err := cut.generation.SnapshotPageUnusedV1(id, cut.oldest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !unused {
+					continue
+				}
+				var physical [page.PageSize]byte
+				if _, err := cut.file.ReadAt(physical[:], int64(id)*page.PageSize); err != nil {
+					t.Fatal(err)
+				}
+				if physical != parent.image {
+					continue // This historical incarnation was already overwritten.
+				}
+				if parent.childCommit >= cut.oldest {
+					t.Fatalf("historical inactive-slot parent %d reusable before strict horizon: child=%d oldest=%d", id, parent.childCommit, cut.oldest)
+				}
+				eligibleParents[id] = parent
+			}
+			if len(eligibleParents) == 0 {
+				t.Fatal("fixture has no strictly reusable historical inactive-slot parent")
 			}
 			destination := t.TempDir()
 			if raw, err := os.ReadFile(filepath.Join(dir, "format.json")); err == nil {
@@ -112,20 +166,63 @@ func TestPhysicalSnapshotCutV1PreservesBothSlotsAcrossReuseAndClose(t *testing.T
 			case <-time.After(5 * time.Second):
 				t.Fatal("cut did not start")
 			}
-			// Overwrite both live slots repeatedly, exercising ordinary free and
-			// allocator-metadata reuse while the captured index has not been read.
+			// Overwrite both live slots repeatedly while the captured index has
+			// not been read. Prove actual reuse of a historical inactive-slot
+			// parent, while both currently captured parents remain protected.
+			reusedParents := make(map[uint64]bool)
 			for i := 0; i < 32; i++ {
 				if err := database.SetSync([]byte("key"), []byte("later")); err != nil {
 					t.Fatal(err)
 				}
+				generation := database.idx.Load().allocator.COWGenerationV1()
+				for _, extent := range generation.ReservationRecord().Entries() {
+					if extent.Kind != freelist.ReservationTargetMetadata && extent.Kind != freelist.ReservationReusedData {
+						continue
+					}
+					for id, parent := range eligibleParents {
+						if id < extent.StartPageID || id-extent.StartPageID >= uint64(extent.Count) {
+							continue
+						}
+						var physical [page.PageSize]byte
+						if _, err := cut.file.ReadAt(physical[:], int64(id)*page.PageSize); err != nil {
+							t.Fatal(err)
+						}
+						if physical == parent.image {
+							t.Fatalf("published reused parent %d retained its historical bytes", id)
+						}
+						reusedParents[id] = true
+						t.Logf("historical inactive-slot parent=%d child=%d captured-oldest=%d reused-kind=%d published-commit=%d", id, parent.childCommit, cut.oldest, extent.Kind, generation.CommitSeq())
+					}
+				}
+			}
+			if len(reusedParents) == 0 {
+				t.Fatal("fixture did not physically reuse a historical inactive-slot parent")
 			}
 			if err := database.Close(); err != nil {
 				t.Fatal(err)
+			}
+			for slot, id := range cut.parentIDs {
+				var physical [page.PageSize]byte
+				if _, err := cut.file.ReadAt(physical[:], int64(id)*page.PageSize); err != nil {
+					t.Fatal(err)
+				}
+				if physical != cut.parents[slot] {
+					t.Fatalf("captured slot %d parent changed while its cut remained held through Close", slot)
+				}
 			}
 			assertWriterBlocked()
 			unblock()
 			if err := <-done; err != nil {
 				t.Fatal(err)
+			}
+			for id := range reusedParents {
+				var exported [page.PageSize]byte
+				if _, err := output.ReadAt(exported[:], int64(id)*page.PageSize); err != nil {
+					t.Fatal(err)
+				}
+				if exported != ([page.PageSize]byte{}) {
+					t.Fatalf("export retained reusable historical parent bytes at page %d", id)
+				}
 			}
 			if err := output.Close(); err != nil {
 				t.Fatal(err)
@@ -302,7 +399,18 @@ func TestPhysicalSnapshotCutV1ReadOnlyOwnership(t *testing.T) {
 		}
 		t.Fatalf("cut lost shared directory lock: %v", err)
 	}
+	formatBytes, err := os.ReadFile(filepath.Join(dir, formatConfigFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
 	destination := t.TempDir()
+	if err := os.WriteFile(filepath.Join(destination, formatConfigFileName), formatBytes, 0600); err != nil {
+		t.Fatal(err)
+	}
+	restoredFormat, err := os.ReadFile(filepath.Join(destination, formatConfigFileName))
+	if err != nil || !bytes.Equal(restoredFormat, formatBytes) {
+		t.Fatalf("snapshot format bytes changed: %v", err)
+	}
 	output, err := os.Create(filepath.Join(destination, indexFileName))
 	if err != nil {
 		t.Fatal(err)

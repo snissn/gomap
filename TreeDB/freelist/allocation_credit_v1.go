@@ -256,6 +256,8 @@ func (prepared *PreparedCOWCandidateV1) ClearTerminalBackingV1() error {
 	defer candidate.writeMu.Unlock()
 	generation, creator, preparedCreator := candidate.generation, candidate.creator, prepared.creator
 	clear(candidate.pages[:cap(candidate.pages)])
+	clear(candidate.dirtyIDs[:cap(candidate.dirtyIDs)])
+	clear(prepared.auxiliary[:cap(prepared.auxiliary)])
 	candidate.pages, candidate.dirtyIDs, candidate.generation = nil, nil, nil
 	candidate.allocationCredit, candidate.creator = nil, nil
 	prepared.candidate, prepared.auxiliary, prepared.creator = nil, nil, nil

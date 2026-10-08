@@ -11,7 +11,7 @@ import (
 
 func ownedPrepared5105(t *testing.T, a *Allocator, id string) *PreparedCOWCandidateV1 {
 	t.Helper()
-	p, err := a.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, 2, candidateIDFromString(id), ReuseCapability{}, nil, 0, NewCandidatePageSinkV1(), nil)
+	p, err := a.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, 2, candidateIDFromString(id), ReuseCapability{}, nil, 0, NewOwnedCandidatePageSinkV1(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestResidentAttachmentUnknownOwnersRefusedBeforeDebit5105(t *testing.T) {
 			case "ledger":
 				a.cow.ledger.rawEscaped = true
 			case "candidate":
-				_, err := a.PrepareCOWCandidateRetiringWithLimitsV1(2, 2, candidateIDFromString(route), ReuseCapability{}, nil, 0, NewCandidatePageSinkV1(), nil)
+				_, err := a.PrepareCOWCandidateRetiringWithLimitsV1(2, 2, candidateIDFromString(route), ReuseCapability{}, nil, 0, NewOwnedCandidatePageSinkV1(), nil)
 				if err != nil {
 					t.Fatal(err)
 				}

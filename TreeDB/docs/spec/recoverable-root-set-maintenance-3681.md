@@ -203,39 +203,76 @@ unvisited unrelated index pages have no immediate whole-inventory detection
 guarantee. The standalone layout retains its whole-inventory corruption,
 namespace/rebind, exact child-handle, pin and directory-sync safeguards.
 
-### Transaction-private allocator preparation (#5105)
+### Transaction-private allocator preparation (#5105 and #5108)
 
-A prepared allocator transaction detaches unmaterialized aliases reachable
-before a durable boundary from its rollback transaction before private edits.
-A durable node can retain empty, zero-ID descendants because emission skips
-empty summaries while the in-memory trie keeps their pointers. Every durable
-node's first private copy therefore isolates each zero-ID immediate-child
-subtree recursively through the next durable boundary, including a zero-ID
-chunk at a durable leaf. Later durable-child first copies repeat that rule.
-Only these isolation boundaries permit in-place editing; zero identity alone
-is insufficient. Materialized objects remain immutable. No owner token/table enters an immutable generation or retained page view.
-Creating a persistent transaction clone first revokes the original's private
-permission; the private clone re-enables it only after its own detachment.
+The allocator uses the canonical typed 16-way Patricia topology described in
+[storage format](storage-format.md#freelist-patricia-v2-active-durable-root-allocator-format).
+Its sole owning edge is a value reference to either a branch or a 256-entry
+chunk. A branch records the first differing nibble and has at least two
+children; deletion immediately collapses unary branches and removes empty
+chunks. A single nonempty chunk is the root directly. The only empty physical
+state is the exact generation-root sentinel; empty or unary descendants do not
+remain as history.
 
-The existing allocator profile admission remains before isolation/allocation.
-A valid high-water H bounds at most ceil(H/256) state chunks and fifteen trie
-nodes per chunk, plus an empty root. Conservative Go allocation-class capacities
-are 192 bytes per state node and 2304 per 256-entry chunk. Thus one complete
-state representation is bounded by 5184*ceil(H/256)+192 bytes; rollback/private
-overlap is at most twice that bound, excluding separately admitted maps/slices,
-reservation/metadata output, and already retained immutable generations. No
-ownership table grows with pages. The private flag occupies existing bool
-padding; four attribution uint64s add 32 bytes to the transaction's allocation
-class on the selected amd64 toolchain (structural/compiler checks remain
-required). The tree bound includes retained empty trie paths, and all boundary
-copies and nonnil node isolation visits are charged. Existing input/output
-count caps and defaults remain. Full caller byte preflight is unproved: this
-tree-overlap bound being smaller than a COW tranche does not account for all
-simultaneous trees, maps, slices, plans and retained candidates, and cannot
-establish complete reservation sufficiency.
+Before private edits, a prepared allocator transaction detaches unmaterialized
+aliases reachable before an immutable boundary from its rollback transaction.
+The first private copy of a durable branch isolates each dirty immediate-child
+subtree through the next durable boundary; later durable-child first copies
+repeat that rule. A copied branch retains its fixed child references exactly
+once. Only these isolation boundaries permit in-place editing; zero page
+identity alone is insufficient. Materialized objects remain immutable. Creating
+a persistent transaction clone first revokes the original's private permission;
+the private clone re-enables it after its own detachment. No owner token or
+identity table enters an immutable generation or retained page view.
+
+Existing allocator admission precedes isolation and allocation. For C nonempty
+chunks, a canonical tree has at most C-1 branches because every branch has at
+least two children. The selected allocation-class geometry is 352 bytes per
+branch and 2304 bytes per chunk. State backing is therefore at most
+2304*C + 352*(C-1) bytes for C>0; a materialized empty root uses one 352-byte
+sentinel. A valid high-water H bounds C by ceil(H/256). Two complete rollback
+and private representations require at most twice the corresponding state
+bound, while shared immutable backing may reduce actual overlap. This bound
+excludes separately admitted creator receipts, sets, maps, slices, reservation
+and metadata output, and other retained generations and candidates. All births,
+boundary copies and isolation visits remain charged; each whole branch or
+chunk class is prepaid before birth, and the original creator retains its
+backing charge until the final owning reference releases it.
+
+The current transaction and generation raw sizes are 384 and 320 bytes,
+respectively, with selected allocation classes 384 and 320. These are explicit
+layout expectations rather than a padding-based incremental charge claim;
+pinned Linux allocation-class witnesses remain required. Existing input/output
+caps, publisher reserves and defaults remain unchanged. Full caller byte
+preflight remains unproved: the state-overlap bound does not account for all
+simultaneous trees, sets, slices, plans, creator receipts and retained
+candidates, and cannot establish complete reservation sufficiency.
 
 Materialization consumes the transaction and clears private permission before
 sink callbacks on success or partial-write failure; validation-error returns
-also revoke permission. Abort restores the original transaction and conservative
-reservation burns. Both visible and durable-seal generations, exact page IDs/
-CRC, slot overwrite retirements, and opaque root/pin/recovery horizons remain.
+also revoke permission. Abort restores the original transaction and preserves
+conservative reservation burns. Dirty state emits one page per actual chunk or
+canonical branch, with one root sentinel for empty state, plus the actual
+coalesced reservation chain and generation header. Reservation sizing must
+match those emitted pages and normalized extents, including skipped abandoned
+append ranges at a reservation-page boundary.
+
+Visible and durable-seal generations remain separate generations with their
+existing publication authority and opaque root, pin and recovery horizons.
+Their allocator and owned-manifest work joins the existing finalization path;
+this topology change does not add a separate publication round. New canonical
+physical page counts, identities, CRCs and bytes are verified independently of
+the historical V1 identical-byte evidence. Logical free/retired contents,
+rollback and recovery behavior, slot-overwrite retirement, and the existing
+horizon checks remain the equivalence contract. Full visible/seal caller
+emission, creator-class and fixed-capacity acceptance remains open until the
+actual production-path witnesses pass. The accepted bounded
+parent-lifetime correction additionally protects overwritten root records
+through any surviving fixed slot's immediate-parent reference, while manifest
+pages retain their own commit horizon. Direct preparation and queued seal use
+one fixed-slot validation and inventory-partition helper. The physical metadata
+reuse fixtures now retain 88 pages in the steady case and 37 in the multipage
+case (previously 86 and 34); earlier physical inventories and fit forecasts do
+not apply to this candidate. These fixture counts are not general plateau
+bounds. The [accounting contract](allocator-patricia-v2-accounting.md) records
+all additional caller/backing obligations and preserves the 128 MiB gate.

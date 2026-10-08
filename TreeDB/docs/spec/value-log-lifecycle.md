@@ -872,7 +872,13 @@ inventory together with its actual external leaf/value-log dependencies.
 Owned-mode manifest retirement reports internal page retirement, promotion,
 reuse and high-water. Its manifest-file deleted-byte counters stay zero.
 Internal reuse is not physical segment deletion or index-file shrink; vacuum
-remains the separate shrink operation. Genuine producer rollover changes the
+remains governed by distinct physical-file owners and namespace/pin checks.
+Patricia allocator metadata reuse protects root records through both fixed
+slots' own and immediate-parent references, while manifest pages use their own
+commit horizon. It never grants deletion of persistent value-log or leaf-log
+files. The [allocator accounting contract](allocator-patricia-v2-accounting.md)
+keeps their resource inventories and backing separate from allocator page
+counts. Vacuum remains the separate shrink operation. Genuine producer rollover changes the
 inventory in the same dependency-flushed acknowledgment, while logical equality
 allows reuse. Forced inventory checkpoints still create and charge revisions.
 This mode requires a new database/rebuild and its required-feature/physical-root

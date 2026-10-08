@@ -878,3 +878,10 @@ source/binary/toolchain evidence and the fixed matched noise rules. GC-only
 speedups cannot excuse unexplained publication allocation. Current qualification
 and rollout ownership remains #5090/#5095; the historical standalone results
 in this guide do not promote the new layout.
+
+Allocator metadata uses the
+[canonical Patricia V2 topology](../spec/storage-format.md#freelist-patricia-v2-active-durable-root-allocator-format).
+Its physical emission and reservation counts are checked separately from
+publication latency. The fixed admission caps, publisher reserve, visible/seal
+horizons, and default workload gates are unchanged; topology counts provide no
+performance or finite plateau acceptance.

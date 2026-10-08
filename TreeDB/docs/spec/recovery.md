@@ -160,6 +160,14 @@ returns `ErrLegacyFormatRebuildRequired`; callers must rebuild the DB directory.
 
 ### 2.2 Existing DB bounded selection
 
+Before either slot or WAL is decoded, `freelist_patricia_v2` must be present for
+every nonempty index, including read-only and no-lock snapshot opens. Fresh
+stores write the marker before index initialization. Missing/removed markers
+and attempts to retrofit a populated store fail with
+`ErrLegacyFormatRebuildRequired`. Version-1 allocator pages are incompatible;
+normal startup never migrates them or uses them as an older-slot fallback.
+
+
 - Read exactly the two fixed meta pages (`MetaPage0`, `MetaPage1`).
 - Validate each page's checksum, type, durable-meta V1 header, scalar bounds,
   and meta-projection digest.
@@ -171,8 +179,10 @@ returns `ErrLegacyFormatRebuildRequired`; callers must rebuild the DB directory.
     and SHA-256 digest from the meta,
   - require its commit/durable sequences and projection digest to match the
     meta and its durable extent not to exceed the physical file,
-  - load the checksummed COW freelist generation and verify its digest and
-    recorded free/retired counts,
+  - load the checksummed COW freelist Patricia V2 generation, verifying its
+    digest, counts, typed root, canonical prefixes/branch depths/slots, exact
+    root generation, bounded child generations, and unique page ownership
+    (including header and reservation aliases),
   - load the bounded dependency-manifest page chain and validate the exact
     external resource identities, digests, frontiers, reachability fields, and
     namespace obligations,
@@ -184,7 +194,18 @@ If the newest candidate is incomplete or corrupt, selection falls back to the
 older complete slot. If neither slot is complete, open fails with
 `ErrNoRecoverableMeta` and stable per-slot rejection reasons. Normal recovery
 never follows the parent-record chain and never repairs a candidate by combining
-fields or resources from the other slot.
+fields or resources from the other slot. The existing bounded
+immediate-parent check still reads the exact parent record named by each slot;
+"never follows" excludes a recursive history walk. Metadata reuse must protect
+that parent record through the referencing slot's commit even after its own
+meta slot is overwritten. Root-record and manifest horizons differ; equality
+with the oldest recoverable commit remains protected. The regression in
+`durable_root_parent_lifetime_v1_test.go` keeps both slots valid before seal,
+checks retry and falls back after corrupting the newest slot without relaxing
+lineage or combining slots. A physical snapshot copies the required
+`format.json` together with its exact captured index/dependencies; missing V2
+features are rebuild-required, not a decoder fallback.
+
 
 For an opt-in `dependency_directory_v2` store, the version-2 durable-root record
 selects the dependency B-tree instead of a contiguous V1 manifest. Recovery

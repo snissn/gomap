@@ -63,6 +63,8 @@ func (a *Allocator) closeCOWOwnersLockedV1() {
 		defer candidate.writeMu.Unlock()
 		generation, creator, preparedCreator := candidate.generation, candidate.creator, prepared.creator
 		clear(candidate.pages[:cap(candidate.pages)])
+		clear(candidate.dirtyIDs[:cap(candidate.dirtyIDs)])
+		clear(prepared.auxiliary[:cap(prepared.auxiliary)])
 		candidate.pages, candidate.dirtyIDs, candidate.generation = nil, nil, nil
 		candidate.allocationCredit, candidate.creator = nil, nil
 		prepared.candidate, prepared.auxiliary, prepared.creator = nil, nil, nil
@@ -86,7 +88,7 @@ func (a *Allocator) closeCOWOwnersLockedV1() {
 		prepared = next
 	}
 	state.ownedCandidates = nil
-	clear(state.activated)
+	clear(state.activated[:cap(state.activated)])
 	state.prepared, state.activated = nil, nil
 	activatedCreator := state.activatedCreator
 	state.activatedCreator = nil

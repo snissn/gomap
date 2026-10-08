@@ -6,27 +6,64 @@ import "unsafe"
 // persistent mutation copied the selected path. Other dirty branches still
 // need isolation. A private preparation already isolated all dirty aliases and
 // bypasses this helper when materialization consumes its builder.
-func detachMetadataSiblings(n *stateNode, depth int, chunkNo uint64) *stateNode {
-	return detachMetadataSiblingsWithStats(n, depth, chunkNo, nil)
+func detachMetadataSiblings(r stateRefV1, depth int, chunkNo uint64) stateRefV1 {
+	return detachMetadataSiblingsWithStats(r, depth, chunkNo, nil)
 }
-
-func detachMetadataSiblingsWithStats(n *stateNode, depth int, chunkNo uint64, stats *FreelistTxnStats) *stateNode {
-	retainStateNodeV1(n)
+func detachMetadataSiblingsWithStats(r stateRefV1, depth int, chunkNo uint64, stats *FreelistTxnStats) stateRefV1 {
+	out, err := detachMetadataSiblingsOwnedV1(r, depth, chunkNo, stats, nil)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+func metadataSiblingBirthPlanV1(r stateRefV1, chunkNo uint64) stateBirthPlanV1 {
+	var plan stateBirthPlanV1
+	if r.branch == nil {
+		return plan
+	}
+	selected := chunkNibble(chunkNo, int(r.branch.depth))
+	for i, child := range r.branch.child {
+		if i == selected {
+			plan.add(metadataSiblingBirthPlanV1(child, chunkNo))
+		} else {
+			plan.add(dirtyStateBirthPlanV1(child, 0))
+		}
+	}
+	return plan
+}
+func detachMetadataSiblingsOwnedV1(r stateRefV1, _ int, chunkNo uint64, stats *FreelistTxnStats, creator *allocationCreditLeaseV1) (stateRefV1, error) {
+	plan := metadataSiblingBirthPlanV1(r, chunkNo)
+	operation, err := admitAllocationOperationV1(creator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	if err != nil {
+		return stateRefV1{}, err
+	}
+	defer operation.close()
+	return detachMetadataSiblingsOperationV1(r, chunkNo, stats, &operation)
+}
+func detachMetadataSiblingsOperationV1(r stateRefV1, chunkNo uint64, stats *FreelistTxnStats, operation *allocationOperationV1) (stateRefV1, error) {
+	owned := retainStateNodeV1(r)
 	if stats != nil {
 		stats.StateIsolationVisits++
 	}
-	if depth == chunkTrieDepth {
-		return n // The selected leaf and chunk were both copied by mutateChunk.
+	if r.branch == nil {
+		return owned, nil
 	}
-	selected := chunkNibble(chunkNo, depth)
-	for i, child := range n.child {
+	selected := chunkNibble(chunkNo, int(r.branch.depth))
+	for i, child := range r.branch.child {
+		var next stateRefV1
+		var err error
 		if i == selected {
-			replaceStateNodeV1(&n.child[i], detachMetadataSiblingsWithStats(child, depth+1, chunkNo, stats))
+			next, err = detachMetadataSiblingsOperationV1(child, chunkNo, stats, operation)
 		} else {
-			replaceStateNodeV1(&n.child[i], detachUnmaterializedWithStats(child, depth+1, stats))
+			next, err = detachStateOwnedOperationV1(child, 0, stats, operation)
 		}
+		if err != nil {
+			releaseStateNodeV1(owned)
+			return stateRefV1{}, err
+		}
+		replaceStateNodeV1(&r.branch.child[i], next)
 	}
-	return n
+	return owned, nil
 }
 
 // A bounded placement attempt, not a full free-set search. Each visited chunk
@@ -199,6 +236,9 @@ func (l *ReservationLedger) claimReusedMetadataAdmittedV1(candidate CandidateIDV
 			coverage++
 		}
 	}
+	if oldIDs > int(^uint(0)>>1)-newOwners || oldCoverage > int(^uint(0)>>1)-coverage {
+		return allocationOperationV1{}, false, ErrNoAllocatablePage
+	}
 	plan, err := l.admitReservationV1(candidate, r, oldIDs+newOwners, newOwners, oldCoverage+coverage, creator, extra)
 	if err != nil {
 		return allocationOperationV1{}, false, err
@@ -253,17 +293,14 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 		// The selected chunk stays nonempty, so the eventual mutation neither
 		// creates nor removes a node; already dirty nodes are counted once.
 		statePages := countUnmaterializedStatePages(t.root, 0)
-		for n, depth := t.root, 0; n != nil; depth++ {
-			if n.pageID != 0 {
+		for r := t.root; !r.zero() && r.containsChunk(chunk.chunkNo); {
+			if r.pageID() != 0 {
 				statePages++
 			}
-			if depth == chunkTrieDepth {
-				if n.chunk.pageID != 0 {
-					statePages++
-				}
+			if r.chunk != nil {
 				break
 			}
-			n = n.child[chunkNibble(chunk.chunkNo, depth)]
+			r = r.branch.child[chunkNibble(chunk.chunkNo, int(r.branch.depth))]
 		}
 		// Even one reservation page plus the header cannot fit. Reject before
 		// allocating a private plan or constructing its reservation extents.
@@ -276,6 +313,7 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 			var err error
 			baseExtents, err = t.reservationExtents()
 			if err != nil {
+				t.allocationErr = err
 				return 0, 0, nil, false
 			}
 			baseReady = true
@@ -297,15 +335,12 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 			overlay[overlayCount] = ReservationExtentV1{StartPageID: id, Count: 1, Kind: ReservationPendingMetadataRetirement, LastReachableCommitSeq: t.base.commitSeq}
 			overlayCount++
 		}
-		for n, depth := t.root, 0; n != nil; depth++ {
-			add(n.pageID)
-			if depth == chunkTrieDepth {
-				if n.chunk != nil {
-					add(n.chunk.pageID)
-				}
+		for r := t.root; !r.zero() && r.containsChunk(chunk.chunkNo); {
+			add(r.pageID())
+			if r.chunk != nil {
 				break
 			}
-			n = n.child[chunkNibble(chunk.chunkNo, depth)]
+			r = r.branch.child[chunkNibble(chunk.chunkNo, int(r.branch.depth))]
 		}
 		for i := 1; i < overlayCount; i++ {
 			for j := i; j > 0 && overlay[j].StartPageID < overlay[j-1].StartPageID; j-- {
@@ -321,6 +356,10 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 			continue
 		}
 		mutation := t.planMutationV1(chunk.chunkNo, 0)
+		if mutation.err != nil {
+			t.allocationErr = mutation.err
+			return 0, 0, nil, false
+		}
 		outputBytes := allocationClassV1(uint64(extentCount)*uint64(unsafe.Sizeof(ReservationExtentV1{})), false)
 		extra := allocationOperationV1{bytes: cowSaturatingAddV1(mutation.bytes, outputBytes), refs: mutation.refs}
 		operation, claimed, err := t.ledger.claimReusedMetadataAdmittedV1(candidate, start, count, t.highWater, t.allocated, t.abandonedAppends, t.buildCreator, extra)
@@ -372,13 +411,36 @@ func (t *FreelistTxn) allocateReusedRange(count int) ([]uint64, bool) {
 		if uint64(count) > run {
 			continue
 		}
+		mutation := t.planMutationV1(chunk.chunkNo, count)
+		if mutation.err != nil {
+			t.allocationErr = mutation.err
+			return nil, false
+		}
+		outputBytes := allocationClassV1(uint64(count)*8, false)
+		operation, err := admitAllocationOperationV1(t.buildCreator, cowSaturatingAddV1(mutation.bytes, outputBytes), mutation.refs)
+		if err != nil {
+			t.allocationErr = err
+			return nil, false
+		}
+		if err = operation.take(outputBytes, 0); err != nil {
+			operation.close()
+			t.allocationErr = err
+			return nil, false
+		}
 		ids := make([]uint64, count)
-		t.mutate(chunk.chunkNo, func(c *stateChunk) {
-			for i := range ids {
-				ids[i] = start + uint64(i)
-				c.setFree(ids[i]&(freelistChunkSize-1), false)
+		for i := range ids {
+			ids[i] = start + uint64(i)
+		}
+		err = t.applyMutationV1(chunk.chunkNo, uint64(count), func(c *stateChunk) {
+			for _, id := range ids {
+				c.setFree(id&(freelistChunkSize-1), false)
 			}
-		})
+		}, mutation, &operation)
+		operation.close()
+		if err != nil {
+			t.allocationErr = err
+			return nil, false
+		}
 		for _, id := range ids {
 			t.allocated = append(t.allocated, allocatedPage{id, ReservationReusedData})
 		}

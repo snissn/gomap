@@ -1,177 +1,174 @@
 package freelist
 
-import "sync/atomic"
-
 type stateBirthPlanV1 struct{ nodes, chunks uint64 }
 
-func (plan *stateBirthPlanV1) add(other stateBirthPlanV1) {
-	plan.nodes += other.nodes
-	plan.chunks += other.chunks
-}
-func dirtyStateBirthPlanV1(n *stateNode, depth int) stateBirthPlanV1 {
-	if n == nil || n.pageID != 0 {
+func (p *stateBirthPlanV1) add(q stateBirthPlanV1) { p.nodes += q.nodes; p.chunks += q.chunks }
+func dirtyStateBirthPlanV1(r stateRefV1, _ int) stateBirthPlanV1 {
+	if r.zero() || r.pageID() != 0 {
 		return stateBirthPlanV1{}
 	}
-	plan := stateBirthPlanV1{nodes: 1}
-	if depth == chunkTrieDepth {
-		if n.chunk != nil && n.chunk.pageID == 0 {
-			plan.chunks++
-		}
-		return plan
+	if r.chunk != nil {
+		return stateBirthPlanV1{chunks: 1}
 	}
-	for _, child := range n.child {
-		plan.add(dirtyStateBirthPlanV1(child, depth+1))
+	p := stateBirthPlanV1{nodes: 1}
+	for _, child := range r.branch.child {
+		p.add(dirtyStateBirthPlanV1(child, 0))
 	}
-	return plan
+	return p
 }
-
-// forcedShared models the edge retained by a prospective shallow copy;
-// isolated models a zero-ID subtree which that copy detaches first. Page ID
-// alone never authorizes mutation of a live object.
-func mutationStateBirthPlanV1(n *stateNode, chunkNo uint64, depth int, private, forcedShared, isolated bool) stateBirthPlanV1 {
-	copyNode := !private || n == nil || n.pageID != 0 || (!isolated && (forcedShared || atomic.LoadUint64(&n.ownedRefs) != 1))
-	plan := stateBirthPlanV1{}
-	if copyNode {
-		plan.nodes++
+func mutationStateBirthPlanV1(r stateRefV1, key uint64, _ int, private, forcedShared, isolated bool) stateBirthPlanV1 {
+	if r.zero() || r.freeCount()+r.retiredCount() == 0 {
+		return stateBirthPlanV1{chunks: 1}
 	}
-	detaches := copyNode && private && n != nil && n.pageID != 0
+	if !r.containsChunk(key) {
+		return stateBirthPlanV1{nodes: 1, chunks: 1}
+	}
+	copyRef := !private || r.pageID() != 0 || (!isolated && (forcedShared || r.ownedRefs() != 1))
+	if r.chunk != nil {
+		if copyRef {
+			return stateBirthPlanV1{chunks: 1}
+		}
+		return stateBirthPlanV1{}
+	}
+	p := stateBirthPlanV1{}
+	if copyRef {
+		p.nodes++
+	}
+	detaches := copyRef && private && r.pageID() != 0
 	if detaches {
-		if depth == chunkTrieDepth {
-			if n.chunk != nil && n.chunk.pageID == 0 {
-				plan.chunks++
-			}
-		} else {
-			for _, child := range n.child {
-				plan.add(dirtyStateBirthPlanV1(child, depth+1))
-			}
+		for _, child := range r.branch.child {
+			p.add(dirtyStateBirthPlanV1(child, 0))
 		}
 	}
-	if depth == chunkTrieDepth {
-		var chunk *stateChunk
-		if n != nil {
-			chunk = n.chunk
-		}
-		chunkIsolated := chunk != nil && chunk.pageID == 0 && (isolated || detaches)
-		if !private || chunk == nil || chunk.pageID != 0 || (!chunkIsolated && (copyNode || atomic.LoadUint64(&chunk.ownedRefs) != 1)) {
-			plan.chunks++
-		}
-		return plan
-	}
-	var child *stateNode
-	if n != nil {
-		child = n.child[chunkNibble(chunkNo, depth)]
-	}
-	childIsolated := child != nil && child.pageID == 0 && (isolated || detaches)
-	plan.add(mutationStateBirthPlanV1(child, chunkNo, depth+1, private, copyNode, childIsolated))
-	return plan
+	child := r.branch.child[chunkNibble(key, int(r.branch.depth))]
+	childIsolated := !child.zero() && child.pageID() == 0 && (isolated || detaches)
+	p.add(mutationStateBirthPlanV1(child, key, 0, private, copyRef, childIsolated))
+	return p
 }
-func detachStateOwnedOperationV1(n *stateNode, depth int, stats *FreelistTxnStats, operation *allocationOperationV1) (*stateNode, error) {
-	if n == nil {
-		return nil, nil
+func noteStateBirthV1(r stateRefV1, stats *FreelistTxnStats) {
+	if stats == nil {
+		return
+	}
+	if r.chunk != nil {
+		stats.StateChunkCopies++
+		stats.StateCopyBytes += stateChunkCopyCapacityV1
+	} else {
+		stats.StateNodeCopies++
+		stats.StateCopyBytes += stateNodeCopyCapacityV1
+	}
+}
+func detachStateOwnedOperationV1(r stateRefV1, _ int, stats *FreelistTxnStats, op *allocationOperationV1) (stateRefV1, error) {
+	if r.zero() {
+		return stateRefV1{}, nil
 	}
 	if stats != nil {
 		stats.StateIsolationVisits++
 	}
-	if n.pageID != 0 {
-		return retainStateNodeV1(n), nil
+	if r.pageID() != 0 {
+		return retainStateNodeV1(r), nil
 	}
-	out, err := cloneStateNodeOwnedV1(n, true, operation.creator, operation)
+	out, err := cloneStateRefOwnedV1(r, true, op.creator, op)
 	if err != nil {
-		return nil, err
+		return stateRefV1{}, err
 	}
-	if stats != nil {
-		stats.StateNodeCopies++
-		stats.StateCopyBytes += stateNodeCopyCapacityV1
-	}
-	if err = detachChildrenOwnedOperationV1(out, depth, stats, operation); err != nil {
+	noteStateBirthV1(out, stats)
+	if err = detachChildrenOwnedOperationV1(out, 0, stats, op); err != nil {
 		releaseStateNodeV1(out)
-		return nil, err
+		return stateRefV1{}, err
 	}
 	return out, nil
 }
-func detachChildrenOwnedOperationV1(out *stateNode, depth int, stats *FreelistTxnStats, operation *allocationOperationV1) error {
-	if depth == chunkTrieDepth {
-		if out.chunk != nil && out.chunk.pageID == 0 {
-			chunk, err := cloneStateChunkOwnedV1(out.chunk, true, operation.creator, operation)
-			if err != nil {
-				return err
-			}
-			replaceStateChunkV1(&out.chunk, chunk)
-			if stats != nil {
-				stats.StateChunkCopies++
-				stats.StateCopyBytes += stateChunkCopyCapacityV1
-			}
-		}
+func detachChildrenOwnedOperationV1(r stateRefV1, _ int, stats *FreelistTxnStats, op *allocationOperationV1) error {
+	if r.branch == nil {
 		return nil
 	}
-	for i, child := range out.child {
-		owned, err := detachStateOwnedOperationV1(child, depth+1, stats, operation)
+	for i, child := range r.branch.child {
+		owned, err := detachStateOwnedOperationV1(child, 0, stats, op)
 		if err != nil {
 			return err
 		}
-		replaceStateNodeV1(&out.child[i], owned)
+		replaceStateNodeV1(&r.branch.child[i], owned)
 	}
 	return nil
 }
-func mutateStateOwnedOperationV1(n *stateNode, chunkNo uint64, depth int, f func(*stateChunk), private bool, stats *FreelistTxnStats, operation *allocationOperationV1) (*stateNode, error) {
-	out := n
-	if !private || n == nil || n.pageID != 0 || atomic.LoadUint64(&n.ownedRefs) != 1 {
-		var err error
-		out, err = cloneStateNodeOwnedV1(n, false, operation.creator, operation)
+func mutateStateOwnedOperationV1(r stateRefV1, key uint64, _ int, f func(*stateChunk), private bool, stats *FreelistTxnStats, op *allocationOperationV1) (stateRefV1, error) {
+	if r.zero() || r.freeCount()+r.retiredCount() == 0 || !r.containsChunk(key) {
+		chunk, err := cloneStateChunkOwnedV1(nil, false, op.creator, op)
 		if err != nil {
-			return nil, err
+			return stateRefV1{}, err
 		}
-		if stats != nil {
-			stats.StateNodeCopies++
-			stats.StateCopyBytes += stateNodeCopyCapacityV1
+		owned := stateRefV1{chunk: chunk}
+		noteStateBirthV1(owned, stats)
+		chunk.chunkNo = key
+		f(chunk)
+		refreshChunkSummaryV1(chunk)
+		if chunk.freeCount()+chunk.retiredPages == 0 {
+			releaseStateNodeV1(owned)
+			return retainStateNodeV1(r), nil
 		}
-		if private && n != nil && n.pageID != 0 {
-			if err = detachChildrenOwnedOperationV1(out, depth, stats, operation); err != nil {
+		if r.zero() || r.freeCount()+r.retiredCount() == 0 {
+			return owned, nil
+		}
+		branch, err := cloneStateBranchOwnedV1(nil, false, op.creator, op)
+		if err != nil {
+			releaseStateNodeV1(owned)
+			return stateRefV1{}, err
+		}
+		out := stateRefV1{branch: branch}
+		noteStateBirthV1(out, stats)
+		depth := firstDifferingDepthV1(key, r.minChunk())
+		branch.depth, branch.prefix = uint8(depth), chunkPrefixV1(key, depth)
+		branch.child[chunkNibble(key, depth)] = owned
+		branch.child[chunkNibble(r.minChunk(), depth)] = retainStateNodeV1(r)
+		recomputeStateNode(branch, depth)
+		return out, nil
+	}
+	out := r
+	if !private || r.pageID() != 0 || r.ownedRefs() != 1 {
+		var err error
+		out, err = cloneStateRefOwnedV1(r, false, op.creator, op)
+		if err != nil {
+			return stateRefV1{}, err
+		}
+		noteStateBirthV1(out, stats)
+		if private && r.pageID() != 0 {
+			if err = detachChildrenOwnedOperationV1(out, 0, stats, op); err != nil {
 				releaseStateNodeV1(out)
-				return nil, err
+				return stateRefV1{}, err
 			}
 		}
 	} else {
 		retainStateNodeV1(out)
 	}
-	if depth == chunkTrieDepth {
-		chunk := out.chunk
-		if !private || chunk == nil || chunk.pageID != 0 || atomic.LoadUint64(&chunk.ownedRefs) != 1 {
-			var err error
-			chunk, err = cloneStateChunkOwnedV1(chunk, false, operation.creator, operation)
-			if err != nil {
-				releaseStateNodeV1(out)
-				return nil, err
-			}
-			if stats != nil {
-				stats.StateChunkCopies++
-				stats.StateCopyBytes += stateChunkCopyCapacityV1
-			}
-		} else {
-			retainStateChunkV1(chunk)
+	if out.chunk != nil {
+		f(out.chunk)
+		refreshChunkSummaryV1(out.chunk)
+		if out.freeCount()+out.retiredCount() == 0 {
+			releaseStateNodeV1(out)
+			return stateRefV1{}, nil
 		}
-		chunk.chunkNo = chunkNo
-		f(chunk)
-		if chunk.freeCount() == 0 {
-			retired, _ := chunk.retiredSummary()
-			if retired == 0 {
-				replaceStateChunkV1(&out.chunk, nil)
-				releaseStateChunkV1(chunk)
-				recomputeStateNode(out, depth)
-				return out, nil
-			}
-		}
-		replaceStateChunkV1(&out.chunk, chunk)
-		recomputeStateNode(out, depth)
 		return out, nil
 	}
-	i := chunkNibble(chunkNo, depth)
-	child, err := mutateStateOwnedOperationV1(out.child[i], chunkNo, depth+1, f, private, stats, operation)
+	i := chunkNibble(key, int(out.branch.depth))
+	child, err := mutateStateOwnedOperationV1(out.branch.child[i], key, 0, f, private, stats, op)
 	if err != nil {
 		releaseStateNodeV1(out)
-		return nil, err
+		return stateRefV1{}, err
 	}
-	replaceStateNodeV1(&out.child[i], child)
-	recomputeStateNode(out, depth)
+	replaceStateNodeV1(&out.branch.child[i], child)
+	recomputeStateNode(out.branch, int(out.branch.depth))
+	count := 0
+	var survivor stateRefV1
+	for _, child := range out.branch.child {
+		if !child.zero() {
+			count++
+			survivor = child
+		}
+	}
+	if count < 2 {
+		owned := retainStateNodeV1(survivor)
+		releaseStateNodeV1(out)
+		return owned, nil
+	}
 	return out, nil
 }

@@ -2,6 +2,17 @@
 
 This document specifies externally-observable behavior expected by callers.
 
+TreeDB's pre-alpha allocator format requires `freelist_patricia_v2` for every
+nonempty public store, including read-only and no-lock snapshot opens. Fresh
+stores persist that marker before index initialization. Old nonempty stores or
+missing/removed markers fail with `ErrLegacyFormatRebuildRequired`; rebuild
+rather than retrofit a marker or mix older-format fallback slots. See
+[storage format](storage-format.md#freelist-patricia-v2-active-durable-root-allocator-format)
+and [allocator accounting](allocator-patricia-v2-accounting.md). Compressed
+metadata preserves public visible/seal, held-reader and exact dual-slot
+recovery authority and grants no new finite/performance admission.
+
+
 Status:
 
 - Current shipped contract: sections that describe existing key/value, cached,

@@ -264,6 +264,67 @@ func (db *DB) durableManifestFromResourcesV1WithStats(resources *rootpublication
 	return manifest, err
 }
 
+// durableRootOverwrittenRecordHorizonV1 keeps an overwritten root record
+// through every fixed-depth lineage check performed by either recoverable slot.
+// Manifests have no parent references and retain their own slot horizon.
+func durableRootOverwrittenRecordHorizonV1(current durableRootRuntimeV1, target uint64) (uint64, error) {
+	if target >= 2 || current.slot >= 2 || current.slotMeta[current.slot] != current.meta || current.slotRecord[current.slot] != current.record {
+		return 0, errors.New("conflicting durable-root current slot binding")
+	}
+	for slot := range current.slotCommit {
+		meta, record := current.slotMeta[slot], current.slotRecord[slot]
+		if current.slotCommit[slot] == 0 {
+			if meta != (page.DurableMetaV1{}) || record != (rootpublication.DurableRootRecordV1{}) {
+				return 0, errors.New("incomplete durable-root recoverable slot binding")
+			}
+			continue
+		}
+		if meta.CommitSeq > current.record.CommitSeq || meta.CommitSeq != current.slotCommit[slot] || record.CommitSeq != meta.CommitSeq || record.DurableSeq != meta.DurableSeq || record.MetaProjectionDigest != meta.MetaProjectionDigest || meta.RootRecordPageID < 2 || meta.RootRecordPageID >= record.TotalPages || meta.RootRecordDigest == ([32]byte{}) {
+			return 0, errors.New("conflicting durable-root recoverable slot binding")
+		}
+		if record.ParentRecordPageID == 0 {
+			if record.ParentCommitSeq != 0 || record.ParentRecordDigest != ([32]byte{}) {
+				return 0, errors.New("conflicting durable-root lineage anchor binding")
+			}
+		} else if record.ParentRecordPageID < 2 || record.ParentRecordPageID >= record.TotalPages || record.ParentCommitSeq == 0 || record.ParentCommitSeq >= record.CommitSeq || record.ParentRecordDigest == ([32]byte{}) {
+			return 0, errors.New("incomplete durable-root parent binding")
+		}
+	}
+	overwritten := current.slotMeta[target]
+	if overwritten.CommitSeq == 0 {
+		return 0, nil
+	}
+	horizon := overwritten.CommitSeq
+	for slot := range current.slotCommit {
+		if current.slotCommit[slot] == 0 {
+			continue
+		}
+		meta, record := current.slotMeta[slot], current.slotRecord[slot]
+		if meta.RootRecordPageID == overwritten.RootRecordPageID && (meta.CommitSeq != overwritten.CommitSeq || meta.RootRecordDigest != overwritten.RootRecordDigest) {
+			return 0, errors.New("conflicting durable-root record alias")
+		}
+		if record.ParentRecordPageID != overwritten.RootRecordPageID && record.ParentCommitSeq != overwritten.CommitSeq {
+			continue
+		}
+		if record.ParentRecordPageID != overwritten.RootRecordPageID || record.ParentCommitSeq != overwritten.CommitSeq || record.ParentRecordDigest != overwritten.RootRecordDigest {
+			return 0, errors.New("conflicting durable-root parent record identity")
+		}
+		if record.CommitSeq > horizon {
+			horizon = record.CommitSeq
+		}
+	}
+	return horizon, nil
+}
+
+// Split the existing slot inventory backing, with its root record last.
+// Preparation retains neither the slice headers nor a new page-ID owner.
+func durableRootPartitionAuxiliaryPagesV1(pages []uint64) (manifest, record []uint64) {
+	if n := len(pages); n != 0 {
+		return pages[: n-1 : n-1], pages[n-1 : n : n]
+	}
+	return nil, nil
+}
+
 func durableRootSlotAuxiliaryPagesV1(meta page.DurableMetaV1, record rootpublication.DurableRootRecordV1) ([]uint64, error) {
 	if meta.CommitSeq == 0 && record.CommitSeq == 0 {
 		return nil, nil
@@ -1408,6 +1469,14 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 	if next.UserRootPageID < 2 || next.SystemRootPageID < 2 {
 		return nil, errors.New("durable-root candidate has invalid roots")
 	}
+	target := uint64(MetaPage0ID)
+	if current.slot == MetaPage0ID {
+		target = MetaPage1ID
+	}
+	recordHorizon, err := durableRootOverwrittenRecordHorizonV1(current, target)
+	if err != nil {
+		return nil, err
+	}
 	capability, err := db.durableRootReuseCapabilityV1(current)
 	if err != nil {
 		return nil, err
@@ -1464,14 +1533,13 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 			token.Release()
 		}
 	}()
-	target := uint64(MetaPage0ID)
-	if current.slot == MetaPage0ID {
-		target = MetaPage1ID
-	}
 	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(current.slotMeta[target], current.slotRecord[target])
 	if err != nil {
 		return nil, err
 	}
+	// Partition the existing inventory backing; no additional page-ID owner is
+	// born. Both groups pass through the same private retirement accounting.
+	manifestPages, recordPages := durableRootPartitionAuxiliaryPagesV1(overwrittenPages)
 	auxiliaryCount := 1
 	if manifest != nil {
 		auxiliaryCount += int(manifest.PageCount())
@@ -1482,11 +1550,12 @@ func (db *DB) prepareDurableRootCandidateV1(idx *indexGen, next page.MetaPageBod
 		durableRootCandidateIDV1(current, next),
 		capability,
 		[]freelist.COWRetirementV1{
-			{PageIDs: overwrittenPages, LastReachableCommitSeq: current.slotCommit[target]},
+			{PageIDs: manifestPages, LastReachableCommitSeq: current.slotCommit[target]},
+			{PageIDs: recordPages, LastReachableCommitSeq: recordHorizon},
 			{PageIDs: retired, LastReachableCommitSeq: current.record.CommitSeq},
 		},
 		auxiliaryCount,
-		freelist.NewCandidatePageSinkV1(),
+		freelist.NewOwnedCandidatePageSinkV1(),
 		nil,
 	)
 	if err != nil {
@@ -2118,7 +2187,7 @@ func (db *DB) initializeDurableRootV1(idx *indexGen) error {
 	}
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], 1)
-	prepared, err := idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, 1, candidateID, capability, nil, auxiliaryCount, freelist.NewCandidatePageSinkV1(), nil)
+	prepared, err := idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, 1, candidateID, capability, nil, auxiliaryCount, freelist.NewOwnedCandidatePageSinkV1(), nil)
 	if err != nil {
 		return err
 	}
@@ -2248,7 +2317,7 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 	var candidateID freelist.CandidateIDV1
 	binary.LittleEndian.PutUint64(candidateID[:8], meta.CommitSeq)
 	binary.LittleEndian.PutUint64(candidateID[8:], meta.UserRootPageID^meta.SystemRootPageID)
-	prepared, err := allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, meta.CommitSeq, candidateID, capability, nil, auxiliaryCount, freelist.NewCandidatePageSinkV1(), nil)
+	prepared, err := allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, meta.CommitSeq, candidateID, capability, nil, auxiliaryCount, freelist.NewOwnedCandidatePageSinkV1(), nil)
 	if err != nil {
 		return err
 	}

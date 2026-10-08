@@ -193,20 +193,21 @@ func cowSaturatingAddV1(a, b uint64) uint64 {
 	return a + b
 }
 
-func (profile *ResidentGenerationProfileV1) addTree(root *stateNode) {
-	if root == nil {
+func (profile *ResidentGenerationProfileV1) addTree(root stateRefV1) {
+	if root.zero() {
 		return
 	}
-	if root.creator != nil {
-		profile.GenerationBytes = cowSaturatingAddV1(profile.GenerationBytes, 32)
+	if root.creator() != nil {
+		profile.GenerationBytes = cowSaturatingAddV1(profile.GenerationBytes, allocationClassV1(uint64(unsafe.Sizeof(allocationCreditLeaseV1{})), true))
 	}
-	profile.StateNodeCount++
-	profile.GenerationBytes = cowSaturatingAddV1(profile.GenerationBytes, allocationClassV1(uint64(unsafe.Sizeof(*root)), true))
 	if root.chunk != nil {
 		profile.StateChunkCount++
 		profile.GenerationBytes = cowSaturatingAddV1(profile.GenerationBytes, allocationClassV1(uint64(unsafe.Sizeof(*root.chunk)), true))
+		return
 	}
-	for _, child := range root.child {
+	profile.StateNodeCount++
+	profile.GenerationBytes = cowSaturatingAddV1(profile.GenerationBytes, allocationClassV1(uint64(unsafe.Sizeof(*root.branch)), true))
+	for _, child := range root.branch.child {
 		profile.addTree(child)
 	}
 }

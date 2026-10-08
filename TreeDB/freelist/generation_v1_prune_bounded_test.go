@@ -20,7 +20,7 @@ func TestBoundedPrune512FreshCapabilityAndWholeWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	work := txn.PruneWithCapabilityBounded(pinned)
-	if work.PromotedPages != 0 || txn.root.freeCount != 0 {
+	if work.PromotedPages != 0 || txn.root.freeCount() != 0 {
 		t.Fatal("reused held pages")
 	}
 	cap, err := NewReuseCapability(10, 0, 0)
@@ -29,7 +29,7 @@ func TestBoundedPrune512FreshCapabilityAndWholeWork(t *testing.T) {
 	}
 	var examined, promoted, visits uint64
 	steps := 0
-	for txn.root.retiredCount != 0 {
+	for txn.root.retiredCount() != 0 {
 		steps++
 		if steps > 128 {
 			t.Fatal("cursor made no bounded progress")
@@ -45,8 +45,8 @@ func TestBoundedPrune512FreshCapabilityAndWholeWork(t *testing.T) {
 	if promoted != 512 || examined > 768 || visits > uint64(steps)*BoundedPruneMaxNodeVisits {
 		t.Fatalf("nonlinear work steps=%d examined=%d promoted=%d visits=%d", steps, examined, promoted, visits)
 	}
-	if txn.root.freeCount != 512 {
-		t.Fatalf("free=%d", txn.root.freeCount)
+	if txn.root.freeCount() != 512 {
+		t.Fatalf("free=%d", txn.root.freeCount())
 	}
 	// A stale hint may revisit but cannot grant stale reuse authority.
 	txn.pruneCursor = 0

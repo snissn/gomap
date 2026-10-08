@@ -39,15 +39,15 @@ func TestFreelistGenerationV1_OlderGenerationAndPagesRemainImmutable(t *testing.
 
 func TestFreelistGenerationV1_MaterializeDoesNotAssignIDsIntoBase(t *testing.T) {
 	base := MustNewFreelistGenerationV1(1, 64, []uint64{2, 9, 33}, nil)
-	if base.root.pageID != 0 {
+	if base.root.pageID() != 0 {
 		t.Fatal("new model unexpectedly materialized")
 	}
 	txn := NewFreelistTxn(base, nil)
 	if _, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("detached"), NewMemoryPageStoreV1()); err != nil {
 		t.Fatal(err)
 	}
-	if base.root.pageID != 0 {
-		t.Fatalf("base root assigned page %d", base.root.pageID)
+	if base.root.pageID() != 0 {
+		t.Fatalf("base root assigned page %d", base.root.pageID())
 	}
 	if err := walkState(base.root, 0, func(chunk *stateChunk) error {
 		if chunk.pageID != 0 {
@@ -526,7 +526,7 @@ func TestReservationLedger_VisibleAndAmbiguousStatesRetainOwnership(t *testing.T
 
 func TestFreelistGenerationV1_PageCodecRoundTripAndCorruption(t *testing.T) {
 	store := NewMemoryPageStoreV1()
-	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 99, []uint64{2, 5, 8}, map[uint64]uint64{11: 7}), 2, store)
+	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 300, []uint64{2, 5, 8, 257}, map[uint64]uint64{11: 7}), 2, store)
 	loaded, err := LoadGenerationV1(store, g.GenerationRef())
 	if err != nil {
 		t.Fatal(err)
@@ -546,7 +546,7 @@ func TestFreelistGenerationV1_PageCodecRoundTripAndCorruption(t *testing.T) {
 	for id, data := range store.Pages {
 		missing.Pages[id] = append([]byte(nil), data...)
 	}
-	delete(missing.Pages, g.root.pageID)
+	delete(missing.Pages, g.root.pageID())
 	if _, err := LoadGenerationV1(missing, g.GenerationRef()); err == nil {
 		t.Fatal("missing root accepted")
 	}
@@ -554,7 +554,7 @@ func TestFreelistGenerationV1_PageCodecRoundTripAndCorruption(t *testing.T) {
 
 func TestFreelistGenerationV1_EveryPageKindRejectsCorruption(t *testing.T) {
 	store := NewMemoryPageStoreV1()
-	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 99, []uint64{2, 5, 8}, map[uint64]uint64{11: 7}), 2, store)
+	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 300, []uint64{2, 5, 8, 257}, map[uint64]uint64{11: 7}), 2, store)
 	seen := map[uint16]bool{}
 	for corruptID, original := range store.Pages {
 		typ := uint16(original[12])
@@ -577,8 +577,8 @@ func TestFreelistGenerationV1_EveryPageKindRejectsCorruption(t *testing.T) {
 
 func TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC(t *testing.T) {
 	store := NewMemoryPageStoreV1()
-	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 99, []uint64{2, 5, 8}, map[uint64]uint64{11: 7}), 2, store)
-	reservedOffset := map[uint16]int{5: 29, 6: 29, 7: 28, 8: 30}
+	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 300, []uint64{2, 5, 8, 257}, map[uint64]uint64{11: 7}), 2, store)
+	reservedOffset := map[uint16]int{5: 30, 6: 72, 7: 28, 8: 30}
 	for corruptID, original := range store.Pages {
 		typ := uint16(original[12])
 		offset, ok := reservedOffset[typ]
@@ -608,7 +608,7 @@ func TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC
 		for id, data := range store.Pages {
 			corrupt.Pages[id] = append([]byte(nil), data...)
 		}
-		corrupt.Pages[corruptID][80] ^= 1 // first child free-count summary
+		corrupt.Pages[corruptID][96] ^= 1 // first child free-count summary
 		finishPage(corrupt.Pages[corruptID])
 		if _, err := LoadGenerationV1(corrupt, g.GenerationRef()); !errors.Is(err, ErrGenerationFormat) && !errors.Is(err, ErrGenerationDigest) {
 			t.Fatalf("forged child summary err=%v", err)
@@ -771,8 +771,8 @@ func TestFreelistGenerationV1_BatchedPruneMutatesEachChunkOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	txn.PruneWithCapability(capability)
-	if txn.root.freeCount != uint64(len(retired)) {
-		t.Fatalf("prune free count=%d want%d", txn.root.freeCount, len(retired))
+	if txn.root.freeCount() != uint64(len(retired)) {
+		t.Fatalf("prune free count=%d want%d", txn.root.freeCount(), len(retired))
 	}
 
 	stats := txn.Stats()
@@ -903,7 +903,7 @@ func BenchmarkFreelistGenerationV1_CandidatePageOwnership(b *testing.B) {
 
 func TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages(t *testing.T) {
 	store := NewMemoryPageStoreV1()
-	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 1024, []uint64{2, 300}, nil), 2, store)
+	base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 1024, []uint64{2, 299, 300}, nil), 2, store)
 	txn := NewFreelistTxn(base, NewReservationLedger())
 	allocated, err := txn.Allocate(300)
 	if err != nil {
@@ -927,26 +927,51 @@ func TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages(t *testing.T) {
 		t.Fatal("changed chunk returned the allocated page after reopen")
 	}
 
-	corrupt := NewMemoryPageStoreV1()
-	for id, data := range store.Pages {
-		corrupt.Pages[id] = append([]byte(nil), data...)
+	// Keep the changed chunk nonempty so canonical collapse does not replace
+	// the formerly shared chunk with a new direct root. Bind corruption to the
+	// actual reachable ancestor, never an orphan left in the page store.
+	shared := lookupChunk(loaded.root, 0)
+	ancestor := lookupChunk(base.root, 0)
+	if loaded.root.branch == nil || !loaded.Allocatable(299) || shared == nil || ancestor == nil ||
+		shared.pageID != ancestor.pageID || shared.checksum != ancestor.checksum {
+		t.Fatal("fixture did not preserve the reachable shared ancestor chunk")
 	}
-	foundSharedChunk := false
-	for _, data := range corrupt.Pages {
-		h := page.DecodeHeader(data)
-		if page.PageType(h.Flags&0xff) != page.PageTypeFreelistChunk || binary.LittleEndian.Uint64(data[40:48]) != 0 || binary.LittleEndian.Uint64(data[32:40]) != 2 {
-			continue
-		}
-		binary.LittleEndian.PutUint64(data[32:40], 3)
-		page.UpdateChecksum(data)
-		foundSharedChunk = true
-		break
+	sharedImage := store.Pages[shared.pageID]
+	if h := page.DecodeHeader(sharedImage); h.PageID != shared.pageID || page.PageType(h.Flags&0xff) != page.PageTypeFreelistChunk ||
+		binary.LittleEndian.Uint64(sharedImage[32:40]) != 2 || binary.LittleEndian.Uint64(sharedImage[40:48]) != 0 {
+		t.Fatal("shared ancestor does not have the actual V2 chunk identity")
 	}
-	if !foundSharedChunk {
-		t.Fatal("shared ancestor chunk page not found")
-	}
-	if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, ErrGenerationDigest) {
-		t.Fatalf("newer child under ancestor page error=%v want %v", err, ErrGenerationDigest)
+	for _, tc := range []struct {
+		name   string
+		mutate func([]byte)
+		want   error
+	}{
+		{
+			name:   "current-generation-outside-target",
+			mutate: func(data []byte) { binary.LittleEndian.PutUint64(data[32:40], 3) },
+			want:   ErrGenerationFormat,
+		},
+		{
+			name: "recomputed-child-crc",
+			mutate: func(data []byte) {
+				// Replace free page 2 with page 3, preserving the encoded free
+				// count and all summaries; only the parent digest detects it.
+				binary.LittleEndian.PutUint64(data[64:72], (uint64(1) << 3))
+			},
+			want: ErrGenerationDigest,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			corrupt := NewMemoryPageStoreV1()
+			for id, data := range store.Pages {
+				corrupt.Pages[id] = append([]byte(nil), data...)
+			}
+			tc.mutate(corrupt.Pages[shared.pageID])
+			page.UpdateChecksum(corrupt.Pages[shared.pageID])
+			if _, err := LoadGenerationV1(corrupt, candidate.GenerationRef()); !errors.Is(err, tc.want) {
+				t.Fatalf("reachable shared ancestor corruption error=%v want %v", err, tc.want)
+			}
+		})
 	}
 }
 
@@ -961,7 +986,7 @@ func TestFreelistGenerationV1_AppendOnlySuccessorRewritesRoot(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := NewMemoryPageStoreV1()
 			base := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, nil, tc.retired), 2, store)
-			oldRootID := base.root.pageID
+			oldRootID := base.root.pageID()
 			txn := NewFreelistTxn(base, NewReservationLedger())
 			allocated, err := txn.Allocate(0)
 			if err != nil {
@@ -971,7 +996,7 @@ func TestFreelistGenerationV1_AppendOnlySuccessorRewritesRoot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if candidate.Generation().root.pageID == oldRootID {
+			if candidate.Generation().root.pageID() == oldRootID {
 				t.Fatalf("append-only generation reused parent root page %d", oldRootID)
 			}
 			loaded, err := LoadGenerationV1(store, candidate.GenerationRef())
@@ -997,7 +1022,7 @@ func TestFreelistGenerationV1_AppendOnlySuccessorRewritesRoot(t *testing.T) {
 
 func TestFreelistGenerationV1_ParentChecksumRejectsRecomputedChildCRC(t *testing.T) {
 	store := NewMemoryPageStoreV1()
-	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 32, []uint64{2}, nil), 2, store)
+	g := materializeTestGeneration(t, MustNewFreelistGenerationV1(1, 300, []uint64{2, 258}, nil), 2, store)
 	corrupt := NewMemoryPageStoreV1()
 	for id, data := range store.Pages {
 		corrupt.Pages[id] = append([]byte(nil), data...)
@@ -1034,9 +1059,10 @@ func TestFreelistGenerationV1_EncodeIndexRejectsChildSummaryOverflow(t *testing.
 		{name: "retired", retired: overflow},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			child := &stateNode{pageID: 2, checksum: 1, freeCount: tc.free, retiredCount: tc.retired}
-			root := &stateNode{freeCount: tc.free, retiredCount: tc.retired}
-			root.child[0] = child
+			child := &stateNode{pageID: 2, checksum: 1, freePages: tc.free, retiredPages: tc.retired}
+			root := &stateNode{freePages: tc.free, retiredPages: tc.retired}
+			root.child[0] = stateRefV1{branch: child}
+			root.child[1] = stateRefV1{chunk: &stateChunk{pageID: 4, free: [4]uint64{1}}}
 			if _, err := encodeIndexPage(3, 1, root, 0); !errors.Is(err, ErrGenerationFormat) {
 				t.Fatalf("encode overflow error=%v want %v", err, ErrGenerationFormat)
 			}
@@ -1063,20 +1089,18 @@ func TestFreelistGenerationV1_LoadStateNodeAcceptsZeroChildChecksum(t *testing.T
 	}
 	chunk.pageID = 2
 	chunk.checksum = 0
-	root := &stateNode{pageID: 3, chunk: chunk, freeCount: chunk.freeCount()}
-	rootPage, err := encodeIndexPage(root.pageID, 1, root, chunkTrieDepth)
-	if err != nil {
-		t.Fatal(err)
-	}
+	refreshChunkSummaryV1(chunk)
 	store := NewMemoryPageStoreV1()
 	store.Pages[chunk.pageID] = chunkPage
-	store.Pages[root.pageID] = rootPage
-	loaded, err := loadStateNode(store, root.pageID, chunkTrieDepth, 0, 1, true, 128, newPageRadixV1[struct{}]())
+	seen := newPageRadixV1[struct{}]()
+	defer seen.Clear()
+	loaded, err := loadStateRefV2(store, chunk.pageID, 1, 1, true, true, 128, seen, -1, nil)
 	if err != nil {
-		t.Fatalf("load zero-checksum child: %v", err)
+		t.Fatalf("load zero-checksum direct root: %v", err)
 	}
-	if loaded.freeCount != 32 || loaded.chunk == nil || loaded.chunk.checksum != 0 {
-		t.Fatalf("loaded zero-checksum child=%+v", loaded)
+	defer releaseStateNodeV1(loaded)
+	if loaded.freeCount() != 32 || loaded.chunk == nil || loaded.chunk.checksum != 0 {
+		t.Fatalf("loaded zero-checksum root=%+v", loaded)
 	}
 }
 
@@ -1089,7 +1113,7 @@ func TestFreelistGenerationV1_MaterializeAcceptsZeroRootChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatalf("materialize zero-checksum root: %v", err)
 	}
-	if got := candidate.Generation().root.checksum; got != 0 {
+	if got := candidate.Generation().root.checksum(); got != 0 {
 		t.Fatalf("root checksum=%08x want 00000000", got)
 	}
 	if _, err := LoadGenerationV1(store, candidate.GenerationRef()); err != nil {

@@ -210,8 +210,8 @@ func TestManagedRawCandidateEscapeRemainsPermanent5105(t *testing.T) {
 }
 
 func TestBuildOwnerPinnedClassWitness5105(t *testing.T) {
-	if got := unsafe.Sizeof(FreelistTxn{}); got != 376 {
-		t.Fatalf("transaction raw bytes=%d want376", got)
+	if got := unsafe.Sizeof(FreelistTxn{}); got != 384 {
+		t.Fatalf("transaction raw bytes=%d want384", got)
 	}
 	if got := allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true); got != 384 {
 		t.Fatalf("transaction class=%d want384", got)

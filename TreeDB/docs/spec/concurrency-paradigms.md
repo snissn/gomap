@@ -626,13 +626,13 @@ first/final GC, whole-call and ACK p95/p99 attribution.
 Under the existing allocator mutex, preparation first admits the live profile,
 copies mutable transaction collections, and detaches dirty rollback aliases.
 Only then does a transaction-local private flag permit reuse of unmaterialized
-nodes for subsequent edits. Durable nodes can retain shared zero-ID descendants
-whose empty summaries prevented emission. Their first private copies isolate
-all zero-ID immediate-child subtrees through the next durable child, including
-zero-ID chunks at durable leaves; that child repeats isolation on its own first
-copy. Immutable page identities are never edited. Sharing
-a private root through the persistent clone helper revokes the original's
-permission before exposing the alias; a new private clone must isolate again.
+nodes for subsequent edits. A first private copy of a durable branch isolates all dirty immediate-child
+subtrees through the next durable child; that child repeats isolation on its
+own first copy. The Patricia topology stores chunks directly and collapses
+empty/unary paths immediately, so no historical empty path is retained.
+Immutable page identities are never edited. Sharing a private root through the
+persistent clone helper revokes the original's permission before exposing the
+alias; a new private clone must isolate again.
 Metadata reuse sizing borrows the tree read-only within one call and returns
 fresh extent values rather than a tree/owner alias.
 
@@ -646,10 +646,25 @@ FreelistTxnStats attributes StateNodeCopies, StateChunkCopies, StateCopyBytes
 (conservative allocation-class capacity), and StateIsolationVisits.
 COWPrepareProfileV1.PreparationCopyWork accumulates those costs incurred inside
 preparation, including failed and aborted attempts, initial isolation and
-hidden-subtree isolation at durable first-copy boundaries. Isolation visits
+dirty-subtree isolation at durable first-copy boundaries. Isolation visits
 count every nonnil node checked, including durable stop nodes.
 It is observational; reads consume no credits and cannot authorize reuse.
 It excludes ordinary allocation and next-generation bootstrap outside that
 preparation boundary, which remain charged by whole-call/setup costs and their
 existing mutation/visit/output accounting. It is not total allocator work or an
 exemption for intrinsic publication, resource capture, pruning or held roots.
+
+Both overwritten-slot preparation callers validate the exact two recoverable
+slot bindings before capturing resources and editing the allocator. Their
+root-record and manifest retirement sets share one existing inventory backing
+through bounded-capacity slices and fixed transient descriptors. Partitioning
+adds no retained page-ID owner. Root-record protection uses the maximum own or
+immediate-parent requiring commit; prior-seal overlap is applied last at the
+selected current commit. The allocator lock and original snapshot/root gates
+continue to serialize preparation and reuse. The fixed-slot check does not
+replace pin admission, debt ownership or the strict opaque reuse predicate.
+
+The [accounting contract](allocator-patricia-v2-accounting.md) distinguishes
+conservative representation census from exact whole backing capacities and
+cumulative birth debit. Zeroing a slice length, consuming a publication debt,
+or retiring its request does not release an older creator's retained backing.

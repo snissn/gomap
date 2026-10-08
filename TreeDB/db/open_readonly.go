@@ -23,6 +23,9 @@ func wrapReadOnlyValueLogRecoveryError(err error) error {
 }
 
 func openReadOnly(opts Options) (*DB, error) {
+	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
+		return nil, err
+	}
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}
@@ -202,6 +205,9 @@ func openReadOnly(opts Options) (*DB, error) {
 }
 
 func openReadOnlyNoLock(opts Options) (*DB, error) {
+	if _, err := validateFreelistTopologyGateV2(opts.Dir); err != nil {
+		return nil, err
+	}
 	if err := applyReadOnlyDefaults(&opts); err != nil {
 		return nil, err
 	}

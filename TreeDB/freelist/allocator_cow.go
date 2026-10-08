@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 var ErrCOWCandidatePrepared = errors.New("COW freelist candidate publication pending")
@@ -117,8 +118,8 @@ func (a *Allocator) cowPrepareProfileLockedV1() COWPrepareProfileV1 {
 	profile.PreparationCopyWork = a.cow.preparationCopyWork
 	profile.Valid = true
 	profile.HighWater = transaction.highWater
-	profile.RetiredPages = transaction.root.retiredCount
-	profile.FreePages = transaction.root.freeCount
+	profile.RetiredPages = transaction.root.retiredCount()
+	profile.FreePages = transaction.root.freeCount()
 	profile.AllocatedPages = uint64(len(transaction.allocated))
 	profile.AbandonedAppendExtents = uint64(len(transaction.abandonedAppends))
 	profile.ChangedChunks = uint64(transaction.changedChunks.Len())
@@ -428,6 +429,9 @@ func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64)
 	if len(ids) == 1 {
 		a.cow.txn.Retire(ids[0], lastReachableCommitSeq)
 	} else {
+		if err := reserveMaterializationBackingV1(a.cow.txn.buildCreator, uint64(len(ids)), uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
+			return err
+		}
 		retired := make([]retiredPage, len(ids))
 		for i, id := range ids {
 			retired[i] = retiredPage{id: id, lastReachableCommitSeq: lastReachableCommitSeq}
@@ -475,11 +479,12 @@ func (a *Allocator) PrepareCOWCandidateRetiringV1(generationID, commitSeq uint64
 // This prevents concurrent allocator growth between admission and allocation.
 // Private preparation adds no ownership collection. Before its dirty-tree
 // isolation allocates, the same profile bounds HighWater and ChangedChunks.
-// A valid tree has at most ceil(HighWater/256) chunks and 15 nodes per chunk
-// (plus an empty root); each dirty node/chunk is detached at most once.
-// Durable first copies also detach hidden zero-ID child subtrees. All such
-// copies and nonnil node visits are attributed; no node is detached twice in
-// one exclusive builder. Old and private trees overlap until activation/abort.
+// For C nonempty chunks a canonical Patricia tree has at most C-1 branches;
+// C is bounded by ceil(HighWater/256). Empty state uses only a root sentinel.
+// Each dirty branch/chunk is detached at most once. Durable first copies also
+// isolate dirty child aliases through the next immutable boundary. All such
+// copies and nonnil visits are attributed; no backing is detached twice in one
+// exclusive builder. Old and private trees overlap until activation/abort.
 // Existing count admission is not a complete caller byte-reservation proof.
 func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1) (*PreparedCOWCandidateV1, error) {
 	return a.prepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, false)
@@ -571,6 +576,16 @@ func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 	// retry returns it above instead of applying a fresher capability after the
 	// caller releases its reader-admission gate.
 	a.pruneCOWLockedV1(a.cow.txn, capability)
+	preparedCreator := a.cow.txn.buildCreator
+	if err := preparedCreator.reserve(allocationClassV1(uint64(unsafe.Sizeof(PreparedCOWCandidateV1{})), true), 1); err != nil {
+		return rollback(err)
+	}
+	preparedHeaderOwned := false
+	defer func() {
+		if !preparedHeaderOwned {
+			preparedCreator.release()
+		}
+	}()
 	auxiliary, err := a.cow.txn.allocateContiguousRange(auxiliaryPageCount)
 	if err != nil {
 		return rollback(err)
@@ -580,9 +595,10 @@ func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 		return rollback(err)
 	}
 	prepared := &PreparedCOWCandidateV1{
-		allocator: a, candidate: candidate, candidateID: candidateID, auxiliary: auxiliary, ownedBacking: owned,
+		creator: preparedCreator, allocator: a, candidate: candidate, candidateID: candidateID, auxiliary: auxiliary, ownedBacking: owned,
 		rollbackTxn: rollbackTxn, rollbackStats: rollbackStats,
 	}
+	preparedHeaderOwned = true
 	if owned {
 		prepared.ownedNext = a.cow.ownedCandidates
 		a.cow.ownedCandidates = prepared
@@ -616,13 +632,22 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 	if a.cow.waitErr != nil {
 		return a.cow.waitErr
 	}
+	// Admit and build rollback isolation before changing reservation ownership.
+	// Failure leaves the exact prepared/rollback aliases available for retry.
+	rollbackStats := prepared.rollbackTxn.stats
+	rollbackRoot, err := detachUnmaterializedOwnedV1(prepared.rollbackTxn.root, 0, &rollbackStats, prepared.rollbackTxn.buildCreator)
+	if err != nil {
+		return err
+	}
 	if err := a.cow.ledger.RollbackPreVisible(prepared.candidateID); err != nil {
+		releaseStateNodeV1(rollbackRoot)
 		return err
 	}
 	stage := a.cow.txn
 	a.cow.txn = prepared.rollbackTxn
 	releaseTxnV1(stage)
-	replaceStateNodeV1(&a.cow.txn.root, detachUnmaterializedWithStats(a.cow.txn.root, 0, &a.cow.txn.stats))
+	replaceStateNodeV1(&a.cow.txn.root, rollbackRoot)
+	a.cow.txn.stats = rollbackStats
 	a.cow.txn.privatePreparation = true
 	a.stats = prepared.rollbackStats
 	a.cow.prepared = nil
@@ -652,10 +677,10 @@ func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) err
 		return a.cow.waitErr
 	}
 	generation := prepared.candidate.generation
-	if err := a.growActivatedBackingLockedV1(prepared.creator); err != nil {
+	if err := a.growActivatedBackingLockedV1(a.cow.txn.buildCreator); err != nil {
 		return err
 	}
-	next, err := beginCandidateOwnedV1(generation, generation.GenerationRef(), a.cow.ledger)
+	next, err := beginCandidateOwnedV1(generation, generation.GenerationRef(), a.cow.ledger, a.cow.txn.buildCreator)
 	if err != nil {
 		return err
 	}
@@ -721,6 +746,37 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	if err := a.validateCOWPhysicalTailLockedV1(generation.HighWater()); err != nil {
 		return err
 	}
+	if err := reserveMaterializationBackingV1(a.cow.txn.buildCreator, uint64(len(prefix)), uint64(unsafe.Sizeof(CandidateIDV1{})), false); err != nil {
+		return err
+	}
+	// The public bounded route admits all births before changing the ledger.
+	// A credited legacy unbounded caller stages its complete private successor;
+	// it never exposes a half-pruned live builder on refusal.
+	var prunePlan boundedPrunePlanV1
+	var pruneStage *FreelistTxn
+	if a.cow.boundedPrune {
+		var err error
+		prunePlan, err = a.cow.txn.prepareBoundedPruneV1(nextCapability)
+		if err != nil {
+			return err
+		}
+		defer prunePlan.operation.close()
+	} else if a.cow.txn.buildCreator != nil && !a.cow.txn.consumed && nextCapability.oldestRecoverableCommitSeq != 0 {
+		var err error
+		pruneStage, err = a.cow.txn.cloneForAllocatorPrepare()
+		if err != nil {
+			return err
+		}
+		defer func() {
+			if pruneStage != nil {
+				releaseTxnV1(pruneStage)
+			}
+		}()
+		pruneStage.PruneWithCapability(nextCapability)
+		if err = pruneStage.valid(); err != nil {
+			return err
+		}
+	}
 	ids := make([]CandidateIDV1, len(prefix))
 	for i, candidate := range prefix {
 		ids[i] = candidate.candidateID
@@ -737,7 +793,22 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	// The live transaction may already be based on a newer visible generation.
 	// Pruning it with the newly advanced recovery horizon is conservative and
 	// does not alter any immutable activated generation.
-	a.pruneCOWLockedV1(a.cow.txn, nextCapability)
+	if a.cow.boundedPrune {
+		work, err := a.cow.txn.applyBoundedPruneV1(&prunePlan)
+		if err != nil {
+			a.cow.waitErr = err
+			a.cow.ready.Broadcast()
+			return err
+		}
+		a.recordBoundedPruneWorkV1(work)
+	} else if pruneStage != nil {
+		oldTxn := a.cow.txn
+		a.cow.txn = pruneStage
+		pruneStage = nil
+		releaseTxnV1(oldTxn)
+	} else {
+		a.pruneCOWLockedV1(a.cow.txn, nextCapability)
+	}
 	a.cow.ready.Broadcast()
 	return nil
 }
@@ -854,18 +925,26 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	if pageCount := a.pager.PageCount(); pageCount != generation.HighWater() {
 		return fmt.Errorf("%w: pager pages %d do not match prepared generation high-water %d", ErrGenerationFormat, pageCount, generation.HighWater())
 	}
-	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
-		return err
-	}
-	if err := a.cow.ledger.Publish(prepared.candidateID); err != nil {
-		return err
-	}
-	next, err := beginCandidateOwnedV1(generation, prepared.candidate.GenerationRef(), a.cow.ledger)
+	// All fallible builder births precede the shared ledger publication. A
+	// historical prepared creator does not confer a new mutable request edge.
+	next, err := beginCandidateOwnedV1(generation, prepared.candidate.GenerationRef(), a.cow.ledger, a.cow.txn.buildCreator)
 	if err != nil {
 		return err
 	}
 	next.pruneCursor = a.cow.txn.pruneCursor
 	a.pruneCOWLockedV1(next, nextCapability)
+	if err := next.valid(); err != nil {
+		releaseTxnV1(next)
+		return err
+	}
+	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
+		releaseTxnV1(next)
+		return err
+	}
+	if err := a.cow.ledger.Publish(prepared.candidateID); err != nil {
+		releaseTxnV1(next)
+		return err
+	}
 	oldGeneration, oldTxn := a.cow.generation, a.cow.txn
 	a.cow.generation = retainGenerationV1(generation)
 	a.cow.txn = next
@@ -920,6 +999,9 @@ func (a *Allocator) pruneCOWLockedV1(txn *FreelistTxn, cap ReuseCapability) {
 		return
 	}
 	work := txn.PruneWithCapabilityBounded(cap)
+	a.recordBoundedPruneWorkV1(work)
+}
+func (a *Allocator) recordBoundedPruneWorkV1(work BoundedPruneStats) {
 	a.cow.pruneWork.NodeVisits += work.NodeVisits
 	a.cow.pruneWork.EntriesExamined += work.EntriesExamined
 	a.cow.pruneWork.PromotedPages += work.PromotedPages

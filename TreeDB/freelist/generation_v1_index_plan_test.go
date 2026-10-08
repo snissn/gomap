@@ -14,63 +14,48 @@ import (
 	"github.com/snissn/gomap/TreeDB/pager"
 )
 
-// This oracle is the unchanged b57 index encoder. It intentionally stays
-// independent of the caller-destination encoder to detect format drift.
-func frozenB57IndexEncodingForTest(id, generationID uint64, n *stateNode, depth int) ([]byte, error) {
+// Independent canonical V2 encoder: literal offsets and magic bind the new
+// format. Historical B57/V1 byte-identity evidence remains frozen in #5105.
+func canonicalPatriciaIndexEncodingForTest(id, generationID uint64, n *stateNode, _ int) ([]byte, error) {
 	b := make([]byte, page.PageSize)
-	count := 0
-	if depth == chunkTrieDepth {
-		if n.chunk == nil || n.chunk.pageID == 0 {
+	children := 0
+	for _, child := range n.child {
+		if !child.zero() {
+			children++
+		}
+	}
+	encodePageHeader(b, id, page.PageTypeFreelistIndex, uint16(children))
+	copy(b[16:24], []byte("FLIDXV2\x00"))
+	binary.LittleEndian.PutUint16(b[24:26], 2)
+	binary.LittleEndian.PutUint16(b[26:28], 80)
+	b[28] = n.depth
+	if children == 0 {
+		b[29] = 1
+	}
+	binary.LittleEndian.PutUint16(b[30:32], 32)
+	binary.LittleEndian.PutUint64(b[32:40], generationID)
+	binary.LittleEndian.PutUint64(b[40:48], n.freePages)
+	binary.LittleEndian.PutUint64(b[48:56], n.retiredPages)
+	binary.LittleEndian.PutUint64(b[56:64], n.minSeq)
+	binary.LittleEndian.PutUint64(b[64:72], n.prefix)
+	offset := 80
+	for slot, child := range n.child {
+		if child.zero() {
+			continue
+		}
+		if child.freeCount() > uint64(^uint32(0)) || child.retiredCount() > uint64(^uint32(0)) {
 			return nil, ErrGenerationFormat
 		}
-		count = 1
-	} else {
-		for _, child := range n.child {
-			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
-				if child.pageID == 0 {
-					return nil, ErrGenerationFormat
-				}
-				count++
-			}
+		b[offset] = byte(slot)
+		if child.chunk != nil {
+			b[offset+1] = 1
 		}
-	}
-	encodePageHeader(b, id, page.PageTypeFreelistIndex, uint16(count))
-	copy(b[16:24], indexMagic[:])
-	binary.LittleEndian.PutUint16(b[24:26], 1)
-	binary.LittleEndian.PutUint16(b[26:28], indexHeaderSize)
-	b[28] = byte(depth)
-	binary.LittleEndian.PutUint16(b[30:32], indexEntrySize)
-	binary.LittleEndian.PutUint64(b[32:40], generationID)
-	binary.LittleEndian.PutUint64(b[40:48], n.freeCount)
-	binary.LittleEndian.PutUint64(b[48:56], n.retiredCount)
-	binary.LittleEndian.PutUint64(b[56:64], n.minRetiredSeq)
-	o := indexHeaderSize
-	write := func(slot byte, kind byte, childChecksum uint32, childID, freeCount, retiredCount, minSeq uint64) error {
-		if freeCount > uint64(^uint32(0)) || retiredCount > uint64(^uint32(0)) {
-			return ErrGenerationFormat
-		}
-		b[o], b[o+1] = slot, kind
-		binary.LittleEndian.PutUint32(b[o+2:o+6], childChecksum)
-		binary.LittleEndian.PutUint64(b[o+8:o+16], childID)
-		binary.LittleEndian.PutUint32(b[o+16:o+20], uint32(freeCount))
-		binary.LittleEndian.PutUint32(b[o+20:o+24], uint32(retiredCount))
-		binary.LittleEndian.PutUint64(b[o+24:o+32], minSeq)
-		o += indexEntrySize
-		return nil
-	}
-	if depth == chunkTrieDepth {
-		retiredCount, minSeq := n.chunk.retiredSummary()
-		if err := write(0, 1, n.chunk.checksum, n.chunk.pageID, n.chunk.freeCount(), retiredCount, minSeq); err != nil {
-			return nil, err
-		}
-	} else {
-		for slot, child := range n.child {
-			if child != nil && (child.freeCount != 0 || child.retiredCount != 0) {
-				if err := write(byte(slot), 0, child.checksum, child.pageID, child.freeCount, child.retiredCount, child.minRetiredSeq); err != nil {
-					return nil, err
-				}
-			}
-		}
+		binary.LittleEndian.PutUint32(b[offset+2:offset+6], child.checksum())
+		binary.LittleEndian.PutUint64(b[offset+8:offset+16], child.pageID())
+		binary.LittleEndian.PutUint32(b[offset+16:offset+20], uint32(child.freeCount()))
+		binary.LittleEndian.PutUint32(b[offset+20:offset+24], uint32(child.retiredCount()))
+		binary.LittleEndian.PutUint64(b[offset+24:offset+32], child.minRetiredSeq())
+		offset += 32
 	}
 	finishPage(b)
 	return b, nil
@@ -121,7 +106,7 @@ func TestCandidateIndexPlansCanonicalBytesAndCapacity(t *testing.T) {
 			if cap(candidate.pages) != len(candidate.pages) {
 				t.Fatal("candidate table has uncharged append capacity")
 			}
-			if unsafe.Sizeof(indexPagePlanV1{}) != 576 {
+			if unsafe.Sizeof(indexPagePlanV1{}) != 592 {
 				t.Fatal("index plan exceeds detached fixed descriptor bound")
 			}
 			// The typed definition owns only byte arrays: neither the view nor its
@@ -134,13 +119,13 @@ func TestCandidateIndexPlansCanonicalBytesAndCapacity(t *testing.T) {
 				}
 			}
 			nodes := make(map[uint64]*stateNode)
-			var visit func(*stateNode)
-			visit = func(n *stateNode) {
-				if n == nil {
+			var visit func(stateRefV1)
+			visit = func(r stateRefV1) {
+				if r.branch == nil {
 					return
 				}
-				nodes[n.pageID] = n
-				for _, child := range n.child {
+				nodes[r.branch.pageID] = r.branch
+				for _, child := range r.branch.child {
 					visit(child)
 				}
 			}
@@ -163,17 +148,17 @@ func TestCandidateIndexPlansCanonicalBytesAndCapacity(t *testing.T) {
 						t.Fatal("plan retains an image")
 					}
 					plan := entry.view.index
-					want, err := frozenB57IndexEncodingForTest(entry.PageID, binary.LittleEndian.Uint64(plan.prefix[32:40]), nodes[entry.PageID], int(plan.prefix[28]))
+					want, err := canonicalPatriciaIndexEncodingForTest(entry.PageID, binary.LittleEndian.Uint64(plan.prefix[32:40]), nodes[entry.PageID], int(plan.prefix[28]))
 					if err != nil {
 						t.Fatal(err)
 					}
 					if !bytes.Equal(dst, want) {
-						t.Fatal("index encoding differs from frozen b57")
+						t.Fatal("index encoding differs from canonical Patricia V2")
 					}
 					if binary.LittleEndian.Uint32(want[8:12]) != page.CalculateChecksumWithZeroGap(plan.prefix[:], page.PageSize-len(plan.prefix), nil) {
 						t.Fatal("logical zero-tail checksum differs from frozen full-page CRC")
 					}
-					for _, offset := range []int{0, 8, 16, 29, 40, 64, 70, 575} {
+					for _, offset := range []int{0, 8, 16, 29, 40, 64, 70, 591} {
 						corrupt := *plan
 						corrupt.prefix[offset] ^= 1
 						guard := bytes.Repeat([]byte{0xc7}, page.PageSize)
@@ -187,7 +172,7 @@ func TestCandidateIndexPlansCanonicalBytesAndCapacity(t *testing.T) {
 					}
 					// An arbitrary nonzero tail is never certified by a prefix checksum:
 					// it changes the full CRC. CopyTo must clear every such destination byte.
-					for _, offset := range []int{576, page.PageSize - 1} {
+					for _, offset := range []int{592, page.PageSize - 1} {
 						tailMutation := bytes.Clone(want)
 						tailMutation[offset] ^= 1
 						if page.VerifyChecksumNonMutating(tailMutation) {
@@ -219,7 +204,7 @@ func TestCandidateIndexPlansCanonicalBytesAndCapacity(t *testing.T) {
 					t.Fatal("destination mutation reached retained view")
 				}
 			}
-			if plans == 0 || !seen[page.PageTypeFreelistGeneration] || !seen[page.PageTypeFreelistReservation] {
+			if (tc.name != "one-chunk" && plans == 0) || (tc.name == "one-chunk" && plans != 0) || !seen[page.PageTypeFreelistGeneration] || !seen[page.PageTypeFreelistReservation] {
 				t.Fatal("missing index/header/reservation coverage")
 			}
 			if tc.name != "empty" && !seen[page.PageTypeFreelistChunk] {
@@ -256,8 +241,8 @@ func assertRetainedPlanViews(t *testing.T, writer *candidatePageRecordingWriterV
 		}
 		clear(dst)
 	}
-	if plans == 0 {
-		t.Fatal("lifetime fixture retained no index plans")
+	if len(writer.views) == 0 {
+		t.Fatal("lifetime fixture retained no candidate views")
 	}
 }
 
@@ -289,11 +274,11 @@ func TestCandidateIndexPlansSurviveAllocatorAbortAndRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer p.Close()
-	if _, err := p.Alloc(64); err != nil {
+	if _, err := p.Alloc(1024); err != nil {
 		t.Fatal(err)
 	}
 	allocator := New(p, 0)
-	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 64, []uint64{2, 9, 33}, nil), NewReservationLedger()); err != nil {
+	if err := allocator.EnableCOWV1(MustNewFreelistGenerationV1(1, 1024, []uint64{2, 9, 257}, nil), NewReservationLedger()); err != nil {
 		t.Fatal(err)
 	}
 	capability, err := NewReuseCapability(1, 1, 0)
@@ -337,7 +322,7 @@ func TestCandidateIndexPlanChecksumFailureDoesNotWritePager(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := &stateNode{pageID: id}
-	expected, err := frozenB57IndexEncodingForTest(id, 2, n, 0)
+	expected, err := canonicalPatriciaIndexEncodingForTest(id, 2, n, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

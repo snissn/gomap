@@ -234,7 +234,7 @@ func TestFreelistGenerationV1_MetadataReusesRetiredCapacity4627(t *testing.T) {
 				t.Fatal(err)
 			}
 			txn.PruneWithCapability(equal)
-			if txn.root.freeCount != 0 {
+			if txn.root.freeCount() != 0 {
 				t.Fatal("equality prematurely grants reuse")
 			}
 		}
@@ -243,8 +243,8 @@ func TestFreelistGenerationV1_MetadataReusesRetiredCapacity4627(t *testing.T) {
 			t.Fatal(err)
 		}
 		txn.PruneWithCapability(capability)
-		if txn.root.freeCount < 256 {
-			t.Fatalf("insufficient safe capacity: %d", txn.root.freeCount)
+		if txn.root.freeCount() < 256 {
+			t.Fatalf("insufficient safe capacity: %d", txn.root.freeCount())
 		}
 		candidateID := candidateIDFromString(benchmarkSizeName(int(cycle + 100)))
 		// Capture the immutable post-capability free state before materialization

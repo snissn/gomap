@@ -158,8 +158,10 @@ func encodeNormalizedReservationPages(id uint64, record ReservationRecordV1) ([]
 
 func reservationDigest(pages [][]byte) [32]byte {
 	h := sha256.New()
+	var scratch [page.PageSize]byte
 	for _, b := range pages {
-		canonical := append([]byte(nil), b...)
+		canonical := scratch[:len(b)]
+		copy(canonical, b)
 		for i := 8; i < 12; i++ {
 			canonical[i] = 0
 		}
@@ -169,7 +171,7 @@ func reservationDigest(pages [][]byte) [32]byte {
 		_, _ = h.Write(canonical)
 	}
 	var digest [32]byte
-	copy(digest[:], h.Sum(nil))
+	_ = h.Sum(digest[:0])
 	return digest
 }
 
@@ -242,6 +244,16 @@ func loadReservationRecord(src PageSource, id, highWater uint64) (ReservationRec
 		}
 	}
 	return record, nil
+}
+
+func (r ReservationRecordV1) pendingMetadataCountV1() uint64 {
+	var count uint64
+	for _, extent := range r.Extents {
+		if extent.Kind == ReservationPendingMetadataRetirement {
+			count += uint64(extent.Count)
+		}
+	}
+	return count
 }
 
 func (r ReservationRecordV1) pendingMetadata() []retiredPage {
@@ -363,7 +375,7 @@ func (l *ReservationLedger) reservedByOtherLocked(candidate CandidateIDV1, id ui
 func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64, creators ...*allocationCreditLeaseV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if candidate == (CandidateIDV1{}) {
+	if candidate == (CandidateIDV1{}) || len(creators) > 1 {
 		return ErrGenerationFormat
 	}
 	if _, exists := l.candidates.Get(candidate); exists {
@@ -424,6 +436,33 @@ func reservationPagesForEntries(entries uint64) uint64 {
 // reserveTail atomically chooses and owns a contiguous metadata range. The
 // range may move above another candidate's reservation; callers persist the
 // skipped prefix as abandoned append space in their reservation record.
+// Count the same appendReservationRange coalescing performed by materialization.
+// Base is normalized and ends before minimum; the target has a distinct kind.
+func tailReservationEntryCountV1(base []ReservationExtentV1, minimum, start uint64) (uint64, error) {
+	if start < minimum {
+		return 0, ErrGenerationFormat
+	}
+	count := uint64(len(base)) + 1 // unique target metadata extent
+	skipped := start - minimum
+	if skipped == 0 {
+		return count, nil
+	}
+	maximum := uint64(^uint32(0))
+	additional := (skipped-1)/maximum + 1
+	if len(base) != 0 {
+		last := base[len(base)-1]
+		if last.Kind == ReservationAbandonedAppend && last.LastReachableCommitSeq == 0 &&
+			last.StartPageID <= minimum && uint64(last.Count) == minimum-last.StartPageID &&
+			uint64(last.Count)+min(skipped, maximum) <= maximum {
+			additional--
+		}
+	}
+	if count > ^uint64(0)-additional {
+		return 0, ErrGenerationFormat
+	}
+	return count + additional, nil
+}
+
 func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1, creators ...*allocationCreditLeaseV1) (uint64, uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -453,17 +492,13 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		}
 		start = max(start, burned.start+burned.count)
 	}
-	baseExtentCount := uint64(len(baseExtents))
 	var count uint64
 	for {
-		skippedExtentCount := uint64(0)
-		if skipped := start - minimumStart; skipped != 0 {
-			skippedExtentCount = (skipped-1)/uint64(^uint32(0)) + 1
+		entryCount, err := tailReservationEntryCountV1(baseExtents, minimumStart, start)
+		if err != nil {
+			return 0, 0, err
 		}
-		if baseExtentCount > ^uint64(0)-skippedExtentCount-1 {
-			return 0, 0, ErrGenerationFormat
-		}
-		recordPageCount := reservationPagesForEntries(baseExtentCount + skippedExtentCount + 1)
+		recordPageCount := reservationPagesForEntries(entryCount)
 		if recordPageCount > uint64(^uint16(0)) || statePageCount > ^uint64(0)-recordPageCount-1 {
 			return 0, 0, ErrGenerationFormat
 		}
@@ -502,6 +537,12 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		if extent.Kind == ReservationAbandonedAppend {
 			coverage++
 		}
+	}
+	if start > minimumStart {
+		coverage++
+	}
+	if oldIDs > int(^uint(0)>>1)-newOwners || oldCoverage > int(^uint(0)>>1)-coverage {
+		return 0, 0, ErrNoAllocatablePage
 	}
 	plan, err := l.admitReservationV1(candidate, r, oldIDs+newOwners, newOwners, oldCoverage+coverage, creator)
 	if err != nil {
@@ -777,7 +818,14 @@ func (l *ReservationLedger) growBurnedTailsLockedV1(creator *allocationCreditLea
 	if len(l.burnedTails) < cap(l.burnedTails) {
 		return nil
 	}
+	maximum := int(^uint(0) >> 1)
+	if len(l.burnedTails) == maximum {
+		return ErrNoAllocatablePage
+	}
 	capacity := grownCapacityV1(cap(l.burnedTails), len(l.burnedTails)+1)
+	if capacity > maximum/int(unsafe.Sizeof(reservationInterval{})) {
+		return ErrNoAllocatablePage
+	}
 	bytes := allocationClassV1(uint64(capacity)*uint64(unsafe.Sizeof(reservationInterval{})), false)
 	operation, err := admitAllocationOperationV1(creator, bytes, 1)
 	if err != nil {
