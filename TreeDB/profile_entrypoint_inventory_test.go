@@ -30,8 +30,8 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 		"InitConditionalTxn", "InitConditionalTxnWithSnapshot", "Iterator", "LeafGenerationGC",
 		"LeafGenerationPack", "LeafGenerationPackFromPlan", "LeafGenerationPackRunOnce",
 		"LeafGenerationPlan", "MaintenancePhase", "NewBatch", "NewBatchWithSize",
-		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "PreflightMVCCPrune", "Print", "ResolvedProfile",
-		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetSync", "Stats", "SupportsMVCCReadCut",
+		"NewConditionalTxn", "NewConditionalTxnWithSnapshot", "NewMVCCAdmission", "PreflightMVCCPrune", "Print", "ResolvedProfile",
+		"ReverseIterator", "SeekGE", "SeekGEVersionRange", "Set", "SetMaintenancePhase", "SetPointWithMVCCInput", "SetSync", "Stats", "SupportsMVCCReadCut",
 		"Update", "UpdateSync", "VacuumIndexOnline", "VacuumOnlineStats", "ValueLogGC", "ValueLogRewriteOnline",
 	}
 	slices.Sort(want)
@@ -42,7 +42,7 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	batchMethods := profileInventoryMethods(t, treeDBDir, "treedb", "commandWALPublicBatch")
 	wantBatch := []string{
 		"Close", "Delete", "DeleteRange", "DeleteView", "DeleteViewWithReplayBytes",
-		"GetByteSize", "Replay", "Reset", "Set", "SetView", "SetViewWithReplayBytes",
+		"GetByteSize", "Replay", "Reset", "Set", "SetView", "SetViewWithReplayBytes", "SetWithMVCCInput",
 		"Write", "WriteSync",
 	}
 	slices.Sort(wantBatch)
@@ -80,18 +80,43 @@ func TestDurabilityProfilePublicEntrypointInventory(t *testing.T) {
 	for _, name := range []string{"ApplyProfile", "ApplyBenchmarkProfile"} {
 		profileInventoryRequireBody(t, profileBodies, name, "applyResolvedProfile")
 	}
-	for _, name := range []string{"Set", "Delete", "DeleteRange"} {
+	for _, name := range []string{"setWithMVCCInput", "Delete", "DeleteRange"} {
 		profileInventoryRequireBody(t, publicBodies, "(*DB)."+name, "commandWALOrdinaryWriteRequiresSync")
 	}
-	for _, name := range []string{"SetSync", "DeleteSync"} {
+	for _, name := range []string{"setSyncWithMVCCInput", "DeleteSync"} {
 		profileInventoryRequireBody(t, publicBodies, "(*DB)."+name, "appendPublicRawKVPointCommand")
 		profileInventoryRequireBody(t, publicBodies, "(*DB)."+name, "true")
+	}
+	profileInventoryRequireBody(t, publicBodies, "(*DB).Set", "db.setWithMVCCInput(key, value, mvccadmission.Input{})")
+	profileInventoryRequireBody(t, publicBodies, "(*DB).SetSync", "db.setSyncWithMVCCInput(key, value, mvccadmission.Input{})")
+	for _, helper := range []string{"setWithMVCCInput", "setSyncWithMVCCInput"} {
+		for _, fragment := range []string{"db.beginPublicOperation()", "db.writeCOWPointAdmittedWithMVCCInput", "db.cached.SetAfterCommandWALAppendWithMVCCInput", "db.appendPublicRawKVPointCommand"} {
+			profileInventoryRequireBody(t, publicBodies, "(*DB)."+helper, fragment)
+		}
+	}
+	for _, fragment := range []string{"if sync", "db.setSyncWithMVCCInput(key, value, input)", "db.setWithMVCCInput(key, value, input)"} {
+		profileInventoryRequireBody(t, publicBodies, "(*DB).SetPointWithMVCCInput", fragment)
+	}
+	for _, fragment := range []string{"db.beginPublicOperation()", "db.backend.NewMVCCAdmission()"} {
+		profileInventoryRequireBody(t, publicBodies, "(*DB).NewMVCCAdmission", fragment)
+	}
+	admissionBodies := profileInventoryFunctionBodies(t, filepath.Join(treeDBDir, "db", "mvcc_admission.go"))
+	for _, fragment := range []string{"db.closing.Load()", "db.mvccAdmission.Issue()"} {
+		profileInventoryRequireBody(t, admissionBodies, "(*DB).NewMVCCAdmission", fragment)
+	}
+	for _, fragment := range []string{"db.lockUpdateKey(key)", "db.writeViaCommitCombinerWithMVCCInput", "db.writeSingleKVWithMVCCInput"} {
+		profileInventoryRequireBody(t, admissionBodies, "(*DB).SetPointWithMVCCInput", fragment)
 	}
 	for _, name := range []string{"NewBatch", "NewBatchWithSize"} {
 		profileInventoryRequireBody(t, publicBodies, "(*DB)."+name, "newCommandWALPublicBatch")
 	}
 	for _, name := range []string{"Checkpoint", "Close"} {
 		profileInventoryRequireBody(t, publicBodies, "(*DB)."+name, "checkpointCachedForPublicCommandWAL")
+	}
+	profileInventoryRequireBody(t, batchBodies, "(*commandWALPublicBatch).SetWithMVCCInput", "b.setViewWithMVCCInput(key, value, false, false, input)")
+	profileInventoryRequireBody(t, batchBodies, "(*commandWALPublicBatch).setView", "b.setViewWithMVCCInput(key, value, retainReplayViews, useInnerView, mvccadmission.Input{})")
+	for _, fragment := range []string{"b.preparePayloadForAppend()", "b.isCOW()", "qualified.SetWithMVCCInput(key, value, input)"} {
+		profileInventoryRequireBody(t, batchBodies, "(*commandWALPublicBatch).setViewWithMVCCInput", fragment)
 	}
 	profileInventoryRequireBody(t, batchBodies, "(*commandWALPublicBatch).Write", "commandWALOrdinaryWriteRequiresSync")
 	profileInventoryRequireBody(t, batchBodies, "(*commandWALPublicBatch).WriteSync", "b.write(true, true)")

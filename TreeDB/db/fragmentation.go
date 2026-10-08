@@ -3,11 +3,14 @@ package db
 import (
 	"context"
 	"fmt"
+	"math/bits"
+	"os"
 	"sort"
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
+	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -63,7 +66,8 @@ func emitFragmentationProbeEvent(event FragmentationProbeEvent) {
 // Contract for background maintenance callers:
 //   - CommitSeq is the snapshot state used for this report.
 //   - User* fields are computed by one user-index page walk and preserve the
-//     treedb.user.pages.span_ratio_ppm semantics from FragmentationReport.
+//     treedb.user.pages.span_ratio_ppm DATA-only semantics from FragmentationReport.
+//     PRIMARY physical pages and private read roots have separate full-report census.
 //   - Freelist* fields come from allocator.Counters(); Pages/FreeIDs are seeded
 //     at open and maintained incrementally so the trigger avoids per-probe
 //     freelist-chain walks. Freelist reclaimable fields are valid only when the
@@ -114,6 +118,89 @@ type IndexVacuumTriggerReport struct {
 	CollectionRootDuplicatePageRefs uint64
 	CollectionRootLeafPages         uint64
 	CollectionRootInternalPages     uint64
+}
+
+// DATA debt describes the DATA file only. A PRIMARY immutable read root is
+// admitted memory at a reserved address; physical PRIMARY pages use local file
+// offsets below that range. Callers classify only after WalkPages validates the
+// actual loaded node, and still traverse every DATA component under a directory.
+type fragmentationPageDomain uint8
+
+const (
+	fragmentationDATA fragmentationPageDomain = iota
+	fragmentationPRIMARY
+	fragmentationReadRoot
+)
+
+func fragmentationPhysicalDomain(p *pager.Pager, id uint64) (fragmentationPageDomain, uint64, error) {
+	if p == nil {
+		return 0, 0, fmt.Errorf("fragmentation: missing physical pager")
+	}
+	if id >= page.PrimaryBankNamespace && id < 2*page.PrimaryBankNamespace {
+		local := id - page.PrimaryBankNamespace
+		if local >= pager.PrimaryReadRootLocalBaseV6 {
+			return fragmentationReadRoot, local, nil
+		}
+		if local < p.PrimaryBankPageCount() {
+			return fragmentationPRIMARY, local, nil
+		}
+		return 0, 0, fmt.Errorf("fragmentation: PRIMARY page %d outside physical extent", local)
+	}
+	if id >= pager.PrimaryReadRootLocalBaseV6 {
+		return 0, 0, fmt.Errorf("fragmentation: page %d outside DATA domain", id)
+	}
+	if id < p.PageCount() {
+		return fragmentationDATA, id, nil
+	}
+	return 0, 0, fmt.Errorf("fragmentation: DATA page %d outside physical extent", id)
+}
+func fragmentationSpanRatio(span, pages uint64) (uint64, error) {
+	if pages == 0 {
+		if span == 0 {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("fragmentation: nonempty span without pages")
+	}
+	if span < pages {
+		return 0, fmt.Errorf("fragmentation: span smaller than physical census")
+	}
+	hi, lo := bits.Mul64(span, 1_000_000)
+	if hi >= pages {
+		return 0, fmt.Errorf("fragmentation: span ratio overflow")
+	}
+	quotient, _ := bits.Div64(hi, lo, pages)
+	return quotient, nil
+}
+
+type fragmentationPhysicalCensus struct{ pages, min, max uint64 }
+
+func (c *fragmentationPhysicalCensus) add(local uint64) {
+	if c.pages == 0 {
+		c.min, c.max = local, local
+	}
+	if local < c.min {
+		c.min = local
+	}
+	if local > c.max {
+		c.max = local
+	}
+	c.pages++
+}
+func (c fragmentationPhysicalCensus) into(out map[string]string, prefix string) error {
+	out[prefix+".pages"] = fmt.Sprintf("%d", c.pages)
+	if c.pages == 0 {
+		return nil
+	}
+	span := c.max - c.min + 1
+	ratio, err := fragmentationSpanRatio(span, c.pages)
+	if err != nil {
+		return err
+	}
+	out[prefix+".pages.min"] = fmt.Sprintf("%d", c.min)
+	out[prefix+".pages.max"] = fmt.Sprintf("%d", c.max)
+	out[prefix+".pages.span"] = fmt.Sprintf("%d", span)
+	out[prefix+".pages.span_ratio_ppm"] = fmt.Sprintf("%d", ratio)
+	return nil
 }
 
 // IndexVacuumFreelistDebtSnapshot returns the cheap freelist-debt fields used
@@ -184,6 +271,13 @@ func (db *DB) IndexVacuumTriggerReportContext(ctx context.Context) (IndexVacuumT
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		domain, _, err := fragmentationPhysicalDomain(snap.idx.pager, pageID)
+		if err != nil {
+			return err
+		}
+		if domain != fragmentationDATA {
+			return nil
+		}
 		if out.UserPages == 0 {
 			out.UserMinPageID = pageID
 			out.UserMaxPageID = pageID
@@ -203,7 +297,10 @@ func (db *DB) IndexVacuumTriggerReportContext(ctx context.Context) (IndexVacuumT
 	}
 	if out.UserPages > 0 {
 		out.UserSpan = (out.UserMaxPageID - out.UserMinPageID) + 1
-		out.UserSpanRatioPPM = (out.UserSpan * 1_000_000) / out.UserPages
+		out.UserSpanRatioPPM, err = fragmentationSpanRatio(out.UserSpan, out.UserPages)
+		if err != nil {
+			return out, err
+		}
 	}
 
 	if snap.idx.allocator != nil {
@@ -236,7 +333,10 @@ func (db *DB) IndexVacuumTriggerReportContext(ctx context.Context) (IndexVacuumT
 			out.CollectionRootMaxPageID = collection.maxPageID
 			out.CollectionRootSpan = (collection.maxPageID - collection.minPageID) + 1
 			if collection.pages > 0 {
-				out.CollectionRootSpanRatioPPM = (out.CollectionRootSpan * 1_000_000) / collection.pages
+				out.CollectionRootSpanRatioPPM, err = fragmentationSpanRatio(out.CollectionRootSpan, collection.pages)
+				if err != nil {
+					return out, err
+				}
 				out.CollectionRootSpanRatioValid = true
 			}
 		}
@@ -269,6 +369,8 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	var internalPages uint64
 	var minID uint64
 	var maxID uint64
+	var primaryPages fragmentationPhysicalCensus
+	var readRoots uint64
 
 	var leafFillSum float64
 	var internalFillSum float64
@@ -277,6 +379,18 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 
 	emitFragmentationProbeEvent(FragmentationProbeEventFullUserTreeWalk)
 	err := tr.WalkPages(func(pageID uint64, n node.Node) error {
+		domain, local, err := fragmentationPhysicalDomain(idx.pager, pageID)
+		if err != nil {
+			return err
+		}
+		switch domain {
+		case fragmentationPRIMARY:
+			primaryPages.add(local)
+			return nil
+		case fragmentationReadRoot:
+			readRoots++
+			return nil
+		}
 		if pages == 0 {
 			minID = pageID
 			maxID = pageID
@@ -315,6 +429,34 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 
 	out := make(map[string]string, 16)
 	out["treedb.pages.total"] = fmt.Sprintf("%d", totalPages)
+	out["treedb.primary.pages.total"] = fmt.Sprintf("%d", idx.pager.PrimaryBankPageCount())
+	// Rounded file length is observed through each actual original pager handle,
+	// separately from allocated page bounds and selected reachable-page census.
+	observeFileBytes := func(p *pager.Pager, key string) error {
+		return p.WithStableResourceFile(func(file *os.File) error {
+			info, err := file.Stat()
+			if err != nil {
+				return err
+			}
+			out[key] = fmt.Sprintf("%d", info.Size())
+			return nil
+		})
+	}
+	if err := observeFileBytes(idx.pager, "treedb.index.file.bytes"); err != nil {
+		return nil, err
+	}
+	if idx.primary != nil {
+		if err := observeFileBytes(idx.primary.Pager(), "treedb.primary.file.bytes"); err != nil {
+			return nil, err
+		}
+	} else {
+		out["treedb.primary.file.bytes"] = "0"
+	}
+
+	out["treedb.user.primary.read_roots"] = fmt.Sprintf("%d", readRoots)
+	if err := primaryPages.into(out, "treedb.user.primary"); err != nil {
+		return nil, err
+	}
 	out["treedb.user.pages"] = fmt.Sprintf("%d", pages)
 	out["treedb.user.pages.leaf"] = fmt.Sprintf("%d", leafPages)
 	out["treedb.user.pages.internal"] = fmt.Sprintf("%d", internalPages)
@@ -323,7 +465,11 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 		out["treedb.user.pages.max"] = fmt.Sprintf("%d", maxID)
 		span := (maxID - minID) + 1
 		out["treedb.user.pages.span"] = fmt.Sprintf("%d", span)
-		out["treedb.user.pages.span_ratio_ppm"] = fmt.Sprintf("%d", (span*1_000_000)/pages)
+		ratio, err := fragmentationSpanRatio(span, pages)
+		if err != nil {
+			return nil, err
+		}
+		out["treedb.user.pages.span_ratio_ppm"] = fmt.Sprintf("%d", ratio)
 	}
 	if leafPages > 0 {
 		out["treedb.user.leaf_fill_ppm_avg"] = fmt.Sprintf("%d", uint64((leafFillSum/float64(leafPages))*1_000_000))
@@ -377,7 +523,9 @@ func (db *DB) FragmentationReport() (map[string]string, error) {
 	if collection, err := collectionRootFragmentationStats(idx, snap.state); err != nil {
 		out["treedb.collection_roots.error"] = err.Error()
 	} else {
-		collection.into(out)
+		if err := collection.into(out); err != nil {
+			return nil, err
+		}
 	}
 
 	return out, nil
@@ -395,6 +543,8 @@ type collectionRootFragmentation struct {
 	minPageID        uint64
 	maxPageID        uint64
 	hasPagerBackedID bool
+	primaryPages     fragmentationPhysicalCensus
+	readRoots        uint64
 }
 
 func collectionRootFragmentationStats(idx *indexGen, state *DBState) (collectionRootFragmentation, error) {
@@ -437,6 +587,18 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 				return nil
 			}
 			out.uniquePageIDs[pageID] = struct{}{}
+			domain, local, err := fragmentationPhysicalDomain(idx.pager, pageID)
+			if err != nil {
+				return err
+			}
+			switch domain {
+			case fragmentationPRIMARY:
+				out.primaryPages.add(local)
+				return nil
+			case fragmentationReadRoot:
+				out.readRoots++
+				return nil
+			}
 			out.pages++
 			if !out.hasPagerBackedID {
 				out.minPageID = pageID
@@ -464,7 +626,11 @@ func collectionRootFragmentationStatsWithContext(ctx context.Context, idx *index
 	return out, nil
 }
 
-func (c collectionRootFragmentation) into(out map[string]string) {
+func (c collectionRootFragmentation) into(out map[string]string) error {
+	out["treedb.collection_roots.primary.read_roots"] = fmt.Sprintf("%d", c.readRoots)
+	if err := c.primaryPages.into(out, "treedb.collection_roots.primary"); err != nil {
+		return err
+	}
 	out["treedb.collection_roots.count"] = fmt.Sprintf("%d", c.roots)
 	out["treedb.collection_roots.leafref_roots"] = fmt.Sprintf("%d", c.leafRefRoots)
 	out["treedb.collection_roots.pager_roots"] = fmt.Sprintf("%d", c.pagerRoots)
@@ -478,9 +644,14 @@ func (c collectionRootFragmentation) into(out map[string]string) {
 		span := (c.maxPageID - c.minPageID) + 1
 		out["treedb.collection_roots.pages.span"] = fmt.Sprintf("%d", span)
 		if c.pages > 0 {
-			out["treedb.collection_roots.pages.span_ratio_ppm"] = fmt.Sprintf("%d", (span*1_000_000)/c.pages)
+			ratio, err := fragmentationSpanRatio(span, c.pages)
+			if err != nil {
+				return err
+			}
+			out["treedb.collection_roots.pages.span_ratio_ppm"] = fmt.Sprintf("%d", ratio)
 		}
 	}
+	return nil
 }
 
 type fillStats struct {

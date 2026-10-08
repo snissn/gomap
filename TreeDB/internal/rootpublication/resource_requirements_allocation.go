@@ -102,6 +102,12 @@ func cloneSelectedResourceRequirements(source *StableResourceSet, r StableLogica
 }
 
 func cloneSelectedResourceFiltered(source *StableResourceSet, r StableLogicalObligationRequirements, removed []StableLogicalObligation, excluded []ResourceKind, work StableResourceClosureWork) (*StableResourceSet, StableResourceClosureWork, error) {
+	return cloneSelectedResourceFilteredWithPhysicalSelection(source, r, removed, excluded, work, "", nil)
+}
+
+// Physical selection is a synchronous caller-owned proof. The only new scratch
+// is exact found membership, admitted alongside the source borrow and output.
+func cloneSelectedResourceFilteredWithPhysicalSelection(source *StableResourceSet, r StableLogicalObligationRequirements, removed []StableLogicalObligation, excluded []ResourceKind, work StableResourceClosureWork, selectedKind ResourceKind, selected []StableIdentity) (*StableResourceSet, StableResourceClosureWork, error) {
 	if removed == nil {
 		if err := validateBorrowedRequirements(r); err != nil {
 			return nil, work, err
@@ -111,7 +117,7 @@ func cloneSelectedResourceFiltered(source *StableResourceSet, r StableLogicalObl
 	if directory := source.emptyDependencyDirectoryLocked(); directory != nil && source.metadata != nil && source.selectedKindViewsAccessibleLocked() {
 		result, err := newStableResourceSetWithEmptyDirectory(source.metadata.owner, directory)
 		source.mu.Unlock()
-		if len(removed) != 0 {
+		if len(removed) != 0 || len(selected) != 0 {
 			result.Release()
 			return nil, work, ErrUnresolvedResource
 		}
@@ -124,6 +130,16 @@ func cloneSelectedResourceFiltered(source *StableResourceSet, r StableLogicalObl
 	}
 	defer borrow.release()
 	owner := borrow.backing.allocation.owner
+
+	var physicalFound []bool
+	if selectedKind != "" {
+		physicalScratch, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(len(selected))))
+		if err != nil {
+			return nil, work, err
+		}
+		physicalFound = make([]bool, len(selected))
+		defer func() { clear(physicalFound); physicalFound = nil; physicalScratch.drop(); physicalScratch.refund() }()
+	}
 
 	removalScratch, err := newResourceAllocation(owner, retainedalloc.AllocationCharge(uint64(len(removed))))
 	if err != nil {
@@ -144,6 +160,31 @@ func cloneSelectedResourceFiltered(source *StableResourceSet, r StableLogicalObl
 				work.DroppedEntries++
 				work.DroppedObligations += uint64(entry.logicalObligations.count)
 				return true
+			}
+
+			if cell.kind == selectedKind {
+				token := activeEntryToken(*entry)
+				if token == nil || token.released.Load() {
+					buildErr = ErrResourceOwnership
+					return false
+				}
+				if err := token.namespace.validateStable(); err != nil {
+					buildErr = err
+					return false
+				}
+				selectedIndex := -1
+				for i, identity := range selected {
+					if identity == token.identity {
+						selectedIndex = i
+						break
+					}
+				}
+				if selectedIndex < 0 {
+					work.DroppedEntries++
+					work.DroppedObligations += uint64(entry.logicalObligations.count)
+					return true
+				}
+				physicalFound[selectedIndex] = true
 			}
 			if entry.outgoing == nil || entry.logicalObligations.directory != nil {
 				buildErr = ErrResourceOwnership
@@ -239,6 +280,11 @@ func cloneSelectedResourceFiltered(source *StableResourceSet, r StableLogicalObl
 		})
 		if buildErr != nil {
 			return nil, work, buildErr
+		}
+	}
+	for _, seen := range physicalFound {
+		if !seen {
+			return nil, work, ErrUnresolvedResource
 		}
 	}
 	for _, seen := range found {

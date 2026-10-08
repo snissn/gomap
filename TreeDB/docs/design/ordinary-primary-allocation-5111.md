@@ -155,3 +155,30 @@ resource caps, Accepted/once-ACK and M3/M8 holds. It does not qualify native API
 power-loss behavior or any performance threshold. Review, current-head CI,
 final-base qualification and matched retained measurements belong to the
 coordinator's completion packet.
+
+### Maintenance consumer ownership and physical domains
+
+Selected physical-kind derivation now uses the existing admitted filtered-entry
+constructors, scoped kind borrow, and same-owner builder. Exact caller-owned
+identity input remains synchronous. Its actual found-membership scratch is
+admitted before allocation and cleared before refund; selected outputs retain
+original operation/handle authority and pass the existing strict Merge guard.
+No selected map backing or generic producer metadata substitutes for that owner.
+This extends the existing requirements/selection constructor group in the
+nineteen-group census, including refusal and last-borrow closure.
+
+Vacuum-debt User*/CollectionRoot* intervals and TotalPages describe DATA only.
+Walking a PRIMARY directory still visits and counts its reachable DATA operands.
+The full report separately records validated physical PRIMARY local page census,
+allocated companion page bound, actual original-handle File.Stat byte lengths
+for DATA and PRIMARY, and private admitted read-root count. Private addresses at
+PrimaryReadRootLocalBaseV6 are memory custody, not disk pages. These additional
+observations do not discount physical output, metadata, callback work, containing
+storage, or complete-operation allocation cost. Wide ratio arithmetic fails
+closed on an unrepresentable result rather than wrapping a namespace difference.
+The public forty-percent shrink and eight-fold output limits remain unchanged.
+
+The selected leaf-pack staging zipper applies SYSTEM collection descriptors in
+materialized form, matching its existing published SYSTEM counterpart. The user
+PRIMARY directory remains governed by its separate operand rewrite path; generic
+R1 rewrite behavior and ownership are unchanged.

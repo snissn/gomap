@@ -91,6 +91,25 @@ func CloneStableResourceSetSelectingPhysicalKind(source *StableResourceSet, kind
 	if kind == "" || source == nil || source.physicalOnly {
 		return nil, ErrResourceOwnership
 	}
+	if source.hasSelectedMetadata() {
+		// Preserve genuine source-governed metadata and original operation custody;
+		// generic producer storage must never be fed into a selected Merge.
+		for i, identity := range selected {
+			if !identity.valid() || identity.Generation == 0 {
+				return nil, ErrUnresolvedResource
+			}
+			for j := 0; j < i; j++ {
+				if selected[j] == identity {
+					return nil, ErrResourceConflict
+				}
+			}
+		}
+		if resourceKindExcluded(kind, excluded) {
+			return nil, ErrResourceConflict
+		}
+		result, _, err := cloneSelectedResourceFilteredWithPhysicalSelection(source, StableLogicalObligationRequirements{}, nil, excluded, StableResourceClosureWork{CloneOperations: 1}, kind, selected)
+		return result, err
+	}
 	wanted := make(map[StableIdentity]bool, len(selected))
 	for _, identity := range selected {
 		if !identity.valid() || identity.Generation == 0 {

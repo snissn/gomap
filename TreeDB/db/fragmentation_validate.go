@@ -80,7 +80,10 @@ func ValidateFragmentationReport(rep map[string]string) error {
 		if span < userPages {
 			return fmt.Errorf("treedb.user.pages.span: span < pages (span=%d pages=%d)", span, userPages)
 		}
-		wantRatio := (span * 1_000_000) / userPages
+		wantRatio, err := fragmentationSpanRatio(span, userPages)
+		if err != nil {
+			return err
+		}
 		if spanRatioPPM != wantRatio {
 			return fmt.Errorf("treedb.user.pages.span_ratio_ppm: expected %d, got %d", wantRatio, spanRatioPPM)
 		}

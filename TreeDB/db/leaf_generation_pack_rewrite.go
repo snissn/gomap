@@ -1439,6 +1439,10 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		}
 	}()
 	leafCtx.zipper = idx.zipper.CloneWithPagerAllocator(stagingPager, tracker)
+	// This zipper applies collection descriptors to SYSTEM only. The user
+	// PRIMARY directory is rewritten separately above its real operands; never
+	// wrap a materialized SYSTEM delta in the inherited user-root preference.
+	leafCtx.zipper.SetPrimaryDirectory(false)
 	leafCtx.zipper.SetOuterLeavesInValueLog(db.indexOuterLeavesInValueLog)
 	leafCtx.zipper.SetLeafPageReader(leafCtx)
 	leafCtx.zipper.SetIndexInternalBaseDelta(db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog)
