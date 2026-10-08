@@ -81,6 +81,7 @@ var (
 	treedbIterDebug                       = flag.Bool("treedb-iter-debug", false, "TreeDB: print prefix_scan iterator build/iterate timing and debug stats (queueLen, sourcesUsed)")
 	treedbIterDebugLimit                  = flag.Int("treedb-iter-debug-limit", 20, "TreeDB: maximum prefix_scan queries to print per DB run when -treedb-iter-debug is set")
 	treedbForceValuePointers              = flag.Bool("treedb-force-value-pointers", false, "TreeDB: store all values out-of-line in the value log (no inline values)")
+	treedbIndexPrimaryDirectory           = flag.Bool("treedb-index-primary-directory", false, "TreeDB: opt in to IndexPrimaryDirectory (requires a supporting build; configuration is not runtime path qualification)")
 	treedbIndexOptimizations              = flag.Bool("treedb-index-optimizations", false, "TreeDB: enable profile-driven index optimization bundle (leaf prefix compression + columnar leaves + packed value pointers + internal base-delta)")
 	treedbLeafPrefixCompression           = flag.Bool("treedb-leaf-prefix-compression", false, "TreeDB: enable front-coded leaf key compression (restart points; compact entry header)")
 	treedbValueLogThreshold               = flag.Int("treedb-value-log-threshold", 0, "TreeDB: value-log pointer threshold in bytes (0=default)")
@@ -205,6 +206,30 @@ func fieldByPath(root reflect.Value, path ...string) reflect.Value {
 		v = v.FieldByName(name)
 	}
 	return v
+}
+
+// configureTreeDBPrimaryDirectory uses the same optional-field compatibility
+// boundary as the value-log options, but a requested path must never fall back.
+func configureTreeDBPrimaryDirectory(root reflect.Value, requested bool) error {
+	field := fieldByPath(root, "IndexPrimaryDirectory")
+	if !field.IsValid() {
+		if requested {
+			return fmt.Errorf("TreeDB: -treedb-index-primary-directory requires Options.IndexPrimaryDirectory; this build does not support it")
+		}
+		return nil
+	}
+	if field.Kind() != reflect.Bool || !field.CanSet() {
+		return fmt.Errorf("TreeDB: Options.IndexPrimaryDirectory must be a settable bool (got %s)", field.Kind())
+	}
+	field.SetBool(requested)
+	return nil
+}
+
+func treeDBPrimaryDirectoryReport(root reflect.Value, requested bool) string {
+	field := fieldByPath(root, "IndexPrimaryDirectory")
+	supported := field.IsValid() && field.Kind() == reflect.Bool
+	enabled := supported && field.Bool()
+	return fmt.Sprintf("index_primary_directory_requested=%t\nindex_primary_directory_supported=%t\nindex_primary_directory_configured_enabled=%t", requested, supported, enabled)
 }
 
 func setOptionalVlogTrainConfig(opts *treedb.Options, trainBytes, dictBytes, minRecords, maxRecordBytes, sampleStride, dedupWindow int) {
@@ -392,10 +417,11 @@ func parseTreeDBFlushAdmissionPolicy(raw string) (treedb.FlushAdmissionPolicy, e
 }
 
 type treeDBOptionsReport struct {
-	opts            treedb.Options
-	maintenanceMode string
-	notes           []string
-	warnings        []string
+	primaryDirectoryRequested bool
+	opts                      treedb.Options
+	maintenanceMode           string
+	notes                     []string
+	warnings                  []string
 }
 
 func (r treeDBOptionsReport) hasReport() bool {
@@ -407,6 +433,7 @@ func (r treeDBOptionsReport) hasReport() bool {
 
 func (r treeDBOptionsReport) formatText(indent string) string {
 	var lines []string
+	lines = append(lines, strings.Split(treeDBPrimaryDirectoryReport(reflect.ValueOf(r.opts), r.primaryDirectoryRequested), "\n")...)
 	lines = append(lines, fmt.Sprintf("profile_resolved=%s", r.opts.ResolvedProfile))
 	lines = append(lines, fmt.Sprintf("durability=%s", formatTreeDBDurability(r.opts.Durability)))
 	lines = append(lines, fmt.Sprintf("read_integrity=%s", formatTreeDBIntegrity(r.opts.ValueLog.ReadIntegrity)))
@@ -995,6 +1022,10 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 	if opts.ValueLog.ForcePointers && opts.ValueLog.PointerThreshold > 0 {
 		notes = append(notes, "vlog.force_pointers=true: pointer_threshold does not affect pointer eligibility")
 	}
+	if err := configureTreeDBPrimaryDirectory(reflect.ValueOf(&opts).Elem(), *treedbIndexPrimaryDirectory); err != nil {
+		return treedb.Options{}, treeDBOptionsReport{}, err
+	}
+	notes = append(notes, "index_primary_directory configuration is not runtime path qualification; verify actual operation/path counters separately")
 	attachUnifiedBenchTreeDBProfile(&opts, resolvedProfile, benchmarkProfile)
 	if _, err := treedbdb.ResolveLeafPageReadCacheEntries(opts.LeafPageReadCacheEntries); err != nil {
 		return treedb.Options{}, treeDBOptionsReport{}, err
@@ -1008,7 +1039,7 @@ func buildTreeDBOptionsWithConfig(dir string, cfg treeDBOptionsBuildConfig) (tre
 		notes = append(notes, "flush_admission_policy=auto declined: "+admission.Reason)
 	}
 
-	rep := treeDBOptionsReport{opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}
+	rep := treeDBOptionsReport{primaryDirectoryRequested: *treedbIndexPrimaryDirectory, opts: opts, maintenanceMode: maintenanceMode, notes: notes, warnings: warnings}
 	return opts, rep, nil
 }
 
