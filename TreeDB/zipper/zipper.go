@@ -196,6 +196,10 @@ type Zipper struct {
 	maintenanceOpsPerCoalesce int
 	parallelMergePressure     ParallelMergePressureSource
 
+	// Private clones check scratch out of the original zipper's bounded pool.
+	// Only idle, reset scratch returns there; allocator, appender, reader and
+	// the active leaf-ref cache remain private to each clone.
+	scratchOwner     *Zipper
 	scratchMu        sync.Mutex
 	applyScratch     *mergeScratch
 	applyScratchFree []*mergeScratch
@@ -1264,6 +1268,9 @@ func (z *Zipper) acquireApplyScratch() *mergeScratch {
 	if z == nil {
 		return newMergeScratch()
 	}
+	if z.scratchOwner != nil {
+		z = z.scratchOwner
+	}
 	z.scratchMu.Lock()
 	var s *mergeScratch
 	if n := len(z.applyScratchFree); n > 0 {
@@ -1285,6 +1292,9 @@ func (z *Zipper) acquireApplyScratch() *mergeScratch {
 func (z *Zipper) releaseApplyScratch(s *mergeScratch) {
 	if z == nil || s == nil {
 		return
+	}
+	if z.scratchOwner != nil {
+		z = z.scratchOwner
 	}
 	s.reset()
 	z.scratchMu.Lock()
@@ -1309,8 +1319,13 @@ func (z *Zipper) CloneWithAllocator(a PageAllocator) *Zipper {
 
 // CloneWithPagerAllocator returns a zipper that shares z's configuration while
 // using a different pager and allocator. Private COW maintenance uses this to
-// build an overlay tree without allocating in the live index pager.
+// build an overlay tree without allocating in the live index pager. Idle merge
+// scratch returns to the original zipper, including through nested clones.
 func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zipper {
+	owner := z
+	if z.scratchOwner != nil {
+		owner = z.scratchOwner
+	}
 	return &Zipper{
 		pager:                     p,
 		allocator:                 a,
@@ -1327,6 +1342,7 @@ func (z *Zipper) CloneWithPagerAllocator(p *pager.Pager, a PageAllocator) *Zippe
 		adaptiveLeafEncoding:      z.adaptiveLeafEncoding,
 		maintenanceOpsPerCoalesce: z.maintenanceOpsPerCoalesce,
 		parallelMergePressure:     z.parallelMergePressure,
+		scratchOwner:              owner,
 	}
 }
 
