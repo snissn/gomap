@@ -7,6 +7,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
+	"math"
 	"unsafe"
 )
 
@@ -14,10 +15,16 @@ import (
 // remains live. The caller holds runtime.mu; copied immutable elements retain
 // their own owners. Releasing the old array precedes its refund.
 func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[]T, need int) error {
+	if need < 0 {
+		return retainedalloc.ErrCapacity
+	}
 	if cap(*values) >= need {
 		return nil
 	}
-	capacity := cap(*values) * 2
+	capacity := need
+	if cap(*values) <= math.MaxInt/2 {
+		capacity = cap(*values) * 2
+	}
 	if capacity < 4 {
 		capacity = 4
 	}
@@ -25,6 +32,9 @@ func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[
 		capacity = need
 	}
 	size := uint64(unsafe.Sizeof(*new(T)))
+	if size != 0 && uint64(capacity) > math.MaxUint64/size {
+		return retainedalloc.ErrCapacity
+	}
 	nextCharge := retainedalloc.AllocationCharge(uint64(capacity) * size)
 	oldCharge := retainedalloc.AllocationCharge(uint64(cap(*values)) * size)
 	if runtime.idx.primary != nil {
@@ -32,9 +42,12 @@ func growPrimaryRuntimeSlice[T any](runtime *rootPublicationRuntimeV1, values *[
 			return err
 		}
 	}
-	next := make([]T, len(*values), capacity)
-	copy(next, *values)
+	old := *values
+	next := make([]T, len(old), capacity)
+	copy(next, old)
 	*values = next
+	clear(old[:cap(old)])
+	old = nil
 	if runtime.idx.primary != nil {
 		runtime.idx.primary.MetadataOwner().RemovePending(oldCharge)
 		runtime.metadataCharge += nextCharge - oldCharge

@@ -63,6 +63,46 @@ Growth records use `source_directory_file_bytes_before_export` for the source
 directory size before export and `archive_bytes` for the streamed archive size.
 Foreground records use `archive_bytes` for the native snapshot size.
 
+## PRIMARY directory selection
+
+`-treedb-index-primary-directory` is an independent opt-in selector (default
+`false`) for `Options.IndexPrimaryDirectory`. A supporting build receives the
+actual boolean option. An older build without that option rejects `true` before
+opening a TreeDB database or executing its workload; `false` keeps the baseline
+path. The benchmark compatibility alias `-profile fast` alone selects
+`no_wal_fast` and may attach a PRIMARY arena, but does not enable the separate
+PRIMARY directory.
+
+The direct-open `column_store` and `collection_storage` suites (including their
+hyphenated aliases) reject this selector before reports, artifacts, or database
+opens. They do not use the adapter's options builder. Their default `false`
+behavior is unchanged.
+
+For example, build from a clean checkout with the supporting product change and
+this harness, then run in a fresh, task-owned database/output directory:
+
+```sh
+# Benchmark compatibility alias: fast selects the no_wal_fast production profile.
+./bin/unified-bench -dbs treedb -profile fast -test write_seq,batch_write \
+  -keys 10000 -treedb-index-primary-directory=true -profile-dir /path/to/fresh-output
+```
+
+The resolved-options text reports `index_primary_directory_requested`,
+`index_primary_directory_supported`, and
+`index_primary_directory_configured_enabled`. Configured enablement is read from
+the constructed options; it is not proof that a measured operation used the
+path. Qualify actual routing separately with product operation/path counters.
+Benchmark names, profile filenames, and structured artifact schemas are unchanged.
+
+Freeze exact product and harness source identities before retained collection.
+Use matched disabled-directory controls for existing public write, batch,
+checkpoint, and vacuum regression checks. Older main has no identical enabled
+directory baseline: enabled results establish incremental/scaling costs, not
+before/after improvement. Results from the `no_wal_fast` production profile do
+not establish command-WAL DURABLE or RELAXED contracts; use the appropriate command-WAL adapter/profile
+and its contract checks for those claims. Expensive retained collection waits
+for independent exact-candidate harness review and landing.
+
 ## Guardrail Check (Read Snapshot + Append-Only)
 
 Targeted regression guardrail for append-only writes plus read-heavy snapshot acquisition:
@@ -1588,7 +1628,60 @@ GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
   -benchtime=1024x -count=1 -benchmem
 ```
 
+The C3-read capability and allocation audit are documented in
+[the production source guide](../../TreeDB/docs/benchmarks/cow-c3-read-5076/README.md).
+
 The dedicated test package imports the ordinary MVCC product. Frozen fixtures
 bind every selected harness file and helper, including TestMain and file modes;
 product regression tests are outside that harness closure. Canonical matched
 counts remain 128 warmup and 1024 measured iterations per fresh process.
+
+### Ordinary PRIMARY publication and borrowed cohort package benchmarks
+
+`TreeDB/db` provides `BenchmarkPublishPrimaryDurableRootV1`, which selects the
+actual `IndexPrimaryDirectory=true` route alongside the existing disabled
+`BenchmarkPublishDurableRootV1` cases. Each timed operation includes the actual
+SetSync/WriteSync construction, resource callbacks and durable publication.
+Setup and terminal DB cleanup are excluded. `-benchmem` reports complete
+operation allocations including fixture and observer work, rather than isolated
+product allocation cost; source-owned metrics report arena/registry metadata,
+physical extents and the existing publication/stability observers.
+
+`BenchmarkPrimaryBorrowedValueLogCohort/files=8` and `/files=16` time the actual
+bounded Snapshot capture, fixed arena/registry enrollment, selected ValueLog
+source-kind clone/borrow, original value read and normal release. Original
+provider operations remain with the imported source-kind cohort. After the
+timer stops, actual overwrite, Vacuum and GC record cohort file counts and
+File.Stat bytes while held and after the descriptor scope drains. Old DATA and
+PRIMARY extents are observed while held. Governor charge is observed while held,
+after the last reader, after the descriptor scope and after actual DB Close;
+original owner closure is checked at that actual teardown.
+Ghost/governor and physical file residuals may be nonzero before teardown;
+no age or unlink is forced. The final successful cleanup must drain its original
+allocation edges once. File/governor metrics are fixture observations, not per-operation rates.
+`last-reader-cleanup-ns` is one separate fixture timing event, not a steady
+operation sample. Descriptor-only checks after actual Snapshot finalization
+verify the original inode and CRC-verified frame/payload through retained
+tokens; unlinked pinned inodes remain valid physical custody.
+
+These new seams remain development diagnostics. Expensive retained collection
+requires independent source/harness review and harness landing, followed by the
+coordinator's collection grant. Bounded premerge development diagnostics require
+a separate explicit coordinator grant. Run one leaf per fresh process with
+matched toolchain, fixed iteration count and quiet host:
+
+```sh
+GOWORK=off GOMAXPROCS=2 go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkPublishPrimaryDurableRootV1/inline$' \
+  -benchtime=128x -count=1 -benchmem
+GOWORK=off GOMAXPROCS=2 go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkPrimaryBorrowedValueLogCohort/files=8$' \
+  -benchtime=128x -count=1 -benchmem
+```
+
+Retain raw Go benchmark stdout, command/exit status, source and binary identities,
+toolchain/module identities and the declared setup/timer boundaries. The matched
+packet owns collection counts and performance acceptance; these commands alone
+do not qualify them. Go benchmark logs and optional `go test` profiles are
+standalone artifacts, **not benchprof inputs**. Existing unified-bench/benchprof
+artifact names and schemas are unchanged.

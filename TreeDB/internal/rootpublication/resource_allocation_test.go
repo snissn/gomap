@@ -390,6 +390,7 @@ func TestResourceKindBackingSharedSetAndScopedBorrow(t *testing.T) {
 		t.Fatal(err)
 	}
 	retained := owner.Bytes()
+	wrapperCharge := clone.metadata.charge
 	if err := source.WithScopedTokens(func(tokens []*StableResourceToken) error {
 		if len(tokens) != 1 || tokens[0] != token {
 			t.Fatal("scoped callback lost token")
@@ -403,8 +404,8 @@ func TestResourceKindBackingSharedSetAndScopedBorrow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if owner.Bytes() != retained || token.released.Load() {
-		t.Fatal("set release retired a scoped borrower")
+	if owner.Bytes() != retained-wrapperCharge || clone.metadata != nil || clone.kindViews != nil || token.released.Load() || borrowed.backing.allocation.refs.Load() != 1 {
+		t.Fatalf("set release did not refund only its private wrapper: before=%d wrapper=%d after=%d tokenReleased=%v backingRefs=%d", retained, wrapperCharge, owner.Bytes(), token.released.Load(), borrowed.backing.allocation.refs.Load())
 	}
 	descriptors, descriptorErr := source.Descriptors()
 	if source.Len() != 0 || len(descriptors) != 0 || !errors.Is(descriptorErr, ErrResourceOwnership) {

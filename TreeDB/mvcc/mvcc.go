@@ -109,6 +109,11 @@ type versionRangeSuccessorDB interface {
 	SeekGEVersionRange(start, end []byte) (key, value []byte, found bool, err error)
 }
 
+type atomicReadCutDB interface {
+	SupportsMVCCReadCut() bool
+	AcquireMVCCReadCut() (treedb.MVCCReadSnapshot, error)
+}
+
 // Store owns the external-version namespace of one TreeDB handle.
 type Store struct {
 	db        treeDB
@@ -118,13 +123,14 @@ type Store struct {
 	// maintenanceMu then mu; foreground reads and commits never take it.
 	maintenanceMu sync.Mutex
 
-	// mu guards the discard floor and fences multi-record commit application
-	// against qualified successor reads and snapshot acquisition. Single-record
-	// commits and reads share it; groups hold it exclusively through publication,
-	// and qualified pruning holds it through physical deletion and lease cleanup.
+	// mu guards floor admission through commit acknowledgement and read-cut
+	// capture. Atomic-cut producers allow grouped writes to share admission;
+	// legacy successor producers require an exclusive grouped publication fence.
+	// Qualified legacy pruning holds it through deletion and lease cleanup.
 	mu           sync.RWMutex
 	discardFloor uint64
 	floorLoaded  bool
+	readCuts     atomicReadCutDB
 }
 
 // New returns the one opt-in MVCC owner for db. Callers must keep exactly one
@@ -136,15 +142,18 @@ func New(db *treedb.DB) *Store {
 		return &Store{}
 	}
 	s := newStore(db)
+	// Only New's concrete TreeDB producer adopts typed input. Internal
+	// decorators can override Set/SetSync; an inherited input method must not
+	// bypass those point-writer contracts or their injected storage errors.
 	s.admission = db.NewMVCCAdmission()
 	return s
 }
 
 func newStore(db treeDB) *Store {
 	s := &Store{db: db}
-	// Only New's concrete TreeDB producer adopts typed input. Internal
-	// decorators can override Set/SetSync; an inherited input method must not
-	// bypass those point-writer contracts or their injected storage errors.
+	if cuts, ok := db.(atomicReadCutDB); ok && cuts.SupportsMVCCReadCut() {
+		s.readCuts = cuts
+	}
 	return s
 }
 
@@ -241,7 +250,7 @@ func (s *Store) CommitGroupAt(groups []CommitGroup, mode CommitMode) error {
 			staged = append(staged, entry)
 		}
 	}
-	if _, qualified := s.db.(versionRangeSuccessorDB); qualified && len(staged) > 1 {
+	if _, qualified := s.db.(versionRangeSuccessorDB); s.readCuts == nil && qualified && len(staged) > 1 {
 		// Cached batches apply across shard tables while holding a shared writer
 		// gate. The Store-owned read capability must not expose that prefix.
 		s.mu.Lock()
@@ -348,6 +357,9 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		s.mu.RUnlock()
 		return Result{}, fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)
 	}
+	if s.readCuts != nil {
+		return s.getAtReadCut(logical, timestamp, lower, upper)
+	}
 	var seek func([]byte, []byte) ([]byte, []byte, bool, error)
 	if seeker, ok := s.db.(versionRangeSuccessorDB); ok {
 		seek = seeker.SeekGEVersionRange
@@ -389,6 +401,28 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		return Result{}, storageError("read value", iterErr)
 	}
 	return decodePointResult(logical, timestamp, physical, record, false)
+}
+
+// getAtReadCut takes over shared floor admission from GetAt and releases it
+// after pinning the cut. Its cleanup stays separate from the legacy read path.
+func (s *Store) getAtReadCut(logical []byte, timestamp uint64, lower, upper []byte) (result Result, err error) {
+	cut, captureErr := s.readCuts.AcquireMVCCReadCut()
+	s.mu.RUnlock()
+	if captureErr != nil {
+		return Result{}, storageError("acquire read cut", captureErr)
+	}
+	if cut == nil {
+		return Result{}, storageError("acquire read cut", treedb.ErrClosed)
+	}
+	defer func() { err = errors.Join(err, storageError("close read cut", cut.Close())) }()
+	physical, record, found, seekErr := cut.SeekGEVersionRange(lower, upper)
+	if seekErr != nil {
+		return Result{}, storageError("seek version", seekErr)
+	}
+	if !found {
+		return Result{State: Absent}, nil
+	}
+	return decodePointResult(logical, timestamp, physical, record, true)
 }
 
 // recordOwned is true only for successor results. Iterator records remain

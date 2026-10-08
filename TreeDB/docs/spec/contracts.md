@@ -107,7 +107,28 @@ cannot form a concurrent durability group. Staging and validation precede the
 fence. Qualified pruning holds the same Store lock exclusively through physical
 pruning and lease cleanup.
 
-The shared source-selection contract depends on these existing invariants:
+The preceding shared-successor fence and source-selection rules apply to legacy
+mutable producers. An explicit resolved `SupportsMVCCReadCut` capability qualifies
+whole-call publication and error-returning `AcquireMVCCReadCut` capture. `Store`
+resolves it once at construction; memtable names and successor-method presence
+are not capability proofs. On that route, groups share floor admission through
+`Write`/`WriteSync` and batch Close. Floor advancement still excludes admitted
+commits until their ordinary acknowledgement completes. Group publication remains
+all-or-none across shards and timestamps.
+
+`GetAt` and `IterateVersions` validate the cached floor and pin one physical cut
+under shared Store admission, then release that admission before successor seek,
+iterator construction, value materialization, decoding or callbacks. Point reads
+use the admitted snapshot's existing owned successor, including its optimized
+empty-backend path. They do not capture another DB cut. The single snapshot owner
+retains old same-timestamp bytes and excludes later historical inserts; an
+application timestamp does not identify a physical publication cut. Independent
+point calls capture independently fresh cuts. Capture/capacity/closed errors are
+returned, never retried through an unqualified fallback. Old admitted cuts remain
+valid through later floor advances until Close, subject to the existing DB Close
+and physical-resource lifetime contract.
+
+The legacy shared source-selection contract depends on these existing invariants:
 
 - All physical versions of one logical key share a mutable shard. Writers
   select the current table while holding that shard's mutex; rotation freezes
@@ -190,7 +211,9 @@ Retained-version iteration and discard/pruning extend that opt-in owner:
   older versions. When that anchor is a tombstone, the tombstone is deleted
   only after all older versions, so a crash cannot expose an older value;
   allowed reads then observe absence until a newer value exists.
-- Pruning is a bounded reverse scan plus bounded delete batches. Durable mode
+- In eligible legacy producers, pruning is a reverse scan plus bounded delete
+  batches. Batch size alone does not bound the entire pass. COW pruning refuses
+  before floor/WAL effects pending its separate maintenance qualification. Durable mode
   re-syncs the floor before its first delete; interrupted runs are safe and
   idempotent. TreeDB snapshots acquired before floor advancement keep their
   pinned physical view until close.
@@ -333,7 +356,12 @@ DB Close denies new COW reads and waits for admitted reads before storage
 teardown. Snapshot/iterator Close remains safe after DB Close, but subsequent
 storage reads return a closed error. `GetManyView` callbacks run outside
 read/writer/publication locks with admitted temporary value ownership; empty
-input still observes closed-handle checks. Store fences remain required.
+input still observes closed-handle checks. Store floor admission remains required;
+qualified COW groups and reads use the capture protocol above. COW reverse
+iteration and `PruneVersions` remain unsupported. Pruning eligibility refuses
+before floor loading/re-sync, snapshot acquisition, physical deletes or WAL
+effects, including when a persisted floor already exists. This refusal does not
+qualify bounded maintenance, replay or the full C3/C4 lifecycle gates.
 
 ### 2.6 Target versioned entry reads
 

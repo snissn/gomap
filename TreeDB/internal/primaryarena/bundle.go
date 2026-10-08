@@ -24,6 +24,7 @@ type BundleClaim struct {
 	chunk               *bankChunk
 	ready, cancelled    bool
 	output              PublicationBundle
+	metadataCharge      uint64
 }
 
 func (a *Arena) PrepareBundleClaim(w *iterator.OrdinalScanWork) (*BundleClaim, bool, error) {
@@ -54,11 +55,16 @@ func (a *Arena) PrepareBundleClaim(w *iterator.OrdinalScanWork) (*BundleClaim, b
 	if local+1 >= maxChunks*chunkBanks {
 		return nil, false, ErrFull
 	}
-	c := &BundleClaim{arena: a, epoch: a.epoch, local: local, count: count}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(BundleClaim{})))
+	if err := a.metadata.Add(charge); err != nil {
+		return nil, false, err
+	}
+	c := &BundleClaim{metadataCharge: charge, arena: a, epoch: a.epoch, local: local, count: count}
 	keepChunk := false
 	defer func() {
 		if !keepChunk {
 			a.discardChunk(&c.chunk)
+			c.finish()
 		}
 	}()
 
@@ -134,14 +140,28 @@ func (c *BundleClaim) Step(w *iterator.OrdinalScanWork) (PublicationBundle, bool
 	}
 	if c.growth != nil {
 		ok, e := c.growth.StepWithInstallAtCount(a.pager, a.next, w, records, bytes, install)
+		if ok && e == nil {
+			c.finish()
+		}
 		return c.output, ok, e
 	}
 	if !reserve(w, records, bytes) {
 		return PublicationBundle{}, false, nil
 	}
 	install()
+	c.finish()
 	return c.output, true, nil
 }
+
+// finish detaches private construction aliases before refunding its wrapper.
+// Installed bank/pager capacity remains charged to the same physical owner.
+func (c *BundleClaim) finish() {
+	a, charge := c.arena, c.metadataCharge
+	c.arena, c.growth, c.chunk = nil, nil, nil
+	c.metadataCharge = 0
+	a.metadata.Remove(charge)
+}
+
 func (c *BundleClaim) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 	if c == nil || c.cancelled {
 		return true, nil
@@ -157,6 +177,7 @@ func (c *BundleClaim) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 	}
 	c.arena.discardChunk(&c.chunk)
 	c.cancelled = true
+	c.finish()
 	return true, nil
 }
 

@@ -61,6 +61,11 @@ func (r *oneShotRead) close() error {
 	// Close shares all registry, value-log, and leaf-generation release logic.
 	// The read has returned, so there are no outstanding readers or iterators.
 	err := r.snapshot.Close()
+	if err != nil {
+		// The exact Snapshot may now be linked to its original cleanup owner.
+		// Reusing it would overwrite that owner's surviving physical debt.
+		return err
+	}
 	// Do not keep an index pager or its reader interfaces alive in the pool.
 	r.snapshot.tree.Reset(nil, nil, 0)
 	r.snapshot.treePager = nil

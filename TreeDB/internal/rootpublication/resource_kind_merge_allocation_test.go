@@ -105,9 +105,15 @@ func TestResourceOwnedKindMergeBuilderTransferAndLastBorrow(t *testing.T) {
 		t.Fatal(err)
 	}
 	retained := owner.Bytes()
+	wrapperCharge := merged.metadata.charge
 	merged.Release()
-	if owner.Bytes() != retained || token1.released.Load() || token2.released.Load() || directoryReleases.Load() != 0 {
-		t.Fatal("public release stole borrowed closure")
+	if owner.Bytes() != retained-wrapperCharge || merged.metadata != nil || merged.kindViews != nil || token1.released.Load() || token2.released.Load() || directoryReleases.Load() != 0 || borrow.backing.allocation.refs.Load() != 1 {
+		t.Fatalf("public release did not refund only its private wrapper: before=%d wrapper=%d after=%d token1Released=%v token2Released=%v directoryReleases=%d backingRefs=%d", retained, wrapperCharge, owner.Bytes(), token1.released.Load(), token2.released.Load(), directoryReleases.Load(), borrow.backing.allocation.refs.Load())
+	}
+	for _, token := range []*StableResourceToken{token1, token2} {
+		if err := token.WithPinnedFile(func(_ *os.File) error { return nil }); err != nil {
+			t.Fatal("borrower lost exact physical handle", err)
+		}
 	}
 	if err := directory.Retain(); err != nil {
 		t.Fatal("descriptor borrower lost physical directory")

@@ -962,16 +962,34 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if runtime == nil || runtime.coordinator == nil || builder == nil || idx == nil || releaseDurablePublish == nil {
 		return post, prePublishErr(errors.New("incomplete queued root-publication handoff"))
 	}
-	// A system-only publication still needs its own complete directory/paired
-	// record. Construct it before resource/reference-count capture so all exact
-	// scan identities name the physical root that will actually be activated.
+	// Each publication owns an independently complete PRIMARY construction.
+	// System-only changes copy the immutable directory; bulk/manual DATA
+	// builders enter the same construction boundary as zipper mutations.
 	var copiedPrimary uint64
-	if idx.primary != nil && next.UserRootPageID == db.meta.UserRootPageID {
-		id, err := idx.zipper.CopyPrimaryRoot(next.UserRootPageID)
+	if idx.primary != nil {
+		var id uint64
+		var err error
+		switch {
+		case next.UserRootPageID == db.meta.UserRootPageID:
+			id, err = idx.zipper.CopyPrimaryRoot(next.UserRootPageID)
+		case !primaryarena.IsPage(next.UserRootPageID):
+			id, err = idx.zipper.BuildPrimaryRoot(next.UserRootPageID, next.CommitSeq)
+		}
 		if err != nil {
 			return post, prePublishErr(err)
 		}
-		next.UserRootPageID, newUserRootID, copiedPrimary = id, id, id
+		if id != 0 {
+			next.UserRootPageID, newUserRootID, copiedPrimary = id, id, id
+		}
+		// PRIMARY retirement belongs to its owned construction/closure, never
+		// the DATA allocator, even when a legacy tree walk collected both.
+		dataRetired := retired[:0]
+		for _, id := range retired {
+			if !primaryarena.IsPage(id) {
+				dataRetired = append(dataRetired, id)
+			}
+		}
+		retired = dataRetired
 	}
 	defer func() {
 		if copiedPrimary != 0 {

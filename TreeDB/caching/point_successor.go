@@ -180,8 +180,9 @@ func (db *DB) SeekGE(start, end []byte) (key, value []byte, found bool, err erro
 
 // SeekGEVersionRange is the MVCC Store-owned successor capability. The caller
 // must own the reserved namespace through a single Store: no raw writes may
-// recreate physical versions deleted by pruning, and Store must fence grouped
-// commits and physical pruning against reads/snapshot acquisition. Logical
+// recreate physical versions deleted by pruning. Legacy producers require Store
+// grouped/prune fences; COW readers can instead use their admitted snapshot's
+// successor after qualified whole-cut capture. Logical
 // tombstones are value records. Noncanonical ranges, range spans and physical
 // tombstones use the
 // generic exclusive path instead.

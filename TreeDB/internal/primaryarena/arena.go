@@ -237,6 +237,7 @@ type Claim struct {
 	ready, cancelled bool
 	ref              Ref
 	splitPair        bool
+	metadataCharge   uint64
 }
 
 func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, bool, error) {
@@ -279,11 +280,16 @@ func (a *Arena) PrepareClaim(class Class, w *iterator.OrdinalScanWork) (*Claim, 
 	if local >= maxChunks*chunkBanks {
 		return nil, false, ErrFull
 	}
-	c := &Claim{arena: a, epoch: a.epoch, local: local, class: class, splitPair: splitPair}
+	charge := retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Claim{})))
+	if err := a.metadata.Add(charge); err != nil {
+		return nil, false, err
+	}
+	c := &Claim{metadataCharge: charge, arena: a, epoch: a.epoch, local: local, class: class, splitPair: splitPair}
 	keepChunk := false
 	defer func() {
 		if !keepChunk {
 			a.discardChunk(&c.chunk)
+			c.finish()
 		}
 	}()
 
@@ -361,14 +367,28 @@ func (c *Claim) Step(w *iterator.OrdinalScanWork) (Ref, bool, error) {
 	}
 	if c.growth != nil {
 		ok, e := c.growth.StepWithInstallAtCount(a.pager, c.local, w, r, b, install)
+		if ok && e == nil {
+			c.finish()
+		}
 		return c.ref, ok, e
 	}
 	if !reserve(w, r, b) {
 		return Ref{}, false, nil
 	}
 	install()
+	c.finish()
 	return c.ref, true, nil
 }
+
+// finish detaches private construction aliases before refunding its wrapper.
+// Installed bank/pager capacity remains charged to the same physical owner.
+func (c *Claim) finish() {
+	a, charge := c.arena, c.metadataCharge
+	c.arena, c.growth, c.chunk = nil, nil, nil
+	c.metadataCharge = 0
+	a.metadata.Remove(charge)
+}
+
 func (c *Claim) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 	if c == nil || c.cancelled {
 		return true, nil
@@ -384,6 +404,7 @@ func (c *Claim) Cancel(w *iterator.OrdinalScanWork) (bool, error) {
 	}
 	c.arena.discardChunk(&c.chunk)
 	c.cancelled = true
+	c.finish()
 	return true, nil
 }
 

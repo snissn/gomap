@@ -5,6 +5,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"unsafe"
 )
@@ -36,6 +37,55 @@ func (l *registryLease) Resize(n uint64) error {
 func (l *registryLease) Close() { l.b.bytes -= l.bytes; l.bytes = 0 }
 func registryTestIdentity(n byte) StableIdentity {
 	return StableIdentity{Platform: "test", ObjectID: [16]byte{n}}
+}
+
+func TestRegistryKeyPayloadRefusalPreservesBacking(t *testing.T) {
+	for _, existing := range []int{0, 7} {
+		t.Run(strconv.Itoa(existing), func(t *testing.T) {
+			r := NewIdentityPinRegistry()
+			defer r.Close()
+			for i := 0; i < existing; i++ {
+				if err := r.namespaces.set(strconv.Itoa(i), true); err != nil {
+					t.Fatal(err)
+				}
+			}
+			b := &registryBudget{cap: 1 << 20}
+			e, err := r.MetadataOwner().Enroll(b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close()
+			before := r.MetadataOwner().Bytes()
+			var first *registryCell[string, bool]
+			if existing != 0 {
+				first = &r.namespaces.cells[0]
+			}
+			capacity := 16
+			if existing != 0 {
+				capacity = 32
+			}
+			tableCharge := retainedalloc.AllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(registryCell[string, bool]{})))
+			b.cap = before + tableCharge // Full new table fits; its additional key does not.
+			if err := r.namespaces.set("new-namespace", true); !errors.Is(err, retainedalloc.ErrCapacity) {
+				t.Fatalf("payload refusal=%v", err)
+			}
+			if r.MetadataOwner().Bytes() != before || b.bytes != before || r.namespaces.count != existing || (existing == 0 && r.namespaces.cells != nil) || (existing != 0 && (cap(r.namespaces.cells) != 16 || &r.namespaces.cells[0] != first)) {
+				t.Fatalf("payload refusal changed backing: owner=%d budget=%d capacity=%d count=%d", r.MetadataOwner().Bytes(), b.bytes, cap(r.namespaces.cells), r.namespaces.count)
+			}
+			for i := 0; i < existing; i++ {
+				if value, ok := r.namespaces.lookup(strconv.Itoa(i)); !ok || !value {
+					t.Fatal("refusal lost existing namespace")
+				}
+			}
+			b.cap = 1 << 20
+			if err := r.namespaces.set("new-namespace", true); err != nil {
+				t.Fatal(err)
+			}
+			if value, ok := r.namespaces.lookup("new-namespace"); !ok || !value {
+				t.Fatal("retry lost namespace")
+			}
+		})
+	}
 }
 
 func TestRegistryCapacityOverlapRefusalAndPhysicalAliases(t *testing.T) {

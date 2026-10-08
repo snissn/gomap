@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"sort"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -40,7 +42,8 @@ func claimPrimaryComponent(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (
 	for {
 		r, done, e := c.Step(w)
 		if e != nil {
-			return primaryarena.Ref{}, e
+			_, cancelErr := c.Cancel(nil)
+			return primaryarena.Ref{}, errors.Join(e, cancelErr)
 		}
 		if done {
 			return r, nil
@@ -55,6 +58,67 @@ func primaryDataRetired(ids []uint64) []uint64 {
 		}
 	}
 	return out
+}
+
+// PRIMARY-only scratch uses the same arena governor as its final construction.
+// Slice aliases are cleared before capacity is refunded, including refusal unwind.
+func makePrimaryScratch[T any](a *primaryarena.Arena, length, capacity int) ([]T, error) {
+	var zero T
+	width := uint64(unsafe.Sizeof(zero))
+	if length < 0 || capacity < length || (width != 0 && uint64(capacity) > ^uint64(0)/width) {
+		return nil, retainedalloc.ErrCapacity
+	}
+	charge := retainedalloc.AllocationCharge(uint64(capacity) * width)
+	if a != nil {
+		if err := a.MetadataOwner().AddPending(charge); err != nil {
+			return nil, err
+		}
+	}
+	return make([]T, length, capacity), nil
+}
+func releasePrimaryScratch[T any](a *primaryarena.Arena, backing *[]T) {
+	var zero T
+	charge := retainedalloc.AllocationCharge(uint64(cap(*backing)) * uint64(unsafe.Sizeof(zero)))
+	clear((*backing)[:cap(*backing)])
+	*backing = nil
+	if a != nil {
+		a.MetadataOwner().RemovePending(charge)
+	}
+}
+
+// Both input vectors are sorted. Feasibility needs only their merged keys,
+// not a dynamically growing copy of the candidate directory.
+func primaryEntriesFitUnion(entries []node.PrimaryDirectoryEntry, ops []batch.Entry) bool {
+	i, j, count, used := 0, 0, 0, node.PrimaryDirectoryHeapOffset
+	for i < len(entries) || j < len(ops) {
+		var key []byte
+		switch {
+		case i == len(entries):
+			key = ops[j].Key
+			j++
+		case j == len(ops):
+			key = entries[i].Key
+			i++
+		default:
+			cmp := bytes.Compare(entries[i].Key, ops[j].Key)
+			if cmp < 0 {
+				key = entries[i].Key
+				i++
+			} else {
+				key = ops[j].Key
+				j++
+				if cmp == 0 {
+					i++
+				}
+			}
+		}
+		count++
+		if count > node.PrimaryDirectoryMaxEntries || len(key) > page.PageSize-used {
+			return false
+		}
+		used += len(key)
+	}
+	return true
 }
 
 func primaryEntriesFit(entries []node.PrimaryDirectoryEntry) bool {
@@ -177,7 +241,7 @@ func (z *Zipper) primaryMaterialize(base node.PrimaryOperand, baseSeq uint64, en
 		return node.PrimaryOperand{}, 0, nil, err
 	}
 	for i := 0; i < count; i++ {
-		if entries[i].Operand.Ref.Kind == page.ChildRefPage {
+		if !entries[i].InlineAbsence() && entries[i].Operand.Ref.Kind == page.ChildRefPage {
 			if !primaryarena.IsPage(entries[i].Operand.Ref.Page) {
 				retired = append(retired, entries[i].Operand.Ref.Page)
 			}
@@ -213,7 +277,11 @@ func (z *Zipper) ConsolidatePrimaryDirectory(rootID uint64, maxCells int) (uint6
 		return 0, nil, metrics, err
 	}
 	metrics.PrimaryDirectoryPagesRead++
-	entries := make([]node.PrimaryDirectoryEntry, directory.Count())
+	entries, err := makePrimaryScratch[node.PrimaryDirectoryEntry](z.primaryArena, directory.Count(), directory.Count())
+	if err != nil {
+		return 0, nil, metrics, err
+	}
+	defer releasePrimaryScratch(z.primaryArena, &entries)
 	for i := range entries {
 		entries[i], _ = directory.Entry(i)
 	}
@@ -277,8 +345,19 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	}
 	base := node.PrimaryOperand{Ref: page.PageChildRef(rootID), Digest: sha256.Sum256(image)}
 	baseSeq := uint64(1)
-	var entries []node.PrimaryDirectoryEntry
+	entries, err := makePrimaryScratch[node.PrimaryDirectoryEntry](z.primaryArena, 0, node.PrimaryDirectoryMaxEntries)
+	if err != nil {
+		return 0, nil, metrics, err
+	}
+	defer releasePrimaryScratch(z.primaryArena, &entries)
 	var privateComponents []primaryarena.Ref
+	if z.primaryArena != nil && constructor == nil {
+		privateComponents, err = makePrimaryScratch[primaryarena.Ref](z.primaryArena, 0, node.PrimaryDirectoryMaxEntries)
+		if err != nil {
+			return 0, nil, metrics, err
+		}
+		defer releasePrimaryScratch(z.primaryArena, &privateComponents)
+	}
 	defer func() {
 		work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 		for _, r := range privateComponents {
@@ -294,7 +373,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 		}
 		base, baseSeq = d.Base()
 		metrics.PrimaryDirectoryPagesRead++
-		entries = make([]node.PrimaryDirectoryEntry, d.Count())
+		entries = entries[:d.Count()]
 		for i := range entries {
 			entries[i], _ = d.Entry(i)
 		}
@@ -308,25 +387,15 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	// Large ordinary batches/ranges and keys exceeding directory capacity use
 	// the genuine materialized-base path. All consolidation and COW work remains
 	// in returned metrics and in the same allocator/retirement packet.
-	candidate := append([]node.PrimaryDirectoryEntry(nil), entries...)
-	for _, op := range ops {
-		i := sort.Search(len(candidate), func(i int) bool { return bytes.Compare(candidate[i].Key, op.Key) >= 0 })
-		if i < len(candidate) && bytes.Equal(candidate[i].Key, op.Key) {
-			candidate[i].Key = op.Key
-		} else {
-			candidate = append(candidate, node.PrimaryDirectoryEntry{})
-			copy(candidate[i+1:], candidate[i:])
-			candidate[i] = node.PrimaryDirectoryEntry{Key: op.Key}
-		}
-	}
-	if len(ranges) > 0 || !primaryEntriesFit(candidate) {
+	if len(ranges) > 0 || !primaryEntriesFitUnion(entries, ops) {
 		var reclaimed []uint64
 		base, baseSeq, reclaimed, err = z.primaryMaterialize(base, baseSeq, entries, len(entries), cfg, &metrics, scratch)
 		if err != nil {
 			return 0, nil, metrics, err
 		}
 		retired = append(retired, reclaimed...)
-		entries = nil
+		clear(entries)
+		entries = entries[:0]
 		if len(ranges) > 0 || !primaryEntriesFitKeys(ops) {
 			delta := batch.New(nil, page.PageSize)
 			defer delta.Close()
@@ -355,6 +424,14 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 			return root, retired, metrics, e
 		}
 	}
+	var componentImage []byte
+	if z.primaryArena != nil {
+		componentImage, err = makePrimaryScratch[byte](z.primaryArena, page.PageSize, page.PageSize)
+		if err != nil {
+			return 0, nil, metrics, err
+		}
+		defer releasePrimaryScratch(z.primaryArena, &componentImage)
+	}
 	for _, op := range ops {
 		classSlot := uint16(len(entries))
 		i := sort.Search(len(entries), func(i int) bool { return bytes.Compare(entries[i].Key, op.Key) >= 0 })
@@ -379,7 +456,7 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 			if cfg.oldEntriesRemoved != nil {
 				*cfg.oldEntriesRemoved++
 			}
-			if old.Operand.Ref.Kind == page.ChildRefPage {
+			if !old.InlineAbsence() && old.Operand.Ref.Kind == page.ChildRefPage {
 				if !primaryarena.IsPage(old.Operand.Ref.Page) {
 					retired = append(retired, old.Operand.Ref.Page)
 				}
@@ -420,7 +497,8 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 				} else {
 					privateComponents = append(privateComponents, component)
 				}
-				data = make([]byte, page.PageSize)
+				clear(componentImage)
+				data = componentImage
 			}
 		} else {
 			id, e = z.allocator.Alloc(0)
@@ -465,13 +543,8 @@ func (z *Zipper) applyPrimaryDirectory(rootID uint64, ops []batch.Entry, ranges 
 	root, err = z.writePrimaryDirectory(base, baseSeq, entries, &metrics, constructor)
 	return root, retired, metrics, err
 }
-func primaryEntriesFitKeys(ops []batch.Entry) bool {
-	entries := make([]node.PrimaryDirectoryEntry, len(ops))
-	for i := range ops {
-		entries[i].Key = ops[i].Key
-	}
-	return primaryEntriesFit(entries)
-}
+func primaryEntriesFitKeys(ops []batch.Entry) bool { return primaryEntriesFitUnion(nil, ops) }
+
 func (z *Zipper) collectPrimaryBaseOld(ref page.ChildRef, key []byte, cfg applyRunConfig, metrics *adaptive.Metrics, scratch *mergeScratch) error {
 	for depth := 0; depth < 50; depth++ {
 		n, _, buf, pooled, source, err := z.loadNodeRef(ref, scratch)
@@ -547,7 +620,8 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
 		for {
 			bundle, ok, e = claim.Step(work)
 			if e != nil {
-				return 0, e
+				_, cancelErr := claim.Cancel(nil)
+				return 0, errors.Join(e, cancelErr)
 			}
 			if ok {
 				break
@@ -586,7 +660,11 @@ func (z *Zipper) writePrimaryArenaDirectory(base node.PrimaryOperand, baseSeq ui
 		}
 		defer a.DropGroup(groups[0], work)
 	}
-	image := make([]byte, page.PageSize)
+	image, e := makePrimaryScratch[byte](a, page.PageSize, page.PageSize)
+	if e != nil {
+		return 0, e
+	}
+	defer releasePrimaryScratch(a, &image)
 	if e = node.EncodePrimaryDirectory(image, bundle.Directory.PageID, baseSeq, base, entries); e != nil {
 		return 0, e
 	}
@@ -627,7 +705,11 @@ func (z *Zipper) CopyPrimaryRoot(id uint64) (uint64, error) {
 	if e != nil {
 		return 0, e
 	}
-	entries := make([]node.PrimaryDirectoryEntry, d.Count())
+	entries, e := makePrimaryScratch[node.PrimaryDirectoryEntry](z.primaryArena, d.Count(), d.Count())
+	if e != nil {
+		return 0, e
+	}
+	defer releasePrimaryScratch(z.primaryArena, &entries)
 	for i := range entries {
 		entries[i], e = d.Entry(i)
 		if e != nil {

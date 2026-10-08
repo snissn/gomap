@@ -113,14 +113,28 @@ func (s *Store) IterateVersions(options VersionIteratorOptions) (*VersionIterato
 		s.mu.RUnlock()
 		return nil, err
 	}
-	snapshotter, ok := s.db.(snapshotDB)
-	if !ok {
+	var snapshot treedb.Snapshot
+	if s.readCuts != nil {
+		snapshot, err = s.readCuts.AcquireMVCCReadCut()
+		// The cut owns all physical resources before floor admission ends.
+		// Iterator construction and value decoding can now proceed independently.
 		s.mu.RUnlock()
-		return nil, ErrSnapshotUnavailable
+		if err != nil {
+			return nil, storageError("acquire version snapshot", err)
+		}
+	} else {
+		snapshotter, ok := s.db.(snapshotDB)
+		if !ok {
+			s.mu.RUnlock()
+			return nil, ErrSnapshotUnavailable
+		}
+		snapshot = snapshotter.AcquireSnapshot()
+		// Preserve legacy construction admission until the iterator is built.
 	}
-	snapshot := snapshotter.AcquireSnapshot()
 	if snapshot == nil {
-		s.mu.RUnlock()
+		if s.readCuts == nil {
+			s.mu.RUnlock()
+		}
 		return nil, storageError("acquire version snapshot", treedb.ErrClosed)
 	}
 	var raw treedb.Iterator
@@ -129,7 +143,9 @@ func (s *Store) IterateVersions(options VersionIteratorOptions) (*VersionIterato
 	} else {
 		raw, err = snapshot.Iterator(lower, upper)
 	}
-	s.mu.RUnlock()
+	if s.readCuts == nil {
+		s.mu.RUnlock()
+	}
 	if err != nil {
 		return nil, errors.Join(storageError("open version iterator", err), storageError("close version snapshot", snapshot.Close()))
 	}
@@ -438,6 +454,11 @@ func (s *Store) PruneVersions(options PruneOptions) (stats PruneStats, err error
 	}
 	if s == nil || s.db == nil {
 		return stats, storageError("prune versions", treedb.ErrClosed)
+	}
+	if preflight, ok := s.db.(interface{ PreflightMVCCPrune() error }); ok {
+		if err := preflight.PreflightMVCCPrune(); err != nil {
+			return stats, storageError("prune eligibility", err)
+		}
 	}
 	if options.BatchSize <= 0 {
 		options.BatchSize = 256

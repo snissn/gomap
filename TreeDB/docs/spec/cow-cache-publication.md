@@ -5,8 +5,8 @@ raw point operations and externally encoded MVCC versions. It is independent
 of the durability profile. Existing `append_only`, `btree`, adaptive selection
 and profile defaults retain their own dispatch. COW is a pre-alpha capability;
 selecting it does not add conflict detection, a transaction scheduler, or new
-MVCC timestamp semantics. `TreeDB/mvcc` Store fences remain required until their
-separate admission proof is implemented.
+MVCC timestamp semantics. `TreeDB/mvcc` retains Store floor admission while
+qualified coherent read cuts permit shared grouped publication admission.
 
 ## Selection and finite admission
 
@@ -163,13 +163,42 @@ empty. They inspect all captured shards/sources and preserve newest-source
 ties. Winning physical tombstones, nonempty disk bases and missing successor
 capabilities use the general merge on that same captured snapshot. Selection,
 materialization and caller copies retain the ordinary read/Close ownership;
-this fast path does not change MVCC Store fencing.
+the Store uses this same successor on its admitted snapshot after releasing
+floor admission; it never seeks through a newly captured DB cut.
 
 
 `GetManyView` retains one immutable snapshot, materializes bounded admitted
 temporary value ownership per callback, and invokes callbacks outside read,
 writer and publication locks. Callback values remain read-only and valid only
 for that callback. Empty input does not bypass closed-handle checks.
+
+## External MVCC read admission
+
+The resolved public `SupportsMVCCReadCut` capability qualifies whole-call atomic
+publication plus error-returning `AcquireMVCCReadCut`, using the existing Snapshot
+owner and `SeekGEVersionRange`. The Store caches this qualification once. Legacy
+successor-method presence does not establish it. Qualified grouped commits retain
+shared floor admission through ordinary `Write`/`WriteSync` acknowledgement and
+batch cleanup; floor advancement still waits for admitted commits.
+
+Reads check the floor and capture one physical cut under shared admission, then
+release admission before materialization. Point seek, iterator construction and
+decoding use that cut, preserving old same-ts replacements and excluding late
+historical inserts. Independent calls remain independently fresh. Capture refusal
+keeps its capacity/closed error and never falls back to an unqualified producer.
+Snapshot/iterator Close releases the single owner and preserves ordinary error
+reporting and borrowed/owned output contracts.
+
+The point successor's disk/tombstone merge uses an internal iterator inside the
+already admitted read, closing its sources and workspace before ending admission.
+It does not recursively admit a snapshot-bound iterator behind queued DB Close.
+
+COW `PruneVersions` explicitly refuses eligibility before floor re-sync or WAL
+side effects. This read milestone is independent of the native bounded pruning
+producer. Full C3 maintenance/replay/lifecycle qualification and C4 sustained
+performance qualification remain required. The bounded public diagnostic and
+allocation ownership audit are documented in
+[the C3 read fixture](../benchmarks/cow-c3-read-5076/README.md).
 
 ## Supported mutation and refusal boundary
 
@@ -326,3 +355,18 @@ replacement backing is admitted during overlap. Pre-Open dependency leases use
 intrusive links in the existing index owner, and failed private bank cleanup
 remains in the SAME arena owner's preadmitted failure custody. These ordinary
 helpers and their synchronous cleanup are not bounded native prune evidence.
+
+The [ordinary PRIMARY allocation inventory](../design/ordinary-primary-allocation-5111.md)
+records the actual constructor/capacity/caller and last-alias boundaries. Public
+set wrapper disposal refunds its own admitted allocation while an active scope
+retains immutable descriptor and original physical closure. Same-identity
+coalescing updates the canonical selected index without mutating an older shared
+rope's frontier. Temporary captures and real producer enrollment are distinct.
+
+Snapshots retaining PRIMARY roots also retain the existing physical arena owner.
+Their original last-read finalizer drops the bank edge, settles original cleanup
+and releases that physical owner before detaching the paired governor. DB.Close
+cannot dispose the mapping needed by this finalizer. Cleanup failure retains the
+exact Snapshot at that owner; private one-shot reads cannot reuse a failed owner.
+This extends physical cleanup custody without adding a Snapshot read-after-close
+promise.

@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
@@ -1368,5 +1370,123 @@ func BenchmarkZipperApplyWarmRandomManyLeaf(b *testing.B) {
 	if b.N > 0 {
 		b.ReportMetric(float64(totalLeafMerges)/float64(b.N), "leaf_merges/op")
 		b.ReportMetric(float64(totalInternalMerges)/float64(b.N), "internal_merges/op")
+	}
+}
+
+func TestReadOnlyPreparePrimaryAbsenceCoverageAndReuse(t *testing.T) {
+	p, z := newReadOnlyPrepareZipper(t)
+	// The generic mock starts at page zero; PRIMARY operands exclude meta pages.
+	if _, err := p.Alloc(2); err != nil {
+		t.Fatal(err)
+	}
+	base := buildReadOnlyPrepareRootWithKeys(t, z, 8)
+	a, err := primaryarena.Open(filepath.Join(t.TempDir(), "index.db.primary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = a.Close() })
+	if err := a.SetMetadataDecoder(rootpublication.PrimaryBankMetadataEdgesV5); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AttachPrimaryBankPager(a.Pager()); err != nil {
+		t.Fatal(err)
+	}
+	z.SetPrimaryArena(a)
+	entries := []node.PrimaryDirectoryEntry{
+		{Key: []byte("a"), Revision: 1, Kind: node.PrimaryAbsence, ClassSlot: 0},
+		{Key: []byte("c"), Revision: 2, Kind: node.PrimaryAbsence, ClassSlot: 1},
+		{Key: []byte("e"), Revision: 3, Kind: node.PrimaryAbsence, ClassSlot: 2},
+	}
+	root, err := z.RebasePrimaryRoot(base, 1, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ops := []batch.Entry{{Key: []byte("a"), Type: batch.OpPut}, {Key: []byte("b"), Type: batch.OpPut}, {Key: []byte("c"), Type: batch.OpPut}, {Key: []byte("d"), Type: batch.OpPut}, {Key: []byte("e"), Type: batch.OpPut}}
+	for _, mode := range []ReadOnlyPrepareOptions{{}, {OmitKeys: true}, {OmitOpKeys: true}, {OmitKeys: true, OmitOpKeys: true}} {
+		var absent []int
+		mode.LogicalAbsencePointCallback = func(position int) { absent = append(absent, position) }
+		prepared, err := z.PrepareReadOnlyPlan(root, ops, nil, mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireValidReadOnlyPrepare(t, prepared)
+		if prepared.ExactLeafSpans || prepared.PointOps != 5 || prepared.LeafSpanSummary().SpanOps != 2 || len(prepared.LeafSpans) != 2 || !reflect.DeepEqual(absent, []int{0, 2, 4}) {
+			t.Fatalf("physical/logical census %+v absent=%v", prepared, absent)
+		}
+		for _, span := range prepared.LeafSpans {
+			if span.Ref.Page == 0 {
+				t.Fatal("absence became physical page zero")
+			}
+		}
+		reuse := prepared.ReuseOptions()
+		if reuse.LogicalAbsencePointCallback != nil {
+			t.Fatal("reuse retained logical callback")
+		}
+		materialized, err := z.PrepareReadOnlyPlan(base, ops, nil, reuse)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireValidReadOnlyPrepare(t, materialized)
+		if materialized.primaryAbsenceCount != 0 || !materialized.ExactLeafSpans {
+			t.Fatal("materialized reuse inherited absence")
+		}
+		again, err := z.PrepareReadOnlyPlan(root, ops, nil, materialized.ReuseOptions())
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireValidReadOnlyPrepare(t, again)
+		again.ResetForReuse()
+		if again.primaryAbsenceCount != 0 || again.primaryAbsencePositions != ([node.PrimaryDirectoryMaxEntries]int{}) {
+			t.Fatal("reset retained absence evidence")
+		}
+	}
+	only := []batch.Entry{ops[0], ops[2], ops[4]}
+	prepared, err := z.PrepareReadOnlyPlan(root, only, nil, ReadOnlyPrepareOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireValidReadOnlyPrepare(t, prepared)
+	if len(prepared.LeafSpans) != 0 || prepared.PointOps != 3 || prepared.primaryAbsenceCount != 3 {
+		t.Fatal("absence-only physical projection", prepared)
+	}
+	var streamed []ReadOnlyLeafSpan
+	var absent []int
+	discarded, err := z.PrepareReadOnlyPlan(root, ops, nil, ReadOnlyPrepareOptions{DiscardLeafSpans: true, LeafSpanCallback: func(span ReadOnlyLeafSpan) { streamed = append(streamed, span) }, LogicalAbsencePointCallback: func(position int) { absent = append(absent, position) }})
+	if err != nil || len(discarded.LeafSpans) != 0 || len(streamed) != 2 || !reflect.DeepEqual(absent, []int{0, 2, 4}) {
+		t.Fatalf("discarded emission %v %v %v", err, streamed, absent)
+	}
+}
+
+func TestReadOnlyPreparePrimaryAbsenceProofFailsClosed(t *testing.T) {
+	valid := ReadOnlyPrepareResult{RootID: 2, Ops: 3, PointOps: 3, OmitKeys: true, primaryAbsenceCount: 2, primaryAbsencePositions: [node.PrimaryDirectoryMaxEntries]int{0, 2}, LeafSpans: []ReadOnlyLeafSpan{{PointOpStart: 1, PointOpEnd: 2, PointOpCount: 1, OpCount: 1}}}
+	requireValidReadOnlyPrepare(t, valid)
+	cases := map[string]func(*ReadOnlyPrepareResult){
+		"negative count":          func(r *ReadOnlyPrepareResult) { r.primaryAbsenceCount = -1 },
+		"capacity":                func(r *ReadOnlyPrepareResult) { r.primaryAbsenceCount = node.PrimaryDirectoryMaxEntries + 1 },
+		"zero root":               func(r *ReadOnlyPrepareResult) { r.RootID = 0 },
+		"cold":                    func(r *ReadOnlyPrepareResult) { r.ColdBuild = true },
+		"exact":                   func(r *ReadOnlyPrepareResult) { r.ExactLeafSpans = true },
+		"ranges":                  func(r *ReadOnlyPrepareResult) { r.DeleteRanges = 1; r.Ops++ },
+		"negative position":       func(r *ReadOnlyPrepareResult) { r.primaryAbsencePositions[0] = -1 },
+		"outside":                 func(r *ReadOnlyPrepareResult) { r.primaryAbsencePositions[1] = 3 },
+		"duplicate":               func(r *ReadOnlyPrepareResult) { r.primaryAbsencePositions[1] = 0 },
+		"unsorted":                func(r *ReadOnlyPrepareResult) { r.primaryAbsencePositions[0] = 2; r.primaryAbsencePositions[1] = 0 },
+		"gap":                     func(r *ReadOnlyPrepareResult) { r.primaryAbsenceCount = 1 },
+		"overlap":                 func(r *ReadOnlyPrepareResult) { r.primaryAbsencePositions[1] = 1 },
+		"span width":              func(r *ReadOnlyPrepareResult) { r.LeafSpans[0].PointOpEnd = 3 },
+		"span zero":               func(r *ReadOnlyPrepareResult) { r.LeafSpans[0].PointOpCount = 0 },
+		"span gap":                func(r *ReadOnlyPrepareResult) { r.LeafSpans[0].PointOpStart = 2; r.LeafSpans[0].PointOpEnd = 3 },
+		"generic inexact missing": func(r *ReadOnlyPrepareResult) { r.primaryAbsenceCount = 0; r.LeafSpans = nil },
+		"generic inexact gap":     func(r *ReadOnlyPrepareResult) { r.primaryAbsenceCount = 0 },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := valid
+			r.LeafSpans = append([]ReadOnlyLeafSpan(nil), valid.LeafSpans...)
+			mutate(&r)
+			if err := r.ValidateLeafSpans(); err == nil {
+				t.Fatal("accepted malformed absence proof")
+			}
+		})
 	}
 }

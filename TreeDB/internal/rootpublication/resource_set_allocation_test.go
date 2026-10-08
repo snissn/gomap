@@ -120,8 +120,15 @@ func TestOwnedBuilderAddCoalescesAndRefusesBeforeTransfer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Len() != 1 || result.kindViews.get(ResourceIndex).root.entries[0].frontier.Bytes != 8 {
-		t.Fatal("actual repeated identity did not coalesce")
+	view := result.kindViews.get(ResourceIndex)
+	logical := findStableResourceLogical(view.logical, first.logicalKey())
+	physical := findStableResourcePhysical(view.physical, first.physicalIdentityKey())
+	physicalCount, physicalBytes := result.PhysicalSummary()
+	if result.Len() != 1 || physicalCount != 1 || physicalBytes != 8 || logical == nil || logical.frontier.Bytes != 8 || len(physical) != 1 || physical[0] != logical {
+		t.Fatalf("actual repeated identity did not coalesce: len=%d physical=%d/%d logical=%v", result.Len(), physicalCount, physicalBytes, logical)
+	}
+	if view.root.entries[0].frontier.Bytes != 4 || view.root.entries[0].token != first || logical.token != first {
+		t.Fatal("coalescing rewrote immutable physical custody")
 	}
 	if builder.metadata != nil || builder.requiredFields != nil {
 		t.Fatal("closed builder retained admitted constructor storage")

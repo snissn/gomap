@@ -383,3 +383,118 @@ Coordinator freeze records this actual mask; every collector pre/post snapshot
 and both offline analyzers require its exact equality to the frozen mask, even
 when copied host records and receipts are rehashed consistently. A large system
 CPU count does not substitute for available CPUs. No CPU quota policy is inferred.
+
+### Optional standard GitHub-hosted route (#5114)
+
+The manual `cow-c3-hosted-qualification.yml` workflow defaults to **capacity-only**.
+It records the first job step's aware UTC and monotonic observation before
+checkout (not an API-observed job start), exports the namespace through
+`GITHUB_ENV` from the physical `RUNNER_TEMP` and actual run IDs, then measures
+the actual owned TMPDIR
+filesystem, runnable CPU mask and platform. Full mode refuses before Go unless
+Linux amd64, four runnable CPUs and 20 GiB free are actually present. It neither
+cleans the hosted image nor buys a larger runner. Public compute availability
+does not guarantee disk capacity or artifact storage quota. Failed admission or
+upload cannot establish qualification.
+
+Full dispatch is restricted to root account numeric ID `1981537`, landed `main`,
+and a distinct run ID, run attempt and root attempt label. This optional route
+uses baseline `2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c` and candidate
+`8d8806b495422e44f7802a96f5737f536a3fb2f0`. It exports complete Git-object-bound
+source bytes/modes using explicit `git -c tar.umask=0022 archive` (checked
+against raw Git blob/mode authority), downloads the exact official Go 1.26.8 linux-amd64 archive,
+retains all 15,036 toolchain file identities, and observes three real GCC-driver,
+assembler and linker files before/after. Construction and matched before/final
+refreshes retain the actual full Go inventory and three compiler snapshots
+before comparing them with the frozen identities; actual regular-file modes
+(including refused mode drift) are observed. Missing, symlink or special compiler
+paths refuse without reading them and retain requested-path/type/error records.
+Bootstrap still requires exactly three physical mode-0755 executables. That declaration is **not** a complete
+C frontend, implicit library or libc closure. The actual race Go environment
+and compiler version remain raw evidence.
+
+A new VM executes all twelve supervised construction commands: compiler version,
+race Go environment, fresh sixteen-test normal and race characterization,
+baseline canonical build and full 54-cell 128x warm characterization, candidate
+build and full warm characterization, 22 isolation controls, 25 readiness
+controls, actual Linux census proof, and strict config freeze. Both canonical
+builds retain all twelve provenance artifacts and complete selected compiler
+inputs. No imported Linux185 commands, previous-failure release, historical
+functional pass or old binary qualify this VM. Canonical seven C3 script bytes
+remain unchanged; `hosted_collect.py` explicitly adapts only pre-child admission.
+
+Construction is uploaded separately. With no Go active, the VM waits at most one
+hour for **one immutable root-authored JSON comment on #5076**, posted only after
+independent actual construction review and release of its readers. The comment
+must contain exactly the following fields; every identity comes from that run's
+sealed `hosted-state.json` and `construction-result.json`, not this example:
+
+```json
+{
+  "repository": "snissn/gomap",
+  "workflow_sha": "ACTUAL_LANDED_WORKFLOW_COMMIT",
+  "run_id": "ACTUAL_INTEGER",
+  "run_attempt": "ACTUAL_INTEGER",
+  "dispatch_actor_id": 1981537,
+  "attempt": "ACTUAL_ROOT_ATTEMPT",
+  "construction_manifest_sha256": "ACTUAL_SEAL_SHA",
+  "config_sha256": "ACTUAL_CONFIG_SHA",
+  "policy_sha256": "ACTUAL_POLICY_SHA",
+  "baseline": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+  "candidate": "8d8806b495422e44f7802a96f5737f536a3fb2f0",
+  "verdict": "ACCEPT_ACTUAL_HOSTED_C3_CONSTRUCTION",
+  "findings": [],
+  "reader_release": "RELEASED",
+  "all_source_and_artifact_readers_released": true,
+  "accepted_utc": "ACTUAL_AWARE_UTC",
+  "end_utc": "ACTUAL_AWARE_UTC"
+}
+```
+
+This is a non-runnable shape illustration: run IDs/attempts must be integers;
+SHA fields and UTC fields must be actual values. Receipt JSON is data only.
+Duplicate keys, boolean IDs, edited or ambiguous comments, predating closure,
+wrong source/config/attempt and less than 9,600 seconds remaining refuse. The
+API creation timestamp must also follow actual construction closure. Read-only
+API credentials exist only in the acceptance step; they are never captured in
+state, raw evidence, Go environments or child receipts. Every original sealed
+construction payload byte/size/mode and archive SHA is rechecked before launch.
+
+The original 54-cell/756-child matrix, 108 warmups plus 648 measurements,
+three ABBA cycles, GOMAXPROCS=4, 128/1024 iteration counts, 300-second leaf timeout,
+600-second **total** readiness budget, 5-second polling, 4.5 readiness margin,
+5.0 original host bound and .30/.05/.10 noise/adverse/benefit rules remain fixed.
+All noisy/adverse flags remain visible; exclusions are empty. Construction
+requires 10,200 seconds remaining; matched launch requires 9,600 seconds.
+
+The 330-minute deadline measured from the first-step origin is a cooperative
+**admission cutoff**. The source-bound adapter also enforces any earlier root
+receipt end before every child, without renewing a 9,600-second minimum per
+leaf. Expiry never signals an active child: it naturally joins under the original
+300-second timeout, then stops before another child. Readiness probes and the
+source refresh are unchanged. A separate 345-minute orchestration hang ceiling,
+finite offline analysis and final archive fit within the 360-minute job limit;
+the final thirty minutes are reserved for joins/export. This hang safeguard,
+actual cancellation and canonical leaf timeout have separate raw custody
+receipts. Any escalation with unproven detached-child custody, hard job timeout,
+any remembered cancellation (including during final source refresh), partial
+matrix, drift or contamination
+stays unqualified. No automatic retry, resume, partial-row combination or expiry
+kill is provided.
+
+Before/during/after process censuses remain comm-only observations, not universal
+host exclusivity or future quiet-host promises. Configured benchmark names,
+known Go tools and the original conservative test-name taxonomy are unchanged.
+Root must review actual CPU/affinity, memory/storage, raw custody, provenance,
+functional evidence, all 756 rows and every noise/adverse flag. Uploaded sealed
+success/failure archives preserve original streams and authority. A separate raw
+fallback runs only if the closer failed; incomplete custody never becomes a
+pass. Hosted tooling acceptance alone does not accept #5076 performance, native
+#5111/#4878, C4 or parent #5044.
+
+`python3 -B scripts/cow_c3_read/hosted_test.py` exercises capacity, authority,
+sealed-payload/archive drift, compiler identity, joins, foreign censuses,
+Go JSON grammar and cooperative deadline seams, plus tiny local Git archive
+modes, the actual canonical generator and first-step environment setup, without
+Go, network or an
+operational helper main.

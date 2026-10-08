@@ -12,6 +12,8 @@ import (
 // run. It is side-effect-free: it captures the current root, runs the read-only
 // prepare pass against the supplied point/range operations, and returns M8/M9
 // span-run metadata for cache-layer chunk planning and future span-native jobs.
+// PRIMARY absence plans have no exhaustive physical-span representation here
+// and fail closed; PlanFlushSpanRunChunks handles their logical point coverage.
 func (db *DB) PlanFlushSpanRun(req FlushSpanRunPlanRequest) (FlushSpanRunMetadata, error) {
 	meta, prepared, err := db.prepareFlushSpanRun(req, false, nil)
 	if err != nil {
@@ -85,9 +87,10 @@ func (db *DB) planFlushSpanRunPointChunks(req FlushSpanRunPlanRequest, maxPointO
 	builder := newReadOnlyFlushSpanRunChunkBuilder(req.PointOps, maxPointOpsPerChunk)
 	prepareStart := time.Now()
 	prepared, err := snap.idx.zipper.PrepareReadOnlyPlan(snap.state.RootPageID, req.PointOps, nil, zipper.ReadOnlyPrepareOptions{
-		OmitKeys:         true,
-		DiscardLeafSpans: true,
-		LeafSpanCallback: builder.AddSpan,
+		OmitKeys:                    true,
+		DiscardLeafSpans:            true,
+		LeafSpanCallback:            builder.AddSpan,
+		LogicalAbsencePointCallback: builder.AddLogicalAbsencePoint,
 	})
 	prepareNs := elapsedReadOnlyPrepareNs(prepareStart)
 	if prepared.RootID != 0 {
@@ -199,6 +202,7 @@ type readOnlyFlushSpanRunChunkBuilder struct {
 	singleOpSpans   int
 	spanOps         int
 	spanBytes       int
+	absenceOps      int
 	splitSummary    FlushSpanRunChunkSplitSummary
 	err             error
 }
@@ -231,44 +235,62 @@ func (b *readOnlyFlushSpanRunChunkBuilder) AddSpan(span zipper.ReadOnlyLeafSpan)
 	if span.OpCount == 1 {
 		b.singleOpSpans++
 	}
-	spanOps := span.PointOpEnd - span.PointOpStart
+	b.appendPointSegment(span.PointOpStart, span.PointOpEnd, span.ByteCount, true)
+}
+
+func (b *readOnlyFlushSpanRunChunkBuilder) AddLogicalAbsencePoint(position int) {
+	if b == nil || b.err != nil {
+		return
+	}
+	b.absenceOps++
+	b.appendPointSegment(position, position+1, 0, false)
+}
+
+// Both physical spans and logical absence cells carry real input operations
+// into chunks. Only physical spans contribute target-leaf and split metrics.
+func (b *readOnlyFlushSpanRunChunkBuilder) appendPointSegment(start, end, byteCount int, physical bool) {
+	spanOps := end - start
+	if start < 0 || end > len(b.ops) || end <= start {
+		b.err = fmt.Errorf("point segment [%d,%d) out of input bounds", start, end)
+		return
+	}
 	if spanOps <= 0 {
 		return
 	}
-	if span.PointOpStart != b.chunkEnd {
-		b.err = fmt.Errorf("span point range starts at %d after chunk end %d", span.PointOpStart, b.chunkEnd)
+	if start != b.chunkEnd {
+		b.err = fmt.Errorf("span point range starts at %d after chunk end %d", start, b.chunkEnd)
 		return
 	}
-	spanBytes := span.ByteCount
+	spanBytes := byteCount
 	if spanBytes <= 0 {
-		for j := span.PointOpStart; j < span.PointOpEnd; j++ {
+		for j := start; j < end; j++ {
 			spanBytes += flushSpanRunEntryByteCount(b.ops[j])
 		}
 	}
 	if spanOps > b.capEntries {
 		b.emit()
 		overlaps := 0
-		for start := span.PointOpStart; start < span.PointOpEnd; {
-			end := start + b.capEntries
-			if end > span.PointOpEnd {
-				end = span.PointOpEnd
+		for chunkStart := start; chunkStart < end; {
+			chunkEnd := chunkStart + b.capEntries
+			if chunkEnd > end {
+				chunkEnd = end
 			}
 			byteCount := 0
-			for j := start; j < end; j++ {
+			for j := chunkStart; j < chunkEnd; j++ {
 				byteCount += flushSpanRunEntryByteCount(b.ops[j])
 			}
-			b.chunks = append(b.chunks, FlushSpanRunBackendChunk{ChunkIndex: len(b.chunks), PointOpStart: start, PointOpEnd: end, ByteCount: byteCount})
+			b.chunks = append(b.chunks, FlushSpanRunBackendChunk{ChunkIndex: len(b.chunks), PointOpStart: chunkStart, PointOpEnd: chunkEnd, ByteCount: byteCount})
 			overlaps++
-			start = end
+			chunkStart = chunkEnd
 		}
-		if overlaps > b.splitSummary.MaxChunksPerTargetLeaf {
+		if physical && overlaps > b.splitSummary.MaxChunksPerTargetLeaf {
 			b.splitSummary.MaxChunksPerTargetLeaf = overlaps
 		}
-		if overlaps > 1 {
+		if physical && overlaps > 1 {
 			b.splitSummary.TargetLeavesSplitAcrossChunks++
 		}
-		b.chunkStart = span.PointOpEnd
-		b.chunkEnd = span.PointOpEnd
+		b.chunkStart = end
+		b.chunkEnd = end
 		b.chunkBytes = 0
 		return
 	}
@@ -276,11 +298,11 @@ func (b *readOnlyFlushSpanRunChunkBuilder) AddSpan(span zipper.ReadOnlyLeafSpan)
 		b.emit()
 	}
 	if b.chunkEnd == b.chunkStart {
-		b.chunkStart = span.PointOpStart
+		b.chunkStart = start
 	}
-	b.chunkEnd = span.PointOpEnd
+	b.chunkEnd = end
 	b.chunkBytes += spanBytes
-	if b.splitSummary.MaxChunksPerTargetLeaf < 1 {
+	if physical && b.splitSummary.MaxChunksPerTargetLeaf < 1 {
 		b.splitSummary.MaxChunksPerTargetLeaf = 1
 	}
 }
@@ -316,7 +338,10 @@ func (b *readOnlyFlushSpanRunChunkBuilder) Validate(prepared zipper.ReadOnlyPrep
 	if b.chunkEnd != len(b.ops) {
 		return fmt.Errorf("chunks cover point ops through %d, want %d", b.chunkEnd, len(b.ops))
 	}
-	if b.spanOps != prepared.PointOps {
+	if b.absenceOps > 0 && (prepared.RootID == 0 || prepared.ColdBuild || prepared.ExactLeafSpans) {
+		return fmt.Errorf("logical absence chunks require a non-cold, non-exact point root")
+	}
+	if b.spanOps+b.absenceOps != prepared.PointOps {
 		return fmt.Errorf("span ops=%d want point ops=%d", b.spanOps, prepared.PointOps)
 	}
 	b.emit()

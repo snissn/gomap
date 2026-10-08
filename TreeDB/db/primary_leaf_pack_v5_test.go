@@ -45,6 +45,9 @@ func TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens(t *testing.T) {
 	if err = database.SetSync([]byte("overlay-retained"), []byte("component")); err != nil {
 		t.Fatal(err)
 	}
+	if err = database.DeleteSync([]byte("overlay-absent")); err != nil {
+		t.Fatal(err)
+	}
 	held := database.AcquireSnapshot()
 	defer held.Close()
 	before := database.State()
@@ -68,6 +71,9 @@ func TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens(t *testing.T) {
 		t.Fatalf("held component %q %v", got, err)
 	}
 	verifyLeafGenerationPointerValues(t, database, oldPointers, newPointers)
+	if has, err := held.Has([]byte("overlay-absent")); err != nil || has {
+		t.Fatalf("held inline absence: %v %v", has, err)
+	}
 	if err = database.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +92,9 @@ func TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifyLeafGenerationPointerValues(t, database, oldPointers, newPointers)
+	if has, err := database.Has([]byte("overlay-absent")); err != nil || has {
+		t.Fatalf("reopened inline absence: %v %v", has, err)
+	}
 	got, err = database.Get([]byte("overlay-retained"))
 	if err != nil || !bytes.Equal(got, []byte("component")) {
 		t.Fatalf("reopened component %q %v", got, err)

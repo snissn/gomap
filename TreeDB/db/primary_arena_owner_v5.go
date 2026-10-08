@@ -18,20 +18,21 @@ type primaryArenaOwnerV5 struct {
 	mu sync.Mutex
 	// Failed dependency custody is held by this same physical owner. A failed
 	// lease never relinquishes its existing edge or becomes undiscoverable.
-	failedDependencies    *primaryDependencyLeaseV5
- failedBankConstructions *primaryBankConstructionV5
-	failedPagerOperations *stablePagerOwnedOperations
-	failedDataGenerations *indexGen
-	cleanupErr            error
-	closeFailure          primaryCleanupFailureV5
-	namespaceFailure      primaryCleanupFailureV5
-	refs                  uint64
-	arena                 *primaryarena.Arena
-	namespaceMu           sync.Mutex
-	namespaceParent       *os.File
-	namespaceProof        *rootpublication.StableNamespaceCreationProof
-	metadataCharge        uint64
-	namespaceParentCharge uint64
+	failedDependencies      *primaryDependencyLeaseV5
+	failedBankConstructions *primaryBankConstructionV5
+	failedPagerOperations   *stablePagerOwnedOperations
+	failedDataGenerations   *indexGen
+	failedSnapshots         *Snapshot
+	cleanupErr              error
+	closeFailure            primaryCleanupFailureV5
+	namespaceFailure        primaryCleanupFailureV5
+	refs                    uint64
+	arena                   *primaryarena.Arena
+	namespaceMu             sync.Mutex
+	namespaceParent         *os.File
+	namespaceProof          *rootpublication.StableNamespaceCreationProof
+	metadataCharge          uint64
+	namespaceParentCharge   uint64
 }
 
 func newPrimaryArenaOwnerV5(a *primaryarena.Arena) (*primaryArenaOwnerV5, error) {
@@ -184,4 +185,14 @@ func (owner *primaryArenaOwnerV5) retainFailedDataGeneration(g *indexGen) {
 	}
 	g.closeErr = &g.closeFailure
 	owner.cleanupErr = g.closeErr
+}
+
+func (owner *primaryArenaOwnerV5) retainFailedSnapshot(snapshot *Snapshot, err error) {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	snapshot.primaryFailure.causes = [3]error{err, rootpublication.ErrResourceOwnership, owner.cleanupErr}
+	snapshot.primaryFailedNext = owner.failedSnapshots
+	owner.failedSnapshots = snapshot
+	owner.cleanupErr = &snapshot.primaryFailure
+	owner.arena.MetadataOwner().CleanupFailed()
 }

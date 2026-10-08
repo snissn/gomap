@@ -5,6 +5,7 @@ import (
 	"sync"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/merging"
@@ -15,6 +16,25 @@ import (
 
 func (db *DB) COWMode() bool { return db != nil && db.cow != nil }
 
+// AcquireMVCCReadCut admits and pins the existing whole-publication cut. It is
+// available only for the resolved COW engine; admission failures are preserved.
+func (db *DB) AcquireMVCCReadCut() (*Snapshot, error) {
+	if !db.COWMode() {
+		return nil, ErrCOWUnsupported
+	}
+	return db.acquireCOWSnapshotWithError()
+}
+
+// SeekGEVersionRange reads owned bytes from this already-admitted physical cut.
+// It never captures a newer database cut during seek or value materialization.
+func (s *Snapshot) SeekGEVersionRange(start, end []byte) ([]byte, []byte, bool, error) {
+	if s == nil {
+		return nil, nil, false, backenddb.ErrClosed
+	}
+	// cowSeekGE's beginRead validates the snapshot before accessing its cut.
+	return s.cowSeekGE(start, end)
+}
+
 // cowSeekGE uses only this snapshot's owned sources. An empty retained disk
 // basis permits allocation-free cached lower bounds; disk records and physical
 // tombstone advancement retain the general merge on the same snapshot.
@@ -23,6 +43,9 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 		return nil, nil, false, err
 	}
 	defer s.endRead()
+	if s.cowCut == nil {
+		return nil, nil, false, ErrCOWUnsupported
+	}
 	empty, err := s.cowCut.basis.snapshot.OwnedUserRootEmpty()
 	if err != nil {
 		return nil, nil, false, err
@@ -57,9 +80,20 @@ func (s *Snapshot) cowSeekGE(start, end []byte) (key, value []byte, found bool, 
 			}
 		}
 	}
-	// No read-workspace mutex is held while the iterator acquires its own pins
-	// and decodes values. beginRead keeps this exact cut alive through Close.
-	it, err := s.Iterator(start, end)
+	return s.cowSeekGEMergeAdmitted(start, end)
+}
+
+// cowSeekGEMergeAdmitted owns a synchronous merge inside the caller's existing
+// beginRead/endRead admission. A snapshot-bound iterator would recursively admit
+// its construction and reads, deadlocking behind a queued DB Close writer.
+func (s *Snapshot) cowSeekGEMergeAdmitted(start, end []byte) (key, value []byte, found bool, err error) {
+	s.iteratorMu.Lock()
+	if s.closed.Load() {
+		s.iteratorMu.Unlock()
+		return nil, nil, false, backenddb.ErrClosed
+	}
+	it, err := s.buildCOWIteratorLocked(start, end, false)
+	s.iteratorMu.Unlock()
 	if err != nil {
 		return nil, nil, false, err
 	}

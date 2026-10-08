@@ -217,6 +217,9 @@ func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roo
 			if e != nil {
 				return selected, nil, e
 			}
+			// Materialization borrows this private encoding; the resulting banks
+			// own independent images, including on a later rebuild failure.
+			defer m.ReleaseOwnedMetadataV1()
 			var refs *primaryBankConstructionV5
 			manifest, refs, e = materializePrimaryManifestV5(idx, m)
 			if e != nil {

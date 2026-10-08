@@ -105,35 +105,81 @@ func TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody(t *testing.T) {
 }
 
 func TestPrimaryCapsulePromotionCloneAdmissionAndIndependentCustody(t *testing.T) {
- a,err:=OpenCapsule(filepath.Join(t.TempDir(),"index.db.primary"))
- if err!=nil {t.Fatal(err)};defer a.Close()
- c:=testComponent(t,a,"old",1)
- componentImage,err:=a.Get(c.PageID);if err!=nil {t.Fatal(err)}
- r,ok,err:=a.PrepareReadRootV6(nil);if !ok || err!=nil {t.Fatal(err)}
- var cells [groupSize]Ref;cells[0]=c
- g,ok,err:=a.NewGroup(cells,nil);if !ok || err!=nil {t.Fatal(err)}
- var groups [groupCount]*Group;groups[0]=g
- image:=make([]byte,page.PageSize)
- entry:=node.PrimaryDirectoryEntry{Key:[]byte("a"),Operand:node.PrimaryOperand{Ref:page.PageChildRef(c.PageID),Digest:sha256.Sum256(componentImage)},Kind:node.PrimaryPut,Revision:1}
- base:=node.PrimaryOperand{Ref:page.PageChildRef(2),Digest:sha256.Sum256([]byte("DATA"))}
- if err=node.EncodePrimaryDirectory(image,r.PageID,1,base,[]node.PrimaryDirectoryEntry{entry});err!=nil {t.Fatal(err)}
- if ok,err=a.SealDirectory(r,image,groups,nil);!ok || err!=nil {t.Fatal(err)}
- sourceImage,_:=a.Get(r.PageID);original:=bytes.Clone(sourceImage)
- before,serial,refs:=a.Counters(),a.readSerial,g.refs
- short:=&iterator.OrdinalScanWork{RecordLimit:4,ByteLimit:1<<20}
- if clone,ok,err:=a.CloneReadRootForPromotionV6(r,short);ok || err!=nil || clone!=(Ref{}) {t.Fatalf("under-admitted clone %v %v %v",clone,ok,err)}
- if a.Counters()!=before || a.readSerial!=serial || g.refs!=refs {t.Fatal("refusal mutated custody")}
- w:=&iterator.OrdinalScanWork{RecordLimit:32,ByteLimit:1<<20}
- clone,ok,err:=a.CloneReadRootForPromotionV6(r,w);if !ok || err!=nil {t.Fatal(err)}
- if clone==r || a.valid(clone).construction!=nil || a.valid(clone).privatePublication || g.refs!=refs+1 {t.Fatal("clone lacks independent immutable custody")}
- clonedImage,_:=a.Get(clone.PageID)
- if page.DecodeHeader(clonedImage).PageID!=clone.PageID || !page.VerifyChecksumNonMutating(clonedImage) {t.Fatal("clone registration/integrity mismatch")}
- decoded,err:=node.DecodePrimaryDirectory(clonedImage);if err!=nil {t.Fatal(err)}
- got,err:=decoded.Entry(0);if err!=nil || !bytes.Equal(got.Key,entry.Key) || got.Operand!=entry.Operand {t.Fatal("clone changed logical component")}
- if !bytes.Equal(sourceImage,original) {t.Fatal("clone mutated original reader")}
- a.DropGroup(g,nil);a.Drop(c,nil);a.Drop(r,nil);testDrain(t,a)
- if a.valid(c)==nil || a.valid(clone)==nil {t.Fatal("source retirement consumed clone custody")}
- a.Drop(clone,nil);testDrain(t,a)
- if a.valid(c)!=nil {t.Fatal("last clone release leaked component")}
- t.Logf("distinct promotion clone %dR/%dB plus ordinary outgoing release debt",w.Records,w.Bytes)
+	a, err := OpenCapsule(filepath.Join(t.TempDir(), "index.db.primary"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	c := testComponent(t, a, "old", 1)
+	componentImage, err := a.Get(c.PageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, ok, err := a.PrepareReadRootV6(nil)
+	if !ok || err != nil {
+		t.Fatal(err)
+	}
+	var cells [groupSize]Ref
+	cells[0] = c
+	g, ok, err := a.NewGroup(cells, nil)
+	if !ok || err != nil {
+		t.Fatal(err)
+	}
+	var groups [groupCount]*Group
+	groups[0] = g
+	image := make([]byte, page.PageSize)
+	entry := node.PrimaryDirectoryEntry{Key: []byte("a"), Operand: node.PrimaryOperand{Ref: page.PageChildRef(c.PageID), Digest: sha256.Sum256(componentImage)}, Kind: node.PrimaryPut, Revision: 1}
+	base := node.PrimaryOperand{Ref: page.PageChildRef(2), Digest: sha256.Sum256([]byte("DATA"))}
+	if err = node.EncodePrimaryDirectory(image, r.PageID, 1, base, []node.PrimaryDirectoryEntry{entry}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err = a.SealDirectory(r, image, groups, nil); !ok || err != nil {
+		t.Fatal(err)
+	}
+	sourceImage, _ := a.Get(r.PageID)
+	original := bytes.Clone(sourceImage)
+	before, serial, refs := a.Counters(), a.readSerial, g.refs
+	short := &iterator.OrdinalScanWork{RecordLimit: 4, ByteLimit: 1 << 20}
+	if clone, ok, err := a.CloneReadRootForPromotionV6(r, short); ok || err != nil || clone != (Ref{}) {
+		t.Fatalf("under-admitted clone %v %v %v", clone, ok, err)
+	}
+	if a.Counters() != before || a.readSerial != serial || g.refs != refs {
+		t.Fatal("refusal mutated custody")
+	}
+	w := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
+	clone, ok, err := a.CloneReadRootForPromotionV6(r, w)
+	if !ok || err != nil {
+		t.Fatal(err)
+	}
+	if clone == r || a.valid(clone).construction != nil || a.valid(clone).privatePublication || g.refs != refs+1 {
+		t.Fatal("clone lacks independent immutable custody")
+	}
+	clonedImage, _ := a.Get(clone.PageID)
+	if page.DecodeHeader(clonedImage).PageID != clone.PageID || !page.VerifyChecksumNonMutating(clonedImage) {
+		t.Fatal("clone registration/integrity mismatch")
+	}
+	decoded, err := node.DecodePrimaryDirectory(clonedImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decoded.Entry(0)
+	if err != nil || !bytes.Equal(got.Key, entry.Key) || got.Operand != entry.Operand {
+		t.Fatal("clone changed logical component")
+	}
+	if !bytes.Equal(sourceImage, original) {
+		t.Fatal("clone mutated original reader")
+	}
+	a.DropGroup(g, nil)
+	a.Drop(c, nil)
+	a.Drop(r, nil)
+	testDrain(t, a)
+	if a.valid(c) == nil || a.valid(clone) == nil {
+		t.Fatal("source retirement consumed clone custody")
+	}
+	a.Drop(clone, nil)
+	testDrain(t, a)
+	if a.valid(c) != nil {
+		t.Fatal("last clone release leaked component")
+	}
+	t.Logf("distinct promotion clone %dR/%dB plus ordinary outgoing release debt", w.Records, w.Bytes)
 }

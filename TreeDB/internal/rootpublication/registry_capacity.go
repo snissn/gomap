@@ -70,20 +70,43 @@ func (t *registryTable[K, V]) set(key K, value V) error {
 		t.insert(key, value, 0)
 		return nil
 	}
-	if len(t.cells) == 0 || (t.used+1)*2 >= len(t.cells) {
-		capacity := len(t.cells)
+	payload := uint64(0)
+	if t.keyCharge != nil {
+		payload = t.keyCharge(key)
+	}
+	capacity := len(t.cells)
+	charge := uint64(0)
+	replace := capacity == 0 || (t.used+1)*2 >= capacity
+	if replace {
 		// Tombstones require rehashing, not growth when the live load is low.
 		// This preserves a finite high-water envelope for repeated identities.
 		if (t.count+1)*2 >= capacity {
+			if capacity > int(^uint(0)>>1)/2 {
+				return retainedalloc.ErrCapacity
+			}
 			capacity *= 2
 		}
 		if capacity == 0 {
 			capacity = 16
 		}
-		charge := retainedalloc.AllocationCharge(uint64(capacity) * uint64(unsafe.Sizeof(registryCell[K, V]{})))
-		if err := t.owner.Add(charge); err != nil {
-			return err
+		width := uint64(unsafe.Sizeof(registryCell[K, V]{}))
+		if uint64(capacity) > ^uint64(0)/width {
+			return retainedalloc.ErrCapacity
 		}
+		charge = retainedalloc.AllocationCharge(uint64(capacity) * width)
+	}
+	if payload > ^uint64(0)-charge {
+		return retainedalloc.ErrCapacity
+	}
+	// Reserve the full new backing and key while the old table is still live.
+	// No refused key allocation may replace the existing authority or capacity.
+	if err := t.owner.Add(charge + payload); err != nil {
+		return err
+	}
+	if t.cloneKey != nil {
+		key = t.cloneKey(key)
+	}
+	if replace {
 		old, oldCharge := t.cells, t.charge
 		t.cells = make([]registryCell[K, V], capacity)
 		t.used = 0
@@ -97,16 +120,6 @@ func (t *registryTable[K, V]) set(key K, value V) error {
 		clear(old)
 		old = nil
 		t.owner.Remove(oldCharge)
-	}
-	payload := uint64(0)
-	if t.keyCharge != nil {
-		payload = t.keyCharge(key)
-	}
-	if err := t.owner.Add(payload); err != nil {
-		return err
-	}
-	if t.cloneKey != nil {
-		key = t.cloneKey(key)
 	}
 	t.insert(key, value, payload)
 	return nil

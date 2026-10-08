@@ -167,6 +167,11 @@ type ReadOnlyPrepareOptions struct {
 	DiscardLeafSpans bool
 	LeafSpanCallback func(ReadOnlyLeafSpan)
 
+	// LogicalAbsencePointCallback observes a validated PRIMARY absence point
+	// position in canonical input order. It does not identify a physical span.
+	// Like LeafSpanCallback, it is call-scoped and is not retained for reuse.
+	LogicalAbsencePointCallback func(int)
+
 	// AllowMaintenancePointLeafSpans marks point-delete maintenance plans as exact
 	// prepared-output ownership for ordered-root span-native apply. Normal raw DB
 	// maintenance leaves this false so the prepared spans remain planning hints.
@@ -229,7 +234,8 @@ type ReadOnlyLeafSpanSummary struct {
 	DeleteRanges int
 
 	// SpanOps and SpanBytes are summed over spans. SpanOps may exceed Ops when a
-	// delete range overlaps multiple leaf spans.
+	// delete range overlaps multiple leaf spans. SpanOps may be below PointOps
+	// when validated PRIMARY absence points have no physical leaf span.
 	SpanOps   int
 	SpanBytes int
 	Spans     int
@@ -309,16 +315,18 @@ type ReadOnlyPrepareResult struct {
 	LeafSpans []ReadOnlyLeafSpan
 	Metrics   adaptive.Metrics
 
-	keyArena               []byte
-	discardLeafSpans       bool
-	leafSpanCallback       func(ReadOnlyLeafSpan)
-	countTouchedOldEntries bool
-	maxTouchedDepth        uint32
-	maxTouchedPages        uint64
-	maxTouchedOldEntries   uint64
-	primaryRouting         bool
-	primaryRouteLow        []byte
-	primaryRouteHigh       []byte
+	keyArena                []byte
+	discardLeafSpans        bool
+	leafSpanCallback        func(ReadOnlyLeafSpan)
+	countTouchedOldEntries  bool
+	maxTouchedDepth         uint32
+	maxTouchedPages         uint64
+	maxTouchedOldEntries    uint64
+	primaryRouting          bool
+	primaryRouteLow         []byte
+	primaryRouteHigh        []byte
+	primaryAbsencePositions [node.PrimaryDirectoryMaxEntries]int
+	primaryAbsenceCount     int
 }
 
 // PurePointOutputPageUpperBound returns a conservative count of pages a
@@ -578,13 +586,21 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 	if r.PointOps+r.DeleteRanges > 0 && r.Ops != r.PointOps+r.DeleteRanges {
 		return fmt.Errorf("zipper: read-only prepare has ops=%d but point/range counts=%d/%d", r.Ops, r.PointOps, r.DeleteRanges)
 	}
+	if r.primaryAbsenceCount < 0 || r.primaryAbsenceCount > len(r.primaryAbsencePositions) {
+		return fmt.Errorf("zipper: invalid PRIMARY absence count %d", r.primaryAbsenceCount)
+	}
+	if r.primaryAbsenceCount > 0 {
+		if err := r.validatePrimaryAbsenceCoverage(); err != nil {
+			return err
+		}
+	}
 	if r.Ops == 0 {
 		if len(r.LeafSpans) != 0 {
 			return fmt.Errorf("zipper: read-only prepare has %d spans for zero ops", len(r.LeafSpans))
 		}
 		return nil
 	}
-	if len(r.LeafSpans) == 0 {
+	if len(r.LeafSpans) == 0 && r.primaryAbsenceCount == 0 {
 		return fmt.Errorf("zipper: read-only prepare has %d ops but no leaf spans", r.Ops)
 	}
 	if r.ColdBuild && len(r.LeafSpans) != 1 {
@@ -666,7 +682,7 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 				if prevPointEnd >= 0 {
 					expectedStart = prevPointEnd
 				}
-				if span.PointOpStart != expectedStart {
+				if r.primaryAbsenceCount == 0 && span.PointOpStart != expectedStart {
 					return readOnlyPrepareSpanError(i, "point index range [%d,%d) starts at %d, want %d under omitted op-key planning", span.PointOpStart, span.PointOpEnd, span.PointOpStart, expectedStart)
 				}
 				prevPointEnd = span.PointOpEnd
@@ -703,11 +719,11 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 			prevHigh = span.HighKey
 		}
 	}
-	if omitOpKeys && totalPointOps > 0 && prevPointEnd != r.PointOps {
+	if r.primaryAbsenceCount == 0 && omitOpKeys && totalPointOps > 0 && prevPointEnd != r.PointOps {
 		return fmt.Errorf("zipper: read-only omitted op-key leaf spans end at point op %d, want %d", prevPointEnd, r.PointOps)
 	}
 	if r.PointOps > 0 {
-		if totalPointOps != r.PointOps {
+		if totalPointOps+r.primaryAbsenceCount != r.PointOps {
 			return fmt.Errorf("zipper: read-only leaf spans cover %d point ops, want %d", totalPointOps, r.PointOps)
 		}
 	} else if r.DeleteRanges == 0 && totalSpanOps != r.Ops {
@@ -715,6 +731,43 @@ func (r ReadOnlyPrepareResult) ValidateLeafSpans() error {
 	}
 	if r.DeleteRanges > 0 && totalSpanOps < r.DeleteRanges {
 		return fmt.Errorf("zipper: read-only leaf spans cover %d span ops, fewer than %d delete ranges", totalSpanOps, r.DeleteRanges)
+	}
+	return nil
+}
+
+// Merge decoded logical absence positions with real physical intervals. This
+// exception is confined to non-exact PRIMARY point planning; generic plans keep
+// their original validation contract, including hand-built keyed spans.
+func (r ReadOnlyPrepareResult) validatePrimaryAbsenceCoverage() error {
+	if r.RootID == 0 || r.ColdBuild || r.ExactLeafSpans || r.DeleteRanges != 0 {
+		return fmt.Errorf("zipper: PRIMARY absence evidence requires a non-cold, non-exact point root")
+	}
+	positions := r.primaryAbsencePositions[:r.primaryAbsenceCount]
+	for i, position := range positions {
+		if position < 0 || position >= r.PointOps || i > 0 && position <= positions[i-1] {
+			return fmt.Errorf("zipper: invalid PRIMARY absence position %d at %d", position, i)
+		}
+	}
+	cursor, absence := 0, 0
+	consume := func() {
+		for absence < len(positions) && positions[absence] == cursor {
+			absence++
+			cursor++
+		}
+	}
+	for i, span := range r.LeafSpans {
+		consume()
+		if span.PointOpCount <= 0 || span.DeleteRangeCount != 0 || span.PointOpStart != cursor || span.PointOpEnd <= cursor || span.PointOpEnd > r.PointOps || span.PointOpEnd-cursor != span.PointOpCount {
+			return readOnlyPrepareSpanError(i, "does not extend PRIMARY point coverage at %d", cursor)
+		}
+		if absence < len(positions) && positions[absence] < span.PointOpEnd {
+			return readOnlyPrepareSpanError(i, "overlaps PRIMARY absence point %d", positions[absence])
+		}
+		cursor = span.PointOpEnd
+	}
+	consume()
+	if cursor != r.PointOps || absence != len(positions) {
+		return fmt.Errorf("zipper: incomplete PRIMARY point coverage through %d, want %d", cursor, r.PointOps)
 	}
 	return nil
 }
@@ -1166,11 +1219,11 @@ func (z *Zipper) PrepareReadOnlyPlan(rootID uint64, ops []batch.Entry, ranges []
 
 	scratch := z.acquireApplyScratch()
 	defer z.releaseApplyScratch(scratch)
-	err := z.prepareReadOnlyRecursive(page.PageChildRef(rootID), ops, 0, ranges, 0, nil, nil, &result, scratch, 1)
+	err := z.prepareReadOnlyRecursive(page.PageChildRef(rootID), ops, 0, ranges, 0, nil, nil, &result, scratch, 1, opts.LogicalAbsencePointCallback)
 	return result, err
 }
 
-func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, opBase int, ranges []batch.DeleteRange, rangeBase int, low, high []byte, result *ReadOnlyPrepareResult, scratch *mergeScratch, depth uint32) error {
+func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, opBase int, ranges []batch.DeleteRange, rangeBase int, low, high []byte, result *ReadOnlyPrepareResult, scratch *mergeScratch, depth uint32, absencePoint func(int)) error {
 	if result.countTouchedOldEntries && result.maxTouchedDepth != 0 && depth > result.maxTouchedDepth {
 		return fmt.Errorf("%w: depth %d exceeds %d", ErrReadOnlyPrepareProfileLimit, depth, result.maxTouchedDepth)
 	}
@@ -1225,12 +1278,26 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			result.TouchedOldInternalChildren += uint64(directory.Count())
 		}
 		if len(ranges) > 0 {
-			return z.prepareReadOnlyRecursive(base.Ref, ops, opBase, ranges, rangeBase, low, high, result, scratch, depth+1)
+			return z.prepareReadOnlyRecursive(base.Ref, ops, opBase, ranges, rangeBase, low, high, result, scratch, depth+1, absencePoint)
 		}
 		for i, op := range ops {
 			selected := base.Ref
 			entry, found := directory.Search(op.Key)
 			if found {
+				// The decoded absence cell participates in the directory census,
+				// but has no old physical leaf or span to visit.
+				if entry.InlineAbsence() {
+					if result.primaryAbsenceCount >= len(result.primaryAbsencePositions) {
+						return node.ErrPrimaryDirectory
+					}
+					position := opBase + i
+					result.primaryAbsencePositions[result.primaryAbsenceCount] = position
+					result.primaryAbsenceCount++
+					if absencePoint != nil {
+						absencePoint(position)
+					}
+					continue
+				}
 				if _, err = z.loadPrimaryOperand(entry.Operand, &entry, &result.Metrics, scratch); err != nil {
 					return err
 				}
@@ -1244,7 +1311,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			}
 			result.primaryRouting = true
 			result.primaryRouteLow, result.primaryRouteHigh = op.Key, next
-			err = z.prepareReadOnlyRecursive(selected, ops[i:i+1], opBase+i, nil, rangeBase, op.Key, next, result, scratch, depth+1)
+			err = z.prepareReadOnlyRecursive(selected, ops[i:i+1], opBase+i, nil, rangeBase, op.Key, next, result, scratch, depth+1, absencePoint)
 			result.primaryRouting = false
 			result.primaryRouteLow, result.primaryRouteHigh = nil, nil
 			if err != nil {
@@ -1356,7 +1423,7 @@ func (z *Zipper) prepareReadOnlyRecursive(ref page.ChildRef, ops []batch.Entry, 
 			if err != nil {
 				return err
 			}
-			if err := z.prepareReadOnlyRecursive(childRef, childOps, opBase+startOpIdx, ranges[rangeStart:rangeEnd], rangeBase+rangeStart, childLow, childHigh, result, scratch, depth+1); err != nil {
+			if err := z.prepareReadOnlyRecursive(childRef, childOps, opBase+startOpIdx, ranges[rangeStart:rangeEnd], rangeBase+rangeStart, childLow, childHigh, result, scratch, depth+1, absencePoint); err != nil {
 				return err
 			}
 		}

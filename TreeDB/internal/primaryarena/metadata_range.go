@@ -5,23 +5,6 @@ import (
 	"unsafe"
 )
 
-// ClaimMetadataRangeOrdinary reserves actual contiguous manifest banks for an
-// ordinary publisher. Native bounded preparation must use its own charged
-// cursor; this entry point never hides a scan behind a native work receipt.
-func (a *Arena) ClaimMetadataRangeOrdinary(count uint32) ([]Ref, error) {
-	if count == 0 {
-		return nil, ErrFormat
-	}
-	if uint64(count) > maxChunks*chunkBanks-2 {
-		return nil, ErrFull
-	}
-	refs := make([]Ref, count)
-	if err := a.ClaimMetadataBanksIntoOrdinary(Manifest, refs); err != nil {
-		return nil, err
-	}
-	return refs, nil
-}
-
 // ClaimMetadataBanksIntoOrdinary consumes caller-admitted, empty reference
 // backing. It performs the same ordinary contiguous claim without constructing
 // an unowned output slice or a native preparation cursor.

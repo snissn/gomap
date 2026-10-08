@@ -64,7 +64,9 @@ func (t *Tree) WalkPages(fn func(pageID uint64, n node.Node) error) error {
 				if _, _, err = t.selectPrimaryOperand(n.Data(), entry.Key, nil, nil, false); err != nil {
 					return err
 				}
-				if entry.Operand.Ref.Kind == page.ChildRefPage {
+				// Inline absence owns no physical component. Its zero operand
+				// must never become a DATA page-zero retirement/read edge.
+				if !entry.InlineAbsence() && entry.Operand.Ref.Kind == page.ChildRefPage {
 					stack = append(stack, entry.Operand.Ref.Page)
 				}
 			}

@@ -59,7 +59,4 @@ func TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody(t *testing.T) {
 	if token.cleanupFailure.count != 1 || owner.Bytes() != before {
 		t.Fatal("public repeat retried or appended failure debt")
 	}
-	var other retainedalloc.Owner
-	other.Initialize(0)
-	_ = other // Owner mismatch is refused by the actual resource constructor.
 }

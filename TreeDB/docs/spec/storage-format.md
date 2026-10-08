@@ -894,7 +894,7 @@ metadata use distinct physical bank identities with checksums and digests.
 Publication makes required DATA and external dependencies durable before
 installing the alternate complete capsule and fencing the actual PRIMARY
 file. This is the selected format's durable authority: DATA META pages 0 and 1
-are not rewritten as a second selector. Ordinary relaxed no-WAL visibility
+are not rewritten as a second selector. Ordinary `DurabilityNoWALFast` visibility
 and ACK still may precede this sealed root; explicit Sync, Checkpoint and clean
 Close require a complete eligible publication. A failure after capsule bytes
 are installed is ambiguous, poisons later writes and requires reopen.
@@ -4159,3 +4159,11 @@ publication transaction and transfer to the selected slot on successful report.
 Logical reader roots do not acquire those later metadata edges. Recovery still
 copies both eligible capsule directories and their embedded parents by value;
 RAM root addresses are never physical file offsets or recovery eligibility.
+
+Every queued ordinary PRIMARY publication constructs an independently owned
+logical directory before dependency capture. A system-only publication copies
+its existing directory; a bulk/manual DATA-root builder, including CompactIndex,
+wraps its actual new DATA root through the same owned construction boundary.
+PRIMARY bank IDs retire through their original physical closure and never enter
+the DATA freelist. This uses the existing format and does not add a recovery or
+native capability variant.

@@ -1571,6 +1571,9 @@ type Options struct {
 // snapshots are acquired.
 type Snapshot struct {
 	primaryRoot            *primaryStateRootV5
+	primaryOwner           *primaryArenaOwnerV5
+	primaryFailedNext      *Snapshot
+	primaryFailure         primaryCleanupFailureV5
 	primaryMetadata        *retainedalloc.Enrollment
 	primaryRelease         primaryarena.ReleaseQueue
 	db                     *DB
@@ -1779,8 +1782,7 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.primaryRetentionCommitV5(), snap.registryShardHint)
 	}
 	if state.primaryRoot != nil {
-		ok, e := state.primaryRoot.arena.Acquire(state.primaryRoot.ref, nil)
-		if !ok || e != nil {
+		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
 			if registryID != 0 {
 				idx.registry.Unregister(registryID)
 			}
@@ -1789,7 +1791,6 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 			}
 			return false
 		}
-		snap.primaryRoot = state.primaryRoot
 	}
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
@@ -1950,8 +1951,7 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 		}
 	}
 	if state.primaryRoot != nil {
-		ok, e := state.primaryRoot.arena.Acquire(state.primaryRoot.ref, nil)
-		if !ok || e != nil {
+		if e := snap.acquirePrimaryRoot(idx, state.primaryRoot); e != nil {
 			if registryID != 0 {
 				idx.registry.Unregister(registryID)
 			}
@@ -1960,7 +1960,6 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 			}
 			return nil, ErrClosed
 		}
-		snap.primaryRoot = state.primaryRoot
 	}
 	if state.LeafGenerations != nil {
 		snap.leafGenerationIDs = state.LeafGenerations.GenerationOrder
@@ -2176,7 +2175,9 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 			}
 		}
 		err = errors.Join(err, primaryCleanupErr)
-		s.primaryRoot = nil
+		if primaryCleanupErr == nil {
+			s.primaryRoot = nil
+		}
 	}
 	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
 		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
@@ -2203,6 +2204,22 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	s.stableIndexCaptureCounter = nil
 	if endForegroundRead != nil {
 		endForegroundRead()
+	}
+	if owner := s.primaryOwner; owner != nil {
+		if err != nil {
+			// Failed original cleanup keeps this existing physical edge and exact
+			// Snapshot payload on the same owner; a Close request is not disposal.
+			owner.retainFailedSnapshot(s, err)
+		} else {
+			consumed, debt, releaseErr := owner.releaseWithOutcome(nil)
+			if consumed {
+				s.primaryOwner = nil
+			}
+			err = releaseErr
+			if !consumed || debt {
+				owner.retainFailedSnapshot(s, releaseErr)
+			}
+		}
 	}
 	if s.primaryMetadata != nil {
 		// All original last-read cleanup outcomes precede governor release.

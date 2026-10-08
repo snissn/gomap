@@ -2341,6 +2341,7 @@ func writeRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, meta page.
 		if err != nil {
 			return err
 		}
+		defer manifest.ReleaseOwnedMetadataV1()
 		auxiliaryCount += int(manifest.PageCount())
 	}
 	base, err := freelist.NewFreelistGenerationV1(1, p.PageCount(), nil, nil)
@@ -2460,6 +2461,7 @@ func appendRebuiltDurableRootV1(dir, indexPath string, p *pager.Pager, current d
 		if err != nil {
 			return err
 		}
+		defer manifest.ReleaseOwnedMetadataV1()
 		auxiliaryCount += int(manifest.PageCount())
 	}
 	capability, err := freelist.NewReuseCapability(current.Record.CommitSeq, current.Record.CommitSeq, 0)

@@ -24,6 +24,71 @@ func primaryDBDirectory(t *testing.T, db *DB) node.PrimaryDirectoryView {
 	}
 	return d
 }
+
+func TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts(t *testing.T) {
+	for _, mode := range []string{"replace", "consolidate"} {
+		t.Run(mode, func(t *testing.T) {
+			opts := Options{Dir: t.TempDir(), IndexPrimaryDirectory: true}
+			d, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			if err := d.SetSync([]byte("gone"), []byte("prior")); err != nil {
+				t.Fatal(err)
+			}
+			old := d.AcquireSnapshot()
+			defer old.Close()
+			if err := d.DeleteSync([]byte("gone")); err != nil {
+				t.Fatal(err)
+			}
+			entry, found := primaryDBDirectory(t, d).Search([]byte("gone"))
+			if !found || !entry.InlineAbsence() {
+				t.Fatal("missing actual inline absence")
+			}
+			absent := d.AcquireSnapshot()
+			defer absent.Close()
+			if mode == "replace" {
+				if err := d.SetSync([]byte("gone"), []byte("restored")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				for i := 0; i < node.PrimaryDirectoryMaxEntries+2; i++ {
+					if err := d.SetSync([]byte(fmt.Sprintf("new/%03d", i)), []byte("new")); err != nil {
+						t.Fatalf("consolidation write %d: %v", i, err)
+					}
+				}
+			}
+			if value, err := old.Get([]byte("gone")); err != nil || string(value) != "prior" {
+				t.Fatalf("old cut %q %v", value, err)
+			}
+			if has, err := absent.Has([]byte("gone")); err != nil || has {
+				t.Fatalf("absent cut %v %v", has, err)
+			}
+			if err := old.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := absent.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := d.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer reopened.Close()
+			if mode == "replace" {
+				if value, err := reopened.Get([]byte("gone")); err != nil || string(value) != "restored" {
+					t.Fatalf("reopened replacement %q %v", value, err)
+				}
+			} else if has, err := reopened.Has([]byte("gone")); err != nil || has {
+				t.Fatalf("reopened consolidated absence %v %v", has, err)
+			}
+		})
+	}
+}
 func TestPrimaryDirectoryOrdinarySnapshotCoalesceReopen(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(Options{Dir: dir, IndexPrimaryDirectory: true})

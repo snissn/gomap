@@ -838,6 +838,9 @@ func (c *leafRefRewriteCtx) rewriteNode(id uint64) (uint64, bool, error) {
 		entries := make([]node.PrimaryDirectoryEntry, directory.Count())
 		for i := range entries {
 			entries[i], _ = directory.Entry(i)
+			if entries[i].InlineAbsence() {
+				continue
+			}
 			if entries[i].Operand.Ref.Kind != page.ChildRefPage {
 				return id, false, node.ErrPrimaryDirectory
 			}
@@ -1190,7 +1193,10 @@ func cloneLeafGenerationPackStagedNode(staged *pager.Pager, id uint64, alloc *le
 		entries := make([]node.PrimaryDirectoryEntry, directory.Count())
 		for i := range entries {
 			entries[i], err = directory.Entry(i)
-			if err != nil || !primaryarena.IsPage(entries[i].Operand.Ref.Page) {
+			if err != nil {
+				return 0, err
+			}
+			if !entries[i].InlineAbsence() && !primaryarena.IsPage(entries[i].Operand.Ref.Page) {
 				return 0, errors.Join(err, node.ErrPrimaryDirectory)
 			}
 		}
