@@ -16617,7 +16617,7 @@ func (db *DB) flushVlogRequests(l *lane, requests []vlogWriteRequest) {
 			est = 0
 		}
 		if est > 0 && w.Size() > maxBytes-est {
-			if rotateErr := db.rotateValueLogMuHeld(l); rotateErr != nil {
+			if rotateErr := db.rotateValueLogForSegmentLimitMuHeldCapture(l, nil); rotateErr != nil {
 				l.vlogMu.Unlock()
 				for i := range requests {
 					ack := requests[i].ack
@@ -18072,7 +18072,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 				est = 0
 			}
 			if est > 0 && w.Size() > maxBytes-est {
-				if rotateErr := db.rotateValueLogMuHeldCapture(l, capture); rotateErr != nil {
+				if rotateErr := db.rotateValueLogForSegmentLimitMuHeldCapture(l, capture); rotateErr != nil {
 					l.vlogMu.Unlock()
 					return nil, nil, rotateErr
 				}
@@ -18111,7 +18111,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 				if delta := w.Size() - segmentStartSize; delta > 0 {
 					bytesWrittenTotal += delta
 				}
-				if rotateErr := db.rotateValueLogMuHeldCapture(l, capture); rotateErr != nil {
+				if rotateErr := db.rotateValueLogForSegmentLimitMuHeldCapture(l, capture); rotateErr != nil {
 					err = rotateErr
 					break
 				}
@@ -18265,7 +18265,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 					if delta := w.Size() - segmentStartSize; delta > 0 {
 						bytesWrittenTotal += delta
 					}
-					if rotateErr := db.rotateValueLogMuHeldCapture(l, capture); rotateErr != nil {
+					if rotateErr := db.rotateValueLogForSegmentLimitMuHeldCapture(l, capture); rotateErr != nil {
 						err = rotateErr
 						break
 					}
@@ -29031,6 +29031,17 @@ func (db *DB) registerValueLogSegmentReplacing(path string, fileID, previousFile
 	return nil
 }
 
+// rotateValueLogForSegmentLimitMuHeldCapture records a naturally triggered
+// segment-limit rotation separately from creation and explicit maintenance.
+func (db *DB) rotateValueLogForSegmentLimitMuHeldCapture(l *lane, capture *stableOuterLeafCapture) error {
+	oldSeq := l.vlogSeq
+	err := db.rotateValueLogMuHeldCapture(l, capture)
+	if l.vlogSeq > oldSeq {
+		l.vlogRotateThresholdTotal.Add(1)
+	}
+	return err
+}
+
 func (db *DB) rotateValueLogForMaxSegmentMuHeld(l *lane, w valueWriter) error {
 	return db.rotateValueLogForMaxSegmentMuHeldCapture(l, w, nil)
 }
@@ -29046,7 +29057,7 @@ func (db *DB) rotateValueLogForMaxSegmentMuHeldCapture(l *lane, w valueWriter, c
 	if w.Size() <= maxBytes {
 		return nil
 	}
-	return db.rotateValueLogMuHeldCapture(l, capture)
+	return db.rotateValueLogForSegmentLimitMuHeldCapture(l, capture)
 }
 
 func (db *DB) untrackWALSegmentLocked(path string) {

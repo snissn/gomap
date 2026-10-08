@@ -103,6 +103,22 @@ Conceptually, a value-log segment can be:
 3. eligible (unreferenced and not active),
 4. deleted/zombied.
 
+The cached leaf-log stats identify each physical append worker with
+`current_sequence` and `current_file_id`. Its `threshold_rotations_total`
+counts only segment-limit rotations that install a newer writer sequence;
+initial creation and explicit maintenance rotations do not increment it.
+An installed rotation still counts if closing the previous writer returns an
+error. `maintenance_handoffs_total` is a separate counter and remains zero
+without an explicit maintenance handoff implementation.
+
+Default rollover qualification must observe at least two threshold rotations
+for every exercised physical worker. Total rotations or aggregate append bytes
+cannot establish that condition. Use the same observer implementation in both
+baseline and candidate, retain the default segment thresholds, and charge the
+two added 64-bit counters (16 bytes per lane, with the actual allocation class)
+to the creator and finite metadata census. These counters are observations,
+not deletion authority or proof of retention economics.
+
 ### 2.1 Physical-identity deletion and quarantine
 
 All managers and writers that can publish or delete segments in one live DB
