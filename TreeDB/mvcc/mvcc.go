@@ -115,8 +115,7 @@ type atomicReadCutDB interface {
 
 // Store owns the external-version namespace of one TreeDB handle.
 type Store struct {
-	db       treeDB
-	readCuts atomicReadCutDB
+	db treeDB
 
 	// maintenanceMu serializes floor advancement and pruning. The lock order is
 	// maintenanceMu then mu; foreground reads and commits never take it.
@@ -129,6 +128,7 @@ type Store struct {
 	mu           sync.RWMutex
 	discardFloor uint64
 	floorLoaded  bool
+	readCuts     atomicReadCutDB
 }
 
 // New returns the one opt-in MVCC owner for db. Callers must keep exactly one
@@ -331,23 +331,7 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		return Result{}, fmt.Errorf("%w: read timestamp %d is at or below floor %d", ErrReadBeforeDiscardFloor, timestamp, floor)
 	}
 	if s.readCuts != nil {
-		cut, captureErr := s.readCuts.AcquireMVCCReadCut()
-		s.mu.RUnlock()
-		if captureErr != nil {
-			return Result{}, storageError("acquire read cut", captureErr)
-		}
-		if cut == nil {
-			return Result{}, storageError("acquire read cut", treedb.ErrClosed)
-		}
-		defer func() { err = errors.Join(err, storageError("close read cut", cut.Close())) }()
-		physical, record, found, seekErr := cut.SeekGEVersionRange(lower, upper)
-		if seekErr != nil {
-			return Result{}, storageError("seek version", seekErr)
-		}
-		if !found {
-			return Result{State: Absent}, nil
-		}
-		return decodePointResult(logical, timestamp, physical, record, true)
+		return s.getAtReadCut(logical, timestamp, lower, upper)
 	}
 	var seek func([]byte, []byte) ([]byte, []byte, bool, error)
 	if seeker, ok := s.db.(versionRangeSuccessorDB); ok {
@@ -390,6 +374,28 @@ func (s *Store) GetAt(logical []byte, timestamp uint64) (result Result, err erro
 		return Result{}, storageError("read value", iterErr)
 	}
 	return decodePointResult(logical, timestamp, physical, record, false)
+}
+
+// getAtReadCut takes over shared floor admission from GetAt and releases it
+// after pinning the cut. Its cleanup stays separate from the legacy read path.
+func (s *Store) getAtReadCut(logical []byte, timestamp uint64, lower, upper []byte) (result Result, err error) {
+	cut, captureErr := s.readCuts.AcquireMVCCReadCut()
+	s.mu.RUnlock()
+	if captureErr != nil {
+		return Result{}, storageError("acquire read cut", captureErr)
+	}
+	if cut == nil {
+		return Result{}, storageError("acquire read cut", treedb.ErrClosed)
+	}
+	defer func() { err = errors.Join(err, storageError("close read cut", cut.Close())) }()
+	physical, record, found, seekErr := cut.SeekGEVersionRange(lower, upper)
+	if seekErr != nil {
+		return Result{}, storageError("seek version", seekErr)
+	}
+	if !found {
+		return Result{State: Absent}, nil
+	}
+	return decodePointResult(logical, timestamp, physical, record, true)
 }
 
 // recordOwned is true only for successor results. Iterator records remain
