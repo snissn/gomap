@@ -29,6 +29,11 @@ class RefreshSnapshotContract(unittest.TestCase):
         self.repo = Path(self.temp.name)
         shutil.copytree(ROOT / '.github', self.repo / '.github',
                         ignore=shutil.ignore_patterns('__pycache__'))
+        # Preserve declared inputs outside .github in this Git-only fixture,
+        # as the runtime planner fixture does.
+        for path in json.loads((ROOT / ci_impact.POLICY).read_text())['harness_inputs']:
+            if not (self.repo / path).exists():
+                self.write(path, (ROOT / path).read_text())
         self.write('source.go', 'package original\n')
         self.write('old.py', '# old source\n')
         self.write('go.mod', 'module fixture\n')
