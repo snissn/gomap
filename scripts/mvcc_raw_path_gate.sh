@@ -195,6 +195,72 @@ else
   gate_status=$?
 fi
 
+# Retain the exact measured executables on both passing and failing gates. This
+# runs only after all original samples and the checker; it adds no measurements.
+retain_measured_binaries() {
+  python3 - "$TMP_ROOT" "$OUT_DIR" "$BASELINE_SHA" "$CANDIDATE_SHA" \
+    "$SCRIPT_GOWORK" "$(git rev-parse "${BASELINE_SHA}^{tree}")" \
+    "$(git rev-parse "${CANDIDATE_SHA}^{tree}")" <<'PY_RETAIN'
+import hashlib, json, pathlib, re, shutil, stat, sys
+
+temporary, output = map(pathlib.Path, sys.argv[1:3])
+baseline, candidate, gowork, baseline_tree, candidate_tree = sys.argv[3:]
+if any(re.fullmatch(r"[0-9a-f]{40}", value) is None
+       for value in (baseline, candidate, baseline_tree, candidate_tree)):
+    raise ValueError("malformed executable source identity")
+packages = {"db": "./TreeDB/db", "caching": "./TreeDB/caching", "treedb": "./TreeDB"}
+names = {f"{revision}-{package}.test" for revision in ("baseline", "candidate")
+         for package in packages}
+initial = {}
+for line in (output / "binary-sha256.txt").read_text().splitlines():
+    digest, name = line.split()
+    if name in initial or name not in names or len(digest) != 64:
+        raise ValueError("malformed initial executable digests")
+    initial[name] = digest
+if set(initial) != names:
+    raise ValueError("missing initial executable digest")
+summary_path = output / "summary.json"
+# A checker error may leave no summary. Initial build digests still bind copies;
+# an existing summary must agree with the exact files the checker inspected.
+checked = json.loads(summary_path.read_text())["binary_digests"] if summary_path.exists() else None
+destination = output / "measured-binaries"
+destination.mkdir()
+records = []
+for revision, sha, tree in (("baseline", baseline, baseline_tree),
+                            ("candidate", candidate, candidate_tree)):
+    for package, source_package in packages.items():
+        name = f"{revision}-{package}.test"
+        source = temporary / name
+        mode = source.lstat().st_mode
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"nonregular measured executable: {name}")
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        if digest != initial[name] or (checked is not None and checked[package][revision] != digest):
+            raise ValueError(f"measured executable digest drift: {name}")
+        retained = destination / name
+        shutil.copy2(source, retained)
+        if (hashlib.sha256(retained.read_bytes()).hexdigest() != digest
+                or stat.S_IMODE(retained.stat().st_mode) != stat.S_IMODE(mode)):
+            raise ValueError(f"retained executable digest drift: {name}")
+        records.append({"path": "measured-binaries/" + name, "sha256": digest,
+                        "bytes": retained.stat().st_size, "mode": stat.S_IMODE(mode),
+                        "source_sha": sha, "source_tree": tree,
+                        "package": source_package,
+                        "build_argv": ["go", "test", "-c", "-trimpath", "-buildvcs=false",
+                                       "-o", str(source), source_package],
+                        "build_environment": {"GOWORK": gowork}})
+manifest = {"status": "RETAINED_ACTUAL_MEASURED_EXECUTABLES", "files": records,
+            "environment_sha256": hashlib.sha256((output / "environment.txt").read_bytes()).hexdigest(),
+            "initial_digests_sha256": hashlib.sha256((output / "binary-sha256.txt").read_bytes()).hexdigest(),
+            "checker_summary_sha256": hashlib.sha256(summary_path.read_bytes()).hexdigest() if checked is not None else None,
+            "identity_scope": "exact source commits/trees, explicit build argv/GOWORK and recorded environment; not complete compiler closure"}
+(output / "measured-binaries.json").write_text(json.dumps(manifest, indent=2) + "\n")
+PY_RETAIN
+}
+if ! retain_measured_binaries >"$OUT_DIR/binary-retention.txt" 2>&1; then
+  echo "Measured executable retention incomplete; original gate status preserved" >&2
+fi
+
 # Diagnose a changed-binary Iterator timing failure without replacing its samples
 # or verdict. Keep original executables before cleanup for CI-matched analysis.
 if ((gate_status != 0)) && python3 - "$SUMMARY_JSON" <<'PY_CHECK'
