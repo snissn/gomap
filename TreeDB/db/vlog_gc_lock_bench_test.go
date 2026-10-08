@@ -38,26 +38,38 @@ func BenchmarkValueLogGCPublishDuringPausedFullScan(b *testing.B) {
 			_ = db.Close()
 			b.Fatalf("refresh value-log set: %v", err)
 		}
-		db.valueLogRefTracker.invalidate()
+		requireUncoveredValueLogGCRootForTest(b, db)
 
 		scanStarted := make(chan struct{})
 		releaseScan := make(chan struct{})
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(releaseScan) }) }
 		var hookOnce sync.Once
-		restore := registerScanValueLogRefCountsHook(func() {
+		db.testValueLogMembershipBeforeFallbackHook = func() {
 			hookOnce.Do(func() {
 				close(scanStarted)
 				<-releaseScan
 			})
-		})
+		}
 		gcDone := make(chan gcResult, 1)
 		go func() {
 			started := time.Now()
 			stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 			gcDone <- gcResult{stats: stats, elapsed: time.Since(started), err: err}
 		}()
-		<-scanStarted
+		select {
+		case <-scanStarted:
+		case result := <-gcDone:
+			_ = db.Close()
+			b.Fatalf("GC returned before actual fallback collector: %v", result.err)
+		case <-time.After(5 * time.Second):
+			release()
+			<-gcDone
+			_ = db.Close()
+			b.Fatal("GC did not enter actual fallback collector")
+		}
 		key := []byte(fmt.Sprintf("publish-during-scan-%d", i))
-		time.AfterFunc(scanPause, func() { close(releaseScan) })
+		time.AfterFunc(scanPause, release)
 
 		b.StartTimer()
 		started := time.Now()
@@ -65,15 +77,19 @@ func BenchmarkValueLogGCPublishDuringPausedFullScan(b *testing.B) {
 		publishElapsed += time.Since(started)
 		b.StopTimer()
 		if err != nil {
-			restore()
+			release()
+			<-gcDone
 			_ = db.Close()
 			b.Fatalf("publish during scan: %v", err)
 		}
 		result := <-gcDone
-		restore()
 		if result.err != nil {
 			_ = db.Close()
 			b.Fatalf("ValueLogGC: %v", result.err)
+		}
+		if result.stats.Membership.FullRootScans == 0 {
+			_ = db.Close()
+			b.Fatal("paused GC did not report actual uncovered-root scans")
 		}
 		gcElapsed += result.elapsed
 		segmentsDeleted += result.stats.SegmentsDeleted

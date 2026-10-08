@@ -79,16 +79,19 @@ type recoverableIdentityPin struct {
 type RecoverableRootSet struct {
 	db *DB
 
-	roots               []RecoverableRoot
-	visible             StateToken
-	durable             recoverableDurableBasis
-	coordinator         *rootpublication.Coordinator
-	coordinatorEpoch    uint64
-	idx                 *indexGen
-	stableSnapshot      *Snapshot
-	oldestRegistryID    int64
-	systemRootEpoch     uint64
-	resources           []*rootpublication.StableResourceSet
+	roots            []RecoverableRoot
+	visible          StateToken
+	durable          recoverableDurableBasis
+	coordinator      *rootpublication.Coordinator
+	coordinatorEpoch uint64
+	idx              *indexGen
+	stableSnapshot   *Snapshot
+	oldestRegistryID int64
+	systemRootEpoch  uint64
+	resources        []*rootpublication.StableResourceSet
+	// debtResources aliases independently owned entries in resources. Unlike
+	// exact slot/visible closures, this debt has no root-bound certificate.
+	debtResources       []*rootpublication.StableResourceSet
 	rootResources       map[recoverableRootKey]*rootpublication.StableResourceSet
 	rootResourceIndexID uint64
 	rootResourceIndex   rootpublication.StableIdentity
@@ -230,15 +233,22 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	}
 	sources := make([]*rootpublication.StableResourceSet, 0, 5+len(db.durableRoot.ambiguous))
 	sources = append(sources, db.durableRoot.slotResources[:]...)
+	debtSources := make([]*rootpublication.StableResourceSet, 0, 1+len(db.durableRoot.ambiguous))
 	if pending := db.durableRoot.pending; pending != nil {
 		sources = append(sources, pending.resources)
+		debtSources = append(debtSources, pending.resources)
 	}
 	for _, ambiguous := range db.durableRoot.ambiguous {
 		if ambiguous != nil {
 			sources = append(sources, ambiguous.resources)
+			debtSources = append(debtSources, ambiguous.resources)
 		}
 	}
 	durableResources, cloneErr := cloneRecoverableResourceUnion(sources...)
+	var durableDebtResources *rootpublication.StableResourceSet
+	if cloneErr == nil {
+		durableDebtResources, cloneErr = cloneRecoverableResourceUnion(debtSources...)
+	}
 	rootResources := make(map[recoverableRootKey]*rootpublication.StableResourceSet, 3)
 	rootResourceSets := make([]*rootpublication.StableResourceSet, 0, 2)
 	if cloneErr == nil {
@@ -266,6 +276,7 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	if cloneErr != nil {
 		db.rootReuseMu.RUnlock()
 		durableResources.Release()
+		durableDebtResources.Release()
 		for _, resources := range rootResourceSets {
 			resources.Release()
 		}
@@ -276,6 +287,7 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 	if !ok || stable.idx != db.idx.Load() {
 		db.rootReuseMu.RUnlock()
 		durableResources.Release()
+		durableDebtResources.Release()
 		for _, resources := range rootResourceSets {
 			resources.Release()
 		}
@@ -297,6 +309,7 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 			stable.idx.registry.Unregister(oldestRegistryID)
 		}
 		durableResources.Release()
+		durableDebtResources.Release()
 		for _, resources := range rootResourceSets {
 			resources.Release()
 		}
@@ -331,12 +344,18 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		return nil, true, nil
 	}
 
-	resources := make([]*rootpublication.StableResourceSet, 0, 3+len(rootResourceSets))
+	resources := make([]*rootpublication.StableResourceSet, 0, 4+len(rootResourceSets))
+	debtResources := make([]*rootpublication.StableResourceSet, 0, 2)
 	if durableResources != nil {
 		resources = append(resources, durableResources)
 	}
+	if durableDebtResources != nil {
+		resources = append(resources, durableDebtResources)
+		debtResources = append(debtResources, durableDebtResources)
+	}
 	if coordinatorView.Resources != nil {
 		resources = append(resources, coordinatorView.Resources)
+		debtResources = append(debtResources, coordinatorView.Resources)
 		coordinatorView.Resources = nil
 	}
 	if visibleResources != nil {
@@ -359,7 +378,7 @@ func (db *DB) tryCaptureRecoverableRootSet(stable *Snapshot) (*RecoverableRootSe
 		db: db, roots: roots, visible: state, durable: durable,
 		coordinator: coordinator, coordinatorEpoch: coordinatorView.Epoch,
 		idx: stable.idx, stableSnapshot: stable, oldestRegistryID: oldestRegistryID,
-		systemRootEpoch: systemRootEpoch, resources: resources, rootResources: rootResources,
+		systemRootEpoch: systemRootEpoch, resources: resources, debtResources: debtResources, rootResources: rootResources,
 		rootResourceIndexID: stable.idx.id, rootResourceIndex: rootResourceIndex,
 		identityPinRegistry: db.StableResourceIdentityPinRegistry(),
 		identityPins:        make(map[rootpublication.StableIdentity]recoverableIdentityPin),

@@ -301,7 +301,9 @@ logical physical-record bytes, not immediately reclaimed segment bytes.
 
 Reachability is defined by pointer references found in index trees.
 
-`ValueLogGC` computes this by scanning:
+`ValueLogGC` computes conservative segment presence from certified exact-root
+physical closures, completely projecting every uncovered root. Those closures
+and fallback scans cover:
 
 - user tree,
 - system tree,
@@ -311,6 +313,39 @@ Reachability is defined by pointer references found in index trees.
   implemented.
 
 Entries with `node.FlagPointer` and `IsValueLogFileID(ptr.FileID)` mark a segment as referenced.
+
+Cached quiet-time retained pruning submits eligible retained candidates in one
+existing `ValueLogGC` call. Ordinary pruning preserves current/recent,
+mutable/queued/in-use, recovery and explicit snapshot protections. Its public
+two-second background budget spans proof and cutover; writer contention aborts
+the attempt. Retention is forgotten and reader segments evicted only for IDs
+successfully marked by GC. A later mark failure/cancellation publishes earlier
+successful marks and returns actual identities. Pins may defer physical unlink.
+
+Explicit synchronous forced maintenance can reclaim a proven-closed retained
+candidate even when the backend's newest-sequence heuristic calls it recent or
+active. Complete recoverable and detached-cache membership, a fresh publication
+token and cache-domain check, and a late cached-writer/in-use fence still apply.
+The actual writable lane head and mutable/queued references remain protected.
+Scheduler force changes admission pressure alone; it keeps the ordinary
+active/recent guard unless reclaiming the separately proved rewrite-observed
+sources.
+
+`ValueLogGCStats` separates requested, eligible, successfully marked, pending
+and deleted identities. Apply-mode pending/deleted counts describe actual
+successful marks, including partial progress; dry-run pending counts retain
+potential-eligibility semantics.
+
+Legacy cached prune action counters remain disjoint: a segment is counted as
+removed or as marked pending physical retirement. The backend identity results
+independently retain every successful mark, including immediately deleted files.
+Cache diagnostics under `treedb.cache.vlog_retained_prune.membership.{last_,total_}` report certified and
+uncovered roots, full fallback work, GC calls/captures and identity counts.
+Fallback records/projections/bytes count actual work; a conservative superset
+never counts as reclaimed progress. Compressed fixture tests explicitly use
+synthetic scheduler pressure. Production-scale eligibility and quiet-time
+convergence remain native qualification gates.
+
 
 Command-WAL external refs are retention roots before they are reachable from
 published roots. GC and rewrite must consult the protected command-WAL
@@ -503,7 +538,8 @@ snapshot/replay pins, and GC's deletion authority intact.
 
 For each segment in current value-log set:
 
-1. determine referenced set (incremental counters when valid; otherwise full scan),
+1. capture certified conservative membership from every recoverable root,
+   completely projecting every uncovered root,
 2. keep if referenced,
 3. keep if current active segment for that lane,
 4. otherwise mark eligible.

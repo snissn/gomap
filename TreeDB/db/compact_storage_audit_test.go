@@ -595,15 +595,16 @@ func TestCompactStorageAudit_ProtectedRootsDoNotPoisonTrackerOrSubsequentGC(t *t
 		t.Fatalf("maintenance segment %d missing from tracker: %v", maintenance.FileID, trackerRefs)
 	}
 
-	var scans atomic.Uint64
-	unregister := registerScanValueLogRefCountsHook(func() { scans.Add(1) })
-	t.Cleanup(unregister)
+	var fallbackScans uint64
+	db.testValueLogMembershipBeforeFallbackHook = func() { fallbackScans++ }
 	stats, err := db.ValueLogGC(context.Background(), ValueLogGCOptions{})
 	if err != nil {
 		t.Fatalf("ValueLogGC after removing protection: %v", err)
 	}
-	if got := scans.Load(); got != 0 {
-		t.Fatalf("ValueLogGC legacy ref scans=%d want tracker-only resolution", got)
+	// Count the actual recovery collector: the repaired logical tracker is
+	// not GC certificate authority. Every uncovered root must be fully scanned.
+	if stats.Membership.FullRootScans != fallbackScans || stats.Membership.FullRootScans != stats.Membership.UncoveredRoots {
+		t.Fatalf("unexpected actual recovery-root work: certified=%d uncovered=%d scans=%d projections=%d", stats.Membership.CertifiedRoots, stats.Membership.UncoveredRoots, stats.Membership.FullRootScans, stats.Membership.PointerProjections)
 	}
 	if stats.SegmentsDeleted != 1 {
 		t.Fatalf("SegmentsDeleted=%d want 1: %+v", stats.SegmentsDeleted, stats)
@@ -684,6 +685,20 @@ func TestCompactStorageAudit_PlannersMatchStandaloneResults(t *testing.T) {
 	if !reflect.DeepEqual(got.ValueLogRewritePlan, wantRewrite) {
 		t.Fatalf("rewrite plan mismatch:\nshared=%+v\nlegacy=%+v", got.ValueLogRewritePlan, wantRewrite)
 	}
+	// The shared planner reports classification from its existing combined
+	// walk; standalone GC additionally reports its recovery proof and candidate
+	// identities. Compare every common classification field, without treating
+	// unlike diagnostic work as equivalent.
+	if wantGC.RecoverableCaptures == 0 || len(wantGC.EligibleFileIDs) != wantGC.SegmentsEligible {
+		t.Fatal("standalone GC omitted recovery proof or candidate identities")
+	}
+	wantGC.RequestedFileIDs = nil
+	wantGC.EligibleFileIDs = nil
+	wantGC.ZombieMarkedFileIDs = nil
+	wantGC.PendingFileIDs = nil
+	wantGC.DeletedFileIDs = nil
+	wantGC.RecoverableCaptures = 0
+	wantGC.Membership = RecoverableValueLogMembershipStats{}
 	if !reflect.DeepEqual(got.ValueLogGC, wantGC) {
 		t.Fatalf("value-log GC plan mismatch:\nshared=%+v\nlegacy=%+v", got.ValueLogGC, wantGC)
 	}

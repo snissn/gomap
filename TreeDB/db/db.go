@@ -125,7 +125,9 @@ type DB struct {
 	compactStorageAuditProtectedBasisHook func(stage string, attempt int)
 	// Test hook used to invalidate a value-log GC recoverable-root capability
 	// immediately before its destructive revalidation.
-	testValueLogGCBeforeRevalidateHook func()
+	testValueLogGCBeforeRevalidateHook       func()
+	testValueLogGCBeforeMarkHook             func(uint32) error
+	testValueLogMembershipBeforeFallbackHook func()
 
 	// idx is the current index generation (pager + MVCC lifecycle state).
 	idx atomic.Pointer[indexGen]
