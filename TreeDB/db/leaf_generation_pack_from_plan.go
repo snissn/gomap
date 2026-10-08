@@ -64,6 +64,9 @@ func leafGenerationPackFromPlanPackOptions(opts LeafGenerationPackFromPlanOption
 // LeafGenerationPackFromPlan computes the current plan, selects a bounded
 // candidate prefix, then packs those sealed generations.
 func (db *DB) LeafGenerationPackFromPlan(ctx context.Context, opts LeafGenerationPackFromPlanOptions) (LeafGenerationPackStats, error) {
+	if err := db.advanceLeafPageLogGenerationForMaintenance(ctx, opts.MaintenanceLimits); err != nil {
+		return LeafGenerationPackStats{}, err
+	}
 	plan, err := db.LeafGenerationPlan(ctx, leafGenerationPackFromPlanPlanOptions(opts))
 	if err != nil {
 		return LeafGenerationPackStats{}, err

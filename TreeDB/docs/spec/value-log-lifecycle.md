@@ -401,6 +401,34 @@ before creating either a `.leaf-pack-copy-*` or
 `.leaf-pack-stable-prepare-*` namespace. This does not fence foreground writers
 and does not weaken exact no-replace promotion.
 
+Public leaf pack, pack-from-plan, run-once pack, and applied leaf GC first
+handoff an installed cached append-only native producer outside backend
+maintenance serialization. Existing footprint limits refuse before producer
+effects. The short cut holds cached flush/write ownership, backend teardown,
+command-WAL admission/publication, and finally the backend builder gate.
+Collection barriers run before that final gate. A pending drain releases all
+these owners and retries against the installed provider/version after draining.
+
+A dirty frontier advances every physical writer beyond one unused shared
+sequence floor, including idle workers; an entirely empty frontier creates no
+file. The cut registers and publishes the exact created/current inventory
+before releasing its owners. Planning, scanning, copying, and deletion then run
+under their existing maintenance phases. Sealing only ends current-writer
+protection: recoverable roots, held readers, stable identity pins, and normal
+reachability still govern retention. GC dispatches confirmed physical-absence
+receipts after unlocking the builder gate while teardown remains pinned;
+callbacks only reconcile producer accounting. See
+[cached native leaf producer handoff](cached-native-leaf-producer-handoff-5098.md).
+
+Generic backend maintenance has a different obligation: it raises the shared
+floor for future sequence reservations while preserving an installed healthy
+writer below that floor. Preservation requires its exact open child and parent
+identity, shared pin registry, and current writable registration in both cache
+and backend Managers. Missing, replaced, rebound, pending, or demoted ownership
+refuses reconciliation. The observation does not flush or certify a durable
+frontier. Native retirement and CompactStorage still use explicit handoffs;
+caller-owned backends without exact inspection retain their prior policy.
+
 Leaf-generation pack uses a two-phase copy/publish state machine:
 
 1. **Copy, without `writeMu`:** acquire a coherent snapshot and its leaf-generation

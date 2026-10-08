@@ -1028,6 +1028,17 @@ func (db *DB) RegisterValueLogSegment(path string, fileID uint32) error {
 	return db.RegisterValueLogSegmentReplacing(path, fileID, 0)
 }
 
+// ValidateCurrentWritableValueLogBinding lets the installed cached producer
+// inspect this Manager's exact current registration without scanning, changing
+// its generation or manufacturing a namespace durability certificate. The
+// Manager's existing Close join owns the call-local handle lease.
+func (db *DB) ValidateCurrentWritableValueLogBinding(path string, fileID uint32, identity rootpublication.StableIdentity, pins *rootpublication.IdentityPinRegistry) error {
+	if err := db.CheckStorageMaintenanceReady(); err != nil {
+		return err
+	}
+	return db.valueLogManager.ValidateCurrentWritableBinding(path, fileID, identity, pins)
+}
+
 // SetMultiCurrentWritableValueLogLane allows cached mode to keep independent
 // physical append writers current under one logical lane ID.
 func (db *DB) SetMultiCurrentWritableValueLogLane(lane uint32, enabled bool) {

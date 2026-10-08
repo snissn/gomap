@@ -1179,7 +1179,7 @@ func TestLeafGenerationGC_PrunePreservesPublishedManifest(t *testing.T) {
 	}
 	before := manifest.clone()
 	published := newLeafGenerationView(manifest)
-	pruned, changed, _, err := db.pruneDeletedLeafGenerationRecords(manifest, nil)
+	pruned, changed, _, _, err := db.pruneDeletedLeafGenerationRecords(manifest, nil)
 	if err != nil {
 		t.Fatalf("pruneDeletedLeafGenerationRecords: %v", err)
 	}

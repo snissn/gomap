@@ -300,6 +300,32 @@ growth between plan and actual pack snapshot, and retain successful admitted
 packing/GC plus reopen coverage. They verify per-phase footprint admission, not
 a cumulative I/O quota.
 
+The cached native producer handoff tests cover every physical writer and idle
+peers, workers created after the cut, empty/cancelled cuts, stable-file pins and
+Close joining. The backend tests cover pending-drain release and provider-version
+replacement, partial errors aborting all four public maintenance callers, and
+invalid or insufficient footprint limits refusing before producer effects.
+Retirement tests require actual physical absence, callback dispatch after the
+builder gate unlocks with teardown still held, and preservation of receipts
+after a later sidecar error. `TestOpenBackendWithCachedLeafLogPublicGenerationHandoff`
+verifies installation through the ordinary public opener. Focused normal and
+race passes are correctness evidence; the unchanged-default two-rollover
+workload, full held/current posting oracles, reopen and drained storage economics
+remain separate qualification gates.
+
+`TestLeafReconcilePreservesHealthyPhysicalWritersAfterNoWorkAndFailure` checks
+generic reconciliation with four real physical writers, a backend-created higher
+sequence, no-work and failed callbacks, a later worker, preserved pointers, and
+the distinct explicit retirement path. The refusal cases replace or remove a
+child, rebind its parent while retaining the same child inode, and demote either
+actual Manager registration. `TestCurrentBinding*` verifies that inspection
+does not flush buffered writer bytes or rescan/promote registrations, rejects
+foreign registries and pending successors, and joins admitted inspections with
+Manager Close. `TestPublicOnlineVacuumPreservesLeafWritersAndReopenablePointers`
+uses the public durable opener, repeated online vacuum, held reads, later
+pointer-producing appends, and full current reads after reopen. These bounded
+semantic tests do not qualify the default workload's rollover or storage gates.
+
 `TestLeafGenerationPackAllocatorsUseInstalledSequenceAuthority` records the
 floor-39 split-allocation regression and requires pack and live reservations to
 produce 40 then 41 from one authority. The repeated db and caching allocator

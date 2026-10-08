@@ -18,6 +18,9 @@ type LeafGenerationPackRunOnceStats struct {
 // LeafGenerationPackRunOnce computes the current plan, applies bounded
 // selection, and either runs one pack pass or reports why it skipped.
 func (db *DB) LeafGenerationPackRunOnce(ctx context.Context, opts LeafGenerationPackFromPlanOptions) (LeafGenerationPackRunOnceStats, error) {
+	if err := db.advanceLeafPageLogGenerationForMaintenance(ctx, opts.MaintenanceLimits); err != nil {
+		return LeafGenerationPackRunOnceStats{}, err
+	}
 	return db.leafGenerationPackRunOnce(ctx, opts, true)
 }
 

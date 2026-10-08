@@ -194,6 +194,16 @@ func (db *DB) LeafGenerationPack(ctx context.Context, opts LeafGenerationPackOpt
 	stats.GenerationsRequested = len(opts.GenerationIDs)
 	opts = normalizeLeafGenerationPackOptions(opts)
 
+	// Explicit requests keep their pre-effect missing/ineligible selection
+	// refusal. Revalidate after handoff under the existing maintenance gate.
+	if _, err := db.validateLeafGenerationPackSelection(ctx, opts); err != nil {
+		return stats, err
+	}
+
+	if err := db.advanceLeafPageLogGenerationForMaintenance(ctx, opts.MaintenanceLimits); err != nil {
+		return stats, err
+	}
+
 	db.maintenanceMu.Lock()
 	defer db.maintenanceMu.Unlock()
 	if err := db.CheckStorageMaintenanceReady(); err != nil {

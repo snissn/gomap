@@ -8051,8 +8051,9 @@ func (db *DB) runWithBackendMaintenanceOptions(opts backendMaintenanceOptions, f
 }
 
 // ReconcileAfterBackendMaintenance refreshes cached-mode value-log readers and
-// advances split value-log writers past segments created directly by backend
-// maintenance.
+// advances future split-log reservation floors past segments created directly
+// by backend maintenance. Healthy installed leaf writers keep their files;
+// explicit generation retirement has a separate forced handoff.
 func (db *DB) ReconcileAfterBackendMaintenance() error {
 	return db.reconcileSplitValueLogWritersAfterBackendMaintenance()
 }
@@ -8098,7 +8099,7 @@ func (db *DB) reconcileSplitValueLogWritersAfterBackendMaintenance() error {
 		observedMaxSeq := maxSeqByLane[leafLogLaneID]
 		db.advanceLeafLogAppendSeqAtLeast(observedMaxSeq)
 		for _, l := range db.leafLogAppendLanesSnapshot() {
-			if err := db.advanceLeafLogAppendWriterPastObservedSeq(l, observedMaxSeq); err != nil {
+			if err := db.reconcileLeafLogAppendWriterAfterBackendMaintenance(l, observedMaxSeq); err != nil {
 				return err
 			}
 		}
