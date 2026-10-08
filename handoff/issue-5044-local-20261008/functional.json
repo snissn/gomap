@@ -1,0 +1,37 @@
+{
+  "head": "86cd88bbcc2b53fff2f914b9784de0132431bcb5",
+  "tree": "95e890daa48d60de34ddc13e5e7da4bb47c0331f",
+  "source_binding": "tested staged tree exactly equals published Git tree",
+  "go_version": "go version go1.26.4 linux/amd64",
+  "controls": {
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4"
+  },
+  "commands": [
+    {
+      "argv": [
+        "go",
+        "test",
+        "./TreeDB/mvcc/cowsustained",
+        "-count=1",
+        "-timeout=4m"
+      ],
+      "exit_code": 0,
+      "elapsed_package_seconds": 16.712
+    },
+    {
+      "argv": [
+        "go",
+        "test",
+        "-race",
+        "./TreeDB/mvcc/cowsustained",
+        "-count=1",
+        "-timeout=4m"
+      ],
+      "exit_code": 0,
+      "elapsed_package_seconds": 65.103
+    }
+  ],
+  "claim": "whole package normal/race passed; no transfer of historical phase or benchmark identity"
+}
