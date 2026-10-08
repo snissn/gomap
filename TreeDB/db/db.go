@@ -541,6 +541,8 @@ type DB struct {
 	rootProbePrefixFallbackCalls atomic.Uint64
 	rootProbePrefixFallbackItems atomic.Uint64
 
+	testWriterManifestPreparedHook func()
+
 	// testFailFinalizeCommit forces finalizeCommitLocked to fail before writing
 	// the next meta page. Used by crash-safety tests.
 	testFailFinalizeCommit        atomic.Bool
@@ -3642,7 +3644,11 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// below then seals new old-generation readers before reuse is sampled.
 	var durableResources *rootpublication.StableResourceSet
 	if db.durableRoot.pending == nil {
-		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback, opts.valueLogPublicationLocked, opts.publishTiming)
+		base := db.durableRoot.slotResources[db.durableRoot.slot]
+		if opts.writerPreparation != nil {
+			base = opts.writerPreparation.baseResources
+		}
+		durableResources, err = db.captureDurableRootResourcesFromBaseV1(idx, nextMeta, vlogRefDelta, base, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback, opts.valueLogPublicationLocked, opts.publishTiming)
 		if err != nil {
 			return post, wrapFinalizeCommitError(fmt.Errorf("capture durable-root dependencies: %w", err), true)
 		}
@@ -3715,7 +3721,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if opts.writerPreparation.hasManifestPreparation() {
+		// Pending ownership is consumed at visibility below, never in post-work.
+	} else if db.leafPageLog != nil {
 		stagedLeafManifest, err := db.stagedLeafGenerationManifestWithPendingResult(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
@@ -3747,6 +3755,9 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	if opts.writerPreparation != nil {
+		opts.writerPreparation.consumePending()
+	}
 	opts.conditionalMutation.record(db, nextMeta.CommitSeq)
 	if opts.commandWALPublish {
 		previousApplied := uint64(0)
@@ -3758,7 +3769,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	db.publishSnapshotView(idx, newState, db.valueLogManager, opts.negativeCoverage)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
-	if db.leafPageLog != nil && len(post.clearLeafGenerationPendingFileIDs) == 0 {
+	if !opts.writerPreparation.hasManifestPreparation() && db.leafPageLog != nil && len(post.clearLeafGenerationPendingFileIDs) == 0 {
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()

@@ -57,10 +57,11 @@ type rootPublicationVisibleMemberV1 struct {
 // visibility boundary. Preparation resolves the value-log set and leaf view;
 // activate performs only bounded in-memory swaps and bookkeeping.
 type rootPublicationVisibleInstallV1 struct {
-	negativeCoverage *negativeRootCoverage
-	db               *DB
-	idx              *indexGen
-	next             page.MetaPageBody
+	writerPreparation *writerPublicationPreparation
+	negativeCoverage  *negativeRootCoverage
+	db                *DB
+	idx               *indexGen
+	next              page.MetaPageBody
 
 	post                        finalizeCommitPost
 	vlogRefCounts               *candidateValueLogRefCountsV1
@@ -353,7 +354,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	opts finalizeCommitOptions,
 ) (*rootPublicationVisibleInstallV1, error) {
 	install := &rootPublicationVisibleInstallV1{
-		db: db, idx: idx, next: next, post: post, negativeCoverage: opts.negativeCoverage,
+		db: db, idx: idx, next: next, post: post, negativeCoverage: opts.negativeCoverage, writerPreparation: opts.writerPreparation,
 		commandWALPublish:           opts.commandWALPublish,
 		skipConditionalRootConflict: opts.skipConditionalRootConflict,
 		oldUserRootID:               oldUserRootID,
@@ -386,7 +387,9 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		install.post.persistLeafGenerationRawFileIDs = append(install.post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		install.leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if opts.writerPreparation.hasManifestPreparation() {
+		// Pending ownership is consumed at activation, never in post-work.
+	} else if db.leafPageLog != nil {
 		staged, err := db.stagedLeafGenerationManifestWithPendingResultAndLimit(manifestBasis, 0, next.CommitSeq, opts.preparedLimits)
 		if err != nil {
 			return nil, err
@@ -403,7 +406,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	if install.leafGenerationView == nil {
 		install.leafGenerationView = db.currentLeafGenerationView()
 	}
-	if db.leafPageLog != nil && len(install.post.clearLeafGenerationPendingFileIDs) == 0 {
+	if !opts.writerPreparation.hasManifestPreparation() && db.leafPageLog != nil && len(install.post.clearLeafGenerationPendingFileIDs) == 0 {
 		install.post.drainLeafGenerationPending = true
 	}
 	install.post.commitSeq = next.CommitSeq
@@ -475,6 +478,9 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 		newState.LeafGenerationStateVersion = db.leafGenerationStateVersion
 	}
 	db.state.Store(newState)
+	if install.writerPreparation != nil {
+		install.writerPreparation.consumePending()
+	}
 	install.conditionalMutation.record(db, install.next.CommitSeq)
 	if install.commandWALPublish {
 		previousApplied := uint64(0)
@@ -754,13 +760,22 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if opts.preparedLimits != nil {
 		maxVisibleResources = opts.preparedLimits.MaxVisibleResources
 	}
-	visibleBase, visibleBaseWork, err := runtime.cloneVisibleResourcesWithWorkMax(maxVisibleResources)
+	var visibleBase *rootpublication.StableResourceSet
+	var visibleBaseWork rootpublication.StableResourceClosureWork
+	var err error
+	if opts.writerPreparation != nil {
+		visibleBase = opts.writerPreparation.baseResources
+	} else {
+		visibleBase, visibleBaseWork, err = runtime.cloneVisibleResourcesWithWorkMax(maxVisibleResources)
+	}
 	candidateTiming.FinalizeCandidateVisibleBaseClone += time.Since(visibleBaseCloneStart)
 	candidateTiming.FinalizeCandidateResourceWork.Add(visibleBaseWork)
 	if err != nil {
 		return post, prePublishErr(err)
 	}
-	defer visibleBase.Release()
+	if opts.writerPreparation == nil {
+		defer visibleBase.Release()
+	}
 
 	var scanned candidateValueLogRefCountsV1
 	resources, err := db.captureDurableRootResourcesFromBaseWithRefCountsV1(

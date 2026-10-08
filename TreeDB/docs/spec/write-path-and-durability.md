@@ -130,6 +130,33 @@ required resource bytes and namespace entries are synced before recoverable
 meta publication. Successful `*Sync`, `Checkpoint`, and clean `Close` retain
 their durability guarantees.
 
+### Writer manifest authority
+
+Ordinary optimistic writes, serialized fallback and physical build-group
+finalization retain tracked private index output, the selected root generation
+and exact base/producer handles before releasing serialization. They stage the
+semantic outer-leaf membership before capturing the candidate closure. Changed
+membership prepares one immutable manifest revision outside DB, write, commit,
+root-build, durable-publication, build-group and publish-prepare locks. The exact
+returned token enters the same inline or queued publication; operational
+revision numbers and compatibility filenames do not grant stable authority.
+Unchanged membership retains the existing exact manifest token without creating
+another revision or synchronizing a replacement.
+
+After every detached preparation or WAL append, publication revalidates index
+identity, user/system roots, commit sequence, manifest identity, pending producer
+attribution and conditional reads. Drift abandons only the attempt's unpublished
+immutable revision and tracked private pages. Successful visibility consumes
+only the selected pending attribution; later registration remains pending.
+Build-group Close joins the finalizing owner before releasing its output.
+
+An ordinary unassigned command intent keeps its outer command-publication guard
+across detached work, while dependency and journal synchronization releases root
+serialization. Physical build groups accept only nil or already assigned,
+non-replay intents. An assigned command that fails before publication requires
+recovery and cannot append again on that handle. An accepted candidate retains
+its output even when a subsequent durability wait returns an error.
+
 ### 0.1 Normative publication state machine
 
 | State | Stable authority | Permitted next action | Failure rule |
