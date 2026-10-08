@@ -87,7 +87,11 @@ this harness, then run in a fresh, task-owned database/output directory:
   -keys 10000 -treedb-index-primary-directory=true -profile-dir /path/to/fresh-output
 ```
 
-The resolved-options text reports `index_primary_directory_requested`,
+The stderr banner and single/sweep Markdown reports include PRIMARY selector
+evidence for every selected TreeDB adapter, including explicitly selected
+`treedb_*` variants and registry aliases. Hidden-only selections retain a clearly
+scoped selector report. Full resolved options describe canonical `treedb`;
+variant profile/compression overrides are excluded from that full report. The resolved-options text reports `index_primary_directory_requested`,
 `index_primary_directory_supported`, and
 `index_primary_directory_configured_enabled`. Configured enablement is read from
 the constructed options; it is not proof that a measured operation used the

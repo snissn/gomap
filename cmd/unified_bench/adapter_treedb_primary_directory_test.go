@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -162,6 +163,98 @@ func TestBuildTreeDBOptionsPrimaryDirectory(t *testing.T) {
 		}
 		if _, err := treeDBResolvedOptionsText(""); err == nil {
 			t.Fatal("resolved-options preflight accepted unsupported enable")
+		}
+	}
+}
+
+func TestTreeDBPrimaryDirectoryReportsHiddenAdapters(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	savedDBs, savedExclude := *dbsArg, *dbsExcludeArg
+	defer func() { *dbsArg, *dbsExcludeArg = savedDBs, savedExclude }()
+	resetTreeDBIndexFlagsForTest()
+	supported := fieldByPath(reflect.ValueOf(treedb.Options{}), "IndexPrimaryDirectory").IsValid()
+	names := []string{"treedbcached", "treedb_cached_command_wal", "treedb_command_wal"}
+	for name := range dbFactories {
+		if name == "treedb" || strings.HasPrefix(name, "treedb_") {
+			names = append(names, name)
+		}
+	}
+	names = append(names, "pebble")
+	for _, name := range names {
+		for _, requested := range []bool{false, true} {
+			if requested && !supported {
+				continue
+			}
+			t.Run(fmt.Sprintf("%s/%t", name, requested), func(t *testing.T) {
+				*treedbIndexPrimaryDirectory = requested
+				*dbsArg, *dbsExcludeArg = name, ""
+				resolved := resolveDBs(name, "")
+				if len(resolved) != 1 {
+					t.Fatalf("adapter did not resolve: %v", resolved)
+				}
+				run := BenchRun{Config: BenchConfig{DBsArg: name}, Instances: []*DBInstance{{Name: resolved[0], Wrapper: &fixedNameDB{name: resolved[0]}}}}
+				stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+				if err != nil {
+					t.Fatal(err)
+				}
+				oldStderr := os.Stderr
+				os.Stderr = stderr
+				logResolvedTreeDBOptions()
+				os.Stderr = oldStderr
+				if _, err := stderr.Seek(0, 0); err != nil {
+					t.Fatal(err)
+				}
+				banner, err := io.ReadAll(stderr)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := stderr.Close(); err != nil {
+					t.Fatal(err)
+				}
+				for kind, text := range map[string]string{"banner": string(banner), "single": renderMarkdownSingle(run), "sweep": renderMarkdownSweep([]BenchRun{run})} {
+					for _, want := range []string{fmt.Sprintf("index_primary_directory_requested=%t", requested), fmt.Sprintf("index_primary_directory_supported=%t", supported), fmt.Sprintf("index_primary_directory_configured_enabled=%t", requested && supported)} {
+						if got := strings.Contains(text, want); got != (name != "pebble") {
+							t.Errorf("%s report contains %q=%t; output=%s", kind, want, got, text)
+						}
+					}
+					if name != "pebble" {
+						canonical := resolved[0] == "treedb"
+						for _, field := range []string{"profile_resolved=", "benchmark_unsafe=", "read_integrity=", "vlog.compression="} {
+							if got := strings.Contains(text, field); got != canonical {
+								t.Errorf("%s generic field %q=%t for canonical=%t", kind, field, got, canonical)
+							}
+						}
+						if !canonical && !strings.Contains(text, "report_scope=primary_directory_selector_for_selected_treedb_adapters") {
+							t.Errorf("%s missing selector scope", kind)
+						}
+					}
+
+				}
+			})
+		}
+	}
+}
+
+func TestTreeDBPrimaryDirectoryVariantReportIgnoresOverriddenFlags(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbDisableWAL = true
+	*treedbAllowUnsafe = false
+	for _, cfg := range []treeDBOptionsBuildConfig{{forceWALOn: true}, {forceBenchmarkUnsafe: true}} {
+		opts, _, err := buildTreeDBOptionsWithConfig("", cfg)
+		if err != nil {
+			t.Fatalf("actual variant builder: %v", err)
+		}
+		text, err := treeDBSelectedOptionsText("", false)
+		if err != nil {
+			t.Errorf("shared selector report rejected valid variant: %v", err)
+			continue
+		}
+		want := treeDBPrimaryDirectoryReport(reflect.ValueOf(opts), false)
+		if !strings.Contains(text, want) {
+			t.Errorf("report does not describe actual variant selector: %s", text)
 		}
 	}
 }
