@@ -1801,8 +1801,7 @@ func (db *DB) rebuildRecoverableRootV1(ctx context.Context, roots *RecoverableRo
 	return db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, newPager, alloc, false)
 }
 
-func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, roots *RecoverableRootSet, root RecoverableRoot, newPager *pager.Pager, alloc vacuumCollectionAllocator, durablePublishLockHeld bool) (rebuiltDurableRootV1, rebuiltRecoverableRootWorkV1, error) {
-	var work rebuiltRecoverableRootWorkV1
+func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, roots *RecoverableRootSet, root RecoverableRoot, newPager *pager.Pager, alloc vacuumCollectionAllocator, durablePublishLockHeld bool) (rebuilt rebuiltDurableRootV1, work rebuiltRecoverableRootWorkV1, err error) {
 	if roots == nil || newPager == nil || alloc == nil {
 		return rebuiltDurableRootV1{}, work, errors.New("vacuum: missing recoverable-root rebuild input")
 	}
@@ -1818,12 +1817,17 @@ func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, r
 		}
 		return rebuiltDurableRootV1{}, work, ErrRecoverableRootSetStale
 	}
-	defer func() { _ = snapshot.Close() }()
+	defer func() {
+		if closeErr := snapshot.Close(); closeErr != nil {
+			rebuilt.resources.Release()
+			rebuilt = rebuiltDurableRootV1{}
+			err = errors.Join(err, closeErr)
+		}
+	}()
 
 	effectiveInternalBaseDelta := db.indexInternalBaseDelta && !db.indexOuterLeavesInValueLog
 	var (
 		userRoot uint64
-		err      error
 	)
 	if db.indexOuterLeavesInValueLog && !primaryarena.IsPage(root.UserRootPageID) {
 		rootData, readErr := snapshot.idx.pager.Get(root.UserRootPageID)
@@ -1843,7 +1847,7 @@ func (db *DB) rebuildRecoverableRootWithPublicationLockV1(ctx context.Context, r
 			PackedValuePtr:        db.indexPackedValuePtr,
 			InternalBaseDelta:     db.indexInternalBaseDelta,
 		})
-		_ = iter.Close()
+		err = errors.Join(err, iter.Close())
 	}
 	if err != nil {
 		return rebuiltDurableRootV1{}, work, err

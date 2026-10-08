@@ -70,32 +70,7 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 	if err != nil {
 		return err
 	}
-	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
-		// The selected format has one pair authority. Reuse its complete
-		// online builder under the already held exclusive offline LOCK.
-		if err = d.Close(); err != nil {
-			return err
-		}
-		opts.ReadOnly = false
-		d, err = openWithLock(opts, nil)
-		if err != nil {
-			return err
-		}
-		var leaf LeafPageLogCloser
-		if opts.IndexOuterLeavesInValueLog {
-			leaf, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{Compression: opts.ValueLog.Compression, AutoPolicy: opts.ValueLog.AutoPolicy, BlockCodec: opts.ValueLog.BlockCodec})
-			if err != nil {
-				return errors.Join(err, d.Close())
-			}
-			d.SetLeafPageLog(leaf)
-		}
-		err = d.VacuumIndexOnline(context.Background())
-		err = errors.Join(err, d.Close())
-		if leaf != nil {
-			err = errors.Join(err, leaf.Close())
-		}
-		return err
-	}
+
 	var maintenanceLeafLog LeafPageLogCloser
 	if opts.IndexOuterLeavesInValueLog {
 		maintenanceLeafLog, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{
@@ -111,6 +86,43 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		defer func() {
 			retErr = errors.Join(retErr, maintenanceLeafLog.Close())
 		}()
+	}
+
+	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
+		roots, e := d.CaptureRecoverableRootSetForInspection(context.Background())
+		if e != nil {
+			return errors.Join(e, d.Close())
+		}
+		defer roots.Release()
+		newPath := filepath.Join(opts.Dir, indexNewFileName)
+		if e = removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); e != nil {
+			return errors.Join(e, d.Close())
+		}
+		newPager, e := pager.Open(newPath, opts.ChunkSize)
+		if e != nil {
+			return errors.Join(e, d.Close())
+		}
+		if e = observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, true); e != nil {
+			return errors.Join(e, newPager.Close(), d.Close())
+		}
+		if _, e = newPager.Alloc(2); e != nil {
+			return errors.Join(e, newPager.Close(), d.Close())
+		}
+		pair, e := d.newOfflinePrimaryPairV6(newPager)
+		if e != nil {
+			return errors.Join(e, d.Close())
+		}
+		produce := func(root RecoverableRoot) (rebuiltDurableRootV1, error) {
+			rebuilt, _, e := d.rebuildRecoverableRootWithPublicationLockV1(context.Background(), roots, root, newPager, pair.allocator, false)
+			return rebuilt, e
+		}
+		e = d.finishOfflinePrimaryPairV6(pair, roots, produce, false, func() error {
+			if maintenanceLeafLog != nil {
+				return maintenanceLeafLog.Close()
+			}
+			return nil
+		})
+		return errors.Join(e, d.Close())
 	}
 
 	state := d.State()

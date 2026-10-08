@@ -66,6 +66,13 @@ func (s *primaryRebuildScratchV5) put(seq uint64, input rebuiltPrimaryRootV5) er
 // the earliest retained record's commit; later bank-only records retain that
 // exact generation. No old DATA generation or bank image is relabelled.
 func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
+	return db.writeRebuiltPrimaryRootsWithProducerV5(ctx, idx, roots, older, latest, indexPath, nil)
+}
+
+// produce is synchronous construction work. It is never stored in a root or
+// runtime: offline value-log rewrite must rewrite proof pointers with the same
+// producer as the two slots, rather than copying old value-log dependencies.
+func (db *DB) writeRebuiltPrimaryRootsWithProducerV5(ctx context.Context, idx *indexGen, roots *RecoverableRootSet, older rebuiltDurableRootV1, latest rebuiltDurableRootV1, indexPath string, produce func(RecoverableRoot) (rebuiltDurableRootV1, error)) (selected durableRootSelectionV1, runtime *primaryDurableRuntimeV5, err error) {
 	if idx == nil || idx.primaryOwner == nil || roots == nil {
 		return selected, nil, rootpublication.ErrResourceOwnership
 	}
@@ -104,7 +111,13 @@ func (db *DB) writeRebuiltPrimaryRootsV5(ctx context.Context, idx *indexGen, roo
 			readRoot = source.primaryReadRoots[proofSlot+2]
 		}
 		root := RecoverableRoot{CommitSeq: record.CommitSeq, UserRootPageID: readRoot, SystemRootPageID: record.SystemRootPageID, AppliedCommandLSN: record.AppliedCommandLSN, MaxEntryRevision: record.MaxEntryRevision, Durable: true}
-		rebuilt, _, e := db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, p, idx.allocator, true)
+		var rebuilt rebuiltDurableRootV1
+		var e error
+		if produce != nil {
+			rebuilt, e = produce(root)
+		} else {
+			rebuilt, _, e = db.rebuildRecoverableRootWithPublicationLockV1(ctx, roots, root, p, idx.allocator, true)
+		}
 		if e != nil {
 			return selected, nil, e
 		}

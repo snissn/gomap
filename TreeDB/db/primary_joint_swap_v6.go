@@ -199,60 +199,81 @@ func validateJointPairV6(data, primary *os.File, d primaryJointDecisionV6) error
 	}
 	return fmt.Errorf("%w: committed pair has no complete eligible capsule", ErrRecoveryRequired)
 }
+
+// Close verification handles before each namespace mutation. Every reopen is
+// relative to the retained parent and must match the COMMIT identity; pathname
+// reopening and unsupported-platform fallbacks cannot supply this authority.
 func rollForwardPrimaryJointV6(ctx context.Context, dir string, parent *os.File, d primaryJointDecisionV6) error {
-	if e := ctx.Err(); e != nil {
-		return e
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	parentID, e := rootpublication.StableIdentityFromFile(parent)
-	if e != nil || !rootpublication.SamePhysicalIdentity(parentID, d.Parent) {
-		return errors.Join(e, ErrRecoveryRequired)
+	parentID, err := rootpublication.StableIdentityFromFile(parent)
+	if err != nil || !rootpublication.SamePhysicalIdentity(parentID, d.Parent) {
+		return errors.Join(err, ErrRecoveryRequired)
 	}
-	data, dname, e := jointFileByIdentityV6(parent, d.DataName, d.DataStaging, d.Data)
-	if e != nil {
-		return e
+	data, dname, err := jointFileByIdentityV6(parent, d.DataName, d.DataStaging, d.Data)
+	if err != nil {
+		return err
 	}
-	defer data.Close()
-	primary, pname, e := jointFileByIdentityV6(parent, d.PrimaryName, d.PrimaryStaging, d.Primary)
-	if e != nil {
-		return e
+	primary, pname, err := jointFileByIdentityV6(parent, d.PrimaryName, d.PrimaryStaging, d.Primary)
+	if err != nil {
+		return errors.Join(err, data.Close())
 	}
-	defer primary.Close()
-	if e = validateJointPairV6(data, primary, d); e != nil {
-		return e
+	err = errors.Join(validateJointPairV6(data, primary, d), data.Close(), primary.Close())
+	if err != nil {
+		return err
 	}
 	for _, entry := range []struct {
 		from, to, phase string
-		f               *os.File
-	}{{dname, d.DataName, "data", data}, {pname, d.PrimaryName, "primary", primary}} {
-		if e = ctx.Err(); e != nil {
-			return e
+		identity        rootpublication.StableIdentity
+	}{{dname, d.DataName, "data", d.Data}, {pname, d.PrimaryName, "primary", d.Primary}} {
+		if err = ctx.Err(); err != nil {
+			return err
 		}
 		if entry.from != entry.to {
-			if e = jointSwapHookV6("before-" + entry.phase + "-rename"); e != nil {
+			if err = jointSwapHookV6("before-" + entry.phase + "-rename"); err != nil {
+				return err
+			}
+			f, name, e := jointFileByIdentityV6(parent, entry.from, entry.from, entry.identity)
+			if e != nil {
 				return e
 			}
-			if e = rootpublication.ValidateStableChildLink(parent, entry.f, entry.from); e != nil {
+			e = errors.Join(rootpublication.ValidateStableChildLink(parent, f, name), f.Close())
+			if e != nil {
 				return e
 			}
 			if e = rootpublication.RenameStableChildFile(parent, entry.from, entry.to); e != nil {
 				return e
 			}
-			if e = observeStableNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceIndex, dir, filepath.Join(dir, entry.from), filepath.Join(dir, entry.to), parent, entry.f, entry.from, entry.to); e != nil {
+			f, name, e = jointFileByIdentityV6(parent, entry.to, entry.to, entry.identity)
+			if e != nil {
 				return e
 			}
-			if e = rootpublication.ValidateStableChildLink(parent, entry.f, entry.to); e != nil {
+			e = errors.Join(rootpublication.ValidateStableChildLink(parent, f, name), observeStableNamespaceMutation(durabilitycut.NamespaceRename, durabilitycut.ResourceIndex, dir, filepath.Join(dir, entry.from), filepath.Join(dir, entry.to), parent, f, entry.from, entry.to), f.Close())
+			if e != nil {
 				return e
 			}
 			if e = jointSwapHookV6("after-" + entry.phase + "-rename"); e != nil {
 				return e
 			}
 		}
-		if e = syncJointParentV6(dir, parent, entry.phase+"-barrier"); e != nil {
-			return e
+		if err = syncJointParentV6(dir, parent, entry.phase+"-barrier"); err != nil {
+			return err
 		}
 	}
-	return nil
+	// Both canonical files must still form the complete committed pair before
+	// removing its recovery decision. A successful first rename is insufficient.
+	data, dname, err = jointFileByIdentityV6(parent, d.DataName, d.DataName, d.Data)
+	if err != nil {
+		return err
+	}
+	primary, pname, err = jointFileByIdentityV6(parent, d.PrimaryName, d.PrimaryName, d.Primary)
+	if err != nil {
+		return errors.Join(err, data.Close())
+	}
+	return errors.Join(validateJointPairV6(data, primary, d), data.Close(), primary.Close())
 }
+
 func deletePrimaryJointCommitV6(ctx context.Context, dir string, parent *os.File) error {
 	if e := ctx.Err(); e != nil {
 		return e

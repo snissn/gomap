@@ -3176,9 +3176,15 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		_ = d.Close()
 		return stats, fmt.Errorf("vlog-rewrite: missing db state")
 	}
-	if state.ValueLogSet != nil {
-		d.valueLogManager.Acquire(state.ValueLogSet)
-		defer d.valueLogManager.Release(state.ValueLogSet)
+	acquiredValueLogManager := d.valueLogManager
+	acquiredValueLogSet := state.ValueLogSet
+	if acquiredValueLogSet != nil {
+		d.valueLogManager.Acquire(acquiredValueLogSet)
+		defer func() {
+			if acquiredValueLogSet != nil {
+				_ = acquiredValueLogManager.Release(acquiredValueLogSet)
+			}
+		}()
 	}
 	if state.ValueLogSet == nil || len(state.ValueLogSet.Files) == 0 {
 		_ = d.Close()
@@ -3306,6 +3312,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 	}
 
+	capsuleRewrite := d.idx.Load() != nil && d.idx.Load().primary != nil && d.idx.Load().primary.CapsuleFormatV6()
 	buildTreeFromIterator := func(iter iteratorWithEntry, useLeafLog bool) (uint64, error) {
 		rewriter := &rewriteIterator{
 			inner:               iter,
@@ -3318,7 +3325,10 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 		if !rewriter.Valid() {
 			if err := rewriter.Error(); err != nil {
-				_ = rewriter.Close()
+				closeErr := rewriter.Close()
+				if capsuleRewrite {
+					err = errors.Join(err, closeErr)
+				}
 				return 0, err
 			}
 		}
@@ -3332,7 +3342,10 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			buildOpts.LeafPageLog = writer
 		}
 		newRoot, err := bulk.BuildWithOptions(rewriter, alloc, newPager, buildOpts)
-		_ = rewriter.Close()
+		closeErr := rewriter.Close()
+		if capsuleRewrite {
+			err = errors.Join(err, closeErr)
+		}
 		if err != nil {
 			return 0, err
 		}
@@ -3378,6 +3391,89 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			}
 		}
 		return buildTree(root, useLeafLog)
+	}
+
+	if source := d.idx.Load(); source != nil && source.primary != nil && source.primary.CapsuleFormatV6() {
+		roots, captureErr := d.CaptureRecoverableRootSetForInspection(context.Background())
+		if captureErr != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return stats, captureErr
+		}
+		defer roots.Release()
+		pair, pairErr := d.newOfflinePrimaryPairV6(newPager)
+		if pairErr != nil {
+			_ = d.Close()
+			return stats, pairErr
+		}
+		defer pair.close()
+		produce := func(root RecoverableRoot) (rebuilt rebuiltDurableRootV1, err error) {
+			snapshot := roots.AcquireSnapshotForRoot(root)
+			if snapshot == nil {
+				return rebuiltDurableRootV1{}, ErrRecoverableRootSetStale
+			}
+			defer func() {
+				if closeErr := snapshot.Close(); closeErr != nil {
+					rebuilt.resources.Release()
+					rebuilt = rebuiltDurableRootV1{}
+					err = errors.Join(err, closeErr)
+				}
+			}()
+			descriptors, e := vacuumCollectCollectionRootDescriptors(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			replacements, e := valueLogRewriteCollectionRootsFromDescriptors(descriptors, buildCollectionTree)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			var system iteratorWithEntry = tree.New(snapshot.idx.pager, &snapshot.reader, root.SystemRootPageID).IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection})
+			if len(replacements) != 0 {
+				system = &vacuumSystemRootRewriteIterator{base: system, replacements: replacements}
+			}
+			systemRoot, e := buildTreeFromIterator(system, rewriteUsesLeafLog)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			userRoot, e := buildTreeFromIterator(snapshot.tree.IteratorWithOptions(nil, nil, tree.IteratorOptions{Mode: tree.IteratorModePointerProjection}), rewriteUsesLeafLog)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			meta := page.MetaPageBody{CommitSeq: root.CommitSeq, UserRootPageID: userRoot, SystemRootPageID: systemRoot, TotalPages: newPager.PageCount(), AppliedCommandLSN: root.AppliedCommandLSN, MaxEntryRevision: root.MaxEntryRevision}
+			if e = writer.Sync(); e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			registered, e := captureOfflineRewriteDurableResourcesV1(d, writer)
+			if e != nil {
+				return rebuiltDurableRootV1{}, e
+			}
+			registered.Release()
+			sourceResources, _, _, _ := roots.resourcesForRootExact(root)
+			resources, e := d.captureRebuiltIndexDurableResourcesFromV1(newPager, meta, sourceResources)
+			return rebuiltDurableRootV1{meta: meta, resources: resources}, e
+		}
+		err = d.finishOfflinePrimaryPairV6(pair, roots, produce, true, func() error {
+			closeErr := writer.Close()
+			if acquiredValueLogSet != nil {
+				closeErr = errors.Join(closeErr, acquiredValueLogManager.Release(acquiredValueLogSet))
+				acquiredValueLogSet = nil
+			}
+			return closeErr
+		})
+		if err != nil {
+			_ = d.Close()
+			return stats, err
+		}
+		// All selected/alternate/proof pointers now name the committed pair's
+		// new segments. Only this completed decision authorizes old deletion.
+		if err = removeOldValueLogSegments(segments); err != nil {
+			return stats, err
+		}
+		if err = updateValueLogHealthAfterRewrite(opts.Dir, oldValueIDs, nil); err != nil && opts.NotifyError != nil {
+			opts.NotifyError(fmt.Errorf("value-log health update after rewrite: %w", err))
+		}
+		stats.SegmentsAfter, stats.BytesAfter, err = valueLogSegmentStats(opts.Dir)
+		return stats, err
 	}
 
 	collectionRootReplacements, err := valueLogRewriteCollectionRootsFromDescriptors(collectionRootDescriptors, buildCollectionTree)

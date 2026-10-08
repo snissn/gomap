@@ -472,7 +472,8 @@ func TestPrimaryJointVacuumV6OfflineUsesPairAuthority(t *testing.T) {
 	if e := VacuumIndexOffline(opts); e != nil {
 		t.Fatal(e)
 	}
-	assertPrimaryJointRecoveredV6(t, dir, prior+1)
+	// Physical offline maintenance preserves the logical committed transaction.
+	assertPrimaryJointRecoveredV6(t, dir, prior)
 }
 
 func TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision(t *testing.T) {
