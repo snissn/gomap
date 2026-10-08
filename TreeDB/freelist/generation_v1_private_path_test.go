@@ -2,6 +2,7 @@ package freelist
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"path/filepath"
 	"reflect"
@@ -88,11 +89,11 @@ func TestFreelistPrivatePathAllocationDifferential(t *testing.T) {
 				t.Fatal("immutable base changed")
 			}
 			candidate := candidateIDFromString("same-candidate")
-			a, err := got.MaterializeCandidate(2, 2, candidate, NewMemoryPageStoreV1())
+			a, err := got.MaterializeCandidate(base.GenerationID()+1, base.CommitSeq()+1, candidate, NewMemoryPageStoreV1())
 			if err != nil {
 				t.Fatal(err)
 			}
-			b, err := want.MaterializeCandidate(2, 2, candidate, NewMemoryPageStoreV1())
+			b, err := want.MaterializeCandidate(base.GenerationID()+1, base.CommitSeq()+1, candidate, NewMemoryPageStoreV1())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +123,7 @@ func TestFreelistPrivatePathPrepareForkIsolation(t *testing.T) {
 		t.Fatal("original changed staged shared root")
 	}
 	originalBefore := detachUnmaterialized(original.root, 0)
-	for _, hint := range []uint64{10, 10, 600, 600} {
+	for _, hint := range []uint64{10, 600, 10, 600} {
 		if _, err := staged.Allocate(hint); err != nil {
 			t.Fatal(err)
 		}
@@ -138,7 +139,11 @@ func TestFreelistPrivatePathPrepareForkIsolation(t *testing.T) {
 	for _, branch := range []*FreelistTxn{staged, nested} {
 		go func(txn *FreelistTxn) {
 			for i := 0; i < 64; i++ {
-				if _, err := txn.Allocate(10); err != nil {
+				hint := uint64(10)
+				if i%2 != 0 {
+					hint = 600
+				}
+				if _, err := txn.Allocate(hint); err != nil {
 					done <- err
 					return
 				}
@@ -213,13 +218,15 @@ func TestAllocatorPrivatePathWarmRollback(t *testing.T) {
 				t.Fatal("rollback changed live transaction or counters")
 			}
 			retainedBefore := privatePathSnapshot(retained)
-			got, err := a.Alloc(10)
-			want, expectedErr := allocatePersistent(oracle, 10)
-			if got != want || !errors.Is(err, expectedErr) || !reflect.DeepEqual(a.cow.txn.root, oracle.root) {
-				t.Fatalf("post-rollback allocation=%d,%v want=%d,%v", got, err, want, expectedErr)
-			}
-			if !reflect.DeepEqual(retained, retainedBefore) {
-				t.Fatal("post-abort allocation changed retained candidate")
+			for _, hint := range []uint64{600, 10, 600, 10} {
+				got, err := a.Alloc(hint)
+				want, expectedErr := allocatePersistent(oracle, hint)
+				if got != want || !errors.Is(err, expectedErr) || !reflect.DeepEqual(a.cow.txn.root, oracle.root) {
+					t.Fatalf("post-rollback allocation=%d,%v want=%d,%v", got, err, want, expectedErr)
+				}
+				if !reflect.DeepEqual(retained, retainedBefore) {
+					t.Fatal("post-abort allocation changed retained candidate")
+				}
 			}
 		})
 	}
@@ -230,7 +237,11 @@ func TestFreelistPrivatePathMaterializeRetainedRoot(t *testing.T) {
 		t.Run(map[bool]string{false: "success", true: "failure"}[fail], func(t *testing.T) {
 			txn := NewFreelistTxn(privatePathBase(), nil)
 			for i := 0; i < 4; i++ {
-				if _, err := txn.Allocate(10); err != nil {
+				hint := uint64(10)
+				if i%2 != 0 {
+					hint = 600
+				}
+				if _, err := txn.Allocate(hint); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -319,6 +330,143 @@ func BenchmarkFreelistAllocatePrivatePath(b *testing.B) {
 						b.Fatal(err)
 					}
 				}
+			}
+		})
+	}
+}
+
+func commonPrefixBase(other uint64, count int) *FreelistGenerationV1 {
+	free := make([]uint64, 0, count*2)
+	for offset := uint64(2); offset < uint64(count)+2; offset++ {
+		free = append(free, offset, other<<freelistChunkShift|offset)
+	}
+	return MustNewFreelistGenerationV1(1, (other+1)<<freelistChunkShift, free, nil)
+}
+
+func TestFreelistPrivateCommonPrefixAllocationBound(t *testing.T) {
+	for _, other := range []uint64{1, 16, 70} {
+		t.Run(fmt.Sprint(other), func(t *testing.T) {
+			base := commonPrefixBase(other, 128)
+			allocs := testing.AllocsPerRun(20, func() {
+				txn := NewFreelistTxn(base, nil)
+				for i := 0; i < 64; i++ {
+					hint := uint64(0)
+					if i%2 != 0 {
+						hint = other << freelistChunkShift
+					}
+					if _, err := txn.Allocate(hint); err != nil {
+						panic(err)
+					}
+				}
+			})
+			t.Logf("64 alternating Allocate calls: %.0f heap allocations", allocs)
+			// Includes chunk copies, the divergent suffix, transaction bookkeeping,
+			// and the first full path. Recopying every complete path exceeds 1,000.
+			if allocs > 256 {
+				t.Fatalf("64 switching allocations use %.0f allocations; want <=256", allocs)
+			}
+		})
+	}
+}
+
+func TestFreelistPrivateCommonPrefixDifferential(t *testing.T) {
+	for _, other := range []uint64{1, 16, 70, 1 << 52} {
+		for _, reserved := range []bool{false, true} {
+			t.Run(fmt.Sprintf("chunk%d/reserved%t", other, reserved), func(t *testing.T) {
+				seed := NewFreelistTxn(commonPrefixBase(other, 32), nil)
+				materialized, err := seed.MaterializeCandidate(2, 2, candidateIDFromString("prefix-base"), NewMemoryPageStoreV1())
+				if err != nil {
+					t.Fatal(err)
+				}
+				base := materialized.Generation()
+				before := privatePathSnapshot(base.root)
+				a, b := NewReservationLedger(), NewReservationLedger()
+				if reserved {
+					ids := []uint64{33, other<<freelistChunkShift | 33, other<<freelistChunkShift | 32}
+					for _, ledger := range []*ReservationLedger{a, b} {
+						if err := ledger.reserve(candidateIDFromString("prefix-blocker"), ids); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				got, want := NewFreelistTxn(base, a), NewFreelistTxn(base, b)
+				// Exhaust both leaves, including switching away from a private empty
+				// leaf, then exercise append fallback with identical reservations.
+				for i := 0; i < 70; i++ {
+					hint := uint64(0)
+					if i%2 != 0 {
+						hint = other << freelistChunkShift
+					}
+					id, err := got.Allocate(hint)
+					wid, werr := allocatePersistent(want, hint)
+					if id != wid || !errors.Is(err, werr) || !reflect.DeepEqual(got.root, want.root) || !reflect.DeepEqual(got.allocated, want.allocated) || !reflect.DeepEqual(got.changedChunks, want.changedChunks) || !reflect.DeepEqual(got.replacedMetadata, want.replacedMetadata) || got.highWater != want.highWater || got.stats != want.stats {
+						t.Fatalf("step%d changed allocation semantics: got %d,%v want %d,%v", i, id, err, wid, werr)
+					}
+				}
+				if !reflect.DeepEqual(base.root, before) {
+					t.Fatal("immutable base changed")
+				}
+				candidate := candidateIDFromString("prefix-differential")
+				x, err := got.MaterializeCandidate(base.GenerationID()+1, base.CommitSeq()+1, candidate, NewMemoryPageStoreV1())
+				if err != nil {
+					t.Fatal(err)
+				}
+				y, err := want.MaterializeCandidate(base.GenerationID()+1, base.CommitSeq()+1, candidate, NewMemoryPageStoreV1())
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(x.Pages(), y.Pages()) || x.GenerationRef() != y.GenerationRef() || !reflect.DeepEqual(x.ReservationRecord(), y.ReservationRecord()) {
+					t.Fatal("materialized bytes or authority changed")
+				}
+			})
+		}
+	}
+}
+
+func BenchmarkFreelistAllocateCommonPrefix(b *testing.B) {
+	for _, other := range []uint64{1, 16, 70, 1 << 52} {
+		base := commonPrefixBase(other, 198)
+		b.Run(fmt.Sprintf("switch-%d", other), func(b *testing.B) {
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				txn := NewFreelistTxn(base, nil)
+				for j := 0; j < 128; j++ {
+					hint := uint64(0)
+					if j%2 != 0 {
+						hint = other << freelistChunkShift
+					}
+					if _, err := txn.Allocate(hint); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestFreelistPrivateCommonPrefixRequiresCompleteProof(t *testing.T) {
+	for _, depth := range []int{0, 5, 14, 15} {
+		t.Run(fmt.Sprint(depth), func(t *testing.T) {
+			txn := NewFreelistTxn(commonPrefixBase(1, 32), nil)
+			if _, err := txn.Allocate(0); err != nil {
+				t.Fatal(err)
+			}
+			n := txn.root
+			for d := 0; d < depth && d < chunkTrieDepth; d++ {
+				n = n.child[chunkNibble(0, d)]
+			}
+			if depth == 15 {
+				n.chunk.pageID = 99
+			} else {
+				n.pageID = 99
+			}
+			held := txn.root
+			before := privatePathSnapshot(held)
+			if _, err := txn.Allocate(1 << freelistChunkShift); err != nil {
+				t.Fatal(err)
+			}
+			if txn.root == held || !reflect.DeepEqual(held, before) {
+				t.Fatal("incomplete old proof reused mutable common prefix")
 			}
 		})
 	}

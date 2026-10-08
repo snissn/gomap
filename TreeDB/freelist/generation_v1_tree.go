@@ -253,6 +253,46 @@ func clearPrivateFreeBit(root *stateNode, chunkNo, offset uint64) bool {
 	return true
 }
 
+// clearPrivateFreeBitPrefix reuses only the common ancestors of the caller's
+// certified private path. Validate that entire old path before touching even
+// its root: a dirty divergent subtree is not necessarily private. The old
+// leaf may be empty after Allocate cleared its last free bit.
+func clearPrivateFreeBitPrefix(root *stateNode, privateChunk, chunkNo, offset uint64) bool {
+	var path [chunkTrieDepth + 1]*stateNode
+	n := root
+	for depth := 0; depth <= chunkTrieDepth; depth++ {
+		if n == nil || n.pageID != 0 {
+			return false
+		}
+		path[depth] = n
+		if depth < chunkTrieDepth {
+			n = n.child[chunkNibble(privateChunk, depth)]
+		}
+	}
+	if n.chunk != nil && n.chunk.pageID != 0 {
+		return false
+	}
+	selected := lookupChunk(root, chunkNo)
+	if privateChunk == chunkNo || offset >= freelistChunkSize || selected == nil || !selected.isFree(offset) {
+		return false
+	}
+	depth := 0
+	for depth < chunkTrieDepth && chunkNibble(privateChunk, depth) == chunkNibble(chunkNo, depth) {
+		depth++
+	}
+	if depth == chunkTrieDepth {
+		return false
+	}
+	// The selected suffix is copied by the original persistent mutation. Only
+	// the already-owned ancestors above that suffix are updated in place.
+	branch := chunkNibble(chunkNo, depth)
+	path[depth].child[branch] = mutateChunk(path[depth].child[branch], chunkNo, depth+1, func(c *stateChunk) { c.setFree(offset, false) })
+	for ; depth >= 0; depth-- {
+		recomputeStateNode(path[depth], depth)
+	}
+	return true
+}
+
 func rightmostFree(n *stateNode, depth int, visits *uint64) *stateChunk {
 	if n == nil || n.freeCount == 0 {
 		return nil

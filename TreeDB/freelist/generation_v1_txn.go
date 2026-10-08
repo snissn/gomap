@@ -186,7 +186,8 @@ type FreelistTxn struct {
 	base   *FreelistGenerationV1
 	ledger *ReservationLedger
 	root   *stateNode
-	// Only this complete, freshly copied path is private. Dirty siblings can
+	// Only this complete, certified path is private: freshly copied or extended
+	// from its private prefix with a copied suffix. Dirty siblings can
 	// still belong to a base or a staged/rollback transaction.
 	privateRoot      *stateNode
 	privateChunk     uint64
@@ -304,9 +305,19 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 	if id, ok := chooseUnreservedFreePage(t.root, regionHint, t.ledger, &t.stats.PageVisits); ok {
 		offset := id & (freelistChunkSize - 1)
 		chunkNo := id >> freelistChunkShift
-		if t.privateRoot == t.root && t.privateChunk == chunkNo && clearPrivateFreeBit(t.root, chunkNo, offset) {
-			// The private path has no durable page IDs to replace. Preserve the
-			// same logical mutation accounting as the persistent fallback.
+		cleared := t.privateRoot == t.root && t.privateChunk == chunkNo && clearPrivateFreeBit(t.root, chunkNo, offset)
+		if !cleared && t.privateRoot == t.root && t.privateChunk != chunkNo {
+			// Record durable IDs before replacing the divergent suffix. On
+			// proof failure the ordinary persistent mutation remains safe.
+			t.markReplacedPath(chunkNo)
+			cleared = clearPrivateFreeBitPrefix(t.root, t.privateChunk, chunkNo, offset)
+			if cleared {
+				t.privateChunk = chunkNo
+			}
+		}
+		if cleared {
+			// Preserve the persistent fallback's logical accounting. Reused
+			// private ancestors carry no durable page IDs to replace.
 			t.recordMutation(chunkNo, 1)
 		} else {
 			t.mutate(chunkNo, func(c *stateChunk) { c.setFree(offset, false) })
