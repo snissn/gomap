@@ -1,0 +1,26 @@
+{
+  "at_utc": "2026-10-08T18:24:52.028717+00:00",
+  "setup_session_id": 1359,
+  "setup_exit": 0,
+  "helper_validated_success": true,
+  "setup": {
+    "mode": "git",
+    "worktree": "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008",
+    "branch": "codex/5118-primary-harness-selector",
+    "base_sha": "3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3",
+    "seed": "/Users/michaelseiler/dev/snissn/gomap",
+    "fallback_reason": "ordinary Git explicitly selected",
+    "cloned_files": 0,
+    "cloned_bytes": 0
+  },
+  "agent": "/root/ordinary_primary_harness_5118_sol61",
+  "requested_model": "gpt-6.1-sol",
+  "requested_effort": "medium",
+  "actual_model": "unobserved",
+  "active_workers": 2,
+  "independence": "isolated Mac cmd/unified_bench harness only versus sole .185 TreeDB implementation; harness has no .185/.111 runtime grant",
+  "merge_authority": "/root only",
+  "main_worker_boundary_notified": true,
+  "review_gate": "fresh-context independent Sol exact candidate covering provenance, isolation/concurrency, fail-closed selector and evidence wording before merge/expensive collection",
+  "cleanup": "no current released batch; new worktree/cache are active and protected"
+}

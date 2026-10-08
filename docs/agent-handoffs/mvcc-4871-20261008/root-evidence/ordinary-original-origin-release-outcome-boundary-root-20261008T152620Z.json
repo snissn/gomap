@@ -1,0 +1,40 @@
+{
+  "at_utc": "2026-10-08T15:26:20.367910+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "classification": "NARROW_ORIGINAL_PRODUCTION_ORIGIN_RELEASE_OUTCOME_REPAIR_ACCEPTED_WITHIN_EXISTING_ALL19",
+  "source": "192.168.0.185:/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+  "base": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+  "inspected_source_bindings": {
+    "TreeDB/internal/rootpublication/resource_token.go": "f4eed8800595418a99d93c860d37d1f27a6bad0b923a0743923745493fe49b87",
+    "TreeDB/internal/rootpublication/resource_token_allocation.go": "a560c17011dad6d9ab7972d93bf8fb531d562711178d915319bde82672ec984e",
+    "TreeDB/internal/rootpublication/resource_import_allocation.go": "3923a45f905479263870a91faf531ab415c889b07996335be4e68eac7641cd69",
+    "TreeDB/internal/rootpublication/resource_entry_view.go": "8494546aef68bcba352e9cada90e20b77594246e91e46aba6c0a0853e1fe2f15",
+    "TreeDB/internal/rootpublication/pin_registry.go": "88827a89ae60231bc00c702a1d61c208eeae9d55ed0b9d08e4dd2de50eda5998",
+    "TreeDB/db/durable_root_runtime.go": "b14dda96b24ec69020c447d936b9d56b3eb485b91f17b57cea038610c0a09ffc",
+    "TreeDB/db/leaf_generation_manifest_store.go": "ed4b42d3c65740bd7272a00085d42c020c576ef341f89199ce6b8b32a3e8fff7",
+    "TreeDB/collections/stable_resource.go": "a2630ccc0cfe07b1058a489dc5d39fe5d922b6ff9ac2836f4885e5d46a69de6a"
+  },
+  "finding": "Imported descriptor retains the genuine source-kind rope. Its final release invokes the original void cleanup; generic original token and namespace paths discard File.Close errors and known original Unobserve-only callbacks discard the registry outcome. Adapter disposal therefore does not prove original physical completion.",
+  "original_origins": [
+    "durable-root recovered dependency",
+    "leaf-manifest revision",
+    "stable column/template/vector asset"
+  ],
+  "accepted_boundary": "Preserve original physical/namespace/registry producer authority and one original action. Add only the typed/internal consumed/deferred/completed/retained-debt outcome at those actual adopted origins; preserve legacy public void Release compatibility. Replace their known Unobserve-only callback with an exact original typed observation edge when it simplifies the same ownership boundary. Do not copy arbitrary opaque callbacks or assume they succeeded.",
+  "custody": "Failed last-source close/namespace/Unobserve remains truthful original registry/producer debt with surviving backing; consumed action must not replay. Independent selected adapter backing refunds only at actual disposal. Preadmit new outcome/debt backing before effects, preferring existing original intrusive custody.",
+  "acceptance": "Actual producer/import/last-source/held-alias, failure/refusal and once-release checks; coherent all19 normal/race closure, docs/CI impact then local product freeze and matched allocation/retention/storage/performance, mature PR/root review/current-head CI/final-base/merge.",
+  "not_accepted": [
+    "implementation not yet verified",
+    "foreign R1 proposal49fe06 not adopted",
+    "no universal generic provider quota or speculative sweep",
+    "no second publisher/budget/registry",
+    "no native eligibility or gate relaxation"
+  ],
+  "implementation_owner": "/root/m7_primary_directory_recovery_sol61",
+  "model": "gpt-6.1-sol",
+  "new_issues": [],
+  "new_owners": [],
+  "edge_changes": [],
+  "released_paths": [],
+  "dependency_ready": false
+}

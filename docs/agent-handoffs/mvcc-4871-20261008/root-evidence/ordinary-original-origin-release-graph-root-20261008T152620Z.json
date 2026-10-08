@@ -1,0 +1,19 @@
+{
+  "at_utc": "2026-10-08T15:26:20.367910+00:00",
+  "old_graph_sha256": "2d3a61eb01091e998b0dbaf0e712aebe1ee63a5dbcc67f655df62e3126194e08",
+  "new_graph_sha256": "46cba63a0c2da48b2ad5be619e8666847154928f01a19efce673d84aab906591",
+  "external_remote_equal": true,
+  "unrelated_nodes_preserved": true,
+  "decision": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-original-origin-release-outcome-boundary-root-20261008T152620Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-original-origin-release-outcome-boundary-root-20261008T152620Z.json",
+    "sha256": "ce11f33d410f282a6da19d6a1d536828c6a60ac35d056a70e3734b839b9f1a06"
+  },
+  "live_receipt": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-original-origin-release-live-root-20261008T152620Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-original-origin-release-live-root-20261008T152620Z.json",
+    "sha256": "49af5db6136d8e7937e60aabce0b9659ee9ea68050bc777bc2194062a7b3ec3c"
+  },
+  "dependency_ready": false,
+  "released_paths": []
+}

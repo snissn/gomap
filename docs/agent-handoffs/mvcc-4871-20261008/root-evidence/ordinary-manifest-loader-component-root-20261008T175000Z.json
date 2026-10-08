@@ -1,0 +1,65 @@
+{
+  "at_utc": "2026-10-08T17:49:17.707811+00:00",
+  "owner": "/root",
+  "issue": 5111,
+  "packets": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-manifest-load-resolver-physical-fixed",
+      "raw_sha256": "42980c49cec99dbca59993119893994b7161bcb6b1303a4a32f1f382f5df8522",
+      "source_map_sha256": "d21a25fe3c1c7ae898ef22d5ad1e2fca8268e7b7714344920ae5cec634aca185",
+      "result_sha256": "f423dc0044bab15eda60c7a0b83ab34bfb6bf91655354b1ab0e5c388ef1e5ae4",
+      "source_count": 10038,
+      "source_equal": true,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "exit": 0,
+      "race": true,
+      "args": [
+        "test",
+        "-p=2",
+        "-race",
+        "-v",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "-run",
+        "TestOwnedManifestPhysicalLoaderCanonicalRebindAndRefusal|TestOwnedRecoveredNamespaceIndependentOriginalObservation|TestDependencyManifestV1DeterministicMultiPageRoundTrip|TestDependencyManifestV1ReferenceEmptyAndNil|TestDependencyManifestV1PageBoundaryAndSinkOwnership|TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6|TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot|TestOwnedManifestScopeRetainsActualMetadataAndRefusesScratch",
+        "-count=1",
+        "-timeout=120s"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "top_level_passes": [
+        "TestDependencyManifestV1DeterministicMultiPageRoundTrip",
+        "TestDependencyManifestV1ReferenceEmptyAndNil",
+        "TestDependencyManifestV1PageBoundaryAndSinkOwnership",
+        "TestOwnedManifestScopeRetainsActualMetadataAndRefusesScratch",
+        "TestOwnedManifestPhysicalLoaderCanonicalRebindAndRefusal",
+        "TestOwnedRecoveredNamespaceIndependentOriginalObservation",
+        "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot",
+        "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6"
+      ],
+      "top_level_failures": [],
+      "qualified_scope": "connected selected loader/resolver/rebind component at recorded source bindings only"
+    }
+  ],
+  "remaining": [
+    "actual retained V5 selector/rebind ownership closure",
+    "remaining checked sizes and complete19 inventory",
+    "canonical docs and coherent affected normal/race",
+    "CI-impact/final-base/product freeze/performance/review/CI/merge"
+  ],
+  "whole_candidate_accepted": false,
+  "dependency_ready": false,
+  "no_tests_run_by_root": true,
+  "graph_sha256_at_read": "3c9a0463ebd707f139301419e5181a752c6ac77eca5dfc8b21322b35b005263d"
+}

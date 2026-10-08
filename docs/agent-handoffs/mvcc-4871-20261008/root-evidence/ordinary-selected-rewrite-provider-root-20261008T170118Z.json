@@ -1,0 +1,228 @@
+{
+  "at_utc": "2026-10-08T17:01:18.283295+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "owner": "/root",
+  "implementation_owner": "/root/m7_primary_directory_recovery_sol61",
+  "requested_model": "gpt-6.1-sol",
+  "classification": "ACCEPT_RECORDED_CONNECTED_PROVIDER_COMPONENTS_ONLY",
+  "packets": [
+    {
+      "packet": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-rewrite-provider-race",
+      "raw_sha256": "31c43ab94d42708dbe41adb2da2037d8b47dd7176da169daff6b6cbd4dc19beb",
+      "source_map_sha256": "a1c22a6177a033924d29cb2aece78204260b1d5f4e662a92ace6af349a5a7046",
+      "result_sha256": "98e4c939bb1e2dd555b54406d73374dc6c7c6a74a775d88ba6e6eee7111e720f",
+      "result": {
+        "after_sha256": "a1c22a6177a033924d29cb2aece78204260b1d5f4e662a92ace6af349a5a7046",
+        "args": [
+          "test",
+          "-p=2",
+          "-race",
+          "-v",
+          "./TreeDB/db",
+          "./TreeDB/caching",
+          "./TreeDB/internal/valuelog",
+          "./TreeDB/internal/rootpublication",
+          "-run",
+          "TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport|TestOwnedPagerSuppliedMetadataBorrowsExistingOriginalNamespaceProof|TestOwnedPagerLegacyChildUsesSuppliedOwnerUntilActualCompletion|TestNamespaceExistingProofSuppliedMetadataIndependentNoResync|TestStableValueLogAppendSelectedMetadata|TestSelectedStableRotationRetainsPendingAndContainerMetadata|TestStableRotationTransfersCreationProofAcrossFourSegments|TestStableValueLogObserverFailure",
+          "-count=1",
+          "-timeout=90s"
+        ],
+        "before_sha256": "a1c22a6177a033924d29cb2aece78204260b1d5f4e662a92ace6af349a5a7046",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 0,
+        "finish": 1791478360.3202002,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "31c43ab94d42708dbe41adb2da2037d8b47dd7176da169daff6b6cbd4dc19beb",
+        "source": ".",
+        "source_count": 10036,
+        "source_equal": true,
+        "start": 1791478305.4662356
+      },
+      "top_level_pass": [
+        "TestOwnedPagerLegacyChildUsesSuppliedOwnerUntilActualCompletion",
+        "TestOwnedPagerSuppliedMetadataBorrowsExistingOriginalNamespaceProof",
+        "TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport",
+        "TestStableValueLogAppendSelectedMetadataMergesLegacyDictionaryClosure",
+        "TestStableValueLogObserverFailureRetriesExactPendingSuccessor",
+        "TestSelectedStableRotationRetainsPendingAndContainerMetadata",
+        "TestStableRotationTransfersCreationProofAcrossFourSegments",
+        "TestNamespaceExistingProofSuppliedMetadataIndependentNoResync"
+      ],
+      "top_level_fail": [],
+      "source_count": 10036,
+      "equal_maps": true,
+      "production_binding_applicability": {
+        "TreeDB/db/stable_resource.go": {
+          "current_sha256": "2544641c81eeadebd4d2be565e816cc782c39c45e18beb3b131032ee36a5c3a8",
+          "recorded_sha256": "2544641c81eeadebd4d2be565e816cc782c39c45e18beb3b131032ee36a5c3a8",
+          "equal": true
+        },
+        "TreeDB/db/stable_pager_owned_operations.go": {
+          "current_sha256": "8be7e5ff32deec45fae969c4305438dba487f2cb2a6e1a84d536b01061b0b268",
+          "recorded_sha256": "8be7e5ff32deec45fae969c4305438dba487f2cb2a6e1a84d536b01061b0b268",
+          "equal": true
+        },
+        "TreeDB/internal/valuelog/stable_resource.go": {
+          "current_sha256": "164253ca324a7f00fc62e037f6dda2082dca290cf4c7c919a21e1bd148fa0087",
+          "recorded_sha256": "346e95103349d78592d6dafff44942578f5f695c8938e8d42e951b02e45a9c72",
+          "equal": false
+        },
+        "TreeDB/internal/valuelog/writer.go": {
+          "current_sha256": "d2bab5102be79c3041423b055464f25ce986fdd9d8a5254d5fa60bbaf508bb67",
+          "recorded_sha256": "d2bab5102be79c3041423b055464f25ce986fdd9d8a5254d5fa60bbaf508bb67",
+          "equal": true
+        },
+        "TreeDB/db/leaf_generation_pack_rewrite.go": {
+          "current_sha256": "e3bf186dcc7019ebfab869b285262d4357b6df4a851d11e58cd143daaacee36b",
+          "recorded_sha256": "e3bf186dcc7019ebfab869b285262d4357b6df4a851d11e58cd143daaacee36b",
+          "equal": true
+        },
+        "TreeDB/db/durable_root_runtime.go": {
+          "current_sha256": "cd57ddfcbf95f31a0704f98352fc755acb89ba845c1e657e68709d6da42fd02f",
+          "recorded_sha256": "cd57ddfcbf95f31a0704f98352fc755acb89ba845c1e657e68709d6da42fd02f",
+          "equal": true
+        },
+        "TreeDB/db/root_publication_activation.go": {
+          "current_sha256": "ae1837885f3592b4b24e932da902d88ee1bac8a1d6d2a6884c7a123ad7e509c3",
+          "recorded_sha256": "ae1837885f3592b4b24e932da902d88ee1bac8a1d6d2a6884c7a123ad7e509c3",
+          "equal": true
+        }
+      }
+    },
+    {
+      "packet": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-rewrite-capture-first",
+      "raw_sha256": "f46e74c675d16874f23df8c791e9fa3c7383bf239359b254b588658e3c2a9c32",
+      "source_map_sha256": "c3f456b1df3f9c8f58b562c09779c13acb46d6fc22183cec42cdae2cfca380ca",
+      "result_sha256": "ceb513a57e199beaed5b177be3261b7e4883580e2c687e65d49c7720c09ec639",
+      "result": {
+        "after_sha256": "c3f456b1df3f9c8f58b562c09779c13acb46d6fc22183cec42cdae2cfca380ca",
+        "args": [
+          "test",
+          "-p=2",
+          "-v",
+          "./TreeDB/db",
+          "./TreeDB/caching",
+          "./TreeDB/internal/valuelog",
+          "-run",
+          "TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport|TestStandaloneStableLeafRewrite|TestStableValueLogAppendSelectedMetadata|TestSelectedStableRotationRetainsPendingAndContainerMetadata",
+          "-count=1",
+          "-timeout=90s"
+        ],
+        "before_sha256": "c3f456b1df3f9c8f58b562c09779c13acb46d6fc22183cec42cdae2cfca380ca",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 0,
+        "finish": 1791478195.868285,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "f46e74c675d16874f23df8c791e9fa3c7383bf239359b254b588658e3c2a9c32",
+        "source": ".",
+        "source_count": 10036,
+        "source_equal": true,
+        "start": 1791478157.8077111
+      },
+      "top_level_pass": [
+        "TestStandaloneStableLeafRewriteIgnoresTemplateMagicInRawPage",
+        "TestStandaloneStableLeafRewriteMergesTemplateClosure",
+        "TestStandaloneStableLeafRewriteBatchDeduplicatesTemplateClosure",
+        "TestStandaloneStableLeafRewriteBatchUnionsTemplateGenerations",
+        "TestStandaloneStableLeafRewriteIgnoresRawTemplateShapedPayload",
+        "TestStandaloneStableLeafRewriteRejectsTemplateAuthorityBeforeFileCreation",
+        "TestStandaloneStableLeafRewriteBatchPreflightsAllTemplateAuthorityBeforeFileCreation",
+        "TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure",
+        "TestStandaloneStableLeafRewriteCapturesOnlyEmittedDictionaryAuthority",
+        "TestStandaloneStableLeafRewriteBatchCapturesOnlyEmittedDictionaryAuthority",
+        "TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure",
+        "TestStandaloneStableLeafRewriteRejectsDictionaryAuthorityMismatchBeforeMutation",
+        "TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport",
+        "TestStableValueLogAppendSelectedMetadataMergesLegacyDictionaryClosure",
+        "TestSelectedStableRotationRetainsPendingAndContainerMetadata"
+      ],
+      "top_level_fail": [],
+      "source_count": 10036,
+      "equal_maps": true
+    },
+    {
+      "packet": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-rewrite-capture-red-actual",
+      "raw_sha256": "79da43a1763b8ce73bb851688b669389595c01101203beee2445a554ae0e69c9",
+      "source_map_sha256": "2068d4a8646095b630a6e4a009dbd24c8983e77c4b58211ac2b6b9a7d586c236",
+      "result_sha256": "905d766607c0a92cc91034787e99ee8b6b40680b94e3d4823c3fbada91851bf6",
+      "result": {
+        "after_sha256": "2068d4a8646095b630a6e4a009dbd24c8983e77c4b58211ac2b6b9a7d586c236",
+        "args": [
+          "test",
+          "-p=2",
+          "-v",
+          "./TreeDB/db",
+          "-run",
+          "^TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport$",
+          "-count=1",
+          "-timeout=90s"
+        ],
+        "before_sha256": "2068d4a8646095b630a6e4a009dbd24c8983e77c4b58211ac2b6b9a7d586c236",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 1,
+        "finish": 1791478086.7891035,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "79da43a1763b8ce73bb851688b669389595c01101203beee2445a554ae0e69c9",
+        "source": ".",
+        "source_count": 10036,
+        "source_equal": true,
+        "start": 1791478058.1054497
+      },
+      "top_level_pass": [],
+      "top_level_fail": [
+        "TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport"
+      ],
+      "source_count": 10036,
+      "equal_maps": true
+    }
+  ],
+  "source_verified_findings": [
+    "Actual selected standalone rewrite wrapper and producer resource builder admit before effects; template/dictionary closure preserves original physical lifetime.",
+    "Existing original pager creation proof reused under original-generation mutex through BindWithMetadata; independent new descriptor storage admitted, no proof/owner relabel or redundant namespace synchronization.",
+    "Generic physical pack producer transfers additional resources; common selected capture imports base/additional before selected builder/clone/merge."
+  ],
+  "remaining": "Sole worker finishing registration and selected scratch closure plus coherent all19 normal/race/docs/CI-impact and one final-base reconciliation. Commit/freeze product before serial matched qualification; mature PR/independent review/current-head CI/root merge.",
+  "candidate_mutable": true,
+  "recorded_component_not_whole_current_race": true,
+  "dependency_ready": false,
+  "whole_M7_accepted": false,
+  "native_activation": false,
+  "caps_or_edges_changed": false,
+  "released_disposables": []
+}

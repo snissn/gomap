@@ -1,0 +1,28 @@
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory
+--- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot (0.48s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest (0.24s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory (0.24s)
+=== RUN   TestPrimaryManifestScratchRefusesBeforeBankClaim
+--- PASS: TestPrimaryManifestScratchRefusesBeforeBankClaim (0.09s)
+=== RUN   TestPrimaryRecordScratchRefusalBeforeCodecAndSeal
+--- PASS: TestPrimaryRecordScratchRefusalBeforeCodecAndSeal (0.05s)
+=== RUN   TestPrimaryDependencySealFramesRefuseBeforeChildAndRejectCycle
+--- PASS: TestPrimaryDependencySealFramesRefuseBeforeChildAndRejectCycle (0.04s)
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/manifest
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/directory
+--- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots (1.73s)
+    --- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/manifest (0.87s)
+    --- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/directory (0.86s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	3.806s
+=== RUN   TestDependencyManifestV1DeterministicMultiPageRoundTrip
+=== RUN   TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=false
+=== RUN   TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=true
+--- PASS: TestDependencyManifestV1DeterministicMultiPageRoundTrip (0.01s)
+    --- PASS: TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=false (0.01s)
+    --- PASS: TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=true (0.01s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	1.113s

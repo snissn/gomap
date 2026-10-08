@@ -1,0 +1,83 @@
+{
+  "at_utc": "2026-10-08T18:20:55.994781+00:00",
+  "references": {
+    "coordination": {
+      "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-primary-harness-coordination-root-20261008T181200Z.json",
+      "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-primary-harness-coordination-root-20261008T181200Z.json",
+      "sha256": "0a8907661299208eb166e99b296550b885f5f1e315d7c9a7a0391321b067e744"
+    },
+    "v5_component": {
+      "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-selected-v5-directory-component-root-20261008T181200Z.json",
+      "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-selected-v5-directory-component-root-20261008T181200Z.json",
+      "sha256": "fd2935a5762e83285f015529484cf2c2a37619856188a99ca14a579af85d628b"
+    },
+    "bank_component": {
+      "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-private-bank-scratch-component-root-20261008T182000Z.json",
+      "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-private-bank-scratch-component-root-20261008T182000Z.json",
+      "sha256": "2c667b4ea5fa4b1f3c8be7ee60fc5c2f7dec7cdcf88b9b49f3fe39ce09030959"
+    }
+  },
+  "harness_issue": {
+    "at_utc": "2026-10-08T18:01:04.734044+00:00",
+    "number": 5118,
+    "id": 5766580387,
+    "url": "https://github.com/snissn/gomap/issues/5118",
+    "body_sha256": "31d98387966db6bd5e89a5a795643bd9e7c44a5715916d13ac63b9274d46f31d",
+    "state": "open",
+    "deliverable": "pr",
+    "base": "3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3",
+    "acceptance_owner": "/root"
+  },
+  "native_edges_verified": {
+    "at_utc": "2026-10-08T18:03:07.865819+00:00",
+    "harness_issue": "https://github.com/snissn/gomap/issues/5118",
+    "harness_issue_id": 5766580387,
+    "parent": "https://github.com/snissn/gomap/issues/5111",
+    "blocked_issue": "https://github.com/snissn/gomap/issues/5111",
+    "dependencies_before": [
+      4874,
+      5011,
+      5019,
+      5036
+    ],
+    "dependencies_after": [
+      4874,
+      5011,
+      5019,
+      5036,
+      5118
+    ],
+    "source_work_continues_provisionally": true,
+    "edge_scope": "performance exit/retained collection only"
+  },
+  "reason": "Existing unified-bench cannot opt into IndexPrimaryDirectory. Fast no-WAL attaches an arena without enabling the directory. A main-safe optional selector is independent and required before expensive retained collection.",
+  "harness_setup": {
+    "state": "in-flight; no worker assigned until helper success",
+    "session_id": 1359,
+    "worktree": "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008",
+    "branch": "codex/5118-primary-harness-selector",
+    "base": "3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3",
+    "mode_requested": "git"
+  },
+  "product_status": "V5/V2 seven-race component and private-bank scratch four-normal component passed at their recorded bindings. Whole current all19 closure remains mutable and unaccepted.",
+  "gate_order": [
+    "product all19 correctness/docs/CI-impact closure proceeds now",
+    "independently review and land #5118",
+    "one final-base C3+harness reconciliation and exact product/harness freeze",
+    "quiet serial existing-path regression and enabled incremental/scaling evidence",
+    "mature product PR; exact-candidate Sol review; current required CI; root merge"
+  ],
+  "native_accepted": false,
+  "whole_candidate_accepted": false,
+  "M3_four_holds_preserved": true,
+  "no_5022_activation": true,
+  "no_root_tests": true,
+  "cleanup": {
+    "path": "/Volumes/FlashDrive/gomap-5028-writer185-v1-source-761e08c9.tar.gz",
+    "owner_reported_deleted_bytes": 69238784,
+    "root_verified_absent": true,
+    "deleted_by_root": false,
+    "owner_retained_receipt": "qualification-v13-writer-invariant-native185-preparation-v1/root-partial-archive-cleanup.json",
+    "source_and_causal_packets_remain_protected": true
+  }
+}

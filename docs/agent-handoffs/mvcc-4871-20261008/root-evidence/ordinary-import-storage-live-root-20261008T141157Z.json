@@ -1,0 +1,18 @@
+{
+  "at_utc": "2026-10-08T14:11:57.033821+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "body_sha256": "3421e2837a069d0ae94eed05bf07771b484a7d2e361fbb47aa007387b5094db6",
+  "prior_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-import-storage-root-20261008T141157Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-import-storage-root-20261008T141157Z.md",
+    "sha256": "80e0817a7a49b45ecc1d189734641a926801db4d7aa8e5b18fc4af4b3c41b38e"
+  },
+  "issue_body_preserved": true,
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-import-and-requirements-components-root-20261008T140857Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-import-and-requirements-components-root-20261008T140857Z.json",
+    "sha256": "84e199381e6d8f53870c49bad49a36dc60b8f36c5e0e8a2007a9a852028f0df5"
+  },
+  "dependency_ready": false
+}

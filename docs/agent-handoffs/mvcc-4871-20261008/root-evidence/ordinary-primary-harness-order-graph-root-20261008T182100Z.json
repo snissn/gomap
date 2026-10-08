@@ -1,0 +1,15 @@
+{
+  "at_utc": "2026-10-08T18:20:55.994781+00:00",
+  "old_graph_sha256": "c953998569797353a66d5d3bc340a2af56e61bf27c9d8b5d0fd90d92229e20fd",
+  "new_graph_sha256": "459d1d61dc5ff99f1a48f2d498d74cc94a7d4fbc3dd3df3661222ef4237b7417",
+  "local_remote_equal": true,
+  "unrelated_nodes_preserved": true,
+  "decision": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-primary-harness-order-and-components-root-20261008T182100Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-primary-harness-order-and-components-root-20261008T182100Z.json",
+    "sha256": "5e4aa0901005ffb3801d92f5f57ab5ba8fea950beab098553d03183de2c7c9a0"
+  },
+  "new_node": "M7H4",
+  "product_dependency_ready": false,
+  "worktree_setup_in_flight": true
+}

@@ -1,0 +1,34 @@
+{
+  "at_utc": "2026-10-08T14:11:57.033821+00:00",
+  "old_graph_sha256": "37dd07e33c2dba26fc4f17aadc76525973d2007bfe1dea6f7b8da1cda3ef9a5b",
+  "new_graph_sha256": "7c005c9cc7f99e1aecdb093a2447052aeaf76aa907ea3ac924c52bf980ae0588",
+  "current_external_remote_equal": true,
+  "primary_preserved_at_old_sha256": true,
+  "unrelated_nodes_preserved": true,
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-import-and-requirements-components-root-20261008T140857Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-import-and-requirements-components-root-20261008T140857Z.json",
+    "sha256": "84e199381e6d8f53870c49bad49a36dc60b8f36c5e0e8a2007a9a852028f0df5"
+  },
+  "live_receipt": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-import-storage-live-root-20261008T141157Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-import-storage-live-root-20261008T141157Z.json",
+    "sha256": "10c1178a6ac71c41c5433e177d2cf0fb372ce8759e5a0bf8b15ce414e1f4f64f"
+  },
+  "storage_fallback": {
+    "at_utc": "2026-10-08T14:11:57.033821+00:00",
+    "cause": "Local Mac ENOSPC prevents even2KiB writes",
+    "remote_authority": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/checkpoints/graph-state.json",
+    "current_local_mirror": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/graph-state.json",
+    "protected_prior_primary_mirror": "/Users/michaelseiler/dev/snissn/gomap/tmp/mvcc-4871-root-recovered-20261001T1859Z/root-state/graph-state.json",
+    "prior_primary_sha256": "37dd07e33c2dba26fc4f17aadc76525973d2007bfe1dea6f7b8da1cda3ef9a5b",
+    "new_receipt_root": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008",
+    "mount_verified": true,
+    "preflight_free_bytes": 39406809088,
+    "latest_cleanup": "No new eligible deletion; prior exact released targets absent; protected negative/source/evidence retained.",
+    "source_execution_host": "192.168.0.185",
+    "source_work_continues": true,
+    "cleanup_completed_new_deletion": false
+  },
+  "dependency_ready": false
+}

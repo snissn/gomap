@@ -1,0 +1,146 @@
+{
+  "at_utc": "2026-10-08T15:54:55.795777+00:00",
+  "classification": "ACTUAL_UNADMITTED_SERIALIZATION_RED_AND_CONNECTED_RACE_GREEN_VERIFIED",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "packets": [
+    {
+      "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-owned-directory-record-scratch-valid-file-red",
+      "result": {
+        "after_sha256": "0f89b8729ba9bf532267420871e6f2db3c5c1679a328a887fd16b1e9db9b9834",
+        "args": [
+          "test",
+          "-p=2",
+          "./TreeDB/internal/rootpublication",
+          "-run",
+          "TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput",
+          "-count=1",
+          "-timeout=30s",
+          "-v"
+        ],
+        "before_sha256": "0f89b8729ba9bf532267420871e6f2db3c5c1679a328a887fd16b1e9db9b9834",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 1,
+        "finish": 1791474329.8469293,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "6e2b0796b316599645e9ecbcdb0918fac1d63b541592973db9f746ecc344e710",
+        "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+        "source_count": 10035,
+        "source_equal": true,
+        "start": 1791474324.9268355
+      },
+      "result_sha256": "906ee0733faa35c7bc2a111045763db13c07a650a371bb4f362bb9b2a238f7ee",
+      "source_maps_equal_verified": true,
+      "actual_top_level_passes": [],
+      "actual_failures": [
+        "TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput"
+      ],
+      "raw_tail": [
+        "=== RUN   TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput",
+        "    resource_directory_records_allocation_test.go:57: serialization backing not admitted",
+        "--- FAIL: TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput (0.00s)",
+        "FAIL",
+        "FAIL\tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t0.002s",
+        "FAIL"
+      ]
+    },
+    {
+      "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-owned-directory-record-flat-fixed",
+      "result": {
+        "after_sha256": "75157d2efcc39b94defdebe4c11f285496f57a4334337fe5449ceed00b45c2a7",
+        "args": [
+          "test",
+          "-race",
+          "-p=2",
+          "./TreeDB/internal/rootpublication",
+          "./TreeDB/db",
+          "-run",
+          "TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestDependencyDirectory.*Stream|TestOwnedImport",
+          "-count=1",
+          "-timeout=60s",
+          "-v"
+        ],
+        "before_sha256": "75157d2efcc39b94defdebe4c11f285496f57a4334337fe5449ceed00b45c2a7",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 0,
+        "finish": 1791474517.700869,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "977efdaf34dbce25e9d817c1e746b853289e5830ebccc2beef30677876d6001e",
+        "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+        "source_count": 10036,
+        "source_equal": true,
+        "start": 1791474468.0373435
+      },
+      "result_sha256": "76ef13a93b64028e701be5b73712791678f87b9249e5d5087f70f396a54cae09",
+      "source_maps_equal_verified": true,
+      "actual_top_level_passes": [
+        "TestDependencyDirectoryV2PinnedPointAndStreamingChecks",
+        "TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput",
+        "TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody",
+        "TestOwnedImportedSetAliasAndRefusal",
+        "TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal",
+        "TestOwnedImportedSharedDirectoryAndExactRIDClosure",
+        "TestOwnedImportedEmptyDirectoryRetainsExactLease",
+        "TestOwnedImportedRequirementsMatchGenericExactScopes",
+        "TestPrimaryJointVacuumV6PointersAndIndependentFallback"
+      ],
+      "actual_failures": [],
+      "raw_tail": [
+        "=== RUN   TestDependencyDirectoryV2PinnedPointAndStreamingChecks",
+        "--- PASS: TestDependencyDirectoryV2PinnedPointAndStreamingChecks (0.00s)",
+        "=== RUN   TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput",
+        "--- PASS: TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput (0.00s)",
+        "=== RUN   TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody",
+        "--- PASS: TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody (0.00s)",
+        "=== RUN   TestOwnedImportedSetAliasAndRefusal",
+        "--- PASS: TestOwnedImportedSetAliasAndRefusal (0.00s)",
+        "=== RUN   TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal",
+        "--- PASS: TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal (0.00s)",
+        "=== RUN   TestOwnedImportedSharedDirectoryAndExactRIDClosure",
+        "--- PASS: TestOwnedImportedSharedDirectoryAndExactRIDClosure (0.00s)",
+        "=== RUN   TestOwnedImportedEmptyDirectoryRetainsExactLease",
+        "--- PASS: TestOwnedImportedEmptyDirectoryRetainsExactLease (0.00s)",
+        "=== RUN   TestOwnedImportedRequirementsMatchGenericExactScopes",
+        "--- PASS: TestOwnedImportedRequirementsMatchGenericExactScopes (0.00s)",
+        "PASS",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t1.053s",
+        "=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+        "=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/false",
+        "=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/true",
+        "--- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback (0.46s)",
+        "    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/false (0.23s)",
+        "    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/true (0.23s)",
+        "PASS",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.658s"
+      ]
+    }
+  ],
+  "scope": "8 actual rootpublication and 1 actual DB top-level race cases, with both vacuum formats. Admission, exact output, empty/shared directory, exact RID and requirement scopes; no full19 or performance qualification.",
+  "root_tests_rerun": false,
+  "dependency_ready": false,
+  "native_activation": false,
+  "released_paths": []
+}

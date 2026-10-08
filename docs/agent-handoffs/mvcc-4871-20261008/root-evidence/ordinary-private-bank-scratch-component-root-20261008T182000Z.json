@@ -1,0 +1,36 @@
+{
+  "at_utc": "2026-10-08T18:19:05.706754+00:00",
+  "root_verified": true,
+  "no_root_tests": true,
+  "source_mutable": true,
+  "whole_candidate_accepted": false,
+  "red": {
+    "packet": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-primary-manifest-private-drained-scratch-red",
+    "raw_sha256": "2c1ba11701e4cec3947cafdfe9ff1246e418c4e65a95aeeab7fde5af8c1a9843",
+    "source_map_sha256": "c4560d2e10f27e9957097a14003648cef5304737d044dffce45b71578438342a",
+    "source_count": 10039,
+    "maps_equal": true,
+    "result_sha256": "400127fb151365ba963287740da40160f6f5e9db8e6945c560a854f4372e059f",
+    "exit": 1,
+    "failed_test": "TestPrimaryManifestScratchRefusesBeforeBankClaim"
+  },
+  "green": {
+    "packet": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-primary-bank-scratch-connected-import-fixed",
+    "raw_sha256": "93d6c74b2d28a032613a6128a306443004f037f5beee743b7625aa4fd8c96703",
+    "source_map_sha256": "9a51caa1c0a41b4772f026327640c1ecbf541970c5b689ca0df351df853e8ef1",
+    "source_count": 10040,
+    "maps_equal": true,
+    "result_sha256": "6520dfe017427923b05f6fbe383e22acc5de700fcdddab0d91619f51691db4f5",
+    "exit": 0,
+    "passes": [
+      "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot",
+      "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+      "TestPrimaryManifestScratchRefusesBeforeBankClaim",
+      "TestDependencyDirectoryV2PinnedPointAndStreamingChecks"
+    ],
+    "primaryarena": "compile only"
+  },
+  "owner_report": "Admitted bank-construction refs/page span, shared canonical reusable encoder, sorted iterative child-first seal and intrusive pre-Open dependency lease links. Capacity-overlap/multi-page/refusal and initial/rebuild temporary backing groups7/15/16 remain before all19 closure.",
+  "qualification": "component at recorded binding only; no full, native, performance or frozen ABI claim",
+  "remaining": "coherent all19/docs/affected checks; one C3+harness final-base reconciliation; freeze, serial performance, mature PR/exact-candidate review/current CI/root merge"
+}

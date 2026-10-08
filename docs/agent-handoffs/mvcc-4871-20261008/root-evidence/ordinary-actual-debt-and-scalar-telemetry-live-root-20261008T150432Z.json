@@ -1,0 +1,23 @@
+{
+  "at_utc": "2026-10-08T15:04:32.641475+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_sha256": "f67fe105825e6c759e28dbdd8936a62fb89f72305e53a7f7287f09287d3fa178",
+  "prior_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-debt-green-root-20261008T150432Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-debt-green-root-20261008T150432Z.md",
+    "sha256": "00be16f1539b0f7dffa3603b499c1edab56f9481047d1b354995d02bc6ae0733"
+  },
+  "issue_body_preserved": true,
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-actual-vlog-debt-race-component-root-20261008T150432Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-actual-vlog-debt-race-component-root-20261008T150432Z.json",
+    "sha256": "855637b6d936b91b99290fdf8fc7f8aeb2218ee6c00e8c99714382c2efe8815c"
+  },
+  "decision": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-legacy-scalar-telemetry-boundary-root-20261008T150432Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-legacy-scalar-telemetry-boundary-root-20261008T150432Z.json",
+    "sha256": "fb8824e948504a3cb984612e1cdf4626bb9ce1a9824c4269a55aae103d3a638b"
+  },
+  "dependency_ready": false
+}

@@ -1,0 +1,28 @@
+{
+  "at_utc": "2026-10-08T14:42:16.195032+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "owner": "/root",
+  "implementation_owner": "/root/m7_primary_directory_recovery_sol61",
+  "model": "gpt-6.1-sol",
+  "source_bindings": {
+    "TreeDB/internal/rootpublication/resource_kind_merge_allocation.go": "bdb46ea193f94768ae1fab65ef83885fbc048c8a2cf46613eb36126235fad851",
+    "TreeDB/internal/rootpublication/resource_coalesce_allocation.go": "782411d75853e27940c18fcb50e1642c8f4cb7ddc21e986a9ee096344974adae",
+    "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go": "0a298c11ae123fefb9586979763bbbf764e09516a02f567d904c053d82e170e8"
+  },
+  "finding": "Same-identity selected collision enters rebuildOwnedResourceKindCollision; cloneOwnedResourceEntryUnion acquires complete left/right history, combines exact obligations, and reconstructs indexes. This replays old retained history for small additions. Its elapsed-time contribution is unmeasured.",
+  "decision": "Within the same all19 correction, use existing admitted outgoing.index as canonical complete immutable history, with optional constructor/delta obligation backing. Share same-owner persistent nodes and append only actual delta where certified; each node preserves the exact admitted backing and original physical source custody. Update import, filter, manifest, certification and diagnostics consumers together. Exact serialization or cross-owner import may traverse when required.",
+  "preserved_gates": [
+    "Duplicate/conflict/namespace/RID parity",
+    "Original cleanup completion, consumed-reference distinction and surviving debt without replay",
+    "All19 actual producer admission and synchronized lifetime",
+    "Normal/race closure and canonical docs/CI impact",
+    "Product freeze before matched storage/allocation/retention performance",
+    "Independent review/current-head CI/final-base and root merge"
+  ],
+  "new_issues": [],
+  "new_owners": [],
+  "edge_changes": [],
+  "native_activation": false,
+  "dependency_ready": false,
+  "status": "COHERENT_HISTORY_REPRESENTATION_CORRECTION_IN_PROGRESS_NOT_PERFORMANCE_ACCEPTANCE"
+}

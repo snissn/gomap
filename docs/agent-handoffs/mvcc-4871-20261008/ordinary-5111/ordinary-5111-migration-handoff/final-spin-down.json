@@ -1,0 +1,9 @@
+{
+  "head": "d4cbf23f9333eed79718845d3ac253c5d7fc5513",
+  "remote": "d4cbf23f9333eed79718845d3ac253c5d7fc5513\trefs/heads/codex/5111-ordinary-data-primary-publication",
+  "clean": true,
+  "go_test_compile_controllers": [],
+  "source_runtime_stopped": true,
+  "no_future_launch_authorized": true,
+  "released_disposable_paths": []
+}

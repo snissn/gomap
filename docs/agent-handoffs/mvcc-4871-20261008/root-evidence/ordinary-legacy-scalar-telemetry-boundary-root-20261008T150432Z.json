@@ -1,0 +1,21 @@
+{
+  "at_utc": "2026-10-08T15:04:32.641475+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "owner": "/root",
+  "implementation_owner": "/root/m7_primary_directory_recovery_sol61",
+  "requested_model": "gpt-6.1-sol",
+  "source_bindings": {
+    "TreeDB/internal/rootpublication/coordinator.go": "15ce189b167b37a733bb17ff426d9b2b26f3f9a05bc0afa943c6d788c7f60c02",
+    "TreeDB/db/command_wal_debt.go": "a4cf04c4ca8f22fbdf21b81bdcc4c41453b55b9152722a5a7629399bb84bd1ce",
+    "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go": "a5700e4563edc482e8ac6c467db4cdace39166aae7d0af717bbeec2b0090ec3a",
+    "TreeDB/internal/rootpublication/resource_token.go": "f4eed8800595418a99d93c860d37d1f27a6bad0b923a0743923745493fe49b87"
+  },
+  "decision": "Existing detached legacy telemetry may copy scalar ResourceKindStats values and exact static built-in ResourceKind constants from scoped admitted selected stats. The legacy output owns independent values and retains no selected arrays/strings/token/proof/namespace/backing. Selected acquisition/union/scratch remains admitted and scoped. Do not replace physical union/dedup/max-frontier/high-water semantics with naive per-set sums. Preserve generic/nil/foreign custom kind behavior; unsupported custom selected names use existing refusal/unavailable behavior without alias/relabel. Prove actual production kinds are supported and outputs survive scoped Close with proportional real-caller/refusal characterization. No new disposal API, authority or universal old telemetry quota.",
+  "scope": "Same existing all19 closure; necessary actual coordinator/command-WAL metrics callers, not new product or graph scope.",
+  "dependency_ready": false,
+  "implementation_accepted": false,
+  "new_issues": [],
+  "new_owners": [],
+  "edge_changes": [],
+  "native_activation": false
+}

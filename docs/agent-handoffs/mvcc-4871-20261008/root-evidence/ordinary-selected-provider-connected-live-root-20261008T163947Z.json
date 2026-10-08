@@ -1,0 +1,17 @@
+{
+  "at_utc": "2026-10-08T16:39:47.228288+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_sha256": "6bf7b031a6c8c7b68a91952984baaa828d390d2c0e3748e52e253990ff007ba4",
+  "previous_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-connected-provider-root-20261008T163947Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-connected-provider-root-20261008T163947Z.md",
+    "sha256": "3f13a6b172a27ab82449771a12d64b6fc6e06c6ca619073c2e23263ae69a4df8"
+  },
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-selected-provider-connected-components-root-20261008T163947Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-selected-provider-connected-components-root-20261008T163947Z.json",
+    "sha256": "e7a297c67748202b3d67fe70c17aa02194abfe3bc23bee06907c309f033b7e73"
+  },
+  "issue_body_unchanged": true,
+  "gates_preserved": true
+}

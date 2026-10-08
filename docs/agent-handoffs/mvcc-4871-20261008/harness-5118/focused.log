@@ -1,0 +1,42 @@
+go: downloading github.com/cockroachdb/pebble v1.1.5
+go: downloading github.com/akrylysov/pogreb v0.10.2
+go: downloading github.com/dgraph-io/badger/v4 v4.8.0
+go: downloading github.com/nutsdb/nutsdb v1.1.0
+go: downloading github.com/tidwall/buntdb v1.3.2
+go: downloading go.etcd.io/bbolt v1.4.3
+go: downloading gonum.org/v1/plot v0.16.0
+go: downloading github.com/edsrzf/mmap-go v1.2.0
+go: downloading github.com/go-errors/errors v1.5.1
+go: downloading github.com/yuin/goldmark v1.7.13
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_pogreb.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_pebble.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_badger.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_nutsdb.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/mmap.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+HashDB/mmap.go:10:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+internal/benchprof/main.go:20:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+internal/benchprof/main.go:21:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_buntdb.go:7:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/adapter_bbolt.go:9:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/plots.go:11:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/plots.go:12:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/plots.go:13:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/plots.go:14:2: module lookup disabled by GOPROXY=off
+# github.com/snissn/gomap/cmd/unified_bench
+cmd/unified_bench/plots.go:15:2: module lookup disabled by GOPROXY=off
+FAIL	github.com/snissn/gomap/cmd/unified_bench [setup failed]
+FAIL

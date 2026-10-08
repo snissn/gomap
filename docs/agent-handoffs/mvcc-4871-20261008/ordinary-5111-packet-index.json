@@ -1,0 +1,92 @@
+[
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-5111-migration-handoff/ci-refresh-handoff.json",
+    "relative": "ordinary-5111-migration-handoff/ci-refresh-handoff.json",
+    "bytes": 397,
+    "sha256": "b1fd2100a7bb6e5310db1a27ad816a424462279491332af28962e7a0e4e9d8e0"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-5111-migration-handoff/core-raw.log",
+    "relative": "ordinary-5111-migration-handoff/core-raw.log",
+    "bytes": 90325,
+    "sha256": "06c394861466b760eecace3481b077e857b20c38ca73de3e37c6f956a5ef85c3"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-5111-migration-handoff/core-result.json",
+    "relative": "ordinary-5111-migration-handoff/core-result.json",
+    "bytes": 1112,
+    "sha256": "b27746dde8bdd93bc0f8ca876590f3233a1b92e71bdfa2867f7b9448b2465f51"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-5111-migration-handoff/final-spin-down.json",
+    "relative": "ordinary-5111-migration-handoff/final-spin-down.json",
+    "bytes": 332,
+    "sha256": "a6827c163d080b4e449546985666d1000d908ec0e47e96343f43d266c198a222"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-5111-migration-handoff/owned-paths.nul",
+    "relative": "ordinary-5111-migration-handoff/owned-paths.nul",
+    "bytes": 11154,
+    "sha256": "7db1a90a276b43f79f36891517fc0ed839357d9c581ee0b1694801c93ca9fde3"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-5111-migration-handoff/owned-source-before-stage.json",
+    "relative": "ordinary-5111-migration-handoff/owned-source-before-stage.json",
+    "bytes": 39026,
+    "sha256": "6ab3c054ceb600035886c75636f8790bf9bc444aceb5292b48e0908920195d15"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-5111-migration-handoff/post-commit-source.json",
+    "relative": "ordinary-5111-migration-handoff/post-commit-source.json",
+    "bytes": 149,
+    "sha256": "e63d0898a1801672caccdf9b2a6b2911bda87a84af2e2438c872a4cfd66363d2"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-allocation-core-normal/raw.log",
+    "relative": "ordinary-allocation-core-normal/raw.log",
+    "bytes": 90325,
+    "sha256": "06c394861466b760eecace3481b077e857b20c38ca73de3e37c6f956a5ef85c3"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-allocation-core-normal/result.json",
+    "relative": "ordinary-allocation-core-normal/result.json",
+    "bytes": 1112,
+    "sha256": "b27746dde8bdd93bc0f8ca876590f3233a1b92e71bdfa2867f7b9448b2465f51"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-allocation-core-normal/source-after.json",
+    "relative": "ordinary-allocation-core-normal/source-after.json",
+    "bytes": 1547869,
+    "sha256": "7ad592208817c1c3959c6296aae75fa49b5d2c931a8029c0a9118108a72f5203"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-allocation-core-normal/source-before.json",
+    "relative": "ordinary-allocation-core-normal/source-before.json",
+    "bytes": 1547869,
+    "sha256": "7ad592208817c1c3959c6296aae75fa49b5d2c931a8029c0a9118108a72f5203"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-primary-child-seal-v5-vacuum-fixed/raw.log",
+    "relative": "ordinary-primary-child-seal-v5-vacuum-fixed/raw.log",
+    "bytes": 2002,
+    "sha256": "c4bfa62b63fa9160dbac1f62f0edd2bb9b8d6ef274bb2e0f191f7cc22a95b006"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-primary-child-seal-v5-vacuum-fixed/result.json",
+    "relative": "ordinary-primary-child-seal-v5-vacuum-fixed/result.json",
+    "bytes": 1427,
+    "sha256": "b7b6ea7b34ceb817cff98591407bd1f1550858a933060d215a9ed46e36b3e041"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-primary-child-seal-v5-vacuum-fixed/source-after.json",
+    "relative": "ordinary-primary-child-seal-v5-vacuum-fixed/source-after.json",
+    "bytes": 1547869,
+    "sha256": "0015e3ad573634af6a82f2e1f0fde1c78453fd93815db9656be7b4ee7cee6033"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-primary-child-seal-v5-vacuum-fixed/source-before.json",
+    "relative": "ordinary-primary-child-seal-v5-vacuum-fixed/source-before.json",
+    "bytes": 1547869,
+    "sha256": "0015e3ad573634af6a82f2e1f0fde1c78453fd93815db9656be7b4ee7cee6033"
+  }
+]

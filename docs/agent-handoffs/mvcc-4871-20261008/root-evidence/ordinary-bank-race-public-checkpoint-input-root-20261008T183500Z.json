@@ -1,0 +1,91 @@
+{
+  "at_utc": "2026-10-08T18:34:26.897352+00:00",
+  "old_comment": {
+    "url": "https://api.github.com/repos/snissn/gomap/issues/comments/6054393776",
+    "html_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+    "issue_url": "https://api.github.com/repos/snissn/gomap/issues/5111",
+    "id": 6054393776,
+    "node_id": "IC_kwDOIdn7C88AAAABaN63sA",
+    "user": {
+      "login": "snissn",
+      "id": 1981537,
+      "node_id": "MDQ6VXNlcjE5ODE1Mzc=",
+      "avatar_url": "https://avatars.githubusercontent.com/u/1981537?u=613705400420c0b796cbadf0e0807951ff560294&v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/snissn",
+      "html_url": "https://github.com/snissn",
+      "followers_url": "https://api.github.com/users/snissn/followers",
+      "following_url": "https://api.github.com/users/snissn/following{/other_user}",
+      "gists_url": "https://api.github.com/users/snissn/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/snissn/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/snissn/subscriptions",
+      "organizations_url": "https://api.github.com/users/snissn/orgs",
+      "repos_url": "https://api.github.com/users/snissn/repos",
+      "events_url": "https://api.github.com/users/snissn/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/snissn/received_events",
+      "type": "User",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "created_at": "2026-10-08T07:00:10Z",
+    "updated_at": "2026-10-08T17:35:38Z",
+    "author_association": "OWNER",
+    "body": "<!-- codex-issue-graph-executor:ordinary-focused-checkpoint -->\n**Current priority: finish ordinary prerequisite #5111 before native #4878.** One GPT-6.1 Sol implementation owner continues on .185. Source remains mutable; all19 maturity, dependency readiness, performance qualification and merge remain open.\n\n**Latest root-verified components:** selected registration/rewrite produced **7 named race PASS** (raw `dfc5acc3\u2026`, map `58d1efe6\u2026`); recovery/rebuild/rebind produced **8 named normal PASS** (raw `07f2eab6\u2026`, map `29daba36\u2026`). Each before/after map agrees over10036 files. The recovery packet exercises independent complete slots, private tail, snapshot rebinding, successful joint vacuum, persistent pointers, fallback and temporary dictionary-capture disposal. A prior scratch parity failure is retained with its original failed result (`7799a5d1\u2026`), followed by the corrected packet. These are component passes at recorded bindings, not qualification of the current mutable whole candidate. Earlier connected15 normal/8 race rewrite/provider evidence remains separately source-bound.\n\nThe original pager namespace creation proof is reused through `BindWithMetadata`, avoiding a fresh capture/sync when eligible. New selected storage is independently admitted; original child Snapshot/pager/registry, final-reader completion and cleanup debt govern physical lifetime. Generic pack resources enter through the shared selected-builder import before selected clone/merge.\n\n**Current implementation frontier:** connect selected manifest loading and recovery resolution through the existing parser/resolver. The resolver previously borrowed decoded strings into long-lived tokens; generic diagnostic aliases may also outlive physical release. The worker is replacing that escape with independently admitted selected output metadata while preserving original observation, operations and deletion authority. No raw selected diagnostic escape, physical-owner relabel, second authority, universal foreign-provider quota or foreign ABI adoption.\n\n**Remaining critical path:** finish this manifest/scratch closure, then close all19 allocation/lifetime groups together with affected normal/race tests, canonical docs and original-member CI-impact reconciliation. Reconcile current main/C3 once at coherence. Commit and freeze the local product before expensive serial matched throughput/latency/allocation/retention/storage qualification with reviewed landed harnesses. Prove actual path selection; the existing fast profile uses no-WAL semantics and cannot substitute for command-WAL durability coverage. Complete a mature PR, independent exact-candidate review, current-head required CI and root merge. No speedup claim yet.\n\n**Durability remains:** DURABLE acknowledges durable command-WAL prefix plus atomic publication and required grouped WAL/value-log synchronization, without a per-write checkpoint. RELAXED with WAL enabled acknowledges kernel-drained command-WAL buffers plus atomic memtable publication without fsync; it is not userspace-buffer-only acknowledgement.\n\n**Adjacent work:** #5116 ACK/reopen ordering investigation and any repair remain with the #5028 owner; reconcile a proven shared seam at maturity. The #5044 owner reports the original756 hosted gate succeeded and the final artifact extraction joined; independent performance audit and guardrail/noise disposition remain outstanding. #5047 public ACK/WAL component remains separate and unmerged. A bounded .185 correctness-slot preparation was relinquished without transfer or runtime launch; root verified no foreign directory or Go/compiler/test processes at17:33UTC and explicitly released this worker's runtime hold. No outstanding foreign host grant or native activation.\n\n**Holds and cleanup:** original native caps, Accepted/onceACK/typed Finish, all M3 HOLDs and M8 blocking remain. .111 native source/evidence stays frozen. No new released cleanup target; retain source, raw/maps/negative evidence and active consumers. Actual deletion follows exact release/ref/evidence/consumer checks. Graph/evidence mirror uses the FlashDrive and remote durable decision directory.\n\nRoot component receipt: `ordinary-registration-recovery-component-root-20261008T173000Z.json` (`363e8af8968289633f50b981a892138c60784703efa34ba6e150bcbbaf2c1891`). Previous focused comment is retained by the root receipt. Checkpoint: 2026-10-08T17:35:33.661334+00:00. Refreshed executor skill SHA `3e91cbdd864abd73879fddba811e9722b74300e6ae6c5143a7dbaf8c215dbe07`.\n",
+    "reactions": {
+      "url": "https://api.github.com/repos/snissn/gomap/issues/comments/6054393776/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "performed_via_github_app": null,
+    "minimized": null,
+    "pin": null
+  },
+  "bank_race_component": {
+    "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-primary-bank-record-scratch-race",
+    "raw_sha256": "cab9b9ddb1a5351ff39fa43748b31023a8b670c7a2e26bb2d041b8c2473d2ef7",
+    "source_map_sha256": "c5fa0ade222ed676c26e5d1838dc82b5496e9965b15a1c7e817a09041ec74786",
+    "result_sha256": "1416b210a7fdc643f2ed449d3c70b35e1ea85749521ae5fc4fe10bb6727f6e0e",
+    "source_count": 10040,
+    "maps_equal": true,
+    "exit": 0,
+    "race": true,
+    "top_level_passes": [
+      "TestPrimaryV5SelectionIndependentSlotsActualDataAndParentFrontier",
+      "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot",
+      "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+      "TestPrimaryManifestScratchRefusesBeforeBankClaim",
+      "TestPrimaryBankConstructionReplacementOverlapAndOnceDisposal",
+      "TestPrimaryRecordScratchRefusalBeforeCodecAndSeal",
+      "TestDependencyManifestV1DeterministicMultiPageRoundTrip",
+      "TestPrimaryRootV5BindsActualDataAndCompleteBanks"
+    ],
+    "root_verified": true,
+    "qualification": "component at recorded binding only; later source changes are not qualified"
+  },
+  "graph_sha256": "364a1a68ef364f1a52e24316f8795aef33c167576d16a6a4b0f8fd1aed3c9bdd",
+  "source_mutable": true,
+  "whole_candidate_accepted": false,
+  "foreign_C3_live_snapshot": {
+    "pr": 5080,
+    "head": "04fd2951ac56af0e0473c4037e71f2bd81612f29",
+    "state": "OPEN",
+    "checks": {
+      "SUCCESS": 53,
+      "IN_PROGRESS": 1
+    }
+  },
+  "fixture_reuse": {
+    "source_pr": 5080,
+    "file": ".github/scripts/test_refresh_ci_impact_inventory.py",
+    "source_blob": "8e42fbb82e3ff94ff4661f0ee8a043007d27fa89",
+    "scope": "reuse identical five-line missing-harness-input fixture repair after bounded exact-base proof; no CI policy relaxation or foreign edits"
+  },
+  "local_io_status": "harness owner reported transient FlashDrive U-state waits; existing commands joined before additional scans/mutations; no storage refusal reported"
+}

@@ -1,0 +1,16 @@
+{
+  "at_utc": "2026-10-08T17:33:04.759371+00:00",
+  "previous_graph_sha256": "64ca25677690a6128c95ba14433ef7d19ebc487c6cf534b805650b625b0f6ae8",
+  "new_graph_sha256": "0521acd8474a17feb890cde3a31055a7f45a2099e408cdfefa444fc2f6c3392f",
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-registration-recovery-component-root-20261008T173000Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-registration-recovery-component-root-20261008T173000Z.json",
+    "sha256": "363e8af8968289633f50b981a892138c60784703efa34ba6e150bcbbaf2c1891"
+  },
+  "issue_body_unchanged": true,
+  "dependency_ready": false,
+  "whole_candidate_accepted": false,
+  "native_caps_unchanged": true,
+  "no_root_tests": true,
+  "remaining": "Complete selected manifest-loader/resolver copies through shared canonical validation and original operation/deletion authority; coherent all19 affected normal/race, docs/CI-impact/final-base, product commit/freeze, matched performance, mature PR/independent review/current-head CI/root merge."
+}

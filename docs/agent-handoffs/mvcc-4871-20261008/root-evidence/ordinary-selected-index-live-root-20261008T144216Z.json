@@ -1,0 +1,23 @@
+{
+  "at_utc": "2026-10-08T14:42:16.195032+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_sha256": "b4094879aa6c09606d996ab577e59e6d5a4f644b1a420774ad473065fefa31ac",
+  "prior_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-selected-index-root-20261008T144216Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-selected-index-root-20261008T144216Z.md",
+    "sha256": "828b8ab97e47f1684b0f766e54effdb97a5083d024deadbaa311707e36df61e7"
+  },
+  "issue_body_preserved": true,
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-selected-rid-race-component-root-20261008T144216Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-selected-rid-race-component-root-20261008T144216Z.json",
+    "sha256": "3d49cf9bb602ddc07b3e500b80298b15321794a1bd1235c12cf67ff65e7e7464"
+  },
+  "decision": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-selected-persistent-index-decision-root-20261008T144216Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-selected-persistent-index-decision-root-20261008T144216Z.json",
+    "sha256": "b3ec650cda8921de96ba639ca0431168498969dd72d4e3820901c4b26129f1f0"
+  },
+  "dependency_ready": false
+}

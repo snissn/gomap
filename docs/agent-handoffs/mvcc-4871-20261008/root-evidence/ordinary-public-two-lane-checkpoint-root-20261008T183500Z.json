@@ -1,0 +1,22 @@
+{
+  "at_utc": "2026-10-08T18:34:26.897352+00:00",
+  "evidence": {
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-bank-race-public-checkpoint-input-root-20261008T183500Z.json",
+    "sha256": "39242242141531113d6b681d2d302e9c765e3b773c5852d1a0014f8a7e936301",
+    "local_mirror": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-bank-race-public-checkpoint-input-root-20261008T183500Z.json",
+    "local_mirror_state": "pending until exact write/verification below"
+  },
+  "ordinary_comment": {
+    "id": 6054393776,
+    "url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+    "body_sha256": "09c862d337bcaf6386eb7ab4dbcb66599d6ad96d703ad1e00bcf85a54cee184a"
+  },
+  "harness_comment": {
+    "id": 6066540829,
+    "url": "https://github.com/snissn/gomap/issues/5118#issuecomment-6066540829",
+    "body_sha256": "be881b80efcbb5629a7686156e6513090c38a6a5fc699ed57e55b97570bbf2fb"
+  },
+  "live_contents_verified": true,
+  "unmet_acceptance_preserved": true,
+  "no_graph_mutation": true
+}

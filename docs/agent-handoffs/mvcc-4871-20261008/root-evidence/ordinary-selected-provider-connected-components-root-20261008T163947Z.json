@@ -1,0 +1,61 @@
+{
+  "at_utc": "2026-10-08T16:39:47.228288+00:00",
+  "classification": "ACCEPT_FOCUSED_COMPONENTS_NOT_WHOLE_MATURITY",
+  "owner": "/root",
+  "implementation_owner": "/root/m7_primary_directory_recovery_sol61",
+  "model": "gpt-6.1-sol",
+  "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+  "HEAD": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+  "toolchain": "Go1.26.4",
+  "GOWORK": "off",
+  "packets": [
+    {
+      "packet": "ordinary-selected-producer-normal-fixed",
+      "raw_sha256": "b576a00e1a9efb5aeb7d5abeb371c32e8e5f18fcb28e1ef69d1357e5430003a1",
+      "map_sha256": "f4547ea65fc7f3628da745f6ed7a1804dea8ce7e3a824366a967dd96ab866563",
+      "result_sha256": "fca26d644a52d64f99372b777a8bfaedc97ab9591793aa2588af431ce180c7f7",
+      "scope": "Four package PASS lines; no-v case count unavailable. valuelog compile-only with no matching tests. Actual selected legacy inline/pointer dictionary/template, supplied pager cleanup/refusal/debt, cached provider component."
+    },
+    {
+      "packet": "ordinary-selected-proof-reuse-race",
+      "raw_sha256": "6bc9db14ce01379e5d91daeafa8413e9ddfad9b672f76d416f8f45cd35e263c2",
+      "map_sha256": "8cc5f7c3ad1c45617dc6eddce81bbfa2dfbf152f9456b91cbfce906e105bf9eb",
+      "result_sha256": "00f6cfd4fe10a424b2432c25bf437ed74ada84041e4d5af6377293095409f7b5",
+      "scope": "Five actual named top-level race PASS: supplied independent proof/no resync, concurrent cleanup, writer repeated bind, four segment rotations, cached selected append with legacy dictionary."
+    }
+  ],
+  "source_before_after_equal": true,
+  "source_count": 10036,
+  "current_race_source_bindings": {
+    "TreeDB/db/stable_pager_owned_operations.go": "8be7e5ff32deec45fae969c4305438dba487f2cb2a6e1a84d536b01061b0b268",
+    "TreeDB/db/stable_resource.go": "09ebd71cd962962cfc41032e974fab0357e3f04783f6fd8650b5504ab6b574e0",
+    "TreeDB/internal/dictdb/resource_capture.go": "ec4ae0248b91c73a99c1dcd38b9f3d539921f95cfd25b85251224ffd00f58191",
+    "TreeDB/internal/templatedb/resource_capture.go": "6d11f07b268f0b8b8df48ffed844fac0b583fcce0c3f7f3112889688384009ef",
+    "TreeDB/template_stable_resource.go": "d9bcfd47903a6a93a25bc4cd1f76b0297b33f04b5d7673d0ee85abecf2712c1b",
+    "TreeDB/internal/valuelog/stable_resource.go": "0cf8b2a888711fc694166b37001e243c2b7145a31a71f77593a74f125f1245d6",
+    "TreeDB/caching/stable_dictionary_resource_test.go": "2e0a9d1e328f2d58d60675534bf7bc15fd6238c3e2fb7fb72b5101a096dccf6c",
+    "TreeDB/internal/rootpublication/namespace_metadata_test.go": "5f0bf423e6aa9aaa00dabb2401141e14734a94aba6d48e4ceafc24940d33f1e7"
+  },
+  "normal_binding_limits": "valuelog source and namespace test changed between normal and race; current values match the race map. Other selected production bindings match both. Root ran no Go tests.",
+  "original_failed_packets_retained": [
+    "ordinary-supplied-child-owner-red",
+    "ordinary-supplied-child-connected-normal",
+    "ordinary-supplied-child-connected-fixture-fixed",
+    "ordinary-supplied-child-connected-cut-fixed"
+  ],
+  "acceptance": "Parent metadata admission is separate from original legacy child physical authority. Actual original Snapshot final-reader cleanup governs consumed/debt reporting; selected namespace descriptors and reused independent original proofs remain priced.",
+  "remaining": "Registration/rotation retained scratch and actual rewrite/pack provider adoption; coherent all19 maturity, docs, CI-impact, final-base reconciliation, local product commit/freeze, quiet serial matched performance, mature PR, independent review, latest CI and root merge.",
+  "adjacent_5116": "Queued capture currently has only base/additional sets before staged pending leaf manifest; no independent pending-stage source found. Source-bound ACK/reopen discriminator and repair remain with #5028/#5116 owner; no new dependency or ABI adoption.",
+  "dependency_ready": false,
+  "native_source_mutation": false,
+  "M8": "blocked",
+  "released_disposables": [],
+  "executor_skill": {
+    "path": "/Users/michaelseiler/.codex/skills/codex-issue-graph-executor/SKILL.md",
+    "sha256": "3e91cbdd864abd73879fddba811e9722b74300e6ae6c5143a7dbaf8c215dbe07",
+    "fresh_read_completed_this_execution": true,
+    "routing": "gpt-6.1-sol-only",
+    "sole_implementation_worker": true,
+    "cleanup": "Delete only exact released disposable paths after durable-ref/evidence/consumer verification; none released."
+  }
+}

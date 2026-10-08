@@ -1,0 +1,16 @@
+{
+  "at_utc": "2026-10-08T15:54:55.795777+00:00",
+  "decision": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-legacy-provider-constructor-boundary-root-20261008T155455Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-legacy-provider-constructor-boundary-root-20261008T155455Z.json",
+    "sha256": "f718bb1bc5600300902f9168fae602b95ea8161dc104bb43b5a1d132ca2fe7c5"
+  },
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_body_sha256": "3f13a6b172a27ab82449771a12d64b6fc6e06c6ca619073c2e23263ae69a4df8",
+  "issue_body_unchanged": true,
+  "backup": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-provider-frontier-comment-backup-root-20261008T155455Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-provider-frontier-comment-backup-root-20261008T155455Z.json",
+    "sha256": "58836e276d8fda90cbf3dcfa2b4d42bdca2c35ca0d6da2e2342d9beb1f62204c"
+  }
+}

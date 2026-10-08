@@ -1,0 +1,35 @@
+{
+  "after_sha256": "7ad592208817c1c3959c6296aae75fa49b5d2c931a8029c0a9118108a72f5203",
+  "args": [
+    "test",
+    "-p=2",
+    "-v",
+    "./TreeDB/internal/retainedalloc",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/internal/primaryarena",
+    "-count=1",
+    "-timeout=180s"
+  ],
+  "before_sha256": "7ad592208817c1c3959c6296aae75fa49b5d2c931a8029c0a9118108a72f5203",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/home/mikers/.cache/go-build",
+    "GOENV": "off",
+    "GOMAXPROCS": "2",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOPATH": "/home/mikers/go",
+    "GOPROXY": "off",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "exit": 1,
+  "finish": 1791484449.2528796,
+  "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+  "raw_sha256": "06c394861466b760eecace3481b077e857b20c38ca73de3e37c6f956a5ef85c3",
+  "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+  "source_count": 10040,
+  "source_equal": true,
+  "start": 1791484436.793782
+}

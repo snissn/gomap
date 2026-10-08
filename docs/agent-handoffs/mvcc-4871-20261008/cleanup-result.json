@@ -1,0 +1,412 @@
+{
+  "all_owned_commands_joined": true,
+  "at": 1791485347.781426,
+  "branch_retained": true,
+  "observed_available_delta_bytes": 1175343104,
+  "protected_after": {
+    "/Users/michaelseiler/dev/snissn/gomap": {
+      "dev": 16777231,
+      "gid": 20,
+      "ino": 114306919,
+      "mode": 16877,
+      "uid": 501
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/.git": {
+      "dev": 16777231,
+      "gid": 20,
+      "ino": 114306920,
+      "mode": 16877,
+      "uid": 501
+    },
+    "/Users/michaelseiler/dev/snissn/gomap/tmp": {
+      "dev": 16777231,
+      "gid": 20,
+      "ino": 199510726,
+      "mode": 16877,
+      "uid": 501
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008": {
+      "dev": 16777239,
+      "gid": 20,
+      "ino": 696469,
+      "mode": 16877,
+      "uid": 501
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/base-ci-refresh-tests.log": {
+      "metadata": {
+        "blocks": 8,
+        "ctime_ns": 1791484322661676189,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 714627,
+        "mode": 33188,
+        "mtime_ns": 1791484322661676189,
+        "nlink": 1,
+        "size": 14,
+        "uid": 501
+      },
+      "sha256": "b2a7ecb6f06c3b115d7347ce0c2f185a0e83ec0fecbcc36f1bce1d9c5c1d6da6"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/ci-contract.log": {
+      "metadata": {
+        "blocks": 8,
+        "ctime_ns": 1791484052753740707,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 697499,
+        "mode": 33188,
+        "mtime_ns": 1791484052753740707,
+        "nlink": 1,
+        "size": 104,
+        "uid": 501
+      },
+      "sha256": "91bf10ce34b2b5f6f6efdd64fd681002bb5816631b2608575fab164709c80992"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/ci-impact-tests.log": {
+      "metadata": {
+        "blocks": 8,
+        "ctime_ns": 1791484097056854185,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 697498,
+        "mode": 33188,
+        "mtime_ns": 1791484097056854185,
+        "nlink": 1,
+        "size": 121,
+        "uid": 501
+      },
+      "sha256": "7a671c791c78167757d6564869606e196f17fb3d45ed41b6635b7cc5e274e114"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/ci-refresh-check.log": {
+      "metadata": {
+        "blocks": 8,
+        "ctime_ns": 1791484053149336129,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 697497,
+        "mode": 33188,
+        "mtime_ns": 1791484053149336129,
+        "nlink": 1,
+        "size": 83,
+        "uid": 501
+      },
+      "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/ci-refresh-tests.log": {
+      "metadata": {
+        "blocks": 32,
+        "ctime_ns": 1791484075043363755,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 697496,
+        "mode": 33188,
+        "mtime_ns": 1791484075043363755,
+        "nlink": 1,
+        "size": 15196,
+        "uid": 501
+      },
+      "sha256": "d47f5064c300580c2ed1aaafed342f5bcbe1b9d667f1ab0d2fb013d6af88e597"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/ci-refresh.log": {
+      "metadata": {
+        "blocks": 8,
+        "ctime_ns": 1791484040166465581,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 697467,
+        "mode": 33188,
+        "mtime_ns": 1791484040166465581,
+        "nlink": 1,
+        "size": 79,
+        "uid": 501
+      },
+      "sha256": "1f028cd2be7f018e3d8a3b1963b91a5cc87ba45c82de6f812a6e0a2dc3419056"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/ci-windows-headroom.log": {
+      "metadata": {
+        "blocks": 8,
+        "ctime_ns": 1791484065697455407,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 697500,
+        "mode": 33188,
+        "mtime_ns": 1791484065697455407,
+        "nlink": 1,
+        "size": 116,
+        "uid": 501
+      },
+      "sha256": "44afba995232d38ac70c73882f1674c4d1af34c453df13797e5fbf710b1c5402"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/dependency-fetch.log": {
+      "metadata": {
+        "blocks": 0,
+        "ctime_ns": 1791484078064731700,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 708258,
+        "mode": 33188,
+        "mtime_ns": 1791484078064698075,
+        "nlink": 1,
+        "size": 0,
+        "uid": 501
+      },
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/focused.log": {
+      "metadata": {
+        "blocks": 8,
+        "ctime_ns": 1791484016696955913,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 696475,
+        "mode": 33188,
+        "mtime_ns": 1791484016696955913,
+        "nlink": 1,
+        "size": 2301,
+        "uid": 501
+      },
+      "sha256": "71e6a0ca2fd6b804243b23a6c12b2d0b0f16d1c6f9b69b5d6c7e857bb71aec08"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/issue-handoff.md": {
+      "metadata": {
+        "blocks": 16,
+        "ctime_ns": 1791484630423173926,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 724828,
+        "mode": 33188,
+        "mtime_ns": 1791484630423173926,
+        "nlink": 1,
+        "size": 4669,
+        "uid": 501
+      },
+      "sha256": "80f3c92ddaeff25952b38e7159a9ab0aa851f776a19cf394498430e0b6650d78"
+    },
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/wip-pr-body.md": {
+      "metadata": {
+        "blocks": 16,
+        "ctime_ns": 1791484601042220468,
+        "dev": 16777239,
+        "gid": 20,
+        "ino": 724826,
+        "mode": 33188,
+        "mtime_ns": 1791484601042220468,
+        "nlink": 1,
+        "size": 4306,
+        "uid": 501
+      },
+      "sha256": "ebdd593b7a684420677cde5808ea66b6b28298fae78a56dc861f143e0d79e7ca"
+    },
+    "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008": {
+      "dev": 16777239,
+      "gid": 20,
+      "ino": 579892,
+      "mode": 16877,
+      "uid": 501
+    }
+  },
+  "protected_matches": true,
+  "pyc_released": [
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008/.github/scripts/__pycache__/ci_impact.cpython-314.pyc",
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008/.github/scripts/__pycache__/refresh_ci_impact_inventory.cpython-314.pyc"
+  ],
+  "registration_after": {
+    "args": [
+      "git",
+      "-C",
+      "/Users/michaelseiler/dev/snissn/gomap",
+      "worktree",
+      "list",
+      "--porcelain"
+    ],
+    "returncode": 0,
+    "stderr": "",
+    "stdout": "worktree /Users/michaelseiler/dev/snissn/gomap\nHEAD fef91b6f98b500bd18db64ce340763a1d42f1731\nbranch refs/heads/codex/3537-leafref-page-reuse\n\nworktree /private/tmp/gomap-5068-matched-report-source-fix-root-v2\nHEAD 3e61b3f3130975dc025c96857405d4ce6c1b33ff\nbranch refs/heads/codex/5068-matched-report-schema-v2\n\nworktree /private/tmp/gomap-c3-macos-ci-repair-ab94233\nHEAD cc4b305b5c236a52388e8c2c7c6b6eec5f4ca067\ndetached\n\nworktree /private/tmp/gomap-cow-execution-o2nauuzm/c3\nHEAD 04fd2951ac56af0e0473c4037e71f2bd81612f29\nbranch refs/heads/codex/cow-c3-mvcc-views\n\nworktree /private/tmp/gomap-cow-execution-o2nauuzm/c3-native-floor-reopen\nHEAD 72d7dcda2ad4922157e61ba8229f283c106579e9\nbranch refs/heads/codex/5047-floor-reopen-provisional\n\nworktree /private/tmp/gomap-cow-execution-o2nauuzm/c4-integer-domain-repair\nHEAD e568220d3c543a0891c177239ee5452f2ac60fa1\nbranch refs/heads/codex/5082-c4-integer-domain\n\nworktree /private/tmp/gomap-cow-execution-o2nauuzm/c4-tools\nHEAD d7328c212285031e3b5dcb76573c5491e1f918fe\nbranch refs/heads/codex/cow-c4-sustained-tools\n\nworktree /private/tmp/gomap-cow-execution-o2nauuzm/load-readiness\nHEAD 07b513893686838e0d5b1c9a20ee8a9ab7f297e5\nbranch refs/heads/codex/cow-load-readiness\n\nworktree /private/tmp/gomap-cow-execution-o2nauuzm/offline-compiler-blob-repair\nHEAD b68bb268a5ca7718d8247a135080f9ba8da06151\nbranch refs/heads/codex/5079-offline-compiler-blob-proof\n\nworktree /private/tmp/gomap-nativewire-vector-ci-repair-c5\nHEAD 6d4db6eaa01cfd7d47d690c4ba13738ed4168693\ndetached\n\nworktree /private/tmp/gomap-qs-5015\nHEAD 4ba7bfad3c29d176fe7686f14cfe49276a9b3d3a\nbranch refs/heads/codex/5015-rewrite-exact-closure\n\nworktree /private/tmp/gomap-qs-5016\nHEAD a6b778ffeb9a401848d5eaf6d177547a5f21aef8\nbranch refs/heads/codex/5016-certified-prune\n\nworktree /private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5098-common-rollover-observer\nHEAD 8844d70630b38266722264e0922a5c6e0ee67440\nbranch refs/heads/codex/r1-5098-common-rollover-observer\n\nworktree /private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5099-captured-closure-reuse\nHEAD c9f85aebbf6a80d833913848ccef4d90acc0d1a8\nbranch refs/heads/codex/r1-5099-captured-closure-reuse\n\nworktree /private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5108-compressed-allocator-topology\nHEAD a264654d69f2b19663f3b60a3c36af0b740e6776\nbranch refs/heads/codex/r1-5108-mac-semantic-construction\n\nworktree /private/var/folders/v0/pbplq_x54gg1bjh38mw1m0600000gn/T/TestManualProfileWrapperGuards45464013220969/001/clean-checkout\nHEAD 2355c2d5de58776a7e9b62c21e976ce9f538741a\ndetached\nlocked initializing\n\nworktree /Users/michaelseiler/dev/snissn/gomap-issue-4809-representative-2owner-20260929\nHEAD 49c4fd543586aa6dff349bf98405dc7f68c8a048\nbranch refs/heads/codex/issue-4809-representative-2owner-20260929\n\nworktree /Users/michaelseiler/dev/snissn/gomap-issue-4809-separate-leader-merge-v1\nHEAD 1b4d2294a18b2576ee39920e81590ce8ac7af177\ndetached\n\nworktree /Users/michaelseiler/dev/snissn/gomap-issue-4811-active-owner-replacement-red\nHEAD ee7b8b9043986e84fb50482cd709d666ac09afaf\nbranch refs/heads/codex/issue-4811-active-owner-replacement-red-20260928\n\nworktree /Users/michaelseiler/dev/snissn/gomap-issue-4811-cold-read-gap\nHEAD 946cf619c472104ba06b08862f44f4e7226e0ffa\nbranch refs/heads/codex/issue-4811-cold-read-gap-20260928\n\nworktree /Users/michaelseiler/dev/snissn/gomap-p3-landed-043072e16-full100k\nHEAD 043072e16daf37cf2d0187a2077ac4d0c1d9945a\ndetached\n\nworktree /Volumes/FlashDrive/gomap-5028-owned-worktrees-20261008/manifest-writer-authority\nHEAD c3db45d456e77f002d6f474932063f4c4ce19b16\nbranch refs/heads/codex/5116-manifest-writer-authority\n\nworktree /Volumes/FlashDrive/gomap-5028-owned-worktrees-20261008/matched-work-allocation\nHEAD 9fda35fdf0268b8165a3659f3e033cd53a874bed\nbranch refs/heads/codex/5028-matched-work-allocation\n\nworktree /Volumes/FlashDrive/gomap-cow-matched-host-isolation-20261007/worktree\nHEAD b60ec2cb6e3e33490d4644e2b2488435bcc4135d\nbranch refs/heads/codex/cow-matched-host-isolation\n\n"
+  },
+  "release_provenance": {
+    "exact_pyc_separately_released": [
+      "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008/.github/scripts/__pycache__/ci_impact.cpython-314.pyc",
+      "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008/.github/scripts/__pycache__/refresh_ci_impact_inventory.cpython-314.pyc"
+    ],
+    "head": "20e3c50511a0aeec02efd648d4257ccd312aac2c",
+    "owner_joined_and_released": true,
+    "recovery": "https://github.com/snissn/gomap/issues/5118#issuecomment-6066586311",
+    "tree": "a5cc7e55087813cf470375c7629202944ab24729"
+  },
+  "remaining_paths": [
+    "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/tmp"
+  ],
+  "remote_branch_retained": true,
+  "results": [
+    {
+      "consumer_recheck": {
+        "clean": true,
+        "lsof": {
+          "args": [
+            "lsof",
+            "-nP",
+            "+D",
+            "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/module-cache",
+            "-Fpnc"
+          ],
+          "returncode": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "ps_matches": []
+      },
+      "estimated_allocated_bytes": 231796736,
+      "path": "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/module-cache",
+      "path_absent": true,
+      "recheck_inventory_matches": true
+    },
+    {
+      "consumer_recheck": {
+        "clean": true,
+        "lsof": {
+          "args": [
+            "lsof",
+            "-nP",
+            "+D",
+            "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/gocache",
+            "-Fpnc"
+          ],
+          "returncode": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "ps_matches": []
+      },
+      "estimated_allocated_bytes": 3788800,
+      "path": "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/gocache",
+      "path_absent": true,
+      "recheck_inventory_matches": true
+    },
+    {
+      "consumer_recheck": {
+        "clean": true,
+        "lsof": {
+          "args": [
+            "lsof",
+            "-nP",
+            "+D",
+            "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/uv-cache",
+            "-Fpnc"
+          ],
+          "returncode": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "ps_matches": []
+      },
+      "estimated_allocated_bytes": 2048000,
+      "path": "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/uv-cache",
+      "path_absent": true,
+      "recheck_inventory_matches": true
+    },
+    {
+      "consumer_recheck": {
+        "clean": true,
+        "lsof": {
+          "args": [
+            "lsof",
+            "-nP",
+            "+D",
+            "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/base-ci-repro",
+            "-Fpnc"
+          ],
+          "returncode": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "ps_matches": []
+      },
+      "estimated_allocated_bytes": 638976,
+      "path": "/Volumes/FlashDrive/gomap-5118-primary-harness-outputs-20261008/base-ci-repro",
+      "path_absent": true,
+      "recheck_inventory_matches": true
+    },
+    {
+      "consumer_recheck": {
+        "clean": true,
+        "lsof": {
+          "args": [
+            "lsof",
+            "-nP",
+            "+D",
+            "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008",
+            "-Fpnc"
+          ],
+          "returncode": 1,
+          "stderr": "",
+          "stdout": ""
+        },
+        "ps_matches": []
+      },
+      "estimated_allocated_bytes": 929558528,
+      "git_remove": {
+        "args": [
+          "git",
+          "-C",
+          "/Users/michaelseiler/dev/snissn/gomap",
+          "worktree",
+          "remove",
+          "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": ""
+      },
+      "ignored_generated_deletions": [
+        {
+          "path": "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008/.github/scripts/__pycache__/ci_impact.cpython-314.pyc",
+          "path_absent": true,
+          "snapshot": {
+            "blocks": 80,
+            "ctime_ns": 1791484039517345914,
+            "dev": 16777239,
+            "gid": 20,
+            "ino": 697494,
+            "mode": 33188,
+            "mtime_ns": 1791484039517261580,
+            "nlink": 1,
+            "sha256": "6b8453b49b013c8a66d39191c8052d8f8636cd759ca5a4b91acc253a9cdc71e7",
+            "size": 37991,
+            "uid": 501
+          }
+        },
+        {
+          "path": "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008/.github/scripts/__pycache__/refresh_ci_impact_inventory.cpython-314.pyc",
+          "path_absent": true,
+          "snapshot": {
+            "blocks": 32,
+            "ctime_ns": 1791484052804337056,
+            "dev": 16777239,
+            "gid": 20,
+            "ino": 697551,
+            "mode": 33188,
+            "mtime_ns": 1791484052804249222,
+            "nlink": 1,
+            "sha256": "2a43cbb6547ccf6aa9881cc4f5b77b054c3683e3ea8c900566fa9d6f82be2b7f",
+            "size": 12457,
+            "uid": 501
+          }
+        }
+      ],
+      "path": "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008",
+      "path_absent": true,
+      "recheck_inventory_matches": true
+    }
+  ],
+  "retained_tmp_reason": "Private unborn fixture stubs match declared test inputs, but copied .github/ci/ci_impact.json differs; bounded provenance check inconclusive. Retain whole tmp child.",
+  "space_after": {
+    "available_bytes": 28524941312,
+    "free_bytes": 28524941312
+  },
+  "space_before": {
+    "available_bytes": 27349598208,
+    "free_bytes": 27349598208
+  },
+  "status": "completed_released_cleanup_with_tmp_retained",
+  "worktree_unregistered": true
+}

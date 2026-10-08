@@ -1,0 +1,28 @@
+{
+  "at_utc": "2026-10-08T15:57:08.321160+00:00",
+  "old_graph_sha256": "46cba63a0c2da48b2ad5be619e8666847154928f01a19efce673d84aab906591",
+  "new_graph_sha256": "115a982196408117ee72b3f5e46e9b1ed468e38560dfc7d9ca988cd3da0b42b1",
+  "local_remote_equal": true,
+  "unrelated_nodes_preserved": true,
+  "partial_checkpoint_reconciled": "Original script wrote immutable decision/component/live and verified GH comment, then raised KeyError while treating receipt ref as decision data before either G write. This continuation reused exact immutable artifacts and verified live comment; no repeated GH mutation or source effects.",
+  "accepted_refs": {
+    "decision": {
+      "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-legacy-provider-constructor-boundary-root-20261008T155455Z.json",
+      "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-legacy-provider-constructor-boundary-root-20261008T155455Z.json",
+      "sha256": "f718bb1bc5600300902f9168fae602b95ea8161dc104bb43b5a1d132ca2fe7c5"
+    },
+    "component": {
+      "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-required-v2-admitted-serialization-component-root-20261008T155455Z.json",
+      "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-required-v2-admitted-serialization-component-root-20261008T155455Z.json",
+      "sha256": "731c2fde9140f803272c213a31c4a88632b0babf6a865346d7a9edd6f45fea13"
+    },
+    "live": {
+      "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-provider-frontier-live-root-20261008T155455Z.json",
+      "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-provider-frontier-live-root-20261008T155455Z.json",
+      "sha256": "b30702e40e8bc7d9d09c8702a4c6c51a6604f1f14f3786fdb67c09f0e99a9db4"
+    }
+  },
+  "dependency_ready": false,
+  "native_activation": false,
+  "released_paths": []
+}

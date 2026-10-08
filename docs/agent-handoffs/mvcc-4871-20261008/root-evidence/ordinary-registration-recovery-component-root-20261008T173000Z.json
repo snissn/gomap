@@ -1,0 +1,156 @@
+{
+  "at_utc": "2026-10-08T17:29:43.581460+00:00",
+  "owner": "/root",
+  "issue": 5111,
+  "source_lane": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+  "packets": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-registration-rewrite-race-final",
+      "raw_sha256": "dfc5acc3b0265395dd1ca5f861b002fae020d6f22ec119f169636726bf2fb847",
+      "source_map_sha256": "58d1efe69ad0b78b192104e23babff61decfa1cdb48a8f35806753a9f2596665",
+      "result_sha256": "c8eb04f6b7788475ba2cee9dbff5eec26cf2fdc6787039f798f4761aca1ab488",
+      "source_count": 10036,
+      "source_equal": true,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "exit": 0,
+      "race": true,
+      "args": [
+        "test",
+        "-p=2",
+        "-race",
+        "-v",
+        "./TreeDB/db",
+        "./TreeDB/internal/valuelog",
+        "-run",
+        "TestOuterLeafRegistrationScratchParityAndAdmission|TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport|TestStandaloneStableLeafRewriteBatchUnionsTemplateGenerations|TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure|TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure|TestStandaloneStableLeafRewriteRejectsDictionaryAuthorityMismatchBeforeMutation|TestSelectedStableRotationRetainsPendingAndContainerMetadata",
+        "-count=1",
+        "-timeout=90s"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "top_level_passes": [
+        "TestStandaloneStableLeafRewriteBatchUnionsTemplateGenerations",
+        "TestStandaloneStableLeafRewriteMergesDictionaryAndTemplateClosure",
+        "TestStandaloneStableLeafRewriteLateBindsAndMergesDictionaryClosure",
+        "TestStandaloneStableLeafRewriteRejectsDictionaryAuthorityMismatchBeforeMutation",
+        "TestSelectedStandaloneLeafCaptureAdmissionAndLegacyImport",
+        "TestSelectedStableRotationRetainsPendingAndContainerMetadata",
+        "TestOuterLeafRegistrationScratchParityAndAdmission"
+      ],
+      "top_level_failures": [],
+      "qualified_scope": "component at recorded source bindings only"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-recovery-scratch-first",
+      "raw_sha256": "db5b0e9d55459ddf53efede1c7334dd482b3d8883f1b12c2408922ce87ff727f",
+      "source_map_sha256": "6701f265c366b684a98ec89a167a308a233c06b7afd92afa687e1dd3d397b8c6",
+      "result_sha256": "7799a5d15c47eab3ecc55522622a84c2a8770db89fed100f9ebd79cbfe58de15",
+      "source_count": 10036,
+      "source_equal": true,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "exit": 1,
+      "race": false,
+      "args": [
+        "test",
+        "-p=2",
+        "-v",
+        "./TreeDB/internal/primaryarena",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "-run",
+        "TestOwnedPrimaryBankMetadataScratchParityRefusalAndDisposal|TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail|TestPrimaryRootV5MetadataBanksRecoverBothIndependentSlotsAndRetainedCut|TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6|TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor",
+        "-count=1",
+        "-timeout=90s"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "top_level_passes": [
+        "TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail",
+        "TestPrimaryRootV5MetadataBanksRecoverBothIndependentSlotsAndRetainedCut",
+        "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+        "TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor"
+      ],
+      "top_level_failures": [
+        "TestOwnedPrimaryBankMetadataScratchParityRefusalAndDisposal"
+      ],
+      "qualified_scope": "retained failing characterization; no acceptance"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-recovery-rebuild-rebind-first",
+      "raw_sha256": "07f2eab6643a8bc3d1f0b3474baec6ff6bc88c9260d04ad217afe046760106a3",
+      "source_map_sha256": "29daba360c172d6123cb83081c7bb57dbe4f1f92ca35201fac577dd9e6223839",
+      "result_sha256": "17a0112e5eb720e35b67897318ca373b9ec47cb302fbbf3f6486caa672a58792",
+      "source_count": 10036,
+      "source_equal": true,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "exit": 0,
+      "race": false,
+      "args": [
+        "test",
+        "-p=2",
+        "-v",
+        "./TreeDB/internal/primaryarena",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/caching",
+        "-run",
+        "TestOwnedPrimaryBankMetadataScratchParityRefusalAndDisposal|TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail|TestPrimaryRootV5MetadataBanksRecoverBothIndependentSlotsAndRetainedCut|TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6|TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor|TestPrimaryJointVacuumV6SuccessfulReplacement|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot",
+        "-count=1",
+        "-timeout=120s"
+      ],
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "top_level_passes": [
+        "TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail",
+        "TestPrimaryRootV5MetadataBanksRecoverBothIndependentSlotsAndRetainedCut",
+        "TestOwnedPrimaryBankMetadataScratchParityRefusalAndDisposal",
+        "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot",
+        "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6",
+        "TestPrimaryJointVacuumV6SuccessfulReplacement",
+        "TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+        "TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor"
+      ],
+      "top_level_failures": [],
+      "qualified_scope": "component at recorded source bindings only"
+    }
+  ],
+  "remaining": "Selected manifest-loader/resolver ownership is mutable; all19 closure, affected normal/race, docs/CI-impact/final-base, product freeze, matched performance and mature PR/review/CI/merge remain.",
+  "whole_candidate_accepted": false,
+  "dependency_ready": false,
+  "no_tests_run_by_root": true,
+  "graph_sha256_at_read": "64ca25677690a6128c95ba14433ef7d19ebc487c6cf534b805650b625b0f6ae8"
+}

@@ -1,0 +1,20 @@
+<!-- codex-issue-graph-executor:ordinary-focused-checkpoint -->
+**Current priority: finish the coherent ordinary prerequisite #5111 before native #4878 activation.** One GPT-6.1 Sol implementation owner continues on .185. Candidate source is still mutable; dependency readiness, all19 maturity, performance qualification and merge remain open.
+
+**Latest root-verified components:**
+
+- Real selected legacy dictionary/template capture and supplied pager cleanup/refusal/debt: four package PASS lines, unchanged 10036-file before/after maps. The normal valuelog package matched no tests and supplies compilation evidence only. Raw `b576a00e…`, map `f4547ea6…`, result `fca26d64…`; no per-case count inferred from non-verbose output.
+- Namespace/proof reuse and selected cached outer-leaf + legacy dictionary: five actual named race PASS, unchanged 10036-file maps. Raw `6bc9db14…`, map `8cc5f7c3…`, result `00f6cfd4…`. Existing writer proof reuse does not repeat namespace synchronization; supplied metadata remains independently admitted and cleanup retains the original proof/physical owner.
+- Prior required-V2 admitted serialization/real vacuum and original close/namespace/clone/refusal components remain applicable at their recorded bindings (`731c2fde…`, `c53552a7…`). Failed construction and producer-identity packets remain retained. Root ran no new tests and claims no speedup or whole-source freeze.
+
+Selected paths admit new descriptor/callback storage under the parent metadata owner while preserving the original legacy child Snapshot/pager/registry custody. Actual final-reader completion and consumed/debt outcomes govern refund. No forced child PRIMARY, opaque completion assumption, universal provider quota, second authority or R1 proposal adoption.
+
+**Remaining critical path:** registration/rotation retained scratch and actual rewrite/pack provider adoption, then finish all19 allocation/lifetime groups together. Complete affected normal/race checks, canonical docs and required CI-impact reconciliation. Reconcile current main/C3 once when the candidate is coherent; current main `3c33dd77…` adds CI/tooling only over source base `2d6b07f5…`. Commit and freeze the local product before expensive serial matched latency/throughput/allocation/retention/storage qualification with landed harnesses. Deliver a mature PR through independent review, current-head required CI, final-base compatibility and root merge.
+
+**Durability contract retained:** DURABLE acknowledges the durable command-WAL prefix plus atomic publication and required grouped WAL/value-log synchronization; it does not require a per-write checkpoint. RELAXED with WAL enabled acknowledges kernel-drained command-WAL buffers plus atomic memtable publication, without fsync; it is not a userspace-buffer-only acknowledgement.
+
+**Adjacent #5116:** current queued capture sees base/additional resources before staged pending leaf metadata; no independent pending-stage source has been found. The #5028 owner retains its source-bound ACK/reopen ordering discriminator and any repair. Reconcile a proven shared seam at maturity; no automatic dependency, duplicate repair or host runtime grant.
+
+**Holds and cleanup:** original native caps, Accepted/onceACK/typed Finish, all M3 HOLDs and M8 blocking remain unchanged. .111 native source/evidence stays frozen. No new released cleanup target; preserve source, maps, raw/negative packets, unique work and active consumers. The refreshed executor requires actual deletion only after exact release/ref/evidence/consumer checks. New root evidence/current graph mirror use the mounted FlashDrive and the remote durable decision directory.
+
+Root component receipt: `ordinary-selected-provider-connected-components-root-20261008T163947Z.json` (`e7a297c67748202b3d67fe70c17aa02194abfe3bc23bee06907c309f033b7e73`). Previous focused comment preserved as `ordinary-focused-comment-before-connected-provider-root-20261008T163947Z.md` (`3f13a6b172a27ab82449771a12d64b6fc6e06c6ca619073c2e23263ae69a4df8`). Checkpoint: 2026-10-08T16:39:47.228288+00:00. Executor skill SHA `3e91cbdd864abd73879fddba811e9722b74300e6ae6c5143a7dbaf8c215dbe07`.

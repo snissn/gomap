@@ -1,0 +1,30 @@
+{
+  "at_utc": "2026-10-08T18:07:57.698692+00:00",
+  "updates": [
+    {
+      "issue": 5111,
+      "url": "https://github.com/snissn/gomap/issues/5111",
+      "before": {
+        "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-primary-harness-issue-5111-before-root-20261008T180900Z.md",
+        "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-primary-harness-issue-5111-before-root-20261008T180900Z.md",
+        "sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012"
+      },
+      "body_sha256": "e4f1c5aa05adf0d05b85586eba1bbe818f2ba9bf0c024926af5479d66e3daf15",
+      "unchecked_preserved": 24,
+      "state": "open"
+    },
+    {
+      "issue": 4871,
+      "url": "https://github.com/snissn/gomap/issues/4871",
+      "before": {
+        "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-primary-harness-issue-4871-before-root-20261008T180900Z.md",
+        "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-primary-harness-issue-4871-before-root-20261008T180900Z.md",
+        "sha256": "2c03376c38c0f576734cd85d6c4abc5673d8ac2460ee6f00154db4b4c993dfef"
+      },
+      "body_sha256": "b4a534507e6b77bc5d28e8870bcd8dcfcb96952452e045edea2a8b886ead0972",
+      "unchecked_preserved": 5,
+      "state": "open"
+    }
+  ],
+  "scope": "Explicit missing selector prerequisite; ordinary implementation remains provisional/running; all original outcome and acceptance retained."
+}

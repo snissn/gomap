@@ -1,0 +1,12 @@
+{
+  "at_utc": "2026-10-08T18:24:52.028717+00:00",
+  "old_graph_sha256": "459d1d61dc5ff99f1a48f2d498d74cc94a7d4fbc3dd3df3661222ef4237b7417",
+  "new_graph_sha256": "364a1a68ef364f1a52e24316f8795aef33c167576d16a6a4b0f8fd1aed3c9bdd",
+  "local_remote_equal": true,
+  "other_nodes_preserved": true,
+  "assignment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-primary-harness-setup-assignment-root-20261008T182500Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-primary-harness-setup-assignment-root-20261008T182500Z.json",
+    "sha256": "9e1e31f3e4d0b7bd63b6993616b5304df3290ee37a07897aabc3375f54e6b040"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "at_utc": "2026-10-08T15:01:19.459397+00:00",
+  "old_graph_sha256": "9c1209c2c7caaff7079a6e5610f7cd1f98890c91806d7e4e1c75c73cd5c95a81",
+  "new_graph_sha256": "2f9c8e0512c2b5f152cecbb1c1ccd8ae01c8e0e534d6425411ad46db499774b6",
+  "external_remote_equal": true,
+  "unrelated_nodes_preserved": true,
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-canonical-history-and-vlog-debt-frontier-root-20261008T150119Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-canonical-history-and-vlog-debt-frontier-root-20261008T150119Z.json",
+    "sha256": "bd635126f37ab5808ccf4a2fcdaac743909540034d558ac8755b1ba102705c5d"
+  },
+  "live_receipt": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-canonical-history-and-debt-live-root-20261008T150119Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-canonical-history-and-debt-live-root-20261008T150119Z.json",
+    "sha256": "530fbc08129c2686903e003fa065112886102402226f033081e3bb2d955634bd"
+  },
+  "dependency_ready": false,
+  "released_paths": []
+}

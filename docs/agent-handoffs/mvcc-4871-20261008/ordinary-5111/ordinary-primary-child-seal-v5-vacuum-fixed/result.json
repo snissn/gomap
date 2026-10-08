@@ -1,0 +1,37 @@
+{
+  "after_sha256": "0015e3ad573634af6a82f2e1f0fde1c78453fd93815db9656be7b4ee7cee6033",
+  "args": [
+    "test",
+    "-race",
+    "-p=2",
+    "-v",
+    "./TreeDB/db",
+    "./TreeDB/internal/rootpublication",
+    "-run",
+    "TestPrimaryDependencySealFramesRefuseBeforeChildAndRejectCycle|TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots|TestPrimaryManifestScratchRefusesBeforeBankClaim|TestPrimaryRecordScratchRefusalBeforeCodecAndSeal|TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot|TestDependencyManifestV1DeterministicMultiPageRoundTrip",
+    "-count=1",
+    "-timeout=120s"
+  ],
+  "before_sha256": "0015e3ad573634af6a82f2e1f0fde1c78453fd93815db9656be7b4ee7cee6033",
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/home/mikers/.cache/go-build",
+    "GOENV": "off",
+    "GOMAXPROCS": "2",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOPATH": "/home/mikers/go",
+    "GOPROXY": "off",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "exit": 0,
+  "finish": 1791484346.0334125,
+  "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+  "raw_sha256": "c4bfa62b63fa9160dbac1f62f0edd2bb9b8d6ef274bb2e0f191f7cc22a95b006",
+  "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+  "source_count": 10040,
+  "source_equal": true,
+  "start": 1791484298.2923756
+}

@@ -1,0 +1,20 @@
+{
+  "at_utc": "2026-10-08T17:01:18.283295+00:00",
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-selected-rewrite-provider-root-20261008T170118Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-selected-rewrite-provider-root-20261008T170118Z.json",
+    "sha256": "c86743fcafdf24b08f85edcccaf043eacd7aabc9cca5d15eb5eabfe126fc1a63"
+  },
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_body_sha256": "fcf376bef1accbeface6c0bdb3c53093daaee8c0d856d4b78f0a9c949f78f191",
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "unchecked_acceptance_items": 24,
+  "issue_open": true,
+  "body_unchanged": true,
+  "dependency_ready": false,
+  "previous_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-rewrite-provider-root-20261008T170118Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-rewrite-provider-root-20261008T170118Z.md",
+    "sha256": "6bf7b031a6c8c7b68a91952984baaa828d390d2c0e3748e52e253990ff007ba4"
+  }
+}

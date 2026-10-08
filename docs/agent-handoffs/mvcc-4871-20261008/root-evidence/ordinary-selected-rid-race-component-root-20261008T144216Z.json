@@ -1,0 +1,89 @@
+{
+  "at_utc": "2026-10-08T14:42:16.195032+00:00",
+  "classification": "SOURCE_BOUND_FIVE_ACTUAL_RACE_COMPONENT_PASSES",
+  "packet": {
+    "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-fresh-rid-first",
+    "result": {
+      "after_sha256": "b439adda0d60c19a4b87357c93c0beff14ea0f6c9b8aeb215c5f9e2147a71046",
+      "args": [
+        "test",
+        "-race",
+        "-p=2",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/internal/valuelog",
+        "-run",
+        "TestSelectedStableValueLogCaptureOwnsExactRIDAndRefusesBeforePin|TestOwnedMutationCertificationAndAppendMerge|TestStableLogicalObligation.*Mutation",
+        "-count=1",
+        "-timeout=45s",
+        "-v"
+      ],
+      "before_sha256": "b439adda0d60c19a4b87357c93c0beff14ea0f6c9b8aeb215c5f9e2147a71046",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "finish": 1791469882.1039665,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "raw_sha256": "1f2a098933cf66ed894adfcdb59bdda823479703c267764ffaca5e6867e832e4",
+      "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+      "source_count": 10031,
+      "source_equal": true,
+      "start": 1791469871.9434822
+    },
+    "result_sha256": "f91aa741f6e87858b0cb3dc170a660805164b51cda9ddc809ef48f7be06c1285",
+    "actual_top_level_passes": [
+      "TestStableLogicalObligationCommitmentCertifiesOnlyCompleteMutation",
+      "TestStableLogicalObligationMutationRequiresExactFinalRequirements",
+      "TestStableLogicalObligationMutationFinalRequirementsSearchesWithinFieldGroup",
+      "TestOwnedMutationCertificationAndAppendMerge",
+      "TestSelectedStableValueLogCaptureOwnsExactRIDAndRefusesBeforePin"
+    ],
+    "actual_top_level_failures": [],
+    "actual_top_level_skips": [],
+    "no_matching_test_packages": [],
+    "source_bindings": {
+      "TreeDB/internal/valuelog/stable_resource.go": "0443a0d939c8f811f448dc10c71636487c54c7733ef2d53903d8f0636a2a379f",
+      "TreeDB/internal/valuelog/stable_resource_test.go": "4fb3b6f1ff65a3470f05754c3534eca1f1d3e91370a3c259b45f4e736fe8dbe3",
+      "TreeDB/internal/rootpublication/resource_mutation_allocation.go": "3c858ce4d5fd7d72526e110343baa6bb1a118653bcc51d269bf775145b76f0de",
+      "TreeDB/internal/rootpublication/resource_requirements_allocation_test.go": "7db677ef073450f109c2564a9bd6d732665a7eeeb7f9b0f384212c291e7f0d7a",
+      "TreeDB/internal/rootpublication/resource_set.go": "0d156e31c20069f05047452e0380304ab6f7a3ecd5896e0ef6c880edf17c75bc",
+      "TreeDB/internal/rootpublication/resource_coalesce_allocation.go": "9b20156d62de0445f1d3f301c4df9cbf2ae89f5e1133c17377fb6115753179d1",
+      "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go": "0a298c11ae123fefb9586979763bbbf764e09516a02f567d904c053d82e170e8"
+    },
+    "current_binding_matches": {
+      "TreeDB/internal/valuelog/stable_resource.go": true,
+      "TreeDB/internal/valuelog/stable_resource_test.go": true,
+      "TreeDB/internal/rootpublication/resource_mutation_allocation.go": false,
+      "TreeDB/internal/rootpublication/resource_requirements_allocation_test.go": true,
+      "TreeDB/internal/rootpublication/resource_set.go": false,
+      "TreeDB/internal/rootpublication/resource_coalesce_allocation.go": false,
+      "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go": true
+    },
+    "root_audit_source_bindings": {
+      "TreeDB/internal/rootpublication/resource_kind_merge_allocation.go": "bdb46ea193f94768ae1fab65ef83885fbc048c8a2cf46613eb36126235fad851",
+      "TreeDB/internal/rootpublication/resource_coalesce_allocation.go": "782411d75853e27940c18fcb50e1642c8f4cb7ddc21e986a9ee096344974adae",
+      "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go": "0a298c11ae123fefb9586979763bbbf764e09516a02f567d904c053d82e170e8"
+    },
+    "root_audit_current_matches": {
+      "TreeDB/internal/rootpublication/resource_kind_merge_allocation.go": true,
+      "TreeDB/internal/rootpublication/resource_coalesce_allocation.go": true,
+      "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go": true
+    }
+  },
+  "tests_rerun_by_root": false,
+  "dependency_ready": false,
+  "performance_qualified": false,
+  "root_test_audit": "Exact RID input is detached from caller mutation, source set/clone lifetime remains charged, last clone releases metadata, closed admission refuses capture without consuming manager file. This bounded component does not certify namespace-debt completion or all production providers.",
+  "source_applicability": "Recorded before/after map is exact. Current matches are diagnostic only; history representation is changing, so reuse each original binding without relabeling these as final-candidate checks.",
+  "released_paths": []
+}

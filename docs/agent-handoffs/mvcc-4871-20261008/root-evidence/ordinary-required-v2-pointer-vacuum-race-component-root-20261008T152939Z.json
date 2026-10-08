@@ -1,0 +1,76 @@
+{
+  "at_utc": "2026-10-08T15:29:39.189839+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "classification": "ACTUAL_REQUIRED_V2_POINTER_HELD_READER_INDEPENDENT_FALLBACK_RACE_COMPONENT_ACCEPTED",
+  "packet": {
+    "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-owned-required-directory-rebuild-actual",
+    "result": {
+      "after_sha256": "7625af7127071300122421809c4305e9eef4b1f77639f76654d8180f05c9132f",
+      "args": [
+        "test",
+        "-race",
+        "-p=2",
+        "./TreeDB/db",
+        "-run",
+        "TestPrimaryJointVacuumV6PointersAndIndependentFallback/true",
+        "-count=1",
+        "-timeout=60s",
+        "-v"
+      ],
+      "before_sha256": "7625af7127071300122421809c4305e9eef4b1f77639f76654d8180f05c9132f",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "finish": 1791473292.5834122,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "raw_sha256": "4d75b60d855c03c17784de293610792807eb13e0addef6545439780b0728b4c2",
+      "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+      "source_count": 10032,
+      "source_equal": true,
+      "start": 1791473249.0998807
+    },
+    "result_sha256": "d61b31104675bd4607857327a590f14a3253a22ecf27a7862fd11098e4d2415e",
+    "actual_top_level_passes": [
+      "TestPrimaryJointVacuumV6PointersAndIndependentFallback"
+    ],
+    "source_bindings": {
+      "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go": "08b526eadd4f3db3195f766535b88ad6d21acb77f08f98375a2de9a2616f33ef",
+      "TreeDB/internal/rootpublication/resource_requirements_allocation.go": "f5ef2041dfd20d73a045848eb94b561babe1417ec3a24958af5aaaeae0382875",
+      "TreeDB/internal/rootpublication/resource_import_allocation.go": "3923a45f905479263870a91faf531ab415c889b07996335be4e68eac7641cd69",
+      "TreeDB/internal/rootpublication/resource_set.go": "8547544eb1e5907a8ebcbcf7f0d29889df4dd1692c565151aef54445642fb8a4",
+      "TreeDB/db/durable_root_runtime.go": "b14dda96b24ec69020c447d936b9d56b3eb485b91f17b57cea038610c0a09ffc"
+    },
+    "current_matches": {
+      "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go": true,
+      "TreeDB/internal/rootpublication/resource_requirements_allocation.go": true,
+      "TreeDB/internal/rootpublication/resource_import_allocation.go": true,
+      "TreeDB/internal/rootpublication/resource_set.go": true,
+      "TreeDB/db/durable_root_runtime.go": true
+    },
+    "raw_tail": [
+      "=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+      "=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/true",
+      "--- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback (0.24s)",
+      "    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/true (0.24s)",
+      "PASS",
+      "ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.261s"
+    ]
+  },
+  "source_gate": "one actual named top-level test and true required-V2 subtest, exit0; original pointers/held-old-reader/physical-cut-refusal/dual-capsule damage/read-only fallback and later write assertions inspected",
+  "root_tests_rerun": false,
+  "limits": "Focused component only at its exact source; all19 closure, original-origin outcome repair, broad gates, product freeze, performance and PR maturity remain pending. Earlier no-tests-matched packet remains compile-only; unchanged sources only may carry.",
+  "dependency_ready": false,
+  "released_paths": [],
+  "native_activation": false
+}

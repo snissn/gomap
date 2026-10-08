@@ -1,0 +1,33 @@
+{
+  "at_utc": "2026-10-08T15:54:55.795777+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "owner": "/root",
+  "implementation_owner": "/root/m7_primary_directory_recovery_sol61",
+  "model": "gpt-6.1-sol",
+  "classification": "CONTINUE_NARROW_ACTUAL_PROVIDER_CONSTRUCTOR_CLOSURE_WITHIN_ACCEPTED_BOUNDARY",
+  "finding": "Actual dictdb/template captures build generic descriptors before selected import. Legacy child snapshots may lack PRIMARY, so the current owned pager constructor cannot use independently supplied parent metadata.",
+  "root_inspected_source_bindings": {
+    "TreeDB/db/stable_pager_owned_operations.go": "ae3fd2e694519f351f26878bc9fd1e6e201ce58c947c13cd09152017fea82738",
+    "TreeDB/db/stable_resource.go": "1af56895d6c120a44e4dd8671d56f4434eb602ab8322c9f6b38010b8151eed04",
+    "TreeDB/db/db.go": "398824168e1c115c0f0adae5ac2e6b6bc3b158770f3a4292bda11e5fe3742794",
+    "TreeDB/internal/dictdb/resource_capture.go": "e48b995900ffacd0ae1a80ffbf10e1ad9675202b77169392502b5584a429ea3b",
+    "TreeDB/internal/templatedb/resource_capture.go": "6f3b1772f49f651beccedefcdd218468b4fa09185910b64523c4b819b42b0e3f"
+  },
+  "decision": "Use explicit request-scoped supplied metadata Owner before new selected capture effects, separate from original child Snapshot/pager/physical registry custody. Reuse the SAME real final-reader finalizer and outcome with preborn failure custody at the original authority. Independently refund wrapper metadata only after actual success, retaining its parent governor through surviving allocation/debt. Preserve generic captures; do not force PRIMARY on the child, use global mutable capture context, relabel physical authority or treat opaque Close as completion.",
+  "remaining_gate": "Actual inline/pointer producer capture, refusal rollback, original final-reader success/debt, full19 maturity/docs/CI impact/final base, coherent local product freeze, serial matched performance, mature PR and independent/current-head/root merge gates.",
+  "original_outcome_component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-original-outcome-expanded-race-component-root-20261008T154817Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-original-outcome-expanded-race-component-root-20261008T154817Z.json",
+    "sha256": "c53552a70b608a9a311f1e0637eabed9b89daed9f76b55d903524ce842a10a82"
+  },
+  "required_v2_component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-required-v2-admitted-serialization-component-root-20261008T155455Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-required-v2-admitted-serialization-component-root-20261008T155455Z.json",
+    "sha256": "731c2fde9140f803272c213a31c4a88632b0babf6a865346d7a9edd6f45fea13"
+  },
+  "dependency_ready": false,
+  "new_issues": [],
+  "edge_changes": [],
+  "native_activation": false,
+  "released_paths": []
+}

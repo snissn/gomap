@@ -1,0 +1,17 @@
+{
+  "at_utc": "2026-10-08T17:01:18.283295+00:00",
+  "old_graph_sha256": "724661ee4df18d3548d9c114723f14423551ecea90071336733002e4aa41248a",
+  "new_graph_sha256": "64ca25677690a6128c95ba14433ef7d19ebc487c6cf534b805650b625b0f6ae8",
+  "local_remote_equal": true,
+  "unrelated_nodes_preserved": true,
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-selected-rewrite-provider-root-20261008T170118Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-selected-rewrite-provider-root-20261008T170118Z.json",
+    "sha256": "c86743fcafdf24b08f85edcccaf043eacd7aabc9cca5d15eb5eabfe126fc1a63"
+  },
+  "live_receipt": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-selected-rewrite-provider-live-root-20261008T170118Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-selected-rewrite-provider-live-root-20261008T170118Z.json",
+    "sha256": "e4a2422060635a6e48f129720f8e82259eeb9eeb0fe29ee2469f196c2a820e53"
+  }
+}

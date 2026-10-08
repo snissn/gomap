@@ -1,0 +1,105 @@
+{
+  "at_utc": "2026-10-08T15:04:32.641475+00:00",
+  "classification": "TEN_ACTUAL_RACE_COMPONENT_PASSES_WITH_REAL_POST_CONSUMPTION_VLOG_DEBT",
+  "packet": {
+    "bindings": {
+      "TreeDB/db/db.go": "398824168e1c115c0f0adae5ac2e6b6bc3b158770f3a4292bda11e5fe3742794",
+      "TreeDB/db/stable_pager_owned_operations.go": "ae3fd2e694519f351f26878bc9fd1e6e201ce58c947c13cd09152017fea82738",
+      "TreeDB/db/stable_pager_owned_operations_test.go": "db2c355e4458f6d05b6528cdbda0e65fc3b214c10317b17d46840c6d1a5870bb",
+      "TreeDB/internal/rootpublication/resource_coalesce_allocation_test.go": "ae627207c67d228dd59595833424d9dd77667b2b20168e4dc268b384bd59fe7d"
+    },
+    "current_matches": {
+      "TreeDB/db/db.go": true,
+      "TreeDB/db/stable_pager_owned_operations.go": true,
+      "TreeDB/db/stable_pager_owned_operations_test.go": true,
+      "TreeDB/internal/rootpublication/resource_coalesce_allocation_test.go": true
+    },
+    "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-owned-history-and-vlog-debt-fixture-final",
+    "fails": [],
+    "fixture_cleanup": [
+      "\td, err := Open(Options{Dir: t.TempDir(), ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})",
+      "\tif err != nil {",
+      "\t\tt.Fatal(err)",
+      "\t}",
+      "\tsnapshot := d.AcquireStableSnapshot()",
+      "\tif snapshot == nil || snapshot.primaryRoot == nil {",
+      "\t\tt.Fatal(\"real primary capture\")",
+      "\t}",
+      "\tfaultForPostConsumptionVLogTest := errors.New(\"post-unlink parent sync failure\")",
+      "\tphysicalPager := snapshot.primaryRoot.arena.Pager()",
+      "\tt.Cleanup(func() {",
+      "\t\t// The failure intentionally retains the exact owner and its admitted",
+      "\t\t// charge. After all consumers/assertions finish, explicit fixture-only",
+      "\t\t// physical teardown joins its worker; this is not typed debt completion.",
+      "\t\tif closeErr := d.Close(); !errors.Is(closeErr, faultForPostConsumptionVLogTest) {",
+      "\t\t\tt.Errorf(\"terminal owner lost original cleanup error: %v\", closeErr)",
+      "\t\t}",
+      "\t\t_ = physicalPager.Close()",
+      "\t})",
+      "\t// A separate genuine manager-owned Set supplies a deterministic last-file",
+      "\t// zombie. The real Snapshot finalizer consumes its original Set edge.",
+      "\tdir := t.TempDir()"
+    ],
+    "has_goleak": false,
+    "passes": [
+      "TestOwnedResourceCoalescingExactFrontierAndLogicalUnion",
+      "TestOwnedResourceCoalescingRefusalKeepsBothInputs",
+      "TestOwnedSameIdentityAppendRetainsCanonicalIndexAndCustody",
+      "TestOwnedCanonicalHistoryBatchAndInheritedFiltering",
+      "TestPrimaryMetadataCaptureFinalizesAfterLastRead",
+      "TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer",
+      "TestOwnedPagerOperationWaitsForActualSnapshotFinalization",
+      "TestOwnedPagerOperationJoinsOriginalRunningFinalizer",
+      "TestOwnedPagerOperationFinalReaderAndExportedHandleRace",
+      "TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor"
+    ],
+    "result": {
+      "after_sha256": "165849021b6fd27b9d33b8e3acc33d0d77c841c6ad14dc9783e95a70a11f8448",
+      "args": [
+        "test",
+        "-race",
+        "-p=2",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "-run",
+        "TestOwnedCanonicalHistoryBatchAndInheritedFiltering|TestOwnedSameIdentityAppendRetainsCanonicalIndexAndCustody|TestOwnedResourceCoalescing|TestOwnedPagerOperation|TestPrimaryMetadataCapture",
+        "-count=1",
+        "-timeout=45s",
+        "-v"
+      ],
+      "before_sha256": "165849021b6fd27b9d33b8e3acc33d0d77c841c6ad14dc9783e95a70a11f8448",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "finish": 1791471620.0137646,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "raw_sha256": "bdddbbcc6429ec378accbd35abc9d31141e8532a195c54f7d48265b413d03373",
+      "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+      "source_count": 10031,
+      "source_equal": true,
+      "start": 1791471576.6051633
+    },
+    "result_sha256": "5d97cce7933bcd00dac8e58e850e5630920262eeab7d5b38fbf3f999aafc9810",
+    "skips": []
+  },
+  "root_tests_rerun": false,
+  "dependency_ready": false,
+  "performance_qualified": false,
+  "root_acceptance": "Snapshot combined cleanup error reaches Enrollment.CloseAfterCleanup before governor release. Real zombie unlink and deferred parent-sync failure consume Set/File refs0; exact snapshot/ops debt and positive budget charge survive. Repeated Close/token Release do not replay original action. DB.Close preserves the same original fault. Fixture-only pager Close happens after all assertions to join worker; it does not certify typed debt completion or refund. Multi-entry inherited-history/filter and held/final readers also pass.",
+  "prior_red_receipt": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-canonical-history-and-vlog-debt-frontier-root-20261008T150119Z.json",
+    "sha256": "bd635126f37ab5808ccf4a2fcdaac743909540034d558ac8755b1ba102705c5d"
+  },
+  "released_paths": []
+}

@@ -1,0 +1,52 @@
+{
+  "at_utc": "2026-10-08T18:10:44.322051+00:00",
+  "harness_issue_created": {
+    "at_utc": "2026-10-08T18:01:04.734044+00:00",
+    "number": 5118,
+    "id": 5766580387,
+    "url": "https://github.com/snissn/gomap/issues/5118",
+    "body_sha256": "31d98387966db6bd5e89a5a795643bd9e7c44a5715916d13ac63b9274d46f31d",
+    "state": "open",
+    "deliverable": "pr",
+    "base": "3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3",
+    "acceptance_owner": "/root"
+  },
+  "native_edges_verified": {
+    "at_utc": "2026-10-08T18:03:07.865819+00:00",
+    "harness_issue": "https://github.com/snissn/gomap/issues/5118",
+    "harness_issue_id": 5766580387,
+    "parent": "https://github.com/snissn/gomap/issues/5111",
+    "blocked_issue": "https://github.com/snissn/gomap/issues/5111",
+    "dependencies_before": [
+      4874,
+      5011,
+      5019,
+      5036
+    ],
+    "dependencies_after": [
+      4874,
+      5011,
+      5019,
+      5036,
+      5118
+    ],
+    "source_work_continues_provisionally": true,
+    "edge_scope": "performance exit/retained collection only"
+  },
+  "live_bodies_receipt": {
+    "path": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-primary-harness-live-bodies-root-20261008T180900Z.json",
+    "sha256": "25c28e0fafd8b77de64a32cc1e441df7279de94dd2639bb1e5e4cb7383437ced"
+  },
+  "setup_path": "/Volumes/FlashDrive/gomap-5118-primary-harness-root-20261008",
+  "setup_session": 1359,
+  "setup_in_flight_no_worker_assigned": true,
+  "abandoned_aux_archive": {
+    "path": "/Volumes/FlashDrive/gomap-5028-writer185-v1-source-761e08c9.tar.gz",
+    "owner_reported_deleted_bytes": 69238784,
+    "root_verified_absent": true,
+    "deleted_by_root": false,
+    "owner_retained_receipt": "qualification-v13-writer-invariant-native185-preparation-v1/root-partial-archive-cleanup.json",
+    "source_and_causal_packets_remain_protected": true
+  },
+  "original_product_and_native_acceptance_preserved": true
+}

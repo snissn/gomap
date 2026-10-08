@@ -1,0 +1,10 @@
+{
+  "changed_only": "discovery_source_sha256",
+  "previous": "1f2e8925e465cac384a601aadac738fc495b44565c4a3c67625dfc9f2de66c89",
+  "current": "f65ddb6985cd7a2b62887e4791a759aaab4662c722b35803af71d45bc9aa6dd1",
+  "workflows": 14,
+  "original_members": 56,
+  "refresh_exit": 0,
+  "check_exit": 0,
+  "tests_not_run": "User-requested spin-down; no new tests. CI-impact contract suite remains owed."
+}

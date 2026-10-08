@@ -1,0 +1,19 @@
+{
+  "at_utc": "2026-10-08T14:29:12.095737+00:00",
+  "old_graph_sha256": "7c005c9cc7f99e1aecdb093a2447052aeaf76aa907ea3ac924c52bf980ae0588",
+  "new_graph_sha256": "2409ef03fc3690edfce59f90803e08e01b49e12588e40cb385e975f52e30a9d2",
+  "external_remote_equal": true,
+  "unrelated_nodes_preserved": true,
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-production-certification-components-root-20261008T142912Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-production-certification-components-root-20261008T142912Z.json",
+    "sha256": "c219896781fe0017c43456903d66f97c7d7ed5127a2c7d09d9072dc5f743fcd6"
+  },
+  "live_receipt": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-production-certification-live-root-20261008T142912Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-production-certification-live-root-20261008T142912Z.json",
+    "sha256": "bc8d0a860f1e5d25b13e4a8be7acd9f86a55ee2a23cb543744280f7c4b708659"
+  },
+  "dependency_ready": false,
+  "released_paths": []
+}

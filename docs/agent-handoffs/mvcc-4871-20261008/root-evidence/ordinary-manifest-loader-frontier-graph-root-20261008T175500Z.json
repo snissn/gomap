@@ -1,0 +1,15 @@
+{
+  "at_utc": "2026-10-08T17:51:41.632189+00:00",
+  "previous_graph_sha256": "3c9a0463ebd707f139301419e5181a752c6ac77eca5dfc8b21322b35b005263d",
+  "new_graph_sha256": "c953998569797353a66d5d3bc340a2af56e61bf27c9d8b5d0fd90d92229e20fd",
+  "component_receipt": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-manifest-loader-component-root-20261008T175000Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-manifest-loader-component-root-20261008T175000Z.json",
+    "sha256": "6027b5df16ad4876f833c3f80d53ef4a0d76711c7934e040891a81691ad4c12c"
+  },
+  "whole_candidate_accepted": false,
+  "dependency_ready": false,
+  "node": "M7P",
+  "next_action": "Complete actual selected V5 manifest and V2 snapshot-rebind ownership callers through existing admitted/shared parsers; checked sizes/complete19/docs and coherent affected normal/race; CI-impact/one final-base reconcile/product freeze; route-proved matched performance; mature PR, independent Sol review, current-head CI and root merge.",
+  "all_original_caps_and_other_node_holds_preserved": true
+}

@@ -1,0 +1,18 @@
+{
+  "at_utc": "2026-10-08T14:29:12.095737+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_sha256": "828b8ab97e47f1684b0f766e54effdb97a5083d024deadbaa311707e36df61e7",
+  "prior_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-production-certification-root-20261008T142912Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-production-certification-root-20261008T142912Z.md",
+    "sha256": "3421e2837a069d0ae94eed05bf07771b484a7d2e361fbb47aa007387b5094db6"
+  },
+  "issue_body_preserved": true,
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-production-certification-components-root-20261008T142912Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-production-certification-components-root-20261008T142912Z.json",
+    "sha256": "c219896781fe0017c43456903d66f97c7d7ed5127a2c7d09d9072dc5f743fcd6"
+  },
+  "dependency_ready": false
+}

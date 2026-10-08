@@ -1,0 +1,22 @@
+{
+  "at_utc": "2026-10-08T18:03:07.865819+00:00",
+  "harness_issue": "https://github.com/snissn/gomap/issues/5118",
+  "harness_issue_id": 5766580387,
+  "parent": "https://github.com/snissn/gomap/issues/5111",
+  "blocked_issue": "https://github.com/snissn/gomap/issues/5111",
+  "dependencies_before": [
+    4874,
+    5011,
+    5019,
+    5036
+  ],
+  "dependencies_after": [
+    4874,
+    5011,
+    5019,
+    5036,
+    5118
+  ],
+  "source_work_continues_provisionally": true,
+  "edge_scope": "performance exit/retained collection only"
+}

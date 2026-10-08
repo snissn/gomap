@@ -1,0 +1,17 @@
+{
+  "at_utc": "2026-10-08T15:26:20.367910+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_sha256": "97ea8927c5ff0e04a82d8598a0f5aa3444fb56a93dc824b8a1132db100aa670a",
+  "prior_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-original-origin-root-20261008T152620Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-original-origin-root-20261008T152620Z.md",
+    "sha256": "f67fe105825e6c759e28dbdd8936a62fb89f72305e53a7f7287f09287d3fa178"
+  },
+  "issue_body_preserved": true,
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "decision": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-original-origin-release-outcome-boundary-root-20261008T152620Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-original-origin-release-outcome-boundary-root-20261008T152620Z.json",
+    "sha256": "ce11f33d410f282a6da19d6a1d536828c6a60ac35d056a70e3734b839b9f1a06"
+  }
+}

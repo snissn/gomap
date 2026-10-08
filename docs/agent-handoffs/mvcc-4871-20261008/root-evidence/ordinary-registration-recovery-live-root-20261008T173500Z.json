@@ -1,0 +1,23 @@
+{
+  "at_utc": "2026-10-08T17:35:33.661334+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_body_sha256": "79cd81933e1c1880fa42ed03d4c7a76efb44e01a29afbc3c511bbbba92b43de5",
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "issue_open": true,
+  "issue_body_unchanged": true,
+  "unchecked_acceptance_items": 24,
+  "previous_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-registration-recovery-root-20261008T173500Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-registration-recovery-root-20261008T173500Z.md",
+    "sha256": "fcf376bef1accbeface6c0bdb3c53093daaee8c0d856d4b78f0a9c949f78f191"
+  },
+  "component_sha256": "363e8af8968289633f50b981a892138c60784703efa34ba6e150bcbbaf2c1891",
+  "dependency_ready": false,
+  "foreign185_runtime_launched": false,
+  "own_runtime_hold_explicitly_released": "2026-10-08T17:33:30Z",
+  "root_fresh_process_audit_at_release": {
+    "Go_compile_test_processes": [],
+    "foreign_root_exists": false,
+    "disk_free_bytes": 70392627200
+  }
+}

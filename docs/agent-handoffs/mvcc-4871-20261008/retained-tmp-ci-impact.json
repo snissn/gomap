@@ -1,0 +1,2887 @@
+{
+  "always_members": [
+    "treedb-tests/required/single"
+  ],
+  "coverage_gaps": [
+    "Manual race/memtier members are inventoried but do not run on every PR.",
+    "Existing push-only/path-filtered workflows remain push-only/path-filtered; forecasts do not add execution.",
+    "Nested modules (benchmarks/experiments/third_party) and Haystack/JavaScript clients have manual or absent qualification; changes force full existing CI, not coverage expansion.",
+    "No package reverse closure or test-level elimination is qualified; production/test/script/unknown/new input changes choose full.",
+    "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate.",
+    "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification."
+  ],
+  "discovery_source_sha256": "23d2d9d2d598828a97679b67e35bb3c2d2efc432f6a3eb389736306c5d5c6923",
+  "dynamic_consumers": [
+    {
+      "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
+      "inputs": [
+        "TreeDB/**/*_test.go",
+        "TreeDB/**"
+      ],
+      "source": "TreeDB/production_authority_matrix_test.go"
+    },
+    {
+      "behavior": "tracked NUL Git path scan, UTF-8 content, retained RESULTS.json and fallback filesystem walk; broad TreeDB test/race ownership",
+      "inputs": [
+        "TreeDB/**",
+        "docs/**",
+        "experiments/**"
+      ],
+      "source": "TreeDB/collections/typed_storage_naming_test.go"
+    },
+    {
+      "behavior": "markdown globs/walks, canonical specs and guides; benchmarks conservatively retained through naming consumer",
+      "inputs": [
+        "TreeDB/README.md",
+        "TreeDB/AGENTS.md",
+        "TreeDB/AUDIT_TRACKING.md",
+        "TreeDB/docs/spec/**",
+        "TreeDB/docs/guides/**",
+        "docs/**"
+      ],
+      "source": "TreeDB/docs/docs_lint_test.go"
+    },
+    {
+      "behavior": "source WalkDir and support matrix documentation",
+      "inputs": [
+        "TreeDB/**"
+      ],
+      "source": "TreeDB/docs/command_wal_matrix_test.go"
+    },
+    {
+      "behavior": "optional acceptance.json glob; unowned path forces full",
+      "inputs": [
+        "artifacts/command-wal/**"
+      ],
+      "source": "TreeDB/docs/command_wal_acceptance_test.go"
+    },
+    {
+      "behavior": "Python-launch Go native service via root workflow",
+      "inputs": [
+        "clients/python/**",
+        "TreeDB/**",
+        "cmd/**",
+        "go.mod",
+        "go.sum"
+      ],
+      "source": "clients/python/treedb_client/tests/test_integration.py"
+    },
+    {
+      "behavior": "Python-discovered peer consumers in existing qualification workflow",
+      "inputs": [
+        "scripts/**",
+        "TreeDB/**",
+        "cmd/treedb-fixed-peer/**"
+      ],
+      "source": "scripts/treedb_peer_*test.py"
+    },
+    {
+      "behavior": "production/test fixtures and platform/CGO/tag contexts are full; no static import closure claim",
+      "inputs": [
+        "**/testdata/**",
+        "**/*.s",
+        "**/*.c",
+        "**/*.h",
+        "**/go.mod",
+        "**/go.sum",
+        "scripts/**",
+        "Makefile"
+      ],
+      "source": "go build/test embed and generators"
+    }
+  ],
+  "global_inputs": [
+    ".github/**",
+    "**/go.mod",
+    "**/go.sum",
+    "go.mod",
+    "go.sum",
+    "go.work*",
+    "**/go.work*",
+    "Makefile",
+    "*.mk",
+    "AGENTS.md",
+    "**/AGENTS.md"
+  ],
+  "harness_inputs": {
+    ".github/ci/treedb_race_weighted_shards.tsv": {
+      "git_blob": "b2c9672676b32ceb26d77c6f09bf9dde363de0db",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_unix_weighted_shards.tsv": {
+      "git_blob": "22f0d32237b1ab7318dfa8b8f396c325c779bca9",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_windows_caching_heavy_shard0_tests.txt": {
+      "git_blob": "4ff4384449ae2679fe9ceb893cd5f9420e277f6f",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_windows_caching_heavy_tests.txt": {
+      "git_blob": "1e0f9db92bad7db7a47400cf6134240944f6e017",
+      "mode": "100644"
+    },
+    ".github/ci/treedb_windows_core_weighted_shards.tsv": {
+      "git_blob": "7fed595f028cc2ecdd3f97946a3c3698de7d219f",
+      "mode": "100644"
+    },
+    ".github/scripts/ci_impact.py": {
+      "git_blob": "20aa94a867598da1501cedca36f7c91fab5d18ed",
+      "mode": "100644"
+    },
+    ".github/scripts/test_ci_impact.py": {
+      "git_blob": "fc7cde6c604a0472266ae04ee8df309ef880dbd5",
+      "mode": "100644"
+    },
+    ".github/scripts/test_treedb_ci_contract.py": {
+      "git_blob": "a5b1deea04dbc3f190678431c3078e808b94c5a8",
+      "mode": "100644"
+    },
+    ".github/scripts/test_treedb_windows_core_headroom.py": {
+      "git_blob": "13b475679f2258435cd0d6407ff9eea2f7b1ac92",
+      "mode": "100644"
+    },
+    "go.mod": {
+      "git_blob": "9c50190970e42029aebab51af84002c17341053e",
+      "mode": "100644"
+    },
+    "go.sum": {
+      "git_blob": "f5e36a3dc970a74f8b2eab76649e9c0d6a1f727a",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/collect.py": {
+      "git_blob": "f371e1c10049992f808df5e9f96d153c49f7aeb0",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/host_isolation_test.py": {
+      "git_blob": "a1d623ed357995b2e1a69da6a658cc19418766d6",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_census.py": {
+      "git_blob": "78073998cc0fa5714870b5112057d1d46374badb",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_collect.py": {
+      "git_blob": "5f61ef5192813bb4bc9b887053511e0a2c4eed36",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_contract.py": {
+      "git_blob": "108a17b99663006ce8362f2f4ef2f37bc1705e21",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_custody.py": {
+      "git_blob": "bcb49eba9b7c6d41f4a71d4057e63d65393b8fcc",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_functional.py": {
+      "git_blob": "2f7a0010235d18904e68cd278fe774909fe2a342",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_runner.py": {
+      "git_blob": "bd47efd917d672238b6011fd81af9c362e2d5988",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/hosted_test.py": {
+      "git_blob": "905630a6eadd64b7a781f5e4f6ff922af0c3ea41",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/load_readiness_test.py": {
+      "git_blob": "d7ec9e1442e716fc498e7f0f7670a53977eeb333",
+      "mode": "100644"
+    },
+    "scripts/cow_c3_read/protocol.py": {
+      "git_blob": "36b2e6ab54eba64dc83a657068da500ea46eae82",
+      "mode": "100644"
+    }
+  },
+  "members": [
+    {
+      "id": "cow-c3-hosted-qualification/qualification/single",
+      "job": "qualification",
+      "owner": "C3 qualification coordinator with CI maintainer and affected harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "cow-c3-hosted-qualification.yml"
+    },
+    {
+      "id": "format/gofmt/single",
+      "job": "gofmt",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "format.yml"
+    },
+    {
+      "id": "hashdb-tests/test/single",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "windows-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "hashdb-tests.yml"
+    },
+    {
+      "id": "memtier-bench/bench/single",
+      "job": "bench",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "memtier-bench.yml"
+    },
+    {
+      "id": "owner-local-metadata-qualification/qualify/single",
+      "job": "qualify",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": true,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "owner-local-metadata-qualification.yml"
+    },
+    {
+      "id": "peer-security-qualification/qualify/single",
+      "job": "qualify",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": true,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "peer-security-qualification.yml"
+    },
+    {
+      "id": "peer-security-qualification/public-path-cost/single",
+      "job": "public-path-cost",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "peer-security-qualification.yml"
+    },
+    {
+      "id": "race/race/single",
+      "job": "race",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": true,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "race.yml"
+    },
+    {
+      "id": "read-snapshot-guardrails/append_only_snapshot_guardrail/single",
+      "job": "append_only_snapshot_guardrail",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "read-snapshot-guardrails.yml"
+    },
+    {
+      "id": "redis-bench/bench/single",
+      "job": "bench",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "redis-bench.yml"
+    },
+    {
+      "id": "root-tests/test/ubuntu-latest-1",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "ubuntu-latest-1",
+          "os": "ubuntu-latest",
+          "run_docs_check": true,
+          "run_vet": true,
+          "test_shard_count": 2,
+          "test_shard_index": 0
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "root-tests.yml"
+    },
+    {
+      "id": "root-tests/test/ubuntu-latest-2",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "ubuntu-latest-2",
+          "os": "ubuntu-latest",
+          "run_docs_check": false,
+          "run_vet": false,
+          "test_shard_count": 2,
+          "test_shard_index": 1
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "root-tests.yml"
+    },
+    {
+      "id": "root-tests/test/macos-latest-1",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "macos-latest-1",
+          "os": "macos-latest",
+          "run_docs_check": true,
+          "run_vet": true,
+          "test_shard_count": 2,
+          "test_shard_index": 0
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "root-tests.yml"
+    },
+    {
+      "id": "root-tests/test/macos-latest-2",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "macos-latest-2",
+          "os": "macos-latest",
+          "run_docs_check": false,
+          "run_vet": false,
+          "test_shard_count": 2,
+          "test_shard_index": 1
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "root-tests.yml"
+    },
+    {
+      "id": "sparse-catalog-qualification/qualify/single",
+      "job": "qualify",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": true,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "sparse-catalog-qualification.yml"
+    },
+    {
+      "id": "sparse-catalog-qualification/paired-performance/single",
+      "job": "paired-performance",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "sparse-catalog-qualification.yml"
+    },
+    {
+      "id": "treedb-tests/mvcc-raw-path-gate/single",
+      "job": "mvcc-raw-path-gate",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/vet/ubuntu",
+      "job": "vet",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "ubuntu",
+          "os": "ubuntu-latest"
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/vet/macos",
+      "job": "vet",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "macos",
+          "os": "macos-latest"
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/vet/windows",
+      "job": "vet",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows",
+          "os": "windows-latest"
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/ubuntu-latest-1",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "ubuntu-latest-1",
+          "os": "ubuntu-latest",
+          "package_shard_count": 3,
+          "package_shard_index": 0,
+          "shard_kind": "all",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/ubuntu-latest-2",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "ubuntu-latest-2",
+          "os": "ubuntu-latest",
+          "package_shard_count": 3,
+          "package_shard_index": 1,
+          "shard_kind": "all",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/ubuntu-latest-3",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "ubuntu-latest-3",
+          "os": "ubuntu-latest",
+          "package_shard_count": 3,
+          "package_shard_index": 2,
+          "shard_kind": "all",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/macos-latest-1",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "macos-latest-1",
+          "os": "macos-latest",
+          "package_shard_count": 3,
+          "package_shard_index": 0,
+          "shard_kind": "all",
+          "timeout": 30
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/macos-latest-2",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "macos-latest-2",
+          "os": "macos-latest",
+          "package_shard_count": 3,
+          "package_shard_index": 1,
+          "shard_kind": "all",
+          "timeout": 30
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/macos-latest-3",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "macos-latest-3",
+          "os": "macos-latest",
+          "package_shard_count": 3,
+          "package_shard_index": 2,
+          "shard_kind": "all",
+          "timeout": 30
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-mongo-gateway",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-mongo-gateway",
+          "os": "windows-latest",
+          "shard_kind": "windows-mongo",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-nativewire",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-nativewire",
+          "os": "windows-latest",
+          "shard_kind": "windows-nativewire",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-powerloss-oracle",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-powerloss-oracle",
+          "os": "windows-latest",
+          "shard_kind": "windows-powerloss-oracle",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-1",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-1",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 0,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-2",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-2",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 1,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-3",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-3",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 2,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-4",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-4",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 3,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-5",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-5",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 4,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-6",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-6",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 5,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-7",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-7",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 6,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-core-8",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-core-8",
+          "os": "windows-latest",
+          "package_shard_count": 8,
+          "package_shard_index": 7,
+          "shard_kind": "windows-core",
+          "timeout": 40
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-caching-heavy-1",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "heavy_shard_count": 2,
+          "heavy_shard_index": 0,
+          "name": "windows-caching-heavy-1",
+          "os": "windows-latest",
+          "shard_kind": "windows-caching-heavy",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-caching-heavy-2",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "heavy_shard_count": 2,
+          "heavy_shard_index": 1,
+          "name": "windows-caching-heavy-2",
+          "os": "windows-latest",
+          "shard_kind": "windows-caching-heavy",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-caching-rest-1",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-caching-rest-1",
+          "os": "windows-latest",
+          "rest_shard_count": 3,
+          "rest_shard_index": 0,
+          "shard_kind": "windows-caching-rest",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-caching-rest-2",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-caching-rest-2",
+          "os": "windows-latest",
+          "rest_shard_count": 3,
+          "rest_shard_index": 1,
+          "shard_kind": "windows-caching-rest",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/test/windows-caching-rest-3",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "name": "windows-caching-rest-3",
+          "os": "windows-latest",
+          "rest_shard_count": 3,
+          "rest_shard_index": 2,
+          "shard_kind": "windows-caching-rest",
+          "timeout": 25
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/race/1",
+      "job": "race",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "shard": 1,
+          "shard_count": 3,
+          "shard_index": 0,
+          "shard_kind": "core"
+        },
+        "race": true,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/race/2",
+      "job": "race",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "shard": 2,
+          "shard_count": 3,
+          "shard_index": 1,
+          "shard_kind": "core"
+        },
+        "race": true,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/race/3",
+      "job": "race",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "shard": 3,
+          "shard_count": 3,
+          "shard_index": 2,
+          "shard_kind": "core"
+        },
+        "race": true,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/race/4",
+      "job": "race",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "shard": 4,
+          "shard_count": 1,
+          "shard_index": 0,
+          "shard_kind": "collections"
+        },
+        "race": true,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/perf/single",
+      "job": "perf",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/snapshot-iterator-perf/single",
+      "job": "snapshot-iterator-perf",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-tests/required/single",
+      "job": "required",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-tests.yml"
+    },
+    {
+      "id": "treedb-vacuum-m0/capture/single",
+      "job": "capture",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-24.04",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "treedb-vacuum-m0.yml"
+    },
+    {
+      "id": "unified-bench-suites/suites/single",
+      "job": "suites",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-suites.yml"
+    },
+    {
+      "id": "unified-bench-suites/bigkeys_guard/single",
+      "job": "bigkeys_guard",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-suites.yml"
+    },
+    {
+      "id": "unified-bench-suites/profiles/balanced",
+      "job": "profiles",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "profile": "balanced"
+        },
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-suites.yml"
+    },
+    {
+      "id": "unified-bench-suites/profiles/fast",
+      "job": "profiles",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "profile": "fast"
+        },
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-suites.yml"
+    },
+    {
+      "id": "unified-bench-suites/profiles/durable",
+      "job": "profiles",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "profile": "durable"
+        },
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-suites.yml"
+    },
+    {
+      "id": "unified-bench-tests/test/ubuntu-latest",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "os": "ubuntu-latest"
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-tests.yml"
+    },
+    {
+      "id": "unified-bench-tests/test/macos-latest",
+      "job": "test",
+      "owner": "CI maintainer with affected package/harness owner",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {
+          "os": "macos-latest"
+        },
+        "race": false,
+        "runs_on": "${{ matrix.os }}",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "unified-bench-tests.yml"
+    }
+  ],
+  "mode": "advisory",
+  "rules": [
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "*.go",
+      "reason": "go-source-or-test-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "*.py",
+      "reason": "executable-discovery-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "*.sh",
+      "reason": "executable-discovery-input"
+    },
+    {
+      "consumers": [
+        "treedb-tests.yml/test",
+        "treedb-tests.yml/race",
+        "root-tests.yml/test"
+      ],
+      "glob": "docs/**",
+      "reason": "docs-and-tracked-utf8-naming-consumers"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "TreeDB/**",
+      "reason": "storage-and-transitive-authority-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "HashDB/**",
+      "reason": "storage-and-root-import-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "scripts/**",
+      "reason": "script-generator-or-service-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "clients/**",
+      "reason": "client-and-python-service-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "benchmarks/**",
+      "reason": "benchmark-module-fixture-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "experiments/**",
+      "reason": "experiment-and-tracked-utf8-input"
+    },
+    {
+      "consumers": [
+        "cow-c3-hosted-qualification.yml",
+        "format.yml",
+        "hashdb-tests.yml",
+        "memtier-bench.yml",
+        "owner-local-metadata-qualification.yml",
+        "peer-security-qualification.yml",
+        "race.yml",
+        "read-snapshot-guardrails.yml",
+        "redis-bench.yml",
+        "root-tests.yml",
+        "sparse-catalog-qualification.yml",
+        "treedb-tests.yml",
+        "treedb-vacuum-m0.yml",
+        "unified-bench-suites.yml",
+        "unified-bench-tests.yml"
+      ],
+      "full": true,
+      "glob": "third_party/**",
+      "reason": "replacement-module-input"
+    }
+  ],
+  "schema_version": 2,
+  "workflows": {
+    "cow-c3-hosted-qualification.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": {
+          "inputs": {
+            "attempt": {
+              "default": "capacity",
+              "description": "Unique root-owned attempt label (required for full)",
+              "required": false,
+              "type": "string"
+            },
+            "mode": {
+              "default": "capacity-only",
+              "description": "Capacity probe by default; full needs root construction review on issue 5076",
+              "options": [
+                "capacity-only",
+                "full"
+              ],
+              "required": true,
+              "type": "choice"
+            }
+          }
+        }
+      },
+      "git_blob": "bba97a5f5fb109374891c6d790755554f0585553",
+      "jobs": {
+        "qualification": {
+          "checkout": [
+            {
+              "fetch-depth": 1,
+              "persist-credentials": false
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "8dcff641011be6ba15188100198a726edf2fef4e49a4d911f61e569f6348fcd9",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:32",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Record job admission origin before checkout"
+            },
+            {
+              "command_sha256": "2ba6f12ab766531ae81a12f25f917c5118d0571fc324c8f368d5440680886efe",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:54",
+              "env": {
+                "JOB_START_MONOTONIC": "${{ steps.origin.outputs.monotonic }}",
+                "JOB_START_UTC": "${{ steps.origin.outputs.utc }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Capacity only; refuse before Go when actual capacity is insufficient"
+            },
+            {
+              "command_sha256": "8f87e85d02cf17d96b3e3a6e2b1c702039bcb15d2f8b0a50fd225fb59b625f57",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:65",
+              "env": {
+                "CHECKOUT_SHA": "${{ github.sha }}",
+                "ROOT_ATTEMPT": "${{ inputs.attempt }}",
+                "WORKFLOW_SHA": "${{ github.workflow_sha }}"
+              },
+              "if": "inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Prepare fresh exact sources, official toolchain and declared compiler files"
+            },
+            {
+              "command_sha256": "7948aa59b120321e959e1eb1fdd84820a3c1edce6f7e406cbf3ee591d3d979c4",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:77",
+              "env": {
+                "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
+              },
+              "if": "inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Fresh twelve-command construction and strict config freeze"
+            },
+            {
+              "command_sha256": "6630cd6ecd5c16f4d1716418fec31f457c9e65413772d1aa85c97eec9ee1ff0c",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:96",
+              "env": {
+                "HOSTED_READ_TOKEN": "${{ github.token }}",
+                "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
+              },
+              "if": "success() && inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Same-VM idle wait for immutable root issue-5076 acceptance"
+            },
+            {
+              "command_sha256": "44eccca3ec1668ca641208cbb3528fe19ab7b577b4f76a45b244e095976bdc74",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:103",
+              "env": {
+                "STATE_SHA": "${{ steps.prepare.outputs.state_sha256 }}"
+              },
+              "if": "success() && inputs.mode == 'full'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Full unchanged 54-cell 756-child matrix through explicit pre-child adapter"
+            },
+            {
+              "command_sha256": "bfc821a3787c2ed81926463dd71272426a965d9ac54fa353cdcdc44f58670bf6",
+              "entrypoint": ".github/workflows/cow-c3-hosted-qualification.yml:109",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Mandatory finite evidence closer; incomplete custody never qualifies"
+            }
+          ],
+          "environment": {
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "da6b04d75bee522e4dac3a8cc0fc38d1486d2f350b1aadfdef385306aa4cf161"
+    },
+    "format.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "push": null
+      },
+      "git_blob": "8b383de2309424864ae17d7b2afba507ab474b39",
+      "jobs": {
+        "gofmt": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "8c685419b4aaf6ba10081287ef876dd5d61e83c63e75607c074a216e17d407df",
+              "entrypoint": ".github/workflows/format.yml:27",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Check formatting"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "ebd68ccc334734d7904240311e98124a3827feb8cd2defd1c9f3dd14c2749ec6"
+    },
+    "hashdb-tests.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "push": null
+      },
+      "git_blob": "d2c79514339927a460218277532c6b224583c69b",
+      "jobs": {
+        "test": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
+              "entrypoint": ".github/workflows/hashdb-tests.yml:28",
+              "invocation": "go vet ./...",
+              "name": "Vet",
+              "working-directory": "HashDB"
+            },
+            {
+              "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+              "entrypoint": ".github/workflows/hashdb-tests.yml:32",
+              "invocation": "go test ./...",
+              "name": "Test",
+              "working-directory": "HashDB"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "windows-latest"
+        }
+      },
+      "sha256": "5dd5f1232088036c03d17466dd26fb52fbce630c02ff5769d048d87e8d42746a"
+    },
+    "memtier-bench.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": {
+          "inputs": {
+            "clients_list": {
+              "default": "50",
+              "description": "Comma-separated clients per thread",
+              "required": false
+            },
+            "data_list": {
+              "default": "128,1024",
+              "description": "Comma-separated data sizes",
+              "required": false
+            },
+            "keypattern_list": {
+              "default": "R:R",
+              "description": "Comma-separated key patterns (e.g. R:R)",
+              "required": false
+            },
+            "keys_list": {
+              "default": "100000",
+              "description": "Comma-separated key counts",
+              "required": false
+            },
+            "pipeline_list": {
+              "default": "1,16",
+              "description": "Comma-separated pipeline depths",
+              "required": false
+            },
+            "ratio_list": {
+              "default": "1:1",
+              "description": "Comma-separated ratios (e.g. 1:1)",
+              "required": false
+            },
+            "test_time": {
+              "default": "10",
+              "description": "Seconds per run",
+              "required": false
+            },
+            "threads_list": {
+              "default": "4",
+              "description": "Comma-separated thread counts",
+              "required": false
+            }
+          }
+        }
+      },
+      "git_blob": "2ab64b1167f6c336654ef8421d10f0f949b497d0",
+      "jobs": {
+        "bench": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "ecca2e198ca6763df35a279f6ead0f0d430dcf1edd158b3c99d545f501086deb",
+              "entrypoint": ".github/workflows/memtier-bench.yml:72",
+              "env": {
+                "BENCH_SERVERS": "hashdb,treedb,redis,valkey,dragonfly",
+                "CLIENTS_LIST": "${{ inputs.clients_list }}",
+                "DATA_LIST": "${{ inputs.data_list }}",
+                "KEYPATTERN_LIST": "${{ inputs.keypattern_list }}",
+                "KEYS_LIST": "${{ inputs.keys_list }}",
+                "MEMTIER_USE_DOCKER": "1",
+                "PIPELINE_LIST": "${{ inputs.pipeline_list }}",
+                "RATIO_LIST": "${{ inputs.ratio_list }}",
+                "TEST_TIME": "${{ inputs.test_time }}",
+                "THREADS_LIST": "${{ inputs.threads_list }}",
+                "USE_DOCKER": "1"
+              },
+              "invocation": "./scripts/memtier_bench.sh",
+              "name": "Run memtier bench"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "23869425c6e777eeab72ddea9d3e34338e248855cf963f394e1c710f0b199fb4"
+    },
+    "owner-local-metadata-qualification.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "pull_request": {
+          "paths": [
+            "TreeDB/collections/vector_partition_owner*",
+            "TreeDB/collections/vector_partition_source_import_v2*",
+            "TreeDB/collections/vector_partition_source_reader_v2*",
+            "TreeDB/collections/column_source_directory*v2*",
+            "TreeDB/collections/column_asset_gc.go",
+            "TreeDB/collections/column_asset_reachability.go",
+            "TreeDB/collections/column_store.go",
+            "TreeDB/collections/column_publish_plan.go",
+            "TreeDB/collections/stable_resource.go",
+            "TreeDB/collections/column_physical_scan.go",
+            "TreeDB/collections/column_physical_visibility.go",
+            "TreeDB/collections/typed_column_publication.go",
+            "TreeDB/collections/source_atomic.go",
+            "TreeDB/collections/column_publish_write.go",
+            "TreeDB/collections/command_wal.go",
+            "TreeDB/internal/commitlog/command_source_import_v2*",
+            "TreeDB/internal/commitlog/command_frame.go",
+            "TreeDB/docs/command_wal_matrix_test.go",
+            "TreeDB/docs/spec/command-wal-support-matrix.json",
+            "TreeDB/collections/vector_partition_paged_root_v2*",
+            "TreeDB/collections/vector_partition_legacy_compat_v2_test.go",
+            "TreeDB/collections/vector_partition_manifest.go",
+            "TreeDB/collections/vector_partition_lifecycle*",
+            "TreeDB/collections/vector_partition_persistent_searcher_v1.go",
+            "TreeDB/collections/vector_partition_router_v1.go",
+            "TreeDB/internal/raftplacement/source_shard_v2*",
+            "TreeDB/internal/vectorpartition/source_snapshot*_v2*",
+            "TreeDB/internal/sourcepartition/*.go",
+            "TreeDB/nativewire/vector_partition_owner*",
+            "TreeDB/nativewire/vector_partition_generation_source_v1.go",
+            "TreeDB/nativewire/vector_partition_production_node_v1.go",
+            ".github/workflows/owner-local-metadata-qualification.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "git_blob": "97778d219bed46788661fcdfb0683518ceefed9a",
+      "jobs": {
+        "qualify": {
+          "checkout": [
+            {
+              "fetch-depth": 0,
+              "persist-credentials": false,
+              "ref": "${{ github.event.pull_request.head.sha || github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "29b158f5578180207a835cf1c9a964eb90bdab5c266b19147d6a8f70dffd8ac4",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:69",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Exact source and formatting"
+            },
+            {
+              "command_sha256": "00bcac107dc8f6c121553e24b7a4be4a6bc6249a72df1c8ca982d1552930859e",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:87",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Owner plan and public generation-source conformance"
+            },
+            {
+              "command_sha256": "8f0936c67533a06495e918ac8d595313980d46bb20fbb614d236c6b426e1d32f",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:92",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Exact baseline schema-6 compatibility"
+            },
+            {
+              "command_sha256": "eccd1cfcc7a3e676d545d18f84d9c4929da4bed3412983f37c74a9fa3e0a0eb9",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:105",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Command-WAL support matrix"
+            },
+            {
+              "command_sha256": "4968dfa2fff0a9a3f94b99aa2f494b5ca30cf049b0959e0a1aa6a0301ad4226e",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:110",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Constructor allocation comparison"
+            },
+            {
+              "command_sha256": "7e398ea9cd88cb5a1c8484dec0a80a30ec3b53137f5a3ddbd02d07551701e615",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:115",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Public source import allocation and dependency growth"
+            },
+            {
+              "command_sha256": "1bd08fbd623ff92154b9df99c111ac316d730ea35ed2e4630866f52876ca9ab0",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:120",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Owner plan and source race conformance"
+            },
+            {
+              "command_sha256": "2458868910044083bc2838f016d17dcf4b6f7d7c0a65b4b7f8264ec3cfbf252f",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:126",
+              "if": "${{ always() && github.event_name == 'workflow_dispatch' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Retain verified development inputs"
+            },
+            {
+              "command_sha256": "1a21be8bb1dc4721d30cc1850ead617faa55ae9aebf416da4369668bdeaf0824",
+              "entrypoint": ".github/workflows/owner-local-metadata-qualification.yml:165",
+              "if": "${{ always() && steps.formatting.outcome == 'failure' }}",
+              "invocation": "exit 1",
+              "name": "Require formatting"
+            }
+          ],
+          "environment": {
+            "GOMAXPROCS": "2",
+            "GOMEMLIMIT": "4GiB",
+            "GOWORK": "off"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "23899afbdf4d26fc13c1beea95dd66c645f552b6ac3c237c28c87c4bb9649ce6"
+    },
+    "peer-security-qualification.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "pull_request": {
+          "paths": [
+            "TreeDB/nativewire/fixed_peer*",
+            "TreeDB/nativewire/peer_*",
+            "TreeDB/nativewire/vector_partition_global_connection_budget_v1_test.go",
+            "TreeDB/nativewire/vector_partition_shard_search_tcp_v1.go",
+            "TreeDB/nativewire/server.go",
+            "TreeDB/nativewire/listener.go",
+            "TreeDB/nativewire/client.go",
+            "TreeDB/nativewire/codec.go",
+            "cmd/treedb-fixed-peer/**",
+            "scripts/treedb_peer_*.py",
+            ".github/workflows/peer-security-qualification.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "git_blob": "b6c273eb08b9faf51ec87dd9825152f629f0b424",
+      "jobs": {
+        "public-path-cost": {
+          "checkout": [
+            {
+              "ref": "${{ github.event.pull_request.head.sha || github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "16d6943322c19ec00b319dff3ca2d51327eae03c46e7084d71243af75d25613f",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:84",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Equivalent plaintext and authenticated durable traffic"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "qualify": {
+          "checkout": [
+            {
+              "fetch-depth": 1,
+              "ref": "${{ github.event.pull_request.head.sha || github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "efb4c4fa5468f10d68a77f004b2f7683031cd2d35c2e9ee877488de6a7adc041",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:36",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Exact source and toolchain"
+            },
+            {
+              "command_sha256": "f421bcdaaeda2ce6622e07f611ec0a43ccf0e8afb8a062fc36adc12d75a62a84",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:40",
+              "invocation": "go test ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP|HotGroupCannotExhaustUnrelatedGroupAdmissionV1)' -count=3 -timeout=6m -v",
+              "name": "Global connection and peer authorization regressions"
+            },
+            {
+              "command_sha256": "df1dd1e7db4939f76cbeb41d29742ffe980be41ba7eef0e92260ad097cc8d5b6",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:42",
+              "invocation": "go test -race ./TreeDB/nativewire -run 'Test(ManyIdleEndpointsRespectGlobalConnectionBudgetV1|PeerShard|VectorPartitionShardSearchTCP|HotGroupCannotExhaustUnrelatedGroupAdmissionV1|UnknownPeerCannotSubmitOrInstallSnapshotV1|PeerSecurity|PeerCredential|PeerRaft)' -count=1 -timeout=6m -v",
+              "name": "Resource and TCP race checks"
+            },
+            {
+              "command_sha256": "0792396dc2310337102c60483f8ec16655a8a4883023e6b3d7cecfb0c6a08210",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:44",
+              "invocation": "go test ./cmd/treedb_vector_partition_bench -run '^TestM8ServingResourcesRetainedTopologyV1$' -count=1 -timeout=4m -v",
+              "name": "Retained serving topology guardrail"
+            },
+            {
+              "command_sha256": "c7ed85aed54a835d4c1c195fc245215cf1ee36ba0d83ae27524347ae3a1117da",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:46",
+              "invocation": "go test -race ./TreeDB/nativewire -run '^$' -bench '^BenchmarkPeerSecurityRemoteOwnerCreateV1$/MutualTLS/Sparse$' -benchtime=10x -count=1 -timeout=4m -v",
+              "name": "Replicated admission and pipeline shutdown under race"
+            },
+            {
+              "command_sha256": "5a20021e46ff24beb141247fbe9e7c2578d32c0b19c17cd684616b3ce8a548b1",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:49",
+              "if": "${{ !cancelled() }}",
+              "invocation": "go test ./TreeDB/nativewire -run 'Test(UnknownPeerCannotSubmitOrInstallSnapshotV1|PeerSecurity|PeerCredential|PeerRaft)' -count=3 -timeout=4m -v",
+              "name": "Credential-free peer regression"
+            },
+            {
+              "command_sha256": "288e50d7e52edb70376419cab5ae1027c5ae6d8a2888c058b54d190ab1189717",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:52",
+              "if": "${{ !cancelled() }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Operational command and deployment contract"
+            },
+            {
+              "command_sha256": "d9741bff8af50c61790f27d06afc5b4be666ec37e00912f8ef5735cfa8f0878f",
+              "entrypoint": ".github/workflows/peer-security-qualification.yml:57",
+              "if": "${{ !cancelled() }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Formatting"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "ca03010c50c44ca1a933af54332b90b8b058e8f97a993b16ec4a4b17e64ef72c"
+    },
+    "race.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "workflow_dispatch": null
+      },
+      "git_blob": "8088a5d1d4326dda4975bb04c5ee54b897042ccb",
+      "jobs": {
+        "race": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "886938c3470c2c07321802323301f0e4be91874082462694a3223aa329baf2c1",
+              "entrypoint": ".github/workflows/race.yml:27",
+              "invocation": "GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./HashDB/...",
+              "name": "HashDB (race)"
+            },
+            {
+              "command_sha256": "5b7ad680606d54e6a33adf6b3d071f9ec0d5bd465a1b677072a9f80bd57e961d",
+              "entrypoint": ".github/workflows/race.yml:30",
+              "invocation": "GOMEMLIMIT=4GiB GOMAXPROCS=2 go test -race -p 1 ./TreeDB/db ./TreeDB/caching ./TreeDB/internal/merging",
+              "name": "TreeDB (race, focused)"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "e850b8393a23ab9d9c6f36a693502ba9c34147418683439a25e38ba0b965c357"
+    },
+    "read-snapshot-guardrails.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "pull_request": null
+      },
+      "git_blob": "a1b8db820fa1b0063590d411c7f659b88feb98a6",
+      "jobs": {
+        "append_only_snapshot_guardrail": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "d39066d1fdcd198197abbedc9dfba2d822cc9d9a80fe6673a8755f2e801254aa",
+              "entrypoint": ".github/workflows/read-snapshot-guardrails.yml:27",
+              "invocation": "./scripts/check_read_snapshot_guardrail.sh",
+              "name": "Run read-snapshot append-only guardrail"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "b63c4d34b536ed9220ff35b68e5bc0724799b644371816f199afabf479678ea1"
+    },
+    "redis-bench.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "push": null
+      },
+      "git_blob": "931f41ed7019c59ace49ab9cf09a9c1ab654d343",
+      "jobs": {
+        "bench": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "d854620a2333d66554eeb53932d96f3d2804e38e9f7fb0d761dae7646a07970d",
+              "entrypoint": ".github/workflows/redis-bench.yml:27",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Install redis-benchmark"
+            },
+            {
+              "command_sha256": "f5d7f7090dc8a91e87466cec2e448ba8317b752c7c2c7017bbabaadf8dcb1a76",
+              "entrypoint": ".github/workflows/redis-bench.yml:43",
+              "env": {
+                "BENCH_CONCURRENCY": 30,
+                "BENCH_KEYS": 20000,
+                "BENCH_PIPELINE": 8,
+                "BENCH_SERVERS": "hashdb,treedb,redis,valkey,dragonfly",
+                "BENCH_VALSIZE": 128,
+                "USE_DOCKER": "1"
+              },
+              "invocation": "./scripts/redis_bench.sh",
+              "name": "Run redis protocol bench"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "838df03981dc70d128fbe6e2a80ea196dac46bf3fe1d165cb2c0ff3898dde51b"
+    },
+    "root-tests.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "push": null
+      },
+      "git_blob": "976fb10c965f0c228fabb623cc432e09ff2056f9",
+      "jobs": {
+        "test": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "61096b190f441bcb1df0babab46ca6d0637b777cad2ec012ed7617aab75537ea",
+              "entrypoint": ".github/workflows/root-tests.yml:58",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ matrix.name == 'ubuntu-latest-1' }}",
+              "invocation": "python3 .github/scripts/test_root_ci_headroom.py",
+              "name": "Root CI headroom contract"
+            },
+            {
+              "command_sha256": "bd93a94a7da3f1ceebf9b4435dd56fe7527bce0720101b356faee2fb663f6a6c",
+              "entrypoint": ".github/workflows/root-tests.yml:63",
+              "if": "${{ matrix.name == 'ubuntu-latest-2' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Python native client",
+              "working-directory": "clients/python/treedb_client"
+            },
+            {
+              "command_sha256": "ae6da23dfdaf06c5b1615d9cc1190963f416b0eb74dbef126bc19320f7fda3e5",
+              "entrypoint": ".github/workflows/root-tests.yml:69",
+              "if": "${{ matrix.run_docs_check }}",
+              "invocation": "make docs-check",
+              "name": "Docs check"
+            },
+            {
+              "command_sha256": "5f81ad60fbe2f61adb9e2dfa4690181b8d6754a0c00db84c82067f93703b889a",
+              "entrypoint": ".github/workflows/root-tests.yml:74",
+              "if": "${{ matrix.run_vet }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Vet"
+            },
+            {
+              "command_sha256": "d081a3acced10dc6ae75746ccf59e0c902abd7974c7c1ba3ea8103c0fed87266",
+              "entrypoint": ".github/workflows/root-tests.yml:80",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Test"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "ubuntu-latest-1",
+                "os": "ubuntu-latest",
+                "run_docs_check": true,
+                "run_vet": true,
+                "test_shard_count": 2,
+                "test_shard_index": 0
+              },
+              {
+                "name": "ubuntu-latest-2",
+                "os": "ubuntu-latest",
+                "run_docs_check": false,
+                "run_vet": false,
+                "test_shard_count": 2,
+                "test_shard_index": 1
+              },
+              {
+                "name": "macos-latest-1",
+                "os": "macos-latest",
+                "run_docs_check": true,
+                "run_vet": true,
+                "test_shard_count": 2,
+                "test_shard_index": 0
+              },
+              {
+                "name": "macos-latest-2",
+                "os": "macos-latest",
+                "run_docs_check": false,
+                "run_vet": false,
+                "test_shard_count": 2,
+                "test_shard_index": 1
+              }
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "${{ matrix.os }}"
+        }
+      },
+      "sha256": "49b2670b50e750a730582d1c84c408a7608c9327fa07c5dbfe58fda93795757e"
+    },
+    "sparse-catalog-qualification.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "pull_request": {
+          "paths": [
+            "TreeDB/nativewire/fixed_peer*",
+            "TreeDB/nativewire/sparse_catalog*",
+            ".github/workflows/sparse-catalog-qualification.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "git_blob": "f21e19f6bca60cb553168e9262375a8d5f3243a2",
+      "jobs": {
+        "paired-performance": {
+          "checkout": [
+            {
+              "fetch-depth": 1,
+              "ref": "${{ github.event.pull_request.head.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "c0d1abafcdd8cd2c3680894fa301e0229fb197ed00e4aa87bbf23bc51452db94",
+              "entrypoint": ".github/workflows/sparse-catalog-qualification.yml:81",
+              "env": {
+                "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+                "GOWORK": "off",
+                "HEAD_SHA": "${{ github.event.pull_request.head.sha }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Build exact pair with identical test-only measurement harness"
+            },
+            {
+              "command_sha256": "d067a7d2fb67182fc0064472bc6100f2896796541f1e3f3a253183269b3236cb",
+              "entrypoint": ".github/workflows/sparse-catalog-qualification.yml:100",
+              "env": {
+                "BASE_SHA": "${{ github.event.pull_request.base.sha }}",
+                "HEAD_SHA": "${{ github.event.pull_request.head.sha }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Paired durable remote-owner and enabled-path resource measurements"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        },
+        "qualify": {
+          "checkout": [
+            {
+              "fetch-depth": 1,
+              "ref": "${{ github.event.pull_request.head.sha || github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "9e93edc3805fe5f8125cf9e103d2d9230bbd49952fdbf8ca1870ffc996ca197e",
+              "entrypoint": ".github/workflows/sparse-catalog-qualification.yml:33",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Exact source and formatting"
+            },
+            {
+              "command_sha256": "79767af9553c5ea59c1fb05dd33e46c73eedef839034980705f554c5093afed6",
+              "entrypoint": ".github/workflows/sparse-catalog-qualification.yml:56",
+              "env": {
+                "GOWORK": "off"
+              },
+              "invocation": "go test ./TreeDB/nativewire -run 'Test(SparseCatalog|FixedPeer)' -count=3 -timeout=8m -v",
+              "name": "Sparse catalog and existing fixed-peer conformance"
+            },
+            {
+              "command_sha256": "6eea8c71d476a236b108db97e156717ed38a6992673f4df4dcdb5c1bf13b24a9",
+              "entrypoint": ".github/workflows/sparse-catalog-qualification.yml:60",
+              "env": {
+                "GOWORK": "off"
+              },
+              "invocation": "go test -race ./TreeDB/nativewire -run 'TestSparseCatalog' -count=1 -timeout=8m -v",
+              "name": "Sparse catalog race conformance"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "8e4cff3764f31a85972ff9383a5e9cf7b1280d119bb7d0d0138bfcd4b7c9effe"
+    },
+    "treedb-tests.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "merge_group": null,
+        "pull_request": null,
+        "push": {
+          "branches": [
+            "main"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "git_blob": "a1151575df76a487df753236ff33dade5aceacbd",
+      "jobs": {
+        "mvcc-raw-path-gate": {
+          "checkout": [
+            {
+              "fetch-depth": 0,
+              "ref": "${{ steps.scope.outputs.head_sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "506d1615b51f5e4aa91bcfb69dff234ae175f1970eda17f8cd9db4af75464d09",
+              "entrypoint": ".github/workflows/treedb-tests.yml:37",
+              "env": {
+                "BASE_SHA": "${{ github.event.pull_request.base.sha || '' }}",
+                "EVENT_NAME": "${{ github.event_name }}",
+                "GH_TOKEN": "${{ github.token }}",
+                "HEAD_SHA": "${{ github.event.pull_request.head.sha || github.sha }}",
+                "PR_NUMBER": "${{ github.event.pull_request.number || '' }}",
+                "REPOSITORY": "${{ github.repository }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Resolve pull request and relevant paths"
+            },
+            {
+              "command_sha256": "4c2eef434e36ab4e0299b7aa158a13e31997cb23c2cd96f064315564e00c1532",
+              "entrypoint": ".github/workflows/treedb-tests.yml:80",
+              "env": {
+                "BASE_SHA": "${{ steps.scope.outputs.base_sha }}",
+                "HEAD_SHA": "${{ steps.scope.outputs.head_sha }}"
+              },
+              "if": "steps.scope.outputs.run == 'true'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Resolve relevant paths from the event pair"
+            },
+            {
+              "command_sha256": "4277ab251c1814e9297f2d425dc484676b0ddcae111ffceadf67b11829eeecd3",
+              "entrypoint": ".github/workflows/treedb-tests.yml:107",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "steps.paths.outputs.run == 'true'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Gate self-checks"
+            },
+            {
+              "command_sha256": "5e3ba7e5d60101df144119400fbe8ea9a817f84af3c92145282fc699431457a8",
+              "entrypoint": ".github/workflows/treedb-tests.yml:163",
+              "env": {
+                "BASELINE_HASH": "${{ steps.scope.outputs.base_sha }}",
+                "BATCH_WRITE_BENCHTIME": "1000x",
+                "BENCHTIME": "2s",
+                "CANDIDATE_HASH": "${{ steps.scope.outputs.head_sha }}",
+                "CPUSET": "0",
+                "MAX_BYTES_REGRESSION_ABSOLUTE": "64",
+                "MAX_BYTES_REGRESSION_PERCENT": "1",
+                "MAX_REGRESSION_PERCENT": "5",
+                "OUT_DIR": "${{ runner.temp }}/mvcc-raw-path-gate",
+                "RUNS": "8",
+                "SCRIPT_GOWORK": "off"
+              },
+              "if": "steps.paths.outputs.run == 'true'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Compare exact base and head"
+            },
+            {
+              "command_sha256": "97ba1a90d615dfdebd8cefc85dada5c68a8b3c433c3739ea1d1ba941a489721d",
+              "entrypoint": ".github/workflows/treedb-tests.yml:174",
+              "if": "always() && steps.paths.outputs.run == 'true'",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Add benchmark summary"
+            }
+          ],
+          "environment": {
+            "MVCC_GATE_PATH_RE": "^((TreeDB/)|scripts/mvcc_(raw_path_gate|adapter_overhead_gate|closeout_matrix|candidate_checkout_guard)\\.sh$|\\.github/scripts/(check_mvcc_(raw_path|adapter_overhead)_gate|summarize_mvcc_closeout|test_(mvcc_(raw_path_equivalence|benchmark_pairing|candidate_checkout_guard)|summarize_mvcc_closeout)|test_treedb_ci_contract|test_treedb_windows_core_headroom)\\.py$|\\.github/workflows/treedb-tests\\.yml$)"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        },
+        "perf": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "e4555e237d48e5423850ceb677994ca50fa2ec16e178b290035db7aba17aaa2b",
+              "entrypoint": ".github/workflows/treedb-tests.yml:811",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "invocation": "python3 .github/scripts/test_vlog_auto_incompressible.py",
+              "name": "Aggregate perf gate self-tests"
+            },
+            {
+              "command_sha256": "6eaad4139a493d7bf43ab4bd35c9d00282f730a10997d1bccf49d0a97f9d90c0",
+              "entrypoint": ".github/workflows/treedb-tests.yml:814",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "ValueLog dict compressibility bench"
+            },
+            {
+              "command_sha256": "942302e855fb3d4155b52dde350d890ce819563b134fe7fa29256bfd6ecf46a5",
+              "entrypoint": ".github/workflows/treedb-tests.yml:820",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Perf baseline checker (gate)"
+            },
+            {
+              "command_sha256": "4be9c5ace88c3806a1a4f3c23163f6c7c6d6e2ac7bde8fdbf057de060bef4d58",
+              "entrypoint": ".github/workflows/treedb-tests.yml:827",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Incompressible auto-vs-off gate"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "race": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "bb77ab3e1acfbac4ac4e619b9476b1301bd3b59d345fc1b13323c961fd0af791",
+              "entrypoint": ".github/workflows/treedb-tests.yml:671",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Test Race",
+              "working-directory": "TreeDB"
+            },
+            {
+              "command_sha256": "308ebfc392637dfb982616681c455cac662de070c78e54b03ef8504f62a7eaa1",
+              "entrypoint": ".github/workflows/treedb-tests.yml:775",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Summarize race timing",
+              "working-directory": "TreeDB"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "shard": 1,
+                "shard_count": 3,
+                "shard_index": 0,
+                "shard_kind": "core"
+              },
+              {
+                "shard": 2,
+                "shard_count": 3,
+                "shard_index": 1,
+                "shard_kind": "core"
+              },
+              {
+                "shard": 3,
+                "shard_count": 3,
+                "shard_index": 2,
+                "shard_kind": "core"
+              },
+              {
+                "shard": 4,
+                "shard_count": 1,
+                "shard_index": 0,
+                "shard_kind": "collections"
+              }
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": true,
+          "runs_on": "ubuntu-latest"
+        },
+        "required": {
+          "checkout": [],
+          "commands": [
+            {
+              "command_sha256": "94cec6a27c199f6be25e2f67ae861299c3e51aebb121b041779a412b88e6a4b4",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1136",
+              "env": {
+                "MVCC_RESULT": "${{ needs.mvcc-raw-path-gate.result }}",
+                "PERF_RESULT": "${{ needs.perf.result }}",
+                "RACE_RESULT": "${{ needs.race.result }}",
+                "SNAPSHOT_ITERATOR_PERF_RESULT": "${{ needs.snapshot-iterator-perf.result }}",
+                "TEST_RESULT": "${{ needs.test.result }}",
+                "VET_RESULT": "${{ needs.vet.result }}"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Verify required TreeDB jobs"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "snapshot-iterator-perf": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "d8e37e4db37f01eee33a78accc677a9dcbd5b04d9c14af7db221501d4bbf9f35",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1004",
+              "invocation": "GOWORK=off go test ./.github/scripts/snapshot_iterator_bench",
+              "name": "Test snapshot iterator benchmark parser"
+            },
+            {
+              "command_sha256": "e729b689a28684cf4adc80555c9f84f8fd9b4e1d15f3fc5ad97d2aaad7aba0e2",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1007",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Capture exact-head runner metadata"
+            },
+            {
+              "command_sha256": "67ead8deae8d9c80846d59790461183529103209012ca6e27a84c2643b32c0b3",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1019",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Build one exact-head snapshot iterator benchmark binary"
+            },
+            {
+              "command_sha256": "f065dc4fb2daa8163f14cf2f340191d2a14c76bd7ffdb4e3b2394968471b27fc",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1024",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Collect CPU-pinned balanced same-binary snapshot iterator pairs"
+            },
+            {
+              "command_sha256": "8faad3a561efcb191870169c8792b3d459979ad0aee5df2e0272a6ad5160b407",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1033",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Check snapshot iterator performance gate"
+            },
+            {
+              "command_sha256": "07d55751ba6cf7e3709ec6586d057beda36481c55a5c39baddaa52d2f3629b10",
+              "entrypoint": ".github/workflows/treedb-tests.yml:1049",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Publish snapshot iterator summary"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "test": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "83ac39828b95694200ca74a153ef2a506b19b7df4935cb726ea1056b455c2114",
+              "entrypoint": ".github/workflows/treedb-tests.yml:392",
+              "env": {
+                "GOMAXPROCS": 2,
+                "GOMEMLIMIT": "4GiB"
+              },
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Test",
+              "working-directory": "TreeDB"
+            },
+            {
+              "command_sha256": "99406da07371361a32a3fbe57ef401766c1703a468748b40d1acfde6cbba9f04",
+              "entrypoint": ".github/workflows/treedb-tests.yml:615",
+              "if": "always()",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "Summarize test timings",
+              "working-directory": "TreeDB"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "ubuntu-latest-1",
+                "os": "ubuntu-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 0,
+                "shard_kind": "all",
+                "timeout": 25
+              },
+              {
+                "name": "ubuntu-latest-2",
+                "os": "ubuntu-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 1,
+                "shard_kind": "all",
+                "timeout": 25
+              },
+              {
+                "name": "ubuntu-latest-3",
+                "os": "ubuntu-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 2,
+                "shard_kind": "all",
+                "timeout": 25
+              },
+              {
+                "name": "macos-latest-1",
+                "os": "macos-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 0,
+                "shard_kind": "all",
+                "timeout": 30
+              },
+              {
+                "name": "macos-latest-2",
+                "os": "macos-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 1,
+                "shard_kind": "all",
+                "timeout": 30
+              },
+              {
+                "name": "macos-latest-3",
+                "os": "macos-latest",
+                "package_shard_count": 3,
+                "package_shard_index": 2,
+                "shard_kind": "all",
+                "timeout": 30
+              },
+              {
+                "name": "windows-mongo-gateway",
+                "os": "windows-latest",
+                "shard_kind": "windows-mongo",
+                "timeout": 40
+              },
+              {
+                "name": "windows-nativewire",
+                "os": "windows-latest",
+                "shard_kind": "windows-nativewire",
+                "timeout": 40
+              },
+              {
+                "name": "windows-powerloss-oracle",
+                "os": "windows-latest",
+                "shard_kind": "windows-powerloss-oracle",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-1",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 0,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-2",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 1,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-3",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 2,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-4",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 3,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-5",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 4,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-6",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 5,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-7",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 6,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "name": "windows-core-8",
+                "os": "windows-latest",
+                "package_shard_count": 8,
+                "package_shard_index": 7,
+                "shard_kind": "windows-core",
+                "timeout": 40
+              },
+              {
+                "heavy_shard_count": 2,
+                "heavy_shard_index": 0,
+                "name": "windows-caching-heavy-1",
+                "os": "windows-latest",
+                "shard_kind": "windows-caching-heavy",
+                "timeout": 25
+              },
+              {
+                "heavy_shard_count": 2,
+                "heavy_shard_index": 1,
+                "name": "windows-caching-heavy-2",
+                "os": "windows-latest",
+                "shard_kind": "windows-caching-heavy",
+                "timeout": 25
+              },
+              {
+                "name": "windows-caching-rest-1",
+                "os": "windows-latest",
+                "rest_shard_count": 3,
+                "rest_shard_index": 0,
+                "shard_kind": "windows-caching-rest",
+                "timeout": 25
+              },
+              {
+                "name": "windows-caching-rest-2",
+                "os": "windows-latest",
+                "rest_shard_count": 3,
+                "rest_shard_index": 1,
+                "shard_kind": "windows-caching-rest",
+                "timeout": 25
+              },
+              {
+                "name": "windows-caching-rest-3",
+                "os": "windows-latest",
+                "rest_shard_count": 3,
+                "rest_shard_index": 2,
+                "shard_kind": "windows-caching-rest",
+                "timeout": 25
+              }
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "${{ matrix.os }}"
+        },
+        "vet": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "3142d426a361acee2e9a0098f3c8c8037cd45c52a43a4f6c93ec1c9bbc2ff0a1",
+              "entrypoint": ".github/workflows/treedb-tests.yml:227",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "if": "${{ matrix.name == 'ubuntu' }}",
+              "invocation": "shell block at source entrypoint; source workflow owns exact commands",
+              "name": "CI shard contracts"
+            },
+            {
+              "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
+              "entrypoint": ".github/workflows/treedb-tests.yml:238",
+              "invocation": "go vet ./...",
+              "name": "Vet",
+              "working-directory": "TreeDB"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "include": [
+              {
+                "name": "ubuntu",
+                "os": "ubuntu-latest"
+              },
+              {
+                "name": "macos",
+                "os": "macos-latest"
+              },
+              {
+                "name": "windows",
+                "os": "windows-latest"
+              }
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "${{ matrix.os }}"
+        }
+      },
+      "sha256": "2af83f60eef92736fec7657325415a1373c01c985e0fc63733658ec5062b97bd"
+    },
+    "treedb-vacuum-m0.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "pull_request": {
+          "paths": [
+            "TreeDB/db/vacuum*.go",
+            "TreeDB/db/recoverable_root_set.go",
+            "TreeDB/db/durable_root*.go",
+            "TreeDB/db/root_publication*.go",
+            "TreeDB/internal/rootpublication/**",
+            "TreeDB/db/ordered_root_publish.go",
+            "TreeDB/db/stable_resource.go",
+            "TreeDB/db/db.go",
+            "TreeDB/public.go",
+            "scripts/treedb_vacuum_m0_capture.sh",
+            "scripts/treedb_vacuum_m0_summarize.py",
+            "scripts/treedb_vacuum_m0_summarize_test.py",
+            ".github/workflows/treedb-vacuum-m0.yml"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "git_blob": "b0ea24e0bf4d8a67ad39ab1668a39fcc69525508",
+      "jobs": {
+        "capture": {
+          "checkout": [
+            {
+              "fetch-depth": 0,
+              "persist-credentials": false,
+              "ref": "${{ github.event.pull_request.head.sha || github.sha }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "c670090f86b7b236bdec4c8d60b6c5305cf860be5a6eb46a511f13f342ccebc2",
+              "entrypoint": ".github/workflows/treedb-vacuum-m0.yml:48",
+              "invocation": "RUN_DIR=\"$RUNNER_TEMP/treedb-vacuum-m0\" scripts/treedb_vacuum_m0_capture.sh",
+              "name": "Capture and enforce M0 evidence"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-24.04"
+        }
+      },
+      "sha256": "9026cc7e16f7bb0cbbac8c380368e4fcce5a6d6016d333c7a9b276420b6c8235"
+    },
+    "unified-bench-suites.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "push": null
+      },
+      "git_blob": "fe5d9b1cbbf4ce56733ad41fea16f3669ce720ea",
+      "jobs": {
+        "bigkeys_guard": {
+          "checkout": [
+            {
+              "persist-credentials": false
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "8794f41c6b4590575f583d455e55bc3a4877f2bd21471c5896680a3c0faff0e6",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:63",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "invocation": "python3 .github/scripts/test_unified_bench_suites_headroom.py",
+              "name": "Unified suite headroom contract"
+            },
+            {
+              "command_sha256": "52cba5b7aae3ef24929b0a490394705fa23bf9c90f0ccc8171c0b79e9d2acb83",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:66",
+              "invocation": "make unified-bench",
+              "name": "Build unified-bench"
+            },
+            {
+              "command_sha256": "612eb6ebbfc5edae1547935732255b9096af61054bc56ded68d6ba9fda290524",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:69",
+              "invocation": "./bin/unified-bench -suite bigkeys_guard -keys 1000000 -seed 1 -progress=false -max-wall 45m -max-rss-mb 4096",
+              "name": "Suite: bigkeys_guard"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "profiles": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "52cba5b7aae3ef24929b0a490394705fa23bf9c90f0ccc8171c0b79e9d2acb83",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:91",
+              "invocation": "make unified-bench",
+              "name": "Build unified-bench"
+            },
+            {
+              "command_sha256": "e1f90f0d2f1feae95edfd854eb1d1209aa4f0f7faefb2a95b3ee4c5a436fb8ca",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:94",
+              "invocation": "./bin/unified-bench -dbs treedb -profile ${{ matrix.profile }} -test write_rand,read_rand -keys 20000 -seed 1 -progress=false -checkpoint-between-tests",
+              "name": "Smoke: ${{ matrix.profile }}"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "profile": [
+              "balanced",
+              "fast",
+              "durable"
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        },
+        "suites": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "8794f41c6b4590575f583d455e55bc3a4877f2bd21471c5896680a3c0faff0e6",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:29",
+              "env": {
+                "PYTHONDONTWRITEBYTECODE": "1"
+              },
+              "invocation": "python3 .github/scripts/test_unified_bench_suites_headroom.py",
+              "name": "Unified suite headroom contract"
+            },
+            {
+              "command_sha256": "52cba5b7aae3ef24929b0a490394705fa23bf9c90f0ccc8171c0b79e9d2acb83",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:32",
+              "invocation": "make unified-bench",
+              "name": "Build unified-bench"
+            },
+            {
+              "command_sha256": "d24aa2c40a7ffe4c39aa4f5d82651099340b75def0920e61193f7748a131616c",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:35",
+              "invocation": "./bin/unified-bench -suite flushthrash -keys 200000 -seed 1 -progress=false",
+              "name": "Suite: flushthrash"
+            },
+            {
+              "command_sha256": "93fc5dc7c2101541bd7e7ff07226740991cc27b30d5928c366894beb62043c67",
+              "entrypoint": ".github/workflows/unified-bench-suites.yml:38",
+              "invocation": "./bin/unified-bench -suite longmix -keys 100001 -seed 1 -progress=false",
+              "name": "Suite: longmix"
+            }
+          ],
+          "environment": {},
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "998905570aff9ee40ca90d6b52b3be2b7e0a9c639cc9b6f9eb275c80be45ca4a"
+    },
+    "unified-bench-tests.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "push": null
+      },
+      "git_blob": "f60b2725f62aa963057a77f922a346526907d070",
+      "jobs": {
+        "test": {
+          "checkout": [
+            {}
+          ],
+          "commands": [
+            {
+              "command_sha256": "3d4b424f6fcd11f530525ddea9a46aeaffec7c883b6c04b6baf7df36bf47800b",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:31",
+              "invocation": "go vet ./...",
+              "name": "Vet",
+              "working-directory": "cmd/unified_bench"
+            },
+            {
+              "command_sha256": "1bb497e3e13a1105cf24e3359fa3ef75de08b66ff8a2839cd7f9ea97824d9eb3",
+              "entrypoint": ".github/workflows/unified-bench-tests.yml:35",
+              "invocation": "go test ./...",
+              "name": "Test",
+              "working-directory": "cmd/unified_bench"
+            }
+          ],
+          "environment": {},
+          "matrix": {
+            "os": [
+              "ubuntu-latest",
+              "macos-latest"
+            ]
+          },
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "${{ matrix.os }}"
+        }
+      },
+      "sha256": "27f858e382f7523a9d045580caba0a1dce27b10715ba3fbf744aba4f9f3104bd"
+    }
+  }
+}

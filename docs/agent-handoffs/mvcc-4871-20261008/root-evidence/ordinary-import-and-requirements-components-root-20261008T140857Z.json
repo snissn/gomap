@@ -1,0 +1,143 @@
+{
+  "at_utc": "2026-10-08T14:08:57.779757+00:00",
+  "classification": "ACCEPT_RECORDED_IMPORT_CONSTRUCTION_AND_REQUIREMENTS_COMPONENTS_ONLY",
+  "verified": [
+    {
+      "stage": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-import-cohort-closure-fixtures-fixed",
+      "result": {
+        "after_sha256": "e315b35fe7a189cd908a11f9381a5c98f8e69454943c5704f362f2d56c7e5b4c",
+        "args": [
+          "test",
+          "-race",
+          "-v",
+          "-p=2",
+          "./TreeDB/internal/rootpublication",
+          "-run",
+          "TestOwnedImported|TestOwnedBorrowedDirectory",
+          "-count=1",
+          "-timeout=60s"
+        ],
+        "before_sha256": "e315b35fe7a189cd908a11f9381a5c98f8e69454943c5704f362f2d56c7e5b4c",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 0,
+        "finish": 1791467806.869489,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "2bbbcd0f74117407a49264e4b13f063be9140b6cfc9be4ad30ee023c4bcc50c6",
+        "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+        "source_count": 10028,
+        "source_equal": true,
+        "start": 1791467799.1040163
+      },
+      "result_sha256": "e630246feab6ee78cbb61de7467915a6a6e9beb7c7d0d8c468899b4adbe16d4f",
+      "raw": "=== RUN   TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody\n--- PASS: TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody (0.00s)\n=== RUN   TestOwnedImportedSetAliasAndRefusal\n--- PASS: TestOwnedImportedSetAliasAndRefusal (0.00s)\n=== RUN   TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal\n--- PASS: TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal (0.00s)\n=== RUN   TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal\n--- PASS: TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal (0.00s)\n=== RUN   TestOwnedImportedSharedDirectoryAndExactRIDClosure\n--- PASS: TestOwnedImportedSharedDirectoryAndExactRIDClosure (0.00s)\n=== RUN   TestOwnedImportedEmptyDirectoryRetainsExactLease\n--- PASS: TestOwnedImportedEmptyDirectoryRetainsExactLease (0.00s)\nPASS\nok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t1.027s\n",
+      "top_pass": [
+        "TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody",
+        "TestOwnedImportedSetAliasAndRefusal",
+        "TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal",
+        "TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal",
+        "TestOwnedImportedSharedDirectoryAndExactRIDClosure",
+        "TestOwnedImportedEmptyDirectoryRetainsExactLease"
+      ],
+      "recorded_source_bindings": {
+        "TreeDB/internal/rootpublication/resource_import_allocation.go": "3923a45f905479263870a91faf531ab415c889b07996335be4e68eac7641cd69",
+        "TreeDB/internal/rootpublication/resource_import_allocation_test.go": "dd305cfc0034c7fb8815a46aec2c434c2c7c7a6f02a1d1a886cee808b448ed61",
+        "TreeDB/internal/rootpublication/resource_import_directory.go": "1095969bb9a25492d222a84f5988cc3454f80dbd9e08aef0c4d38e5e8f488fdc",
+        "TreeDB/internal/rootpublication/resource_import_set.go": "2f840d25ed3fa35227908c8e25b0ec2f8a7ae9f45ea14e8c564d45d0f610b73c",
+        "TreeDB/internal/rootpublication/resource_logical_borrow.go": "f3821ab3c9b1c17fe102e522ffb093eba4e22b95b3382903546a671713888aa7",
+        "TreeDB/internal/rootpublication/resource_logical_borrow_test.go": "fd39a90852bcb31d61818fb469c092ccfa80bb011fa95c919a8f4ec25030330d",
+        "TreeDB/internal/rootpublication/resource_requirements_allocation_test.go": "fcec21d7a0c92ef4664fce39646226857e4fd819caf172762dfdcd796856069a"
+      }
+    },
+    {
+      "stage": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-import-requirements-fixture-fixed",
+      "result": {
+        "after_sha256": "3ced488655fb2738c1de673219df0318c901a7f2d8e956a9b6cc3c794175bbe9",
+        "args": [
+          "test",
+          "-race",
+          "-v",
+          "-p=2",
+          "./TreeDB/internal/rootpublication",
+          "-run",
+          "TestOwnedImported|TestOwnedBorrowedDirectory|TestStableLogicalRequirement",
+          "-count=1",
+          "-timeout=60s"
+        ],
+        "before_sha256": "3ced488655fb2738c1de673219df0318c901a7f2d8e956a9b6cc3c794175bbe9",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 0,
+        "finish": 1791468082.6380694,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "92c56e0d1160e68e5c5d05ff63115eb05ada30a5ef36e9a0a8a37d5aabcda056",
+        "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+        "source_count": 10029,
+        "source_equal": true,
+        "start": 1791468074.886228
+      },
+      "result_sha256": "5f4e7b86ac1a15c8e7a24af4fb876789271bb6df2f9c636f89d3fbe447206390",
+      "raw": "=== RUN   TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody\n--- PASS: TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody (0.00s)\n=== RUN   TestOwnedImportedSetAliasAndRefusal\n--- PASS: TestOwnedImportedSetAliasAndRefusal (0.00s)\n=== RUN   TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal\n--- PASS: TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal (0.00s)\n=== RUN   TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal\n--- PASS: TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal (0.00s)\n=== RUN   TestOwnedImportedSharedDirectoryAndExactRIDClosure\n--- PASS: TestOwnedImportedSharedDirectoryAndExactRIDClosure (0.00s)\n=== RUN   TestOwnedImportedEmptyDirectoryRetainsExactLease\n--- PASS: TestOwnedImportedEmptyDirectoryRetainsExactLease (0.00s)\n=== RUN   TestOwnedImportedRequirementsMatchGenericExactScopes\n--- PASS: TestOwnedImportedRequirementsMatchGenericExactScopes (0.00s)\nPASS\nok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t1.033s\n",
+      "top_pass": [
+        "TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody",
+        "TestOwnedImportedSetAliasAndRefusal",
+        "TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal",
+        "TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal",
+        "TestOwnedImportedSharedDirectoryAndExactRIDClosure",
+        "TestOwnedImportedEmptyDirectoryRetainsExactLease",
+        "TestOwnedImportedRequirementsMatchGenericExactScopes"
+      ],
+      "recorded_source_bindings": {
+        "TreeDB/internal/rootpublication/resource_import_allocation.go": "3923a45f905479263870a91faf531ab415c889b07996335be4e68eac7641cd69",
+        "TreeDB/internal/rootpublication/resource_import_allocation_test.go": "dd305cfc0034c7fb8815a46aec2c434c2c7c7a6f02a1d1a886cee808b448ed61",
+        "TreeDB/internal/rootpublication/resource_import_directory.go": "1095969bb9a25492d222a84f5988cc3454f80dbd9e08aef0c4d38e5e8f488fdc",
+        "TreeDB/internal/rootpublication/resource_import_set.go": "2f840d25ed3fa35227908c8e25b0ec2f8a7ae9f45ea14e8c564d45d0f610b73c",
+        "TreeDB/internal/rootpublication/resource_logical_borrow.go": "f3821ab3c9b1c17fe102e522ffb093eba4e22b95b3382903546a671713888aa7",
+        "TreeDB/internal/rootpublication/resource_logical_borrow_test.go": "fd39a90852bcb31d61818fb469c092ccfa80bb011fa95c919a8f4ec25030330d",
+        "TreeDB/internal/rootpublication/resource_requirements_allocation.go": "f731c1ad3f5aec116d29b24793219f422fffe27371e29ef64705177c5372428c",
+        "TreeDB/internal/rootpublication/resource_requirements_allocation_test.go": "dacb99ce0e26a57b4e2d2b311ee010a6cc857a1fa746ca9a4f561c1643d072bb"
+      }
+    }
+  ],
+  "tests_rerun_by_root": false,
+  "dependency_ready": false,
+  "covered": [
+    "Actual identity collisions/exact RID union/partial capacity refusal; shared and empty directory custody.",
+    "One preadmitted flattened canonical directory per exact root, reused by sizing/copy passes.",
+    "Focused global and namespace requirement parity, missing/conflict refusal and metadata disposal."
+  ],
+  "qualification_limits": [
+    "Seven focused race cases at the latest recorded map; no elapsed-time or production performance claim.",
+    "Root found unscoped-nonempty requirement error parity edge and sent it to worker; preserve ErrUnresolvedResource before maturity.",
+    "Void cohort callback release proves adapter alias detachment only; original actual physical/namespace/debt custody remains required.",
+    "Actual pre-first-visible-Clone admission, new-provider capture, all19 closure, product freeze, performance, review/CI/merge remain open."
+  ],
+  "local_storage_fallback": {
+    "at_recording": "ENOSPC even for2KiB writes; source/raw retained on185, root receipt stored durably on111; local mirror pending.",
+    "cleanup": "Released local allowlist already absent; no new eligible deletion identified; protected negative packets retained.",
+    "observed_free_bytes": 122101760
+  },
+  "released_disposables": []
+}

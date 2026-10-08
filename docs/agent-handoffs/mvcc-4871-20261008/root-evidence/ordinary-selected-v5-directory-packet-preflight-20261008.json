@@ -1,0 +1,47 @@
+{
+  "path": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-selected-v5-directory-rebind-enrollment-fixed",
+  "raw_sha256": "b5e836128c1753ed5d2c60bc71ca5b54c2ee3209d91e79c16fa0b61568ea94d2",
+  "source_map_sha256": "bac2fc1af67d458e705fce0dcfffe1c78dd6d509e1da8ac6cf150cdd4e524530",
+  "result_sha256": "6f178d8851ec6b1a6b34c6cd932988e5c89e62aee7ce9b0d037acb86dbcc8d11",
+  "source_count": 10038,
+  "source_equal": true,
+  "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+  "exit": 0,
+  "race": true,
+  "args": [
+    "test",
+    "-p=2",
+    "-race",
+    "-v",
+    "./TreeDB/internal/rootpublication",
+    "./TreeDB/db",
+    "-run",
+    "TestOwnedDependencyPhysicalRebindCanonicalScopeAndRefusal|TestPrimaryV5SelectionIndependentSlotsActualDataAndParentFrontier|TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot|TestDependencyDirectoryV2PinnedPointAndStreamingChecks|TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6|TestOwnedManifestPhysicalLoaderCanonicalRebindAndRefusal|TestOwnedRecoveredNamespaceIndependentOriginalObservation",
+    "-count=1",
+    "-timeout=120s"
+  ],
+  "env": {
+    "CGO_ENABLED": "1",
+    "GOCACHE": "/home/mikers/.cache/go-build",
+    "GOENV": "off",
+    "GOMAXPROCS": "2",
+    "GOMODCACHE": "/home/mikers/go/pkg/mod",
+    "GOPATH": "/home/mikers/go",
+    "GOPROXY": "off",
+    "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off"
+  },
+  "top_level_passes": [
+    "TestDependencyDirectoryV2PinnedPointAndStreamingChecks",
+    "TestOwnedManifestPhysicalLoaderCanonicalRebindAndRefusal",
+    "TestOwnedRecoveredNamespaceIndependentOriginalObservation",
+    "TestOwnedDependencyPhysicalRebindCanonicalScopeAndRefusal",
+    "TestPrimaryV5SelectionIndependentSlotsActualDataAndParentFrontier",
+    "TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot",
+    "TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6"
+  ],
+  "top_level_failures": [],
+  "qualified_scope": "selected V5 recovery and shared manifest/directory snapshot-rebind component at recorded bindings only"
+}

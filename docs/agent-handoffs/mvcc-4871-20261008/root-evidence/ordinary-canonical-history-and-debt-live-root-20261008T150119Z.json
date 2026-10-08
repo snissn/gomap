@@ -1,0 +1,18 @@
+{
+  "at_utc": "2026-10-08T15:01:19.459397+00:00",
+  "comment_url": "https://github.com/snissn/gomap/issues/5111#issuecomment-6054393776",
+  "comment_sha256": "00be16f1539b0f7dffa3603b499c1edab56f9481047d1b354995d02bc6ae0733",
+  "prior_comment": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-focused-comment-before-vlog-debt-root-20261008T150119Z.md",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-focused-comment-before-vlog-debt-root-20261008T150119Z.md",
+    "sha256": "b4094879aa6c09606d996ab577e59e6d5a4f644b1a420774ad473065fefa31ac"
+  },
+  "issue_body_preserved": true,
+  "issue_body_sha256": "b85d6c785486fd1b0203e8e5fc14ccdd6395d658c8ed2f43c5c42356e1dbe012",
+  "component": {
+    "local": "/Volumes/FlashDrive/gomap-mvcc-4871-root-evidence-20261008/ordinary-canonical-history-and-vlog-debt-frontier-root-20261008T150119Z.json",
+    "remote": "/home/mikers/benchmarks/mvcc-architecture-4871-root-state-20261001/decisions/m7-whole-publication-output-reassessment-root-20261007/ordinary-canonical-history-and-vlog-debt-frontier-root-20261008T150119Z.json",
+    "sha256": "bd635126f37ab5808ccf4a2fcdaac743909540034d558ac8755b1ba102705c5d"
+  },
+  "dependency_ready": false
+}

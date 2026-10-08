@@ -1,0 +1,84 @@
+{
+  "at_utc": "2026-10-08T15:48:17.722754+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "classification": "ACTUAL_ORIGINAL_ORIGIN_OUTCOME_NAMESPACE_CLONE_REFUSAL_COMPONENT_RACE_VERIFIED",
+  "packet": {
+    "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-import-original-outcome-terminal-fixed",
+    "result": {
+      "after_sha256": "edff7b76fbc7c7fe6b4756b8a9790a6edec2b6c319efeb5cec01cfe9daf6098d",
+      "args": [
+        "test",
+        "-race",
+        "-p=2",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/collections",
+        "-run",
+        "TestImportedOriginalObservation|TestOriginalObserved|TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody|TestPrimaryJointVacuumV6PointersAndIndependentFallback|TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody|TestLeafGenerationManifestStablePreparedClosureUsesActualReplacement|TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce",
+        "-count=1",
+        "-timeout=60s",
+        "-v"
+      ],
+      "before_sha256": "edff7b76fbc7c7fe6b4756b8a9790a6edec2b6c319efeb5cec01cfe9daf6098d",
+      "env": {
+        "CGO_ENABLED": "1",
+        "GOCACHE": "/home/mikers/.cache/go-build",
+        "GOENV": "off",
+        "GOMAXPROCS": "2",
+        "GOMODCACHE": "/home/mikers/go/pkg/mod",
+        "GOPATH": "/home/mikers/go",
+        "GOPROXY": "off",
+        "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+        "GOSUMDB": "off",
+        "GOTOOLCHAIN": "local",
+        "GOWORK": "off"
+      },
+      "exit": 0,
+      "finish": 1791474199.4585526,
+      "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+      "raw_sha256": "a050b47d9fcf151edc30bf3c3210265d56932b4deee2b00ac2d2341ded8ce006",
+      "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+      "source_count": 10034,
+      "source_equal": true,
+      "start": 1791474115.962772
+    },
+    "raw_sha256": "a050b47d9fcf151edc30bf3c3210265d56932b4deee2b00ac2d2341ded8ce006",
+    "result_sha256": "c36e3dada72ee1c0284b4e9b387ae37d73b98a1a606b6ee38750d30e7db5eca5",
+    "source_equal_verified": true,
+    "actual_top_level_passes": [
+      "TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody",
+      "TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody",
+      "TestImportedOriginalObservationKeepsFailedLastPhysicalCustody",
+      "TestOriginalObservedCloneOwnsExactActionAndSharedPhysicalBacking",
+      "TestOriginalObservedNamespaceFailureAndAdmissionRefusal",
+      "TestLeafGenerationManifestStablePreparedClosureUsesActualReplacement",
+      "TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+      "TestStableColumnAssetCreatesThroughCapturedParentAndSyncsOnce"
+    ],
+    "subtests": [
+      "TestPrimaryJointVacuumV6PointersAndIndependentFallback/false",
+      "TestPrimaryJointVacuumV6PointersAndIndependentFallback/true"
+    ],
+    "source_bindings_root_inspected": {
+      "TreeDB/internal/rootpublication/resource_original_cleanup.go": "36260db9d8658a3cb02ecb72760a4be8cc08a1641eb7874473e80280bc88caaa",
+      "TreeDB/internal/rootpublication/resource_original_cleanup_unix_test.go": "2dbbf1ec7b266f56544bc8c1f7da15f7fefdb9f7f8e521e84d1c6d70cd2ce0cc",
+      "TreeDB/internal/rootpublication/resource_token.go": "a472df2ab7ae34bcdca38e0691c31fc334d6cbed8825e829ea02279fd9432f19",
+      "TreeDB/internal/rootpublication/resource_token_allocation.go": "da35b28f169868de7968bd317f1d5a5e928b66866ae306c2649ba750adf37b9d",
+      "TreeDB/internal/rootpublication/pin_registry.go": "88827a89ae60231bc00c702a1d61c208eeae9d55ed0b9d08e4dd2de50eda5998",
+      "TreeDB/db/durable_root_runtime.go": "cd57ddfcbf95f31a0704f98352fc755acb89ba845c1e657e68709d6da42fd02f",
+      "TreeDB/db/leaf_generation_manifest_store.go": "1386ee5725812da0bee9ddffec51bd8372e4de4649571be9e5b69c68605d3e9e",
+      "TreeDB/collections/stable_resource.go": "937b248b1784b86aa1f8e544460cf3f572c79b0f4c80829d79b3607c6b114ba3"
+    }
+  },
+  "root_review": "Inspected exact original observation preadmission, shared physical backing once-only close, original registry intrusive failed custody, original namespace cleanup and terminal registry refusal, constructor routes at recovered resources/leaf manifest/column assets. Original test verifies last imported alias EBADF, independent adapter disposal, successful clone pin+backing detachment and namespace fault/refusal without replay. Actual replacement and column namespace tests executed, both requiredV2 vacuum formats executed.",
+  "classification_by_package": {
+    "rootpublication": "5 actual race passes",
+    "db": "2 actual race passes including vacuum false and true subtests",
+    "collections": "1 actual race pass"
+  },
+  "source_scope": "Component evidence only; requiredV2 encoding scratch, full19 connected audit, docs, full normal/race maturity, coherent local product commit/freeze, matched performance and PR gates remain.",
+  "dependency_ready": false,
+  "root_tests_rerun": false,
+  "released_paths": [],
+  "native_activation": false
+}

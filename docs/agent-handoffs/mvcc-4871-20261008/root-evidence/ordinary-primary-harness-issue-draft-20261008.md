@@ -1,0 +1,17 @@
+The ordinary prerequisite #5111 needs matched regression evidence for existing public write/batch/checkpoint/vacuum paths and enabled incremental/scaling evidence for its new PRIMARY directory. Current unified-bench cannot select `Options.IndexPrimaryDirectory`: `-profile fast` selects the no-WAL profile and can attach the PRIMARY arena, but does not enable the separate directory option. `BenchmarkPublishDurableRootV1` also leaves it false. A requested feature must not silently fall back to the old path.
+
+Deliver one focused harness PR against main, accepted by the #4871 root coordinator, before expensive retained #5111 collection. This is a prerequisite to performance qualification; #5111 source/correctness work continues provisionally.
+
+Source preflight: main `3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3`, `cmd/unified_bench/adapter_treedb.go` optional reflection helpers (`fieldByPath`), option builder, resolved-options report and existing index/profile tests; `cmd/unified_bench/README.md`; root AGENTS.md and CONTRIBUTING.md; docs/CI_IMPACT_SELECTION.md. The option exists in the mutable #5111 source at `TreeDB/db/db.go:1328`, with the directory routing at `:2624`, but is absent from this main baseline. Reuse the adapter's existing optional-option mechanism with an explicit error when enablement is requested but unsupported. Avoid a new runner, engine change, format change or benchmark matrix redesign.
+
+Acceptance:
+
+- [ ] Add an opt-in unified-bench PRIMARY-directory selector, default false. A supported build receives the actual bool option; an unsupported build rejects true before Open/workload execution, while false preserves the existing path.
+- [ ] Report requested, supported and configured enablement from the constructed options. Distinguish this configuration from actual operation/path counters; configuration alone is not runtime qualification.
+- [ ] Cover supported true/false, absent-option refusal/default behavior and invalid option types; exercise the real adapter builder/report and preserve existing command-WAL/profile/unsafe checks.
+- [ ] Update the existing README with reproduction and limits: no-WAL fast does not establish DURABLE/RELAXED command-WAL contracts; old main has no identical enabled directory baseline, so enabled results are incremental/scaling costs rather than before/after improvement claims.
+- [ ] Keep benchmark names, profile artifact filenames and schemas unchanged unless a concrete need requires otherwise; then update existing consumers in this same packet.
+- [ ] Follow CI-impact refresh policy for the actual staged source and tests. Preserve every original member; run relevant adapter checks and current-head required CI.
+- [ ] Independent exact-candidate GPT-6.1 Sol review covers provenance, isolation/concurrency, fail-closed selection and evidence wording. Root owns merge authority; no expensive retained performance collection before this harness is reviewed/landed and exact product/harness identities are frozen.
+
+Ownership: one isolated GPT-6.1 Sol implementation lane for `cmd/unified_bench` and its focused CI-impact update. The existing #5111 worker remains the sole TreeDB implementation owner. Do not change #5111 product/native caps, Request/Accepted/Finish contracts, M3 gates, foreign graph ownership or #5022 discussion hold. Released worktree/test outputs must be deleted after source refs/evidence and consumers are verified.

@@ -1,0 +1,133 @@
+{
+  "at_utc": "2026-10-08T15:35:45.371338+00:00",
+  "issue": "https://github.com/snissn/gomap/issues/5111",
+  "classification": "ACTUAL_ORIGINAL_CLOSE_ERROR_RED_AND_FIRST_CONNECTED_RACE_COMPONENT_VERIFIED",
+  "packets": [
+    {
+      "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-import-original-close-first",
+      "result": {
+        "after_sha256": "6b1277ce706462c7e3eecd55088cce6bb39907f3be830c8dcbf4565149bac832",
+        "args": [
+          "test",
+          "-race",
+          "-p=2",
+          "./TreeDB/internal/rootpublication",
+          "./TreeDB/db",
+          "./TreeDB/collections",
+          "-run",
+          "TestImportedOriginalObservationKeepsFailedLastPhysicalCustody|TestPrimaryJointVacuumV6PointersAndIndependentFallback/true|TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody",
+          "-count=1",
+          "-timeout=60s",
+          "-v"
+        ],
+        "before_sha256": "6b1277ce706462c7e3eecd55088cce6bb39907f3be830c8dcbf4565149bac832",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 0,
+        "finish": 1791473631.2984984,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "782d5a6ed73ec3e74f690bfde0411c7c0738d42d98174b99436da01fb57458ab",
+        "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+        "source_count": 10034,
+        "source_equal": true,
+        "start": 1791473549.6224487
+      },
+      "source_equal_verified": true,
+      "actual_passes": [
+        "TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody",
+        "TestImportedOriginalObservationKeepsFailedLastPhysicalCustody",
+        "TestPrimaryJointVacuumV6PointersAndIndependentFallback"
+      ],
+      "actual_failures": [],
+      "raw_tail": [
+        "=== RUN   TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody",
+        "--- PASS: TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody (0.02s)",
+        "=== RUN   TestImportedOriginalObservationKeepsFailedLastPhysicalCustody",
+        "--- PASS: TestImportedOriginalObservationKeepsFailedLastPhysicalCustody (0.00s)",
+        "PASS",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t1.061s",
+        "=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback",
+        "=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/true",
+        "--- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback (0.24s)",
+        "    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/true (0.24s)",
+        "PASS",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.445s",
+        "testing: warning: no tests to run",
+        "PASS",
+        "ok  \tgithub.com/snissn/gomap/TreeDB/collections\t1.412s [no tests to run]"
+      ]
+    },
+    {
+      "directory": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/ordinary-import-original-close-red",
+      "result": {
+        "after_sha256": "a0b4bd45af7e8d0db5f57515177664266756be99a76e6b940e7713daf7359cf6",
+        "args": [
+          "test",
+          "-p=2",
+          "./TreeDB/internal/rootpublication",
+          "-run",
+          "TestImportedOriginalObservationKeepsFailedLastPhysicalCustody",
+          "-count=1",
+          "-timeout=30s",
+          "-v"
+        ],
+        "before_sha256": "a0b4bd45af7e8d0db5f57515177664266756be99a76e6b940e7713daf7359cf6",
+        "env": {
+          "CGO_ENABLED": "1",
+          "GOCACHE": "/home/mikers/.cache/go-build",
+          "GOENV": "off",
+          "GOMAXPROCS": "2",
+          "GOMODCACHE": "/home/mikers/go/pkg/mod",
+          "GOPATH": "/home/mikers/go",
+          "GOPROXY": "off",
+          "GOROOT": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64",
+          "GOSUMDB": "off",
+          "GOTOOLCHAIN": "local",
+          "GOWORK": "off"
+        },
+        "exit": 1,
+        "finish": 1791473456.4994476,
+        "head": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+        "raw_sha256": "ffde03bdf0e37f62383e390651da4c18e0c5e3614f0221a13caa1277484e6ab6",
+        "source": "/home/mikers/benchmarks/mvcc-ordinary-5111-root-20261008/source",
+        "source_count": 10033,
+        "source_equal": true,
+        "start": 1791473451.5735648
+      },
+      "source_equal_verified": true,
+      "actual_passes": [],
+      "actual_failures": [
+        "TestImportedOriginalObservationKeepsFailedLastPhysicalCustody"
+      ],
+      "raw_tail": [
+        "=== RUN   TestImportedOriginalObservationKeepsFailedLastPhysicalCustody",
+        "    resource_original_cleanup_unix_test.go:69: original close failure lost: <nil>",
+        "--- FAIL: TestImportedOriginalObservationKeepsFailedLastPhysicalCustody (0.00s)",
+        "FAIL",
+        "FAIL\tgithub.com/snissn/gomap/TreeDB/internal/rootpublication\t0.002s",
+        "FAIL"
+      ]
+    }
+  ],
+  "classification_by_package": {
+    "rootpublication": "2 actual race passes",
+    "db": "1 actual requiredV2 pointer/vacuum race pass",
+    "collections": "compile-only no tests to run"
+  },
+  "scope": "Original physical close fault remains at original registry through held and last imported alias; adapter storage disposes independently. Exact RED and green source maps verified. Constructor namespace/refusal/generic clone observation and full production origin closure remain the same worker obligation. This component is not all19 or PR maturity.",
+  "root_tests_rerun": false,
+  "dependency_ready": false,
+  "released_paths": [],
+  "native_activation": false
+}
