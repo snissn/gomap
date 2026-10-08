@@ -73,6 +73,11 @@ path. The benchmark compatibility alias `-profile fast` alone selects
 `no_wal_fast` and may attach a PRIMARY arena, but does not enable the separate
 PRIMARY directory.
 
+The direct-open `column_store` and `collection_storage` suites (including their
+hyphenated aliases) reject this selector before reports, artifacts, or database
+opens. They do not use the adapter's options builder. Their default `false`
+behavior is unchanged.
+
 For example, build from a clean checkout with the supporting product change and
 this harness, then run in a fresh, task-owned database/output directory:
 

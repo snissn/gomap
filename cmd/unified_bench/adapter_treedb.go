@@ -1074,6 +1074,20 @@ func attachUnifiedBenchTreeDBProfile(opts *treedb.Options, profile treedb.Profil
 	opts.UnsafeBenchmarkProfile = proof.UnsafeBenchmarkProfile
 }
 
+// validateTreeDBPrimaryDirectoryRequest rejects requests before suite dispatch or
+// artifact setup. The direct-open storage suites do not use the adapter builder.
+func validateTreeDBPrimaryDirectoryRequest(suite string) error {
+	if !*treedbIndexPrimaryDirectory {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(suite)) {
+	case "column_store", "column-store", "collection_storage", "collection-storage":
+		return fmt.Errorf("suite %q does not support -treedb-index-primary-directory; use an adapter-based workload", suite)
+	}
+	opts := treedb.Options{}
+	return configureTreeDBPrimaryDirectory(reflect.ValueOf(&opts).Elem(), true)
+}
+
 func treeDBResolvedOptionsText(indent string) (string, error) {
 	opts, rep, err := buildTreeDBOptions("")
 	if err != nil {

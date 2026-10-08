@@ -1623,6 +1623,9 @@ func columnStoreSuiteIndexes() []collections.IndexDefinition {
 }
 
 func openColumnStoreSuiteDB(dir string) (*backenddb.DB, error) {
+	if err := validateTreeDBPrimaryDirectoryRequest("column_store"); err != nil {
+		return nil, err
+	}
 	return backenddb.Open(backenddb.Options{
 		Dir:                    dir,
 		CommandWAL:             true,

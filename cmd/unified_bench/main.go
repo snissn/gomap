@@ -474,6 +474,9 @@ func main() {
 	if extras := flag.Args(); len(extras) > 0 {
 		log.Fatalf("unexpected positional args: %q (tip: for bool flags, use -flag=false, e.g. -progress=false)", extras)
 	}
+	if err := validateTreeDBPrimaryDirectoryRequest(*suiteArg); err != nil {
+		log.Fatal(err)
+	}
 
 	isSet := make(map[string]bool)
 	flag.Visit(func(f *flag.Flag) {

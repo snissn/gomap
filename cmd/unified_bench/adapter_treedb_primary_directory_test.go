@@ -4,12 +4,14 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
 	treedb "github.com/snissn/gomap/TreeDB"
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
 
 func TestTreeDBPrimaryDirectoryOptionalOption(t *testing.T) {
@@ -44,6 +46,64 @@ func TestTreeDBPrimaryDirectoryOptionalOption(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTreeDBPrimaryDirectorySuiteOpenFailsClosed(t *testing.T) {
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	*treedbIndexPrimaryDirectory = true
+	for name, open := range map[string]func(string) (*backenddb.DB, error){
+		"column_store":       openColumnStoreSuiteDB,
+		"collection_storage": openCollectionStorageDB,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "must-not-open")
+			db, err := open(dir)
+			if db != nil {
+				defer db.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), "does not support -treedb-index-primary-directory") {
+				t.Fatalf("suite Open rejection=%v", err)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatalf("suite Open touched directory: %v", err)
+			}
+		})
+	}
+}
+
+func TestTreeDBPrimaryDirectorySuitePreflight(t *testing.T) {
+	if os.Getenv("GOMAP_PRIMARY_SUITE_PREFLIGHT_TEST") == "1" {
+		main()
+		return
+	}
+	saved := saveTreeDBFlagState()
+	defer restoreTreeDBFlagState(saved)
+	resetTreeDBIndexFlagsForTest()
+	for _, suite := range []string{"column_store", "column-store", "collection_storage", "collection-storage", " COLLECTION_STORAGE "} {
+		if err := validateTreeDBPrimaryDirectoryRequest(suite); err != nil {
+			t.Fatalf("default false suite %q: %v", suite, err)
+		}
+		*treedbIndexPrimaryDirectory = true
+		if err := validateTreeDBPrimaryDirectoryRequest(suite); err == nil {
+			t.Fatalf("enabled suite %q accepted", suite)
+		}
+		*treedbIndexPrimaryDirectory = false
+		dir := filepath.Join(t.TempDir(), "must-not-create-artifacts")
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTreeDBPrimaryDirectorySuitePreflight$", "-suite="+suite, "-treedb-index-primary-directory=true", "-profile-dir="+dir)
+		cmd.Env = append(os.Environ(), "GOMAP_PRIMARY_SUITE_PREFLIGHT_TEST=1")
+		out, err := cmd.CombinedOutput()
+		if err == nil || !strings.Contains(string(out), "does not support -treedb-index-primary-directory") {
+			t.Fatalf("CLI suite %q rejection=%v output=%s", suite, err, out)
+		}
+		if strings.Contains(string(out), "Unified Benchmark Runner") {
+			t.Fatalf("CLI printed measurement banner before rejecting suite %q: %s", suite, out)
+		}
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("CLI touched artifacts for suite %q: %v", suite, err)
+		}
 	}
 }
 
