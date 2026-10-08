@@ -5621,7 +5621,12 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if err != nil {
 		return stats, err
 	}
-	defer finishFence()
+	fenceHeld := true
+	defer func() {
+		if fenceHeld {
+			finishFence()
+		}
+	}()
 	if refresher, ok := db.backend.(valueLogSetRefresher); ok {
 		if err := refresher.RefreshValueLogSet(); err != nil {
 			return stats, err
@@ -5665,6 +5670,11 @@ func (db *DB) ReclaimObservedValueLogSources(ctx context.Context, ids []uint32) 
 	if stats.ObservedSourceSegmentsDeleted > 0 {
 		db.cleanupMissingObservedValueLogRetains(seen)
 	}
+	// Value-source revalidation and reclaim are complete. Leaf GC takes its
+	// own checked producer handoff, which drains flushMu then writeMu; entering
+	// it under this write fence would reacquire writeMu and invert that order.
+	finishFence()
+	fenceHeld = false
 	if hasLeafGenerationGC {
 		if _, err := leafGcer.LeafGenerationGC(ctx, db.leafGenerationGCOptions()); err != nil {
 			return stats, err

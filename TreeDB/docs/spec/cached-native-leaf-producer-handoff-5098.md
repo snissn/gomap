@@ -36,6 +36,14 @@ cannot rotate or register the old installed owner. No public checkpoint,
 Cached Close sets closing and waits for the matching flush/foreground owners;
 a cancelled acquisition releases whichever cached lock it acquired.
 
+Observed value-source reclamation keeps its cached write fence through refresh,
+source revalidation, value GC and missing-retain cleanup. It releases that fence
+before calling leaf GC. Leaf GC then acquires its own checked producer handoff
+and revalidates its captured roots and manifest. Holding the completed value
+fence across this call would recursively acquire cached `writeMu` and deadlock.
+Early value-operation errors release the fence exactly once and do not enter
+leaf GC; its independent checks continue to own leaf deletion authority.
+
 If every current writer has zero appended bytes, handoff reserves no sequence
 and opens no new file. Otherwise the producer reserves an unused sequence above
 both the shared allocator and every physical current writer. It advances the
