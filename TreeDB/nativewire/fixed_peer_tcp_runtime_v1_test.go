@@ -3,6 +3,7 @@ package nativewire
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -941,6 +942,12 @@ func TestFixedPeerTCPRuntimeProcessV1(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Socket ownership (including Windows staged activation) precedes runtime
+	// open. A separate private ACK witnesses this exact child/config after open.
+	if err := fixedPeerWriteRuntimeOpenV1(path, config); err != nil {
+		_ = runtime.Close()
+		t.Fatal(err)
+	}
 	fixedPeerActiveInvalidationChildV1(runtime)
 	if os.Getenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1") == "1" || os.Getenv("GOMAP_FIXED_PEER_COST_SETUP_PREFLIGHT_V1") == "1" {
 		fixedPeerCostChildV1(t, runtime)
@@ -1002,6 +1009,147 @@ func TestFixedPeerTCPRuntimeConfigFileV1(t *testing.T) {
 			}
 		})
 	}
+}
+
+type fixedPeerRuntimeOpenV1 struct {
+	PID          int
+	ConfigDigest string
+}
+
+func fixedPeerRuntimeOpenIdentityV1(pid int, config FixedPeerTCPConfigV1) (fixedPeerRuntimeOpenV1, error) {
+	raw, err := json.Marshal(config)
+	return fixedPeerRuntimeOpenV1{PID: pid, ConfigDigest: fmt.Sprintf("%x", sha256.Sum256(raw))}, err
+}
+
+func fixedPeerWriteRuntimeOpenV1(path string, config FixedPeerTCPConfigV1) error {
+	identity, err := fixedPeerRuntimeOpenIdentityV1(os.Getpid(), config)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(identity)
+	if err != nil {
+		return err
+	}
+	// Publish complete bytes, matching the staged listener file ACK idiom.
+	target := path + ".open"
+	if err := os.WriteFile(target+".tmp", raw, 0600); err != nil {
+		return err
+	}
+	return os.Rename(target+".tmp", target)
+}
+
+func fixedPeerWaitRuntimeOpenV1(ctx context.Context, path string, want fixedPeerRuntimeOpenV1, read func(string) ([]byte, error)) error {
+	for {
+		raw, err := read(path)
+		if err == nil {
+			var got fixedPeerRuntimeOpenV1
+			if err := json.Unmarshal(raw, &got); err != nil {
+				return fmt.Errorf("malformed runtime-open acknowledgement: %w", err)
+			}
+			if got != want {
+				return fmt.Errorf("stale runtime-open acknowledgement: got=%+v want=%+v", got, want)
+			}
+			return nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("runtime-open acknowledgement deadline: %w", ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func (p *fixedPeerTestProcessV1) waitRuntimeOpen(t testing.TB, ctx context.Context, config FixedPeerTCPConfigV1) {
+	t.Helper()
+	var path string
+	for _, value := range p.command.Env {
+		if strings.HasPrefix(value, "GOMAP_FIXED_PEER_TEST_CONFIG_FILE=") {
+			path = strings.TrimPrefix(value, "GOMAP_FIXED_PEER_TEST_CONFIG_FILE=")
+		}
+	}
+	want, err := fixedPeerRuntimeOpenIdentityV1(p.command.Process.Pid, config)
+	if err == nil && path != "" {
+		err = fixedPeerWaitRuntimeOpenV1(ctx, path+".open", want, os.ReadFile)
+	} else if err == nil {
+		err = errors.New("child configuration path missing")
+	}
+	if err != nil {
+		raw, _ := os.ReadFile(p.log.Name())
+		t.Fatalf("child runtime open: %v\n%s", err, raw)
+	}
+}
+
+func TestFixedPeerRuntimeOpenAcknowledgementV1(t *testing.T) {
+	config := FixedPeerTCPConfigV1{NodeID: "owner-1", DataRoot: "selected-config"}
+	want, err := fixedPeerRuntimeOpenIdentityV1(os.Getpid(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := fixedPeerWriteRuntimeOpenV1(path, config); err != nil {
+		t.Fatal(err)
+	}
+	valid, err := os.ReadFile(path + ".open")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherConfig := config
+	otherConfig.DataRoot = "stale-config"
+	staleConfig, err := fixedPeerRuntimeOpenIdentityV1(want.PID, otherConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		identity fixedPeerRuntimeOpenV1
+	}{
+		{"selected", want},
+		{"stale-pid", fixedPeerRuntimeOpenV1{PID: want.PID + 1, ConfigDigest: want.ConfigDigest}},
+		{"stale-config", staleConfig},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.identity)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = fixedPeerWaitRuntimeOpenV1(t.Context(), path, want, func(string) ([]byte, error) { return raw, nil })
+			if (err == nil) != (tc.name == "selected") {
+				t.Fatalf("ACK identity result: %v", err)
+			}
+		})
+	}
+	t.Run("delayed-start", func(t *testing.T) {
+		calls := 0
+		err := fixedPeerWaitRuntimeOpenV1(t.Context(), path, want, func(string) ([]byte, error) {
+			calls++
+			if calls == 1 {
+				return nil, os.ErrNotExist
+			}
+			return valid, nil
+		})
+		if err != nil || calls != 2 {
+			t.Fatalf("delayed ACK: calls=%d err=%v", calls, err)
+		}
+	})
+	t.Run("missing", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+		defer cancel()
+		err := fixedPeerWaitRuntimeOpenV1(ctx, path, want, func(string) ([]byte, error) {
+			return nil, os.ErrNotExist
+		})
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("missing ACK: %v", err)
+		}
+	})
+	t.Run("malformed", func(t *testing.T) {
+		err := fixedPeerWaitRuntimeOpenV1(t.Context(), path, want, func(string) ([]byte, error) { return []byte("{"), nil })
+		if err == nil {
+			t.Fatal("malformed ACK accepted")
+		}
+	})
 }
 
 type fixedPeerTestProcessV1 struct {
@@ -1084,7 +1232,8 @@ func (p *fixedPeerTestProcessV1) stop(t testing.TB) {
 	case <-time.After(8 * time.Second):
 		p.command.Process.Kill()
 		<-done
-		t.Error("child required forced cleanup")
+		raw, _ := os.ReadFile(p.log.Name())
+		t.Errorf("child required forced cleanup\n%s", raw)
 	}
 	p.log.Close()
 }
@@ -1407,7 +1556,13 @@ func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
 		dir := t.TempDir()
 		t.Setenv("GOMAP_ACCEPTED_COMPARATIVE_COST_V1", "1")
 		t.Setenv("GOMAP_SELECTED_LIVE_RECEIPTS", dir)
-		process := fixedPeerStartTestProcessV1(t, fixedPeerTestConfigsV1(t, fixedPeerSubprocessAllocatorV1(t))[1])
+		config := fixedPeerTestConfigsV1(t, fixedPeerSubprocessAllocatorV1(t))[1]
+		process := fixedPeerStartTestProcessV1(t, config)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+		defer cancel()
+		// Runtime open is bounded independently of the unchanged rejection bound.
+		// No setup command is sent: before must remain invalid as the first command.
+		process.waitRuntimeOpen(t, ctx, config)
 		ack := filepath.Join(t.TempDir(), "rejected.json")
 		profile := filepath.Join(dir, "rejected.pprof")
 		if err := json.NewEncoder(process.input).Encode(fixedPeerCostCommandV1{"before", ack, profile}); err != nil {
@@ -1429,7 +1584,8 @@ func TestFixedPeerCostObservationBoundariesV1(t *testing.T) {
 		case <-time.After(8 * time.Second):
 			process.command.Process.Kill()
 			<-done
-			t.Fatal("out-of-order command child required forced cleanup")
+			raw, _ := os.ReadFile(process.log.Name())
+			t.Fatalf("out-of-order command child required forced cleanup\n%s", raw)
 		}
 		raw, err := os.ReadFile(process.log.Name())
 		if err != nil || !bytes.Contains(raw, []byte("invalid trusted cost observation command")) || bytes.Contains(raw, []byte("WARNING: DATA RACE")) {
