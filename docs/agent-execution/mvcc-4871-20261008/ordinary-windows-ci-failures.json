@@ -1,0 +1,220 @@
+{
+  "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+  "run": 37852241958,
+  "jobs": [
+    {
+      "job": 113567766969,
+      "failures": [
+        {
+          "test": "TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck/no_wal_fast\n",
+            "    cow_power_loss_test.go:87: actual COW checkpoint emitted no completed meta sync\n",
+            "--- FAIL: TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck/no_wal_fast (0.38s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck",
+          "events": [
+            "=== RUN   TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck\n",
+            "--- FAIL: TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck (16.85s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs",
+          "events": [
+            "=== RUN   TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs\n",
+            "    recovery_spec_test.go:984: open: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs (0.29s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766912,
+      "failures": [
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_durable",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_durable\n",
+            "    cow_public_resource_lifetime_test.go:147: physical pin did not drain after final cut/DB close: retained metadata owner closed\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_durable (0.33s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_relaxed",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_relaxed\n",
+            "    cow_public_resource_lifetime_test.go:147: physical pin did not drain after final cut/DB close: retained metadata owner closed\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_relaxed (0.40s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/no_wal_fast\n",
+            "    cow_public_resource_lifetime_test.go:147: physical pin did not drain after final cut/DB close: retained metadata owner closed\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/no_wal_fast (0.33s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime (1.05s)\n"
+          ]
+        },
+        {
+          "test": "TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup",
+          "events": [
+            "=== RUN   TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup\n",
+            "    offline_maintenance_template_lookup_test.go:200: VacuumIndexOffline: online vacuum unsupported on this platform\n",
+            "--- FAIL: TestVacuumIndexOffline_WithTemplateFrames_WiresTemplateLookup (0.18s)\n"
+          ]
+        },
+        {
+          "test": "TestOpen_PersistedProfileCannotChangeContracts",
+          "events": [
+            "=== RUN   TestOpen_PersistedProfileCannotChangeContracts\n",
+            "    profiles_test.go:188: implicit-profile offline vacuum: online vacuum unsupported on this platform\n",
+            "--- FAIL: TestOpen_PersistedProfileCannotChangeContracts (0.21s)\n"
+          ]
+        },
+        {
+          "test": "TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure",
+          "events": [
+            "=== RUN   TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure\n",
+            "    public_poison_admission_test.go:144: pre-meta checkpoint error=<nil>, want injected cut without ErrRecoveryRequired\n",
+            "--- FAIL: TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure (0.08s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766835,
+      "failures": [
+        {
+          "test": "TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability",
+          "events": [
+            "=== RUN   TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability\n",
+            "    adjacent_write_work_test.go:15: chunk size must be a multiple of mmap allocation granularity (65536)\n",
+            "--- FAIL: TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability (0.00s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766817,
+      "failures": [
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/inline-values/offline-vacuum",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/offline-vacuum\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: online vacuum unsupported on this platform\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/inline-values/offline-vacuum (0.22s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/pointer-values/offline-vacuum",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/offline-vacuum\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: online vacuum unsupported on this platform\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/pointer-values/offline-vacuum (0.22s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: online vacuum unsupported on this platform\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum (0.21s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/collection-root/offline-vacuum",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/offline-vacuum\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: online vacuum unsupported on this platform\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/collection-root/offline-vacuum (0.23s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix (8.73s)\n"
+          ]
+        },
+        {
+          "test": "TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline",
+          "events": [
+            "=== RUN   TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline\n",
+            "    maintenance_leaf_vlog_test.go:462: no valid durable-root meta pages found in C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefR3890116691\\001\\maindb\\index.db\n",
+            "--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline (0.15s)\n"
+          ]
+        },
+        {
+          "test": "TestPublicCachedHandleRejectsMutationAfterPostMetaFailure",
+          "events": [
+            "=== RUN   TestPublicCachedHandleRejectsMutationAfterPostMetaFailure\n",
+            "    public_poison_admission_test.go:103: post-meta checkpoint error=<nil>, want injected cut and ErrRecoveryRequired\n",
+            "--- FAIL: TestPublicCachedHandleRejectsMutationAfterPostMetaFailure (0.20s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766786,
+      "failures": [
+        {
+          "test": "TestDurabilityProfilePublicEntrypointInventory",
+          "events": [
+            "=== RUN   TestDurabilityProfilePublicEntrypointInventory\n",
+            "    profile_entrypoint_inventory_test.go:39: exported DB entrypoint inventory changed\n",
+            "         got: [AcquireMVCCReadCut AcquireSnapshot Checkpoint Close CompactIndex CompactStorage CompactStorageLeafPageLogOwnerClassification CompactStoragePlan Delete DeleteRange DeleteSync DurabilityMode FragmentationReport Get GetAppend GetMany GetManyParallelPlan GetManyView GetUnsafe GetVersioned GetVersionedAppend Has HasMany HasPrefixes InitConditionalTxn InitConditionalTxnWithSnapshot Iterator LeafGenerationGC LeafGenerationPack LeafGenerationPackFromPlan LeafGenerationPackRunOnce LeafGenerationPlan MaintenancePhase NewBatch NewBatchWithSize NewConditionalTxn NewConditionalTxnWithSnapshot NewMVCCAdmission PreflightMVCCPrune Print ResolvedProfile ReverseIterator SeekGE SeekGEVersionRange Set SetMaintenancePhase SetPointWithMVCCInput SetSync Stats SupportsMVCCReadCut Update UpdateSync VacuumIndexOnline VacuumOnlineStats ValueLogGC ValueLogRewriteOnline]\n",
+            "        want: [AcquireMVCCReadCut AcquireSnapshot Checkpoint Close CompactIndex CompactStorage CompactStorageLeafPageLogOwnerClassification CompactStoragePlan Delete DeleteRange DeleteSync DurabilityMode FragmentationReport Get GetAppend GetMany GetManyParallelPlan GetManyView GetUnsafe GetVersioned GetVersionedAppend Has HasMany HasPrefixes InitConditionalTxn InitConditionalTxnWithSnapshot Iterator LeafGenerationGC LeafGenerationPack LeafGenerationPackFromPlan LeafGenerationPackRunOnce LeafGenerationPlan MaintenancePhase NewBatch NewBatchWithSize NewConditionalTxn NewConditionalTxnWithSnapshot PreflightMVCCPrune Print ResolvedProfile ReverseIterator SeekGE SeekGEVersionRange Set SetMaintenancePhase SetSync Stats SupportsMVCCReadCut Update UpdateSync VacuumIndexOnline VacuumOnlineStats ValueLogGC ValueLogRewriteOnline]\n",
+            "--- FAIL: TestDurabilityProfilePublicEntrypointInventory (0.01s)\n"
+          ]
+        },
+        {
+          "test": "TestVacuumIndexOffline_LoadsPersistedFormatConfig",
+          "events": [
+            "=== RUN   TestVacuumIndexOffline_LoadsPersistedFormatConfig\n",
+            "    offline_maintenance_format_config_test.go:107: VacuumIndexOffline: online vacuum unsupported on this platform\n",
+            "--- FAIL: TestVacuumIndexOffline_LoadsPersistedFormatConfig (0.10s)\n"
+          ]
+        },
+        {
+          "test": "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+          "events": [
+            "=== RUN   TestPowerLossOracleCounterexampleNewMetaMissingClosure\n",
+            "    power_loss_oracle_test.go:597: actual relaxed finalize did not stop at AfterMetaWrite: err=<nil>\n",
+            "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPowerLossOracleCounterexampleNewMetaMissingClosure4177286859\\001\\index.db: The process cannot access the file because it is being used by another process.\n",
+            "--- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure (1.83s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_RIDJoinReplaysValueLog",
+          "events": [
+            "=== RUN   TestRecovery_RIDJoinReplaysValueLog\n",
+            "    recovery_spec_test.go:912: open backend: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_RIDJoinReplaysValueLog (0.12s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766733,
+      "failures": [
+        {
+          "test": "TestRecovery_TruncatedValueLogRecord",
+          "events": [
+            "=== RUN   TestRecovery_TruncatedValueLogRecord\n",
+            "    recovery_spec_test.go:1369: open backend: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_TruncatedValueLogRecord (0.09s)\n"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "schema_version": "mvcc-4871-execution-overlay/v1",
+  "parent": "https://github.com/snissn/gomap/issues/4871",
+  "historical_graph_sha256": "997017bda8467f3ba9dabfd8604263bcbdf8db185aa8710a98eb0ac3ac1be428",
+  "historical_graph_source": "f3f87717ce50791772543300dc8995e706817b49/docs/agent-handoffs/mvcc-4871-20261008",
+  "acceptance_owner": "/root",
+  "routing": "GPT-6.1 Sol/high independent workers; max2 active; one writer per node; sole root merge",
+  "parent_complete": false,
+  "qualification": "No performance/native or parent acceptance. Historical states retain their original source-bound acceptance; this overlay does not requalify earlier evidence.",
+  "nodes": [
+    {
+      "issue": "snissn/gomap#4872",
+      "state": "merged",
+      "pr": "https://github.com/snissn/gomap/pull/4881",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#4873",
+      "state": "merged",
+      "pr": "https://github.com/snissn/gomap/pull/4882",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4874",
+      "state": "merged",
+      "pr": "https://github.com/snissn/gomap/pull/4884",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/dgraph#40",
+      "state": "merged",
+      "status": "MERGED_ACCEPTED_NATIVE_CI_AND_LANDED_INPUT_APPLICABILITY",
+      "pr": "https://github.com/snissn/dgraph/pull/41",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/dgraph#36",
+      "state": "fix-needed",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#4875",
+      "state": "pending",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4876",
+      "state": "pending",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4877",
+      "state": "pending",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4878",
+      "state": "blocked",
+      "status": "ORIGINAL_NATIVE_SOURCE_FIXTURE_CUSTODY_MISSING",
+      "owner": "/root",
+      "blockers": [
+        "ordinary#5111 immature",
+        "original terminal source/protected fixture bytes unavailable"
+      ],
+      "next_action": "Artifact holder mikers exports original .111 terminal source, both protected fixtures, final manifests to accessible location; root verifies frozen identities before activation.",
+      "evidence": "https://github.com/snissn/gomap/issues/4871#issuecomment-6070352664"
+    },
+    {
+      "issue": "snissn/dgraph#37",
+      "state": "blocked",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4879",
+      "state": "blocked",
+      "owner": null
+    },
+    {
+      "issue": "snissn/dgraph#38",
+      "state": "merged",
+      "pr": "https://github.com/snissn/dgraph/pull/39",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5011",
+      "state": "merged",
+      "status": "merged",
+      "pr": 5014,
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5019",
+      "state": "merged",
+      "status": "MERGED_ACTUAL_LANDED_SOURCE_AND_POLICY_PROVEN",
+      "pr": "https://github.com/snissn/gomap/pull/5020",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5036",
+      "state": "merged",
+      "status": "MERGED_TOOLING_ONLY_LANDED_SOURCE_IDENTITIES_VERIFIED",
+      "pr": "https://github.com/snissn/gomap/pull/5043",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5111",
+      "state": "fix-needed",
+      "status": "ACTUAL_CORRECTNESS_AND_RAW_PATH_GATES_RED",
+      "pr": "https://github.com/snissn/gomap/pull/5127",
+      "owner": "/root/ordinary_5111",
+      "acceptance_owner": "/root",
+      "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+      "next_action": "One coherent actual consumer/ownership/format correction including strict historical archive and current V5/V6 evidence; review, fresh full CI and landed-harness matched performance before maturity.",
+      "decisions": [
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999"
+      ],
+      "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108"
+    },
+    {
+      "issue": "snissn/gomap#5118",
+      "state": "in-progress",
+      "status": "EXACT_REPAIR_REVIEW_ACCEPT_REQUIRED_CI_ACTIVE",
+      "pr": "https://github.com/snissn/gomap/pull/5126",
+      "owner": "/root",
+      "head": "72f5692a5c93d6355589b846ebfcf64ab254cc9a",
+      "next_action": "Await fresh current-head required gate; inspect final findings/base/rules, root merge only green.",
+      "evidence": "https://github.com/snissn/gomap/pull/5126#issuecomment-6070555638"
+    }
+  ],
+  "preserved_holds": [
+    "M3 performance HOLDs",
+    "M4/M6 conditional inactive",
+    "M5 waits native and causal GO",
+    "M8 blocked by native",
+    "5022 discussion hold",
+    "foreign C3/R1 ownership"
+  ],
+  "evidence_branch": "codex/mvcc-4871-execution-20261008"
+}

@@ -1,0 +1,283 @@
+{
+  "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+  "run": 37852241958,
+  "jobs": [
+    {
+      "job": 113567766783,
+      "failures": [
+        {
+          "test": "TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters",
+          "events": [
+            "=== RUN   TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters\n",
+            "    compact_storage_cached_internal_test.go:579: CompactStorage: index-vacuum: merge inherited rebuilt-index durable resources: stable resource ownership violation\n",
+            "--- FAIL: TestCompactStorageClearsPublicRewriteSourceGCBehindActiveWriters (5.79s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_durable",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_durable\n",
+            "    cow_public_resource_lifetime_test.go:147: physical pin did not drain after final cut/DB close: retained metadata owner closed\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_durable (0.12s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_relaxed",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_relaxed\n",
+            "    cow_public_resource_lifetime_test.go:147: physical pin did not drain after final cut/DB close: retained metadata owner closed\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/command_wal_relaxed (0.12s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/no_wal_fast\n",
+            "    cow_public_resource_lifetime_test.go:147: physical pin did not drain after final cut/DB close: retained metadata owner closed\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime/no_wal_fast (0.06s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime",
+          "events": [
+            "=== RUN   TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime\n",
+            "--- FAIL: TestCOWPublicCompressedDictionaryAndPhysicalPinLifetime (0.31s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast\n",
+            "    cow_public_review_regression_test.go:308: no rotated leaf segment\n",
+            "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.03s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+          "events": [
+            "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress\n",
+            "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (0.27s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/inline-values/background-freelist",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/inline-values/background-freelist\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason=\"user\" want one/\"freelist\"\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/inline-values/background-freelist (0.13s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/pointer-values/background-freelist",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/pointer-values/background-freelist\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason=\"user\" want one/\"freelist\"\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/pointer-values/background-freelist (0.14s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/backend-vacuum-online",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/backend-vacuum-online\n",
+            "    index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/backend-vacuum-online (0.19s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/public-noncached-vacuum-online",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/public-noncached-vacuum-online\n",
+            "    index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-noncached-vacuum-online (0.21s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/public-cached-vacuum-online",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/public-cached-vacuum-online\n",
+            "    index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/public-cached-vacuum-online (0.19s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-full",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-full\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: index-vacuum: merge inherited rebuilt-index durable resources: stable resource ownership violation\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/compact-storage-full (0.21s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum\n",
+            "    index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/offline-vacuum (0.20s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/close-opt-in-vacuum",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/close-opt-in-vacuum\n",
+            "    index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/close-opt-in-vacuum (0.19s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/background-user",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/background-user\n",
+            "    index_vacuum_m4_matrix_test.go:253: index shrink before=393216 after=655360 want >=40%\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-user (0.26s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason=\"user\" want one/\"freelist\"\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/outer-leaf/background-freelist (0.19s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/collection-root/background-freelist",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/background-freelist\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason=\"user\" want one/\"freelist\"\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/collection-root/background-freelist (0.15s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix/collection-root/background-collection-roots",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix/collection-root/background-collection-roots\n",
+            "    index_vacuum_m4_matrix_test.go:253: supported lane error: background result vacuums=1 reason=\"user\" want one/\"collection_roots\"\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix/collection-root/background-collection-roots (0.16s)\n"
+          ]
+        },
+        {
+          "test": "TestIndexVacuumM4CertificationMatrix",
+          "events": [
+            "=== RUN   TestIndexVacuumM4CertificationMatrix\n",
+            "--- FAIL: TestIndexVacuumM4CertificationMatrix (6.44s)\n"
+          ]
+        },
+        {
+          "test": "TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen",
+          "events": [
+            "=== RUN   TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen\n",
+            "    vacuum_public_bench_test.go:31: public online shrink before=5373952 after=3702784 want >=40%\n",
+            "--- FAIL: TestPublicVacuumIndexOnlineHighDebtShrinkAndReopen (0.28s)\n"
+          ]
+        },
+        {
+          "test": "TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure",
+          "events": [
+            "=== RUN   TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure\n",
+            "    public_poison_admission_test.go:144: pre-meta checkpoint error=<nil>, want injected cut without ErrRecoveryRequired\n",
+            "--- FAIL: TestPublicCachedHandleRetainsAdmissionAfterPreMetaFailure (0.04s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_RIDJoinReplaysValueLog",
+          "events": [
+            "=== RUN   TestRecovery_RIDJoinReplaysValueLog\n",
+            "    recovery_spec_test.go:912: open backend: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_RIDJoinReplaysValueLog (0.01s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_MultiLaneOrdering",
+          "events": [
+            "=== RUN   TestRecovery_MultiLaneOrdering\n",
+            "    recovery_spec_test.go:1119: open backend: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_MultiLaneOrdering (0.01s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_TruncatedCommitLogRecord",
+          "events": [
+            "=== RUN   TestRecovery_TruncatedCommitLogRecord\n",
+            "    recovery_spec_test.go:1298: open backend: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_TruncatedCommitLogRecord (0.01s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766906,
+      "failures": [
+        {
+          "test": "TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown/no_wal_fast\n",
+            "    cow_close_frontier_test.go:65: final owner drain: {TotalBytes:52320 HistoryBytes:0 ReservedBytes:52064 RetiredBytes:0 PeakBytes:7463872 ControlBytes:256 DeferredBytes:0 ExternalBytes:52064 Views:0 Generations:0 Sources:0 ExternalLeases:1}\n",
+            "--- FAIL: TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown/no_wal_fast (0.20s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown",
+          "events": [
+            "=== RUN   TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown\n",
+            "--- FAIL: TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown (16.85s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast\n",
+            "    cow_public_review_regression_test.go:227: unsupported leaf-pack promotion: <nil>\n",
+            "--- FAIL: TestCOWPublicSelectedSourceRewriteKeepsOldCuts/no_wal_fast (0.24s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicSelectedSourceRewriteKeepsOldCuts",
+          "events": [
+            "=== RUN   TestCOWPublicSelectedSourceRewriteKeepsOldCuts\n",
+            "--- FAIL: TestCOWPublicSelectedSourceRewriteKeepsOldCuts (16.37s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no before-meta-write boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write (0.18s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no after-meta-write boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write (0.18s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no before-meta-sync boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync (0.21s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no after-meta-sync boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync (0.24s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts (201.15s)\n"
+          ]
+        }
+      ]
+    }
+  ],
+  "note": "Complete these two job event failures; not exhaustive all18red checks. Raw logs retained in connector/session. mvcc raw-path gate actualGetVersioned+8.29%, conditionalbatch allocations281→283 and B152744.5→153496 exceed strict64Bjitter; FAILCANDIDATE, noflake or waiver."
+}

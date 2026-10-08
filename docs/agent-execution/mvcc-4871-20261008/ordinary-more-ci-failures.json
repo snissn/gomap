@@ -1,0 +1,361 @@
+{
+  "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+  "run": 37852241958,
+  "jobs": [
+    {
+      "job": 113567766584,
+      "failures": [
+        {
+          "test": "TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast\n",
+            "    cow_public_retention_test.go:165: closed integration retained charges: {TotalBytes:49632 HistoryBytes:0 ReservedBytes:49376 RetiredBytes:0 PeakBytes:2088160 ControlBytes:256 DeferredBytes:0 ExternalBytes:49376 Views:0 Generations:0 Sources:0 ExternalLeases:1}\n",
+            "--- FAIL: TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast (8.50s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicRetentionRefusalDrainAndResume",
+          "events": [
+            "=== RUN   TestCOWPublicRetentionRefusalDrainAndResume\n",
+            "--- FAIL: TestCOWPublicRetentionRefusalDrainAndResume (27.67s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck/no_wal_fast\n",
+            "    cow_power_loss_test.go:87: actual COW checkpoint emitted no completed meta sync\n",
+            "--- FAIL: TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck/no_wal_fast (1.53s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck",
+          "events": [
+            "=== RUN   TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck\n",
+            "--- FAIL: TestCOWPublicModeledStableImageCheckpointAndNoWALVolatileAck (6.70s)\n"
+          ]
+        },
+        {
+          "test": "TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity",
+          "events": [
+            "=== RUN   TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity\n",
+            "    maintenance_leaf_vlog_test.go:420: reopen: treedb: no recoverable durable meta: slot 0: capsule complete physical closure: invalid freelist generation format: page 6 header/type; slot 1: capsule complete physical closure: invalid freelist generation format: page 25 header/type\n",
+            "--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity (0.13s)\n"
+          ]
+        },
+        {
+          "test": "TestPowerLossCertificationRecoverablePageReusePublicReopen",
+          "events": [
+            "=== RUN   TestPowerLossCertificationRecoverablePageReusePublicReopen\n",
+            "    power_loss_certification_page_reuse_test.go:95: write first post-horizon generation: sync durable-root index: power-loss-certification: stop before reused-page index sync\n",
+            "--- FAIL: TestPowerLossCertificationRecoverablePageReusePublicReopen (0.86s)\n"
+          ]
+        },
+        {
+          "test": "TestPowerLossOracleCounterexampleNewMetaMissingClosure",
+          "events": [
+            "      /opt/hostedtoolcache/go/1.26.8/x64/src/testing/testing.go:2101 +0x38\n",
+            "==================\n",
+            "    power_loss_oracle_test.go:597: actual relaxed finalize did not stop at AfterMetaWrite: err=<nil>\n",
+            "    testing.go:1712: race detected during execution of test\n",
+            "--- FAIL: TestPowerLossOracleCounterexampleNewMetaMissingClosure (0.61s)\n"
+          ]
+        },
+        {
+          "test": "TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison",
+          "events": [
+            "=== RUN   TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison\n",
+            "    public_poison_admission_test.go:53: checkpoint did not reach post-meta cut\n",
+            "--- FAIL: TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison (2.04s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs",
+          "events": [
+            "=== RUN   TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs\n",
+            "    recovery_spec_test.go:984: open: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_CommitFence_PublishesOnlyCommittedVLogRefs (0.03s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_TruncatedValueLogRecord",
+          "events": [
+            "=== RUN   TestRecovery_TruncatedValueLogRecord\n",
+            "    recovery_spec_test.go:1369: open backend: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_TruncatedValueLogRecord (0.03s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766694,
+      "failures": [
+        {
+          "test": "TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown/no_wal_fast\n",
+            "    cow_close_frontier_test.go:65: final owner drain: {TotalBytes:52192 HistoryBytes:0 ReservedBytes:51936 RetiredBytes:0 PeakBytes:7461792 ControlBytes:256 DeferredBytes:0 ExternalBytes:51936 Views:0 Generations:0 Sources:0 ExternalLeases:1}\n",
+            "--- FAIL: TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown/no_wal_fast (0.25s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown",
+          "events": [
+            "=== RUN   TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown\n",
+            "--- FAIL: TestCOWCloseDrainsChunkedOverwritesBeforeLeafReaderTeardown (1.24s)\n"
+          ]
+        },
+        {
+          "test": "TestDurabilityProfilePublicEntrypointInventory",
+          "events": [
+            "=== RUN   TestDurabilityProfilePublicEntrypointInventory\n",
+            "    profile_entrypoint_inventory_test.go:39: exported DB entrypoint inventory changed\n",
+            "         got: [AcquireMVCCReadCut AcquireSnapshot Checkpoint Close CompactIndex CompactStorage CompactStorageLeafPageLogOwnerClassification CompactStoragePlan Delete DeleteRange DeleteSync DurabilityMode FragmentationReport Get GetAppend GetMany GetManyParallelPlan GetManyView GetUnsafe GetVersioned GetVersionedAppend Has HasMany HasPrefixes InitConditionalTxn InitConditionalTxnWithSnapshot Iterator LeafGenerationGC LeafGenerationPack LeafGenerationPackFromPlan LeafGenerationPackRunOnce LeafGenerationPlan MaintenancePhase NewBatch NewBatchWithSize NewConditionalTxn NewConditionalTxnWithSnapshot NewMVCCAdmission PreflightMVCCPrune Print ResolvedProfile ReverseIterator SeekGE SeekGEVersionRange Set SetMaintenancePhase SetPointWithMVCCInput SetSync Stats SupportsMVCCReadCut Update UpdateSync VacuumIndexOnline VacuumOnlineStats ValueLogGC ValueLogRewriteOnline]\n",
+            "        want: [AcquireMVCCReadCut AcquireSnapshot Checkpoint Close CompactIndex CompactStorage CompactStorageLeafPageLogOwnerClassification CompactStoragePlan Delete DeleteRange DeleteSync DurabilityMode FragmentationReport Get GetAppend GetMany GetManyParallelPlan GetManyView GetUnsafe GetVersioned GetVersionedAppend Has HasMany HasPrefixes InitConditionalTxn InitConditionalTxnWithSnapshot Iterator LeafGenerationGC LeafGenerationPack LeafGenerationPackFromPlan LeafGenerationPackRunOnce LeafGenerationPlan MaintenancePhase NewBatch NewBatchWithSize NewConditionalTxn NewConditionalTxnWithSnapshot PreflightMVCCPrune Print ResolvedProfile ReverseIterator SeekGE SeekGEVersionRange Set SetMaintenancePhase SetSync Stats SupportsMVCCReadCut Update UpdateSync VacuumIndexOnline VacuumOnlineStats ValueLogGC ValueLogRewriteOnline]\n",
+            "--- FAIL: TestDurabilityProfilePublicEntrypointInventory (0.08s)\n"
+          ]
+        },
+        {
+          "test": "TestCloseOptInVacuumIndexOnlineShrinksAndReopens",
+          "events": [
+            "=== RUN   TestCloseOptInVacuumIndexOnlineShrinksAndReopens\n",
+            "    vacuum_public_bench_test.go:75: close online vacuum shrink before=5308416 after=3702784 want >=40%\n",
+            "--- FAIL: TestCloseOptInVacuumIndexOnlineShrinksAndReopens (0.43s)\n"
+          ]
+        },
+        {
+          "test": "TestCompactStorageFullPacksLeafGenerationDebtOffline",
+          "events": [
+            "=== RUN   TestCompactStorageFullPacksLeafGenerationDebtOffline\n",
+            "    compact_storage_test.go:122: CompactStorage: index-vacuum: vacuum: new index page count 1124 exceeds 8x old (117)\n",
+            "--- FAIL: TestCompactStorageFullPacksLeafGenerationDebtOffline (2.85s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no before-meta-write boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-write (1.57s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no after-meta-write boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-write (1.57s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no before-meta-sync boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/before-meta-sync (1.58s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync\n",
+            "    cow_power_loss_test.go:245: real COW route emitted no after-meta-sync boundary (operation=<nil>)\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts/no_wal_fast/after-meta-sync (1.58s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts",
+          "events": [
+            "=== RUN   TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts\n",
+            "--- FAIL: TestCOWPublicModeledInterruptedDependencyAndRootPublicationCuts (52.36s)\n"
+          ]
+        },
+        {
+          "test": "TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline",
+          "events": [
+            "=== RUN   TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline\n",
+            "    maintenance_leaf_vlog_test.go:462: no valid durable-root meta pages found in /tmp/TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefR1233796768/001/maindb/index.db\n",
+            "--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline (0.03s)\n"
+          ]
+        },
+        {
+          "test": "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot",
+          "events": [
+            "=== RUN   TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot\n",
+            "    power_loss_oracle_test.go:1328: actual chunk checkpoint cut err=<nil>\n",
+            "--- FAIL: TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot (0.55s)\n"
+          ]
+        },
+        {
+          "test": "TestPublicCachedHandleRejectsMutationAfterPostMetaFailure",
+          "events": [
+            "=== RUN   TestPublicCachedHandleRejectsMutationAfterPostMetaFailure\n",
+            "    public_poison_admission_test.go:103: post-meta checkpoint error=<nil>, want injected cut and ErrRecoveryRequired\n",
+            "--- FAIL: TestPublicCachedHandleRejectsMutationAfterPostMetaFailure (0.02s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766830,
+      "failures": [
+        {
+          "test": "TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes",
+          "events": [
+            "=== RUN   TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes\n",
+            "    api_test.go:535: reopen db: treedb: no recoverable durable meta: slot 0: capsule complete physical closure: invalid freelist generation format: page 6 header/type; slot 1: capsule complete physical closure: invalid freelist generation format: page 48 header/type\n",
+            "--- FAIL: TestCollectionValueLogRewriteOffline_RoundTripWithCompressedSecondaryIndexes (0.07s)\n"
+          ]
+        },
+        {
+          "test": "TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes",
+          "events": [
+            "=== RUN   TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes\n",
+            "    api_test.go:699: LeafGenerationPackFromPlan: leaf generation pack: rewrite leaf refs: vlog-rewrite: rewrite system collection descriptors: node: invalid primary directory\n",
+            "2026/10/08 22:22:30 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=1880 ratio=0.014\n",
+            "--- FAIL: TestCollectionLeafGenerationPackGC_RoundTripWithTemplateV1SecondaryIndexes (0.54s)\n"
+          ]
+        },
+        {
+          "test": "TestCollectionCompactStorageFoldsRootsAndCleansStorage",
+          "events": [
+            "=== RUN   TestCollectionCompactStorageFoldsRootsAndCleansStorage\n",
+            "    api_test.go:5480: storage FullyCompacted=false debt={ValueLogRewriteSegments:0 ValueLogRewriteBytes:0 ValueLogGCSegments:0 ValueLogGCBytes:0 LeafPackGenerations:0 LeafPackBytes:0 LeafGCGenerations:0 LeafGCBytes:0 ZeroByteValueLogFiles:0 IndexVacuumRequired:true IndexVacuumReason:user IndexVacuumTotalPages:17 IndexVacuumUserPages:2 IndexVacuumUserSpan:4611686018427387900 IndexVacuumUserSpanRatioPPM:9223372036852775808 IndexVacuumFreelistReclaimablePages:0 IndexVacuumFreelistReclaimableRatioPPM:0 IndexVacuumCollectionRootPages:3 IndexVacuumCollectionRootSpan:3 IndexVacuumCollectionRootSpanRatioPPM:1000000}\n",
+            "--- FAIL: TestCollectionCompactStorageFoldsRootsAndCleansStorage (0.09s)\n"
+          ]
+        },
+        {
+          "test": "TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers/compact_storage",
+          "events": [
+            "=== RUN   TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers/compact_storage\n",
+            "    no_wal_checkpoint_test.go:133: read-only open requires an existing index with meta pages\n",
+            "--- FAIL: TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers/compact_storage (9.45s)\n"
+          ]
+        },
+        {
+          "test": "TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers",
+          "events": [
+            "=== RUN   TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers\n",
+            "--- FAIL: TestNoWALFastBoundaryDrainsAcknowledgedCollectionBuffers (40.39s)\n"
+          ]
+        },
+        {
+          "test": "TestNoWALVolatileCollectionAckDoesNotImplyGlobalOrdinaryPrefix",
+          "events": [
+            "=== RUN   TestNoWALVolatileCollectionAckDoesNotImplyGlobalOrdinaryPrefix\n",
+            "    no_wal_checkpoint_test.go:264: ordinary publication was not autonomously sealed\n",
+            "--- FAIL: TestNoWALVolatileCollectionAckDoesNotImplyGlobalOrdinaryPrefix (5.32s)\n"
+          ]
+        },
+        {
+          "test": "TestTextV2MaintenancePolicyStorageComposition2732",
+          "events": [
+            "=== RUN   TestTextV2MaintenancePolicyStorageComposition2732\n",
+            "    text_v2_maintenance_policy_test.go:589: MaintainTextIndex with storage compaction: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: rewrite system collection descriptors: node: invalid primary directory\n",
+            "--- FAIL: TestTextV2MaintenancePolicyStorageComposition2732 (0.19s)\n"
+          ]
+        },
+        {
+          "test": "TestTextV2RewriteStorageMaintenanceAndValueLogGC2630",
+          "events": [
+            "=== RUN   TestTextV2RewriteStorageMaintenanceAndValueLogGC2630\n",
+            "    text_v2_rewrite_test.go:390: CompactStorage: leaf-generation-pack-1: leaf generation pack: rewrite leaf refs: vlog-rewrite: rewrite system collection descriptors: node: invalid primary directory\n",
+            "--- FAIL: TestTextV2RewriteStorageMaintenanceAndValueLogGC2630 (0.17s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567767303,
+      "failures": [
+        {
+          "test": "TestDurablePagerCandidateWriteLockContract",
+          "events": [
+            "=== RUN   TestDurablePagerCandidateWriteLockContract\n",
+            "    durable_root_pager_lock_contract_test.go:34: Pager.Write lock contract incomplete: lock=false deferred_unlock=false copy=false\n",
+            "--- FAIL: TestDurablePagerCandidateWriteLockContract (0.01s)\n"
+          ]
+        },
+        {
+          "test": "TestRecoverIndexSwapEmitsNamespaceMutations",
+          "events": [
+            "=== RUN   TestRecoverIndexSwapEmitsNamespaceMutations\n",
+            "    namespace_instrumentation_test.go:88: recoverIndexSwap: collectionwal: recovery required\n",
+            "        invalid joint DATA/PRIMARY COMMIT\n",
+            "--- FAIL: TestRecoverIndexSwapEmitsNamespaceMutations (0.00s)\n"
+          ]
+        },
+        {
+          "test": "TestPowerLossCertificationStaleBuildBasePublicReopen",
+          "events": [
+            "=== RUN   TestPowerLossCertificationStaleBuildBasePublicReopen\n",
+            "    power_loss_certification_stale_build_test.go:181: checkpoint emitted 0 completed meta syncs, want one\n",
+            "--- FAIL: TestPowerLossCertificationStaleBuildBasePublicReopen (0.15s)\n"
+          ]
+        }
+      ]
+    },
+    {
+      "job": 113567766672,
+      "failures": [
+        {
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast",
+          "events": [
+            "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast\n",
+            "    cow_public_review_regression_test.go:308: no rotated leaf segment\n",
+            "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.32s)\n"
+          ]
+        },
+        {
+          "test": "TestCOWPublicEmptyCheckpointLeafRegistrationProgress",
+          "events": [
+            "=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress\n",
+            "--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (16.88s)\n"
+          ]
+        },
+        {
+          "test": "TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut",
+          "events": [
+            "=== RUN   TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut\n",
+            "    primary_joint_vacuum_v6_test.go:70: held cut refusal: online vacuum unsupported on this platform\n",
+            "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAnd3883447097\\001\\maindb\\index.db: The process cannot access the file because it is being used by another process.\n",
+            "--- FAIL: TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut (2.20s)\n"
+          ]
+        },
+        {
+          "test": "TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity",
+          "events": [
+            "=== RUN   TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity\n",
+            "    maintenance_leaf_vlog_test.go:420: reopen: treedb: no recoverable durable meta: slot 0: capsule complete physical closure: invalid freelist generation format: page 6 header/type; slot 1: capsule complete physical closure: invalid freelist generation format: page 25 header/type\n",
+            "--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity (0.58s)\n"
+          ]
+        },
+        {
+          "test": "TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot",
+          "events": [
+            "=== RUN   TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot\n",
+            "    power_loss_oracle_test.go:1328: actual chunk checkpoint cut err=<nil>\n",
+            "    testing.go:1464: TempDir RemoveAll cleanup: unlinkat C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot246234953\\001\\index.db: The process cannot access the file because it is being used by another process.\n",
+            "--- FAIL: TestPowerLossOracleCounterexampleChunkedSyncIntermediateRoot (2.25s)\n"
+          ]
+        },
+        {
+          "test": "TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison",
+          "events": [
+            "=== RUN   TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison\n",
+            "    public_poison_admission_test.go:53: checkpoint did not reach post-meta cut\n",
+            "--- FAIL: TestPublicCachedWriterWaitingBehindPostMetaFailureRejectsAfterPoison (2.18s)\n"
+          ]
+        },
+        {
+          "test": "TestRecovery_MultiLaneOrdering",
+          "events": [
+            "=== RUN   TestRecovery_MultiLaneOrdering\n",
+            "    recovery_spec_test.go:1119: open backend: durable root record V1 format invalid\n",
+            "--- FAIL: TestRecovery_MultiLaneOrdering (0.25s)\n"
+          ]
+        }
+      ]
+    }
+  ]
+}

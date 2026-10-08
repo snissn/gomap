@@ -1,0 +1,6 @@
+--- FAIL: TestTreeDBPrimaryDirectoryVariantReportIgnoresOverriddenFlags (0.00s)
+    adapter_treedb_primary_directory_test.go:252: shared selector report rejected valid variant: TreeDB: unsafe flags require -treedb-allow-unsafe
+    adapter_treedb_primary_directory_test.go:252: shared selector report rejected valid variant: TreeDB: unsafe flags require -treedb-allow-unsafe
+FAIL
+FAIL	github.com/snissn/gomap/cmd/unified_bench	0.009s
+FAIL
