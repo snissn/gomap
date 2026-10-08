@@ -10,7 +10,7 @@
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate.",
     "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification."
   ],
-  "discovery_source_sha256": "0262054d9aa7d613478b32560f756ceda148c1f2d0e1bafe3fe9eed779c5db39",
+  "discovery_source_sha256": "8ccab8135ff97ca71ba6aebecc5e1bda9970b84a6a6b8752a4ca0ce50e3fe8e8",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -149,7 +149,7 @@
       "mode": "100644"
     },
     "scripts/cow_c3_read/collect.py": {
-      "git_blob": "d2ad14abb650822d0d153c1ae9378c3cf253f555",
+      "git_blob": "2e1dedfc1ae43f47e3f4a5f3b3dd85e25ac92a23",
       "mode": "100644"
     },
     "scripts/cow_c3_read/host_isolation_test.py": {

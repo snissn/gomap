@@ -6,7 +6,7 @@ from pathlib import Path
 import statistics
 
 from analyze import summary, validate_packet
-from c4_protocol import config,load,need,raw_receipts,sha,write
+from c4_protocol import config,load,need,raw_receipts,sha,write,lifecycle_directory
 
 
 def quantiles(values):
@@ -28,7 +28,7 @@ def analyze(packet,emit=True):
     need(len({json.dumps(r["metadata"],sort_keys=True) for r in rows})==1,"benchmark metadata differs")
     cases={x["id"]:x for x in c["cases"]};raw_summary=[];work={}
     for receipt,row in zip(receipts,rows):
-        case=cases[receipt["case"]];epochs=row["iterations"];directory=packet/(receipt["label"]+"-lifecycle")
+        case=cases[receipt["case"]];epochs=row["iterations"];directory=lifecycle_directory(packet,completion,receipt)
         observed=raw_receipts(directory,case,epochs)
         need(observed==receipt["raw_lifecycles"],"raw lifecycle identity/cached validation mismatch")
         final=observed[-1]["validation"]

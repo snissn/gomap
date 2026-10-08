@@ -92,7 +92,7 @@ def _validate_packet(packet, suite="c3-read"):
         case = cases[r["case"]]
         raw_directory = r.get("raw_directory") if suite == "c4-sustained" else None
         if suite == "c4-sustained":
-            need(type(raw_directory) is str and Path(raw_directory).is_absolute() and Path(raw_directory).name == name + "-lifecycle", "unbound raw directory")
+            selected.lifecycle_directory(packet, completion, r)
         need(r["command"] == invocation_command(selected, c["variants"][r["variant"]]["binary"], case, expected, c["timeout_seconds"], raw_directory), "invocation mismatch")
         need(r["elapsed_seconds"] > 0 and r["child_max_rss_kib"] > 0 and r["child_user_seconds"] >= 0 and r["child_system_seconds"] >= 0, "invalid process measurements")
         need(r["work_contract_sha256"] == digest(invocation_work_contract(selected, case, expected)), "workload contract mismatch")

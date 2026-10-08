@@ -5,6 +5,79 @@ import c4_protocol
 from collect import invocation_work_contract
 
 
+class CaptureRootContractTest(unittest.TestCase):
+    def setUp(self):
+        from pathlib import Path
+        self.original = Path("/captured/producer/packet")
+        self.relocated = Path("/reader/relocated/packet")
+        self.receipt = {"case": "actual-leaf", "phase": "construction",
+                        "cycle": 0, "slot": 0, "variant": "candidate"}
+        self.name = c4_protocol.label(self.receipt) + "-lifecycle"
+        self.receipt["raw_directory"] = str(self.original / self.name)
+        self.completion = {"schema": c4_protocol.SCHEMA,
+                           "at": "2026-10-08T17:00:00+00:00", "runs": 1,
+                           "config_sha256": "1" * 64,
+                           "receipts_sha256": "2" * 64,
+                           "script_identity_sha256": "3" * 64,
+                           "claim": c4_protocol.COMPLETION_CLAIM,
+                           "capture_root": str(self.original)}
+
+    def test_original_and_relocated_directories_share_producer_identity(self):
+        c4_protocol.validate_completion(self.completion)
+        for packet in (self.original, self.relocated):
+            with self.subTest(packet=packet):
+                self.assertEqual(c4_protocol.lifecycle_directory(
+                    packet, self.completion, self.receipt), packet / self.name)
+        self.assertEqual(self.receipt["raw_directory"], str(self.original / self.name))
+
+    def test_relocation_does_not_resolve_or_require_original_paths(self):
+        from unittest.mock import patch
+        with patch("pathlib.Path.resolve", side_effect=AssertionError("live producer path lookup")), \
+             patch("pathlib.Path.exists", side_effect=AssertionError("live producer path lookup")):
+            self.assertEqual(c4_protocol.lifecycle_directory(
+                self.relocated, self.completion, self.receipt), self.relocated / self.name)
+
+    def test_missing_root_cannot_promote_a_historical_packet(self):
+        del self.completion["capture_root"]
+        with self.assertRaisesRegex(ValueError, "missing/unknown completion fields"):
+            c4_protocol.validate_completion(self.completion)
+        with self.assertRaisesRegex(ValueError, "captured packet root"):
+            c4_protocol.lifecycle_directory(self.relocated, self.completion, self.receipt)
+
+    def test_typed_relative_or_noncanonical_capture_roots_refuse(self):
+        for root in (None, True, 1, [], {}, "", "relative/root",
+                     "/captured/../unrelated", "/captured/./producer", "/captured//producer",
+                     "//captured/producer", "/captured/producer/", "/captured/\0producer"):
+            with self.subTest(root=root):
+                self.completion["capture_root"] = root
+                with self.assertRaisesRegex(ValueError, "captured packet root"):
+                    c4_protocol.validate_completion(self.completion)
+
+    def test_tampered_root_refuses_unchanged_actual_directory(self):
+        self.completion["capture_root"] = "/unrelated/producer"
+        with self.assertRaisesRegex(ValueError, "unbound raw directory"):
+            c4_protocol.lifecycle_directory(self.relocated, self.completion, self.receipt)
+
+    def test_unrelated_absolute_same_basename_refuses(self):
+        self.receipt["raw_directory"] = "/unrelated/producer/" + self.name
+        with self.assertRaisesRegex(ValueError, "unbound raw directory"):
+            c4_protocol.lifecycle_directory(self.relocated, self.completion, self.receipt)
+
+    def test_missing_typed_relative_and_aliased_raw_directories_refuse(self):
+        for directory in (None, True, 1, self.name,
+                          str(self.original) + "/../packet/" + self.name,
+                          str(self.original) + "//" + self.name):
+            with self.subTest(directory=directory):
+                self.receipt["raw_directory"] = directory
+                with self.assertRaisesRegex(ValueError, "unbound raw directory"):
+                    c4_protocol.lifecycle_directory(self.relocated, self.completion, self.receipt)
+
+    def test_wrong_label_directory_refuses(self):
+        self.receipt["raw_directory"] = str(self.original / "other-lifecycle")
+        with self.assertRaisesRegex(ValueError, "unbound raw directory"):
+            c4_protocol.lifecycle_directory(self.relocated, self.completion, self.receipt)
+
+
 class PhaseContractTest(unittest.TestCase):
     def test_warmup_and_measurement_describe_their_actual_epochs(self):
         case = {"keys": 512, "iterations": 8, "warmup_iterations": 1,

@@ -8,7 +8,7 @@ import re
 
 from protocol import validate_host_isolation, benchmark_comms, CONTROLS, digest, identity, drift, label, need, now, sha, write, variant_paths, variant_git_ids, matched_products, validate_harness_fixtures, C4_PACKAGE, validate_cpu_affinity
 
-SCHEMA = "gomap-cow-sustained-public-v2"
+SCHEMA = "gomap-cow-sustained-public-v3"
 COMPLETION_CLAIM = "Supported sustained construction/evidence only; native/product/C4 qualification pending"
 PROFILES = ("command_wal_durable", "command_wal_relaxed", "no_wal_fast")
 MODES = ("cow_btree", "append_only", "btree")
@@ -75,7 +75,7 @@ def work_contract(case, phase):
 
 def validate_completion(completion):
     exact(completion, ("schema", "at", "runs", "config_sha256", "receipts_sha256",
-                       "script_identity_sha256", "claim"), "completion")
+                       "script_identity_sha256", "claim", "capture_root"), "completion")
     need(completion["schema"] == SCHEMA and completion["claim"] == COMPLETION_CLAIM,
          "completion must preserve pending native/product/C4 qualification")
     need(type(completion["at"]) is str and re.fullmatch(
@@ -85,6 +85,23 @@ def validate_completion(completion):
     for key in ("config_sha256", "receipts_sha256", "script_identity_sha256"):
         need(type(completion[key]) is str and re.fullmatch(r"[0-9a-f]{64}", completion[key]),
              "invalid completion identity " + key)
+    capture_root(completion)
+
+def capture_root(completion):
+    # Retain the producer's spelling without resolving paths on the reader's
+    # host: original capture paths need not exist after packet relocation.
+    root = completion.get("capture_root")
+    need(type(root) is str and "\0" not in root and Path(root).is_absolute() and not root.startswith("//")
+         and str(Path(root)) == root and ".." not in Path(root).parts,
+         "invalid captured packet root")
+    return Path(root)
+
+def lifecycle_directory(packet, completion, receipt):
+    name = label(receipt) + "-lifecycle"
+    expected = str(capture_root(completion) / name)
+    need(receipt.get("raw_directory") == expected, "unbound raw directory")
+    # The verified original directory maps to precisely this packet-local leaf.
+    return Path(packet) / name
 
 def quiescent_owners(stats, phase):
     values = {}

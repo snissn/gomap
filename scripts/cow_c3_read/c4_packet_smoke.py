@@ -51,6 +51,13 @@ def completion_mutation(change):
         completion=load(packet/"completion.json");change(completion);replace_json(packet/"completion.json",completion)
     return run
 
+def unrelated_raw_directory(packet):
+    receipts=load(packet/"receipts.json");receipt=receipts[0]
+    old=receipt["raw_directory"];new="/unrelated-capture/"+Path(old).name
+    receipt["raw_directory"]=new
+    receipt["command"]=["-cow-c4-public-output-dir="+new if arg=="-cow-c4-public-output-dir="+old else arg for arg in receipt["command"]]
+    replace_json(packet/"receipts.json",receipts);reseal(packet,{"receipts.json"})
+
 def mutate_config(change):
     def run(packet):
         c=load(packet/"config.json");change(c);replace_json(packet/"config.json",c);reseal(packet,{"config.json"})
@@ -123,6 +130,12 @@ def main():
     positive=args.positive.resolve();out=args.out.resolve();need(not out.exists() and not out.is_relative_to(positive),"smoke output needs distinct new directory")
     validation=analyze(positive,emit=False);out.mkdir(parents=True)
     cases={
+        "unrelated-absolute-raw-directory":unrelated_raw_directory,
+        "missing-capture-root":completion_mutation(lambda c:c.pop("capture_root")),
+        "tampered-capture-root":completion_mutation(lambda c:c.update(capture_root="/unrelated-capture")),
+        "relative-capture-root":completion_mutation(lambda c:c.update(capture_root="relative-capture")),
+        "missing-raw-directory":receipt_mutation(lambda r:r.pop("raw_directory")),
+        "mismatched-output-command":receipt_mutation(lambda r:r["command"].__setitem__(-1,"-cow-c4-public-output-dir=/unrelated-capture/"+Path(r["raw_directory"]).name)),
         "completion-native-claim":completion_mutation(lambda c:c.update(claim="Native/product/C4 qualified")),
         "completion-unknown-field":completion_mutation(lambda c:c.update(qualification="PASS")),
         "completion-missing-claim":completion_mutation(lambda c:c.pop("claim")),

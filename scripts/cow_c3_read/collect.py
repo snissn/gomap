@@ -479,6 +479,9 @@ def main():
               "claim": "C3-read matched evidence only; coordinator acceptance pending; no C4/M7/parent qualification" if args.suite == "c3-read" else selected.COMPLETION_CLAIM}
         if readiness is not None:
             completion["readiness_sha256"] = sha(out / "readiness.json")
+        if args.suite == "c4-sustained":
+            completion["capture_root"] = str(out)
+            selected.validate_completion(completion)
         write(out / "completion.json", completion)
     except BaseException as error:
         failure = {"at": now(), "type": type(error).__name__, "error": str(error), "retained_runs": len(receipts)}

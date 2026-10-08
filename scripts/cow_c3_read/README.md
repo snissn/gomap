@@ -415,6 +415,16 @@ python3 -B scripts/cow_c3_read/c4_packet_smoke.py \
   --positive <actual-successful-packet> --out <new-refusal-smoke>
 ```
 
+C4 v3 records the collector's resolved output root in `completion.capture_root`.
+Every receipt and benchmark output-directory argument must name exactly
+`<capture_root>/<label>-lifecycle`. Offline analysis maps that verified leaf into
+the packet being read, so copying the complete packet preserves its original
+producer paths without requiring those paths to exist on the reader's host.
+An unrelated absolute path with the same basename, a missing or changed capture
+root, and an inconsistent command refuse. Historical v2 packets retain their
+original reader and identities; they do not gain v3 capture provenance through
+resealing. The v3 contract requires a fresh collector packet.
+
 The collector creates one explicit raw directory per child and passes it via
 `-cow-c4-public-output-dir`. Each actual invocation emits an immutable JSON
 receipt, including Go's initial 1x calibration and the requested finite count.
