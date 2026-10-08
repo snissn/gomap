@@ -66,10 +66,10 @@ func (r *oneShotRead) close() error {
 		// Reusing it would overwrite that owner's surviving physical debt.
 		return err
 	}
-	// Do not keep an index pager or its reader interfaces alive in the pool.
-	r.snapshot.tree.Reset(nil, nil, 0)
-	r.snapshot.treePager = nil
-	r.snapshot.treeRoot = 0
+	// This private capture exposes no Snapshot/iterator and its one synchronous
+	// owned-value read has returned. Close therefore completed the finalizer,
+	// including SnapshotPool.Put's scrub before stablePagerCompletion. Repeat
+	// neither that scrub nor failed-cleanup reuse here.
 	oneShotReadPool.Put(r)
 	return err
 }

@@ -930,7 +930,6 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 		if captureErr != nil {
 			return nil, captureErr
 		}
-		defer diagnostics.Close()
 		for _, descriptor := range diagnostics.Physical() {
 			switch descriptor.Kind {
 			case rootpublication.ResourceOuterLeafPack:
@@ -943,6 +942,9 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 				}
 			}
 		}
+		// Only scalar kind/generation values survive this iteration. End the
+		// descriptor borrow after consumption rather than accumulating loop defers.
+		diagnostics.Close()
 	}
 	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
 	if err != nil {

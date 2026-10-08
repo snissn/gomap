@@ -1227,9 +1227,9 @@
       "claim_boundary": "normal public read-only reopen after deterministic low-traffic timeout, checkpoint, and close progress"
     },
     {
-      "id": "retained-stale-build-base-retry-saved-primary-v5",
+      "id": "retained-stale-build-base-retry",
       "package": "./TreeDB/db",
-      "test_name": "TestPowerLossCertificationStaleBuildBaseSavedPrimaryV5PublicReopen",
+      "test_name": "TestPowerLossCertificationStaleBuildBasePublicReopen",
       "profile": "no_wal_fast",
       "acknowledgement_shape": "checkpoint",
       "data_resource_shapes": [
@@ -1249,17 +1249,17 @@
       "expected_typed_error": "none",
       "state": {
         "root_meta_generation": "selected_slot=1 commit_seq=4 slot0=3 slot1=4",
-        "freelist_generation": "generation=4",
+        "freelist_generation": "generation=8",
         "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
         "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
         "wal_lineage": "profile=no_wal_fast applied_lsn=0",
         "durable_lsn": "durable_wal_lsn=0 durable_root_seq=4",
         "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=4"
       },
-      "counterexample_id": "stale-build-base-saved-primary-v5",
-      "seed": 13546396532373078556,
-      "cut_id": "cut/public-stale-build-base-retry-saved-primary-v5/after-meta-sync/000",
-      "variant_id": "cut/public-stale-build-base-retry-saved-primary-v5/after-meta-sync/000/variant/full-writeback",
+      "counterexample_id": "stale-build-base-root-publication",
+      "seed": 12505447533306515078,
+      "cut_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000",
+      "variant_id": "cut/public-stale-build-base-retry-stable-image/after-meta-sync/000/variant/full-writeback",
       "cut_point": "after-meta-sync",
       "reopen_mode": "read-only",
       "expected_recovery": {
@@ -1268,52 +1268,7 @@
         "commit_seq": 4,
         "applied_lsn": 0
       },
-      "claim_boundary": "normal public read-only reopen of an explicitly saved PRIMARY V5 format after private stale-base rendezvous; independently versioned from the archived historical DATA V1 generation8 witness"
-    },
-    {
-      "id": "retained-stale-build-base-retry-primary-capsule-v6",
-      "package": "./TreeDB/db",
-      "test_name": "TestPowerLossCertificationStaleBuildBasePrimaryCapsulePublicReopenV6",
-      "profile": "no_wal_fast",
-      "acknowledgement_shape": "checkpoint",
-      "data_resource_shapes": [
-        "combined_nested_roots"
-      ],
-      "dependency_graph": "predecessor root publication -> stale successor rejected before acknowledgement -> retry complete PRIMARY capsule current4/parent3 -> exact same-original file fence -> checkpoint",
-      "storage_boundaries": [
-        "cow_index_freelist_root_record_write",
-        "index_sync_excluding_meta"
-      ],
-      "writeback_variant": "all_dirty_bytes",
-      "failure_classes": [
-        "stale_build_base_rejected_retry"
-      ],
-      "expected_durable_horizon": "the rejected stale successor is absent and its retry joins the predecessor at selected commit 4",
-      "expected_outcome": "accepted:new-root",
-      "expected_typed_error": "none",
-      "state": {
-        "root_meta_generation": "selected_slot=1 commit_seq=4 slot0=3 slot1=4 complete_capsule_current=4 parent=3",
-        "freelist_generation": "generation=4",
-        "external_resource_ids_frontiers": "stable_image_tree_artifact=stable_image_tree.json manifest_entries=1",
-        "namespace_generations": "stable_image_tree_artifact=stable_image_tree.json",
-        "wal_lineage": "profile=no_wal_fast applied_lsn=0",
-        "durable_lsn": "durable_wal_lsn=0 durable_root_seq=4",
-        "cleanup_maintenance_pins": "slot0_commit_seq=3 slot1_commit_seq=4"
-      },
-      "counterexample_id": "stale-build-base-primary-capsule-v6",
-      "seed": 13362006158980588834,
-      "cut_id": "cut/public-stale-build-base-retry-capsule-v6/after-index-data-sync/000",
-      "variant_id": "cut/public-stale-build-base-retry-capsule-v6/after-index-data-sync/000/variant/full-writeback",
-      "cut_point": "after-index-data-sync",
-      "reopen_mode": "read-only",
-      "expected_recovery": {
-        "rejected": false,
-        "error_type": "",
-        "commit_seq": 4,
-        "applied_lsn": 0
-      },
-      "claim_boundary": "normal public read-only reopen after private stale-base rendezvous, exact complete retry capsule seal, and subsequent same-original PRIMARY file fence; historical DATA META witness remains separate",
-      "replay_window": "cut/public-stale-build-base-retry-capsule-v6/after-index-data-sync/000/variant/full-writeback"
+      "claim_boundary": "normal public read-only reopen after a private deterministic publication rendezvous reproduces #3865 and behaviorally verifies the accepted predecessor and retry"
     }
   ]
 }

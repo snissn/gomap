@@ -67,7 +67,9 @@ func TestRecoverIndexSwapEmitsNamespaceMutations(t *testing.T) {
 	if err := os.WriteFile(newPath, []byte("new"), 0o600); err != nil {
 		t.Fatalf("WriteFile(new): %v", err)
 	}
-	if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
+	// The actual legacy vacuum producer writes this exact marker. Every other
+	// spelling must be authenticated as a joint DATA/PRIMARY decision.
+	if err := os.WriteFile(readyPath, []byte("ready\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(ready): %v", err)
 	}
 	model, err := powerlossoracle.Capture(dir)
@@ -108,6 +110,38 @@ func TestRecoverIndexSwapEmitsNamespaceMutations(t *testing.T) {
 	for _, stale := range []string{indexNewFileName, indexReadyFileName} {
 		if _, err := os.Stat(filepath.Join(crashDir, stale)); !os.IsNotExist(err) {
 			t.Fatalf("stable stale path %s error = %v, want not-exist", stale, err)
+		}
+	}
+}
+
+func TestRecoverIndexSwapRejectsMalformedJointMarkerBeforeNamespaceMutation(t *testing.T) {
+	dir := t.TempDir()
+	newPath := filepath.Join(dir, indexNewFileName)
+	readyPath := filepath.Join(dir, indexReadyFileName)
+	if err := os.WriteFile(newPath, []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(readyPath, []byte("ready"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mutations := 0
+	restore := durabilitycut.Install(func(event durabilitycut.Event) error {
+		if event.Namespace != "" {
+			mutations++
+		}
+		return nil
+	})
+	defer restore()
+	if err := recoverIndexSwap(dir); !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("malformed joint marker error=%v, want recovery required", err)
+	}
+	if mutations != 0 {
+		t.Fatalf("malformed marker authorized %d namespace mutations", mutations)
+	}
+	for path, want := range map[string]string{newPath: "new", readyPath: "ready"} {
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != want {
+			t.Fatalf("refused marker changed %s: %q %v", path, got, err)
 		}
 	}
 }

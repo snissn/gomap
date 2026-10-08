@@ -17,7 +17,8 @@
     "relaxed-command-frame-before-rid",
     "chunked-sync-intermediate-root",
     "older-meta-live-page-reused",
-    "stale-build-base-root-publication"
+    "stale-build-base-saved-primary-v5",
+    "stale-build-base-primary-capsule-v6"
   ],
   "required_negative_controls": [
     "target-meta-without-dependency-closure",

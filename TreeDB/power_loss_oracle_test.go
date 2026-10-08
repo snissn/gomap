@@ -152,7 +152,8 @@ var retainedPowerLossCounterexamples = []string{
 	"relaxed-command-frame-before-rid",
 	"chunked-sync-intermediate-root",
 	"older-meta-live-page-reused",
-	"stale-build-base-root-publication",
+	"stale-build-base-saved-primary-v5",
+	"stale-build-base-primary-capsule-v6",
 }
 
 type observedPowerLossCommandFrame struct {
@@ -1084,7 +1085,7 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 			},
 		},
 		{
-			ID:               "public-stale-build-base-retry-stable-image",
+			ID:               "public-stale-build-base-retry-saved-primary-v5",
 			Point:            powerlossoracle.AfterMetaSync,
 			Occurrence:       0,
 			Model:            model,
@@ -1094,6 +1095,15 @@ func powerLossLedgerGeneratedVariants(t *testing.T) map[string][]powerlossoracle
 				powerlossoracle.VariantSyncedOnly:    powerlossoracle.ExpectedOldRoot,
 				powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot,
 			},
+		},
+		{
+			ID:               "public-stale-build-base-retry-capsule-v6",
+			Point:            powerlossoracle.AfterIndexDataSync,
+			Occurrence:       0,
+			Model:            model,
+			Dependencies:     []powerlossoracle.DirtyResource{{Kind: powerlossoracle.ResourceIndex, ID: "stale-build-base-retry-capsule", Path: "maindb/index.db"}},
+			RequiredFamilies: []powerlossoracle.VariantFamily{powerlossoracle.VariantFullWriteback},
+			ExpectedByFamily: map[powerlossoracle.VariantFamily]powerlossoracle.ExpectedResult{powerlossoracle.VariantSyncedOnly: powerlossoracle.ExpectedOldRoot, powerlossoracle.VariantFullWriteback: powerlossoracle.ExpectedNewRoot},
 		},
 	}
 	generated := make(map[string][]powerlossoracle.Variant, len(specs))

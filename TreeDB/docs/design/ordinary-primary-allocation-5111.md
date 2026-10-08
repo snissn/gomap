@@ -5,6 +5,29 @@ This inventory binds the ordinary route extracted at
 The completion packet supplies the final source identity and command receipts;
 this document is a source/caller inventory, not a performance or review result.
 
+The stale-build publication witnesses are format-specific. The historical
+DATA V1 witness (generation 8) is preserved under
+`testdata/power_loss_legacy_stale_build_v1` with exact original source blobs and
+replay receipt, and has zero current runner coverage. The saved PRIMARY V5
+fixture uses the existing production V5 initializer, then the public NoWALFast
+open/retry/read-only-reopen route. Its independently named witness selects
+commit 4, predecessor 3 and actual generation 4 at DATA META sync. A fresh
+NoWALFast producer uses PRIMARY capsules: its separate V6 witness decodes the
+exact immutable retry slot (current 4, parent 3), records the original file
+identity, and observes the subsequent same-original PRIMARY file fence.
+Both active witnesses retain stale rejection before acceptance, predecessor
+visibility, distinguishable retry, public reopen, slot and dependency horizon
+assertions. The V6 evidence replay window starts after the verified seal, so
+preparatory file syncs cannot satisfy the terminal cut. Public reopen runs the
+existing `BeginEvidenceFromEnv` path with the exact current selector, trace,
+stable image and recovered statistics. No META event is manufactured for V6.
+
+The scoped diagnostic optimization ends its borrow only after copying consumed
+kind/generation scalars. The span-native worker captures the existing leaf-span
+slice instead of the larger preparation result; validation and preparation
+summaries still consume the original result. Complete-operation measurements
+must include both changes and the previously documented containing-result cost.
+
 `retainedalloc.AllocationCharge` rounds each actual allocation separately.
 `Owner.Add`/`AddPending` precedes allocation. Replacement reserves the complete
 new capacity while the old capacity remains charged. Aliases and outgoing edges
