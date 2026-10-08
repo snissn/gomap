@@ -1,0 +1,14 @@
+{
+  "Go_build": false,
+  "actual_worker_wait": true,
+  "exception": null,
+  "exit": 0,
+  "finished": "2026-10-08T17:10:18.850898+00:00",
+  "payload_sha256": "6b91caebba1fc74a51702700655c3e2c382a1a224d21c49845159c5ae3db1e4e",
+  "started": "2026-10-08T17:10:17.281491+00:00",
+  "supervisor_pid": 2104846,
+  "tests": false,
+  "worker_group_absent": true,
+  "worker_never_started": false,
+  "worker_pid": 2104929
+}

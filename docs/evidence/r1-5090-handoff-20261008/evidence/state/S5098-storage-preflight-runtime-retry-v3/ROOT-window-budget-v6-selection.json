@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-08T17:47:35.256186+00:00",
+  "cleanup_slack_seconds": 30,
+  "comment": "Whole guard may stop diagnostic before600s if controls consume window; retain raw failed result, no cap or oracle waiver",
+  "diagnostic_test_cap_seconds": 600,
+  "explicit_ACK_sha256": "0b490101697d7acd6efb3a9d66bc6e04dc368a3c9e028dc102228bb451dd67e9",
+  "launcher_sha256": "dce2174a22f1955c9723d180d787521b316ba0e77c91ae8d0ce7c5a975ed0c43",
+  "minimum_total_seconds": 600,
+  "qualified": false,
+  "whole_driver_guard": "min(1800,remaining agreed window)-30s",
+  "window_until": "2026-10-08T17:58:00+00:00"
+}

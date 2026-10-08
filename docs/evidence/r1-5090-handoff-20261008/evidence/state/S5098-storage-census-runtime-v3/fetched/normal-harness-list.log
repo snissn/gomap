@@ -1,0 +1,10 @@
+{"Action":"start","Package":"github.com/snissn/gomap/cmd/collection_workload_bench"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1SExposureFixtureShape5098\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1SExposureScheduleCoverage5098\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1SExposurePayloadDeterminismAndHeldAlias5098\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1SExposureTypedRetainedJSONAndOracle5098\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1SExposureInvalidInputNoMutation5098\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestS5098PhysicalEpochRequiresAllWritersAndFreshReopenBaseline\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestS5098PhysicalEpochRejectsMissingLateWorkerRegressionAndBadIdentity\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestS5098PhysicalEpochRejectsIncompleteDeclaredInventory\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/cmd/collection_workload_bench"}

@@ -1,0 +1,13 @@
+{
+  "artifacts": {
+    "actual-source-bindings.json": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+    "evidence.json": "c4e355b6ba5810056e5f8e659b9cb742d0ebd0a6c3750d58bd311ff2c8d53676",
+    "review.md": "de3c9931a71961fc3268df3b21a8e7eb2b88ac52dc3ac37e0db3e4e63e009b4f"
+  },
+  "conditional_checkpoint03_prefix_fix_satisfied": true,
+  "created_utc": "2026-10-08T17:10:32.226292+00:00",
+  "decision": "ACCEPT_COMPONENT_ONLY",
+  "source_count": 9878,
+  "stopped": true,
+  "worktree": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5098-default-common-control-v8-mac-compile"
+}

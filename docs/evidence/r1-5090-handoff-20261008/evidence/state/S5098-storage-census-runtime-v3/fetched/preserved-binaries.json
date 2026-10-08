@@ -1,0 +1,6 @@
+{
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-census-v3/binaries/normal/caching.test": "661d1103f8dd4c8f604ea51b87a06bb5c1f5acded4042b97f6739965ec7944d1",
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-census-v3/binaries/normal/harness.test": "7e6e76a74789f7c4b9c5ff055dd862dc76cc9ed153783b2615875db6817f4ea3",
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-census-v3/binaries/race/caching.test": "d5629ecabaa18ece37aad6d34701dd72f014bac3bae8a2fbc953abd4a912f892",
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-census-v3/tools/test2json": "4941b132d09420cf4845878a7ec384bf8c8a1fbc0d6243b5a902e556c5e0802c"
+}

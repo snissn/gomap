@@ -1,0 +1,32 @@
+{
+  "completion": {
+    "Go_build": false,
+    "actual_worker_wait": true,
+    "exception": null,
+    "exit": 0,
+    "finished": "2026-10-08T17:10:18.850898+00:00",
+    "payload_sha256": "6b91caebba1fc74a51702700655c3e2c382a1a224d21c49845159c5ae3db1e4e",
+    "started": "2026-10-08T17:10:17.281491+00:00",
+    "supervisor_pid": 2104846,
+    "tests": false,
+    "worker_group_absent": true,
+    "worker_never_started": false,
+    "worker_pid": 2104929
+  },
+  "packet_exact": true,
+  "stage": {
+    "Go_build": false,
+    "authorized": false,
+    "changed_paths": [
+      "cmd/collection_workload_bench/s_default_exposure_shape_5098_test.go",
+      "cmd/collection_workload_bench/s_default_storage_preflight_5098_test.go"
+    ],
+    "original_source_unchanged": true,
+    "source_exact": true,
+    "source_manifest_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+    "source_paths": 9878,
+    "tests": false
+  },
+  "supervisor_absent": true,
+  "worker_absent": true
+}

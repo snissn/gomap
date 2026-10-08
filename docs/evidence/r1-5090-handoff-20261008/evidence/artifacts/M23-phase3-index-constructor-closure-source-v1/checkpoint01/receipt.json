@@ -1,0 +1,40 @@
+{
+  "Git": false,
+  "Go": false,
+  "after_count": 10076,
+  "at": "2026-10-08T17:38:16.745939+00:00",
+  "before_count": 10074,
+  "changed_paths": [
+    "TreeDB/db/index_constructor_closure_v1_test.go",
+    "TreeDB/db/pager_holder_lifetime.go",
+    "TreeDB/lifecycle/graveyard.go",
+    "TreeDB/lifecycle/graveyard_constructor_layout_v1_test.go"
+  ],
+  "delta_sha256": "d9bf936d4855e3789ee5aa05e6356d4d9a462df3c054b120e1dbaae353553cb4",
+  "files": {
+    "delta.json": "d9bf936d4855e3789ee5aa05e6356d4d9a462df3c054b120e1dbaae353553cb4",
+    "known-class-rationale.md": "c89e039e2c9aecca22623898f29cadb5d5893b565c1b65db54dfca5d2cf58b35",
+    "outside-equality.json": "86c71d95ee10a34b8af9e2fa86437ad1fe37157b19337ca6c07e7726ac38fc03",
+    "risk-test-inventory.json": "392fcb408236a2cab851718944f46594f54b7a3119bb14a21cd8132f8145bbb8",
+    "selected-after.json": "e1bb7e178048d6a156a46b02aa1361c153b728864cf2c38cce2d25fabd5c5487",
+    "selected-after.tar": "992d4287744da4a9f88bfb6212b14eb636dd8d221d81f36c6e21f9180fe19ba3",
+    "selected-before.json": "fda2392f1239cd05b5f4f7050135edf614823a4fc7fbc5a2378eb98251fb6be3",
+    "selected-before.tar": "daf72a9228639fc9a9d88d5e45d49c24c03f617d017ddf7a8ec7ea199be4a8e6",
+    "source-after.json": "e87125afa7407d4d519ddcd96cd569ec07b7ef39d951a9538c965b9eb96a32f8",
+    "source-before.json": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff",
+    "source-bindings.json": "c5222df474c7e96a71a730e15bca9c609fccaf1aa4394878b075ae385885a5d5",
+    "source.patch": "f4c80107ec174fa80963cf260b185f07f9b5e265f51e4d568947330b5b039b55"
+  },
+  "finite_admission": "CLOSED",
+  "full128MiB_fit": "not certified",
+  "gofmt": false,
+  "grant_sha256": "54d382f49abe50f967ac122e9b6070b69fe9005074cbf62480b0e59d5abf4604",
+  "head": "ae6b6a87090be5bf64554f68738a1fe103393aa9",
+  "implementation_stopped": true,
+  "new_tests": 5,
+  "outside_existing_equal": 10072,
+  "remote": false,
+  "scope": "phase3 source-only index constructor closure",
+  "source_after_sha256": "e87125afa7407d4d519ddcd96cd569ec07b7ef39d951a9538c965b9eb96a32f8",
+  "source_before_sha256": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff"
+}

@@ -1,0 +1,217 @@
+[
+  {
+    "name": "version",
+    "argv": [
+      "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.darwin-arm64/bin/go",
+      "version"
+    ],
+    "start": "2026-10-08T09:20:58.606902+00:00",
+    "end": "2026-10-08T09:20:58.634701+00:00",
+    "pid_pgid": 80092,
+    "exit": 0,
+    "joined": true,
+    "group_absent": true,
+    "observed_descendants": {
+      "80092": [
+        80088,
+        80092
+      ]
+    },
+    "observed_orphans": [],
+    "remaining": [],
+    "exception": null,
+    "log_sha256": "b2fdffd04ae5a836eca9bfdd1d3d10c524b2920dcd5aca393f80258a93a3f0f4"
+  },
+  {
+    "name": "format",
+    "argv": [
+      "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.darwin-arm64/bin/gofmt",
+      "-w",
+      "TreeDB/freelist/allocator_packet_pages_v1_test.go"
+    ],
+    "start": "2026-10-08T09:21:00.396137+00:00",
+    "end": "2026-10-08T09:21:00.422722+00:00",
+    "pid_pgid": 80099,
+    "exit": 0,
+    "joined": true,
+    "group_absent": true,
+    "observed_descendants": {
+      "80099": [
+        80088,
+        80099
+      ]
+    },
+    "observed_orphans": [],
+    "remaining": [],
+    "exception": null,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "name": "normal-inputs",
+    "argv": [
+      "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.darwin-arm64/bin/go",
+      "list",
+      "-compiled",
+      "-deps",
+      "-test",
+      "-json",
+      "./TreeDB/freelist"
+    ],
+    "start": "2026-10-08T09:21:02.199923+00:00",
+    "end": "2026-10-08T09:21:02.670096+00:00",
+    "pid_pgid": 80104,
+    "exit": 0,
+    "joined": true,
+    "group_absent": true,
+    "observed_descendants": {
+      "80104": [
+        80088,
+        80104
+      ],
+      "80106": [
+        80104,
+        80104
+      ],
+      "80110": [
+        80104,
+        80104
+      ]
+    },
+    "observed_orphans": [],
+    "remaining": [],
+    "exception": null,
+    "log_sha256": "c22ac7ee6d9437d927b48a7b40041af76dd5c9f91a2297dde19dee7303ffdbe2"
+  },
+  {
+    "name": "normal-public",
+    "argv": [
+      "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.darwin-arm64/bin/go",
+      "test",
+      "-json",
+      "./TreeDB/freelist",
+      "-run",
+      "^(Test|Fuzz).*",
+      "-count=1",
+      "-timeout=240s"
+    ],
+    "start": "2026-10-08T09:21:04.722885+00:00",
+    "end": "2026-10-08T09:21:07.329548+00:00",
+    "pid_pgid": 80127,
+    "exit": 0,
+    "joined": true,
+    "group_absent": true,
+    "observed_descendants": {
+      "80127": [
+        80088,
+        80127
+      ],
+      "80133": [
+        80127,
+        80127
+      ],
+      "80145": [
+        80127,
+        80127
+      ],
+      "80149": [
+        80127,
+        80127
+      ],
+      "80156": [
+        80127,
+        80127
+      ]
+    },
+    "observed_orphans": [],
+    "remaining": [],
+    "exception": null,
+    "log_sha256": "8a422b2862a77b1f5abe395ee6a20530e5ef092cbd7b6fd278fe3f9c90b252ab"
+  },
+  {
+    "name": "race-inputs",
+    "argv": [
+      "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.darwin-arm64/bin/go",
+      "list",
+      "-compiled",
+      "-deps",
+      "-test",
+      "-race",
+      "-json",
+      "./TreeDB/freelist"
+    ],
+    "start": "2026-10-08T09:21:09.212387+00:00",
+    "end": "2026-10-08T09:21:09.511761+00:00",
+    "pid_pgid": 80181,
+    "exit": 0,
+    "joined": true,
+    "group_absent": true,
+    "observed_descendants": {
+      "80181": [
+        80088,
+        80181
+      ],
+      "80185": [
+        80181,
+        80181
+      ],
+      "80190": [
+        80181,
+        80181
+      ]
+    },
+    "observed_orphans": [],
+    "remaining": [],
+    "exception": null,
+    "log_sha256": "9b11508a06e21644687d5728c21c727fbb4d4fc9682b2be915743797ce1b831f"
+  },
+  {
+    "name": "race-public",
+    "argv": [
+      "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.darwin-arm64/bin/go",
+      "test",
+      "-race",
+      "-json",
+      "./TreeDB/freelist",
+      "-run",
+      "^(Test|Fuzz).*",
+      "-count=1",
+      "-timeout=240s"
+    ],
+    "start": "2026-10-08T09:21:11.753396+00:00",
+    "end": "2026-10-08T09:21:21.563007+00:00",
+    "pid_pgid": 80214,
+    "exit": 0,
+    "joined": true,
+    "group_absent": true,
+    "observed_descendants": {
+      "80214": [
+        80088,
+        80214
+      ],
+      "80220": [
+        80214,
+        80214
+      ],
+      "80244": [
+        80214,
+        80214
+      ],
+      "80245": [
+        80214,
+        80214
+      ],
+      "80248": [
+        80214,
+        80214
+      ],
+      "80253": [
+        80214,
+        80214
+      ]
+    },
+    "observed_orphans": [],
+    "remaining": [],
+    "exception": null,
+    "log_sha256": "55268283a244f6c7744cde8eb1f353db84bad8585d982e486726d2fdde567d87"
+  }
+]

@@ -1,0 +1,74 @@
+{
+  "compiler_generated_inputs_and_stdlib_included": true,
+  "expected": [
+    [
+      "github.com/snissn/gomap/TreeDB/caching",
+      "TestLeafLogStatsExposeWorker65"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/caching",
+      "TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/caching",
+      "TestPhysicalValueLogWriterStatsExposeInventoryAbove64"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/caching",
+      "TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/caching",
+      "TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/caching",
+      "TestThresholdRotationStatsCountInstalledRotationOnly"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureFixtureShape5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureInvalidInputNoMutation5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposurePayloadDeterminismAndHeldAlias5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureScheduleCoverage5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureTypedRetainedJSONAndOracle5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestS5098PhysicalEpochRejectsIncompleteDeclaredInventory"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestS5098PhysicalEpochRejectsMissingLateWorkerRegressionAndBadIdentity"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestS5098PhysicalEpochRequiresAllWritersAndFreshReopenBaseline"
+    ]
+  ],
+  "selected_dirs": {
+    "github.com/snissn/gomap/TreeDB/caching": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/source-census-v3/TreeDB/caching",
+    "github.com/snissn/gomap/cmd/collection_workload_bench": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/source-census-v3/cmd/collection_workload_bench"
+  },
+  "special": [
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/caching",
+      "sha256": "f0dca4fa469ab5700c9451c2102ecad517a1186c3bda3dc7e2fa67d56958c049",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/source-census-v3/TreeDB/caching/leak_test.go"
+    }
+  ],
+  "unselected_dependency_test_fields_excluded": true
+}

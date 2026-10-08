@@ -1,0 +1,36 @@
+{
+  "added_top_names": [
+    "TestStablePublicSelectorsReleaseEmptyCloneCreatorControls",
+    "TestStableCloneRefusalKeepsUnclaimedRoleUntilOuterUnlock",
+    "TestStablePausedPendingCreatorCannotEscapeFreeze"
+  ],
+  "additional_existing_required": [
+    "TestStableLogicalObligationPackedAliasCertificationKeepsExactMerge4371"
+  ],
+  "all_eight_top_names": [
+    "TestStableNestedAddCleanupWaitsForOuterGates",
+    "TestStableNestedFlatTransferKeepsDestinationPendingDebt",
+    "TestStableAppendFallbackPendingOriginalRolesRetryWithoutReplay",
+    "TestStableAppendFallbackConflictPreservesOriginalCleanupRoles",
+    "TestStableViewCollisionAddAllowsReentrantAddAfterOuterUnlock",
+    "TestStablePublicSelectorsReleaseEmptyCloneCreatorControls",
+    "TestStableCloneRefusalKeepsUnclaimedRoleUntilOuterUnlock",
+    "TestStablePausedPendingCreatorCannotEscapeFreeze"
+  ],
+  "execution": "NOT RUN: SOURCE ONLY; unformatted/uncompiled",
+  "existing_cleanup_failure_panic_controls": "resource_cleanup_custody_v1_test.go byte-identical",
+  "mandatory_existing_five": [
+    "TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks",
+    "TestMergeAppendOnlyLogicalObligationsAmbiguousPhysicalCandidatesUseExactFallback",
+    "TestMergeAppendOnlyLogicalObligationsCrossKindCollisionUsesExactFallback",
+    "TestMergeAppendOnlyLogicalObligationsRepresentativeReplacementUsesExactFallback",
+    "TestMergeAppendOnlyLogicalObligationsKeepsSmallBuilderLinear"
+  ],
+  "mandatory_pretransfer_controls": [
+    "TestMergeAppendOnlyLogicalObligationsLateMixedConflictLeavesInputsUnchanged",
+    "TestMergeAppendOnlyLogicalObligationsRejectsLogicalConflictBeforePhysicalCoalesce",
+    "TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371"
+  ],
+  "no_changed_excluded_or_waived_existing_tests": true,
+  "prior_inventory_correction": "checkpoint01 substituted PackedAlias for KeepsSmallBuilderLinear; frozen checkpoint01 retained unchanged"
+}

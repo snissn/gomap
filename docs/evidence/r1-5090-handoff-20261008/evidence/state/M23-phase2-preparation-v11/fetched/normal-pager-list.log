@@ -1,0 +1,14 @@
+{"Action":"start","Package":"github.com/snissn/gomap/TreeDB/pager"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerConstructorClosedOwnerRefusesBeforeFileBirth\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerConstructorFailureRetainsActualFileForCloseRetry\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerPartialUnmapRetrySkipsSuccessfulChunks\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerDurabilityObserverMayCloseWithoutSelfJoin\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerLifecycle\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerTruncate\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerTruncateSerializesConcurrentGrowth\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"TestPagerAsyncPreGrow_DefaultChunkEnabled\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager"}

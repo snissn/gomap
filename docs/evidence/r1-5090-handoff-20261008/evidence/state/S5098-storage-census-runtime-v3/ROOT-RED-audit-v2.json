@@ -1,0 +1,86 @@
+{
+  "Go_phase_actual_wait_exit": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "N_accepted": false,
+  "ROOT_audited": true,
+  "all_processes_joined": true,
+  "at": "2026-10-08T18:26:35.696088+00:00",
+  "controls_passed": {
+    "normal-caching-functional": [
+      "TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct",
+      "TestPhysicalValueLogWriterStatsExposeInventoryAbove64",
+      "TestLeafLogStatsExposeWorker65",
+      "TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity",
+      "TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations",
+      "TestThresholdRotationStatsCountInstalledRotationOnly"
+    ],
+    "normal-harness-functional": [
+      "TestR1SExposureFixtureShape5098",
+      "TestR1SExposureScheduleCoverage5098",
+      "TestR1SExposurePayloadDeterminismAndHeldAlias5098",
+      "TestR1SExposureTypedRetainedJSONAndOracle5098",
+      "TestR1SExposureInvalidInputNoMutation5098",
+      "TestS5098PhysicalEpochRequiresAllWritersAndFreshReopenBaseline",
+      "TestS5098PhysicalEpochRejectsMissingLateWorkerRegressionAndBadIdentity",
+      "TestS5098PhysicalEpochRejectsIncompleteDeclaredInventory"
+    ],
+    "race-caching-functional": [
+      "TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct",
+      "TestPhysicalValueLogWriterStatsExposeInventoryAbove64",
+      "TestLeafLogStatsExposeWorker65",
+      "TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity",
+      "TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations",
+      "TestThresholdRotationStatsCountInstalledRotationOnly"
+    ]
+  },
+  "diagnostic_executed": false,
+  "evidence_sha256": "1a23d58ee2638d2a65db7d821926d57d984f58c4c848deaebb8bb554d63a0843",
+  "fetch_tool_exit": 0,
+  "fetch_tool_session": 42265,
+  "finite": false,
+  "normal_top_pass": 14,
+  "outer_tool_exit": 1,
+  "outer_tool_session": 4032,
+  "performance": false,
+  "race_caching_top_pass": 6,
+  "race_harness_executed": false,
+  "remote_receipt_sha256": "e6e326c479390f17c27230df074f284ecda31e628d26804fcb1312464d8eadf5",
+  "reservation": {
+    "all_remote_phases_joined": true,
+    "authorization_sha256": "4dc4e680dc186eecabdeaeb4ada66c3c589b4e748e9d0e5581dcab8bbe462eb7",
+    "outer_join_audited": false,
+    "owner": "R1 #5090 ROOT",
+    "receipt_sha256": "e6e326c479390f17c27230df074f284ecda31e628d26804fcb1312464d8eadf5",
+    "status": "joined_pending_ROOT_audit_v2",
+    "token": "S5098-census-v3-181758"
+  },
+  "result": "REJECT resource preparation; sampled 4GiB source/cache/output guard during race harness compilation; diagnostic unexecuted; user requested handoff, no rerun",
+  "retained_failed_DBs": [
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/tmp/gomap-r1-tree-1927759698",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/tmp/gomap-r1-tree-3817663676"
+  ],
+  "server111_window_still_ROOT_owned": true,
+  "source_paths": 9878,
+  "source_sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+  "tests_executed": true
+}

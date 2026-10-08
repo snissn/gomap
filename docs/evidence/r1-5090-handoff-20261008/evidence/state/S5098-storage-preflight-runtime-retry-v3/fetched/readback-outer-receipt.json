@@ -1,0 +1,10 @@
+{
+  "actual_wait": true,
+  "exception": null,
+  "exit": 0,
+  "group_absent": true,
+  "pid": 82055,
+  "remote_stage_acceptance": null,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "2a5e94b472e2d66b7ce6b47fb80e8d7239487e33ce177af0cf86c2f146fb21d3"
+}

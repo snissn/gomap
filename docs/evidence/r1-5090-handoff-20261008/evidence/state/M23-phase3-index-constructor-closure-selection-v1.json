@@ -1,0 +1,52 @@
+{
+  "Git": false,
+  "Go": false,
+  "ROOT_selected": true,
+  "actual_classes": [
+    "indexGen scanned control",
+    "ReaderRegistry scanned control including16embeddedfastshards",
+    "Graveyard scanned control",
+    "Graveyard initial64batch scanned backing",
+    "conditional ManagedWriter control when allocator nonnil"
+  ],
+  "allowed_production_paths": [
+    "TreeDB/db/pager_holder_lifetime.go",
+    "TreeDB/lifecycle/graveyard.go"
+  ],
+  "allowed_test_paths": [
+    "TreeDB/db/index_constructor_closure_v1_test.go",
+    "TreeDB/lifecycle/graveyard_constructor_layout_v1_test.go"
+  ],
+  "at": "2026-10-08T17:30:42.608109+00:00",
+  "base_source_sha256": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff",
+  "conditional_production_path": "TreeDB/db/index_gen.go only after ROOT accepts demonstrated unavoidable constructor seam requirement",
+  "format": false,
+  "inquiry_receipt_sha256": "3bc4fee6b440ad3a8bd5ba22c11877ea4b7feba06f398577e6ab9c26b4cd0f4c",
+  "mode": "provisional source construction against frozen phase2 source; no runtime or merge authority",
+  "node": 5093,
+  "objective": "precharge full actual index generation constructor closure on SAME retained Pager Scope before any constructor child or managed allocator writer bind",
+  "parent": 5090,
+  "preserved_open": [
+    "all128MiBwholefit",
+    "Pager dirtymap/channel/goroutineOSFDcontrols",
+    "Registryfallbackgrowth andGraveyard growth",
+    "cacheconstructor andidentity registry",
+    "opaque callback/resource closure",
+    "fullfunctional and performance and CI and exactheadreview and merge"
+  ],
+  "remote": false,
+  "requirements": [
+    "compute each actual allocation class separately before checked sum; full64capacity backing notzero slice length",
+    "single atomic existing ReserveStableMetadata aggregate preflight before any newIndexGen child/bind; no newledger/request stamp/unmeasured helper heapbirth",
+    "preserve ordinary unsupported class raw fallback with coverage remaining false; finite admission remains closed",
+    "retain existing Pager Scope original lifetime and generation/reader/writer/failedClose custody; no premature refunds",
+    "preserve ReaderRegistry fastshardsaturation/privatefallback and Graveyard ordering; no performance claim"
+  ],
+  "tests": [
+    "header-only headroom refuses before childbirth/bind",
+    "exactfull independently-rounded classes succeeds on same creator",
+    "nilallocator excludes writer control",
+    "full charges survive held readers/replacement/failedClose and existing writer custody edges"
+  ],
+  "writer": "/root/m5093_transitive_ownership"
+}

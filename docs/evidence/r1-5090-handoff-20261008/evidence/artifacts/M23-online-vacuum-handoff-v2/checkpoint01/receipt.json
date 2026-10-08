@@ -1,0 +1,32 @@
+{
+  "Git": false,
+  "Go": false,
+  "at": "2026-10-08T18:24:51.852957+00:00",
+  "changed_paths": [],
+  "commands_in_flight": [],
+  "commands_joined": true,
+  "compile_claim": false,
+  "files": {
+    "delta-from-checkpoint02.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "handoff.md": "bd8bd9734e7c514c771c5e7ad7cb04c93d08fba61941f7fbd028959fa496a376",
+    "outside-equality.json": "345d011d03673ad65353112edae4da31d0c0c8ca806671239e7b744fe1843d62",
+    "read-bindings.json": "8de032817e4a5310d746bfc4eb3925f0a830f06be9420ca715c29e57854aa3a0",
+    "source-current.json": "7b1ffd5da22b9c0cd1807679533cc8b322eeb77e2b5501b96e1e9fcc9fa7ae83",
+    "source.patch": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "finite_admission": "CLOSED",
+  "gofmt": false,
+  "grant": "state/M23-online-vacuum-constructor-owner-selection-v2.json",
+  "grant_sha256": "34a2917a0d0eead54389504b8fe8de3c454f69f7bcae3083dfe48c446ce0971d",
+  "head": "ae6b6a87090be5bf64554f68738a1fe103393aa9",
+  "implementation_stopped": true,
+  "online_vacuum_implementation": "NOT STARTED; read-only investigation",
+  "prior_checkpoint": "artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02",
+  "remote": false,
+  "source_count": 10077,
+  "source_edits": 0,
+  "source_manifest_sha256": "7b1ffd5da22b9c0cd1807679533cc8b322eeb77e2b5501b96e1e9fcc9fa7ae83",
+  "test_claim": false,
+  "unfinished_code": "existing unmodified vacuum lifetime/cleanup paths; no partial code added",
+  "worktree": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group"
+}

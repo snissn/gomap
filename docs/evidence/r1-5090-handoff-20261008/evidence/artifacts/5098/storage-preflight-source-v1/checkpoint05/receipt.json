@@ -1,0 +1,25 @@
+{
+  "Git_mutations": false,
+  "Go_executed": false,
+  "artifacts": {
+    "delta.patch": "02c0ac0d2b65e5dbd22bd59547174f4dc08d6104a765dcfe7d9bf67af8296f99",
+    "inquiry.md": "e6ce934d96b4d5f98ba146adde77c6d4b772eb4baa965ca5a7ab5798fb22fbae",
+    "new-source.tar.gz": "16b3e849bedeb05ded41e4335eee62f01a9add7b1c1ebe0aa5dc0033d3edabe3",
+    "selected-before.go": "d79ead42016f06c5e123a37013502dacc69185e51cb7beb99b77f5d5e2b1546e",
+    "source-after.json": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+    "source-before.json": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+    "source-delta.json": "e95a4fcad42aaca135f19e7621dc0a3e0212493f1e6a79654a0c3a1d5736cf30",
+    "source-evidence.json": "8c73770cc4db9dc432e0f3535ec34dd78bd53535cb27604ca96774bc7c28b74d"
+  },
+  "at": "2026-10-08T18:00:15.422567+00:00",
+  "changed_paths": [
+    "cmd/collection_workload_bench/s_default_storage_preflight_5098_test.go"
+  ],
+  "finite": false,
+  "formatter_executed": false,
+  "other_9877_paths_byte_exact": true,
+  "performance": false,
+  "remote_access": false,
+  "source_count": 9878,
+  "status": "SOURCE_ONLY_FROZEN"
+}

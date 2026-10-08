@@ -1,0 +1,9 @@
+{
+  "compiled_declarations": [
+    "TestR1LeafDefaultRolloverDiscovery5098",
+    "TestR1LeafDefaultFixedEpochs5098",
+    "TestR1SDefaultStoragePreflight5098"
+  ],
+  "fixed_arms_granted": false,
+  "workload_executed": false
+}

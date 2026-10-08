@@ -1,0 +1,22 @@
+{
+  "status": "ACCEPT_SCOPED_SOURCE_ONLY_STOPPED",
+  "created_utc": "2026-10-08T18:15:24.251360+00:00",
+  "candidate_receipt_sha256": "788316ef94df978b549f79f3b02c00b1241549b1025f2e54983c67dbbbac3861",
+  "review_sha256": "9ea44c752470660700dee54571b4d1a4584d639d94387741cfa2479cea895c26",
+  "bindings_sha256": "03b1b1c7a198fb5edd0ae7ff818a06209e116c1dc108b589754b904dc3428f06",
+  "named_inspected_source_count": 9,
+  "archive_matches_named_live_candidates": true,
+  "findings": [],
+  "prior_F1": "corrected",
+  "prior_F2": "corrected mandatory inventory",
+  "runtime_executed": false,
+  "source_mutations": false,
+  "whole_mutable_source_claim": false,
+  "remaining_gates": [
+    "compile/normal/race",
+    "full checked caller error custody",
+    "platform",
+    "whole128MiB/finite",
+    "economics/performance"
+  ]
+}

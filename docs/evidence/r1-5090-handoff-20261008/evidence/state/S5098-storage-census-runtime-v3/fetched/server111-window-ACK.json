@@ -1,0 +1,9 @@
+{
+  "actual_message_received": true,
+  "at": "2026-10-08T18:14:50.657172+00:00",
+  "external_text": "ACK your next111 window18:16-18:32UTC, gated by my actual final release (I will send it). Rcollect deferred until after ROOT actual release.",
+  "prerequisite": "external actual final release before any source staging or Go",
+  "thread": "01a0f9ab-98a1-7840-87a3-aff6d04bae35",
+  "window_start": "2026-10-08T18:16:00+00:00",
+  "window_until": "2026-10-08T18:32:00+00:00"
+}

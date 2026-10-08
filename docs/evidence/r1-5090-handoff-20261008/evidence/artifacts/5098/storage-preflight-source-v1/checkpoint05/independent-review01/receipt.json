@@ -1,0 +1,15 @@
+{
+  "status": "ACCEPT_SCOPED_SOURCE_ONLY_STOPPED",
+  "created_utc": "2026-10-08T18:05:02.474078+00:00",
+  "review_sha256": "be34ff78572e58a36bd1e85ddad733d627ff346d6ec3499d3a0cfd989bd9dc87",
+  "bindings_sha256": "8b47845cc2a8977d3d596cc127db3e0a083586b962466f7d6d9fc978b0d83ad3",
+  "candidate_receipt_sha256": "fabcc91fc229457d8283c038ac334c768257c65215ad86ba346c02831f7112bd",
+  "archive_candidate_matches_live": true,
+  "source_mutations": false,
+  "runtime_executed": false,
+  "whole_worktree_identity_claim": false,
+  "limitations": [
+    "diagnostic path correction only",
+    "no runtime or finite/performance acceptance"
+  ]
+}

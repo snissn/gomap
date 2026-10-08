@@ -1,0 +1,16 @@
+{
+  "ACK_sha256": "0b490101697d7acd6efb3a9d66bc6e04dc368a3c9e028dc102228bb451dd67e9",
+  "ROOT_selected": true,
+  "at": "2026-10-08T17:48:12.106256+00:00",
+  "cleanup_slack_seconds": 30,
+  "early_whole_deadline_is_failed_incomplete": true,
+  "launcher_sha256": "1a14b65c1a89957c5ce9745df682a50e0f5bbd5ab3d262815e77c4c4ef8d17db",
+  "mandatory_controls_oracles_unchanged": true,
+  "minimum_whole_driver_seconds": 480,
+  "qualification": false,
+  "rationale": "Diagnostic cap is an upper bound. ROOT may retain early incomplete diagnostic; no minimum600s runtime is product acceptance. Preserve initial unlaunched precondition failure and explicit external deadline.",
+  "short_test_cap_seconds": 600,
+  "whole_driver_guard": "remaining explicit window minus30s",
+  "window_until": "2026-10-08T17:58:00+00:00",
+  "work": "14normal/race controls then2fresh256call diagnostic arms"
+}

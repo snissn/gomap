@@ -1,0 +1,17 @@
+{
+  "Go_tests_authorized": true,
+  "actual_wait": true,
+  "at": "2026-10-08T17:31:20.034601+00:00",
+  "authorization_sha256": "bf3bac69c3395d5e81d183b68e312f02c852a0a7e0154894a19d6f7c90413f84",
+  "exit": 1,
+  "failure": null,
+  "finite": false,
+  "group_absent": true,
+  "performance": false,
+  "pid": 90603,
+  "remote_launch_sha256": "5678b57f9552111aa7b53929c4528ef93d406fd75476c4fb500ef4b9d71f174e",
+  "remote_phase_join_requires_receipt_audit": true,
+  "signals": [],
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "4857b6599b85e01be3f5f0d04b7d40ab7e9d8de7a3169d3dad4b9a6746eb2a73"
+}

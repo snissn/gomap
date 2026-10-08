@@ -1,0 +1,9 @@
+{
+  "accepted_inquiry_receipt_sha256": "cbaed1a4bcf8fd15d50bd6cc9c93e5f782af28be071418d9f94e404e7f1667ac",
+  "actual_five_red_audit_sha256": "bdaf4b17750ec39e7b508cffed849a95df5bd93e53f2634dc8fe651598e94365",
+  "before_packet": "artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/receipt.json",
+  "before_receipt_sha256": "3e2a2eaae6a54a2cad1ec538aec32d01385faa1c17d494d0edbc542e9bcf15c7",
+  "grant": "state/M23-phase2-fallback-custody-selection-v1.json",
+  "grant_sha256": "2e0da3285060f8cfbec273edc04b4ae259653586dedcb0f54db1c2d0890c8db2",
+  "inquiry": "artifacts/M23-phase2-builder-operation-failure-inquiry-v1/inquiry.md"
+}

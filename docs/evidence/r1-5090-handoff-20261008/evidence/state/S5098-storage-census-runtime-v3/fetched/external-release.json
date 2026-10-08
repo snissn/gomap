@@ -1,0 +1,27 @@
+{
+  "actual_message_received": true,
+  "actual_receipt_path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-writer-invariant-main-baseline-native-v1/root-actual-setup-failure-release.json",
+  "actual_receipt_retained": "external-release-raw.json",
+  "actual_receipt_sha256": "ec0e821901b161f42aaf646bf1ebfcdf67be8d0d3cdf21510967699820c0813a",
+  "actual_release": true,
+  "actual_release_tool": {
+    "exit": 0,
+    "session": 47004
+  },
+  "actual_setup_tools": [
+    {
+      "exit": 1,
+      "session": 75619
+    },
+    {
+      "exit": 1,
+      "session": 42059
+    }
+  ],
+  "all_processes_joined": true,
+  "at": "2026-10-08T18:17:17.952980+00:00",
+  "external_message": "GENUINE FINAL111 RELEASE: baseline setup v1 failed before sourcecopy/Go; v2 window guard rejected before output/runtime creation. Actual SSH waits75619/42059 joinedexit1; fresh release47004 exit0 verifies new source/output absent, commands[], fresh Go/test/collector conflicts[]. ROOT acknowledged18:16-18:32 window may begin now.",
+  "fresh_conflicts": [],
+  "runtime_never_started": true,
+  "thread": "01a0f9ab-98a1-7840-87a3-aff6d04bae35"
+}

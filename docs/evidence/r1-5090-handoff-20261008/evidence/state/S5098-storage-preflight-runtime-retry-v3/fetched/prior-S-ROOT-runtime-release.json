@@ -1,0 +1,26 @@
+{
+  "proof": {
+    "ROOT_audit_sha256": "c7204fe1690b43985e1a903597d5d764894d36a3e5c5d1adcd4b51ed8af89226",
+    "all_remote_phases_joined": true,
+    "at": "2026-10-08T17:36:42.365626+00:00",
+    "failed_packet_retained": true,
+    "finite": false,
+    "fresh_conflicts": [],
+    "outer_SSH_and_tool_actual_join": true,
+    "performance": false,
+    "remote_receipt_sha256": "c9ab5533a03a0e25c7a49a6fe777de4c05c4062908abb33d124d438b9216d2b0",
+    "reservation": {
+      "all_remote_phases_joined": true,
+      "authorization_sha256": "a6fd5d24c3a3de1236a45b5a4daccb4ec42067894ade188bda9caa39b50b28ef",
+      "outer_join_audited": false,
+      "owner": "R1 #5090 ROOT",
+      "receipt_sha256": "c9ab5533a03a0e25c7a49a6fe777de4c05c4062908abb33d124d438b9216d2b0",
+      "status": "joined_pending_ROOT_audit_v2",
+      "token": "S5098-short-preflight-v2-173424"
+    },
+    "server111_runtime_released": true,
+    "source_retained": true
+  },
+  "release_outer_sha256": "69bf68cf291501ac1300cda0684595dcf2ac887508dee2c5f6b9eddd7c64953e",
+  "remote_proof_sha256": "bf7033b2f3595e4b87bfc8d486d94fff00f43d856f7dc2f444a7392126254db6"
+}

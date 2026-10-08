@@ -1,0 +1,13 @@
+{
+  "ROOT_audit_sha256": "5a39224ffdf647c29bd2f30692e0396d33599fdff89ebf5e6060f64acd9e1068",
+  "actual_runtime_receipt": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/receipt.json",
+  "actual_runtime_receipt_sha256": "f6343b337c418329eeaefc08338ed05efb18d7ddda22cea19483f4a569c00eb5",
+  "bindings": {
+    "TreeDB/dir_layout.go": "7bbeba773c434e885af025471d5fd8e8c07750736a93cdcc6dad36f31e539e3f",
+    "TreeDB/open_backend.go": "08648dc0d86b921c23a980d38ae7a45eb2f18aaf099dc0b5316450d4934ff57e",
+    "TreeDB/profiles.go": "60e637ca9ad0493f5ebac36bf49ed18bbc2b4fe04c93aadbca25004e675c9742",
+    "TreeDB/public.go": "626b7d2f1ab12545d1d8ace49c89b81da09821d588819cdbb95ae2f170278c65",
+    "cmd/collection_workload_bench/s_default_storage_preflight_5098_test.go": "b45a270fc489ce1eccbe4f259445f1a52a384c728d1ce7965526dbd4b3b6ed8b"
+  },
+  "question": "Both runtime arms passed loaded current/held rows and postings, then os.Open(root/index.db) failed. OpenBackendWithCachedLeafLogStats calls public Open, and resolveOpenDirLayout on this fresh MkdirTemp with side stores enabled selects root/maindb/index.db. This census follows that fixed producer layout and records the exact relative metadata path; it does not search alternate generations or change producer defaults. Existing actual short diagnostic is the meaningful verification;14 mandatory normal/race controls unchanged. Both failed DBs and source/raw packet retained. No N/rollover/performance/finite acceptance."
+}

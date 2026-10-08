@@ -1,0 +1,169 @@
+{
+  "TestMain_Fuzz": [
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB",
+      "sha256": "b52ec5b4d1c2485f57a9a3acb57a74b04504b71165c8da4884e0a64071357947",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/db",
+      "sha256": "06d4c247e4711980dfd6e83a5b3258fcd27ad6d56098797040741c7902ce22ce",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/db/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/pager",
+      "sha256": "a80b1f64a3e61babe364b37c0a0b249fa9561bd3ee5ad90f94a73a82a1487f40",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/pager/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "sha256": "e5bd1abf2b17b9f4652ba50d752839264394edcfcefce8c5dc6edf87a116f767",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/rootpublication/leak_test.go"
+    },
+    {
+      "name": "FuzzDecodeFrame",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "22cca4651619d33e112e25fe407c96e7f920e9da5a0d0888a10006b4499cc81c",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/fuzz_decode_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "0ae55389eaf6a08943f81d247508de0cda19309fa9b1a0b8da09cfd4b8c2bca8",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/leak_test.go"
+    },
+    {
+      "name": "FuzzValueLogReader",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "48852b0b1f5717a4f9f426d9ee14fc57604c6ee7823431af8e98e6430c078d97",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/valuelog_fuzz_test.go"
+    },
+    {
+      "name": "FuzzValueLogDecodeMixedFrame",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "48852b0b1f5717a4f9f426d9ee14fc57604c6ee7823431af8e98e6430c078d97",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/valuelog_fuzz_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "sha256": "37443add4f0f4b43e6465c3d135c9b92b787c4ae1db9077dfd3901fa4f7ddffd",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/dictdb/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "sha256": "80024c558d140b9078fd7f964195e0ed873a0cdee180e1a238f15cf2c430493c",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/templatedb/leak_test.go"
+    }
+  ],
+  "actual_go_list_and_binary_inventory_required": true,
+  "driver_derivative": "Only W and D constants changed from accepted v8",
+  "expected_top": 253,
+  "mandatory_risks": 57,
+  "new_driver_sha256": "1dc96eb19432c3062dd762bd6028076ec0c95f07437ffb8d8970703600179af6",
+  "new_packages": [
+    "dictdb",
+    "templatedb"
+  ],
+  "new_risks": [
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionCounterOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestPrivatePointConstructorChurnAndPublicControlNoRefund"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestScanConstructorPrivateOriginAndUnownedRefusal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "TestDictionaryStoreCloseKeepsRealSnapshotWhileIteratorHeld"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "TestDictionaryCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingMalformedAndOverflowRefusal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableSetCheckedReleaseRetainsUnfinishedRoleAndSkipsConsumedToken"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableBuilderNestedCleanupFailuresKeepBothActualOwners"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableBuilderCleanupPanicIsUncertainAndNotReplayed"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableSetOperationAllowsReentrantStateButRefusesReleaseBeforeEffects"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableCheckedTokenReentrantReleaseIsBusyAndRetryConsumesOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableConcatCleanupPreservesCompleteChildErrorWithoutReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "TestTemplateStoreCloseKeepsRealSnapshotWhileIteratorHeld"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "TestTemplateCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture"
+    ]
+  ],
+  "original_driver_sha256": "63d95831de6f23161b556c2d04ecc56c46c7f1c7c07b4e63688df52f543799f5",
+  "runtime_authorized": false
+}

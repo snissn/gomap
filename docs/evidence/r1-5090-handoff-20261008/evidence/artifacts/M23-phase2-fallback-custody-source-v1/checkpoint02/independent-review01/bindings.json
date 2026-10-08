@@ -1,0 +1,62 @@
+[
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/resource_set.go",
+    "sha256": "28948fa60bc6e6104b4309800daf949a2995b5fd4a74bda32260963aa63464c2"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go",
+    "sha256": "4bf8116cab2bb3cf15fb754d6d2f265fae9b7daccc06bea5450f0dd6dc2bb9eb"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/resource_selector.go",
+    "sha256": "0dd9ef0237e9b078ac956e8cd3fb22ce7e933d43f46a1f66cd5796ac76f02056"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/resource_physical_union.go",
+    "sha256": "e85b00513928717a893046bb97e920f13591fc0300a01e75cb1eb33c2170a426"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/resource_token.go",
+    "sha256": "3c1381c91427fec9db73c4807a997ca84fb4e60d5703536eeb288bfca52e8ea1"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/resource_append_mutation_test.go",
+    "sha256": "ad9b253a64c9fe57638de7f587fd6c4fc8f9541568946fa51aad505af12639d4"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/resource_cleanup_custody_v1_test.go",
+    "sha256": "7a3fbf3e6446c2aaef7e1f07bc306293d95e8b38cf079751f3367614948415ac"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/rootpublication/token_operation_lifetime_v1_test.go",
+    "sha256": "c6f5f8ee06657724bf8fea1a8b5b34a422197a1e95bd953684852740c0566692"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group/TreeDB/internal/residentcredit/owner.go",
+    "sha256": "8a16b97a8e03c704beeecfc84cd740f137b9e9b8c3384ac9a717fdaaa31ebf45"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/receipt.json",
+    "sha256": "788316ef94df978b549f79f3b02c00b1241549b1025f2e54983c67dbbbac3861"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/selected-after.tar",
+    "sha256": "bdd3836c2cbf23107c9a1716844f0bd7db0e3984c064bfbdcfe8e65af53ba453"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source.patch",
+    "sha256": "b4ceac6925e1c9d3aae31598f260d7a2d5139fa6554c9feff2428a37830c3aea"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/risk-test-inventory.json",
+    "sha256": "2bba3f0a03fff6f58b3fff71125ce04196fcdd2f7c67dac401e7fc18c20103f5"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/rationale.md",
+    "sha256": "2dd10314a5c2e326e0dd8d341db963d8608772340c56cceb4c710e5b09cdb522"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source-after.json",
+    "sha256": "7b1ffd5da22b9c0cd1807679533cc8b322eeb77e2b5501b96e1e9fcc9fa7ae83"
+  }
+]

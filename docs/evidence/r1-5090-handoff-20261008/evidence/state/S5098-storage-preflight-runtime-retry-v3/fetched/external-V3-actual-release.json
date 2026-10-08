@@ -1,0 +1,17 @@
+{
+  "status": "ACTUAL_WRITER_INVARIANT_RUNTIME_JOINED_AND_RELEASED",
+  "active_go_compile_link_test_bench": [],
+  "checked_ns": 1791481489819816628,
+  "all_owned_runs_joined": true,
+  "qualification": false,
+  "native_completion": {
+    "path": "/home/mikers/quicksilver-maintenance-5028-20261006/qualification-v13-writer-invariant-native-run-v3/completion.json",
+    "sha256": "653f8a8c6eebf54f0c1a9dfbbbb865ccf963efa9fd954090c2675e50718d1030"
+  },
+  "transport": {
+    "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-writer-invariant-native-preparation-v3/actual-join-release-and-readback-v3-stdout.txt",
+    "sha256": "bba3c00c8c99741b71231fc7ccf37bc73bb45f237abd816f72e01ec2ceefb151"
+  },
+  "fetched_files": 12,
+  "actual_bytes": 16576283
+}

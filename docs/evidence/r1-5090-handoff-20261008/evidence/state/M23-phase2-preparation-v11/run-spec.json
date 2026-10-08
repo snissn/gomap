@@ -1,0 +1,1442 @@
+{
+  "allowed_skips": [],
+  "environment": {
+    "CC": "/usr/bin/gcc",
+    "CGO_CFLAGS": "-O2 -g",
+    "CGO_CPPFLAGS": "",
+    "CGO_CXXFLAGS": "-O2 -g",
+    "CGO_ENABLED": "1",
+    "CGO_FFLAGS": "-O2 -g",
+    "CGO_LDFLAGS": "-O2 -g",
+    "CXX": "/usr/bin/g++",
+    "GIT_TERMINAL_PROMPT": "0",
+    "GOAMD64": "v1",
+    "GOARCH": "amd64",
+    "GOCACHE": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build",
+    "GODEBUG": "",
+    "GOENV": "off",
+    "GOEXPERIMENT": "",
+    "GOFLAGS": "-mod=readonly",
+    "GOINSECURE": "",
+    "GOMAXPROCS": "4",
+    "GOMODCACHE": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-mod",
+    "GONOPROXY": "",
+    "GONOSUMDB": "",
+    "GOOS": "linux",
+    "GOPATH": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-path",
+    "GOPRIVATE": "",
+    "GOPROXY": "https://proxy.golang.org,direct",
+    "GOROOT": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3",
+    "GOSUMDB": "sum.golang.org",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "HOME": "/home/mikers",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "LOGNAME": "mikers",
+    "PATH": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/bin:/usr/bin:/bin",
+    "TMPDIR": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp",
+    "USER": "mikers"
+  },
+  "expected_tests": [
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestAcquireSnapshot_BackendFastPathAllocsAreBounded"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestAcquireSnapshot_IncludesCachedWrites"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestAcquireSnapshot_IncludesCachedWrites_ValuePointers"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestPublicCloseDropsLifecycleGateAndRefusesReentrantCloseRead"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestPublicPendingConstructorRetainsActualChildOnCloseError"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotCloseInvalidatesOutstandingIterator"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotGetManyViewClosedSnapshotBoundary"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIterateBackendFastPathUsesPinnedView"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIterateNilCallbackFailsClosed"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIterateUsesPinnedView"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIteratorEmptyDomainSeekRemainsEmpty"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIteratorSeekAfterReopen"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIteratorSeekContract"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB",
+      "TestSnapshotIteratorSeekRandomizedOracle"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_ReturnsNilWhenDBIsClosing"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestAcquireSnapshot_UsesPublishedCoherentView"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_AcquireSnapshot"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Close"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Commit"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_CompactIndex"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Delete"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_DeleteSync"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Dir"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_FragmentationReport"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Get"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_GetAppend"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_GetMany"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_GetManyView"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_GetUnsafe"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Has"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_InlineThreshold"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_InlineThresholdForKey"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Iterator"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_IteratorWithOptions"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_MarkValueLogZombie"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_NewBatch"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_NewBatchWithSize"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Pager"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Print"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Prune"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_PublishOrderedRootGroup"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_PublishOrderedRootIterator"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_PublishSystemRootIterator"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_RefreshValueLogSet"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_ReverseIterator"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_ReverseIteratorWithOptions"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Set"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_SetSync"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_State"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Stats"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Update"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_UpdateSync"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_VacuumIndexOnline"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_ValueLogGC"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_ValueLogRewriteOnline"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestClosedDB_Zipper"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBFailedOpenReturnsActualIndexCleanupOwner"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBGhostKeepsActualIndexAcrossPhysicalCloseFailure"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBGhostOrdinaryScavengeRemovesHealthyExactOwner"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBPagerJoinDropsMaintenanceTeardownAndWriteGates"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotCapturesRealStableIndexToken"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestPrivatePointConstructorChurnAndPublicControlNoRefund"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestReadAPIsWhileClosing_DoNotPanic"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestRegisterCloseHookAfterRunCloseHooksIsIgnored"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestScanConstructorPrivateOriginAndUnownedRefusal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotAllocationAdmissionFixedCohortPressure"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotDetachForegroundReadUsesOperationScopedLifetime"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotForegroundReadConcurrentCloseEndsOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotForegroundReadLifetimeFollowsBoundIterator"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotGet_ReturnsSafeCopyForValueLogPointer"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotIteratorCreationRejectsStaleGeneration"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotIteratorCreationSerializesCloseAndRelease"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionCounterOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotPool_PutClearsLeafGenerationRefs"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotReadCallbackCanCloseOwner"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotReaderAtRootGetAppend"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotRootProbesSkipTombstones"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotRootReaderCallbackCanCloseOwner"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotTreeAtRootCachesRootTrees"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotTreeAtRootConcurrentCacheAccess"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshot_HasManyAndHasPrefixes"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableIndexCallbackKnownEnvironmentClassPrepaid"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableIndexCallbackOriginalOnlyBothPublicClonePaths"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableResourceCaptureLeaseRetainSerializesWithRelease"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "TestDictionaryCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "TestDictionaryStoreCloseKeepsRealSnapshotWhileIteratorHeld"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingMalformedAndOverflowRefusal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestBuilderDisposalCallbacksOutsideLinearIndexedAndViewGates"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestBuilderMergeConflictRetainsBothOwnersTransactionally"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestBuilderMergeDuplicateChildPinStressDoesNotGrowDescriptors"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestBuilderMergeReleasesDroppedDuplicateChildPin"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestBuilderNestedViewMergeDisposalOutsideParentAndChildGates"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestCloneStableResourceForSelector"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestCloneStableResourceForSelectorRejectsReleasedSource"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestCloneStableResourceSetFiltersExactLogicalObligationClosure"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestCloneStableResourceSetReportsPhysicalAndLogicalWorkSeparately"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestCloneStableResourceSetSharesCustomSyncHandle"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestCloneStableResourceSetUsesExactHandlesAndIndependentPins"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsAmbiguousPhysicalCandidatesUseExactFallback"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsCrossKindCollisionUsesExactFallback"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsKeepsSmallBuilderLinear"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsLateMixedConflictLeavesInputsUnchanged"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsMixedDistinctAndCollisionIsAtomic"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsRejectsLogicalConflictBeforePhysicalCoalesce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsRejectsScopedEntryWithoutObligations"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducerTokens"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsRepeatedDistinctSegmentsStayMutationLocal4371"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsRepresentativeReplacementUsesExactFallback"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableBuilderCleanupPanicIsUncertainAndNotReplayed"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableBuilderNestedCleanupFailuresKeepBothActualOwners"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableCheckedTokenReentrantReleaseIsBusyAndRetryConsumesOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableConcatCleanupPreservesCompleteChildErrorWithoutReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableMetadataGenericSetClonesRefuseBeforeObserveOrClone"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableMetadataNilCloneRejectsWithoutAccountRead"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStablePreparedTransferExclusiveClosureAndCleanup"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStablePreparedTransferSurvivingCloneRefusesIncompleteClosure"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceBuilderClosureWorkSnapshotConcurrentWithAdd"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceBuilderDistinctPhysicalLookupWorkIsBounded"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceBuilderMergeDistinctPhysicalLookupWorkIsBounded"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceBuilderRepresentativeReplacementUpdatesLogicalLookup"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceDefaultFlushDoesNotFsync"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceEntryRopeDeepAppendTraversalAndReleaseAreIterative"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceInventoryHasNoUnknownOwnerCells"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceMetricsDistinguishCoveredSyncAttemptFromPhysicalFileSync"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceMetricsSeparateFileAndNamespaceOperations"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceNamespaceAcceptsExactLinkedChild"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceNamespaceRequiresExactLinkedChild"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceNestedUnionMustResolveEveryRequiredChild"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourcePrioritiesPreserveFNVByteStream"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourcePublicationDebtCoverage"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourcePublicationDebtRetainsIndexedOwnership"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetConcurrentReadsAndRelease"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetExtrasReleasedEvidence"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetLargeLogicalObligationIndexRejectsConflictAtomically"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetLogicalClonePreservesContentCertificate"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetMergeFrozenUnsyncedChildPreservesSyncRequirement"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetRejectedLargeLogicalObligationBatchDoesNotLeakEarlierAddition"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetRejectedLogicalObligationBatchDoesNotLeakEarlierAddition"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetRejectsConflictingLogicalObligationAtomically"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetRejectsDataStableNamespaceUnstable"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetRetainsRotatedIdentitiesAndGreatestFrontier"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetSyncUsesCoalescedGreatestFrontier"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceTokenCapturesExactRIDMembershipByValue"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceTokenCapturesSingleLogicalObligationByValue"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceTokenPinnedReadRemainsUsable"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceTokenPinsIdentityRegistryUntilExactRelease"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceTokenRejectsRIDSummaryWithoutExactMembership"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableResourceTokenSyncedRIDCoverage"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableSetCheckedReleaseRetainsUnfinishedRoleAndSkipsConsumedToken"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableSetOperationAllowsReentrantStateButRefusesReleaseBeforeEffects"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalAliasRoleRejectedBeforeCreditAndPublication"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalCandidateAbandonPreflightsActualClosureBeforeCOW"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalCommittedPartialDBCleanupKeepsOwnerAndCOWOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReportCleanupFailureHandoffNeverConsumesCOWTwice"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReportEndsBeforeACKAndProtectsFinishingReservation"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReportMissingConsumerPreservesCOWAndActualOwners"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReservedBackingChargesCurrentAndFutureRegistryBorrowers"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReservedGateRetryUsesImmutableGenerationAndNoLateDebit"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReservedWholeInputRefusesBeforeConstructorEffects"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalWholeDBGroupRefusalBeforePublication"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTerminalDeleteReservationRefusesForeignDuplicateAndReleasedPinsBeforeDebit"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenCallbackOriginNeverBecomesOwnedAfterScrub"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenCloneRefusalBalancesOriginalCreatorAndObservation"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenConcreteProviderBothClonePathsAfterOriginalOwnerClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenOperationReentrantReleaseAndCallbackPanicCustody"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenOperationReleaseWaitsForActualAdmittedAliases"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenOrdinaryMetadataAdmissionConcurrentRelease"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenPhaseOneKnownControlClasses"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenPhysicalCloneWithoutRegistryRetainsNilReleaseEnvironment"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenSharedCloneWithoutRegistryRetainsNilReleaseEnvironment"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "TestTemplateCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "TestTemplateStoreCloseKeepsRealSnapshotWhileIteratorHeld"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "TestSnapshotSetCheckedReleasePreservesOpenLastZombie"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "TestStableTerminalStoragePreparedGateRetainsActualDebtAcrossSyncFailure"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerAsyncPreGrow_DefaultChunkEnabled"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerConstructorClosedOwnerRefusesBeforeFileBirth"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerConstructorFailureRetainsActualFileForCloseRetry"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerDurabilityObserverMayCloseWithoutSelfJoin"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerLifecycle"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerPartialUnmapRetrySkipsSuccessfulChunks"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerTruncate"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/pager",
+      "TestPagerTruncateSerializesConcurrentGrowth"
+    ]
+  ],
+  "finite": false,
+  "mandatory_risk_tests": [
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotCapturesRealStableIndexToken"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestPrivatePointConstructorChurnAndPublicControlNoRefund"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestScanConstructorPrivateOriginAndUnownedRefusal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionCounterOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableIndexCallbackKnownEnvironmentClassPrepaid"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableIndexCallbackOriginalOnlyBothPublicClonePaths"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/db",
+      "TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "TestDictionaryCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "TestDictionaryStoreCloseKeepsRealSnapshotWhileIteratorHeld"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingMalformedAndOverflowRefusal"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestBuilderDisposalCallbacksOutsideLinearIndexedAndViewGates"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestBuilderNestedViewMergeDisposalOutsideParentAndChildGates"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableBuilderCleanupPanicIsUncertainAndNotReplayed"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableBuilderNestedCleanupFailuresKeepBothActualOwners"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableCheckedTokenReentrantReleaseIsBusyAndRetryConsumesOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableConcatCleanupPreservesCompleteChildErrorWithoutReplay"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStablePreparedTransferExclusiveClosureAndCleanup"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStablePreparedTransferSurvivingCloneRefusesIncompleteClosure"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableSetCheckedReleaseRetainsUnfinishedRoleAndSkipsConsumedToken"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableSetOperationAllowsReentrantStateButRefusesReleaseBeforeEffects"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalAliasRoleRejectedBeforeCreditAndPublication"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalCandidateAbandonPreflightsActualClosureBeforeCOW"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalCommittedPartialDBCleanupKeepsOwnerAndCOWOnce"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReportCleanupFailureHandoffNeverConsumesCOWTwice"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReportEndsBeforeACKAndProtectsFinishingReservation"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReportMissingConsumerPreservesCOWAndActualOwners"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReservedBackingChargesCurrentAndFutureRegistryBorrowers"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReservedGateRetryUsesImmutableGenerationAndNoLateDebit"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalReservedWholeInputRefusesBeforeConstructorEffects"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestStableTerminalWholeDBGroupRefusalBeforePublication"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenCallbackOriginNeverBecomesOwnedAfterScrub"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenCloneRefusalBalancesOriginalCreatorAndObservation"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenConcreteProviderBothClonePathsAfterOriginalOwnerClose"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenOperationReentrantReleaseAndCallbackPanicCustody"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenOperationReleaseWaitsForActualAdmittedAliases"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenOrdinaryMetadataAdmissionConcurrentRelease"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenPhaseOneKnownControlClasses"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenPhysicalCloneWithoutRegistryRetainsNilReleaseEnvironment"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "TestTokenSharedCloneWithoutRegistryRetainsNilReleaseEnvironment"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "TestTemplateCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "TestTemplateStoreCloseKeepsRealSnapshotWhileIteratorHeld"
+    ],
+    [
+      "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "TestStableTerminalStoragePreparedGateRetainsActualDebtAcrossSyncFailure"
+    ]
+  ],
+  "minimum_expected": 253,
+  "packages": [
+    {
+      "go_argument": "./TreeDB",
+      "import_path": "github.com/snissn/gomap/TreeDB",
+      "relative_dir": "TreeDB",
+      "tag": "TreeDB"
+    },
+    {
+      "go_argument": "./TreeDB/db",
+      "import_path": "github.com/snissn/gomap/TreeDB/db",
+      "relative_dir": "TreeDB/db",
+      "tag": "db"
+    },
+    {
+      "go_argument": "./TreeDB/pager",
+      "import_path": "github.com/snissn/gomap/TreeDB/pager",
+      "relative_dir": "TreeDB/pager",
+      "tag": "pager"
+    },
+    {
+      "go_argument": "./TreeDB/internal/residentcredit",
+      "import_path": "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+      "relative_dir": "TreeDB/internal/residentcredit",
+      "tag": "residentcredit"
+    },
+    {
+      "go_argument": "./TreeDB/internal/rootpublication",
+      "import_path": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "relative_dir": "TreeDB/internal/rootpublication",
+      "tag": "rootpublication"
+    },
+    {
+      "go_argument": "./TreeDB/internal/valuelog",
+      "import_path": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "relative_dir": "TreeDB/internal/valuelog",
+      "tag": "valuelog"
+    },
+    {
+      "go_argument": "./TreeDB/internal/dictdb",
+      "import_path": "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "relative_dir": "TreeDB/internal/dictdb",
+      "tag": "dictdb"
+    },
+    {
+      "go_argument": "./TreeDB/internal/templatedb",
+      "import_path": "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "relative_dir": "TreeDB/internal/templatedb",
+      "tag": "templatedb"
+    }
+  ],
+  "performance": false,
+  "platform": "linux/amd64",
+  "purpose": "functional_normal_race",
+  "regex": "^(?:(TestPager.*|TestResident.*|TestPublic(Close.*|PendingConstructor.*)|TestDB(FailedOpen.*|HeldSnapshot.*|Ghost.*|PagerJoin.*|PhysicallyClosed.*|PendingClose.*)|TestDBAndSnapshotStateToken.*|TestMinPinnedSnapshotCommitSeq.*|TestAcquireSnapshot.*|TestSnapshot.*|TestClosedDB.*|TestReadAPIsWhileClosing.*|TestRegisterCloseHook.*|TestStableIndexCallbackOriginalOnlyBothPublicClonePaths|TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility|TestStableIndexCallbackKnownEnvironmentClassPrepaid|TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge|TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects|TestTokenOperationReleaseWaitsForActualAdmittedAliases|TestTokenOperationReentrantReleaseAndCallbackPanicCustody|TestTokenConcreteProviderBothClonePathsAfterOriginalOwnerClose|TestTokenCallbackOriginNeverBecomesOwnedAfterScrub|TestBuilderDisposalCallbacksOutsideLinearIndexedAndViewGates|TestTokenCloneRefusalBalancesOriginalCreatorAndObservation|TestBuilderNestedViewMergeDisposalOutsideParentAndChildGates|TestTokenOrdinaryMetadataAdmissionConcurrentRelease|TestTokenPhaseOneKnownControlClasses|TestTokenSharedCloneWithoutRegistryRetainsNilReleaseEnvironment|TestTokenPhysicalCloneWithoutRegistryRetainsNilReleaseEnvironment|TestStableTerminalReportMissingConsumerPreservesCOWAndActualOwners|TestStableTerminalReportCleanupFailureHandoffNeverConsumesCOWTwice|TestStableTerminalReportEndsBeforeACKAndProtectsFinishingReservation|TestStableTerminalCandidateAbandonPreflightsActualClosureBeforeCOW|TestStablePreparedTransferExclusiveClosureAndCleanup|TestStablePreparedTransferSurvivingCloneRefusesIncompleteClosure|TestStableTerminalReservedGateRetryUsesImmutableGenerationAndNoLateDebit|TestStableTerminalReservedBackingChargesCurrentAndFutureRegistryBorrowers|TestStableTerminalReservedWholeInputRefusesBeforeConstructorEffects|TestStableTerminalWholeDBGroupRefusalBeforePublication|TestStableTerminalCommittedPartialDBCleanupKeepsOwnerAndCOWOnce|TestStableTerminalAliasRoleRejectedBeforeCreditAndPublication|TestStableTerminalStoragePreparedGateRetainsActualDebtAcrossSyncFailure|TestStableResource.*|TestCloneStableResource.*|TestBuilderMerge.*|TestMergeAppendOnly.*|TestStableMetadataNilClone.*|TestStableMetadataGenericSetClones.*|TestConsumedStableResourceUnion.*|TestEnqueueBuiltRejectsForeignReleased.*|TestTerminalDeleteReservationRefusesForeign.*|TestDurableCandidateSnapshot.*)|TestPrivatePointConstructorChurnAndPublicControlNoRefund|TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit|TestScanConstructorPrivateOriginAndUnownedRefusal|TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback|TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay|TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown|TestSnapshotOriginalCompletionCounterOnce|TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty|TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub|TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay|TestDictionaryCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture|TestDictionaryStoreCloseKeepsRealSnapshotWhileIteratorHeld|TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap|TestPrivateSnapshotBackingMalformedAndOverflowRefusal|TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose|TestStableBuilderCleanupPanicIsUncertainAndNotReplayed|TestStableBuilderNestedCleanupFailuresKeepBothActualOwners|TestStableCheckedTokenReentrantReleaseIsBusyAndRetryConsumesOnce|TestStableConcatCleanupPreservesCompleteChildErrorWithoutReplay|TestStableSetCheckedReleaseRetainsUnfinishedRoleAndSkipsConsumedToken|TestStableSetOperationAllowsReentrantStateButRefusesReleaseBeforeEffects|TestTemplateCaptureAddRefusalBalancesOriginalSnapshotAndCanRecapture|TestTemplateStoreCloseKeepsRealSnapshotWhileIteratorHeld)$",
+  "special_test_inventory": [
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB",
+      "sha256": "b52ec5b4d1c2485f57a9a3acb57a74b04504b71165c8da4884e0a64071357947",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/db",
+      "sha256": "06d4c247e4711980dfd6e83a5b3258fcd27ad6d56098797040741c7902ce22ce",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/db/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/dictdb",
+      "sha256": "37443add4f0f4b43e6465c3d135c9b92b787c4ae1db9077dfd3901fa4f7ddffd",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/dictdb/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/rootpublication",
+      "sha256": "e5bd1abf2b17b9f4652ba50d752839264394edcfcefce8c5dc6edf87a116f767",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/rootpublication/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/templatedb",
+      "sha256": "80024c558d140b9078fd7f964195e0ed873a0cdee180e1a238f15cf2c430493c",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/templatedb/leak_test.go"
+    },
+    {
+      "name": "FuzzDecodeFrame",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "22cca4651619d33e112e25fe407c96e7f920e9da5a0d0888a10006b4499cc81c",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/fuzz_decode_test.go"
+    },
+    {
+      "name": "FuzzValueLogDecodeMixedFrame",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "48852b0b1f5717a4f9f426d9ee14fc57604c6ee7823431af8e98e6430c078d97",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/valuelog_fuzz_test.go"
+    },
+    {
+      "name": "FuzzValueLogReader",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "48852b0b1f5717a4f9f426d9ee14fc57604c6ee7823431af8e98e6430c078d97",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/valuelog_fuzz_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/internal/valuelog",
+      "sha256": "0ae55389eaf6a08943f81d247508de0cda19309fa9b1a0b8da09cfd4b8c2bca8",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/leak_test.go"
+    },
+    {
+      "name": "TestMain",
+      "package": "github.com/snissn/gomap/TreeDB/pager",
+      "sha256": "a80b1f64a3e61babe364b37c0a0b249fa9561bd3ee5ad90f94a73a82a1487f40",
+      "source": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/pager/leak_test.go"
+    }
+  ],
+  "symlink_bindings": {
+    "/usr/bin/ar": "/usr/bin/x86_64-linux-gnu-ar",
+    "/usr/bin/as": "/usr/bin/x86_64-linux-gnu-as",
+    "/usr/bin/g++": "/usr/bin/x86_64-linux-gnu-g++-15",
+    "/usr/bin/gcc": "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "/usr/bin/ld": "/usr/bin/x86_64-linux-gnu-ld.bfd",
+    "/usr/bin/nm": "/usr/bin/x86_64-linux-gnu-nm",
+    "/usr/bin/objcopy": "/usr/bin/x86_64-linux-gnu-objcopy",
+    "/usr/bin/objdump": "/usr/bin/x86_64-linux-gnu-objdump",
+    "/usr/bin/pkg-config": "/usr/bin/pkgconf",
+    "/usr/bin/strip": "/usr/bin/x86_64-linux-gnu-strip"
+  },
+  "system_tools": {
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/bin/go": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/bin/gofmt": "f5b77505ba58bdbf60725592b1499c55f50c89b28757a02227165532a73f8545",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/asm": "dda91b31b0d42e710d70e714a50e80fef9f0be59f68996c52cce2a079ea3b29f",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/cgo": "cc9d80b92bde4fa35298d1d4dc67a2b68ebd6c54a483a2544e049c2783cea9d1",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/compile": "3bb421d581f60b9ab48c2c73adf5c018557e89af32ad018d9c4417afa4bf90c1",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/cover": "340c14bf8d21352f06b26707339b1ce0ad52da62327d61b78b05a3c9adce12cb",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/fix": "387261c80efae7590992e177e8bb091d61d8ade949a7954e770eb5b7a8e1df1e",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/link": "dac2c3179a6efe737181d79cda5e09b03c3df74df83bebd8864b5f0c61ef9cf3",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/preprofile": "9a03e0178c65a026724e8675da8e9a244cd1e8d99bba2b9bbbb20388ffe94c8b",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/vet": "cd69774e4d7559efbf3e52b105ad3f9b9806e9ada321d5a293d33941f2b33b06",
+    "/usr/bin/pkgconf": "33fe3cef13ad2e476c13416867bf0ba152423738ce299e03cdd3859aff780a91",
+    "/usr/bin/x86_64-linux-gnu-ar": "531473816bf553e863df5aab14c8177c72b732cf80c51dcf0fa990a50125041c",
+    "/usr/bin/x86_64-linux-gnu-as": "4e5fcaa3cdc160173cb5cfe7aa35dc39d7aa1f06ba8d75b8d923bbae5473991b",
+    "/usr/bin/x86_64-linux-gnu-g++-15": "e6718f7e0c7d057c3ff77b550c603da9bc4030e3ede3c053705acce1293dbe4d",
+    "/usr/bin/x86_64-linux-gnu-gcc-15": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88",
+    "/usr/bin/x86_64-linux-gnu-ld.bfd": "97f48d93b8b076a92d2809ec29dcb17f0f37c8827358f832255e2ed22fef6075",
+    "/usr/bin/x86_64-linux-gnu-nm": "f04262bf48192a7cbb78a17ca49ae03f8930b0372bd0115576f957b2e2a57a01",
+    "/usr/bin/x86_64-linux-gnu-objcopy": "05f4473d24f7330a9b13f43d007d619a2e792e33de453cd7533a2d97c30da770",
+    "/usr/bin/x86_64-linux-gnu-objdump": "44f07f8da860b15bd4dec909f229dec536595fb170a616fe3ab29c7b21c9736f",
+    "/usr/bin/x86_64-linux-gnu-strip": "4d2ca6ba80677c3b2975e328306a779cd7bd6590a87948b5ebea9c1b41a049c8",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1": "30510b346885152c4fce41d2b501751c95d3690b1c34eaa04ebb970e70eae620",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/cc1plus": "6f2b2c0e3fd32042eb2acace19a57fdb0b229d9c24cdd5e2cc100639c77e9ff0",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/collect2": "8ab5d946ba2c948e5ea5c91e25a104439302e0599a521785770d10690c565437",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/liblto_plugin.so": "2c272245c6b257d4ac2bdb01faaa9bbcfa8b62c43c952e07006dd30e098b1230",
+    "/usr/libexec/gcc/x86_64-linux-gnu/15/lto1": "562342f5e15d0f465e43d366b5450226a680271fc172a2a55df9e6955215f14c"
+  }
+}

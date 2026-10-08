@@ -1,0 +1,6 @@
+{
+  "artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/receipt.json": "c7f1b6e605216bb1f4606b37ddfb78e5ebfdcf2c650225a39e1adfa4627ede4a",
+  "artifacts/M23-phase2-fallback-custody-source-v1/independent-review01/receipt.json": "ee9b59f275f5a63faaae7516ae59e45ebf995ca02c8ccf5bd90d601ded5d675c",
+  "artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/receipt.json": "3e2a2eaae6a54a2cad1ec538aec32d01385faa1c17d494d0edbc542e9bcf15c7",
+  "state/M23-phase2-shared-clone-custody-selection-v1.json": "088c826abe52459b8650b68d180d718af90401b0b2bc5599da64d1495351a306"
+}

@@ -1,0 +1,64 @@
+{
+  "ROOT_fresh_full_source_actual_tool_join": {
+    "exit": 0,
+    "session": 76864
+  },
+  "ROOT_selected": true,
+  "accepted_inquiry": "artifacts/M23-online-vacuum-constructor-owner-inquiry01/inquiry.md",
+  "accepted_inquiry_receipt_sha256": "786793b66cf453b53f96c1778a986f4b12715a7d3fd982b5aa49861e7df87c82",
+  "allowed_docs": [
+    "TreeDB/docs/spec/recoverable-root-set-maintenance-3681.md",
+    "TreeDB/docs/spec/r1-row-lifecycle.md",
+    "TreeDB/docs/spec/verification.md"
+  ],
+  "allowed_production_paths": [
+    "TreeDB/db/vacuum_online.go",
+    "TreeDB/db/db.go",
+    "TreeDB/db/vacuum_constructor_custody_v1.go"
+  ],
+  "allowed_test_paths": [
+    "TreeDB/db/index_constructor_closure_v1_test.go",
+    "TreeDB/db/vacuum_online_swap_test.go",
+    "TreeDB/db/vacuum_online_legacy_test.go",
+    "TreeDB/db/vacuum_constructor_custody_v1_test.go"
+  ],
+  "at": "2026-10-08T18:17:44.188740+00:00",
+  "conditional_existing_paths": [
+    "TreeDB/db/pager_holder_lifetime.go",
+    "TreeDB/db/index_gen_db.go"
+  ],
+  "hard_boundaries": [
+    "No Go/format/Git/remote/runtime",
+    "No changes resource_set.go or other phase2 paths under independent review",
+    "No finite activation/full128MiB/performance claim",
+    "No global Owner/Pager API replacement, second metadata engine, format change or migration",
+    "If another production file is genuinely required, report exact causal seam before editing it"
+  ],
+  "node": 5113,
+  "parent": 5090,
+  "phase3_scoped_review_receipt_sha256": "922847d4cf403f9799f1a52a4f999b3aaba470a2561050d95629f07c7bb87107",
+  "prior_checkpoint": "artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02",
+  "prior_phase2_receipt_sha256": "788316ef94df978b549f79f3b02c00b1241549b1025f2e54983c67dbbbac3861",
+  "prior_phase2_scoped_review_receipt_sha256": "260fbb5705bfa435d5fd0d856020732b92081c17432703f3d9e77e7ba4b9aecd",
+  "required_behavior": [
+    "SAME installed concrete Owner; no new master, retrofit, registry or background queue",
+    "Borrow/admit before any stale-artifact unlink/Pager/File/generation children; missing/closing or pending exact custody refuses before effects",
+    "Owned Open partial nonnil holder+error retained, existing replacement mmap defaults unchanged",
+    "newConstructorIndexGen precharge before children/writer bind; preserve separate original generation Scopes and actual held readers",
+    "Preborn fixed DB intrinsic actual replacement custody, exact resource/runtime/handoff roles and namespace phase, all class changes actual separately rounded prebirth",
+    "One checked stop/join/resources/handoff/gen/Pager/namespace sequence; retain failed actual fields/cursors, retry no replay; no Close while actual runtime aliases remain",
+    "Do not execute waits or extensible callbacks under inherited maintenance/write/cleanup gates; real admission handoff/lifetime barrier preserves DB Close serialization",
+    "Successful cutover transfers exact roles once, old generation retained until real last reader/token/physicalclose",
+    "Rename uncertainty preserves real recovery files, poison is not cleanup completion",
+    "DB Close finishes admitted/pending replacement custody before namespace/master release and supports genuine retry",
+    "Fix phase3 early-fatal explicit reader/acquire hold with immediately installed consumed-flag cleanup; no synthetic unpin/successful Close",
+    "Preserve all existing test oracles/faults/finite refusal, add meaningful public vacuum/Close tests from inquiry, update owning docs"
+  ],
+  "scope_note": "Coherent production integration and checked failure custody, not constructor-only forwarding. Simplify existing cleanup defers into one original-owner sequence. Freeze exact full source + selected before/after + class/caller rationale+risk inventory when complete, then STOP for ROOT acceptance/runtime.",
+  "source_before_count": 10077,
+  "source_before_sha256": "7b1ffd5da22b9c0cd1807679533cc8b322eeb77e2b5501b96e1e9fcc9fa7ae83",
+  "status": "SOURCE_ONLY_IMPLEMENTATION_GRANTED",
+  "supersedes_paused_selection": "state/M23-online-vacuum-constructor-owner-selection-v1.json",
+  "worktree": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group",
+  "writer": "/root/m5093_transitive_ownership"
+}

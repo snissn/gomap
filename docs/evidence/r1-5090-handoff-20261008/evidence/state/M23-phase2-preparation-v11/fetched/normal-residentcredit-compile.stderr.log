@@ -1,0 +1,299 @@
+WORK=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685
+mkdir -p $WORK/b001/
+mkdir -p $WORK/b012/
+mkdir -p $WORK/b006/
+mkdir -p $WORK/b008/
+mkdir -p $WORK/b014/
+mkdir -p $WORK/b015/
+mkdir -p $WORK/b017/
+mkdir -p $WORK/b018/
+mkdir -p $WORK/b016/
+mkdir -p $WORK/b011/
+mkdir -p $WORK/b005/
+mkdir -p $WORK/b019/
+mkdir -p $WORK/b021/
+mkdir -p $WORK/b010/
+mkdir -p $WORK/b013/
+mkdir -p $WORK/b023/
+mkdir -p $WORK/b024/
+mkdir -p $WORK/b025/
+mkdir -p $WORK/b029/
+mkdir -p $WORK/b030/
+mkdir -p $WORK/b027/
+mkdir -p $WORK/b031/
+mkdir -p $WORK/b032/
+mkdir -p $WORK/b033/
+mkdir -p $WORK/b034/
+mkdir -p $WORK/b022/
+mkdir -p $WORK/b026/
+mkdir -p $WORK/b028/
+mkdir -p $WORK/b035/
+mkdir -p $WORK/b020/
+mkdir -p $WORK/b043/
+mkdir -p $WORK/b045/
+mkdir -p $WORK/b042/
+mkdir -p $WORK/b047/
+mkdir -p $WORK/b060/
+mkdir -p $WORK/b065/
+mkdir -p $WORK/b041/
+mkdir -p $WORK/b058/
+mkdir -p $WORK/b009/
+mkdir -p $WORK/b048/
+mkdir -p $WORK/b004/
+mkdir -p $WORK/b003/
+mkdir -p $WORK/b046/
+mkdir -p $WORK/b038/
+mkdir -p $WORK/b044/
+mkdir -p $WORK/b040/
+mkdir -p $WORK/b059/
+mkdir -p $WORK/b051/
+mkdir -p $WORK/b039/
+mkdir -p $WORK/b056/
+mkdir -p $WORK/b050/
+mkdir -p $WORK/b062/
+mkdir -p $WORK/b071/
+mkdir -p $WORK/b068/
+mkdir -p $WORK/b070/
+mkdir -p $WORK/b052/
+mkdir -p $WORK/b057/
+mkdir -p $WORK/b055/
+mkdir -p $WORK/b067/
+mkdir -p $WORK/b049/
+mkdir -p $WORK/b063/
+mkdir -p $WORK/b037/
+mkdir -p $WORK/b054/
+mkdir -p $WORK/b036/
+mkdir -p $WORK/b126/
+mkdir -p $WORK/b053/
+mkdir -p $WORK/b002/
+mkdir -p $WORK/b069/
+mkdir -p $WORK/b072/
+mkdir -p $WORK/b066/
+mkdir -p $WORK/b064/
+mkdir -p $WORK/b073/
+mkdir -p $WORK/b074/
+mkdir -p $WORK/b061/
+mkdir -p $WORK/b125/
+cat >/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b125/importcfg << 'EOF' # internal
+# import config
+packagefile errors=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cd/cd19b2f9ca8697d522cf9ac228edd5f76f95015c244c62eeaf0e79ee2c046112-d
+packagefile github.com/snissn/gomap/TreeDB/internal/allocclass=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/65/65c5c41e57de38cbcb34b4b3a226e928a58f56754efa8bc765ebdecd41008f37-d
+packagefile math=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/63/639c2cf5d12e171d4b507550163b9930a4de2e18666076ad382a2cef434e9db8-d
+packagefile sync=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/50/5039f98be9557070d7349f15edfef4e0a92c8063aaad5c105d381276e8a036d9-d
+packagefile testing=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/fd/fd0a5336ae4307840c9980cbb501d3def99d43f20dfc1a89fcc1d9dcb3e023ac-d
+packagefile errors=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cd/cd19b2f9ca8697d522cf9ac228edd5f76f95015c244c62eeaf0e79ee2c046112-d
+packagefile github.com/snissn/gomap/TreeDB/internal/allocclass=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/65/65c5c41e57de38cbcb34b4b3a226e928a58f56754efa8bc765ebdecd41008f37-d
+packagefile math=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/63/639c2cf5d12e171d4b507550163b9930a4de2e18666076ad382a2cef434e9db8-d
+packagefile sync=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/50/5039f98be9557070d7349f15edfef4e0a92c8063aaad5c105d381276e8a036d9-d
+packagefile sync/atomic=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/79/79fdab5b079cfefcaa14ebf32c9f73679d5564f772618edb28c35139a7cfbd06-d
+EOF
+cd /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11
+/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/compile -o $WORK/b125/_pkg_.a -trimpath "$WORK/b125=>" -p github.com/snissn/gomap/TreeDB/internal/residentcredit -lang=go1.26 -complete -buildid uuox1Unk_u39t5lj7Iev/uuox1Unk_u39t5lj7Iev -goversion go1.26.3 -c=4 -nolocalimports -importcfg $WORK/b125/importcfg -pack ./TreeDB/internal/residentcredit/owner.go ./TreeDB/internal/residentcredit/ordinary_retained_lifetime_v1_test.go ./TreeDB/internal/residentcredit/owner_test.go ./TreeDB/internal/residentcredit/owns_scope_test.go ./TreeDB/internal/residentcredit/private_snapshot_backing_v1_test.go
+go tool buildid -w $WORK/b125/_pkg_.a # internal
+cp $WORK/b125/_pkg_.a /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/39/399178191da656a5711564b041e0b31eb2ad7b159af60d2c460d67fcaece79a7-d # internal
+cat >/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b001/importcfg << 'EOF' # internal
+# import config
+packagefile os=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/13/13e77b40e0c15c949f345b079a4320423a4b832416ebb84bf709454ea52cf042-d
+packagefile reflect=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/a2/a2de0a18f4a748c5d75d667594189cb165a73f5d1404677100196340824afbe8-d
+packagefile testing=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/fd/fd0a5336ae4307840c9980cbb501d3def99d43f20dfc1a89fcc1d9dcb3e023ac-d
+packagefile testing/internal/testdeps=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/5f/5f23989630b1b948c6e3882c484060deabd4f922f795b038206112a3abe56e1a-d
+packagefile runtime=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f0/f079fd401e0d029ec52f840cd4bfd579b3822bccc00afee80f234e2b7b728ad5-d
+packagefile github.com/snissn/gomap/TreeDB/internal/residentcredit=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b125/_pkg_.a
+EOF
+/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/compile -o $WORK/b001/_pkg_.a -trimpath "$WORK/b001=>" -p main -lang=go1.26 -complete -buildid sNPKiRmmdUVpiLHf4D0E/sNPKiRmmdUVpiLHf4D0E -goversion go1.26.3 -c=4 -nolocalimports -importcfg $WORK/b001/importcfg -pack $WORK/b001/_testmain.go
+cat >/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b125/vet.cfg << 'EOF' # internal
+{
+	"ID": "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+	"Compiler": "gc",
+	"Dir": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/residentcredit",
+	"ImportPath": "github.com/snissn/gomap/TreeDB/internal/residentcredit",
+	"GoFiles": [
+		"/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/residentcredit/owner.go",
+		"/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/residentcredit/ordinary_retained_lifetime_v1_test.go",
+		"/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/residentcredit/owner_test.go",
+		"/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/residentcredit/owns_scope_test.go",
+		"/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/residentcredit/private_snapshot_backing_v1_test.go"
+	],
+	"NonGoFiles": [],
+	"IgnoredFiles": [],
+	"ModulePath": "github.com/snissn/gomap",
+	"ModuleVersion": "",
+	"ImportMap": {
+		"errors": "errors",
+		"github.com/snissn/gomap/TreeDB/internal/allocclass": "github.com/snissn/gomap/TreeDB/internal/allocclass",
+		"math": "math",
+		"sync": "sync",
+		"sync/atomic": "sync/atomic",
+		"testing": "testing",
+		"unsafe": "unsafe"
+	},
+	"PackageFile": {
+		"errors": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cd/cd19b2f9ca8697d522cf9ac228edd5f76f95015c244c62eeaf0e79ee2c046112-d",
+		"github.com/snissn/gomap/TreeDB/internal/allocclass": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/65/65c5c41e57de38cbcb34b4b3a226e928a58f56754efa8bc765ebdecd41008f37-d",
+		"math": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/63/639c2cf5d12e171d4b507550163b9930a4de2e18666076ad382a2cef434e9db8-d",
+		"sync": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/50/5039f98be9557070d7349f15edfef4e0a92c8063aaad5c105d381276e8a036d9-d",
+		"sync/atomic": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/79/79fdab5b079cfefcaa14ebf32c9f73679d5564f772618edb28c35139a7cfbd06-d",
+		"testing": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/fd/fd0a5336ae4307840c9980cbb501d3def99d43f20dfc1a89fcc1d9dcb3e023ac-d"
+	},
+	"Standard": {
+		"errors": true,
+		"math": true,
+		"sync": true,
+		"sync/atomic": true,
+		"testing": true,
+		"unsafe": true
+	},
+	"PackageVetx": {
+		"errors": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855-d",
+		"github.com/snissn/gomap/TreeDB/internal/allocclass": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855-d",
+		"math": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855-d",
+		"sync": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855-d",
+		"sync/atomic": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e3/e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855-d",
+		"testing": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/13/132f05341bf64f480c4028f75f54882ac9df66713cd5c6ed2b4cb38c2b3c7ebf-d"
+	},
+	"VetxOnly": false,
+	"VetxOutput": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b125/vet.out",
+	"Stdout": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b125/vet.stdout",
+	"GoVersion": "go1.26",
+	"FixArchive": "",
+	"SucceedOnTypecheckFailure": false
+}
+EOF
+cd /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/residentcredit
+TERM='dumb' /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/vet -atomic -bool -buildtags -directive -errorsas -ifaceassert -nilfunc -printf -slog -stringintconv -tests $WORK/b125/vet.cfg
+go tool buildid -w $WORK/b001/_pkg_.a # internal
+cp $WORK/b001/_pkg_.a /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/b5/b51ec07ce5b956d051b8f0a5ae9fb8d7e2538353c4720f466308062ba21ce822-d # internal
+cat >/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b001/importcfg.link << 'EOF' # internal
+packagefile github.com/snissn/gomap/TreeDB/internal/residentcredit.test=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b001/_pkg_.a
+packagefile os=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/13/13e77b40e0c15c949f345b079a4320423a4b832416ebb84bf709454ea52cf042-d
+packagefile reflect=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/a2/a2de0a18f4a748c5d75d667594189cb165a73f5d1404677100196340824afbe8-d
+packagefile testing=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/fd/fd0a5336ae4307840c9980cbb501d3def99d43f20dfc1a89fcc1d9dcb3e023ac-d
+packagefile testing/internal/testdeps=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/5f/5f23989630b1b948c6e3882c484060deabd4f922f795b038206112a3abe56e1a-d
+packagefile runtime=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f0/f079fd401e0d029ec52f840cd4bfd579b3822bccc00afee80f234e2b7b728ad5-d
+packagefile github.com/snissn/gomap/TreeDB/internal/residentcredit=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/tmp/go-build3157410685/b125/_pkg_.a
+packagefile errors=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cd/cd19b2f9ca8697d522cf9ac228edd5f76f95015c244c62eeaf0e79ee2c046112-d
+packagefile internal/bytealg=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/5e/5eef5ac1098ec03f14b196bfa6b845dfcd529b65f4ff7c283929b86a3e5aefc5-d
+packagefile internal/byteorder=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f0/f0df8a07ff7c5d6d4679bbf9930fc31379de1c3921d9f6b9dfafc2e26ead1d65-d
+packagefile internal/filepathlite=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/8d/8d256e631115e5e3dd30cfdddd363aa7152ede758310f11f5420ac4ffa52ba1d-d
+packagefile internal/goarch=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/7f/7fcb14549a31451046b23d2d8ef96ac15e73c92a5d7e25bded7f0f7d1a516646-d
+packagefile internal/poll=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ab/abade280631a55d626c2744bbc8cd4f74a478a7dcd980267a517c20186fe3b9e-d
+packagefile internal/strconv=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/4f/4fc5827adf5acef50829824cee744b89d6c6831379137f7480b163152162fd69-d
+packagefile internal/stringslite=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/7a/7a85fccee7d424662b59b83fedaab9b61f59751c2ee85e0cf386028141382ad2-d
+packagefile internal/syscall/execenv=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cc/ccdd4ea7dac07a3a784b22692bf28843d8cb30830a0b0fba0c8ff56c6c46a840-d
+packagefile internal/syscall/unix=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/fe/fec8a750f7424b3b4f30f475fb749a5aa4e2d12d0bf37e931d4d77c2226a780b-d
+packagefile internal/testlog=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/5b/5b7c1edc2e0632790ff69934616d6562de3c110b5dd51c607106acd5695dc128-d
+packagefile io=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/37/372d656eae2853e18a584c290fc9a44ddeb97aa13f51ef8a5ce4ed248ccfb50b-d
+packagefile io/fs=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/10/1021f1a457d64a1e3c5727a0a808d609dd3d6bd55ff1fee34bfdd0650cbcf5e5-d
+packagefile slices=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/4d/4dccd7f7bea7e0c60a957b6108835d6b3cc12dcb270ea193247a3efa6f0b357a-d
+packagefile sync=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/50/5039f98be9557070d7349f15edfef4e0a92c8063aaad5c105d381276e8a036d9-d
+packagefile sync/atomic=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/79/79fdab5b079cfefcaa14ebf32c9f73679d5564f772618edb28c35139a7cfbd06-d
+packagefile syscall=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e1/e13667d677958a25fad5dad0c7e03c3b15cd882f43bbeeb96214d3bc8aab61a2-d
+packagefile time=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/dd/dde96ac71c4e281c4292f9ee4af84ee7ade9df9791d4262c130c53781bb3898a-d
+packagefile internal/abi=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/58/588c38196db6a26868bc683aea5aab48caaf62c60b88485034059ec7a683d936-d
+packagefile internal/race=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/a1/a1dd3af2807379d04f7e14e1b37a0b5c40e41f1b77e7a49d6a086db6bd354663-d
+packagefile internal/runtime/maps=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/6c/6c5dbfccba387da95f6c7510917e5a64267382d673e234e472b7226a1c2c6f13-d
+packagefile internal/runtime/sys=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/d2/d2542e9311fcd359c594484e9c8297d37efc88d0c4934849e6f91dd1c9485b47-d
+packagefile internal/unsafeheader=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/d8/d859ab6fa8cf4a4715bee364d885819dad47dd6a94710ae256b41e5ae9aeeb8b-d
+packagefile iter=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/d3/d3651c1e1ffe195b5ed62cc8626faefff14dd17846c188d497c038e711a41468-d
+packagefile math=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/63/639c2cf5d12e171d4b507550163b9930a4de2e18666076ad382a2cef434e9db8-d
+packagefile strconv=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/c6/c672a57e2e7083e6b135a9c5fcbe8136e9ce231cd2ca2f70c9ce395fe6348948-d
+packagefile unicode=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/11/11472475e9cc2e910f513f3177392fa4a0cc3ce10b9049fd53d27a741bacb0c3-d
+packagefile unicode/utf8=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e0/e08589e66e6108ad0f1bb21d426152796933b29ed83ad73ae17d0d7a5a6d4419-d
+packagefile bytes=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/33/33907fe39c4d3b687c819bd6d2267dff89629c428e297643a7aa934fe975860d-d
+packagefile context=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/26/26e8f1c6bdd39da88f0c5bb7fe196a7462710a79a76cc6c221d8daa92ff59f70-d
+packagefile flag=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/84/84dddb7365f39eda26e024e7a3b3ba09c3ed036ec41e5cefb04b880feb875f1e-d
+packagefile fmt=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/11/11e672379b149be096605cc6cdb2fefee36617d20446c234167768562d84ebd0-d
+packagefile internal/sysinfo=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ec/ecd7c7d4f132a1543b14154fe238cb9be4e584f13046cbab2975064e0bf7af9d-d
+packagefile math/rand=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/0c/0c3921ae99dc9041af497958abd8198b023f06932cd166a0863125dd062b3c1d-d
+packagefile path/filepath=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/79/799adba274504173d114386c5f61061b1cc5712f8b75e82f4f60a7328caa50d5-d
+packagefile runtime/debug=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/bc/bc598312781f6b084c361a351dd6a55aa037d92b62e12795ca568c45bbe5e270-d
+packagefile runtime/trace=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/34/3468d62bf9bc1cf2c7ae18b7aa570e32f041c5cb3b2e546c901095d6f0494736-d
+packagefile strings=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/20/20a82762ee38320131cd2a5541395a51e990b6bc4b26c1de3a9551f89ca4e8c3-d
+packagefile bufio=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/29/295bd53d0466abb9270b69f823c196cc8a79aa6d9155b84b879fda974823f0de-d
+packagefile internal/fuzz=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f2/f2cf96e0ed8568cce5ea1899fbfb94d6603af7b626bf9b91b5feecd9c3995e53-d
+packagefile os/signal=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ae/ae92c86ead5934c29babbfef5a973ff4af8ac050cf80c41fe3ee4ce63b76704f-d
+packagefile regexp=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/70/70fc5dbc18e9c747030d3bddcee1f25dc4cf1ff815a4758403cc5774b0d1e92c-d
+packagefile runtime/pprof=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f3/f3ce64fa3e29a888f2e8ba0d3655d2801faa85768fb4f6856378f8c384be7f4d-d
+packagefile internal/chacha8rand=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/98/98ed77f9dc0804972587e0e4e01ab22010b197d47a1eea09b2117b7759f9db01-d
+packagefile internal/coverage/rtcov=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/7d/7dfdb5f818c5b4f279364d9f54aaf96753bdcaf2ea30f0426f5a9df5dbed1685-d
+packagefile internal/cpu=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/aa/aa2d0bdf5d5e67ded00c6d39ef9e209eefa5b909e096652f8322fd8b914e8c29-d
+packagefile internal/godebugs=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ef/ef2d03c4e918017ddc26fc21e80f6d75efe12dd1c27c889d118f0a84e264449a-d
+packagefile internal/goexperiment=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/c6/c676c62ce35e0f8c711dff6711c34d1829700a8780373190d442422fe5181618-d
+packagefile internal/goos=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/17/1774b1e808b47c3e85b157ccd602577572cb300095a8905c85504f38033eb796-d
+packagefile internal/profilerecord=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/c0/c0b25648b6cb5015f86ace69ca66d31c46cd4f99bb2f4ae2d24f60d5ed28e1f3-d
+packagefile internal/runtime/atomic=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/0f/0f4dfa831cb53107faa55c781373c490c63eb2005d87bb2a2b28c3f3745ee9c3-d
+packagefile internal/runtime/cgroup=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/4e/4eec68bc0ed4832c5434a32b3b16e544bd986b533ebaed739335519747636f98-d
+packagefile internal/runtime/exithook=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/4d/4d1bf701793d3ffba95b94b07e1b5d1581acf330c804659210031cd197a6ee56-d
+packagefile internal/runtime/gc=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cd/cde71a4149da1d915cafee5291b479b2a0579e88b46ee3d049131937540b58f5-d
+packagefile internal/runtime/gc/scan=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/27/27e766f33e4446d8b330a69a0a432b9908d06a7d3c95e913ea416486803623b8-d
+packagefile internal/runtime/math=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/1d/1dceddea9265f8b7ed93e1c2fd01c8b66450f309014b15cb53dcf73414089415-d
+packagefile internal/runtime/pprof/label=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/b0/b01334ebe91ca292a3eb5ef657923ffd93ac3ed6fc62199119d053b4d7e9a4c5-d
+packagefile internal/runtime/syscall/linux=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/d6/d6c593b43343b8e09673a608207320c39816ca34779f2e363fc4bbeb351da6d6-d
+packagefile internal/trace/tracev2=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/51/514fca6be0fb1f57ae098642ba904a0d828fdababc4ab95144d924e4ecf7c439-d
+packagefile math/bits=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/45/455f5bae67c929d21ddc119c139306debcb446a5b4e8ef4826651e3f4cecb303-d
+packagefile github.com/snissn/gomap/TreeDB/internal/allocclass=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/65/65c5c41e57de38cbcb34b4b3a226e928a58f56754efa8bc765ebdecd41008f37-d
+packagefile internal/reflectlite=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/87/87cc5c783350401db91afff742c4e977b7d965051de5d356908321b1c2dae6a5-d
+packagefile internal/oserror=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/38/386981595c345c701cc3f07a3c64cf86e6bd301fb260952da8b8f41193e2c608-d
+packagefile path=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/0c/0c0e5589bbd0f26639b415f34769e8988d621b681abecb272387fae6b6a1c50f-d
+packagefile cmp=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/1c/1cd655301e7210d5b9c58939b253fc1c0e404612391539e0985a67c5bde37c18-d
+packagefile internal/sync=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/05/05effda59227695a4265d644f98443a220413cbe95001e86470ec0b94ba6f1fa-d
+packagefile internal/synctest=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/4e/4e43e7cba11f5d4fb852d1d036578e7cfea666c59dd8f11fed1536852b51becc-d
+packagefile internal/asan=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/53/53757863fe778d0dd54b0af0ba975d8bee61d1761597290deac6b9e4ca290705-d
+packagefile internal/msan=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/4a/4a3f31b4d078fd09f0b9f24ba844fa6d1bfa7106c22c3b769b910d385f1dd017-d
+packagefile internal/godebug=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/9b/9b2c5a164780f0a7a47b625108b571485ab2c5228c280bdcd7cb046907ae7328-d
+packagefile encoding=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/dc/dc914ded9e2dc2eeb7126eefe471458dc35ac8928338ab2a8c7b64b94d1c2f49-d
+packagefile internal/fmtsort=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ab/abf8362809156f4d06fb7a463a4b4458e6d905fba6c801e0d42a0755d366356a-d
+packagefile crypto/sha256=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/7a/7a9e0d5c6d6bd6517b5231211fb0ac78014e6f3b15fcb45e08cb5c1f0ee3c29a-d
+packagefile encoding/binary=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/78/78642b1978df01907164d59421d26e0d3055d38872461818513207e4657e8b2c-d
+packagefile encoding/json=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cf/cf04a7be20157fa0e3edefd46985f257984aeb78d3425d4d307b5e5fe09a78e5-d
+packagefile go/ast=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/89/89819ddc9a138fdc0c3de2f97741f1ccbc96bcf0634565d33d910165cc40320f-d
+packagefile go/parser=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f2/f2c1d0247658d0255544a8e1d914d30d73956d9c165a714d0593700a85fbeb95-d
+packagefile go/token=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/87/8794f4b44f69dc3b250c84e8362260d1dbcfe531e858557f2549f5c764494614-d
+packagefile os/exec=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/d1/d1ec1c3fc7ac01bb0ce28924dce2bd43e3686b5e01cd8cd0bab069e20a7f7a4e-d
+packagefile regexp/syntax=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/db/db0b3b33f55aa8a50e7b03bc0e3c4ca2b8119971e48df90df8d600858266c5eb-d
+packagefile compress/gzip=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/05/059ce01100d6c29db84abd4445fb6946771074e0f6addd882ad5bcd2f1907eb0-d
+packagefile sort=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/7b/7b8fb9bddab4e3faf81c1597f6d910a21f13adef191bf7de1f7c3f3570777883-d
+packagefile text/tabwriter=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/3b/3b0500e3b6e33b335e08e49bca847ad16080985daf4cbb9261e538bd2854dafe-d
+packagefile internal/bisect=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/a3/a384bb9f75473d43c536aee9dceb999973a61298b1d464fe6b2f1e1857c76376-d
+packagefile crypto=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/c0/c0b7461653bacfb09fedb8634b263c242e10538c81a3bac1c2b7d979e81119d2-d
+packagefile crypto/internal/boring=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ec/ec2eea5cab7e5cc5f366840ee7958bfc431e5de8fc276504ab42e9a73149aa0f-d
+packagefile crypto/internal/fips140/sha256=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/96/9607f39e658a28dcb06ee23c49b0db15f1e9f47e228e8ca5af038c0c213ced92-d
+packagefile hash=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ba/ba20356c2fe929a110830c54c4615d0438734f02971acf85a6c1d78d0ae59e45-d
+packagefile encoding/base64=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/32/32e0f8a76c93548f389ec28a907e1390ec32beba4f957102ff47cb1c6902873d-d
+packagefile unicode/utf16=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/3c/3ccd4cfdb69cf4328fbf1cbd509e5b8220a8fe5563370b8ebf68c7dbad87ce60-d
+packagefile go/scanner=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/5a/5a9ea9a1f3f3501b418ee9cadb2a9503ace9f3a913c1c247d208ea6a8e1b537a-d
+packagefile go/build/constraint=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/3b/3bfe3b7df13ae56faebdf60845e9a2d79362459af0fe242257693e10126dac3d-d
+packagefile go/internal/scannerhooks=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/51/511958fe6deb480460d67015789486ee6250393cef33e0f5659d4812a4f1dc02-d
+packagefile compress/flate=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/d5/d5da552b5d7b5a3097c360fb1633ddcd70e5471facc0b31024f4515485280931-d
+packagefile hash/crc32=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/b0/b0cd0e8f709fffdcf6c6a952d88e74dff55a8488142040cedfa9b2a5624a5362-d
+packagefile crypto/cipher=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/98/98b2179874f9707fa475e8ec883b07eb8405c0293dc0425bfdbbc3e009418178-d
+packagefile crypto/internal/boring/sig=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f7/f738068b33d1c25ba914c575c46c35fe857672468bfe41567fb1c1c539e04988-d
+packagefile crypto/internal/fips140=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/ca/cad8d6e86477c46c0955f10adbce60cf63aba681f1ae6e5dd5559c877881d9ae-d
+packagefile crypto/internal/fips140deps/byteorder=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/7f/7fb3a4ca38ab694e81fb1c602b457d3480c3a6268e395896727f7026ed898b72-d
+packagefile crypto/internal/fips140deps/cpu=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/c0/c0435a4156f4c940081fdc6b36ba7cdfa006126500162fcc92549e70887353b7-d
+packagefile crypto/internal/impl=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/fa/fa3eb64f52c4f0ab1085a439844db974ed26e192227825abccea486bf93a88d0-d
+packagefile crypto/internal/fips140/aes=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/68/6888934d436522e1246029d30ea7a7d0022ede67bae5e46290a411c22be7ffde-d
+packagefile crypto/internal/fips140/aes/gcm=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/70/70d6fd2bd7757ffb0455da01103947da2948bd81bcac7031f00923c4a87e4f47-d
+packagefile crypto/internal/fips140/alias=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/aa/aa90b35105579bc7e6ee135b3195afbfb31fd2e60595b4d57b32b357add17c53-d
+packagefile crypto/internal/fips140only=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/8f/8f11a20384bdd9fe9cca26bf34c063e0c35723d0d35a0498c029c630e2da0332-d
+packagefile crypto/subtle=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/95/9537e8c4c8e37826abfccea195eca51ff33083715820b7c6d8cd52339ef3af01-d
+packagefile crypto/internal/fips140deps/godebug=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/43/43b18ef08d029f88936090dc8937ea1bb0f78c3dc2fb49a812a3006f6ba01a15-d
+packagefile crypto/internal/fips140/check=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/f0/f0f70357607dcff46d1db50941a0e863b5a65a49f79b22115b4d959a40f106a6-d
+packagefile crypto/internal/fips140/subtle=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/16/16bf316055f25027e94607ce1465522630710733d21409bb3d48df68f3be5341-d
+packagefile crypto/internal/fips140/drbg=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/77/772c754aee6edd884c9d60417cc27d99e516dea85bdd283acf54779f6d56b4aa-d
+packagefile crypto/fips140=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/fd/fd7d30a383a2effe14c8e12a5e6d6ea03dd693b626a42543734ba3c07c55bccd-d
+packagefile crypto/internal/fips140/sha3=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/b0/b0e8d3265a300e2b49624e0cd2078b18fc0735ad29b81c6f73201219000e453a-d
+packagefile crypto/internal/fips140/sha512=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/c0/c031b383bca27cf0d88fd25024966b5fba33ffd651ac9dd6a30cc52691f1ea52-d
+packagefile crypto/internal/constanttime=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/60/60ed1582b34a5cc57352796a685ef75891e097b8d608d8a1dbe3f1b657bc738e-d
+packagefile crypto/internal/fips140/hmac=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/6f/6fc3e72d38f33dac54ff3daec4b4187eb291ea9fca571a9d90a97637c18a875e-d
+packagefile crypto/internal/entropy/v1.0.0=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/e5/e53fa6531ac902a7816896820e49c328e16c81b38e6a2ea61b67d8b3ed49fa19-d
+packagefile crypto/internal/sysrand=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/a0/a0e40d5d4d434916ada381fa77fe4177431f215486ed597ce52be8e83f0a16e7-d
+packagefile crypto/internal/fips140deps/time=/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/cache/go-build/cb/cb30ffe0789e27036030815aff5889b481ecfade044f17f79fe257bde79177ed-d
+modinfo "0w\xaf\f\x92t\b\x02A\xe1\xc1\a\xe6\xd6\x18\xe6path\tgithub.com/snissn/gomap/TreeDB/internal/residentcredit.test\nmod\tgithub.com/snissn/gomap\t(devel)\t\nbuild\t-buildmode=exe\nbuild\t-compiler=gc\nbuild\tCGO_ENABLED=1\nbuild\tCGO_CFLAGS=\"-O2 -g\"\nbuild\tCGO_CPPFLAGS=\nbuild\tCGO_CXXFLAGS=\"-O2 -g\"\nbuild\tCGO_LDFLAGS=\"-O2 -g\"\nbuild\tGOARCH=amd64\nbuild\tGOOS=linux\nbuild\tGOAMD64=v1\n\xf92C1\x86\x18 r\x00\x82B\x10A\x16\xd8\xf2"
+EOF
+cd .
+GOROOT='/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3' /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/toolchain/go1.26.3/pkg/tool/linux_amd64/link -o $WORK/b001/residentcredit.test -importcfg $WORK/b001/importcfg.link -buildmode=exe -buildid=LB4tSXd9Mt00MUW1uKIh/sNPKiRmmdUVpiLHf4D0E/xYXqtEMGX8ffIEtk7DPB/LB4tSXd9Mt00MUW1uKIh -X testing.testBinary=1 -extld=/usr/bin/gcc $WORK/b001/_pkg_.a
+go tool buildid -w $WORK/b001/residentcredit.test # internal
+mkdir -p /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/state/M23-phase2-functional-v11/binaries/normal/
+mv $WORK/b001/residentcredit.test /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/state/M23-phase2-functional-v11/binaries/normal/residentcredit.test
+rm -rf $WORK/b001/

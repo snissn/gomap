@@ -1,0 +1,5 @@
+{"Action":"start","Package":"github.com/snissn/gomap/cmd/collection_workload_bench"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1LeafDefaultRolloverDiscovery5098\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1LeafDefaultFixedEpochs5098\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"TestR1SDefaultStoragePreflight5098\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/cmd/collection_workload_bench"}

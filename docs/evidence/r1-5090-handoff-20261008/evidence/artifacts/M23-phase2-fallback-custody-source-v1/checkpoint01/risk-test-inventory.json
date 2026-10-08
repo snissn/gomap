@@ -1,0 +1,24 @@
+{
+  "execution": "NOT RUN: SOURCE ONLY",
+  "existing_nested_failure_panic_and_checked_custody_tests": "resource_cleanup_custody_v1_test.go remains exact",
+  "mandatory_existing_five": [
+    "TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks",
+    "TestMergeAppendOnlyLogicalObligationsAmbiguousPhysicalCandidatesUseExactFallback",
+    "TestMergeAppendOnlyLogicalObligationsCrossKindCollisionUsesExactFallback",
+    "TestMergeAppendOnlyLogicalObligationsRepresentativeReplacementUsesExactFallback",
+    "TestStableLogicalObligationPackedAliasCertificationKeepsExactMerge4371"
+  ],
+  "mandatory_pretransfer_controls": [
+    "TestMergeAppendOnlyLogicalObligationsLateMixedConflictLeavesInputsUnchanged",
+    "TestMergeAppendOnlyLogicalObligationsRejectsLogicalConflictBeforePhysicalCoalesce",
+    "TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371"
+  ],
+  "new_top_names": [
+    "TestStableNestedAddCleanupWaitsForOuterGates",
+    "TestStableNestedFlatTransferKeepsDestinationPendingDebt",
+    "TestStableAppendFallbackPendingOriginalRolesRetryWithoutReplay",
+    "TestStableAppendFallbackConflictPreservesOriginalCleanupRoles",
+    "TestStableViewCollisionAddAllowsReentrantAddAfterOuterUnlock"
+  ],
+  "no_changed_or_excluded_existing_tests": true
+}

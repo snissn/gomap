@@ -1,0 +1,85 @@
+{
+  "duplicate_outcomes": 0,
+  "fails": 0,
+  "named_pass": 38,
+  "packages": [
+    {
+      "duplicate_outcomes": 0,
+      "fails": 0,
+      "named_pass": 16,
+      "package": "github.com/snissn/gomap/TreeDB/caching",
+      "skips": 0,
+      "top_pass": 6,
+      "top_tests": [
+        [
+          "github.com/snissn/gomap/TreeDB/caching",
+          "TestLeafLogStatsExposeWorker65"
+        ],
+        [
+          "github.com/snissn/gomap/TreeDB/caching",
+          "TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations"
+        ],
+        [
+          "github.com/snissn/gomap/TreeDB/caching",
+          "TestPhysicalValueLogWriterStatsExposeInventoryAbove64"
+        ],
+        [
+          "github.com/snissn/gomap/TreeDB/caching",
+          "TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct"
+        ],
+        [
+          "github.com/snissn/gomap/TreeDB/caching",
+          "TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity"
+        ],
+        [
+          "github.com/snissn/gomap/TreeDB/caching",
+          "TestThresholdRotationStatsCountInstalledRotationOnly"
+        ]
+      ]
+    },
+    {
+      "duplicate_outcomes": 0,
+      "fails": 0,
+      "named_pass": 22,
+      "package": "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "skips": 0,
+      "top_pass": 8,
+      "top_tests": [
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestR1SExposureFixtureShape5098"
+        ],
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestR1SExposureInvalidInputNoMutation5098"
+        ],
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestR1SExposurePayloadDeterminismAndHeldAlias5098"
+        ],
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestR1SExposureScheduleCoverage5098"
+        ],
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestR1SExposureTypedRetainedJSONAndOracle5098"
+        ],
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestS5098PhysicalEpochRejectsIncompleteDeclaredInventory"
+        ],
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestS5098PhysicalEpochRejectsMissingLateWorkerRegressionAndBadIdentity"
+        ],
+        [
+          "github.com/snissn/gomap/cmd/collection_workload_bench",
+          "TestS5098PhysicalEpochRequiresAllWritersAndFreshReopenBaseline"
+        ]
+      ]
+    }
+  ],
+  "skips": 0,
+  "top_pass": 14
+}

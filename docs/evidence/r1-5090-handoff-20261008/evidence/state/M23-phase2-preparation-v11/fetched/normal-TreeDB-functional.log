@@ -1,0 +1,179 @@
+{"Action":"start","Package":"github.com/snissn/gomap/TreeDB"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicCloseDropsLifecycleGateAndRefusesReentrantCloseRead"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicCloseDropsLifecycleGateAndRefusesReentrantCloseRead","Output":"=== RUN   TestPublicCloseDropsLifecycleGateAndRefusesReentrantCloseRead\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicCloseDropsLifecycleGateAndRefusesReentrantCloseRead","Output":"--- PASS: TestPublicCloseDropsLifecycleGateAndRefusesReentrantCloseRead (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicCloseDropsLifecycleGateAndRefusesReentrantCloseRead"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicPendingConstructorRetainsActualChildOnCloseError"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicPendingConstructorRetainsActualChildOnCloseError","Output":"=== RUN   TestPublicPendingConstructorRetainsActualChildOnCloseError\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicPendingConstructorRetainsActualChildOnCloseError","Output":"--- PASS: TestPublicPendingConstructorRetainsActualChildOnCloseError (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestPublicPendingConstructorRetainsActualChildOnCloseError"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotGetManyViewClosedSnapshotBoundary"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotGetManyViewClosedSnapshotBoundary","Output":"=== RUN   TestSnapshotGetManyViewClosedSnapshotBoundary\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotGetManyViewClosedSnapshotBoundary","Output":"--- PASS: TestSnapshotGetManyViewClosedSnapshotBoundary (0.11s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotGetManyViewClosedSnapshotBoundary"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites","Output":"=== RUN   TestAcquireSnapshot_IncludesCachedWrites\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites","Output":"--- PASS: TestAcquireSnapshot_IncludesCachedWrites (0.11s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites_ValuePointers"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites_ValuePointers","Output":"=== RUN   TestAcquireSnapshot_IncludesCachedWrites_ValuePointers\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites_ValuePointers","Output":"--- PASS: TestAcquireSnapshot_IncludesCachedWrites_ValuePointers (0.12s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_IncludesCachedWrites_ValuePointers"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites","Output":"=== RUN   TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites","Output":"--- PASS: TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites (0.14s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_HasManyAndHasPrefixesIncludeCachedWrites"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable","Output":"=== RUN   TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable","Output":"--- PASS: TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable (0.12s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAfterCheckpointIsStable"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAllocsAreBounded"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAllocsAreBounded","Output":"=== RUN   TestAcquireSnapshot_BackendFastPathAllocsAreBounded\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAllocsAreBounded","Output":"--- PASS: TestAcquireSnapshot_BackendFastPathAllocsAreBounded (0.10s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_BackendFastPathAllocsAreBounded"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints","Output":"=== RUN   TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints","Output":"--- PASS: TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints (0.60s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_ConcurrentFastPathAcquireCloseWithCheckpoints"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot","Output":"=== RUN   TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot","Output":"--- PASS: TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot (0.10s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestAcquireSnapshot_MutableCachedWritesUseCachedSnapshot"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateUsesPinnedView"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateUsesPinnedView","Output":"=== RUN   TestSnapshotIterateUsesPinnedView\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateUsesPinnedView","Output":"--- PASS: TestSnapshotIterateUsesPinnedView (0.08s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateUsesPinnedView"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateBackendFastPathUsesPinnedView"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateBackendFastPathUsesPinnedView","Output":"=== RUN   TestSnapshotIterateBackendFastPathUsesPinnedView\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateBackendFastPathUsesPinnedView","Output":"--- PASS: TestSnapshotIterateBackendFastPathUsesPinnedView (0.09s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateBackendFastPathUsesPinnedView"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateNilCallbackFailsClosed"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateNilCallbackFailsClosed","Output":"=== RUN   TestSnapshotIterateNilCallbackFailsClosed\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateNilCallbackFailsClosed","Output":"--- PASS: TestSnapshotIterateNilCallbackFailsClosed (0.05s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIterateNilCallbackFailsClosed"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekContract"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekContract","Output":"=== RUN   TestSnapshotIteratorSeekContract\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekContract","Output":"--- PASS: TestSnapshotIteratorSeekContract (0.15s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekContract"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekRandomizedOracle"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekRandomizedOracle","Output":"=== RUN   TestSnapshotIteratorSeekRandomizedOracle\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekRandomizedOracle","Output":"--- PASS: TestSnapshotIteratorSeekRandomizedOracle (1.05s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekRandomizedOracle"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotCloseInvalidatesOutstandingIterator"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotCloseInvalidatesOutstandingIterator","Output":"=== RUN   TestSnapshotCloseInvalidatesOutstandingIterator\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotCloseInvalidatesOutstandingIterator","Output":"--- PASS: TestSnapshotCloseInvalidatesOutstandingIterator (0.58s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotCloseInvalidatesOutstandingIterator"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekAfterReopen"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekAfterReopen","Output":"=== RUN   TestSnapshotIteratorSeekAfterReopen\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekAfterReopen","Output":"--- PASS: TestSnapshotIteratorSeekAfterReopen (0.13s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorSeekAfterReopen"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty","Output":"=== RUN   TestSnapshotIteratorEmptyDomainSeekRemainsEmpty\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/forward"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/forward","Output":"=== RUN   TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/forward\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/forward","Output":"--- PASS: TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/forward (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/forward"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/reverse","Output":"=== RUN   TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/reverse\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/reverse","Output":"--- PASS: TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/reverse (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/equal/reverse"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/forward"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/forward","Output":"=== RUN   TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/forward\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/forward","Output":"--- PASS: TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/forward (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/forward"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/reverse","Output":"=== RUN   TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/reverse\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/reverse","Output":"--- PASS: TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/reverse (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty/inverted/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty","Output":"--- PASS: TestSnapshotIteratorEmptyDomainSeekRemainsEmpty (0.12s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorEmptyDomainSeekRemainsEmpty"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/nil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/nil","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/nil\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/nil","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/nil (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/nil"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/below"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/below","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/below\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/below","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/below (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/below"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/inside"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/inside","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/inside\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/inside","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/inside (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/inside"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/above","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/above\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/above","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/above (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/forward"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/nil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/nil","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/nil\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/nil","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/nil (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/nil"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/below"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/below","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/below\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/below","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/below (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/below"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/inside"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/inside","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/inside\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/inside","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/inside (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/inside"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/above","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/above\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/above","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/above (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty (0.12s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekRemainsEmpty"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/nil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/nil","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/nil\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/nil","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/nil (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/nil"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/below"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/below","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/below\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/below","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/below (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/below"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/inside"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/inside","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/inside\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/inside","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/inside (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/inside"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/above","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/above\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/above","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/above (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/forward"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/nil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/nil","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/nil\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/nil","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/nil (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/nil"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/below"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/below","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/below\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/below","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/below (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/below"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/inside"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/inside","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/inside\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/inside","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/inside (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/inside"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/above","Output":"=== RUN   TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/above\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/above","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/above (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse/above"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain","Output":"--- PASS: TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain (0.12s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB","Test":"TestSnapshotIteratorOpenEndedLowerBoundSeekClampsToDomain"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB","Output":"PASS\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB"}

@@ -1,0 +1,18 @@
+{
+  "ROOT_selected": true,
+  "at": "2026-10-08T17:01:36.154580+00:00",
+  "existing_public_allocation_guard_unchanged": true,
+  "finite": false,
+  "independent_reviewer": "/root/l9_independent_review",
+  "patch_sha256": "6ae6e3704e706f311c25da3a7087f12a26983581a831ed72d67a31fd48fe2121",
+  "performance": false,
+  "prior_failure_audit_sha256": "2f8da266549f3a6a7306bc528e5aea7807cf627bce60eb927969ba58f6776155",
+  "private_last_observer_refund": true,
+  "public_cumulative": true,
+  "receipt_sha256": "be2af3abffc68e12627ffa3fd1829213449fab1372624dc6d68ae8433a824d8c",
+  "review_result": "ACCEPT source coherence; runtime/target classes/full128fit open",
+  "runtime_authorized": false,
+  "scope": "Existing phase2 grant: same actual Snapshot and original cleanup capsule share one never-reused allocation; no threshold/API changes",
+  "source_sha256": "70e0b3d6a39dd9301d0d44c565a4cb04dfde004097427dba3e0c903c713fd095",
+  "two_original_lifetime_edges": true
+}

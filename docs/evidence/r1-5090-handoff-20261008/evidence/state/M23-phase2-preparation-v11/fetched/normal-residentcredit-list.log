@@ -1,0 +1,8 @@
+{"Action":"start","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Output":"TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Output":"TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Output":"TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Output":"TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Output":"TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Output":"TestPrivateSnapshotBackingMalformedAndOverflowRefusal\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit"}

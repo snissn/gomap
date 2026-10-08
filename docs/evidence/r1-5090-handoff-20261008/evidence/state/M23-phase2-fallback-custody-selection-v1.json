@@ -1,0 +1,37 @@
+{
+  "Git": false,
+  "Go": false,
+  "ROOT_selected": true,
+  "accepted_inquiry_receipt_sha256": "cbaed1a4bcf8fd15d50bd6cc9c93e5f782af28be071418d9f94e404e7f1667ac",
+  "actual_five_RED_audit_sha256": "bdaf4b17750ec39e7b508cffed849a95df5bd93e53f2634dc8fe651598e94365",
+  "allowed_production_paths": [
+    "TreeDB/internal/rootpublication/resource_set.go"
+  ],
+  "allowed_test_paths": [
+    "TreeDB/internal/rootpublication/resource_append_mutation_test.go",
+    "TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go"
+  ],
+  "at": "2026-10-08T17:43:02.238864+00:00",
+  "base_source_sha256": "e87125afa7407d4d519ddcd96cd569ec07b7ef39d951a9538c965b9eb96a32f8",
+  "finite_admission": "CLOSED",
+  "format": false,
+  "head": "ae6b6a87090be5bf64554f68738a1fe103393aa9",
+  "node": 5093,
+  "objective": "coherent exact-fallback custody handoff and deferred nested cleanup outside all inherited gates",
+  "parent": 5090,
+  "performance": false,
+  "phase3_checkpoint_frozen": true,
+  "remote": false,
+  "requirements": [
+    "discharge temporary child shell only on proven Builder-to-Transferred handoff plus cleared backing; keep actual destination/drop cleanup custody even when posttransfer cleanup returns error",
+    "all nested Add/flat merge cleanup callbacks execute after OUTER builder and child unlock; stage actual cleanup owner or detached reservation/revalidation",
+    "no global Transferred acceptance, Busy suppression, cleanup replay, early token/pin release or test waiver",
+    "retain all five failing tests and all existing named oracles; add semantic pretransfer preservation, posttransfer Pending retry/no replay, reentrant callback outside outer locks discriminators",
+    "inspect affected callers for shared simple coherent implementation; no unnecessary parallel machinery"
+  ],
+  "source_only": true,
+  "source_paths": 10076,
+  "stop": "full bound source packet then stop writes for ROOT formatting/review/runtime",
+  "worktree": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5094-native-prefix-group",
+  "writer": "/root/m5093_transitive_ownership"
+}

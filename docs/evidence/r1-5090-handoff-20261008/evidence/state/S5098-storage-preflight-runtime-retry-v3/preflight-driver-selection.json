@@ -1,0 +1,23 @@
+{
+  "N_selected": false,
+  "ROOT_accepted_exact_derivative": true,
+  "derivative_changes": [
+    "namespace v2",
+    "infrastructure free floor160GiB after retained source growth",
+    "whole ROOT namespace infrastructure cap40GiB; product S6GiB cap unchanged"
+  ],
+  "driver_sha256": "be8048ff70dcda8e21ea86720e3b1f1fe6a3b4695205faad856052ddc34def38",
+  "finite": false,
+  "independent_review_receipt_sha256": "75c1c8096663b8dd1b01de0d21291624aab052e721aff8ad649f98103ab551d7",
+  "performance": false,
+  "prior_driver_sha256": "f02def40df0b81bb5e2c53d63acb5ef3c6d18f942e4fb48be119fe36caf6f728",
+  "runtime_granted": false,
+  "source_paths": 9878,
+  "source_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+  "unchanged_product_limits": {
+    "fixtureGiB": 6,
+    "namespaceGiB": 12,
+    "shutdown_slackGiB": 2,
+    "source_cacheGiB": 4
+  }
+}

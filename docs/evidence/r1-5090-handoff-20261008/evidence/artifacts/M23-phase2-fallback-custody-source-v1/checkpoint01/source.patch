@@ -1,0 +1,440 @@
+--- a/TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go
++++ b/TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go
+@@ -0,0 +1,181 @@
++package rootpublication
++
++import (
++	"crypto/sha256"
++	"errors"
++	"testing"
++)
++
++// A private staging builder is still the real owner of each retired role.
++// Neither its own mutex boundary nor a consumed set shell is an outer boundary.
++func TestStableNestedAddCleanupWaitsForOuterGates(t *testing.T) {
++	outer := NewStableResourceSetBuilder()
++	child := &StableResourceSet{ordinaryMetadata: true}
++	child.owner.Store(uint32(ResourceOwnerBuilder))
++	staged := NewStableResourceSetBuilder()
++	spec := operationLifetimeSpec(operationLifetimeFile(t))
++	baseEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	retiredEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	base := cleanupCustodyTokenV1(t, spec, baseEnv)
++	retired := cleanupCustodyTokenV1(t, spec, retiredEnv)
++	if err := staged.Add(base); err != nil { t.Fatal(err) }
++	retiredEnv.callback = func() {
++		if !outer.mu.TryLock() { t.Error("nested Add callback retained outer builder gate"); return }
++		outer.mu.Unlock()
++		if !child.mu.TryLock() { t.Error("nested Add callback retained outer child gate"); return }
++		child.mu.Unlock()
++		if outer.State() != ResourceOwnerBuilder || child.Len() != 0 { t.Error("callback saw wrong outer ownership") }
++		if !errors.Is(staged.AbandonCheckedV1(), ErrStableResourceOperationBusy) { t.Error("reentrant cleanup did not refuse running owner") }
++	}
++	outer.mu.Lock()
++	child.mu.Lock()
++	err := staged.addWithCleanupBoundaryV1(retired, true)
++	child.mu.Unlock()
++	outer.mu.Unlock()
++	if err != nil { t.Fatal(err) }
++	if retiredEnv.calls != 0 || retired.CleanupCompleteV1() { t.Fatal("nested Add drained before inherited gates dropped") }
++	if err = staged.AbandonCheckedV1(); err != nil { t.Fatal(err) }
++	if retiredEnv.calls != 1 || baseEnv.calls != 1 || !retired.CleanupCompleteV1() { t.Fatal("staged roles were lost or replayed") }
++	if err = staged.AbandonCheckedV1(); err != nil || retiredEnv.calls != 1 || baseEnv.calls != 1 { t.Fatal("completed staging cleanup replayed") }
++}
++
++func TestStableNestedFlatTransferKeepsDestinationPendingDebt(t *testing.T) {
++	outer := NewStableResourceSetBuilder()
++	inheritedChild := &StableResourceSet{ordinaryMetadata: true}
++	inheritedChild.owner.Store(uint32(ResourceOwnerBuilder))
++	staged := NewStableResourceSetBuilder()
++	spec := operationLifetimeSpec(operationLifetimeFile(t))
++	baseEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	pending := &cleanupCustodyEnvironmentV1{}
++	base := cleanupCustodyTokenV1(t, spec, baseEnv)
++	dropped := cleanupCustodyTokenV1(t, spec, pending)
++	if err := staged.Add(base); err != nil { t.Fatal(err) }
++	childBuilder := NewStableResourceSetBuilder()
++	if err := childBuilder.Add(dropped); err != nil { t.Fatal(err) }
++	// Match the actual fallback's private entry-only shell; Freeze deliberately
++	// includes view/high-water aliases and is not a transferable cleanup shell.
++	childBuilder.mu.Lock()
++	child := &StableResourceSet{ordinaryMetadata: true, entries: childBuilder.entries}
++	child.owner.Store(uint32(ResourceOwnerBuilder))
++	childBuilder.entries = nil
++	childBuilder.closed = true
++	childBuilder.mu.Unlock()
++	var err error
++	cleanup := stableBuilderAddCleanup{temporary: staged, temporarySet: child}
++	pending.callback = func() {
++		if !outer.mu.TryLock() { t.Error("flat cleanup retained outer builder gate"); return }
++		outer.mu.Unlock()
++		if !inheritedChild.mu.TryLock() { t.Error("flat cleanup retained inherited child gate"); return }
++		inheritedChild.mu.Unlock()
++		if outer.State() != ResourceOwnerBuilder || inheritedChild.Len() != 0 { t.Error("flat cleanup observed invalid outer owner") }
++	}
++	outer.mu.Lock()
++	inheritedChild.mu.Lock()
++	_, err = staged.mergeAppendOnlyLogicalObligationsFlatWithCleanupV1(child, StableLogicalObligationMutation{}, &cleanup)
++	if err == nil {
++		staged.mu.Lock()
++		outer.entries = staged.entries
++		staged.entries = nil
++		staged.indexed = nil
++		staged.closed = true
++		staged.mu.Unlock()
++	}
++	inheritedChild.mu.Unlock()
++	outer.mu.Unlock()
++	if err != nil { t.Fatal(err) }
++	if child.Owner() != ResourceOwnerTransferred || cleanup.temporarySet != nil || pending.calls != 0 { t.Fatal("exact shell transfer or deferred boundary failed") }
++	if err = cleanup.release(); !errors.Is(err, errCleanupCustodyFixtureV1) { t.Fatalf("pending cleanup: %v", err) }
++	if cleanup.temporary != staged || len(outer.entries) != 1 || outer.entries[0].token != base || base.CleanupCompleteV1() || pending.calls != 1 { t.Fatal("posttransfer destination or pending dropped role was lost") }
++	pending.ready = true
++	if err = cleanup.release(); err != nil { t.Fatal(err) }
++	if !cleanup.empty() || pending.calls != 2 || baseEnv.calls != 0 { t.Fatal("pending retry replayed or released destination") }
++	if err = outer.AbandonCheckedV1(); err != nil { t.Fatal(err) }
++	if pending.calls != 2 || baseEnv.calls != 1 { t.Fatal("final destination cleanup replayed dropped role") }
++}
++
++func TestStableAppendFallbackPendingOriginalRolesRetryWithoutReplay(t *testing.T) {
++	file := operationLifetimeFile(t)
++	candidate := NewStableResourceSetBuilder()
++	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
++		if err := candidate.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil { t.Fatal(err) }
++	}
++	spec := StableResourceSpec{Kind: ResourceOuterLeafPack, LogicalLane: "packs", ResourceID: "fallback-pending", Generation: 1,
++		DiagnosticPath: "fallback-pending", File: file, Frontier: DurableFrontier{Bytes: 1},
++		Digest: sha256.Sum256([]byte("immutable")), Reachability: ReachabilityDictionaryGeneration, ContentSynced: true}
++	baseEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	pending := &cleanupCustodyEnvironmentV1{}
++	base := cleanupCustodyTokenV1(t, spec, baseEnv)
++	if err := candidate.Add(base); err != nil { t.Fatal(err) }
++	// Cross-kind immutable coalescing is an actual exact-fallback trigger.
++	spec.Kind, spec.LogicalLane, spec.Reachability = ResourceDictionary, "dictionary", ReachabilityDictionaryGeneration
++	producer := freezeAppendMutationResources(t, cleanupCustodyTokenV1(t, spec, pending))
++	pending.callback = func() {
++		if !candidate.mu.TryLock() { t.Error("fallback callback retained outer builder gate"); return }
++		candidate.mu.Unlock()
++		if !producer.mu.TryLock() { t.Error("fallback callback retained outer set gate"); return }
++		producer.mu.Unlock()
++		if candidate.State() != ResourceOwnerBuilder || producer.Owner() != ResourceOwnerTransferred { t.Error("fallback callback preceded actual adoption") }
++		if !errors.Is(candidate.AbandonCheckedV1(), ErrStableResourceOperationBusy) { t.Error("reentrant abandonment ignored running outer owner") }
++	}
++	work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
++	if !errors.Is(err, errCleanupCustodyFixtureV1) || work.AppendOnlyCollisionFallbacks != 1 { t.Fatalf("fallback result %+v %v", work, err) }
++	if producer.Owner() != ResourceOwnerTransferred || len(candidate.entries) != stableResourceEntryLinearLookupLimit+1 || baseEnv.calls != 1 || pending.calls != 1 { t.Fatal("fallback lost adopted destination or original cleanup cursor") }
++	if _, err = candidate.Freeze(); err == nil { t.Fatal("unfinished original cleanup allowed publication") }
++	if err = producer.Release(); err != nil || pending.calls != 1 { t.Fatal("transferred external shell replayed original token") }
++	pending.ready = true
++	if err = candidate.AbandonCheckedV1(); err != nil { t.Fatal(err) }
++	if baseEnv.calls != 1 || pending.calls != 2 || candidate.State() != ResourceOwnerReleased { t.Fatal("fallback retry replayed complete original or lost pending debt") }
++}
++
++func TestStableAppendFallbackConflictPreservesOriginalCleanupRoles(t *testing.T) {
++	file := operationLifetimeFile(t)
++	candidate := NewStableResourceSetBuilder()
++	defer candidate.Abandon()
++	for id := uint64(1); id <= stableResourceEntryLinearLookupLimit; id++ {
++		if err := candidate.Add(distinctPhysicalTokenFixture(t, file, id)); err != nil { t.Fatal(err) }
++	}
++	spec := StableResourceSpec{Kind: ResourceDictionary, LogicalLane: "dictionary", ResourceID: "fallback-conflict", Generation: 1,
++		DiagnosticPath: "fallback-conflict", File: file, Frontier: DurableFrontier{Bytes: 1},
++		Digest: sha256.Sum256([]byte("base")), Reachability: ReachabilityDictionaryGeneration, ContentSynced: true}
++	baseEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	incomingEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	if err := candidate.Add(cleanupCustodyTokenV1(t, spec, baseEnv)); err != nil { t.Fatal(err) }
++	spec.Digest = sha256.Sum256([]byte("conflicting"))
++	incoming := cleanupCustodyTokenV1(t, spec, incomingEnv)
++	producer := freezeAppendMutationResources(t, incoming)
++	defer producer.Release()
++	candidate.mu.Lock()
++	if err := candidate.promoteEntriesToViewsLocked(); err != nil { candidate.mu.Unlock(); t.Fatal(err) }
++	before := candidate.kindViews.get(ResourceDictionary).root
++	candidate.mu.Unlock()
++	_, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
++	if !errors.Is(err, ErrResourceConflict) { t.Fatalf("conflict: %v", err) }
++	if producer.Owner() != ResourceOwnerBuilder || candidate.kindViews.get(ResourceDictionary).root != before || incoming.CleanupCompleteV1() || baseEnv.calls != 0 || incomingEnv.calls != 0 { t.Fatal("pretransfer refusal consumed original participants") }
++}
++
++func TestStableViewCollisionAddAllowsReentrantAddAfterOuterUnlock(t *testing.T) {
++	spec := operationLifetimeSpec(operationLifetimeFile(t))
++	baseEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	retiredEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	base := cleanupCustodyTokenV1(t, spec, baseEnv)
++	initial := freezeAppendMutationResources(t, base)
++	candidate := NewStableResourceSetBuilder()
++	if err := candidate.Merge(initial); err != nil { t.Fatal(err) }
++	defer candidate.Abandon()
++	nestedSpec := operationLifetimeSpec(operationLifetimeFile(t))
++	nestedSpec.ResourceID = "nested-after-collision"
++	nested, err := NewStableResourceToken(nestedSpec)
++	if err != nil { t.Fatal(err) }
++	defer nested.Release()
++	retiredEnv.callback = func() {
++		if !candidate.mu.TryLock() { t.Error("view collision callback retained outer builder gate"); return }
++		candidate.mu.Unlock()
++		if candidate.State() != ResourceOwnerBuilder { t.Error("collision callback saw wrong destination state") }
++		if err := candidate.Add(nested); err != nil { t.Errorf("reentrant Add: %v", err) }
++	}
++	retired := cleanupCustodyTokenV1(t, spec, retiredEnv)
++	if err = candidate.Add(retired); err != nil { t.Fatal(err) }
++	if retiredEnv.calls != 1 || baseEnv.calls != 1 || len(candidate.entries) != 2 { t.Fatal("view collision lost reentrant addition or replayed originals") }
++	if err = candidate.AbandonCheckedV1(); err != nil { t.Fatal(err) }
++	if retiredEnv.calls != 1 || baseEnv.calls != 1 || !nested.CleanupCompleteV1() { t.Fatal("collision final cleanup replayed or lost nested owner") }
++}
+--- a/TreeDB/internal/rootpublication/resource_set.go
++++ b/TreeDB/internal/rootpublication/resource_set.go
+@@ -806,6 +806,7 @@
+ 	cleanupViewCursor  int
+ 	cleanupViewStarted bool
+ 	pendingCleanup     *stableBuilderCleanupOwnerV1
++	stagingNextV1      *StableResourceSetBuilder // private exact cleanup custody only
+ 	mu                 sync.Mutex
+ 	entries            []stableResourceEntry
+ 	kindViews          stableKindViews
+@@ -870,21 +871,35 @@
+ 	droppedCursor   int
+ 	temporary2      *StableResourceSetBuilder
+ 	temporarySet    *StableResourceSet
++	stagedBuilders  *StableResourceSetBuilder
++	unclaimed       *StableResourceToken
+ }
+ 
+ func (c *stableBuilderAddCleanup) empty() bool {
+-	return c.retired == nil && c.failed == nil && c.views == nil && c.views2 == nil && c.temporary == nil && c.temporary2 == nil && c.temporarySet == nil && c.dropped == nil
++	return c.retired == nil && c.failed == nil && c.views == nil && c.views2 == nil && c.temporary == nil && c.temporary2 == nil && c.temporarySet == nil && c.dropped == nil && c.stagedBuilders == nil && c.unclaimed == nil
+ }
+ func (c *stableBuilderAddCleanup) release() (result error) {
++	for c.stagedBuilders != nil {
++		staged := c.stagedBuilders
++		if err := staged.AbandonCheckedV1(); err != nil { return errors.Join(result, err) }
++		c.stagedBuilders = staged.stagingNextV1
++		staged.stagingNextV1 = nil
++	}
++	if c.unclaimed != nil {
++		err := c.unclaimed.Release()
++		result = errors.Join(result, err)
++		if !c.unclaimed.CleanupCompleteV1() { return errors.Join(result, ErrStableResourceOperationBusy) }
++		c.unclaimed = nil
++	}
+ 	if c.temporary != nil {
+ 		if err := c.temporary.AbandonCheckedV1(); err != nil {
+-			return err
++			return errors.Join(result, err)
+ 		}
+ 		c.temporary = nil
+ 	}
+ 	if c.temporary2 != nil {
+ 		if err := c.temporary2.AbandonCheckedV1(); err != nil {
+-			return err
++			return errors.Join(result, err)
+ 		}
+ 		c.temporary2 = nil
+ 	}
+@@ -898,13 +913,13 @@
+ 	}
+ 	if c.views != nil {
+ 		if err := releaseStableResourceKindViewsCursorV1(c.views, &c.viewCursor, &c.viewStarted); err != nil {
+-			return err
++			return errors.Join(result, err)
+ 		}
+ 		c.views = nil
+ 	}
+ 	if c.views2 != nil {
+ 		if err := releaseStableResourceKindViewsCursorV1(c.views2, &c.viewCursor2, &c.viewStarted2); err != nil {
+-			return err
++			return errors.Join(result, err)
+ 		}
+ 		c.views2 = nil
+ 	}
+@@ -1095,7 +1110,19 @@
+ 	set.activeOperations--
+ 	set.mu.Unlock()
+ }
+-func (builder *StableResourceSetBuilder) Add(token *StableResourceToken) (result error) {
++func (builder *StableResourceSetBuilder) Add(token *StableResourceToken) error {
++	return builder.addWithCleanupBoundaryV1(token, false)
++}
++
++// Private staging borrows inherited gates. Its exact cleanup owners remain on
++// that same builder until the outer operation drops every gate and drains them.
++func (builder *StableResourceSetBuilder) pauseCleanupOwnerV1(op *stableBuilderCleanupOwnerV1) {
++	if op == nil { return }
++	builder.mu.Lock()
++	op.running = false
++	builder.mu.Unlock()
++}
++func (builder *StableResourceSetBuilder) addWithCleanupBoundaryV1(token *StableResourceToken, staging bool) (result error) {
+ 	if builder == nil || token == nil {
+ 		return ErrResourceOwnership
+ 	}
+@@ -1113,7 +1140,7 @@
+ 			builder.recordCleanupPanicV1(op)
+ 			panic(v)
+ 		}
+-		result = errors.Join(result, builder.finishCleanupOwnerV1(op))
++		if staging { builder.pauseCleanupOwnerV1(op) } else { result = errors.Join(result, builder.finishCleanupOwnerV1(op)) }
+ 	}()
+ 	if err := token.RequireMetadataExport(); err != nil {
+ 		return err
+@@ -1188,6 +1215,7 @@
+ 
+ 	// Exact identity collisions retain the established coalescing rules.
+ 	temporary := NewStableResourceSetBuilder()
++	cleanup.temporary = temporary
+ 	if err := cloneStableResourceViewsIntoBuilder(temporary, builder.kindViews); err != nil {
+ 		cleanup.temporary = temporary
+ 		cleanup.failed = token
+@@ -1816,15 +1844,24 @@
+ 		return ErrUnresolvedResource
+ 	}
+ 	sort.Slice(fields, func(i, j int) bool { return fields[i] < fields[j] })
++	builder.mu.Lock()
++	cloneOwner, err := builder.beginCleanupOwnerLockedV1(token, nil)
++	builder.mu.Unlock()
++	if err != nil { return err }
++	defer builder.pauseCleanupOwnerV1(cloneOwner)
+ 	cloned, err := cloneStableEntryToken(token, source.logicalLane, source.resourceID, source.diagnosticPath, source.frontier, fields[0], source.logicalObligations.deltaSlice(), source.logicalObligations.directory, false)
+ 	if err != nil {
+ 		return err
+ 	}
++	cloneOwner.cleanup.unclaimed = cloned
+ 	before := len(builder.entries)
+-	if err := builder.Add(cloned); err != nil {
+-		cloned.Release()
++	if err := builder.addWithCleanupBoundaryV1(cloned, true); err != nil {
++		// A claimed token is held by Add's own exact retired/failed role or
++		// destination entries. Only a genuinely unclaimed clone stays here.
++		if ResourceOwnerState(cloned.owner.Load()) != ResourceOwnerToken { cloneOwner.cleanup.unclaimed = nil }
+ 		return err
+ 	}
++	cloneOwner.cleanup.unclaimed = nil
+ 	builder.mu.Lock()
+ 	defer builder.mu.Unlock()
+ 	var destination *stableResourceEntry
+@@ -2313,7 +2350,7 @@
+ 			return directWork, nil
+ 		}
+ 	}
+-	if plan, work, certified, err := certifiedAppendOnlyPhysicalCoalesce(builder.kindViews, child.kindViews, mutation); certified || err != nil {
++	if plan, work, certified, err := certifiedAppendOnlyPhysicalCoalesceWithCleanupV1(builder.kindViews, child.kindViews, mutation, &op.cleanup); certified || err != nil {
+ 		if err != nil {
+ 			childLocked = false
+ 			child.mu.Unlock()
+@@ -2379,7 +2416,7 @@
+ 	temporaryChildBuilder.closed = true
+ 	temporaryChildBuilder.mu.Unlock()
+ 
+-	work, err := temporary.mergeAppendOnlyLogicalObligationsFlat(temporaryChild, mutation)
++	work, err := temporary.mergeAppendOnlyLogicalObligationsFlatWithCleanupV1(temporaryChild, mutation, &op.cleanup)
+ 	work.AppendOnlyCollisionFallbacks = 1
+ 	if err != nil {
+ 		childLocked = false
+@@ -2437,7 +2474,12 @@
+ // persistent indexes are canonical. Collision-only producer roots are dropped;
+ // all-distinct roots transfer directly; mixed roots pin only their distinct
+ // delta so repeated collisions cannot accumulate hidden tokens or descriptors.
+-func certifiedAppendOnlyPhysicalCoalesce(target, incoming stableKindViews, mutation StableLogicalObligationMutation) (*certifiedAppendOnlyPhysicalCoalescePlan, StableResourceClosureWork, bool, error) {
++func certifiedAppendOnlyPhysicalCoalesce(target, incoming stableKindViews, mutation StableLogicalObligationMutation) (plan *certifiedAppendOnlyPhysicalCoalescePlan, work StableResourceClosureWork, certified bool, result error) {
++	var cleanup stableBuilderAddCleanup
++	defer func() { result = errors.Join(result, cleanup.release()) }()
++	return certifiedAppendOnlyPhysicalCoalesceWithCleanupV1(target, incoming, mutation, &cleanup)
++}
++func certifiedAppendOnlyPhysicalCoalesceWithCleanupV1(target, incoming stableKindViews, mutation StableLogicalObligationMutation, cleanup *stableBuilderAddCleanup) (*certifiedAppendOnlyPhysicalCoalescePlan, StableResourceClosureWork, bool, error) {
+ 	if err := requireOrdinaryStableResourceInputs(nil, target); err != nil {
+ 		return nil, StableResourceClosureWork{}, false, err
+ 	}
+@@ -2657,7 +2699,7 @@
+ 			view.root = current.root
+ 			plan.releaseIncoming.set(kind, child)
+ 		default:
+-			staged, cloneErr := cloneStableResourceEntriesToKindView(distinct[kind])
++			staged, cloneErr := cloneStableResourceEntriesToKindViewWithCleanupV1(distinct[kind], cleanup)
+ 			if cloneErr != nil {
+ 				return plan, work, true, cloneErr
+ 			}
+@@ -2677,34 +2719,37 @@
+ 	return plan, work, true, nil
+ }
+ 
+-func cloneStableResourceEntriesToKindView(entries []*stableResourceEntry) (stableResourceKindView, error) {
++func cloneStableResourceEntriesToKindView(entries []*stableResourceEntry) (view stableResourceKindView, result error) {
++	var cleanup stableBuilderAddCleanup
++	defer func() { result = errors.Join(result, cleanup.release()) }()
++	return cloneStableResourceEntriesToKindViewWithCleanupV1(entries, &cleanup)
++}
++func cloneStableResourceEntriesToKindViewWithCleanupV1(entries []*stableResourceEntry, cleanup *stableBuilderAddCleanup) (stableResourceKindView, error) {
+ 	for _, entry := range entries {
+ 		if stableResourceEntryHasMetadataAccount(entry) {
+ 			return stableResourceKindView{}, ErrStableMetadataShapeUnsupported
+ 		}
+ 	}
+ 	builder := NewStableResourceSetBuilder()
++	builder.stagingNextV1 = cleanup.stagedBuilders
++	cleanup.stagedBuilders = builder
+ 	for _, entry := range entries {
+ 		if err := cloneStableResourceEntryIntoBuilder(builder, entry); err != nil {
+-			builder.Abandon()
+ 			return stableResourceKindView{}, err
+ 		}
+ 	}
+ 	builder.mu.Lock()
+ 	if err := builder.promoteEntriesToViewsLocked(); err != nil {
+ 		builder.mu.Unlock()
+-		builder.Abandon()
+ 		return stableResourceKindView{}, err
+ 	}
+ 	if len(entries) == 0 || builder.kindViews.len() != 1 {
+ 		builder.mu.Unlock()
+-		builder.Abandon()
+ 		return stableResourceKindView{}, ErrUnresolvedResource
+ 	}
+ 	view, ok := builder.kindViews.lookup(entries[0].token.kind)
+ 	if !ok {
+ 		builder.mu.Unlock()
+-		builder.Abandon()
+ 		return stableResourceKindView{}, ErrUnresolvedResource
+ 	}
+ 	builder.kindViews = nil
+@@ -2792,7 +2837,10 @@
+ 	return normalized, work, nil
+ }
+ 
+-func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(child *StableResourceSet, mutation StableLogicalObligationMutation) (resultWork StableResourceClosureWork, result error) {
++func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlat(child *StableResourceSet, mutation StableLogicalObligationMutation) (StableResourceClosureWork, error) {
++	return builder.mergeAppendOnlyLogicalObligationsFlatWithCleanupV1(child, mutation, nil)
++}
++func (builder *StableResourceSetBuilder) mergeAppendOnlyLogicalObligationsFlatWithCleanupV1(child *StableResourceSet, mutation StableLogicalObligationMutation, inherited *stableBuilderAddCleanup) (resultWork StableResourceClosureWork, result error) {
+ 	if err := requireOrdinaryStableResourceBuilderInputs(builder, child); err != nil {
+ 		return StableResourceClosureWork{}, err
+ 	}
+@@ -2858,7 +2906,7 @@
+ 			builder.recordCleanupPanicV1(op)
+ 			panic(v)
+ 		}
+-		result = errors.Join(result, builder.finishCleanupOwnerV1(op))
++		if inherited != nil { builder.pauseCleanupOwnerV1(op) } else { result = errors.Join(result, builder.finishCleanupOwnerV1(op)) }
+ 	}()
+ 	if ResourceOwnerState(child.owner.Load()) != ResourceOwnerBuilder {
+ 		childLocked = false
+@@ -3037,6 +3085,11 @@
+ 		builder.indexed.lookup = lookup
+ 	}
+ 	child.entries = nil
++	// This caller-created shell had only entries. Discharge its exact role
++	// only after this CAS transferred them and every owned backing is empty.
++	if inherited != nil && inherited.temporarySet == child && child.kindViews == nil && child.extras == nil && child.metadataAccount == nil && child.metadataBacking == 0 && !child.finiteMetadata && child.ordinaryMetadata && child.pinHighWater == nil {
++		inherited.temporarySet = nil
++	}
+ 	childLocked = false
+ 	child.mu.Unlock()
+ 	builderLocked = false
+@@ -3140,7 +3193,7 @@
+ 		return nil
+ 	}
+ 	builder.mu.Lock()
+-	if builder.closed || builder.abandoned {
++	if builder.abandoned || builder.closed && builder.pendingCleanup == nil {
+ 		builder.mu.Unlock()
+ 		return nil
+ 	}

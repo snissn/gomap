@@ -1,0 +1,18 @@
+{
+  "actual_external_release_path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-writer-invariant-native-preparation-v3/root-runtime-release.json",
+  "actual_external_release_sha256": "363b51a7fa3fc3d92f718fa71d80b8ab0b83c25f5285a2d07f28077f1a20715a",
+  "at": "2026-10-08T17:47:00.511372+00:00",
+  "explicit_ACK": "Fresh ROOT111 S retry <=12min NOW to17:58UTC:14normal/racecontrols+unchanged<=600sdiagnostic+ownedcleanup. 5028 stays Go/copy/collector quiet until ROOTwindowrelease; Rcopy/counters next",
+  "external_release_fetch_tool": {
+    "exit": 0,
+    "session": 43871
+  },
+  "external_runtime_tool": {
+    "exit": 0,
+    "session": 19228
+  },
+  "fresh_conflicts": [],
+  "no_ABI_adoption": true,
+  "owner_thread": "01a0f9ab-98a1-7840-87a3-aff6d04bae35",
+  "window_until": "2026-10-08T17:58:00+00:00"
+}

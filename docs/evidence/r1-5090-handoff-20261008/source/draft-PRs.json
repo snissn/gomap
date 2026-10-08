@@ -1,0 +1,38 @@
+[
+  {
+    "lane": "M",
+    "baseRefName": "main",
+    "headRefName": "codex/r1-5093-5113-composed-handoff-20261008",
+    "headRefOid": "169a34dc320d713ee08acbd3096b03178cf77d00",
+    "isDraft": true,
+    "number": 5122,
+    "url": "https://github.com/snissn/gomap/pull/5122"
+  },
+  {
+    "lane": "L",
+    "baseRefName": "main",
+    "headRefName": "codex/r1-5108-allocator-handoff-20261008",
+    "headRefOid": "46e5c249e5714be644a406c52addcae312ad372f",
+    "isDraft": true,
+    "number": 5123,
+    "url": "https://github.com/snissn/gomap/pull/5123"
+  },
+  {
+    "lane": "S",
+    "baseRefName": "main",
+    "headRefName": "codex/r1-5098-default-harness-handoff-20261008",
+    "headRefOid": "28da479a02b629a906d0bf3fc38c1e639fb68e0d",
+    "isDraft": true,
+    "number": 5124,
+    "url": "https://github.com/snissn/gomap/pull/5124"
+  },
+  {
+    "lane": "P",
+    "baseRefName": "main",
+    "headRefName": "codex/r1-5099-captured-closure-reuse",
+    "headRefOid": "c9f85aebbf6a80d833913848ccef4d90acc0d1a8",
+    "isDraft": true,
+    "number": 5125,
+    "url": "https://github.com/snissn/gomap/pull/5125"
+  }
+]

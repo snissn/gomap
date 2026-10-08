@@ -1,0 +1,102 @@
+{
+  "Go_phase_actual_wait_exit": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1
+  ],
+  "N_accepted": false,
+  "ROOT_audited": true,
+  "all_processes_joined": true,
+  "at": "2026-10-08T17:57:30.907619+00:00",
+  "controls_passed": {
+    "normal-caching-functional": [
+      "TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct",
+      "TestPhysicalValueLogWriterStatsExposeInventoryAbove64",
+      "TestLeafLogStatsExposeWorker65",
+      "TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity",
+      "TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations",
+      "TestThresholdRotationStatsCountInstalledRotationOnly"
+    ],
+    "normal-harness-functional": [
+      "TestR1SExposureFixtureShape5098",
+      "TestR1SExposureScheduleCoverage5098",
+      "TestR1SExposurePayloadDeterminismAndHeldAlias5098",
+      "TestR1SExposureTypedRetainedJSONAndOracle5098",
+      "TestR1SExposureInvalidInputNoMutation5098",
+      "TestS5098PhysicalEpochRequiresAllWritersAndFreshReopenBaseline",
+      "TestS5098PhysicalEpochRejectsMissingLateWorkerRegressionAndBadIdentity",
+      "TestS5098PhysicalEpochRejectsIncompleteDeclaredInventory"
+    ],
+    "race-caching-functional": [
+      "TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct",
+      "TestPhysicalValueLogWriterStatsExposeInventoryAbove64",
+      "TestLeafLogStatsExposeWorker65",
+      "TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity",
+      "TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations",
+      "TestThresholdRotationStatsCountInstalledRotationOnly"
+    ],
+    "race-harness-functional": [
+      "TestR1SExposureFixtureShape5098",
+      "TestR1SExposureScheduleCoverage5098",
+      "TestR1SExposurePayloadDeterminismAndHeldAlias5098",
+      "TestR1SExposureTypedRetainedJSONAndOracle5098",
+      "TestR1SExposureInvalidInputNoMutation5098",
+      "TestS5098PhysicalEpochRequiresAllWritersAndFreshReopenBaseline",
+      "TestS5098PhysicalEpochRejectsMissingLateWorkerRegressionAndBadIdentity",
+      "TestS5098PhysicalEpochRejectsIncompleteDeclaredInventory"
+    ]
+  },
+  "controls_per_mode": 14,
+  "evidence_sha256": "6fa489017f2f5585527de26a277c4d61d1da5499de49e8e16452737049d561d8",
+  "failed_tests": [
+    "TestR1SDefaultStoragePreflight5098/original",
+    "TestR1SDefaultStoragePreflight5098/exposure",
+    "TestR1SDefaultStoragePreflight5098"
+  ],
+  "fetch_tool_exit": 0,
+  "fetch_tool_session": 6432,
+  "finite": false,
+  "outer_tool_exit": 1,
+  "outer_tool_session": 67632,
+  "performance": false,
+  "remote_receipt_sha256": "f6343b337c418329eeaefc08338ed05efb18d7ddda22cea19483f4a569c00eb5",
+  "reservation": {
+    "all_remote_phases_joined": true,
+    "authorization_sha256": "08913abea2ed9bcb37791c2842d6dce950b41d903d2f9e573f3030193645dc4b",
+    "outer_join_audited": false,
+    "owner": "R1 #5090 ROOT",
+    "receipt_sha256": "f6343b337c418329eeaefc08338ed05efb18d7ddda22cea19483f4a569c00eb5",
+    "status": "joined_pending_ROOT_audit_v2",
+    "token": "S5098-short-preflight-v2-174812"
+  },
+  "result": "REJECT diagnostic census cannot locate index.db in both arms; causal source inquiry required",
+  "retained_failed_DBs": [
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/tmp/gomap-r1-tree-1927759698",
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/tmp/gomap-r1-tree-3817663676"
+  ],
+  "server111_window_still_ROOT_owned": true,
+  "source_paths": 9878,
+  "source_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891"
+}

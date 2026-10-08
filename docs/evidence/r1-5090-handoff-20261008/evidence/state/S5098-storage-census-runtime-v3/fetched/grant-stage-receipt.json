@@ -1,0 +1,46 @@
+{
+  "Go_tests_authorized": true,
+  "at": "2026-10-08T18:18:01.299158+00:00",
+  "files": {
+    "ROOT-driver-v5-selection.json": "4aa1495cc3c3743024d652f3ee3f1c28433296f2e55c8832c83ac6deaf48e6fe",
+    "ROOT-independent-S-diagnostic-reassessment.json": "765e062c6752eb0523a28c77cd90a3cb6480cf70819f3442bc87f49082e3edc8",
+    "ROOT-source-preparation-acceptance.json": "b3f76eb808080b4a8121705dc19e92a6ff646c55bcd279d3c2c208fe90e03b51",
+    "authorization.json": "4dc4e680dc186eecabdeaeb4ada66c3c589b4e748e9d0e5581dcab8bbe462eb7",
+    "driver3-independent-review-receipt.json": "9a6d877e167202b93f4339a56ec7252e5a9600aa12cce3a03b5fe67a1a8f43c7",
+    "external-release.json": "2425dce69226e2eb562d8e225a8bcbb13a0c929ec29ec7d318e13efdbab5a46d",
+    "format-receipt.json": "a7a5d47beb7cc2355f8abbcc1797c4a25c1a3af6e532d53722de5f86f4f8f93a",
+    "pinned-toolchain-source.json": "cfbf27003420164cef9440ae61e8dcc43aaf7f7b8854c3fc55ce0d7a459c4a44",
+    "preflight-driver-v5.py": "702fe09fd739662688f4cd316e05790f3ff5639174fe27bc37ec5fb8505be601",
+    "preparation-tool-join.json": "16370740810525f4d59e3289bbff6fa6e8842d50129462aba46a7b1bb48c7ae0",
+    "prior-S-ROOT-RED-audit.json": "5a39224ffdf647c29bd2f30692e0396d33599fdff89ebf5e6060f64acd9e1068",
+    "prior-S-ROOT-runtime-release.json": "a6dc912fa638a9212be290e16d43f39d514bb28aa4e4837bfd2c04386dd8d300",
+    "readback-outer-receipt.json": "a92d6bab202d19cd820359c079906e5268c321f0d39921448c59dd95c699972f",
+    "remote-stage-receipt.json": "0f69a9b92e3c895f86713a5cf01b6d093a3317b121926fced0d832b68ae4c12c",
+    "remote-supervisor-receipt.json": "905ccf4ec0bbc91ee2f8ec1e4a49f857ee4a6742401c072d5d35a0cc939ec869",
+    "resource-plan.json": "bd4fc9c5d21218bb47ac301d1714eb3ce54365ef869ba7c8f563a3d8ad7c83da",
+    "run-spec.json": "c94eeb7a9ebcdedcb84046927b91954ac36ce32cfeeca28c597042329e01f090",
+    "server111-window-ACK.json": "28108af6a31f408be83beb4f64ac51b2fb4a503618e198092cbc5f0e611b7410",
+    "source-tests-selection.json": "cec01f095db84414129c8d547a6b9f334f020c7ea6d8e275ff42c7445f0374f6",
+    "source.json": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+    "source05-independent-review.json": "c59089342f85203616fdacaec3dbecefeded00b3d420da55fe486474b5283273",
+    "source05-receipt.json": "fabcc91fc229457d8283c038ac334c768257c65215ad86ba346c02831f7112bd",
+    "stage-outer-receipt.json": "95ee4ba460c2f1f2533c59b18377adc00e10aec52f88074171f09f5206bc9c1b"
+  },
+  "fresh_conflicts": [],
+  "resource_snapshot": {
+    "at": "2026-10-08T18:18:01.298938+00:00",
+    "attributable_logical_bytes": 29693411965,
+    "conflicts": [],
+    "host_free_bytes": 180782223360,
+    "loadavg": "0.12 0.11 0.17 1/1195 2190498\n",
+    "own_relevant_processes": [
+      {
+        "comm": "python3",
+        "exe": "/usr/bin/python3.14",
+        "pid": 2190498
+      }
+    ],
+    "previous_reservation_sha256": "5ab240a0e60cb2e4b5b79f873a3ae73bf08612cd810c81a3a637b1f33431f42a"
+  },
+  "source_paths": 9878
+}

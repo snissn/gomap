@@ -1,0 +1,26 @@
+{
+  "proof": {
+    "ROOT_audit_sha256": "bdaf4b17750ec39e7b508cffed849a95df5bd93e53f2634dc8fe651598e94365",
+    "all_remote_phases_joined": true,
+    "at": "2026-10-08T17:33:28.910467+00:00",
+    "failed_packet_retained": true,
+    "finite": false,
+    "fresh_conflicts": [],
+    "outer_SSH_and_tool_actual_join": true,
+    "performance": false,
+    "remote_receipt_sha256": "72d7610247bffdff5b5123f64d72b2c6447984f8012e80b5e1eed292cb4c2a13",
+    "reservation": {
+      "all_remote_phases_joined": true,
+      "authorization_sha256": "bf3bac69c3395d5e81d183b68e312f02c852a0a7e0154894a19d6f7c90413f84",
+      "outer_join_audited": false,
+      "owner": "R1 #5090 ROOT",
+      "receipt_sha256": "72d7610247bffdff5b5123f64d72b2c6447984f8012e80b5e1eed292cb4c2a13",
+      "status": "joined_pending_ROOT_audit_v2",
+      "token": "M23-phase2-functional-v11-172853"
+    },
+    "server111_runtime_released": true,
+    "source_retained": true
+  },
+  "release_outer_sha256": "e71e535d68eecf598b9d36c6948ecbb9cc2944255f5764682d068f1d0b34cb7f",
+  "remote_proof_sha256": "a7f946c257aaf7501094863c658dda6a000477a3869b2792d21769d0d2f48463"
+}

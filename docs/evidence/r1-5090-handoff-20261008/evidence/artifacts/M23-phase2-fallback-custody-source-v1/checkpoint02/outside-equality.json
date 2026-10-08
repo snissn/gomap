@@ -1,0 +1,10 @@
+{
+  "all_equal": true,
+  "changed_paths": [
+    "TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go",
+    "TreeDB/internal/rootpublication/resource_set.go"
+  ],
+  "new_paths": [],
+  "outside_existing_count": 10075,
+  "removed_paths": []
+}

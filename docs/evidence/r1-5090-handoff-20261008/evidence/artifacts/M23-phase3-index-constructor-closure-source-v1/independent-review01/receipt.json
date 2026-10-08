@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-08T17:45:08.821553+00:00",
+  "bindings_sha256": "b6808db2438ac04ece0c8c9faef4de474582b7c8e5773eee914abc70067aad42",
+  "packet_receipt_sha256": "3e2a2eaae6a54a2cad1ec538aec32d01385faa1c17d494d0edbc542e9bcf15c7",
+  "review_sha256": "87263e9cbecf2ecdd6ad81e98b07d2c2e2b67af3b3045518de02f84e808ae24b",
+  "runtime_commands": false,
+  "scope_limitations": [
+    "online vacuum replacement bypasses helper",
+    "early fatal test-owned reader discharge not explicit",
+    "finite/full128MiB/platform/performance remain unqualified"
+  ],
+  "source_writes": false,
+  "status": "ACCEPT_SCOPED_SOURCE_CLOSED_STOPPED"
+}

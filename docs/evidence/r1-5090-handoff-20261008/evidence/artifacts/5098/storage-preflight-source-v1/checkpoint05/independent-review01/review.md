@@ -1,0 +1,5 @@
+Scoped source ACCEPT. The fresh diagnostic uses MkdirTemp gomap-r1-tree- and default public OpenBackendWithCachedLeafLogStats. resolveOpenDirLayout maps this fresh root to root/maindb, and openBackend installs layout.mainDir into Options.Dir. Reading maindb/index.db therefore matches the actual public fresh layout. The emitted relative path now identifies that same file. No fallback lookup or recovery authority was added; the existing raw-slot diagnostic limitation remains.
+
+The three-line patch changes only path, explanatory comment, and diagnostic field. Cleanup remains installed before constructors and checks held reader, DB, and log completion before conditional removal; census errors preserve failed DB custody. Defaults, fixtures, full oracles, workload geometry, Unix platform guard, and resource limits are unchanged. No further material finding in this narrow delta.
+
+Named inspected source hashes and one-file archived candidate were verified. No whole mutable worktree claim or runtime replay was performed. Prior runtime evidence is ROOT-provided. Default rollover, N, finite fit, economics, performance, and integration acceptance remain closed.

@@ -1,0 +1,10 @@
+{
+  "TreeDB/internal/residentcredit/owner.go": "8a16b97a8e03c704beeecfc84cd740f137b9e9b8c3384ac9a717fdaaa31ebf45",
+  "TreeDB/internal/rootpublication/resource_append_mutation_test.go": "ad9b253a64c9fe57638de7f587fd6c4fc8f9541568946fa51aad505af12639d4",
+  "TreeDB/internal/rootpublication/resource_cleanup_custody_v1_test.go": "7a3fbf3e6446c2aaef7e1f07bc306293d95e8b38cf079751f3367614948415ac",
+  "TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go": "4bf8116cab2bb3cf15fb754d6d2f265fae9b7daccc06bea5450f0dd6dc2bb9eb",
+  "TreeDB/internal/rootpublication/resource_physical_union.go": "e85b00513928717a893046bb97e920f13591fc0300a01e75cb1eb33c2170a426",
+  "TreeDB/internal/rootpublication/resource_selector.go": "0dd9ef0237e9b078ac956e8cd3fb22ce7e933d43f46a1f66cd5796ac76f02056",
+  "TreeDB/internal/rootpublication/resource_set.go": "28948fa60bc6e6104b4309800daf949a2995b5fd4a74bda32260963aa63464c2",
+  "TreeDB/internal/rootpublication/resource_token.go": "3c1381c91427fec9db73c4807a997ca84fb4e60d5703536eeb288bfca52e8ea1"
+}

@@ -1,0 +1,14 @@
+{
+  "AGENTS.md": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+  "TreeDB/AGENTS.md": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+  "TreeDB/db/index_constructor_closure_v1_test.go": "eada6ba2a93bdac4195bc08587e924b9de3e296c2d4a3d27f32f62c620811839",
+  "TreeDB/db/index_gen.go": "e070f016555c8183834166013dc67daa7131a3696aa74b34ea722cb3e32706de",
+  "TreeDB/db/pager_holder_lifetime.go": "b6b15c113e5bbf0d5402756eca49b1d3a80e456e1d93846dca3a761142da787b",
+  "TreeDB/internal/allocatorownership/managed_writer.go": "48e1289a734d70f7cf9108a4057def7bddab01a84a4270f9ec7ccf7931e02d27",
+  "TreeDB/internal/allocclass/class.go": "3e4ec35e478ab1082806e93f067b7c93d9d98772c106b83f3a6d70a7daa1392b",
+  "TreeDB/internal/residentcredit/owner.go": "8a16b97a8e03c704beeecfc84cd740f137b9e9b8c3384ac9a717fdaaa31ebf45",
+  "TreeDB/lifecycle/graveyard.go": "71069db485444734531d826ed719a7646544fe806fb606ed64cff46b719c633f",
+  "TreeDB/lifecycle/graveyard_constructor_layout_v1_test.go": "452c25d1bf142a7054cdb86f3175a27e627b1fde7b881881b240274ee4d7e34d",
+  "TreeDB/lifecycle/registry.go": "43f3c55893c3d7c2b7b340132375de87d88c86a288846cbc1ea22ed23348afdf",
+  "TreeDB/pager/owned_lifetime.go": "09d0471b3b15a0e67722cdb1198d86231b58d7cb6631a3ed0f1deabaea9e17c9"
+}

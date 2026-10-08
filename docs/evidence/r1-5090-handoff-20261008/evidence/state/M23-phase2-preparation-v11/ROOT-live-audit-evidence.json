@@ -1,0 +1,144 @@
+{
+  "at": "2026-10-08T17:32:07.791400+00:00",
+  "decoded_files": {
+    "ROOT-source-preparation-acceptance.json": "7890d7cbdf812653dc6882e219f63c162e726d10148d9890c78c07bbecb3fd3f",
+    "actual-tools.json": "cdc89141caedc1433ce5627b0fac9ace03b74333de2f167511ef4b011b904734",
+    "authorization.json": "bf3bac69c3395d5e81d183b68e312f02c852a0a7e0154894a19d6f7c90413f84",
+    "commands.json": "d605ec0ad0553cb3751dd15ff6e1d4b2f7710e9a5043394d175b9e77b12d100c",
+    "custody.json": "681dc149d2bd8080f97f014ad9815008718a0953afa8630ddad20638ab80cd19",
+    "driver.py": "1dc96eb19432c3062dd762bd6028076ec0c95f07437ffb8d8970703600179af6",
+    "environment.json": "13e68c09160009b3019d6a78b6ca072b7a8c09ea36f0f77448083150e1c19ead",
+    "external111-last-release.json": "11804ed4afb8ec5021c3fc6ee8e1f9bea2a9844e421124a96d66e01abe126827",
+    "fixture08-independent-review-receipt.json": "b836a4d294774df3ce2bf4e29153aa1576aed26e52c24294c8534459428b3000",
+    "format-receipt.json": "22efdf3802c508aac656943eb82de117f74dc23698fb9770ffb3927867ec0aae",
+    "fresh-process-preflight.json": "3d89891bf52f510038d18641d051e3fb450a6ded9311ff6677f7d42c75988187",
+    "grant-stage-receipt.json": "92b1d0b452664d5e64f8dc803063395c7eaf957d5c2a088b855e3fa287e2b530",
+    "normal-TreeDB-buildinfo.log": "5081ca3e5eb5a6f89f2f2752df5182a26b0e226817a8548989a466ba53fff4ad",
+    "normal-TreeDB-buildinfo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-TreeDB-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-TreeDB-compile.stderr.log": "2cae1078dfc5414485a018f552b57cca375fb05019aa322d85a9a3f057b2a566",
+    "normal-TreeDB-functional.log": "cd54c9afcc6ba1741d85b32c991ac98b2d7b3ccc38752640dd3622bc41caa1ef",
+    "normal-TreeDB-functional.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-TreeDB-list.log": "ee5b3ed64d9ad251d3443d7653714a1e98715c1c5202900640fe3ffdbc10e5c5",
+    "normal-TreeDB-list.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-db-buildinfo.log": "6212f5dbf6d00c511c40000b6ec7ebc6a9a0facf345000498a100bad2efd9338",
+    "normal-db-buildinfo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-db-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-db-compile.stderr.log": "c16728b85d0cb5243e73713e6a1444bf3e8fe29225ec51c8addf27c2bf22381c",
+    "normal-db-functional.log": "504e076aad43bcba283b739816bb1b7409116e1f24490f74f7e0211012b4f5e4",
+    "normal-db-functional.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-db-list.log": "d923fcafc56f88a11426c7a31c341b6140f1aa13df1d117ce06d551350cab51d",
+    "normal-db-list.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-expected.json": "dda2a429a1b05daea2873ecd56a66a3e76600bad4e133ba89cf785ed381d326f",
+    "normal-inputs.json": "9cb4f97f0802cd16600248801c7f37bff77560ca8e58c2aa155325ef903d3b76",
+    "normal-inputs.log": "fa8418dc92e1b0debde8b27548d8f00e91a5aea727bba361edd2dba3a5a6f554",
+    "normal-inputs.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-pager-buildinfo.log": "665edbbda98904fde51ee02fdabf1ec6ba2fb69756ccbd8fa1f6184b5feca538",
+    "normal-pager-buildinfo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-pager-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-pager-compile.stderr.log": "b6c2bf7ad3fffda2681c41e61c41efc4db8a788924a638c2bbcfdcf32d231400",
+    "normal-pager-functional.log": "67dbcd05e3224f403a697795a0c6eec56d2b363c3f496684d2ab2594a80311d5",
+    "normal-pager-functional.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-pager-list.log": "0fbcbbef56e2ca0ac23cab1e46bba0a3c9007ac7be9dce4b68e2f6d4a6f908cb",
+    "normal-pager-list.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-residentcredit-buildinfo.log": "4c267e42ccf57f0dba1f50c51ac58db41b47289d696ddb6479c8118353bf1aa2",
+    "normal-residentcredit-buildinfo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-residentcredit-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-residentcredit-compile.stderr.log": "306e8ed4b31bc452948bfc64ad2d645fc148568c373bc59df495bd504b5d29f3",
+    "normal-residentcredit-functional.log": "d59ecf1f0bb2591241eb3ff33098add452dd204333173257cf909274d91a56d8",
+    "normal-residentcredit-functional.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-residentcredit-list.log": "711c0a853592fa61738324ba2c67d16011b16665f074633e9c2293971e1d2480",
+    "normal-residentcredit-list.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-rootpublication-buildinfo.log": "b78a2ef0aa8bca8f4e4290bf7ecc954ab161b4302bbe81faf91a5f4b1fbdb008",
+    "normal-rootpublication-buildinfo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-rootpublication-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-rootpublication-compile.stderr.log": "e5f9a310ac7559548e85306017e0a307f229d94a4edffb75c4e64da64b30e440",
+    "normal-rootpublication-functional.log": "f63f68ada293b80033b6f030d2cdac5dc47d817efff07f5404ba57c003248225",
+    "normal-rootpublication-functional.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "normal-rootpublication-list.log": "ec5584c7b3f9a748579a6648194e39fa92717e177388f4a59e2af16fdf52e3cc",
+    "normal-rootpublication-list.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "pinned-toolchain-source.json": "cfbf27003420164cef9440ae61e8dcc43aaf7f7b8854c3fc55ce0d7a459c4a44",
+    "preserved-binaries.json": "ec48c5990e1f61f155052ab42ecb8a846cebb1e1262b548b3e79928bcc85534e",
+    "prior-genuine-runtime-release.json": "943b3671e342e2fa74c115b9d573276f7e82395651290a851c71a89ae4991790",
+    "prior-runtime-release.json": "a7da96d0fa56d78b44e4c82889ecd25f263eaf6f5af6ea64f737917fe4a76e60",
+    "readback-outer-receipt.json": "2bdeb5f37fc8cf947e42f447deaaf6e83d855b57d626639eb575c312b69654d5",
+    "receipt.json": "72d7610247bffdff5b5123f64d72b2c6447984f8012e80b5e1eed292cb4c2a13",
+    "remote-stage-receipt.json": "aebdcfaba18232f7e5adab765f56ed08795d72e5db1330a3c683a8136ce5128c",
+    "remote-supervisor-receipt.json": "cf7d946374f1d38e158a6664c936ff57e45ecd14466695758afa4cac506fada2",
+    "run-spec.json": "4445bcc97ad7f01850c5540e3c20bc52e344f09bb4bb043a1b5b4abab0144799",
+    "server111-window-ACK.json": "dfb611c366bd180063d282ca48c1ddd83450d606e3f2a64ebdebec6ca735d15e",
+    "single-allocation-selection.json": "6542e12fa598298ba4cd0c544daad75821fca39171f5098678aab07b56035d46",
+    "source-stage-receipt.json": "76b29461d788e83f7188088da2a068979919860a2bfa197179179cad8bcf6b79",
+    "source-tests-selection.json": "84a740527178be51578c8fc5fe71173c45aaf8c9cad5f7028c1f76acf207f4ad",
+    "source.json": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff",
+    "stage-outer-receipt.json": "f0e0bdec9024aad41f9a17bdfa8acf42881ce6ab169f1bff4cf7889b997a22a6",
+    "store-custody-api-selection.json": "ef98f9989f49b671198ef609020e2868bc199d0fa0e470047b458d7cdb642517",
+    "test2json-buildinfo.log": "b05193b87025f7a21ea6a9b5dc79574e4b8ae5fa629c91a04a7176ff6ec855e5",
+    "test2json-buildinfo.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test2json-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "test2json-compile.stderr.log": "f333eaf6e9f758b3c4bfa4b5481b3c80b93801bd72053ebbbb0ae3f33aca9fe3",
+    "test2json-compiler-inputs.json": "0caa3e5c3a4764aaac9504936ff7e348b0a9efbb6f7839cc91eadea9276dcb2a",
+    "test2json-inputs.log": "9da308303cf5cf6267cbc8435f69837cd8c56402378a18c8c05ad2cbbd8e9f1c",
+    "test2json-inputs.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "version.log": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7",
+    "version.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "fetch_outer_receipt_sha256": "d8ee0c7b0eae888aa6c272fbe36fd96b9017331e86a447835e5b87a962ec93bb",
+  "input_counts": {
+    "normal-inputs.json": 3141,
+    "test2json-compiler-inputs.json": 693
+  },
+  "no_live_owned_driver_or_ELF": true,
+  "pinned_toolchain_exact": true,
+  "reservation": {
+    "all_remote_phases_joined": true,
+    "authorization_sha256": "bf3bac69c3395d5e81d183b68e312f02c852a0a7e0154894a19d6f7c90413f84",
+    "outer_join_audited": false,
+    "owner": "R1 #5090 ROOT",
+    "receipt_sha256": "72d7610247bffdff5b5123f64d72b2c6447984f8012e80b5e1eed292cb4c2a13",
+    "status": "joined_pending_ROOT_audit_v2",
+    "token": "M23-phase2-functional-v11-172853"
+  },
+  "reservation_sha256": "8babba8ed72f1412b21c601e12ff8e349fd893e074cc675c85b3f16c394d0595",
+  "source_exact": true,
+  "source_paths": 10074,
+  "special_sources": {
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/db/leak_test.go": {
+      "sha256": "06d4c247e4711980dfd6e83a5b3258fcd27ad6d56098797040741c7902ce22ce",
+      "text": "package db\n\nimport (\n\t\"testing\"\n\n\t\"go.uber.org/goleak\"\n)\n\n// sharedLoop appears in the stacks of the memtable package's documented\n// process-global fallback indexer; see TreeDB/internal/memtable/leak_test.go.\nfunc TestMain(m *testing.M) {\n\tgoleak.VerifyTestMain(m,\n\t\tgoleak.IgnoreAnyFunction(\"github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop\"),\n\t)\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/dictdb/leak_test.go": {
+      "sha256": "37443add4f0f4b43e6465c3d135c9b92b787c4ae1db9077dfd3901fa4f7ddffd",
+      "text": "package dictdb\n\nimport (\n\t\"testing\"\n\n\t\"go.uber.org/goleak\"\n)\n\n// sharedLoop appears in the stacks of the memtable package's documented\n// process-global fallback indexer; see TreeDB/internal/memtable/leak_test.go.\nfunc TestMain(m *testing.M) {\n\tgoleak.VerifyTestMain(m,\n\t\tgoleak.IgnoreAnyFunction(\"github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop\"),\n\t)\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/rootpublication/leak_test.go": {
+      "sha256": "e5bd1abf2b17b9f4652ba50d752839264394edcfcefce8c5dc6edf87a116f767",
+      "text": "package rootpublication\n\nimport (\n\t\"testing\"\n\n\t\"go.uber.org/goleak\"\n)\n\nfunc TestMain(m *testing.M) {\n\tgoleak.VerifyTestMain(m)\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/templatedb/leak_test.go": {
+      "sha256": "80024c558d140b9078fd7f964195e0ed873a0cdee180e1a238f15cf2c430493c",
+      "text": "package templatedb\n\nimport (\n\t\"testing\"\n\n\t\"go.uber.org/goleak\"\n)\n\n// sharedLoop appears in the stacks of the memtable package's documented\n// process-global fallback indexer; see TreeDB/internal/memtable/leak_test.go.\nfunc TestMain(m *testing.M) {\n\tgoleak.VerifyTestMain(m,\n\t\tgoleak.IgnoreAnyFunction(\"github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop\"),\n\t)\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/fuzz_decode_test.go": {
+      "sha256": "22cca4651619d33e112e25fe407c96e7f920e9da5a0d0888a10006b4499cc81c",
+      "text": "package valuelog\n\nimport \"testing\"\n\nfunc FuzzDecodeFrame(f *testing.F) {\n\traw, _, err := EncodeFrame(0, nil, []Record{{RID: 1, Value: []byte(\"hello world\")}})\n\tif err == nil && len(raw) > 0 {\n\t\tf.Add(raw)\n\t\tif len(raw) > 4 {\n\t\t\tf.Add(raw[:len(raw)/2])\n\t\t}\n\t}\n\tf.Add([]byte{0x00})\n\tf.Add([]byte{0xff, 0xff, 0xff, 0xff})\n\tf.Add([]byte{0x01, 0x02, 0x03, 0x04, 0x05})\n\n\tf.Fuzz(func(t *testing.T, data []byte) {\n\t\t_, _, _, _, _ = DecodeFrame(data)\n\t})\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/leak_test.go": {
+      "sha256": "0ae55389eaf6a08943f81d247508de0cda19309fa9b1a0b8da09cfd4b8c2bca8",
+      "text": "package valuelog\n\nimport (\n\t\"testing\"\n\n\t\"go.uber.org/goleak\"\n)\n\nfunc TestMain(m *testing.M) {\n\tgoleak.VerifyTestMain(m)\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/internal/valuelog/valuelog_fuzz_test.go": {
+      "sha256": "48852b0b1f5717a4f9f426d9ee14fc57604c6ee7823431af8e98e6430c078d97",
+      "text": "package valuelog\n\nimport (\n\t\"os\"\n\t\"path/filepath\"\n\t\"testing\"\n\n\t\"github.com/snissn/gomap/TreeDB/internal/limits\"\n)\n\nconst valuelogFuzzMaxRecord = 1 << 20\n\nfunc seedValueLogData() ([]byte, uint32, error) {\n\tdir, err := os.MkdirTemp(\"\", \"valuelog-fuzz\")\n\tif err != nil {\n\t\treturn nil, 0, err\n\t}\n\tdefer os.RemoveAll(dir)\n\n\tfileID, err := EncodeFileID(0, 1)\n\tif err != nil {\n\t\treturn nil, 0, err\n\t}\n\tpath := filepath.Join(dir, \"value-l0-000001.log\")\n\tw, err := NewWriter(path, fileID)\n\tif err != nil {\n\t\treturn nil, 0, err\n\t}\n\tif _, err := w.Append(0, nil, 1, []byte(\"v\")); err != nil {\n\t\t_ = w.Close()\n\t\treturn nil, 0, err\n\t}\n\tif err := w.Close(); err != nil {\n\t\treturn nil, 0, err\n\t}\n\tdata, err := os.ReadFile(path)\n\tif err != nil {\n\t\treturn nil, 0, err\n\t}\n\treturn data, fileID, nil\n}\n\nfunc FuzzValueLogReader(f *testing.F) {\n\tf.Add([]byte{})\n\tif seed, fileID, err := seedValueLogData(); err == nil {\n\t\tf.Add(seed)\n\t\t_ = fileID\n\t}\n\n\tf.Fuzz(func(t *testing.T, data []byte) {\n\t\tif len(data) > valuelogFuzzMaxRecord {\n\t\t\treturn\n\t\t}\n\t\toldMax := limits.MaxRecordSize\n\t\tlimits.MaxRecordSize = valuelogFuzzMaxRecord\n\t\tt.Cleanup(func() { limits.MaxRecordSize = oldMax })\n\n\t\tdir := t.TempDir()\n\t\tpath := filepath.Join(dir, \"value-l0-000001.log\")\n\t\tif err := os.WriteFile(path, data, 0600); err != nil {\n\t\t\treturn\n\t\t}\n\t\tfileID, err := EncodeFileID(0, 1)\n\t\tif err != nil {\n\t\t\treturn\n\t\t}\n\t\tr, err := NewReader(path, fileID)\n\t\tif err != nil {\n\t\t\treturn\n\t\t}\n\t\tr.SetDictLookup(func(uint64) ([]byte, error) {\n\t\t\treturn nil, ErrMissingDict\n\t\t})\n\t\tdefer r.Close()\n\t\tfor i := 0; i < 8; i++ {\n\t\t\tif _, _, _, err := r.ReadNext(); err != nil {\n\t\t\t\tbreak\n\t\t\t}\n\t\t}\n\t})\n}\n\nfunc FuzzValueLogDecodeMixedFrame(f *testing.F) {\n\tf.Add(byte(BlockCodecSnappy), []byte(\"abc\"), uint32(3))\n\tf.Add(byte(BlockCodecLZ4), []byte(\"\"), uint32(0))\n\tf.Add(byte(BlockCodecZSTD), []byte(\"\"), uint32(0))\n\tf.Add(byte(0xFF), []byte{0x01, 0x02, 0x03}, uint32(16))\n\n\tf.Fuzz(func(t *testing.T, codecID byte, payload []byte, rawLen uint32) {\n\t\tif len(payload) > valuelogFuzzMaxRecord {\n\t\t\treturn\n\t\t}\n\t\tif rawLen > valuelogFuzzMaxRecord {\n\t\t\trawLen = valuelogFuzzMaxRecord\n\t\t}\n\t\theader := FrameHeader{\n\t\t\tVersion:  FrameVersion,\n\t\t\tFlags:    FrameFlagCompressed,\n\t\t\tReserved: codecID,\n\t\t}\n\t\t_, _ = decodeFramePayloadTo(header, payload, nil, rawLen, nil)\n\t})\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/leak_test.go": {
+      "sha256": "b52ec5b4d1c2485f57a9a3acb57a74b04504b71165c8da4884e0a64071357947",
+      "text": "package treedb\n\nimport (\n\t\"testing\"\n\n\t\"go.uber.org/goleak\"\n)\n\n// sharedLoop appears in the stacks of the memtable package's documented\n// process-global fallback indexer; see TreeDB/internal/memtable/leak_test.go.\nfunc TestMain(m *testing.M) {\n\tgoleak.VerifyTestMain(m,\n\t\tgoleak.IgnoreAnyFunction(\"github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop\"),\n\t)\n}\n"
+    },
+    "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/source/M23-phase2-v11/TreeDB/pager/leak_test.go": {
+      "sha256": "a80b1f64a3e61babe364b37c0a0b249fa9561bd3ee5ad90f94a73a82a1487f40",
+      "text": "package pager\n\nimport (\n\t\"testing\"\n\n\t\"go.uber.org/goleak\"\n)\n\n// sharedLoop appears in the stacks of the memtable package's documented\n// process-global fallback indexer; see TreeDB/internal/memtable/leak_test.go.\nfunc TestMain(m *testing.M) {\n\tgoleak.VerifyTestMain(m,\n\t\tgoleak.IgnoreAnyFunction(\"github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop\"),\n\t)\n}\n"
+    }
+  },
+  "tools_inputs_binaries_exact": true
+}

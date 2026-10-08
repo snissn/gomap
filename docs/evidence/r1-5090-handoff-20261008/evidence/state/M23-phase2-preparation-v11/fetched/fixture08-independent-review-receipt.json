@@ -1,0 +1,16 @@
+{
+  "bindings_sha256": "029eabcd0ffd3622dd479de3eb5c3eaa1130efc577cb4768f10ee8146678ecf6",
+  "created_utc": "2026-10-08T17:28:29.309293+00:00",
+  "limitations": [
+    "ordinary test fixture only",
+    "runtime normal/race and actual joins not reviewed",
+    "no finite/performance/full-platform acceptance"
+  ],
+  "material_findings": [],
+  "review_sha256": "7c4942b5ba50e141b3e0824e2a631903b828184f87277de7fe18ee1109e5a196",
+  "runtime_commands": false,
+  "source_after_sha256": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff",
+  "source_receipt_sha256": "d0981b46184d40366b5fb8b47472480b20d43808d9f3f6f2214497d86b5293cb",
+  "source_writes": false,
+  "status": "ACCEPT_SOURCE_ONLY_CLOSED_STOPPED"
+}

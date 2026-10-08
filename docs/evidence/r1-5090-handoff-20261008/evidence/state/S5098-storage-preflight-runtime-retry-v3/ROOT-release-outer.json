@@ -1,0 +1,9 @@
+{
+  "actual_wait": true,
+  "exception": null,
+  "exit": 0,
+  "group_absent": true,
+  "pid": 99293,
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "afceff13210c8e22d0bdc12dbc14b229e3472d596baf5605310acb0f69673636"
+}

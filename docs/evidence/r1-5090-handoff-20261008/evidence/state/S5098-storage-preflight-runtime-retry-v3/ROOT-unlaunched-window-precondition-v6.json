@@ -1,0 +1,10 @@
+{
+  "Go_started": false,
+  "SSH_started": false,
+  "at": "2026-10-08T17:47:47.968362+00:00",
+  "authorization_created": false,
+  "reason": "remaining explicit window below prospective600s whole-driver minimum after30s cleanup slack",
+  "source_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+  "tool_actual_exit": 1,
+  "tool_chunk": "4238fd"
+}

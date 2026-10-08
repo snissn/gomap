@@ -1,0 +1,31 @@
+{
+  "Go_phase_actual_wait_exit": [
+    0,
+    1
+  ],
+  "ROOT_audited": true,
+  "all_processes_joined": true,
+  "at": "2026-10-08T17:36:42.028604+00:00",
+  "evidence_sha256": "ab935b83374da612b9de47287e4c167a7d469d5125a3e1255f566f392905b69c",
+  "fetch_tool_exit": 0,
+  "fetch_tool_session": 62189,
+  "finite": false,
+  "outer_tool_exit": 1,
+  "outer_tool_session": 51420,
+  "performance": false,
+  "remote_receipt_sha256": "c9ab5533a03a0e25c7a49a6fe777de4c05c4062908abb33d124d438b9216d2b0",
+  "reservation": {
+    "all_remote_phases_joined": true,
+    "authorization_sha256": "a6fd5d24c3a3de1236a45b5a4daccb4ec42067894ade188bda9caa39b50b28ef",
+    "outer_join_audited": false,
+    "owner": "R1 #5090 ROOT",
+    "receipt_sha256": "c9ab5533a03a0e25c7a49a6fe777de4c05c4062908abb33d124d438b9216d2b0",
+    "status": "joined_pending_ROOT_audit_v2",
+    "token": "S5098-short-preflight-v2-173424"
+  },
+  "result": "REJECT ROOT preparation omission: missing private TMPDIR; version0/list1, no compile or test began",
+  "server111_window_still_ROOT_owned": true,
+  "source_paths": 9878,
+  "source_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+  "tests_executed": false
+}

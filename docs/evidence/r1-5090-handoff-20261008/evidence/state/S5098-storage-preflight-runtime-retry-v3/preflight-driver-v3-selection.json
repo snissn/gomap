@@ -1,0 +1,11 @@
+{
+  "at": "2026-10-08T17:26:47.517765+00:00",
+  "purpose": "ROOT detected parser overwrote compiler-input map with arm records; local variable rename preserves actual source closure through final check",
+  "before_sha256": "be8048ff70dcda8e21ea86720e3b1f1fe6a3b4695205faad856052ddc34def38",
+  "after_sha256": "4e5c8ca8fb815f52564bcea2ed838b8d38c464f8c31019a5800cdf006eb0ab0d",
+  "patch_sha256": "7b4feccc2a71eb8535e386115a7e34a9b9b197311ae52d82ad6191d8cf986342",
+  "source_unchanged": true,
+  "runtime_granted": false,
+  "finite": false,
+  "performance": false
+}

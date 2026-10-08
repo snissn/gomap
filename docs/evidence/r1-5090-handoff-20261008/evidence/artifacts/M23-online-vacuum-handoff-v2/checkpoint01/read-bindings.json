@@ -1,0 +1,12 @@
+{
+  "TreeDB/db/compact_storage.go": "59d57c87ce42abbdc32ecd168eeae26ce4a377ef8ad6b05cf0607a7c826d6e21",
+  "TreeDB/db/db.go": "e3b7de0bbaa08a772b47de7b1d3677262a03c59f29640e04ee192f33e0091d05",
+  "TreeDB/db/durable_root_recovery.go": "0272146cabdf38b4da2990420aa2c1b2110c4b11e889bc929436dc528f1f31b1",
+  "TreeDB/db/index_constructor_closure_v1_test.go": "eada6ba2a93bdac4195bc08587e924b9de3e296c2d4a3d27f32f62c620811839",
+  "TreeDB/db/index_gen.go": "e070f016555c8183834166013dc67daa7131a3696aa74b34ea722cb3e32706de",
+  "TreeDB/db/index_gen_db.go": "ff9b2b6b7f3d5bde14ee2998548b2b63ea62a2bec6ac40bc94f89be81de38e22",
+  "TreeDB/db/pager_holder_lifetime.go": "b6b15c113e5bbf0d5402756eca49b1d3a80e456e1d93846dca3a761142da787b",
+  "TreeDB/db/recoverable_root_set.go": "c597d15435ae569e51c570236e3951551aa42ca7487031382c4491c382077857",
+  "TreeDB/db/root_publication_activation.go": "5143508f14bfef7bfaf5ef465c3054fc56761022df95bba610088d3eb219562e",
+  "TreeDB/db/vacuum_online.go": "5a06495911e03d29414747f6cb99602a6b451d88970e965b47c094fd5c2f1e80"
+}

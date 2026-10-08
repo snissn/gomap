@@ -1,0 +1,12 @@
+{
+  "status": "SOURCE_INQUIRY_COMPLETE_CONDITIONAL_SELECTION",
+  "timestamp_utc": "2026-10-08T17:50:10.304357+00:00",
+  "artifacts": {
+    "bindings.json": "1f8e73166f5bb8e5f9190c3a6c312831279c01ca4acfa832d96469cc51821a6f",
+    "inquiry.md": "69560828e5f28a58caadff3880c2517064c9c42895f9f1f4c04a9b2d4e602192"
+  },
+  "source_writes": false,
+  "go_or_runtime": false,
+  "finite_admission": false,
+  "bindings_scope": "17 named inspected production/test blobs; no whole mutable source assertion"
+}

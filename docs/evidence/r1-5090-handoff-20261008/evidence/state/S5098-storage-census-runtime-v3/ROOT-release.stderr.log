@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "<string>", line 14, in <module>
+    assert hashlib.sha256(rec.read_bytes()).hexdigest()==q['remote_receipt_sha256']
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError

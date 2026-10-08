@@ -1,0 +1,11 @@
+{
+  "Go": false,
+  "ROOT_accepted_exact_namespace_derivative": true,
+  "at": "2026-10-08T17:37:57.951274+00:00",
+  "onlychange": "D run\u2192run-retry3; sameNS/source/cache/tmp/spec/environment; freshruntimefiles andsingle-usegrant",
+  "original_driver_sha256": "4e5c8ca8fb815f52564bcea2ed838b8d38c464f8c31019a5800cdf006eb0ab0d",
+  "prior_genuine_release_sha256": "7a984f01581e9d8a822497a4b39052670ce2ff816178dec247d050fb12aec6fd",
+  "retry_driver_sha256": "2d3dc675db9b1f348c49e54c38e3bc52117c5909cf17580d3ac1ed212b8badc7",
+  "setup_correction": "create frozen environment TMPDIR andprivatecache roots beforego",
+  "source_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891"
+}

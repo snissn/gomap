@@ -1,0 +1,21 @@
+{"Action":"start","Package":"github.com/snissn/gomap/cmd/collection_workload_bench"}
+{"Action":"run","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098","Output":"=== RUN   TestR1SDefaultStoragePreflight5098\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/original"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/original","Output":"=== RUN   TestR1SDefaultStoragePreflight5098/original\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/original","Output":"2026/10/08 07:52:40 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=351 raw=32814 stored=8980 ratio=0.274\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/original","Output":"2026/10/08 07:52:40 treedb: value-log dict published class=single_value dict_id=1482335941809869459 k=32 payload_ratio=0.009 total_ratio=0.148\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/original","Output":"    s_default_storage_preflight_5098_test.go:262: open /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/tmp/gomap-r1-tree-1927759698/index.db: no such file or directory\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/original","Output":"--- FAIL: TestR1SDefaultStoragePreflight5098/original (1.95s)\n"}
+{"Action":"fail","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/original"}
+{"Action":"run","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/exposure"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/exposure","Output":"=== RUN   TestR1SDefaultStoragePreflight5098/exposure\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/exposure","Output":"2026/10/08 07:52:42 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=2097152 stored=1966545 ratio=0.938\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/exposure","Output":"2026/10/08 07:52:42 treedb: value-log dict published class=single_value dict_id=5450841743505919249 k=2 payload_ratio=0.938 total_ratio=0.938\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/exposure","Output":"    s_default_storage_preflight_5098_test.go:262: open /home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/tmp/gomap-r1-tree-3817663676/index.db: no such file or directory\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/exposure","Output":"--- FAIL: TestR1SDefaultStoragePreflight5098/exposure (2.24s)\n"}
+{"Action":"fail","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098/exposure"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098","Output":"--- FAIL: TestR1SDefaultStoragePreflight5098 (4.19s)\n"}
+{"Action":"fail","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Test":"TestR1SDefaultStoragePreflight5098"}
+{"Action":"output","Package":"github.com/snissn/gomap/cmd/collection_workload_bench","Output":"FAIL\n"}
+{"Action":"fail","Package":"github.com/snissn/gomap/cmd/collection_workload_bench"}

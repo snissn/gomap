@@ -1,0 +1,21 @@
+{
+  "M_phase2_NOT_accepted": true,
+  "N_selected": false,
+  "ROOT_accepted_source_preparation": true,
+  "actual_preparation_tool_join": {
+    "Go": false,
+    "actual_join": true,
+    "chunk": "ce3d94",
+    "exit": 0,
+    "scope": "bounded source stage and exact fresh process/completion/packet readback",
+    "session": 37234
+  },
+  "at": "2026-10-08T18:17:58.463175+00:00",
+  "defaults_resources_all_controls_full_oracles_work_unchanged": true,
+  "finite": false,
+  "fixed15_granted": false,
+  "namespace_only_driver_selection_sha256": "4aa1495cc3c3743024d652f3ee3f1c28433296f2e55c8832c83ac6deaf48e6fe",
+  "performance": false,
+  "source05_review_sha256": "c59089342f85203616fdacaec3dbecefeded00b3d420da55fe486474b5283273",
+  "source_sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918"
+}

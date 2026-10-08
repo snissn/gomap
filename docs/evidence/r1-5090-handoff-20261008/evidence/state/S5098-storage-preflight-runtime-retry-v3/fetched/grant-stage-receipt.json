@@ -1,0 +1,49 @@
+{
+  "Go_tests_authorized": true,
+  "at": "2026-10-08T17:48:14.815000+00:00",
+  "files": {
+    "ROOT-independent-S-diagnostic-reassessment.json": "b77865d339e3d3d5805445fb22e58cea9921ecb2fdf3d85f2a8ebbb61473fe36",
+    "ROOT-runtime-driver-v4-selection.json": "74f61f7bfda005a8b76144a8e4095d95dc9663e2f41fe774b2d3ba1bec75b3c1",
+    "ROOT-source-preparation-acceptance.json": "03b9d47abd2ff1f5c427233ddcecee1f8dd092a516c10704b25a3186124b62ec",
+    "ROOT-window-budget-v7-selection.json": "4c1810ca071dea159edfbadf57bb0df8dfba285ef417f5b07173cb46b6367a0e",
+    "authorization.json": "08913abea2ed9bcb37791c2842d6dce950b41d903d2f9e573f3030193645dc4b",
+    "driver3-independent-review-receipt.json": "9a6d877e167202b93f4339a56ec7252e5a9600aa12cce3a03b5fe67a1a8f43c7",
+    "external-V3-actual-release.json": "363b51a7fa3fc3d92f718fa71d80b8ab0b83c25f5285a2d07f28077f1a20715a",
+    "format-receipt.json": "a0b39962b6fb3a958803e4f3d58be30bdac1e5eb38613be1bbf440c43a1df2ab",
+    "independent-review-receipt.json": "75c1c8096663b8dd1b01de0d21291624aab052e721aff8ad649f98103ab551d7",
+    "pinned-toolchain-source.json": "cfbf27003420164cef9440ae61e8dcc43aaf7f7b8854c3fc55ce0d7a459c4a44",
+    "preflight-driver-selection.json": "470ec24fa419d3be6d2853b8f3446abf333b1eb875446014148b1b8ec8966889",
+    "preflight-driver-v3-selection.json": "eb9f8ee4aa188f2ae22d41745d7bc1fde104db86ae736fb389def55a1b970b98",
+    "preflight-driver-v4.py": "2d3dc675db9b1f348c49e54c38e3bc52117c5909cf17580d3ac1ed212b8badc7",
+    "prior-S-ROOT-RED-audit.json": "c7204fe1690b43985e1a903597d5d764894d36a3e5c5d1adcd4b51ed8af89226",
+    "prior-S-ROOT-runtime-release.json": "7a984f01581e9d8a822497a4b39052670ce2ff816178dec247d050fb12aec6fd",
+    "prior-genuine-runtime-release.json": "c35388f3b758dcae400900d109f33ff55c7ffd4a2c718d92c26aa86b23a61222",
+    "prior-runtime-RED-audit.json": "bdaf4b17750ec39e7b508cffed849a95df5bd93e53f2634dc8fe651598e94365",
+    "readback-outer-receipt.json": "62ae38c4a0a001acab9e30d41063ea6f4d4333fae4b6b73845d592ec80532eb3",
+    "remote-stage-receipt.json": "213ef6dde0134cf3f36ec54ecdcfe2ea4d6b1fcf8d239808f26f68fd8b2443ba",
+    "remote-supervisor-receipt.json": "1355680217cdda2d6fcfd651cfe4ab76f85705f35478d800e590459d81699130",
+    "resource-plan.json": "914150b1c7f922fe46c320e6eaba351d70ffc4bc3672787ff08f10a3a1213cf9",
+    "run-spec.json": "27955d6ce18c332ee5cf740cea39b1720982f247dde36804e59476f11e39c34f",
+    "server111-window-ACK.json": "0b490101697d7acd6efb3a9d66bc6e04dc368a3c9e028dc102228bb451dd67e9",
+    "source-tests-selection.json": "7fdc3f75da2f7768d66aaf67bcbf64e814a64b301c8ecd09db4300b95abb2fff",
+    "source.json": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+    "stage-outer-receipt.json": "7d362793f2ac18dbc4959f3bacbacbe0c52e99d0a505b592f90fe7687273eda9"
+  },
+  "fresh_conflicts": [],
+  "resource_snapshot": {
+    "at": "2026-10-08T17:48:14.814767+00:00",
+    "attributable_logical_bytes": 27389680381,
+    "conflicts": [],
+    "host_free_bytes": 184414220288,
+    "loadavg": "0.17 0.18 0.23 1/1194 2147110\n",
+    "own_relevant_processes": [
+      {
+        "comm": "python3",
+        "exe": "/usr/bin/python3.14",
+        "pid": 2147046
+      }
+    ],
+    "previous_reservation_sha256": "e9cd29adc54e478f5621d7f4d3f0ba2db7e02bf4d67e19fb47a2c800e87c83f2"
+  },
+  "source_paths": 9878
+}

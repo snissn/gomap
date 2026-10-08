@@ -1,0 +1,171 @@
+--- a/TreeDB/internal/rootpublication/resource_set.go
++++ b/TreeDB/internal/rootpublication/resource_set.go
+@@ -1120,7 +1120,27 @@
+ 	if op == nil { return }
+ 	builder.mu.Lock()
+ 	op.running = false
++	var creator *residentcredit.Scope
++	// A successful clone/Add has transferred every token role to the actual
++	// destination. Only a truly empty operation shell may finish here: no
++	// token/provider/registry/environment cleanup can execute under inherited
++	// gates. Nonempty, failed and uncertain roles stay on this same builder.
++	if !op.failed && !op.uncertain && op.cleanup.empty() {
++		link := &builder.pendingCleanup
++		for *link != nil && *link != op { link = &(*link).next }
++		if *link == op {
++			*link = op.next
++			op.next = nil
++			creator = op.creator
++			op.creator = nil
++		}
++	}
+ 	builder.mu.Unlock()
++	// Scope is concrete scalar accounting under its independent Owner mutex;
++	// it has no extensible release callback. Public/control births remain
++	// cumulatively charged; this discharges only the exact temporary edge.
++	op = nil
++	if creator != nil { creator.ReleaseStableMetadata() }
+ }
+ func (builder *StableResourceSetBuilder) addWithCleanupBoundaryV1(token *StableResourceToken, staging bool) (result error) {
+ 	if builder == nil || token == nil {
+@@ -3130,7 +3150,9 @@
+ 	if err := builder.requireOrdinaryMetadataLocked(); err != nil {
+ 		return nil, err
+ 	}
+-	if builder.closed || builder.abandoned || builder.cleanupRunning || builder.hasFailedCleanupLockedV1() {
++	if builder.closed || builder.abandoned || builder.cleanupRunning || builder.pendingCleanup != nil {
++		// Freeze transfers entries/views, never operation controls. A remaining
++		// running, paused, failed or uncertain owner must drain on this builder.
+ 		return nil, ErrResourceOwnership
+ 	}
+ 	covered := newStableReachabilitySet(0)
+--- a/TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go
++++ b/TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go
+@@ -4,6 +4,8 @@
+ 	"crypto/sha256"
+ 	"errors"
+ 	"testing"
++
++	"github.com/snissn/gomap/TreeDB/internal/residentcredit"
+ )
+ 
+ // A private staging builder is still the real owner of each retired role.
+@@ -179,3 +181,118 @@
+ 	if err = candidate.AbandonCheckedV1(); err != nil { t.Fatal(err) }
+ 	if retiredEnv.calls != 1 || baseEnv.calls != 1 || !nested.CleanupCompleteV1() { t.Fatal("collision final cleanup replayed or lost nested owner") }
+ }
++
++// Public selector success must not lose preborn operation controls at Freeze.
++// Each surviving clone owns exactly one original creator edge; discharged
++// operation shells retain no extra edge and do not refund cumulative births.
++func TestStablePublicSelectorsReleaseEmptyCloneCreatorControls(t *testing.T) {
++	owner, err := residentcredit.NewOrdinary(128 << 20)
++	if err != nil { t.Fatal(err) }
++	scope, err := owner.NewOrdinaryScope()
++	if err != nil { t.Fatal(err) }
++	t.Cleanup(func() { scope.ReleaseStableMetadata(); owner.Close() })
++	spec := operationLifetimeSpec(operationLifetimeFile(t))
++	obligation := appendMutationTestObligation(1)
++	spec.Reachability = obligation.Reachability
++	spec.LogicalObligations = []StableLogicalObligation{obligation}
++	spec.CallbackCreator = scope
++	environment := &cleanupCustodyEnvironmentV1{ready: true}
++	source := freezeAppendMutationResources(t, cleanupCustodyTokenV1(t, spec, environment))
++	t.Cleanup(func() { if err := source.Release(); err != nil { t.Error(err) } })
++	selector := StableResourceSelector{Kind: spec.Kind, LogicalLane: spec.LogicalLane, ResourceID: spec.ResourceID, PhysicalGeneration: spec.Generation, Obligation: obligation}
++	baseline := scope.Stats()
++	for i := 0; i < 8; i++ {
++		// Original ordinary Scope remains valid after DB admission closes.
++		if i == 4 { owner.Close() }
++		before := scope.Stats()
++		selected, err := CloneStableResourceForSelector(source, selector)
++		if err != nil { t.Fatal(err) }
++		if scope.Stats().Retained != baseline.Retained+1 { t.Fatal("selector leaked paused clone/Add creator edges") }
++		descriptors := mustStableResourceDescriptors(t, selected)
++		if len(descriptors) != 1 || len(descriptors[0].LogicalObligations()) != 1 || descriptors[0].LogicalObligations()[0] != obligation { t.Fatal("selector lost actual logical obligation") }
++		if err := selected.Release(); err != nil { t.Fatal(err) }
++		if scope.Stats().Retained != baseline.Retained || scope.Stats().Bytes <= before.Bytes { t.Fatal("selector retained shell or refunded cumulative control births") }
++		wrong := selector
++		wrong.Obligation = appendMutationTestObligation(99)
++		beforeRefusal := scope.Stats()
++		if result, err := CloneStableResourceForSelector(source, wrong); result != nil || !errors.Is(err, ErrUnresolvedResource) { t.Fatalf("selector refusal: %v %v", result, err) }
++		if scope.Stats() != beforeRefusal { t.Fatal("selection refusal changed original creator") }
++	}
++	for _, clone := range []func() (*StableResourceSet, error){
++		func() (*StableResourceSet, error) { return CloneStableResourceSetSelectingPhysicalKind(source, ResourceDictionary, nil) },
++		func() (*StableResourceSet, error) { return ClonePhysicalReachabilityUnion(source, source) },
++	} {
++		selected, err := clone()
++		if err != nil { t.Fatal(err) }
++		if scope.Stats().Retained != baseline.Retained+1 { t.Fatal("shared clone caller lost control custody at Freeze") }
++		if err := selected.Release(); err != nil { t.Fatal(err) }
++		if scope.Stats().Retained != baseline.Retained { t.Fatal("shared clone caller leaked operation edge") }
++	}
++	environment.callback = func() {
++		if !source.mu.TryLock() { t.Error("source cleanup retained source gate"); return }
++		source.mu.Unlock()
++		_ = source.Len()
++		if result, err := CloneStableResourceForSelector(source, selector); result != nil || !errors.Is(err, ErrResourceOwnership) { t.Error("reentrant selector admitted releasing original") }
++	}
++	if err := source.Release(); err != nil { t.Fatal(err) }
++	if environment.calls != 1 || scope.Stats().Retained != 1 { t.Fatal("original cleanup or creator discharge lost/replayed") }
++}
++
++func TestStableCloneRefusalKeepsUnclaimedRoleUntilOuterUnlock(t *testing.T) {
++	owner, _ := residentcredit.NewOrdinary(128 << 20)
++	scope, _ := owner.NewOrdinaryScope()
++	t.Cleanup(func() { scope.ReleaseStableMetadata(); owner.Close() })
++	spec := operationLifetimeSpec(operationLifetimeFile(t))
++	spec.CallbackCreator = scope
++	environment := &cleanupCustodyEnvironmentV1{ready: true}
++	source := freezeAppendMutationResources(t, cleanupCustodyTokenV1(t, spec, environment))
++	t.Cleanup(func() { if err := source.Release(); err != nil { t.Error(err) } })
++	builder := NewStableResourceSetBuilder()
++	builder.closed = true // Exact Add refusal after a real clone constructor.
++	baseline := scope.Stats()
++	source.mu.Lock()
++	entry := source.entries[0]
++	err := cloneStableResourceEntryIntoBuilder(builder, &entry)
++	if !errors.Is(err, ErrResourceOwnership) { source.mu.Unlock(); t.Fatalf("clone Add refusal: %v", err) }
++	if builder.pendingCleanup == nil || builder.pendingCleanup.cleanup.unclaimed == nil || scope.Stats().Retained <= baseline.Retained { source.mu.Unlock(); t.Fatal("failed clone lost actual unclaimed owner/control") }
++	if _, err := builder.Freeze(); err == nil { source.mu.Unlock(); t.Fatal("failed clone exposed unfinished role") }
++	source.mu.Unlock()
++	if err := builder.AbandonCheckedV1(); err != nil { t.Fatal(err) }
++	if builder.pendingCleanup != nil || scope.Stats().Retained != baseline.Retained || environment.calls != 0 { t.Fatal("unclaimed clone drain lost creator or replayed original callback") }
++	if err := builder.AbandonCheckedV1(); err != nil || scope.Stats().Retained != baseline.Retained { t.Fatal("clone rollback replayed") }
++}
++
++func TestStablePausedPendingCreatorCannotEscapeFreeze(t *testing.T) {
++	owner, _ := residentcredit.NewOrdinary(128 << 20)
++	scope, _ := owner.NewOrdinaryScope()
++	t.Cleanup(func() { scope.ReleaseStableMetadata(); owner.Close() })
++	spec := operationLifetimeSpec(operationLifetimeFile(t))
++	spec.CallbackCreator = scope
++	baseEnv := &cleanupCustodyEnvironmentV1{ready: true}
++	pending := &cleanupCustodyEnvironmentV1{}
++	base := cleanupCustodyTokenV1(t, spec, baseEnv)
++	retired := cleanupCustodyTokenV1(t, spec, pending)
++	builder := NewStableResourceSetBuilder()
++	t.Cleanup(func() { pending.ready = true; if err := builder.AbandonCheckedV1(); err != nil { t.Error(err) } })
++	if err := builder.Add(base); err != nil { t.Fatal(err) }
++	baseline := scope.Stats().Retained
++	outer := NewStableResourceSetBuilder()
++	pending.callback = func() {
++		if !outer.mu.TryLock() { t.Error("pending callback retained inherited gate"); return }
++		outer.mu.Unlock()
++		_ = outer.State()
++		if !errors.Is(builder.AbandonCheckedV1(), ErrStableResourceOperationBusy) { t.Error("running pending cleanup allowed reentrant replay") }
++	}
++	outer.mu.Lock()
++	err := builder.addWithCleanupBoundaryV1(retired, true)
++	outer.mu.Unlock()
++	if err != nil { t.Fatal(err) }
++	if pending.calls != 0 || scope.Stats().Retained != baseline+1 { t.Fatal("paused nonempty owner was scrubbed or called inside inherited gate") }
++	if _, err := builder.Freeze(); err == nil { t.Fatal("Freeze discarded paused nonempty creator role") }
++	if err := builder.AbandonCheckedV1(); !errors.Is(err, errCleanupCustodyFixtureV1) { t.Fatalf("pending role: %v", err) }
++	if scope.Stats().Retained != baseline+1 || baseEnv.calls != 0 || pending.calls != 1 { t.Fatal("Pending role lost creator/destination") }
++	pending.ready = true
++	if err := builder.AbandonCheckedV1(); err != nil { t.Fatal(err) }
++	if scope.Stats().Retained != 1 || baseEnv.calls != 1 || pending.calls != 2 { t.Fatal("pending retry failed exact last edge or replayed complete role") }
++	if err := builder.AbandonCheckedV1(); err != nil || pending.calls != 2 || baseEnv.calls != 1 { t.Fatal("completed Pending cleanup replayed") }
++}

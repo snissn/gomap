@@ -1,0 +1,2922 @@
+[
+  {
+    "at": "2026-10-08T17:48:17.060216+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414191616,
+    "global_census": {
+      "allocated": 27855605760,
+      "apparent": 27389690318
+    },
+    "other": {
+      "allocated": 933425152,
+      "apparent": 910646740
+    },
+    "owned": {
+      "allocated": 933425152,
+      "apparent": 910646740
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:18.614675+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414187520,
+    "global_census": {
+      "allocated": 27855609856,
+      "apparent": 27389690719
+    },
+    "other": {
+      "allocated": 933429248,
+      "apparent": 910647141
+    },
+    "owned": {
+      "allocated": 933429248,
+      "apparent": 910647141
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:19.463156+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414187520,
+    "global_census": {
+      "allocated": 27855609856,
+      "apparent": 27389691117
+    },
+    "other": {
+      "allocated": 933429248,
+      "apparent": 910647539
+    },
+    "owned": {
+      "allocated": 933429248,
+      "apparent": 910647539
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:20.311459+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414187520,
+    "global_census": {
+      "allocated": 27855609856,
+      "apparent": 27389691659
+    },
+    "other": {
+      "allocated": 933429248,
+      "apparent": 910648081
+    },
+    "owned": {
+      "allocated": 933429248,
+      "apparent": 910648081
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:21.872624+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414179328,
+    "global_census": {
+      "allocated": 27855618048,
+      "apparent": 27389693848
+    },
+    "other": {
+      "allocated": 933437440,
+      "apparent": 910650270
+    },
+    "owned": {
+      "allocated": 933437440,
+      "apparent": 910650270
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:23.418932+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414175232,
+    "global_census": {
+      "allocated": 27855618048,
+      "apparent": 27389694246
+    },
+    "other": {
+      "allocated": 933437440,
+      "apparent": 910650668
+    },
+    "owned": {
+      "allocated": 933437440,
+      "apparent": 910650668
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:24.266358+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414175232,
+    "global_census": {
+      "allocated": 27855618048,
+      "apparent": 27389694644
+    },
+    "other": {
+      "allocated": 933437440,
+      "apparent": 910651066
+    },
+    "owned": {
+      "allocated": 933437440,
+      "apparent": 910651066
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:25.121236+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184414175232,
+    "global_census": {
+      "allocated": 27855618048,
+      "apparent": 27389695195
+    },
+    "other": {
+      "allocated": 933437440,
+      "apparent": 910651617
+    },
+    "owned": {
+      "allocated": 933437440,
+      "apparent": 910651617
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:26.739488+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184412749824,
+    "global_census": {
+      "allocated": 27857043456,
+      "apparent": 27390165512
+    },
+    "other": {
+      "allocated": 934862848,
+      "apparent": 911121934
+    },
+    "owned": {
+      "allocated": 934862848,
+      "apparent": 911121934
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:28.316556+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184412622848,
+    "global_census": {
+      "allocated": 27857170432,
+      "apparent": 27390290820
+    },
+    "other": {
+      "allocated": 934989824,
+      "apparent": 911247242
+    },
+    "owned": {
+      "allocated": 934989824,
+      "apparent": 911247242
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:29.179336+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184412622848,
+    "global_census": {
+      "allocated": 27857170432,
+      "apparent": 27390291218
+    },
+    "other": {
+      "allocated": 934989824,
+      "apparent": 911247640
+    },
+    "owned": {
+      "allocated": 934989824,
+      "apparent": 911247640
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:30.032934+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184412618752,
+    "global_census": {
+      "allocated": 27857174528,
+      "apparent": 27390291770
+    },
+    "other": {
+      "allocated": 934993920,
+      "apparent": 911248192
+    },
+    "owned": {
+      "allocated": 934993920,
+      "apparent": 911248192
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:33.459857+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367288320,
+    "global_census": {
+      "allocated": 27902504960,
+      "apparent": 27434560135
+    },
+    "other": {
+      "allocated": 980324352,
+      "apparent": 955516557
+    },
+    "owned": {
+      "allocated": 980324352,
+      "apparent": 955516557
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:35.037087+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367284224,
+    "global_census": {
+      "allocated": 27902509056,
+      "apparent": 27434560948
+    },
+    "other": {
+      "allocated": 980328448,
+      "apparent": 955517370
+    },
+    "owned": {
+      "allocated": 980328448,
+      "apparent": 955517370
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:35.892375+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367284224,
+    "global_census": {
+      "allocated": 27902509056,
+      "apparent": 27434561346
+    },
+    "other": {
+      "allocated": 980328448,
+      "apparent": 955517768
+    },
+    "owned": {
+      "allocated": 980328448,
+      "apparent": 955517768
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:36.748115+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367284224,
+    "global_census": {
+      "allocated": 27902509056,
+      "apparent": 27434561900
+    },
+    "other": {
+      "allocated": 980328448,
+      "apparent": 955518322
+    },
+    "owned": {
+      "allocated": 980328448,
+      "apparent": 955518322
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:38.322809+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367276032,
+    "global_census": {
+      "allocated": 27902517248,
+      "apparent": 27434564682
+    },
+    "other": {
+      "allocated": 980336640,
+      "apparent": 955521104
+    },
+    "owned": {
+      "allocated": 980336640,
+      "apparent": 955521104
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:39.885692+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367276032,
+    "global_census": {
+      "allocated": 27902517248,
+      "apparent": 27434565080
+    },
+    "other": {
+      "allocated": 980336640,
+      "apparent": 955521502
+    },
+    "owned": {
+      "allocated": 980336640,
+      "apparent": 955521502
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:40.743354+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367276032,
+    "global_census": {
+      "allocated": 27902517248,
+      "apparent": 27434565478
+    },
+    "other": {
+      "allocated": 980336640,
+      "apparent": 955521900
+    },
+    "owned": {
+      "allocated": 980336640,
+      "apparent": 955521900
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:41.606064+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184367276032,
+    "global_census": {
+      "allocated": 27902517248,
+      "apparent": 27434566026
+    },
+    "other": {
+      "allocated": 980336640,
+      "apparent": 955522448
+    },
+    "owned": {
+      "allocated": 980336640,
+      "apparent": 955522448
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:44.516293+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184332230656,
+    "global_census": {
+      "allocated": 27950592000,
+      "apparent": 27478248739
+    },
+    "other": {
+      "allocated": 1038057472,
+      "apparent": 1007764353
+    },
+    "owned": {
+      "allocated": 1038057472,
+      "apparent": 1007764353
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:47.415500+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184288223232,
+    "global_census": {
+      "allocated": 27982368768,
+      "apparent": 27508926488
+    },
+    "other": {
+      "allocated": 1063284736,
+      "apparent": 1032978717
+    },
+    "owned": {
+      "allocated": 1063284736,
+      "apparent": 1032978717
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:50.359578+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184268644352,
+    "global_census": {
+      "allocated": 28000800768,
+      "apparent": 27527358827
+    },
+    "other": {
+      "allocated": 1082388480,
+      "apparent": 1052083310
+    },
+    "owned": {
+      "allocated": 1082388480,
+      "apparent": 1052083310
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:53.261668+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184250736640,
+    "global_census": {
+      "allocated": 28020006912,
+      "apparent": 27546564764
+    },
+    "other": {
+      "allocated": 1224032256,
+      "apparent": 1192367379
+    },
+    "owned": {
+      "allocated": 1224032256,
+      "apparent": 1192367379
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:56.188058+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184117772288,
+    "global_census": {
+      "allocated": 28149665792,
+      "apparent": 27672588188
+    },
+    "other": {
+      "allocated": 1227485184,
+      "apparent": 1193544610
+    },
+    "owned": {
+      "allocated": 1227485184,
+      "apparent": 1193544610
+    }
+  },
+  {
+    "at": "2026-10-08T17:48:59.107302+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184115372032,
+    "global_census": {
+      "allocated": 28152225792,
+      "apparent": 27675148590
+    },
+    "other": {
+      "allocated": 1230884864,
+      "apparent": 1196944692
+    },
+    "owned": {
+      "allocated": 1230884864,
+      "apparent": 1196944692
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:01.988639+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184111747072,
+    "global_census": {
+      "allocated": 28155920384,
+      "apparent": 27678843584
+    },
+    "other": {
+      "allocated": 1234612224,
+      "apparent": 1200672454
+    },
+    "owned": {
+      "allocated": 1234612224,
+      "apparent": 1200672454
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:04.882390+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184107958272,
+    "global_census": {
+      "allocated": 28159766528,
+      "apparent": 27682690130
+    },
+    "other": {
+      "allocated": 1238323200,
+      "apparent": 1204383832
+    },
+    "owned": {
+      "allocated": 1238323200,
+      "apparent": 1204383832
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:07.769024+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184104603648,
+    "global_census": {
+      "allocated": 28162834432,
+      "apparent": 27685758436
+    },
+    "other": {
+      "allocated": 1241997312,
+      "apparent": 1208058346
+    },
+    "owned": {
+      "allocated": 1241997312,
+      "apparent": 1208058346
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:10.660039+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184100749312,
+    "global_census": {
+      "allocated": 28166950912,
+      "apparent": 27689875318
+    },
+    "other": {
+      "allocated": 1277198336,
+      "apparent": 1243256477
+    },
+    "owned": {
+      "allocated": 1277198336,
+      "apparent": 1243256477
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:13.170651+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184118235136,
+    "global_census": {
+      "allocated": 28150177792,
+      "apparent": 27673056027
+    },
+    "other": {
+      "allocated": 1227997184,
+      "apparent": 1194012449
+    },
+    "owned": {
+      "allocated": 1227997184,
+      "apparent": 1194012449
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:14.893216+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184117719040,
+    "global_census": {
+      "allocated": 28150685696,
+      "apparent": 27673556273
+    },
+    "other": {
+      "allocated": 1228513280,
+      "apparent": 1194512695
+    },
+    "owned": {
+      "allocated": 1228513280,
+      "apparent": 1194512695
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:15.775210+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184117710848,
+    "global_census": {
+      "allocated": 28150693888,
+      "apparent": 27673556675
+    },
+    "other": {
+      "allocated": 1228513280,
+      "apparent": 1194513097
+    },
+    "owned": {
+      "allocated": 1228513280,
+      "apparent": 1194513097
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:16.666444+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 184117710848,
+    "global_census": {
+      "allocated": 28150693888,
+      "apparent": 27673557236
+    },
+    "other": {
+      "allocated": 1228513280,
+      "apparent": 1194513658
+    },
+    "owned": {
+      "allocated": 1228513280,
+      "apparent": 1194513658
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:19.692850+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183943311360,
+    "global_census": {
+      "allocated": 28324700160,
+      "apparent": 27843224367
+    },
+    "other": {
+      "allocated": 1431339008,
+      "apparent": 1391402915
+    },
+    "owned": {
+      "allocated": 1431339008,
+      "apparent": 1391402915
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:22.644245+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183844626432,
+    "global_census": {
+      "allocated": 28422660096,
+      "apparent": 27938821941
+    },
+    "other": {
+      "allocated": 1500479488,
+      "apparent": 1459778363
+    },
+    "owned": {
+      "allocated": 1500479488,
+      "apparent": 1459778363
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:25.578590+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183844626432,
+    "global_census": {
+      "allocated": 28422660096,
+      "apparent": 27938822343
+    },
+    "other": {
+      "allocated": 1500479488,
+      "apparent": 1459778765
+    },
+    "owned": {
+      "allocated": 1500479488,
+      "apparent": 1459778765
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:28.464778+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183573962752,
+    "global_census": {
+      "allocated": 28440453120,
+      "apparent": 27958576925
+    },
+    "other": {
+      "allocated": 1518272512,
+      "apparent": 1479533347
+    },
+    "owned": {
+      "allocated": 1518272512,
+      "apparent": 1479533347
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:30.166486+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827947520,
+    "global_census": {
+      "allocated": 28440453120,
+      "apparent": 27958579479
+    },
+    "other": {
+      "allocated": 1518272512,
+      "apparent": 1479535901
+    },
+    "owned": {
+      "allocated": 1518272512,
+      "apparent": 1479535901
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:31.843270+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827947520,
+    "global_census": {
+      "allocated": 28440453120,
+      "apparent": 27958580073
+    },
+    "other": {
+      "allocated": 1518272512,
+      "apparent": 1479536495
+    },
+    "owned": {
+      "allocated": 1518272512,
+      "apparent": 1479536495
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:32.733393+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827947520,
+    "global_census": {
+      "allocated": 28440453120,
+      "apparent": 27958580475
+    },
+    "other": {
+      "allocated": 1518272512,
+      "apparent": 1479536897
+    },
+    "owned": {
+      "allocated": 1518272512,
+      "apparent": 1479536897
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:33.626118+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827943424,
+    "global_census": {
+      "allocated": 28440457216,
+      "apparent": 27958581038
+    },
+    "other": {
+      "allocated": 1518276608,
+      "apparent": 1479537460
+    },
+    "owned": {
+      "allocated": 1518276608,
+      "apparent": 1479537460
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:35.293991+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827939328,
+    "global_census": {
+      "allocated": 28440461312,
+      "apparent": 27958583936
+    },
+    "other": {
+      "allocated": 1518280704,
+      "apparent": 1479540358
+    },
+    "owned": {
+      "allocated": 1518280704,
+      "apparent": 1479540358
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:36.936299+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827939328,
+    "global_census": {
+      "allocated": 28440461312,
+      "apparent": 27958584338
+    },
+    "other": {
+      "allocated": 1518280704,
+      "apparent": 1479540760
+    },
+    "owned": {
+      "allocated": 1518280704,
+      "apparent": 1479540760
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:37.820186+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827939328,
+    "global_census": {
+      "allocated": 28440461312,
+      "apparent": 27958584740
+    },
+    "other": {
+      "allocated": 1518280704,
+      "apparent": 1479541162
+    },
+    "owned": {
+      "allocated": 1518280704,
+      "apparent": 1479541162
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:38.714355+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827939328,
+    "global_census": {
+      "allocated": 28440461312,
+      "apparent": 27958585298
+    },
+    "other": {
+      "allocated": 1518280704,
+      "apparent": 1479541720
+    },
+    "owned": {
+      "allocated": 1518280704,
+      "apparent": 1479541720
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:40.360491+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827927040,
+    "global_census": {
+      "allocated": 28440473600,
+      "apparent": 27958590348
+    },
+    "other": {
+      "allocated": 1518292992,
+      "apparent": 1479546770
+    },
+    "owned": {
+      "allocated": 1518292992,
+      "apparent": 1479546770
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:42.003600+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827927040,
+    "global_census": {
+      "allocated": 28440473600,
+      "apparent": 27958590750
+    },
+    "other": {
+      "allocated": 1518292992,
+      "apparent": 1479547172
+    },
+    "owned": {
+      "allocated": 1518292992,
+      "apparent": 1479547172
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:42.892617+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827927040,
+    "global_census": {
+      "allocated": 28440473600,
+      "apparent": 27958591152
+    },
+    "other": {
+      "allocated": 1518292992,
+      "apparent": 1479547574
+    },
+    "owned": {
+      "allocated": 1518292992,
+      "apparent": 1479547574
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:43.784031+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827927040,
+    "global_census": {
+      "allocated": 28440473600,
+      "apparent": 27958591716
+    },
+    "other": {
+      "allocated": 1518292992,
+      "apparent": 1479548138
+    },
+    "owned": {
+      "allocated": 1518292992,
+      "apparent": 1479548138
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:45.533865+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827910656,
+    "global_census": {
+      "allocated": 28440489984,
+      "apparent": 27958608402
+    },
+    "other": {
+      "allocated": 1518309376,
+      "apparent": 1479564824
+    },
+    "owned": {
+      "allocated": 1518309376,
+      "apparent": 1479564824
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:47.167576+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827910656,
+    "global_census": {
+      "allocated": 28440489984,
+      "apparent": 27958608804
+    },
+    "other": {
+      "allocated": 1518309376,
+      "apparent": 1479565226
+    },
+    "owned": {
+      "allocated": 1518309376,
+      "apparent": 1479565226
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:48.052133+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827906560,
+    "global_census": {
+      "allocated": 28440494080,
+      "apparent": 27958609206
+    },
+    "other": {
+      "allocated": 1518313472,
+      "apparent": 1479565628
+    },
+    "owned": {
+      "allocated": 1518313472,
+      "apparent": 1479565628
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:48.952306+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183827906560,
+    "global_census": {
+      "allocated": 28440494080,
+      "apparent": 27958609767
+    },
+    "other": {
+      "allocated": 1518313472,
+      "apparent": 1479566189
+    },
+    "owned": {
+      "allocated": 1518313472,
+      "apparent": 1479566189
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:51.899405+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183762964480,
+    "global_census": {
+      "allocated": 28541194240,
+      "apparent": 28058263013
+    },
+    "other": {
+      "allocated": 1630089216,
+      "apparent": 1590260750
+    },
+    "owned": {
+      "allocated": 1630089216,
+      "apparent": 1590260750
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:54.856647+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183712935936,
+    "global_census": {
+      "allocated": 28554493952,
+      "apparent": 28071528858
+    },
+    "other": {
+      "allocated": 1633054720,
+      "apparent": 1593226656
+    },
+    "owned": {
+      "allocated": 1633054720,
+      "apparent": 1593226656
+    }
+  },
+  {
+    "at": "2026-10-08T17:49:57.807289+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183709405184,
+    "global_census": {
+      "allocated": 28571852800,
+      "apparent": 28088887092
+    },
+    "other": {
+      "allocated": 1790377984,
+      "apparent": 1750540262
+    },
+    "owned": {
+      "allocated": 1790377984,
+      "apparent": 1750540262
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:00.708010+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183551889408,
+    "global_census": {
+      "allocated": 28715532288,
+      "apparent": 28232550096
+    },
+    "other": {
+      "allocated": 1794142208,
+      "apparent": 1754297046
+    },
+    "owned": {
+      "allocated": 1794142208,
+      "apparent": 1754297046
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:03.619662+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183548112896,
+    "global_census": {
+      "allocated": 28719247360,
+      "apparent": 28236265570
+    },
+    "other": {
+      "allocated": 1797758976,
+      "apparent": 1757914216
+    },
+    "owned": {
+      "allocated": 1797758976,
+      "apparent": 1757914216
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:06.527938+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183544774656,
+    "global_census": {
+      "allocated": 28722409472,
+      "apparent": 28239428084
+    },
+    "other": {
+      "allocated": 1801363456,
+      "apparent": 1761519098
+    },
+    "owned": {
+      "allocated": 1801363456,
+      "apparent": 1761519098
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:09.462837+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183455793152,
+    "global_census": {
+      "allocated": 28878512128,
+      "apparent": 28396542246
+    },
+    "other": {
+      "allocated": 1959989248,
+      "apparent": 1919935436
+    },
+    "owned": {
+      "allocated": 1959989248,
+      "apparent": 1919935436
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:11.166711+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633276928,
+    "global_census": {
+      "allocated": 28635119616,
+      "apparent": 28152418741
+    },
+    "other": {
+      "allocated": 1712939008,
+      "apparent": 1673375163
+    },
+    "owned": {
+      "allocated": 1712939008,
+      "apparent": 1673375163
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:12.874325+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633272832,
+    "global_census": {
+      "allocated": 28635123712,
+      "apparent": 28152419335
+    },
+    "other": {
+      "allocated": 1712943104,
+      "apparent": 1673375757
+    },
+    "owned": {
+      "allocated": 1712943104,
+      "apparent": 1673375757
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:13.761054+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633272832,
+    "global_census": {
+      "allocated": 28635123712,
+      "apparent": 28152419737
+    },
+    "other": {
+      "allocated": 1712943104,
+      "apparent": 1673376159
+    },
+    "owned": {
+      "allocated": 1712943104,
+      "apparent": 1673376159
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:14.650220+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633272832,
+    "global_census": {
+      "allocated": 28635123712,
+      "apparent": 28152420300
+    },
+    "other": {
+      "allocated": 1712943104,
+      "apparent": 1673376722
+    },
+    "owned": {
+      "allocated": 1712943104,
+      "apparent": 1673376722
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:16.336645+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633268736,
+    "global_census": {
+      "allocated": 28635127808,
+      "apparent": 28152424663
+    },
+    "other": {
+      "allocated": 1712947200,
+      "apparent": 1673381085
+    },
+    "owned": {
+      "allocated": 1712947200,
+      "apparent": 1673381085
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:18.001230+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633268736,
+    "global_census": {
+      "allocated": 28635127808,
+      "apparent": 28152425065
+    },
+    "other": {
+      "allocated": 1712947200,
+      "apparent": 1673381487
+    },
+    "owned": {
+      "allocated": 1712947200,
+      "apparent": 1673381487
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:18.894605+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633268736,
+    "global_census": {
+      "allocated": 28635127808,
+      "apparent": 28152425467
+    },
+    "other": {
+      "allocated": 1712947200,
+      "apparent": 1673381889
+    },
+    "owned": {
+      "allocated": 1712947200,
+      "apparent": 1673381889
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:19.786064+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633268736,
+    "global_census": {
+      "allocated": 28635127808,
+      "apparent": 28152426025
+    },
+    "other": {
+      "allocated": 1712947200,
+      "apparent": 1673382447
+    },
+    "owned": {
+      "allocated": 1712947200,
+      "apparent": 1673382447
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:21.468581+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633264640,
+    "global_census": {
+      "allocated": 28635131904,
+      "apparent": 28152431525
+    },
+    "other": {
+      "allocated": 1712951296,
+      "apparent": 1673387947
+    },
+    "owned": {
+      "allocated": 1712951296,
+      "apparent": 1673387947
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:23.177205+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633264640,
+    "global_census": {
+      "allocated": 28635131904,
+      "apparent": 28152431927
+    },
+    "other": {
+      "allocated": 1712951296,
+      "apparent": 1673388349
+    },
+    "owned": {
+      "allocated": 1712951296,
+      "apparent": 1673388349
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:24.072785+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633264640,
+    "global_census": {
+      "allocated": 28635131904,
+      "apparent": 28152432329
+    },
+    "other": {
+      "allocated": 1712951296,
+      "apparent": 1673388751
+    },
+    "owned": {
+      "allocated": 1712951296,
+      "apparent": 1673388751
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:24.969128+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633260544,
+    "global_census": {
+      "allocated": 28635136000,
+      "apparent": 28152432896
+    },
+    "other": {
+      "allocated": 1712955392,
+      "apparent": 1673389318
+    },
+    "owned": {
+      "allocated": 1712955392,
+      "apparent": 1673389318
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:26.658253+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633248256,
+    "global_census": {
+      "allocated": 28635148288,
+      "apparent": 28152436352
+    },
+    "other": {
+      "allocated": 1712967680,
+      "apparent": 1673392774
+    },
+    "owned": {
+      "allocated": 1712967680,
+      "apparent": 1673392774
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:28.326649+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633244160,
+    "global_census": {
+      "allocated": 28635152384,
+      "apparent": 28152436979
+    },
+    "other": {
+      "allocated": 1712971776,
+      "apparent": 1673393401
+    },
+    "owned": {
+      "allocated": 1712971776,
+      "apparent": 1673393401
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:29.222911+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633244160,
+    "global_census": {
+      "allocated": 28635152384,
+      "apparent": 28152437381
+    },
+    "other": {
+      "allocated": 1712971776,
+      "apparent": 1673393803
+    },
+    "owned": {
+      "allocated": 1712971776,
+      "apparent": 1673393803
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:30.118810+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633244160,
+    "global_census": {
+      "allocated": 28635152384,
+      "apparent": 28152437945
+    },
+    "other": {
+      "allocated": 1712971776,
+      "apparent": 1673394367
+    },
+    "owned": {
+      "allocated": 1712971776,
+      "apparent": 1673394367
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:32.004308+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633223680,
+    "global_census": {
+      "allocated": 28635172864,
+      "apparent": 28152460694
+    },
+    "other": {
+      "allocated": 1712992256,
+      "apparent": 1673417116
+    },
+    "owned": {
+      "allocated": 1712992256,
+      "apparent": 1673417116
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:33.675610+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633219584,
+    "global_census": {
+      "allocated": 28635176960,
+      "apparent": 28152463683
+    },
+    "other": {
+      "allocated": 1712996352,
+      "apparent": 1673420105
+    },
+    "owned": {
+      "allocated": 1712996352,
+      "apparent": 1673420105
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:35.341557+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633219584,
+    "global_census": {
+      "allocated": 28635176960,
+      "apparent": 28152464085
+    },
+    "other": {
+      "allocated": 1712996352,
+      "apparent": 1673420507
+    },
+    "owned": {
+      "allocated": 1712996352,
+      "apparent": 1673420507
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:36.229805+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633219584,
+    "global_census": {
+      "allocated": 28635176960,
+      "apparent": 28152464487
+    },
+    "other": {
+      "allocated": 1712996352,
+      "apparent": 1673420909
+    },
+    "owned": {
+      "allocated": 1712996352,
+      "apparent": 1673420909
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:37.122033+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183633219584,
+    "global_census": {
+      "allocated": 28635176960,
+      "apparent": 28152465037
+    },
+    "other": {
+      "allocated": 1712996352,
+      "apparent": 1673421459
+    },
+    "owned": {
+      "allocated": 1712996352,
+      "apparent": 1673421459
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:40.028803+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183628967936,
+    "global_census": {
+      "allocated": 28638146560,
+      "apparent": 28153855650
+    },
+    "other": {
+      "allocated": 1716363264,
+      "apparent": 1675209384
+    },
+    "owned": {
+      "allocated": 1716363264,
+      "apparent": 1675209384
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:42.930916+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183626051584,
+    "global_census": {
+      "allocated": 28641308672,
+      "apparent": 28157018164
+    },
+    "other": {
+      "allocated": 1719996416,
+      "apparent": 1678842938
+    },
+    "owned": {
+      "allocated": 1719996416,
+      "apparent": 1678842938
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:45.832945+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183622316032,
+    "global_census": {
+      "allocated": 28645044224,
+      "apparent": 28160754118
+    },
+    "other": {
+      "allocated": 1723658240,
+      "apparent": 1682505164
+    },
+    "owned": {
+      "allocated": 1723658240,
+      "apparent": 1682505164
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:48.741394+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183618723840,
+    "global_census": {
+      "allocated": 28648800256,
+      "apparent": 28164510552
+    },
+    "other": {
+      "allocated": 1727533056,
+      "apparent": 1686380382
+    },
+    "owned": {
+      "allocated": 1727533056,
+      "apparent": 1686380382
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:51.681867+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183614763008,
+    "global_census": {
+      "allocated": 28652580864,
+      "apparent": 28168291562
+    },
+    "other": {
+      "allocated": 1731104768,
+      "apparent": 1689952496
+    },
+    "owned": {
+      "allocated": 1731104768,
+      "apparent": 1689952496
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:54.606010+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183602790400,
+    "global_census": {
+      "allocated": 28687859712,
+      "apparent": 28203567517
+    },
+    "other": {
+      "allocated": 1765679104,
+      "apparent": 1724523939
+    },
+    "owned": {
+      "allocated": 1765679104,
+      "apparent": 1724523939
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:56.638110+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183630659584,
+    "global_census": {
+      "allocated": 28637736960,
+      "apparent": 28153630841
+    },
+    "other": {
+      "allocated": 1715556352,
+      "apparent": 1674587263
+    },
+    "owned": {
+      "allocated": 1715556352,
+      "apparent": 1674587263
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:58.449627+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183630151680,
+    "global_census": {
+      "allocated": 28638240768,
+      "apparent": 28154132908
+    },
+    "other": {
+      "allocated": 1716060160,
+      "apparent": 1675089330
+    },
+    "owned": {
+      "allocated": 1716060160,
+      "apparent": 1675089330
+    }
+  },
+  {
+    "at": "2026-10-08T17:50:59.341314+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183630151680,
+    "global_census": {
+      "allocated": 28638240768,
+      "apparent": 28154133310
+    },
+    "other": {
+      "allocated": 1716060160,
+      "apparent": 1675089732
+    },
+    "owned": {
+      "allocated": 1716060160,
+      "apparent": 1675089732
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:00.240854+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183630151680,
+    "global_census": {
+      "allocated": 28638240768,
+      "apparent": 28154133869
+    },
+    "other": {
+      "allocated": 1716060160,
+      "apparent": 1675090291
+    },
+    "owned": {
+      "allocated": 1716060160,
+      "apparent": 1675090291
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:03.242211+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183584247808,
+    "global_census": {
+      "allocated": 28690595840,
+      "apparent": 28204202385
+    },
+    "other": {
+      "allocated": 1810059264,
+      "apparent": 1765653929
+    },
+    "owned": {
+      "allocated": 1810059264,
+      "apparent": 1765653929
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:06.285178+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183403540480,
+    "global_census": {
+      "allocated": 28884643840,
+      "apparent": 28394766262
+    },
+    "other": {
+      "allocated": 1992232960,
+      "apparent": 1944547391
+    },
+    "owned": {
+      "allocated": 1992232960,
+      "apparent": 1944547391
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:09.229087+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183314141184,
+    "global_census": {
+      "allocated": 28953137152,
+      "apparent": 28460687390
+    },
+    "other": {
+      "allocated": 2052902912,
+      "apparent": 2003531509
+    },
+    "owned": {
+      "allocated": 2052902912,
+      "apparent": 2003531509
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:12.202395+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183239241728,
+    "global_census": {
+      "allocated": 29028024320,
+      "apparent": 28535458453
+    },
+    "other": {
+      "allocated": 2105843712,
+      "apparent": 2056414875
+    },
+    "owned": {
+      "allocated": 2105843712,
+      "apparent": 2056414875
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:15.134221+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183239241728,
+    "global_census": {
+      "allocated": 29028024320,
+      "apparent": 28535458855
+    },
+    "other": {
+      "allocated": 2105843712,
+      "apparent": 2056415277
+    },
+    "owned": {
+      "allocated": 2105843712,
+      "apparent": 2056415277
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:18.096546+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183239241728,
+    "global_census": {
+      "allocated": 29028024320,
+      "apparent": 28535459257
+    },
+    "other": {
+      "allocated": 2105843712,
+      "apparent": 2056415679
+    },
+    "owned": {
+      "allocated": 2105843712,
+      "apparent": 2056415679
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:21.038643+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183202148352,
+    "global_census": {
+      "allocated": 29145235456,
+      "apparent": 28652667289
+    },
+    "other": {
+      "allocated": 2340438016,
+      "apparent": 2290988336
+    },
+    "owned": {
+      "allocated": 2340438016,
+      "apparent": 2290988336
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:23.753345+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262969856,
+    "global_census": {
+      "allocated": 29005422592,
+      "apparent": 28515501387
+    },
+    "other": {
+      "allocated": 2083241984,
+      "apparent": 2036457809
+    },
+    "owned": {
+      "allocated": 2083241984,
+      "apparent": 2036457809
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:25.510548+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262969856,
+    "global_census": {
+      "allocated": 29005422592,
+      "apparent": 28515501979
+    },
+    "other": {
+      "allocated": 2083241984,
+      "apparent": 2036458401
+    },
+    "owned": {
+      "allocated": 2083241984,
+      "apparent": 2036458401
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:26.415962+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262969856,
+    "global_census": {
+      "allocated": 29005422592,
+      "apparent": 28515502381
+    },
+    "other": {
+      "allocated": 2083241984,
+      "apparent": 2036458803
+    },
+    "owned": {
+      "allocated": 2083241984,
+      "apparent": 2036458803
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:27.329329+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262969856,
+    "global_census": {
+      "allocated": 29005422592,
+      "apparent": 28515502942
+    },
+    "other": {
+      "allocated": 2083241984,
+      "apparent": 2036459364
+    },
+    "owned": {
+      "allocated": 2083241984,
+      "apparent": 2036459364
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:29.054032+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262961664,
+    "global_census": {
+      "allocated": 29005430784,
+      "apparent": 28515505850
+    },
+    "other": {
+      "allocated": 2083250176,
+      "apparent": 2036462272
+    },
+    "owned": {
+      "allocated": 2083250176,
+      "apparent": 2036462272
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:30.768765+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262961664,
+    "global_census": {
+      "allocated": 29005430784,
+      "apparent": 28515506252
+    },
+    "other": {
+      "allocated": 2083250176,
+      "apparent": 2036462674
+    },
+    "owned": {
+      "allocated": 2083250176,
+      "apparent": 2036462674
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:31.683358+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262961664,
+    "global_census": {
+      "allocated": 29005430784,
+      "apparent": 28515506654
+    },
+    "other": {
+      "allocated": 2083250176,
+      "apparent": 2036463076
+    },
+    "owned": {
+      "allocated": 2083250176,
+      "apparent": 2036463076
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:32.602008+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262961664,
+    "global_census": {
+      "allocated": 29005430784,
+      "apparent": 28515507210
+    },
+    "other": {
+      "allocated": 2083250176,
+      "apparent": 2036463632
+    },
+    "owned": {
+      "allocated": 2083250176,
+      "apparent": 2036463632
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:35.355160+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262953472,
+    "global_census": {
+      "allocated": 29005438976,
+      "apparent": 28515512254
+    },
+    "other": {
+      "allocated": 2083258368,
+      "apparent": 2036468676
+    },
+    "owned": {
+      "allocated": 2083258368,
+      "apparent": 2036468676
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:37.068153+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262953472,
+    "global_census": {
+      "allocated": 29005438976,
+      "apparent": 28515512656
+    },
+    "other": {
+      "allocated": 2083258368,
+      "apparent": 2036469078
+    },
+    "owned": {
+      "allocated": 2083258368,
+      "apparent": 2036469078
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:37.981479+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262953472,
+    "global_census": {
+      "allocated": 29005438976,
+      "apparent": 28515513058
+    },
+    "other": {
+      "allocated": 2083258368,
+      "apparent": 2036469480
+    },
+    "owned": {
+      "allocated": 2083258368,
+      "apparent": 2036469480
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:38.891090+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262953472,
+    "global_census": {
+      "allocated": 29005438976,
+      "apparent": 28515513620
+    },
+    "other": {
+      "allocated": 2083258368,
+      "apparent": 2036470042
+    },
+    "owned": {
+      "allocated": 2083258368,
+      "apparent": 2036470042
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:41.797839+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262932992,
+    "global_census": {
+      "allocated": 29005459456,
+      "apparent": 28515530300
+    },
+    "other": {
+      "allocated": 2083278848,
+      "apparent": 2036486722
+    },
+    "owned": {
+      "allocated": 2083278848,
+      "apparent": 2036486722
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:43.508534+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262932992,
+    "global_census": {
+      "allocated": 29005459456,
+      "apparent": 28515530702
+    },
+    "other": {
+      "allocated": 2083278848,
+      "apparent": 2036487124
+    },
+    "owned": {
+      "allocated": 2083278848,
+      "apparent": 2036487124
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:44.425170+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262928896,
+    "global_census": {
+      "allocated": 29005463552,
+      "apparent": 28515531104
+    },
+    "other": {
+      "allocated": 2083282944,
+      "apparent": 2036487526
+    },
+    "owned": {
+      "allocated": 2083282944,
+      "apparent": 2036487526
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:45.337609+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183262920704,
+    "global_census": {
+      "allocated": 29005463552,
+      "apparent": 28515531663
+    },
+    "other": {
+      "allocated": 2083282944,
+      "apparent": 2036488085
+    },
+    "owned": {
+      "allocated": 2083282944,
+      "apparent": 2036488085
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:48.305000+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183221497856,
+    "global_census": {
+      "allocated": 29065965568,
+      "apparent": 28575041631
+    },
+    "other": {
+      "allocated": 2148667392,
+      "apparent": 2100764175
+    },
+    "owned": {
+      "allocated": 2148667392,
+      "apparent": 2100764175
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:51.282262+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183137480704,
+    "global_census": {
+      "allocated": 29129957376,
+      "apparent": 28638854248
+    },
+    "other": {
+      "allocated": 2208481280,
+      "apparent": 2160515182
+    },
+    "owned": {
+      "allocated": 2208481280,
+      "apparent": 2160515182
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:54.258949+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183133638656,
+    "global_census": {
+      "allocated": 29133615104,
+      "apparent": 28642512378
+    },
+    "other": {
+      "allocated": 2212175872,
+      "apparent": 2164210176
+    },
+    "owned": {
+      "allocated": 2212175872,
+      "apparent": 2164210176
+    }
+  },
+  {
+    "at": "2026-10-08T17:51:57.195621+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183130054656,
+    "global_census": {
+      "allocated": 29137395712,
+      "apparent": 28646293388
+    },
+    "other": {
+      "allocated": 2216022016,
+      "apparent": 2168056722
+    },
+    "owned": {
+      "allocated": 2216022016,
+      "apparent": 2168056722
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:00.164052+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183126355968,
+    "global_census": {
+      "allocated": 29141127168,
+      "apparent": 28650025246
+    },
+    "other": {
+      "allocated": 2219089920,
+      "apparent": 2171125028
+    },
+    "owned": {
+      "allocated": 2219089920,
+      "apparent": 2171125028
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:03.136348+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 182939410432,
+    "global_census": {
+      "allocated": 29327962112,
+      "apparent": 28836852964
+    },
+    "other": {
+      "allocated": 2406633472,
+      "apparent": 2358653512
+    },
+    "owned": {
+      "allocated": 2406633472,
+      "apparent": 2358653512
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:06.067578+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 182913675264,
+    "global_census": {
+      "allocated": 29353484288,
+      "apparent": 28862287779
+    },
+    "other": {
+      "allocated": 2546610176,
+      "apparent": 2498434448
+    },
+    "owned": {
+      "allocated": 2546610176,
+      "apparent": 2498434448
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:08.498163+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034662912,
+    "global_census": {
+      "allocated": 29233721344,
+      "apparent": 28742926299
+    },
+    "other": {
+      "allocated": 2311540736,
+      "apparent": 2263882721
+    },
+    "owned": {
+      "allocated": 2311540736,
+      "apparent": 2263882721
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:10.334686+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034658816,
+    "global_census": {
+      "allocated": 29233725440,
+      "apparent": 28742926891
+    },
+    "other": {
+      "allocated": 2311544832,
+      "apparent": 2263883313
+    },
+    "owned": {
+      "allocated": 2311544832,
+      "apparent": 2263883313
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:11.241717+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034658816,
+    "global_census": {
+      "allocated": 29233725440,
+      "apparent": 28742927293
+    },
+    "other": {
+      "allocated": 2311544832,
+      "apparent": 2263883715
+    },
+    "owned": {
+      "allocated": 2311544832,
+      "apparent": 2263883715
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:12.158433+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034658816,
+    "global_census": {
+      "allocated": 29233725440,
+      "apparent": 28742927854
+    },
+    "other": {
+      "allocated": 2311544832,
+      "apparent": 2263884276
+    },
+    "owned": {
+      "allocated": 2311544832,
+      "apparent": 2263884276
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:13.914623+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034650624,
+    "global_census": {
+      "allocated": 29233733632,
+      "apparent": 28742932227
+    },
+    "other": {
+      "allocated": 2311553024,
+      "apparent": 2263888649
+    },
+    "owned": {
+      "allocated": 2311553024,
+      "apparent": 2263888649
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:15.660686+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034650624,
+    "global_census": {
+      "allocated": 29233733632,
+      "apparent": 28742932629
+    },
+    "other": {
+      "allocated": 2311553024,
+      "apparent": 2263889051
+    },
+    "owned": {
+      "allocated": 2311553024,
+      "apparent": 2263889051
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:16.574734+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034650624,
+    "global_census": {
+      "allocated": 29233733632,
+      "apparent": 28742933031
+    },
+    "other": {
+      "allocated": 2311553024,
+      "apparent": 2263889453
+    },
+    "owned": {
+      "allocated": 2311553024,
+      "apparent": 2263889453
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:17.488519+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034650624,
+    "global_census": {
+      "allocated": 29233733632,
+      "apparent": 28742933587
+    },
+    "other": {
+      "allocated": 2311553024,
+      "apparent": 2263890009
+    },
+    "owned": {
+      "allocated": 2311553024,
+      "apparent": 2263890009
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:20.278887+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034642432,
+    "global_census": {
+      "allocated": 29233741824,
+      "apparent": 28742939081
+    },
+    "other": {
+      "allocated": 2311561216,
+      "apparent": 2263895503
+    },
+    "owned": {
+      "allocated": 2311561216,
+      "apparent": 2263895503
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:22.025415+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034642432,
+    "global_census": {
+      "allocated": 29233741824,
+      "apparent": 28742939483
+    },
+    "other": {
+      "allocated": 2311561216,
+      "apparent": 2263895905
+    },
+    "owned": {
+      "allocated": 2311561216,
+      "apparent": 2263895905
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:22.937874+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034642432,
+    "global_census": {
+      "allocated": 29233741824,
+      "apparent": 28742939885
+    },
+    "other": {
+      "allocated": 2311561216,
+      "apparent": 2263896307
+    },
+    "owned": {
+      "allocated": 2311561216,
+      "apparent": 2263896307
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:23.847310+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034638336,
+    "global_census": {
+      "allocated": 29233745920,
+      "apparent": 28742940450
+    },
+    "other": {
+      "allocated": 2311565312,
+      "apparent": 2263896872
+    },
+    "owned": {
+      "allocated": 2311565312,
+      "apparent": 2263896872
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:26.641080+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034634240,
+    "global_census": {
+      "allocated": 29233750016,
+      "apparent": 28742943900
+    },
+    "other": {
+      "allocated": 2311569408,
+      "apparent": 2263900322
+    },
+    "owned": {
+      "allocated": 2311569408,
+      "apparent": 2263900322
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:28.386354+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034630144,
+    "global_census": {
+      "allocated": 29233754112,
+      "apparent": 28742944527
+    },
+    "other": {
+      "allocated": 2311573504,
+      "apparent": 2263900949
+    },
+    "owned": {
+      "allocated": 2311573504,
+      "apparent": 2263900949
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:29.287217+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034630144,
+    "global_census": {
+      "allocated": 29233754112,
+      "apparent": 28742944929
+    },
+    "other": {
+      "allocated": 2311573504,
+      "apparent": 2263901351
+    },
+    "owned": {
+      "allocated": 2311573504,
+      "apparent": 2263901351
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:30.201953+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034626048,
+    "global_census": {
+      "allocated": 29233758208,
+      "apparent": 28742945491
+    },
+    "other": {
+      "allocated": 2311577600,
+      "apparent": 2263901913
+    },
+    "owned": {
+      "allocated": 2311577600,
+      "apparent": 2263901913
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:33.114171+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034605568,
+    "global_census": {
+      "allocated": 29233778688,
+      "apparent": 28742964251
+    },
+    "other": {
+      "allocated": 2311598080,
+      "apparent": 2263920757
+    },
+    "owned": {
+      "allocated": 2311598080,
+      "apparent": 2263920757
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:34.959989+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034601472,
+    "global_census": {
+      "allocated": 29233782784,
+      "apparent": 28742968636
+    },
+    "other": {
+      "allocated": 2311602176,
+      "apparent": 2263925058
+    },
+    "owned": {
+      "allocated": 2311602176,
+      "apparent": 2263925058
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:36.711286+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034597376,
+    "global_census": {
+      "allocated": 29233786880,
+      "apparent": 28742971625
+    },
+    "other": {
+      "allocated": 2311606272,
+      "apparent": 2263928047
+    },
+    "owned": {
+      "allocated": 2311606272,
+      "apparent": 2263928047
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:38.462826+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034597376,
+    "global_census": {
+      "allocated": 29233786880,
+      "apparent": 28742972027
+    },
+    "other": {
+      "allocated": 2311606272,
+      "apparent": 2263928449
+    },
+    "owned": {
+      "allocated": 2311606272,
+      "apparent": 2263928449
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:39.371877+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034597376,
+    "global_census": {
+      "allocated": 29233786880,
+      "apparent": 28742972429
+    },
+    "other": {
+      "allocated": 2311606272,
+      "apparent": 2263928851
+    },
+    "owned": {
+      "allocated": 2311606272,
+      "apparent": 2263928851
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:40.281736+00:00",
+    "fixture": {
+      "allocated": 0,
+      "apparent": 0
+    },
+    "free": 183034593280,
+    "global_census": {
+      "allocated": 29233790976,
+      "apparent": 28742972992
+    },
+    "other": {
+      "allocated": 2311610368,
+      "apparent": 2263929414
+    },
+    "owned": {
+      "allocated": 2311610368,
+      "apparent": 2263929414
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:43.208413+00:00",
+    "fixture": {
+      "allocated": 39702528,
+      "apparent": 39434941
+    },
+    "free": 183017611264,
+    "global_census": {
+      "allocated": 29259440128,
+      "apparent": 28768390432
+    },
+    "other": {
+      "allocated": 2312085504,
+      "apparent": 2264403477
+    },
+    "owned": {
+      "allocated": 2351788032,
+      "apparent": 2303838418
+    }
+  },
+  {
+    "at": "2026-10-08T17:52:46.269839+00:00",
+    "fixture": {
+      "allocated": 33062912,
+      "apparent": 32770524
+    },
+    "free": 183000653824,
+    "global_census": {
+      "allocated": 29267570688,
+      "apparent": 28776455188
+    },
+    "other": {
+      "allocated": 2312327168,
+      "apparent": 2264641086
+    },
+    "owned": {
+      "allocated": 2345390080,
+      "apparent": 2297411610
+    }
+  }
+]

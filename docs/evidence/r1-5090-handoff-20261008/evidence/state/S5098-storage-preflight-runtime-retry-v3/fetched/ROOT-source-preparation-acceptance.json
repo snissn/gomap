@@ -1,0 +1,24 @@
+{
+  "M_phase2_NOT_accepted": true,
+  "N_selected": false,
+  "ROOT_accepted_source_preparation": true,
+  "actual_preparation_tool_join": {
+    "exit": 0,
+    "session": 91265
+  },
+  "at": "2026-10-08T17:48:12.174086+00:00",
+  "driver3_independent_review_receipt_sha256": "9a6d877e167202b93f4339a56ec7252e5a9600aa12cce3a03b5fe67a1a8f43c7",
+  "driver3_selection_sha256": "eb9f8ee4aa188f2ae22d41745d7bc1fde104db86ae736fb389def55a1b970b98",
+  "driver_selection_sha256": "470ec24fa419d3be6d2853b8f3446abf333b1eb875446014148b1b8ec8966889",
+  "finite": false,
+  "fixed15_granted": false,
+  "fixed_short_work": "two fresh arms,256calls each,15full oracles and15census each",
+  "independent_diagnostic_reassessment_sha256": "b77865d339e3d3d5805445fb22e58cea9921ecb2fdf3d85f2a8ebbb61473fe36",
+  "independent_review_receipt_sha256": "75c1c8096663b8dd1b01de0d21291624aab052e721aff8ad649f98103ab551d7",
+  "original_segment_defaults_and_product_resource_limits_unchanged": true,
+  "performance": false,
+  "resource_plan_prior_driver_superseded_by_exact3line_parser_local_variable_fix": true,
+  "source04_receipt_sha256": "ff34350cc0eea1ed8a73b72b347c58803e535c3d58d46fe4ff9095835500d5fc",
+  "source_paths": 9878,
+  "source_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891"
+}

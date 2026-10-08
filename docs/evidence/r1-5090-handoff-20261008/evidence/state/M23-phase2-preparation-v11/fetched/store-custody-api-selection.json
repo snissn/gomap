@@ -1,0 +1,23 @@
+{
+  "Git": false,
+  "Go": false,
+  "at": "2026-10-08T16:35:00.426010+00:00",
+  "finite": false,
+  "format": false,
+  "new_public_API": false,
+  "original_grant": "state/M23-phase2-source-grant-v1/grant.json",
+  "owner": "/root/m5093_transitive_ownership",
+  "performance": false,
+  "reason": "Compiler proved nonexistent Owner accessor; actual builder must drain claimed roles before original candidate alias uses Release. Preserve genuine unclaimed Add-refusal path.",
+  "remote": false,
+  "selected_existing_paths": [
+    "TreeDB/internal/dictdb/store.go",
+    "TreeDB/internal/dictdb/resource_capture.go",
+    "TreeDB/internal/templatedb/store.go",
+    "TreeDB/internal/templatedb/resource_capture.go"
+  ],
+  "selected_existing_risk_paths": [
+    "TreeDB/internal/dictdb/resource_capture_custody_v1_test.go",
+    "TreeDB/internal/templatedb/resource_capture_custody_v1_test.go"
+  ]
+}

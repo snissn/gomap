@@ -1,0 +1,33 @@
+{
+  "actual_remote_head": "28da479a02b629a906d0bf3fc38c1e639fb68e0d",
+  "base": "754f5d990a13bddd167239b8001f23c3aa02b447",
+  "branch": "codex/r1-5098-default-harness-handoff-20261008",
+  "changed_paths": [
+    "TreeDB/caching/db.go",
+    "TreeDB/caching/flush_apply_stats.go",
+    "TreeDB/caching/hot_value_log_reconcile_test.go",
+    "TreeDB/caching/leaf_page_log_reconcile.go",
+    "TreeDB/caching/leaf_page_log_reconcile_test.go",
+    "TreeDB/caching/observed_reclaim_leaf_handoff_test.go",
+    "TreeDB/caching/physical_vlog_writer_stats_test.go",
+    "TreeDB/db/leaf_page_log.go",
+    "TreeDB/internal/valuelog/current_binding.go",
+    "TreeDB/internal/valuelog/manager.go",
+    "cmd/collection_workload_bench/s_default_discovery_5098_test.go",
+    "cmd/collection_workload_bench/s_default_exposure_shape_5098_test.go",
+    "cmd/collection_workload_bench/s_default_fixed_epochs_5098_test.go",
+    "cmd/collection_workload_bench/s_default_storage_preflight_5098_test.go",
+    "cmd/collection_workload_bench/s_rollover_observer_5098_test.go"
+  ],
+  "commit": "28da479a02b629a906d0bf3fc38c1e639fb68e0d",
+  "formatting": false,
+  "lane": "S",
+  "merge_ready": false,
+  "new_tests": false,
+  "pushed": true,
+  "scoped_source_exact": true,
+  "source_manifest_sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+  "source_paths": 9878,
+  "tree": "9ff9a487d803061d53aeb700f34bb0ad79df99cd",
+  "working_checkout_unchanged": true
+}

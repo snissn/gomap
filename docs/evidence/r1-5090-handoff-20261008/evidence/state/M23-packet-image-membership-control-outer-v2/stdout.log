@@ -1,0 +1,13 @@
+START version 80092
+END version 0
+START format 80099
+END format 0
+START normal-inputs 80104
+END normal-inputs 0
+START normal-public 80127
+END normal-public 0
+START race-inputs 80181
+END race-inputs 0
+START race-public 80214
+END race-public 0
+RECEIPT 44bb9c39501fcce8bedba4c55bce4e49ba60ae1cfa91f9efc61845b5c2a62f9d PASS_SCOPED_FL_PACKET_MEMBERSHIP_NORMAL_RACE

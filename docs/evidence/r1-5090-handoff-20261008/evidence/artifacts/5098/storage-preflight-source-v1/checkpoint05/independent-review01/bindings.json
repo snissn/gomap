@@ -1,0 +1,34 @@
+[
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5098-default-common-control-v8-mac-compile/cmd/collection_workload_bench/s_default_storage_preflight_5098_test.go",
+    "sha256": "b45a270fc489ce1eccbe4f259445f1a52a384c728d1ce7965526dbd4b3b6ed8b"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5098-default-common-control-v8-mac-compile/TreeDB/dir_layout.go",
+    "sha256": "7bbeba773c434e885af025471d5fd8e8c07750736a93cdcc6dad36f31e539e3f"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/worktrees/5098-default-common-control-v8-mac-compile/TreeDB/open_backend.go",
+    "sha256": "08648dc0d86b921c23a980d38ae7a45eb2f18aaf099dc0b5316450d4934ff57e"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/receipt.json",
+    "sha256": "fabcc91fc229457d8283c038ac334c768257c65215ad86ba346c02831f7112bd"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/delta.patch",
+    "sha256": "02c0ac0d2b65e5dbd22bd59547174f4dc08d6104a765dcfe7d9bf67af8296f99"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/new-source.tar.gz",
+    "sha256": "16b3e849bedeb05ded41e4335eee62f01a9add7b1c1ebe0aa5dc0033d3edabe3"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-delta.json",
+    "sha256": "e95a4fcad42aaca135f19e7621dc0a3e0212493f1e6a79654a0c3a1d5736cf30"
+  },
+  {
+    "path": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-evidence.json",
+    "sha256": "8c73770cc4db9dc432e0f3535ec34dd78bd53535cb27604ca96774bc7c28b74d"
+  }
+]

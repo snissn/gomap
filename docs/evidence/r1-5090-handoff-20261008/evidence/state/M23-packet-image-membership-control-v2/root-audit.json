@@ -1,0 +1,35 @@
+{
+  "at": "2026-10-08T09:22:05.739517+00:00",
+  "status": "ROOT_AUDITED_FL_PAGE_MEMBERSHIP_NORMAL_RACE",
+  "source_count": 10050,
+  "whole_source_actual": true,
+  "compiler_test_embed_modules_std_ext_tools_actual": true,
+  "all_phase_outer_actual_wait": true,
+  "results": {
+    "normal": {
+      "expected": 184,
+      "top_pass": 184,
+      "named_pass": 330,
+      "skipped": 0,
+      "failed": 0,
+      "missing": 0,
+      "actual_compiler_input_count": 1579
+    },
+    "race": {
+      "expected": 184,
+      "top_pass": 184,
+      "named_pass": 330,
+      "skipped": 0,
+      "failed": 0,
+      "missing": 0,
+      "actual_compiler_input_count": 1586
+    }
+  },
+  "red_retained_sha256": "51762ad721ce721379683175992c9178f119a051d4f54138a658f6b5f0f7416d",
+  "receipt_sha256": "44bb9c39501fcce8bedba4c55bce4e49ba60ae1cfa91f9efc61845b5c2a62f9d",
+  "outer_receipt_sha256": "825872224dc6c75381c1cbbb4afde57dedbe408858a9b1fb78c1aae92e82c7df",
+  "source_sha256": "7adfb92c8b6ed1c927a1a6e406abcec2629dded6715bfc27face8a8aa8dc44c0",
+  "finite": false,
+  "performance": false,
+  "Linux": false
+}

@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-08T09:20:57.718647+00:00",
+  "authorized": true,
+  "driver_sha256": "3cbf719d848af22fb65c860c517602c36963690e04b384ee6823e7cbf290147a",
+  "source_sha256": "e0ebf8077407cc097be1eea719f0a1e16645838d0e9ebb84d8da23add14c21f0",
+  "head": "ae6b6a87090be5bf64554f68738a1fe103393aa9",
+  "mode": "packet-image-membership",
+  "host": "Mac",
+  "sole_mac_Go": true,
+  "finite": false,
+  "performance": false
+}

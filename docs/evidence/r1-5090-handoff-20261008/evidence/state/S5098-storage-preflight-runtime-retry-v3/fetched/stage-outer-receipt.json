@@ -1,0 +1,16 @@
+{
+  "Go_build": false,
+  "actual_wait": true,
+  "exception": null,
+  "exit": 0,
+  "group_absent": true,
+  "pid": 82021,
+  "remote_actual_join_requires_completion_readback": true,
+  "remote_control": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/state/S5098-preflight-stage-v2",
+  "remote_custody_unresolved": true,
+  "remote_released": false,
+  "source_manifest_sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "4e2a89744cb9b306771338ab68271049787136fbf490bb7eb10d260616b7269d",
+  "tests": false
+}

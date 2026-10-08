@@ -1,0 +1,27 @@
+{"Action":"start","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge","Output":"=== RUN   TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge","Output":"--- PASS: TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalOrdinaryScopeSurvivesOwnerCloseUntilLastEdge"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects","Output":"=== RUN   TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects","Output":"--- PASS: TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestOriginalLifetimeRejectsStrictAndOverflowWithoutEffects"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose","Output":"=== RUN   TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose","Output":"--- PASS: TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestResidentOwnsScopeUsesActualOriginalCreatorThroughClose"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose","Output":"=== RUN   TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose","Output":"--- PASS: TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingSerialChurnAndLateOriginalClose"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap","Output":"=== RUN   TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap","Output":"--- PASS: TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingConcurrentAliasesAndStrictOverlap"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingMalformedAndOverflowRefusal"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingMalformedAndOverflowRefusal","Output":"=== RUN   TestPrivateSnapshotBackingMalformedAndOverflowRefusal\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingMalformedAndOverflowRefusal","Output":"--- PASS: TestPrivateSnapshotBackingMalformedAndOverflowRefusal (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Test":"TestPrivateSnapshotBackingMalformedAndOverflowRefusal"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit","Output":"PASS\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/internal/residentcredit"}

@@ -1,0 +1,9 @@
+{
+  "at": "2026-10-08T17:23:25.466833+00:00",
+  "external_thread": "01a0f9ab-98a1-7840-87a3-aff6d04bae35",
+  "actual_received_ACK": "ACK extension through17:50UTC, no consequential timing conflict; #5028 has no active native/runtime",
+  "window_until": "2026-10-08T17:50:00+00:00",
+  "owner": "R1 #5090 ROOT",
+  "external_next": "R and V3 diagnostics after genuine ROOT release",
+  "server185": "external5111 owned; no R1 runtime"
+}

@@ -1,0 +1,8 @@
+{
+  "actual_go_list_and_binary_inventory_required": true,
+  "expected_top": 14,
+  "mandatory_risks": 14,
+  "new_risks": [],
+  "runtime_authorized": false,
+  "source05_census_path_fix_only": true
+}

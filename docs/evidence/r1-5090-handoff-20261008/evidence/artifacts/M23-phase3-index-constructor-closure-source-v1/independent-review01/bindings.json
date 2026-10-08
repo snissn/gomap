@@ -1,0 +1,64 @@
+{
+  "outside_existing_equal": 10072,
+  "packet_files": {
+    "known-class-rationale.md": "c89e039e2c9aecca22623898f29cadb5d5893b565c1b65db54dfca5d2cf58b35",
+    "receipt.json": "3e2a2eaae6a54a2cad1ec538aec32d01385faa1c17d494d0edbc542e9bcf15c7",
+    "risk-test-inventory.json": "392fcb408236a2cab851718944f46594f54b7a3119bb14a21cd8132f8145bbb8",
+    "selected-after.tar": "992d4287744da4a9f88bfb6212b14eb636dd8d221d81f36c6e21f9180fe19ba3",
+    "source-after.json": "e87125afa7407d4d519ddcd96cd569ec07b7ef39d951a9538c965b9eb96a32f8",
+    "source-before.json": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff",
+    "source.patch": "f4c80107ec174fa80963cf260b185f07f9b5e265f51e4d568947330b5b039b55"
+  },
+  "selected_after_archive": {
+    "TreeDB/db/index_constructor_closure_v1_test.go": "eada6ba2a93bdac4195bc08587e924b9de3e296c2d4a3d27f32f62c620811839",
+    "TreeDB/db/pager_holder_lifetime.go": "b6b15c113e5bbf0d5402756eca49b1d3a80e456e1d93846dca3a761142da787b",
+    "TreeDB/lifecycle/graveyard.go": "71069db485444734531d826ed719a7646544fe806fb606ed64cff46b719c633f",
+    "TreeDB/lifecycle/graveyard_constructor_layout_v1_test.go": "452c25d1bf142a7054cdb86f3175a27e627b1fde7b881881b240274ee4d7e34d"
+  },
+  "source_paths": {
+    "TreeDB/db/index_constructor_closure_v1_test.go": {
+      "matches_frozen_after": true,
+      "sha256": "eada6ba2a93bdac4195bc08587e924b9de3e296c2d4a3d27f32f62c620811839"
+    },
+    "TreeDB/db/index_gen.go": {
+      "matches_frozen_after": true,
+      "sha256": "e070f016555c8183834166013dc67daa7131a3696aa74b34ea722cb3e32706de"
+    },
+    "TreeDB/db/pager_holder_lifetime.go": {
+      "matches_frozen_after": true,
+      "sha256": "b6b15c113e5bbf0d5402756eca49b1d3a80e456e1d93846dca3a761142da787b"
+    },
+    "TreeDB/db/vacuum_online.go": {
+      "matches_frozen_after": true,
+      "sha256": "5a06495911e03d29414747f6cb99602a6b451d88970e965b47c094fd5c2f1e80"
+    },
+    "TreeDB/internal/allocatorownership/managed_writer.go": {
+      "matches_frozen_after": true,
+      "sha256": "48e1289a734d70f7cf9108a4057def7bddab01a84a4270f9ec7ccf7931e02d27"
+    },
+    "TreeDB/internal/allocclass/class.go": {
+      "matches_frozen_after": true,
+      "sha256": "3e4ec35e478ab1082806e93f067b7c93d9d98772c106b83f3a6d70a7daa1392b"
+    },
+    "TreeDB/internal/residentcredit/owner.go": {
+      "matches_frozen_after": true,
+      "sha256": "8a16b97a8e03c704beeecfc84cd740f137b9e9b8c3384ac9a717fdaaa31ebf45"
+    },
+    "TreeDB/lifecycle/graveyard.go": {
+      "matches_frozen_after": true,
+      "sha256": "71069db485444734531d826ed719a7646544fe806fb606ed64cff46b719c633f"
+    },
+    "TreeDB/lifecycle/graveyard_constructor_layout_v1_test.go": {
+      "matches_frozen_after": true,
+      "sha256": "452c25d1bf142a7054cdb86f3175a27e627b1fde7b881881b240274ee4d7e34d"
+    },
+    "TreeDB/lifecycle/registry.go": {
+      "matches_frozen_after": true,
+      "sha256": "43f3c55893c3d7c2b7b340132375de87d88c86a288846cbc1ea22ed23348afdf"
+    },
+    "TreeDB/pager/owned_lifetime.go": {
+      "matches_frozen_after": true,
+      "sha256": "09d0471b3b15a0e67722cdb1198d86231b58d7cb6631a3ed0f1deabaea9e17c9"
+    }
+  }
+}

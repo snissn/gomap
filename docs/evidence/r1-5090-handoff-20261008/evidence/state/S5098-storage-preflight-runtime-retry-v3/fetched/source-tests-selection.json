@@ -1,0 +1,29 @@
+{
+  "actual_go_list_and_binary_inventory_required": true,
+  "driver_is_unaccepted_preparation_only": true,
+  "expected_top": 14,
+  "mandatory_risks": 14,
+  "new_risks": [
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureFixtureShape5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureScheduleCoverage5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposurePayloadDeterminismAndHeldAlias5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureTypedRetainedJSONAndOracle5098"
+    ],
+    [
+      "github.com/snissn/gomap/cmd/collection_workload_bench",
+      "TestR1SExposureInvalidInputNoMutation5098"
+    ]
+  ],
+  "runtime_authorized": false
+}

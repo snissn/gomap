@@ -1,0 +1,17 @@
+{
+  "Go_build": false,
+  "actual_wait": true,
+  "changed_paths": [],
+  "exception": null,
+  "exit": 0,
+  "finite": false,
+  "formatter": "/Users/michaelseiler/.gvm/pkgsets/go1.25.5/global/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.3.darwin-arm64/bin/gofmt",
+  "formatter_sha256": "55345bedfd23105ac6807b62f2403bba9556923f0dd8d6587f070377e5f3ddb7",
+  "group_absent": true,
+  "performance": false,
+  "pid": 3682,
+  "source_after_sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+  "source_before_sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+  "source_paths": 9878,
+  "tests": false
+}

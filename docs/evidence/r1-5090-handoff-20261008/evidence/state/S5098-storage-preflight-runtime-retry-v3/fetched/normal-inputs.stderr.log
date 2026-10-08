@@ -1,0 +1,26 @@
+go: downloading github.com/mattn/go-sqlite3 v1.14.42
+go: downloading go.mongodb.org/mongo-driver/v2 v2.6.0
+go: downloading github.com/cespare/xxhash/v2 v2.3.0
+go: downloading github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721
+go: downloading go.uber.org/goleak v1.3.0
+go: downloading github.com/buger/jsonparser v1.1.2
+go: downloading github.com/golang/snappy v0.0.4
+go: downloading github.com/pierrec/lz4/v4 v4.1.22
+go: downloading github.com/tidwall/gjson v1.14.3
+go: downloading golang.org/x/sys v0.41.0
+go: downloading github.com/tidwall/btree v1.8.1
+go: downloading github.com/zeebo/xxh3 v1.1.0
+go: downloading github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a
+go: downloading github.com/tphakala/simd v1.0.22
+go: downloading github.com/tidwall/match v1.1.1
+go: downloading github.com/tidwall/pretty v1.2.0
+go: downloading github.com/klauspost/cpuid/v2 v2.2.10
+# github.com/mattn/go-sqlite3
+sqlite3-binding.c: In function ‘sqlite3ShadowTableName’:
+sqlite3-binding.c:126949:9: warning: assignment discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+126949 |   zTail = strrchr(zName, '_');
+       |         ^
+sqlite3-binding.c: In function ‘unistrFunc’:
+sqlite3-binding.c:132979:15: warning: initialization discards ‘const’ qualifier from pointer target type [-Wdiscarded-qualifiers]
+132979 |     char *z = strchr(&zIn[i],'\\');
+       |               ^~~~~~

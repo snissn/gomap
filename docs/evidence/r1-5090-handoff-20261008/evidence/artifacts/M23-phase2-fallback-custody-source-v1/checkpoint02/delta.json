@@ -1,0 +1,10 @@
+{
+  "TreeDB/internal/rootpublication/resource_operation_lifetime_v1_test.go": {
+    "after": "4bf8116cab2bb3cf15fb754d6d2f265fae9b7daccc06bea5450f0dd6dc2bb9eb",
+    "before": "63dd2e0ae68720ae1f56b6c91d781adf3456ce859ef6c99a567350991c751e62"
+  },
+  "TreeDB/internal/rootpublication/resource_set.go": {
+    "after": "28948fa60bc6e6104b4309800daf949a2995b5fd4a74bda32260963aa63464c2",
+    "before": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f"
+  }
+}

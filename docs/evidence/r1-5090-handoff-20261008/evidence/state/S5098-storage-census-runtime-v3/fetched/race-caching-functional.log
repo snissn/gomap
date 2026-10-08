@@ -1,0 +1,67 @@
+{"Action":"start","Package":"github.com/snissn/gomap/TreeDB/caching"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct","Output":"=== RUN   TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct","Output":"--- PASS: TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsKeepSharedLaneWritersDistinct"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsExposeInventoryAbove64"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsExposeInventoryAbove64","Output":"=== RUN   TestPhysicalValueLogWriterStatsExposeInventoryAbove64\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsExposeInventoryAbove64","Output":"--- PASS: TestPhysicalValueLogWriterStatsExposeInventoryAbove64 (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsExposeInventoryAbove64"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65","Output":"=== RUN   TestLeafLogStatsExposeWorker65\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65/unused-index-holes"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65/unused-index-holes","Output":"=== RUN   TestLeafLogStatsExposeWorker65/unused-index-holes\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65/unused-index-holes","Output":"--- PASS: TestLeafLogStatsExposeWorker65/unused-index-holes (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65/unused-index-holes"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65","Output":"--- PASS: TestLeafLogStatsExposeWorker65 (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogStatsExposeWorker65"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/records"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/records","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/records\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/records","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/records (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/records"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/bytes"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/bytes","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/bytes\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/bytes","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/bytes (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/bytes"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence-truncation"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence-truncation","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence-truncation\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence-truncation","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence-truncation (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/sequence-truncation"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-truncation"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-truncation","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-truncation\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-truncation","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-truncation (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-truncation"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-negative"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-negative","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-negative\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-negative","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-negative (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/lane-negative"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/nil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/nil","Output":"=== RUN   TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/nil\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/nil","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/nil (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity/nil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity","Output":"--- PASS: TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestPhysicalValueLogWriterStatsRejectInvalidAndOverflowedIdentity"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations","Output":"=== RUN   TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations","Output":"--- PASS: TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations (0.10s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestLeafLogThresholdStatsTrackActualPhysicalWorkerRotations"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly","Output":"=== RUN   TestThresholdRotationStatsCountInstalledRotationOnly\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=false"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=false","Output":"=== RUN   TestThresholdRotationStatsCountInstalledRotationOnly/installed=false\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=false","Output":"--- PASS: TestThresholdRotationStatsCountInstalledRotationOnly/installed=false (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=false"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=true"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=true","Output":"=== RUN   TestThresholdRotationStatsCountInstalledRotationOnly/installed=true\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=true","Output":"--- PASS: TestThresholdRotationStatsCountInstalledRotationOnly/installed=true (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly/installed=true"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly","Output":"--- PASS: TestThresholdRotationStatsCountInstalledRotationOnly (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching","Test":"TestThresholdRotationStatsCountInstalledRotationOnly"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/caching","Output":"PASS\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/caching"}

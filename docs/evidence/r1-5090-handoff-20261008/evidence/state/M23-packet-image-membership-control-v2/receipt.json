@@ -1,0 +1,1875 @@
+{
+  "at": "2026-10-08T09:21:23.880240+00:00",
+  "status": "PASS_SCOPED_FL_PACKET_MEMBERSHIP_NORMAL_RACE",
+  "failure": null,
+  "mode": "packet-image-membership",
+  "source_count": 10050,
+  "head": "ae6b6a87090be5bf64554f68738a1fe103393aa9",
+  "source_exact": true,
+  "actual_compiler_inputs_exact": true,
+  "tools_exact": true,
+  "commands_joined": true,
+  "inventories": {
+    "normal-public": {
+      "top_pass": 184,
+      "named_pass": 330,
+      "skips": [],
+      "fails": [],
+      "statuses": [
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "FuzzFreelistGenerationV1_Model",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationEpochRequiresCurrentRequestAndDestination5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationLoanPreservesHistoricalCreators5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationRequestResidentOrderAndRetirement5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationScratchRefusalAndIndependentLifetime5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorActivatedCOWFailurePoisonsAndWakesAllocation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorActivatedCOWPrefixRejectsUntrackedPhysicalTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWAllocAppendIsScopedAndAdvancesCandidateHighWater",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWAllocAppendSkipsActivatedVirtualTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWAuxiliaryPagesStayContiguousAboveReusableHoles",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateEncodesSealedReuseCapability",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateMustBeMaterializedBeforePublish",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateOwnsAllocationsAndAuxiliaryPages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateRetirementsRollbackBeforePublish",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWDoesNotReuseUntilTwoSlotHorizonAdvances",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWPreferAppendBypassesReusablePages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWPrepareLimitsRejectBeforeClone",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWPrepareProfileCountsLiveTransaction",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorFailedCOWCandidateWakesBlockedAllocation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorFiniteRetryRefusesBeforeCachedOrdinaryCandidate5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorTerminalCutLastEdgeReleasesFiniteCredit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorTerminalPreservesOrdinaryEscapedGenerationAndLedger5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorTerminalSharedLedgerCreatingCredit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_AllocClearsFreelistBodySlot",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_AllocClearsVerifiedBit",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_AllocMany",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_DuplicatesMatchFreeLoop",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_ErrorReportsCommittedPrefix",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_FillsHeadAndChains",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_FullHeadGetsFinalChecksumBeforeChaining",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_HookRunsBeforeChecksum",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_RejectsCorruptHead",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_RejectsPageZeroBeforeMutation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_NoDuplicateAllocations",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_PreferAppendAlloc_CanToggleBack",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_PreferAppendAlloc_IgnoresFreelist",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_BatchesNearbyUnverified",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_DrainsAndRecyclesHeadWithOneVerification",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_IndexedPathMatchesRepeatedAlloc",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_MatchesRepeatedAllocWithMovingHint",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_RecycledHeadDoesNotConsumeFreeIDStat",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAlloc_FallsBackToLIFO",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAlloc_SelectsNearby",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBeginCandidateV1RejectsStaleParent",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBoundedPrune512FreshCapabilityAndWholeWork",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBuildOwnerPinnedClassWitness5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBurnedTailGrowthAdmissionBeforeReservationDeletion5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCOWPrepareProfileLimitsCoverEveryCopiedCollection",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateFiniteDirectPagerAndOrdinaryRetainingWriter5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateFiniteGenericWriterRefusedBeforeCallback5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateGettersSynchronizeTerminalClear5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlanChecksumFailureDoesNotWritePager",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlansCanonicalBytesAndCapacity",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlansSurviveAllocatorAbortAndRetry",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlansSurviveForkAndCandidateRelease",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidatePageSinkV1_ValidatesSizeAndDuplicateWithoutRetainingBytes",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorActualClassWitness5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorActualStatePageCounts5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorBranchBirthDenialPreservesAllAliases5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorCanonicalLoaderCorruption5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorDirectRootDirtyPageCounts5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorEmptySentinelReplacementOwnership5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorExactMetadataOwnership5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorFanoutActualEmission5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorRequiresExplicitTopologyVersion5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorReservationCoalescingActualMaterializer5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorSplitCollapseRetainsExactCreators5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorTailCountMatchesActualCoalescing5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorThousandActualMutations5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFiniteTerminalBackingAndAmbiguousRetention5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistCandidateV1_WritePagesToUsesOpaqueViewsAndStopsOnError",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_100KLogicalChurnConverges",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_AppendOnlySuccessorRewritesRoot",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_BatchedPruneMutatesEachChunkOnce",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_BatchedRetirementMatchesPerPageBytes",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_BatchedRetirementMutatesEachChunkOnce",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_EncodeIndexRejectsChildSummaryOverflow",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_EveryPageKindRejectsCorruption",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_HorizonPreventsPrematureReuse",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_LoadStateNodeAcceptsZeroChildChecksum",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MaterializeAcceptsZeroRootChecksum",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MaterializeDoesNotAssignIDsIntoBase",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MetadataReusesRetiredCapacity4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MultiPageReservationRecordRoundTripAndDigest",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_OlderGenerationAndPagesRemainImmutable",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_OneChunkDeltaEmitsOnlyOnePath",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_PageCodecRoundTripAndCorruption",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ParentChecksumRejectsRecomputedChildCRC",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ReopenReconstructsReservationOwnership",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ReplacedMetadataWaitsForExplicitHorizon",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseAfterPhysicalTailFailure4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseArbitrarySinkRollback4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseAtomicClaim4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseAuxiliaryClaimConflict4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseMaximumHighWater4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseMixedDirtySiblingSizing4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReusePlacement4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReusePublishesBurnedCoverage4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseReservationChain4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseStagedAllocatorRollback4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataTailPlacementAfterBurn4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_AllocateSkipsAnotherCandidateReservation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_AppendFallbackSkipsAnotherCandidatesMetadataTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_CandidateReservationsSurviveSupersedeAndFailure",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_CandidateSinkEliminatesIsolationCopies",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_GenericSinkCannotMutateOrRetainCandidatePages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_ReservationRejectsAppendChosenBeforeCompetingMetadataTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_SinkFailureConsumesTransaction",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestIntrinsicTreeBirthDeniedBeforeAliasOrMutation5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestIntrinsicTreeCreatingCreditOutlivesTransferredParent5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedRawCandidateEscapeRemainsPermanent5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedWriterCapabilitySingleClaim5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedWriterCondBorrowOwnsHeadersThroughShutdown5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedWriterEscapeRefusesResidentAdoptionAndFiniteExport5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMaterializationBackingPredebitsAndKeepsCreator5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataAuxiliarySharesCursor4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataChunkRunMatchesReservationOracle4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataChunkSearchWrapAndBound4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataCursorCompletionPolicy4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataCursorConcurrentClaims4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataCursorOccupiedChunkAdvancesWithoutOwnershipLoss4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataEmissionPreservesSharedDirtyBranches4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataFixedOverlayMatchesNormalizedReference5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataFreshPathDoesNotDetachTwice4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataImpossibleRunDoesNotAllocate4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataLosingClaimPreservesTransaction4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataReservationMaskBoundaries4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataSearchMakesBoundedProgress4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNormalizeExtentsOwnedCopyAllocations4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixActualAllocationClasses5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixCandidateOrderAndDeleteChurn5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixChunkGrowthDeniedBeforeBirth5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixGlobalMapOracle5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixPredebitAndIntrinsicLifetime5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixResidentPartialRetiredChunk5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixWholeChunkPlanAndBulkClone5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestOrdinaryPreparedWriterReentryAcrossTerminalClose5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestOwnedCandidatePublishedBackingLivesUntilTerminal5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipAcceptsRealReuseAppendAndEmpty5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipEndedEpochAndZeroAllocation5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRejectsForeignStalePhaseAndUncertainty5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRejectsOtherVisiblePrefixOwner5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRejectsUnownedTailHistoryAndOrder5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRevalidatesWholeProofEvenForEmpty5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketActualClassInventory5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketEndedEpochConsumesWithoutBirth5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketFullCensusReadmissionAndJoinedClose5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketMissingAuthorityAndLimitsRefuse5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketNoPagerEffectsBeforeWAL5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketPrefixRefusalAtomicAndForwardOnly5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketPrevisibleAbortBurnsBothAndRetries5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketPrevisibleStorageAttemptRetainsFuture5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketUncertaintyRetainsWholeFuture5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationAbortKeepsWorkAndRetainedViews5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCapacityAndNoTreeOwner5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCollapsedRebirthAbortAndFailure5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCollapsedRebirthPersistentOracle5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCopiesDirtyPathOnce5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationDirtyRollbackAfterSinkFailure5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationDurableBranchDirtyChunk5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationErrorsRevokeAuthority5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationExactPersistentCandidateOracle5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationPersistentCloneRevokesBothAliases5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPublishedGenerationLeaseInstanceCensus5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReservationExtentsRejectCrossKindOverlap",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReservationLedgerPublishBatchValidatesBeforeMutation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReservationLedger_VisibleAndAmbiguousStatesRetainOwnership",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAllocationClassWitness5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentCutReaderAndCloseSynchronization5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentDeniedBeforeAnyCreator5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentManagedCandidatesCutsAndExactRetry5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentUnknownOwnersRefusedBeforeDebit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentChunkCloseDetachHeldOldReader5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReusedMetadataJointAdmissionBeforeClaim5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionAppendGrowthDeniedBeforeMutation5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionBirthCloneAndRetainedNodeCredit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionBuildExactRetryAndRawLedgerRefusal5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionHeaderAndCrossRequestBufferCreators5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestWriteCandidatePageToPagerV1CopiesWithoutRetainingCandidateBytes",
+          "status": "pass"
+        }
+      ]
+    },
+    "race-public": {
+      "top_pass": 184,
+      "named_pass": 330,
+      "skips": [],
+      "fails": [],
+      "statuses": [
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "FuzzFreelistGenerationV1_Model",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationEpochRequiresCurrentRequestAndDestination5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationLoanPreservesHistoricalCreators5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationRequestResidentOrderAndRetirement5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocationScratchRefusalAndIndependentLifetime5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorActivatedCOWFailurePoisonsAndWakesAllocation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorActivatedCOWGenerationsBuildAheadOfDurablePublication",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorActivatedCOWPrefixRejectsUntrackedPhysicalTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWAllocAppendIsScopedAndAdvancesCandidateHighWater",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWAllocAppendSkipsActivatedVirtualTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWAuxiliaryPagesStayContiguousAboveReusableHoles",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateEncodesSealedReuseCapability",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateMustBeMaterializedBeforePublish",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateOwnsAllocationsAndAuxiliaryPages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWCandidateRetirementsRollbackBeforePublish",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWDoesNotReuseUntilTwoSlotHorizonAdvances",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWPreferAppendBypassesReusablePages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWPrepareLimitsRejectBeforeClone",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorCOWPrepareProfileCountsLiveTransaction",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorFailedCOWCandidateWakesBlockedAllocation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorFiniteRetryRefusesBeforeCachedOrdinaryCandidate5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorTerminalCutLastEdgeReleasesFiniteCredit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorTerminalPreservesOrdinaryEscapedGenerationAndLedger5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocatorTerminalSharedLedgerCreatingCredit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_AllocClearsFreelistBodySlot",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_AllocClearsVerifiedBit",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_AllocMany",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_DuplicatesMatchFreeLoop",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_ErrorReportsCommittedPrefix",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_FillsHeadAndChains",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_FullHeadGetsFinalChecksumBeforeChaining",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_HookRunsBeforeChecksum",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_RejectsCorruptHead",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_FreeMany_RejectsPageZeroBeforeMutation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_NoDuplicateAllocations",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_PreferAppendAlloc_CanToggleBack",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_PreferAppendAlloc_IgnoresFreelist",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_BatchesNearbyUnverified",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_DrainsAndRecyclesHeadWithOneVerification",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_IndexedPathMatchesRepeatedAlloc",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_MatchesRepeatedAllocWithMovingHint",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAllocMany_RecycledHeadDoesNotConsumeFreeIDStat",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAlloc_FallsBackToLIFO",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestAllocator_RegionBiasedAlloc_SelectsNearby",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBeginCandidateV1RejectsStaleParent",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBoundedPrune512FreshCapabilityAndWholeWork",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBuildOwnerPinnedClassWitness5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestBurnedTailGrowthAdmissionBeforeReservationDeletion5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCOWPrepareProfileLimitsCoverEveryCopiedCollection",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateFiniteDirectPagerAndOrdinaryRetainingWriter5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateFiniteGenericWriterRefusedBeforeCallback5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateGettersSynchronizeTerminalClear5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlanChecksumFailureDoesNotWritePager",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlansCanonicalBytesAndCapacity",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlansSurviveAllocatorAbortAndRetry",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidateIndexPlansSurviveForkAndCandidateRelease",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCandidatePageSinkV1_ValidatesSizeAndDuplicateWithoutRetainingBytes",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorActualClassWitness5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorActualStatePageCounts5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorBranchBirthDenialPreservesAllAliases5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorCanonicalLoaderCorruption5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorDirectRootDirtyPageCounts5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorEmptySentinelReplacementOwnership5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorExactMetadataOwnership5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorFanoutActualEmission5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorRequiresExplicitTopologyVersion5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorReservationCoalescingActualMaterializer5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorSplitCollapseRetainsExactCreators5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorTailCountMatchesActualCoalescing5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestCompressedAllocatorThousandActualMutations5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFiniteTerminalBackingAndAmbiguousRetention5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistCandidateV1_WritePagesToUsesOpaqueViewsAndStopsOnError",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_100KLogicalChurnConverges",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_AppendOnlySuccessorRewritesRoot",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_BatchedPruneMutatesEachChunkOnce",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_BatchedRetirementMatchesPerPageBytes",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_BatchedRetirementMutatesEachChunkOnce",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_CanonicalAndSummaryValidationSurvivesRecomputedCRC",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_EncodeIndexRejectsChildSummaryOverflow",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_EveryPageKindRejectsCorruption",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_HorizonPreventsPrematureReuse",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_LoadStateNodeAcceptsZeroChildChecksum",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MaterializeAcceptsZeroRootChecksum",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MaterializeDoesNotAssignIDsIntoBase",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MetadataReusesRetiredCapacity4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_MultiPageReservationRecordRoundTripAndDigest",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_OlderGenerationAndPagesRemainImmutable",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_OneChunkDeltaEmitsOnlyOnePath",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_PageCodecRoundTripAndCorruption",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ParentChecksumRejectsRecomputedChildCRC",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ReopenAcceptsSharedAncestorPages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ReopenReconstructsReservationOwnership",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistGenerationV1_ReplacedMetadataWaitsForExplicitHorizon",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseAfterPhysicalTailFailure4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseArbitrarySinkRollback4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseAtomicClaim4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseAuxiliaryClaimConflict4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseMaximumHighWater4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseMixedDirtySiblingSizing4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReusePlacement4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReusePublishesBurnedCoverage4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseReservationChain4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataReuseStagedAllocatorRollback4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistMetadataTailPlacementAfterBurn4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_AllocateSkipsAnotherCandidateReservation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_AppendFallbackSkipsAnotherCandidatesMetadataTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_CandidateReservationsSurviveSupersedeAndFailure",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_CandidateSinkEliminatesIsolationCopies",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_GenericSinkCannotMutateOrRetainCandidatePages",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_PartialSinkFailureBurnsTailUntilRetryPublishesAbandonment",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_ReservationRejectsAppendChosenBeforeCompetingMetadataTail",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestFreelistTxn_SinkFailureConsumesTransaction",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestIntrinsicTreeBirthDeniedBeforeAliasOrMutation5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestIntrinsicTreeCreatingCreditOutlivesTransferredParent5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedRawCandidateEscapeRemainsPermanent5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedWriterCapabilitySingleClaim5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedWriterCondBorrowOwnsHeadersThroughShutdown5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestManagedWriterEscapeRefusesResidentAdoptionAndFiniteExport5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMaterializationBackingPredebitsAndKeepsCreator5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataAuxiliarySharesCursor4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataChunkRunMatchesReservationOracle4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataChunkSearchWrapAndBound4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataCursorCompletionPolicy4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataCursorConcurrentClaims4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataCursorOccupiedChunkAdvancesWithoutOwnershipLoss4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataEmissionPreservesSharedDirtyBranches4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataFixedOverlayMatchesNormalizedReference5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataFreshPathDoesNotDetachTwice4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataImpossibleRunDoesNotAllocate4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataLosingClaimPreservesTransaction4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataReservationMaskBoundaries4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestMetadataSearchMakesBoundedProgress4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNormalizeExtentsOwnedCopyAllocations4627",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixActualAllocationClasses5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixCandidateOrderAndDeleteChurn5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixChunkGrowthDeniedBeforeBirth5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixGlobalMapOracle5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixPredebitAndIntrinsicLifetime5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixResidentPartialRetiredChunk5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestNumericRadixWholeChunkPlanAndBulkClone5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestOrdinaryPreparedWriterReentryAcrossTerminalClose5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestOwnedCandidatePublishedBackingLivesUntilTerminal5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipAcceptsRealReuseAppendAndEmpty5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipEndedEpochAndZeroAllocation5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRejectsForeignStalePhaseAndUncertainty5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRejectsOtherVisiblePrefixOwner5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRejectsUnownedTailHistoryAndOrder5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPacketPageMembershipRevalidatesWholeProofEvenForEmpty5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketActualClassInventory5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketEndedEpochConsumesWithoutBirth5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketFullCensusReadmissionAndJoinedClose5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketMissingAuthorityAndLimitsRefuse5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketNoPagerEffectsBeforeWAL5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketPrefixRefusalAtomicAndForwardOnly5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketPrevisibleAbortBurnsBothAndRetries5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketPrevisibleStorageAttemptRetainsFuture5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPreparedPublicationPacketUncertaintyRetainsWholeFuture5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationAbortKeepsWorkAndRetainedViews5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCapacityAndNoTreeOwner5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCollapsedRebirthAbortAndFailure5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCollapsedRebirthPersistentOracle5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationCopiesDirtyPathOnce5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationDirtyRollbackAfterSinkFailure5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationDurableBranchDirtyChunk5108",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationErrorsRevokeAuthority5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationExactPersistentCandidateOracle5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPrivatePreparationPersistentCloneRevokesBothAliases5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestPublishedGenerationLeaseInstanceCensus5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReservationExtentsRejectCrossKindOverlap",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReservationLedgerPublishBatchValidatesBeforeMutation",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReservationLedger_VisibleAndAmbiguousStatesRetainOwnership",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAllocationClassWitness5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentCutReaderAndCloseSynchronization5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentDeniedBeforeAnyCreator5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentManagedCandidatesCutsAndExactRetry5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentAttachmentUnknownOwnersRefusedBeforeDebit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestResidentChunkCloseDetachHeldOldReader5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestReusedMetadataJointAdmissionBeforeClaim5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestSnapshotPageUnusedV1PreservesPinnedRetirementBoundary",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionAppendGrowthDeniedBeforeMutation5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionBirthCloneAndRetainedNodeCredit5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionBuildExactRetryAndRawLedgerRefusal5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestTransactionHeaderAndCrossRequestBufferCreators5105",
+          "status": "pass"
+        },
+        {
+          "package": "github.com/snissn/gomap/TreeDB/freelist",
+          "test": "TestWriteCandidatePageToPagerV1CopiesWithoutRetainingCandidateBytes",
+          "status": "pass"
+        }
+      ]
+    }
+  },
+  "grant_sha256": "5a918bf89f7069857ecf802d798d6969836a75484a0109a8dee14ab6b2d266fe",
+  "driver_sha256": "3cbf719d848af22fb65c860c517602c36963690e04b384ee6823e7cbf290147a",
+  "finite": false,
+  "performance": false,
+  "Linux": false
+}

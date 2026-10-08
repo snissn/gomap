@@ -1,0 +1,16 @@
+{
+  "Go_build": false,
+  "actual_wait": true,
+  "exception": null,
+  "exit": 0,
+  "group_absent": true,
+  "pid": 90580,
+  "remote_actual_join_requires_completion_readback": true,
+  "remote_control": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/state/M23-phase2-stage-v11",
+  "remote_custody_unresolved": true,
+  "remote_released": false,
+  "source_manifest_sha256": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "3681f89c9e1d90c12faaec71f76ff1c778af8878990e7b14ef2c18c0d9c78b55",
+  "tests": false
+}

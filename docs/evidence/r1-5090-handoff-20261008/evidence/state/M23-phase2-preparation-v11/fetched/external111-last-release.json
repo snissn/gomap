@@ -1,0 +1,17 @@
+{
+  "status": "ACTUAL_OPPORTUNITY_STAGE_JOINED_AND_RELEASED",
+  "stage": "build",
+  "active_conflicts": [],
+  "all_owned_runs_joined": true,
+  "whole_stage_deadline_satisfied": true,
+  "stage_status": "OVERLAY_BUILD_AND_NORMAL_TESTS_JOINED",
+  "checked_ns": 1791478455228774888,
+  "qualification": false,
+  "performance_accepted": false,
+  "transport": {
+    "path": "/Users/michaelseiler/dev/snissn/gomap/tmp/quicksilver-maintenance-5028-20261005/qualification-v13-common-prefix-opportunity-preparation-v1/actual-build-join-release-and-readback-v1-stdout.txt",
+    "sha256": "ab8fefd0db2b4892b47a4d7973202b204a2297799192d7397d1df3cb4f7d5446"
+  },
+  "fetched_files": 34,
+  "actual_bytes": 24034869
+}

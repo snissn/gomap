@@ -1,0 +1,507 @@
+{"Action":"start","Package":"github.com/snissn/gomap/TreeDB/db"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotGet_ReturnsSafeCopyForValueLogPointer"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotGet_ReturnsSafeCopyForValueLogPointer","Output":"=== RUN   TestSnapshotGet_ReturnsSafeCopyForValueLogPointer\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotGet_ReturnsSafeCopyForValueLogPointer","Output":"--- PASS: TestSnapshotGet_ReturnsSafeCopyForValueLogPointer (0.05s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotGet_ReturnsSafeCopyForValueLogPointer"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookAfterRunCloseHooksIsIgnored"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookAfterRunCloseHooksIsIgnored","Output":"=== RUN   TestRegisterCloseHookAfterRunCloseHooksIsIgnored\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookAfterRunCloseHooksIsIgnored","Output":"--- PASS: TestRegisterCloseHookAfterRunCloseHooksIsIgnored (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookAfterRunCloseHooksIsIgnored"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks","Output":"=== RUN   TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks","Output":"--- PASS: TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookBeforeRunsBeforeOrdinaryHooks"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration","Output":"=== RUN   TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration","Output":"--- PASS: TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupRunsUnderAcceptedRegistration"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook","Output":"=== RUN   TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook","Output":"--- PASS: TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestRegisterCloseHookIfOpenAfterSetupCanDeclineHook"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic","Output":"=== RUN   TestReadAPIsWhileClosing_DoNotPanic\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Get"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Get","Output":"=== RUN   TestReadAPIsWhileClosing_DoNotPanic/Get\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Get","Output":"--- PASS: TestReadAPIsWhileClosing_DoNotPanic/Get (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Get"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetAppend"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetAppend","Output":"=== RUN   TestReadAPIsWhileClosing_DoNotPanic/GetAppend\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetAppend","Output":"--- PASS: TestReadAPIsWhileClosing_DoNotPanic/GetAppend (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetAppend"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Has"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Has","Output":"=== RUN   TestReadAPIsWhileClosing_DoNotPanic/Has\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Has","Output":"--- PASS: TestReadAPIsWhileClosing_DoNotPanic/Has (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/Has"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetMany"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetMany","Output":"=== RUN   TestReadAPIsWhileClosing_DoNotPanic/GetMany\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetMany","Output":"--- PASS: TestReadAPIsWhileClosing_DoNotPanic/GetMany (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic/GetMany"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic","Output":"--- PASS: TestReadAPIsWhileClosing_DoNotPanic (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestReadAPIsWhileClosing_DoNotPanic"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_AcquireSnapshot"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_AcquireSnapshot","Output":"=== RUN   TestClosedDB_AcquireSnapshot\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_AcquireSnapshot","Output":"--- PASS: TestClosedDB_AcquireSnapshot (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_AcquireSnapshot"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Close"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Close","Output":"=== RUN   TestClosedDB_Close\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Close","Output":"--- PASS: TestClosedDB_Close (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Close"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Commit"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Commit","Output":"=== RUN   TestClosedDB_Commit\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Commit","Output":"--- PASS: TestClosedDB_Commit (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Commit"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Prune"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Prune","Output":"=== RUN   TestClosedDB_Prune\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Prune","Output":"--- PASS: TestClosedDB_Prune (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Prune"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Pager"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Pager","Output":"=== RUN   TestClosedDB_Pager\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Pager","Output":"--- PASS: TestClosedDB_Pager (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Pager"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Zipper"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Zipper","Output":"=== RUN   TestClosedDB_Zipper\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Zipper","Output":"--- PASS: TestClosedDB_Zipper (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Zipper"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThreshold"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThreshold","Output":"=== RUN   TestClosedDB_InlineThreshold\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThreshold","Output":"--- PASS: TestClosedDB_InlineThreshold (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThreshold"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThresholdForKey"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThresholdForKey","Output":"=== RUN   TestClosedDB_InlineThresholdForKey\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThresholdForKey","Output":"--- PASS: TestClosedDB_InlineThresholdForKey (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_InlineThresholdForKey"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_State"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_State","Output":"=== RUN   TestClosedDB_State\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_State","Output":"--- PASS: TestClosedDB_State (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_State"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_RefreshValueLogSet"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_RefreshValueLogSet","Output":"=== RUN   TestClosedDB_RefreshValueLogSet\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_RefreshValueLogSet","Output":"--- PASS: TestClosedDB_RefreshValueLogSet (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_RefreshValueLogSet"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_MarkValueLogZombie"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_MarkValueLogZombie","Output":"=== RUN   TestClosedDB_MarkValueLogZombie\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_MarkValueLogZombie","Output":"--- PASS: TestClosedDB_MarkValueLogZombie (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_MarkValueLogZombie"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_CompactIndex"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_CompactIndex","Output":"=== RUN   TestClosedDB_CompactIndex\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_CompactIndex","Output":"--- PASS: TestClosedDB_CompactIndex (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_CompactIndex"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_VacuumIndexOnline"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_VacuumIndexOnline","Output":"=== RUN   TestClosedDB_VacuumIndexOnline\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_VacuumIndexOnline","Output":"--- PASS: TestClosedDB_VacuumIndexOnline (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_VacuumIndexOnline"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogRewriteOnline"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogRewriteOnline","Output":"=== RUN   TestClosedDB_ValueLogRewriteOnline\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogRewriteOnline","Output":"--- PASS: TestClosedDB_ValueLogRewriteOnline (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogRewriteOnline"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatch"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatch","Output":"=== RUN   TestClosedDB_NewBatch\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatch","Output":"--- PASS: TestClosedDB_NewBatch (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatch"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatchWithSize"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatchWithSize","Output":"=== RUN   TestClosedDB_NewBatchWithSize\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatchWithSize","Output":"--- PASS: TestClosedDB_NewBatchWithSize (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_NewBatchWithSize"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogGC"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogGC","Output":"=== RUN   TestClosedDB_ValueLogGC\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogGC","Output":"--- PASS: TestClosedDB_ValueLogGC (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ValueLogGC"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_FragmentationReport"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_FragmentationReport","Output":"=== RUN   TestClosedDB_FragmentationReport\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_FragmentationReport","Output":"--- PASS: TestClosedDB_FragmentationReport (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_FragmentationReport"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Get"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Get","Output":"=== RUN   TestClosedDB_Get\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Get","Output":"--- PASS: TestClosedDB_Get (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Get"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetMany"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetMany","Output":"=== RUN   TestClosedDB_GetMany\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetMany","Output":"--- PASS: TestClosedDB_GetMany (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetMany"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetManyView"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetManyView","Output":"=== RUN   TestClosedDB_GetManyView\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetManyView","Output":"--- PASS: TestClosedDB_GetManyView (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetManyView"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetUnsafe"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetUnsafe","Output":"=== RUN   TestClosedDB_GetUnsafe\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetUnsafe","Output":"--- PASS: TestClosedDB_GetUnsafe (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetUnsafe"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Dir"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Dir","Output":"=== RUN   TestClosedDB_Dir\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Dir","Output":"--- PASS: TestClosedDB_Dir (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Dir"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetAppend"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetAppend","Output":"=== RUN   TestClosedDB_GetAppend\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetAppend","Output":"--- PASS: TestClosedDB_GetAppend (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_GetAppend"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Has"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Has","Output":"=== RUN   TestClosedDB_Has\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Has","Output":"--- PASS: TestClosedDB_Has (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Has"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Set"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Set","Output":"=== RUN   TestClosedDB_Set\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Set","Output":"--- PASS: TestClosedDB_Set (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Set"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_SetSync"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_SetSync","Output":"=== RUN   TestClosedDB_SetSync\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_SetSync","Output":"--- PASS: TestClosedDB_SetSync (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_SetSync"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Delete"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Delete","Output":"=== RUN   TestClosedDB_Delete\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Delete","Output":"--- PASS: TestClosedDB_Delete (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Delete"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_DeleteSync"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_DeleteSync","Output":"=== RUN   TestClosedDB_DeleteSync\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_DeleteSync","Output":"--- PASS: TestClosedDB_DeleteSync (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_DeleteSync"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Update"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Update","Output":"=== RUN   TestClosedDB_Update\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Update","Output":"--- PASS: TestClosedDB_Update (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Update"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_UpdateSync"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_UpdateSync","Output":"=== RUN   TestClosedDB_UpdateSync\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_UpdateSync","Output":"--- PASS: TestClosedDB_UpdateSync (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_UpdateSync"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Iterator"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Iterator","Output":"=== RUN   TestClosedDB_Iterator\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Iterator","Output":"--- PASS: TestClosedDB_Iterator (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Iterator"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_IteratorWithOptions"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_IteratorWithOptions","Output":"=== RUN   TestClosedDB_IteratorWithOptions\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_IteratorWithOptions","Output":"--- PASS: TestClosedDB_IteratorWithOptions (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_IteratorWithOptions"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIterator"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIterator","Output":"=== RUN   TestClosedDB_ReverseIterator\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIterator","Output":"--- PASS: TestClosedDB_ReverseIterator (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIterator"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIteratorWithOptions"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIteratorWithOptions","Output":"=== RUN   TestClosedDB_ReverseIteratorWithOptions\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIteratorWithOptions","Output":"--- PASS: TestClosedDB_ReverseIteratorWithOptions (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_ReverseIteratorWithOptions"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishSystemRootIterator"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishSystemRootIterator","Output":"=== RUN   TestClosedDB_PublishSystemRootIterator\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishSystemRootIterator","Output":"--- PASS: TestClosedDB_PublishSystemRootIterator (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishSystemRootIterator"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootIterator"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootIterator","Output":"=== RUN   TestClosedDB_PublishOrderedRootIterator\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootIterator","Output":"--- PASS: TestClosedDB_PublishOrderedRootIterator (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootIterator"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootGroup"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootGroup","Output":"=== RUN   TestClosedDB_PublishOrderedRootGroup\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootGroup","Output":"--- PASS: TestClosedDB_PublishOrderedRootGroup (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootGroup"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder","Output":"=== RUN   TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder","Output":"--- PASS: TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithSystemBuilder"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder","Output":"=== RUN   TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder","Output":"--- PASS: TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaGroupWithPreflightMaintenanceSystemDeltaBuilder"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder","Output":"=== RUN   TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder","Output":"--- PASS: TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_PublishOrderedRootDeltaBatchGroupWithSystemDeltaBuilder"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Stats"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Stats","Output":"=== RUN   TestClosedDB_Stats\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Stats","Output":"--- PASS: TestClosedDB_Stats (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Stats"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Print"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Print","Output":"=== RUN   TestClosedDB_Print\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Print","Output":"--- PASS: TestClosedDB_Print (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestClosedDB_Print"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission","Output":"=== RUN   TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission","Output":"--- PASS: TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose","Output":"=== RUN   TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose","Output":"--- PASS: TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCreatorSurvivesDatabaseClose"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime","Output":"=== RUN   TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime","Output":"--- PASS: TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCutoverRefusalBalancesOriginalLifetime"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner","Output":"=== RUN   TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/closed"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/closed","Output":"=== RUN   TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/closed\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/closed","Output":"--- PASS: TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/closed (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/closed"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/strict-envelope"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/strict-envelope","Output":"=== RUN   TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/strict-envelope\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/strict-envelope","Output":"--- PASS: TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/strict-envelope (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner/strict-envelope"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner","Output":"--- PASS: TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotRefusesBeforeBirthOnClosedOrStrictOwner"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCapturesRealStableIndexToken"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCapturesRealStableIndexToken","Output":"=== RUN   TestDurableCandidateSnapshotCapturesRealStableIndexToken\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCapturesRealStableIndexToken","Output":"--- PASS: TestDurableCandidateSnapshotCapturesRealStableIndexToken (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDurableCandidateSnapshotCapturesRealStableIndexToken"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBFailedOpenReturnsActualIndexCleanupOwner"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBFailedOpenReturnsActualIndexCleanupOwner","Output":"=== RUN   TestDBFailedOpenReturnsActualIndexCleanupOwner\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBFailedOpenReturnsActualIndexCleanupOwner","Output":"--- PASS: TestDBFailedOpenReturnsActualIndexCleanupOwner (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBFailedOpenReturnsActualIndexCleanupOwner"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal","Output":"=== RUN   TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal","Output":"--- PASS: TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostKeepsActualIndexAcrossPhysicalCloseFailure"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostKeepsActualIndexAcrossPhysicalCloseFailure","Output":"=== RUN   TestDBGhostKeepsActualIndexAcrossPhysicalCloseFailure\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostKeepsActualIndexAcrossPhysicalCloseFailure","Output":"--- PASS: TestDBGhostKeepsActualIndexAcrossPhysicalCloseFailure (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostKeepsActualIndexAcrossPhysicalCloseFailure"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPagerJoinDropsMaintenanceTeardownAndWriteGates"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPagerJoinDropsMaintenanceTeardownAndWriteGates","Output":"=== RUN   TestDBPagerJoinDropsMaintenanceTeardownAndWriteGates\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPagerJoinDropsMaintenanceTeardownAndWriteGates","Output":"--- PASS: TestDBPagerJoinDropsMaintenanceTeardownAndWriteGates (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPagerJoinDropsMaintenanceTeardownAndWriteGates"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal","Output":"=== RUN   TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal","Output":"--- PASS: TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry","Output":"=== RUN   TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/writer"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/writer","Output":"=== RUN   TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/writer\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/writer","Output":"--- PASS: TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/writer (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/writer"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/shared-read-only"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/shared-read-only","Output":"=== RUN   TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/shared-read-only\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/shared-read-only","Output":"--- PASS: TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/shared-read-only (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry/shared-read-only"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry","Output":"--- PASS: TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry (0.04s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBPendingCloseKeepsNamespaceUntilActualIndexRetry"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry","Output":"=== RUN   TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry","Output":"--- PASS: TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeRemovesHealthyExactOwner"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeRemovesHealthyExactOwner","Output":"=== RUN   TestDBGhostOrdinaryScavengeRemovesHealthyExactOwner\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeRemovesHealthyExactOwner","Output":"--- PASS: TestDBGhostOrdinaryScavengeRemovesHealthyExactOwner (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBGhostOrdinaryScavengeRemovesHealthyExactOwner"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry","Output":"=== RUN   TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry","Output":"--- PASS: TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionBeforeWrapperAndRegistry"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionFixedCohortPressure"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionFixedCohortPressure","Output":"=== RUN   TestSnapshotAllocationAdmissionFixedCohortPressure\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionFixedCohortPressure","Output":"--- PASS: TestSnapshotAllocationAdmissionFixedCohortPressure (0.05s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionFixedCohortPressure"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet","Output":"=== RUN   TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet","Output":"--- PASS: TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub","Output":"=== RUN   TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub","Output":"--- PASS: TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionWaitsForHeldReadAndScrub"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty","Output":"=== RUN   TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/reentrant"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/reentrant","Output":"=== RUN   TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/reentrant\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/reentrant","Output":"--- PASS: TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/reentrant (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/reentrant"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/panic"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/panic","Output":"=== RUN   TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/panic\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/panic","Output":"--- PASS: TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/panic (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty/panic"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty","Output":"--- PASS: TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionReentrantCloseAndPanicUncertainty"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionCounterOnce"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionCounterOnce","Output":"=== RUN   TestSnapshotOriginalCompletionCounterOnce\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionCounterOnce","Output":"--- PASS: TestSnapshotOriginalCompletionCounterOnce (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotOriginalCompletionCounterOnce"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivatePointConstructorChurnAndPublicControlNoRefund"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivatePointConstructorChurnAndPublicControlNoRefund","Output":"=== RUN   TestPrivatePointConstructorChurnAndPublicControlNoRefund\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivatePointConstructorChurnAndPublicControlNoRefund","Output":"--- PASS: TestPrivatePointConstructorChurnAndPublicControlNoRefund (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivatePointConstructorChurnAndPublicControlNoRefund"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestScanConstructorPrivateOriginAndUnownedRefusal"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestScanConstructorPrivateOriginAndUnownedRefusal","Output":"=== RUN   TestScanConstructorPrivateOriginAndUnownedRefusal\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestScanConstructorPrivateOriginAndUnownedRefusal","Output":"--- PASS: TestScanConstructorPrivateOriginAndUnownedRefusal (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestScanConstructorPrivateOriginAndUnownedRefusal"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit","Output":"=== RUN   TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit","Output":"--- PASS: TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestPrivateSnapshotFailedCloseRetainsExactBackingUntilReaderExit"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown","Output":"=== RUN   TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown","Output":"--- PASS: TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupReentrantDBCloseRefusesBeforePhysicalTeardown"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback","Output":"=== RUN   TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback","Output":"--- PASS: TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupConcurrentDBCloseDoesNotWaitForOwnCallback"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay","Output":"=== RUN   TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay","Output":"--- PASS: TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotCleanupPanicLeavesActualDBOwnerAndNoCallbackReplay"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay","Output":"=== RUN   TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay","Output":"--- PASS: TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableSnapshotTokenSetReleaseRetriesHeldIteratorWithoutCounterReplay"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators","Output":"=== RUN   TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators","Output":"--- PASS: TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotClosedSurfaceRejectsReadsAndInvalidatesAllIterators"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadLifetimeFollowsBoundIterator"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadLifetimeFollowsBoundIterator","Output":"=== RUN   TestSnapshotForegroundReadLifetimeFollowsBoundIterator\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadLifetimeFollowsBoundIterator","Output":"--- PASS: TestSnapshotForegroundReadLifetimeFollowsBoundIterator (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadLifetimeFollowsBoundIterator"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotDetachForegroundReadUsesOperationScopedLifetime"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotDetachForegroundReadUsesOperationScopedLifetime","Output":"=== RUN   TestSnapshotDetachForegroundReadUsesOperationScopedLifetime\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotDetachForegroundReadUsesOperationScopedLifetime","Output":"--- PASS: TestSnapshotDetachForegroundReadUsesOperationScopedLifetime (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotDetachForegroundReadUsesOperationScopedLifetime"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadConcurrentCloseEndsOnce"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadConcurrentCloseEndsOnce","Output":"=== RUN   TestSnapshotForegroundReadConcurrentCloseEndsOnce\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadConcurrentCloseEndsOnce","Output":"--- PASS: TestSnapshotForegroundReadConcurrentCloseEndsOnce (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotForegroundReadConcurrentCloseEndsOnce"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReadCallbackCanCloseOwner"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReadCallbackCanCloseOwner","Output":"=== RUN   TestSnapshotReadCallbackCanCloseOwner\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReadCallbackCanCloseOwner","Output":"--- PASS: TestSnapshotReadCallbackCanCloseOwner (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReadCallbackCanCloseOwner"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootReaderCallbackCanCloseOwner"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootReaderCallbackCanCloseOwner","Output":"=== RUN   TestSnapshotRootReaderCallbackCanCloseOwner\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootReaderCallbackCanCloseOwner","Output":"--- PASS: TestSnapshotRootReaderCallbackCanCloseOwner (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootReaderCallbackCanCloseOwner"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease","Output":"=== RUN   TestSnapshotIteratorCreationSerializesCloseAndRelease\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/forward"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/forward","Output":"=== RUN   TestSnapshotIteratorCreationSerializesCloseAndRelease/forward\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/forward","Output":"--- PASS: TestSnapshotIteratorCreationSerializesCloseAndRelease/forward (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/forward"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/reverse","Output":"=== RUN   TestSnapshotIteratorCreationSerializesCloseAndRelease/reverse\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/reverse","Output":"--- PASS: TestSnapshotIteratorCreationSerializesCloseAndRelease/reverse (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease/reverse"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease","Output":"--- PASS: TestSnapshotIteratorCreationSerializesCloseAndRelease (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationSerializesCloseAndRelease"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsStaleGeneration"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsStaleGeneration","Output":"=== RUN   TestSnapshotIteratorCreationRejectsStaleGeneration\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsStaleGeneration","Output":"--- PASS: TestSnapshotIteratorCreationRejectsStaleGeneration (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsStaleGeneration"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition","Output":"=== RUN   TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition","Output":"--- PASS: TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorCreationRejectsClosedHandleAfterNewAcquisition"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner","Output":"=== RUN   TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner","Output":"--- PASS: TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotIteratorDoubleCloseCannotMutateDetachedOwner"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAndHasPrefixes"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAndHasPrefixes","Output":"=== RUN   TestSnapshot_HasManyAndHasPrefixes\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAndHasPrefixes","Output":"--- PASS: TestSnapshot_HasManyAndHasPrefixes (0.04s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAndHasPrefixes"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot","Output":"=== RUN   TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot","Output":"--- PASS: TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasManyAtRootAndHasPrefixesAtRoot"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReaderAtRootGetAppend"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReaderAtRootGetAppend","Output":"=== RUN   TestSnapshotReaderAtRootGetAppend\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReaderAtRootGetAppend","Output":"--- PASS: TestSnapshotReaderAtRootGetAppend (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReaderAtRootGetAppend"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootCachesRootTrees"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootCachesRootTrees","Output":"=== RUN   TestSnapshotTreeAtRootCachesRootTrees\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootCachesRootTrees","Output":"--- PASS: TestSnapshotTreeAtRootCachesRootTrees (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootCachesRootTrees"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootConcurrentCacheAccess"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootConcurrentCacheAccess","Output":"=== RUN   TestSnapshotTreeAtRootConcurrentCacheAccess\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootConcurrentCacheAccess","Output":"--- PASS: TestSnapshotTreeAtRootConcurrentCacheAccess (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotTreeAtRootConcurrentCacheAccess"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback","Output":"=== RUN   TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback","Output":"--- PASS: TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootRecordsPerItemFallback"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys","Output":"=== RUN   TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys","Output":"--- PASS: TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshot_HasAnySortedAtRootFallbackDedupesDuplicateKeys"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootProbesSkipTombstones"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootProbesSkipTombstones","Output":"=== RUN   TestSnapshotRootProbesSkipTombstones\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootProbesSkipTombstones","Output":"--- PASS: TestSnapshotRootProbesSkipTombstones (0.03s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotRootProbesSkipTombstones"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree","Output":"=== RUN   TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree","Output":"--- PASS: TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_UsesPublishedCoherentView"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_UsesPublishedCoherentView","Output":"=== RUN   TestAcquireSnapshot_UsesPublishedCoherentView\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_UsesPublishedCoherentView","Output":"--- PASS: TestAcquireSnapshot_UsesPublishedCoherentView (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_UsesPublishedCoherentView"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations","Output":"=== RUN   TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations","Output":"--- PASS: TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire","Output":"=== RUN   TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire","Output":"--- PASS: TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqProtectsInFlightSnapshotAcquire"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan","Output":"=== RUN   TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan","Output":"--- PASS: TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn","Output":"=== RUN   TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn","Output":"--- PASS: TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil","Output":"=== RUN   TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil","Output":"--- PASS: TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReturnsNilWhenDBIsClosing"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReturnsNilWhenDBIsClosing","Output":"=== RUN   TestAcquireSnapshot_ReturnsNilWhenDBIsClosing\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReturnsNilWhenDBIsClosing","Output":"--- PASS: TestAcquireSnapshot_ReturnsNilWhenDBIsClosing (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ReturnsNilWhenDBIsClosing"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale","Output":"=== RUN   TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale","Output":"--- PASS: TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins","Output":"=== RUN   TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins","Output":"--- PASS: TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish","Output":"=== RUN   TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish","Output":"--- PASS: TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot","Output":"=== RUN   TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot","Output":"--- PASS: TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil","Output":"=== RUN   TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil","Output":"--- PASS: TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotPool_PutClearsLeafGenerationRefs"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotPool_PutClearsLeafGenerationRefs","Output":"=== RUN   TestSnapshotPool_PutClearsLeafGenerationRefs\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotPool_PutClearsLeafGenerationRefs","Output":"--- PASS: TestSnapshotPool_PutClearsLeafGenerationRefs (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotPool_PutClearsLeafGenerationRefs"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray","Output":"=== RUN   TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray","Output":"--- PASS: TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestSnapshotReleaseLeafGenerationPins_ClearsRefBackingArray"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths","Output":"=== RUN   TestStableIndexCallbackOriginalOnlyBothPublicClonePaths\n"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/shared"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/shared","Output":"=== RUN   TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/shared\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/shared","Output":"--- PASS: TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/shared (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/shared"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/physical"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/physical","Output":"=== RUN   TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/physical\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/physical","Output":"--- PASS: TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/physical (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths/physical"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths","Output":"--- PASS: TestStableIndexCallbackOriginalOnlyBothPublicClonePaths (0.04s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackOriginalOnlyBothPublicClonePaths"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility","Output":"=== RUN   TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility","Output":"--- PASS: TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackConstructorFailureLeavesSnapshotResponsibility"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackKnownEnvironmentClassPrepaid"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackKnownEnvironmentClassPrepaid","Output":"=== RUN   TestStableIndexCallbackKnownEnvironmentClassPrepaid\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackKnownEnvironmentClassPrepaid","Output":"--- PASS: TestStableIndexCallbackKnownEnvironmentClassPrepaid (0.02s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableIndexCallbackKnownEnvironmentClassPrepaid"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableResourceCaptureLeaseRetainSerializesWithRelease"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableResourceCaptureLeaseRetainSerializesWithRelease","Output":"=== RUN   TestStableResourceCaptureLeaseRetainSerializesWithRelease\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableResourceCaptureLeaseRetainSerializesWithRelease","Output":"--- PASS: TestStableResourceCaptureLeaseRetainSerializesWithRelease (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db","Test":"TestStableResourceCaptureLeaseRetainSerializesWithRelease"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/db","Output":"PASS\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/db"}

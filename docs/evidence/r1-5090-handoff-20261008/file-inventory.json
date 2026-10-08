@@ -1,0 +1,2637 @@
+{
+  "files": [
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/delta-from-checkpoint02.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/delta-from-checkpoint02.json",
+      "bytes": 3,
+      "sha256": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/handoff.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/handoff.md",
+      "bytes": 3717,
+      "sha256": "bd8bd9734e7c514c771c5e7ad7cb04c93d08fba61941f7fbd028959fa496a376"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/outside-equality.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/outside-equality.json",
+      "bytes": 100,
+      "sha256": "345d011d03673ad65353112edae4da31d0c0c8ca806671239e7b744fe1843d62"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/read-bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/read-bindings.json",
+      "bytes": 1046,
+      "sha256": "8de032817e4a5310d746bfc4eb3925f0a830f06be9420ca715c29e57854aa3a0"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/receipt.json",
+      "bytes": 1601,
+      "sha256": "0a157a812e5674a15643be14497d5e7967681233534c493449ed4461a7aa3559"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/source-current.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/source-current.json",
+      "bytes": 1552440,
+      "sha256": "7b1ffd5da22b9c0cd1807679533cc8b322eeb77e2b5501b96e1e9fcc9fa7ae83"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/source.patch",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-handoff-v2/checkpoint01/source.patch",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-constructor-owner-inquiry01/bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-constructor-owner-inquiry01/bindings.json",
+      "bytes": 2845,
+      "sha256": "1f8e73166f5bb8e5f9190c3a6c312831279c01ca4acfa832d96469cc51821a6f"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-constructor-owner-inquiry01/inquiry.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-constructor-owner-inquiry01/inquiry.md",
+      "bytes": 9742,
+      "sha256": "69560828e5f28a58caadff3880c2517064c9c42895f9f1f4c04a9b2d4e602192"
+    },
+    {
+      "path": "evidence/artifacts/M23-online-vacuum-constructor-owner-inquiry01/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-online-vacuum-constructor-owner-inquiry01/receipt.json",
+      "bytes": 495,
+      "sha256": "786793b66cf453b53f96c1778a986f4b12715a7d3fd982b5aa49861e7df87c82"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/delta.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/delta.json",
+      "bytes": 408,
+      "sha256": "1e3a2b7e3df6bfc5c23f0c873cac8271c2b2ad1c5172d8ec71960e761246bfa5"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/outside-equality.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/outside-equality.json",
+      "bytes": 152,
+      "sha256": "7327d2070a36f1e0b604c0de4cd3581f8760b7c5b26ba1170ee4098259268e51"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/prior-bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/prior-bindings.json",
+      "bytes": 647,
+      "sha256": "7b6394b7c322bac74786864ff283680356be0f34c294560b031ed3f74e69c6e6"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/rationale.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/rationale.md",
+      "bytes": 4461,
+      "sha256": "21f399f1559586075db6ef93a4735e1123eb8371540c98de2903f0b5cef9b676"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/receipt.json",
+      "bytes": 2711,
+      "sha256": "c7f1b6e605216bb1f4606b37ddfb78e5ebfdcf2c650225a39e1adfa4627ede4a"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/risk-test-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/risk-test-inventory.json",
+      "bytes": 1275,
+      "sha256": "1aba14bc2952bf1f32e265226e3e403aaae1c94851af6ba0d804208c01ffec5d"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/selected-after.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/selected-after.json",
+      "bytes": 406,
+      "sha256": "18ef44abf8c6a45d0c838f9b1403f620c23b74ca9f45402949a89ec2b0e3e1d1"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/selected-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/selected-before.json",
+      "bytes": 344,
+      "sha256": "f6accbefc99d2cb34869881e7f239daca013b71026f2dbad34364c3bb0e2e41b"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source-after.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source-after.json",
+      "bytes": 1552440,
+      "sha256": "301fb4702efb9f1c0b90baf82166c213539ba1bd4d80ee7d06449adeb4ed6cfc"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source-before.json",
+      "bytes": 1552296,
+      "sha256": "e87125afa7407d4d519ddcd96cd569ec07b7ef39d951a9538c965b9eb96a32f8"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source-bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source-bindings.json",
+      "bytes": 1974,
+      "sha256": "ea10ba961dca1e8ff343b2bdf2d4d66b94ec6fb2f4d812826d8ef309cc937950"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source.patch",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint01/source.patch",
+      "bytes": 22420,
+      "sha256": "2e96b3c94c6569d13a8989baceb29b58b57aa11cc250fbf2357a30c5175212c1"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/delta.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/delta.json",
+      "bytes": 470,
+      "sha256": "9229e14b5096dc90597fa3620e207f21c5c902409e389181913f45f94177af7f"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/independent-review01/bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/independent-review01/bindings.json",
+      "bytes": 3587,
+      "sha256": "03b1b1c7a198fb5edd0ae7ff818a06209e116c1dc108b589754b904dc3428f06"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/independent-review01/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/independent-review01/receipt.json",
+      "bytes": 820,
+      "sha256": "260fbb5705bfa435d5fd0d856020732b92081c17432703f3d9e77e7ba4b9aecd"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/independent-review01/review.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/independent-review01/review.md",
+      "bytes": 2418,
+      "sha256": "9ea44c752470660700dee54571b4d1a4584d639d94387741cfa2479cea895c26"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/outside-equality.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/outside-equality.json",
+      "bytes": 259,
+      "sha256": "19e4050d0969c84f9e15ddaf2c7584fe61c9d068749b5035d0b12f24cf00147a"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/prior-bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/prior-bindings.json",
+      "bytes": 590,
+      "sha256": "da20292ca46434f49351d807e02318535fc2282d9e69448b0ce1881116b7d926"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/rationale.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/rationale.md",
+      "bytes": 3394,
+      "sha256": "2dd10314a5c2e326e0dd8d341db963d8608772340c56cceb4c710e5b09cdb522"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/receipt.json",
+      "bytes": 2441,
+      "sha256": "788316ef94df978b549f79f3b02c00b1241549b1025f2e54983c67dbbbac3861"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/risk-test-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/risk-test-inventory.json",
+      "bytes": 1942,
+      "sha256": "2bba3f0a03fff6f58b3fff71125ce04196fcdd2f7c67dac401e7fc18c20103f5"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/selected-after.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/selected-after.json",
+      "bytes": 268,
+      "sha256": "334e63e049f36010d49eff9e886d036f87df9223307a159c223fa2324a936e60"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/selected-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/selected-before.json",
+      "bytes": 268,
+      "sha256": "e41bb714c69cf90a789b5e5a3c8ecd1dbc3284b901950a841cb7cd42909cc35b"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source-after.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source-after.json",
+      "bytes": 1552440,
+      "sha256": "7b1ffd5da22b9c0cd1807679533cc8b322eeb77e2b5501b96e1e9fcc9fa7ae83"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source-before.json",
+      "bytes": 1552440,
+      "sha256": "301fb4702efb9f1c0b90baf82166c213539ba1bd4d80ee7d06449adeb4ed6cfc"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source-bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source-bindings.json",
+      "bytes": 1041,
+      "sha256": "0c51c36407d5c06ec1d4f40c45ea378d8ecece484a8e17c762f78b03437c27be"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source.patch",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase2-fallback-custody-source-v1/checkpoint02/source.patch",
+      "bytes": 9907,
+      "sha256": "b4ceac6925e1c9d3aae31598f260d7a2d5139fa6554c9feff2428a37830c3aea"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/delta.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/delta.json",
+      "bytes": 744,
+      "sha256": "d9bf936d4855e3789ee5aa05e6356d4d9a462df3c054b120e1dbaae353553cb4"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/known-class-rationale.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/known-class-rationale.md",
+      "bytes": 2794,
+      "sha256": "c89e039e2c9aecca22623898f29cadb5d5893b565c1b65db54dfca5d2cf58b35"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/outside-equality.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/outside-equality.json",
+      "bytes": 129,
+      "sha256": "86c71d95ee10a34b8af9e2fa86437ad1fe37157b19337ca6c07e7726ac38fc03"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/receipt.json",
+      "bytes": 2165,
+      "sha256": "3e2a2eaae6a54a2cad1ec538aec32d01385faa1c17d494d0edbc542e9bcf15c7"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/risk-test-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/risk-test-inventory.json",
+      "bytes": 926,
+      "sha256": "392fcb408236a2cab851718944f46594f54b7a3119bb14a21cd8132f8145bbb8"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/selected-after.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/selected-after.json",
+      "bytes": 464,
+      "sha256": "e1bb7e178048d6a156a46b02aa1361c153b728864cf2c38cce2d25fabd5c5487"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/selected-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/selected-before.json",
+      "bytes": 214,
+      "sha256": "fda2392f1239cd05b5f4f7050135edf614823a4fc7fbc5a2378eb98251fb6be3"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source-after.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source-after.json",
+      "bytes": 1552296,
+      "sha256": "e87125afa7407d4d519ddcd96cd569ec07b7ef39d951a9538c965b9eb96a32f8"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source-before.json",
+      "bytes": 1552046,
+      "sha256": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source-bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source-bindings.json",
+      "bytes": 1287,
+      "sha256": "c5222df474c7e96a71a730e15bca9c609fccaf1aa4394878b075ae385885a5d5"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source.patch",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/checkpoint01/source.patch",
+      "bytes": 14328,
+      "sha256": "f4c80107ec174fa80963cf260b185f07f9b5e265f51e4d568947330b5b039b55"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/independent-review01/bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/independent-review01/bindings.json",
+      "bytes": 3139,
+      "sha256": "b6808db2438ac04ece0c8c9faef4de474582b7c8e5773eee914abc70067aad42"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/independent-review01/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/independent-review01/receipt.json",
+      "bytes": 627,
+      "sha256": "922847d4cf403f9799f1a52a4f999b3aaba470a2561050d95629f07c7bb87107"
+    },
+    {
+      "path": "evidence/artifacts/M23-phase3-index-constructor-closure-source-v1/independent-review01/review.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/M23-phase3-index-constructor-closure-source-v1/independent-review01/review.md",
+      "bytes": 2953,
+      "sha256": "87263e9cbecf2ecdd6ad81e98b07d2c2e2b67af3b3045518de02f84e808ae24b"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/delta.patch",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/delta.patch",
+      "bytes": 1075,
+      "sha256": "02c0ac0d2b65e5dbd22bd59547174f4dc08d6104a765dcfe7d9bf67af8296f99"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/independent-review01/bindings.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/independent-review01/bindings.json",
+      "bytes": 1855,
+      "sha256": "8b47845cc2a8977d3d596cc127db3e0a083586b962466f7d6d9fc978b0d83ad3"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/independent-review01/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/independent-review01/receipt.json",
+      "bytes": 634,
+      "sha256": "c59089342f85203616fdacaec3dbecefeded00b3d420da55fe486474b5283273"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/independent-review01/review.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/independent-review01/review.md",
+      "bytes": 1168,
+      "sha256": "be34ff78572e58a36bd1e85ddad733d627ff346d6ec3499d3a0cfd989bd9dc87"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/inquiry.md",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/inquiry.md",
+      "bytes": 622,
+      "sha256": "e6ce934d96b4d5f98ba146adde77c6d4b772eb4baa965ca5a7ab5798fb22fbae"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/receipt.json",
+      "bytes": 1154,
+      "sha256": "fabcc91fc229457d8283c038ac334c768257c65215ad86ba346c02831f7112bd"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-after.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-after.json",
+      "bytes": 1527864,
+      "sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-before.json",
+      "bytes": 1527864,
+      "sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-delta.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-delta.json",
+      "bytes": 260,
+      "sha256": "e95a4fcad42aaca135f19e7621dc0a3e0212493f1e6a79654a0c3a1d5736cf30"
+    },
+    {
+      "path": "evidence/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-evidence.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/artifacts/5098/storage-preflight-source-v1/checkpoint05/source-evidence.json",
+      "bytes": 1528,
+      "sha256": "8c73770cc4db9dc432e0f3535ec34dd78bd53535cb27604ca96774bc7c28b74d"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/ROOT-source-preparation-acceptance.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/ROOT-source-preparation-acceptance.json",
+      "bytes": 1907,
+      "sha256": "7890d7cbdf812653dc6882e219f63c162e726d10148d9890c78c07bbecb3fd3f"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/actual-tools.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/actual-tools.json",
+      "bytes": 4372,
+      "sha256": "cdc89141caedc1433ce5627b0fac9ace03b74333de2f167511ef4b011b904734"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/authorization.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/authorization.json",
+      "bytes": 14014,
+      "sha256": "bf3bac69c3395d5e81d183b68e312f02c852a0a7e0154894a19d6f7c90413f84"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/commands.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/commands.json",
+      "bytes": 66763,
+      "sha256": "d605ec0ad0553cb3751dd15ff6e1d4b2f7710e9a5043394d175b9e77b12d100c"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/custody.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/custody.json",
+      "bytes": 68354,
+      "sha256": "681dc149d2bd8080f97f014ad9815008718a0953afa8630ddad20638ab80cd19"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/driver.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/driver.py",
+      "bytes": 22045,
+      "sha256": "1dc96eb19432c3062dd762bd6028076ec0c95f07437ffb8d8970703600179af6"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/environment.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/environment.json",
+      "bytes": 1269,
+      "sha256": "13e68c09160009b3019d6a78b6ca072b7a8c09ea36f0f77448083150e1c19ead"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/external111-last-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/external111-last-release.json",
+      "bytes": 700,
+      "sha256": "11804ed4afb8ec5021c3fc6ee8e1f9bea2a9844e421124a96d66e01abe126827"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/fixture08-independent-review-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/fixture08-independent-review-receipt.json",
+      "bytes": 719,
+      "sha256": "b836a4d294774df3ce2bf4e29153aa1576aed26e52c24294c8534459428b3000"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/format-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/format-receipt.json",
+      "bytes": 643,
+      "sha256": "22efdf3802c508aac656943eb82de117f74dc23698fb9770ffb3927867ec0aae"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/fresh-process-preflight.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/fresh-process-preflight.json",
+      "bytes": 424,
+      "sha256": "3d89891bf52f510038d18641d051e3fb450a6ded9311ff6677f7d42c75988187"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/grant-stage-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/grant-stage-receipt.json",
+      "bytes": 2554,
+      "sha256": "92b1d0b452664d5e64f8dc803063395c7eaf957d5c2a088b855e3fa287e2b530"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-buildinfo.log",
+      "bytes": 434,
+      "sha256": "5081ca3e5eb5a6f89f2f2752df5182a26b0e226817a8548989a466ba53fff4ad"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-compile.stderr.log",
+      "bytes": 808492,
+      "sha256": "2cae1078dfc5414485a018f552b57cca375fb05019aa322d85a9a3f057b2a566"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-functional.log",
+      "bytes": 30926,
+      "sha256": "cd54c9afcc6ba1741d85b32c991ac98b2d7b3ccc38752640dd3622bc41caa1ef"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-list.log",
+      "bytes": 2646,
+      "sha256": "ee5b3ed64d9ad251d3443d7653714a1e98715c1c5202900640fe3ffdbc10e5c5"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-TreeDB-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-buildinfo.log",
+      "bytes": 433,
+      "sha256": "6212f5dbf6d00c511c40000b6ec7ebc6a9a0facf345000498a100bad2efd9338"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-compile.stderr.log",
+      "bytes": 448231,
+      "sha256": "c16728b85d0cb5243e73713e6a1444bf3e8fe29225ec51c8addf27c2bf22381c"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-functional.log",
+      "bytes": 79959,
+      "sha256": "504e076aad43bcba283b739816bb1b7409116e1f24490f74f7e0211012b4f5e4"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-list.log",
+      "bytes": 14082,
+      "sha256": "d923fcafc56f88a11426c7a31c341b6140f1aa13df1d117ce06d551350cab51d"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-db-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-db-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-expected.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-expected.json",
+      "bytes": 36773,
+      "sha256": "dda2a429a1b05daea2873ecd56a66a3e76600bad4e133ba89cf785ed381d326f"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-inputs.json",
+      "bytes": 602366,
+      "sha256": "9cb4f97f0802cd16600248801c7f37bff77560ca8e58c2aa155325ef903d3b76"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-inputs.log",
+      "bytes": 1439769,
+      "sha256": "fa8418dc92e1b0debde8b27548d8f00e91a5aea727bba361edd2dba3a5a6f554"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-inputs.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-buildinfo.log",
+      "bytes": 439,
+      "sha256": "665edbbda98904fde51ee02fdabf1ec6ba2fb69756ccbd8fa1f6184b5feca538"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-compile.stderr.log",
+      "bytes": 47113,
+      "sha256": "b6c2bf7ad3fffda2681c41e61c41efc4db8a788924a638c2bbcfdcf32d231400"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-functional.log",
+      "bytes": 8004,
+      "sha256": "67dbcd05e3224f403a697795a0c6eec56d2b363c3f496684d2ab2594a80311d5"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-list.log",
+      "bytes": 1694,
+      "sha256": "0fbcbbef56e2ca0ac23cab1e46bba0a3c9007ac7be9dce4b68e2f6d4a6f908cb"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-pager-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-pager-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-buildinfo.log",
+      "bytes": 466,
+      "sha256": "4c267e42ccf57f0dba1f50c51ac58db41b47289d696ddb6479c8118353bf1aa2"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-compile.stderr.log",
+      "bytes": 33692,
+      "sha256": "306e8ed4b31bc452948bfc64ad2d645fc148568c373bc59df495bd504b5d29f3"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-functional.log",
+      "bytes": 4956,
+      "sha256": "d59ecf1f0bb2591241eb3ff33098add452dd204333173257cf909274d91a56d8"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-list.log",
+      "bytes": 1118,
+      "sha256": "711c0a853592fa61738324ba2c67d16011b16665f074633e9c2293971e1d2480"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-residentcredit-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-buildinfo.log",
+      "bytes": 468,
+      "sha256": "b78a2ef0aa8bca8f4e4290bf7ecc954ab161b4302bbe81faf91a5f4b1fbdb008"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-compile.stderr.log",
+      "bytes": 148790,
+      "sha256": "e5f9a310ac7559548e85306017e0a307f229d94a4edffb75c4e64da64b30e440"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-functional.log",
+      "bytes": 165284,
+      "sha256": "f63f68ada293b80033b6f030d2cdac5dc47d817efff07f5404ba57c003248225"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-list.log",
+      "bytes": 16086,
+      "sha256": "ec5584c7b3f9a748579a6648194e39fa92717e177388f4a59e2af16fdf52e3cc"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/normal-rootpublication-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/pinned-toolchain-source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/pinned-toolchain-source.json",
+      "bytes": 1336598,
+      "sha256": "cfbf27003420164cef9440ae61e8dcc43aaf7f7b8854c3fc55ce0d7a459c4a44"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/preserved-binaries.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/preserved-binaries.json",
+      "bytes": 1161,
+      "sha256": "ec48c5990e1f61f155052ab42ecb8a846cebb1e1262b548b3e79928bcc85534e"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/prior-genuine-runtime-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/prior-genuine-runtime-release.json",
+      "bytes": 1127,
+      "sha256": "943b3671e342e2fa74c115b9d573276f7e82395651290a851c71a89ae4991790"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/prior-runtime-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/prior-runtime-release.json",
+      "bytes": 1456,
+      "sha256": "a7da96d0fa56d78b44e4c82889ecd25f263eaf6f5af6ea64f737917fe4a76e60"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/readback-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/readback-outer-receipt.json",
+      "bytes": 309,
+      "sha256": "2bdeb5f37fc8cf947e42f447deaaf6e83d855b57d626639eb575c312b69654d5"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/receipt.json",
+      "bytes": 75417,
+      "sha256": "72d7610247bffdff5b5123f64d72b2c6447984f8012e80b5e1eed292cb4c2a13"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/remote-stage-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/remote-stage-receipt.json",
+      "bytes": 2479,
+      "sha256": "aebdcfaba18232f7e5adab765f56ed08795d72e5db1330a3c683a8136ce5128c"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/remote-supervisor-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/remote-supervisor-receipt.json",
+      "bytes": 411,
+      "sha256": "cf7d946374f1d38e158a6664c936ff57e45ecd14466695758afa4cac506fada2"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/run-spec.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/run-spec.json",
+      "bytes": 54395,
+      "sha256": "4445bcc97ad7f01850c5540e3c20bc52e344f09bb4bb043a1b5b4abab0144799"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/server111-window-ACK.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/server111-window-ACK.json",
+      "bytes": 433,
+      "sha256": "dfb611c366bd180063d282ca48c1ddd83450d606e3f2a64ebdebec6ca735d15e"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/single-allocation-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/single-allocation-selection.json",
+      "bytes": 959,
+      "sha256": "6542e12fa598298ba4cd0c544daad75821fca39171f5098678aab07b56035d46"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/source-stage-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/source-stage-receipt.json",
+      "bytes": 1850,
+      "sha256": "76b29461d788e83f7188088da2a068979919860a2bfa197179179cad8bcf6b79"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/source-tests-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/source-tests-selection.json",
+      "bytes": 6924,
+      "sha256": "84a740527178be51578c8fc5fe71173c45aaf8c9cad5f7028c1f76acf207f4ad"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/source.json",
+      "bytes": 1552046,
+      "sha256": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/stage-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/stage-outer-receipt.json",
+      "bytes": 643,
+      "sha256": "f0e0bdec9024aad41f9a17bdfa8acf42881ce6ab169f1bff4cf7889b997a22a6"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/store-custody-api-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/store-custody-api-selection.json",
+      "bytes": 887,
+      "sha256": "ef98f9989f49b671198ef609020e2868bc199d0fa0e470047b458d7cdb642517"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/test2json-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/test2json-buildinfo.log",
+      "bytes": 362,
+      "sha256": "b05193b87025f7a21ea6a9b5dc79574e4b8ae5fa629c91a04a7176ff6ec855e5"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/test2json-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/test2json-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/test2json-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/test2json-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/test2json-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/test2json-compile.stderr.log",
+      "bytes": 15805,
+      "sha256": "f333eaf6e9f758b3c4bfa4b5481b3c80b93801bd72053ebbbb0ae3f33aca9fe3"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/test2json-compiler-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/test2json-compiler-inputs.json",
+      "bytes": 124910,
+      "sha256": "0caa3e5c3a4764aaac9504936ff7e348b0a9efbb6f7839cc91eadea9276dcb2a"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/test2json-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/test2json-inputs.log",
+      "bytes": 169004,
+      "sha256": "9da308303cf5cf6267cbc8435f69837cd8c56402378a18c8c05ad2cbbd8e9f1c"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/test2json-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/test2json-inputs.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/version.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/version.log",
+      "bytes": 32,
+      "sha256": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/fetched/version.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/fetched/version.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-independent-S-diagnostic-reassessment.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-independent-S-diagnostic-reassessment.json",
+      "bytes": 10376,
+      "sha256": "b77865d339e3d3d5805445fb22e58cea9921ecb2fdf3d85f2a8ebbb61473fe36"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-runtime-driver-v4-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-runtime-driver-v4-selection.json",
+      "bytes": 702,
+      "sha256": "74f61f7bfda005a8b76144a8e4095d95dc9663e2f41fe774b2d3ba1bec75b3c1"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-source-preparation-acceptance.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-source-preparation-acceptance.json",
+      "bytes": 1286,
+      "sha256": "03b9d47abd2ff1f5c427233ddcecee1f8dd092a516c10704b25a3186124b62ec"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-window-budget-v7-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/ROOT-window-budget-v7-selection.json",
+      "bytes": 878,
+      "sha256": "4c1810ca071dea159edfbadf57bb0df8dfba285ef417f5b07173cb46b6367a0e"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/actual-tools.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/actual-tools.json",
+      "bytes": 4370,
+      "sha256": "ba92011cb93baf0f1ad139c1ff9f625830adeead775b8f2dda557f981ed437a1"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/authorization.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/authorization.json",
+      "bytes": 5540,
+      "sha256": "08913abea2ed9bcb37791c2842d6dce950b41d903d2f9e573f3030193645dc4b"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/commands.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/commands.json",
+      "bytes": 34540,
+      "sha256": "33352b1c0410e543838c546c8b7b6b5b3754aba691c5b870d7e74e78d6419bd6"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/custody.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/custody.json",
+      "bytes": 36129,
+      "sha256": "f92572fb37031b3922931d0f3f1396caf2c3bd65782e845c4de313aef241d172"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/driver3-independent-review-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/driver3-independent-review-receipt.json",
+      "bytes": 623,
+      "sha256": "9a6d877e167202b93f4339a56ec7252e5a9600aa12cce3a03b5fe67a1a8f43c7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/environment.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/environment.json",
+      "bytes": 1345,
+      "sha256": "6c1acb4ca7b315218c6f822095b5cb63034a4f410f4bd7cb02c49286c9cba693"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/external-V3-actual-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/external-V3-actual-release.json",
+      "bytes": 804,
+      "sha256": "363b51a7fa3fc3d92f718fa71d80b8ab0b83c25f5285a2d07f28077f1a20715a"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/format-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/format-receipt.json",
+      "bytes": 642,
+      "sha256": "a0b39962b6fb3a958803e4f3d58be30bdac1e5eb38613be1bbf440c43a1df2ab"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/fresh-process-preflight.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/fresh-process-preflight.json",
+      "bytes": 424,
+      "sha256": "adb800f03d262d4c438274880527b4397e31936fa51f43e221c3209ac2eb42ac"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/grant-stage-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/grant-stage-receipt.json",
+      "bytes": 3330,
+      "sha256": "ca917532152dc7acac01c1e2f309e53703f78a66eb4260196155a7e3670d2d56"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/independent-review-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/independent-review-receipt.json",
+      "bytes": 610,
+      "sha256": "75c1c8096663b8dd1b01de0d21291624aab052e721aff8ad649f98103ab551d7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-buildinfo.log",
+      "bytes": 441,
+      "sha256": "0eca9eccd786b121124c1cff8ee7383dab37188355a67b7e3cc0da6069b4b8da"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-compile.stderr.log",
+      "bytes": 2146332,
+      "sha256": "c1e0942c98757a6f95d0bf0234fdb722fe50c085ec9cbe612580a098d1b5a5cc"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-functional.log",
+      "bytes": 12438,
+      "sha256": "9d2fb83dcb196d0df0bae8d845178e39d794229ff19094e832834d5a1debd029"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-list.log",
+      "bytes": 968,
+      "sha256": "3225156c75096dff3f6d49a236a9bf08767313b601f6c68019dd5bc2657c365d"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-caching-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-expected.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-expected.json",
+      "bytes": 2630,
+      "sha256": "625a549a36ee75991f3a74ad69c9db8f24de2d4034678e119a112046e30d8d1b"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-buildinfo.log",
+      "bytes": 1906,
+      "sha256": "4cc18276d139d74c5243cd68ad590de206c19956f2f97a005bbed83037407527"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-compile.stderr.log",
+      "bytes": 580890,
+      "sha256": "a1fb2997aeb79ee73b9ad4e902746e0294db5124c2b2649c30aab56a60bcec15"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-functional.log",
+      "bytes": 18441,
+      "sha256": "493c6aafd05d21aac88d8ea4d97f96b54e235f8df21e67814b8a0f2a50cb7515"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-list.log",
+      "bytes": 1358,
+      "sha256": "7fc2f0b22c03a57040979de9c0d8b04cd7a035f635cf44f9b3709bb2b7a92115"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-workflow-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-workflow-list.log",
+      "bytes": 573,
+      "sha256": "5e46d71e41dca7f8957959b1d784f64fd05f40f27ed317e69d25d5f1840af112"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-workflow-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-harness-workflow-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inputs.json",
+      "bytes": 497214,
+      "sha256": "dde14e1ae5489d1c7ea47a623c67b953fe273f7fb5b5279f06082d16deb195d6"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inputs.log",
+      "bytes": 1069661,
+      "sha256": "7db05756cccb59d08e97f0e0909dee567f2db150bad147458df92ea351f482df"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inputs.stderr.log",
+      "bytes": 1442,
+      "sha256": "cb508ee58f093dfe21aec2088bd1cdff15d740fa7883aed3e9159b2564185f1e"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-inventory.json",
+      "bytes": 2587,
+      "sha256": "bdc848376a62a6d88b69b5e2c4bd5dbf996be3e2b1d8caefe89e4920853cc7ff"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-storage-preflight.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-storage-preflight.log",
+      "bytes": 4152,
+      "sha256": "358820df6b5c71500434022ee11f97b9df18d6293b306f45026f16f4de7def9a"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-storage-preflight.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-storage-preflight.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-workflow-declarations.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/normal-workflow-declarations.json",
+      "bytes": 225,
+      "sha256": "fbad9870ba09faa1184c6d331e8cd52344a35f7178bb504424db0c4b63ec3826"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/pinned-toolchain-source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/pinned-toolchain-source.json",
+      "bytes": 1336598,
+      "sha256": "cfbf27003420164cef9440ae61e8dcc43aaf7f7b8854c3fc55ce0d7a459c4a44"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight/exposure-stages.jsonl",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight/exposure-stages.jsonl",
+      "bytes": 352361,
+      "sha256": "6528371a5601cce04cf645215373b49ef9aedaf8bb6ccf1a915cec5a311ec14a"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight/original-stages.jsonl",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight/original-stages.jsonl",
+      "bytes": 351818,
+      "sha256": "efd5fd27dd55c8e30c000800b068f9e1a23389e99526c5d42b9006e3776785e7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight-driver-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight-driver-selection.json",
+      "bytes": 871,
+      "sha256": "470ec24fa419d3be6d2853b8f3446abf333b1eb875446014148b1b8ec8966889"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight-driver-v3-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight-driver-v3-selection.json",
+      "bytes": 563,
+      "sha256": "eb9f8ee4aa188f2ae22d41745d7bc1fde104db86ae736fb389def55a1b970b98"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight-driver-v4.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/preflight-driver-v4.py",
+      "bytes": 30111,
+      "sha256": "2d3dc675db9b1f348c49e54c38e3bc52117c5909cf17580d3ac1ed212b8badc7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/preserved-binaries.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/preserved-binaries.json",
+      "bytes": 946,
+      "sha256": "1ef5ae48370679e719d9b26b725cf4e523f3e6b05a0a6319906153648d149ff3"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-S-ROOT-RED-audit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-S-ROOT-RED-audit.json",
+      "bytes": 1192,
+      "sha256": "c7204fe1690b43985e1a903597d5d764894d36a3e5c5d1adcd4b51ed8af89226"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-S-ROOT-runtime-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-S-ROOT-runtime-release.json",
+      "bytes": 1126,
+      "sha256": "7a984f01581e9d8a822497a4b39052670ce2ff816178dec247d050fb12aec6fd"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-genuine-runtime-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-genuine-runtime-release.json",
+      "bytes": 1127,
+      "sha256": "c35388f3b758dcae400900d109f33ff55c7ffd4a2c718d92c26aa86b23a61222"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-runtime-RED-audit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/prior-runtime-RED-audit.json",
+      "bytes": 1566,
+      "sha256": "bdaf4b17750ec39e7b508cffed849a95df5bd93e53f2634dc8fe651598e94365"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-buildinfo.log",
+      "bytes": 457,
+      "sha256": "77aa350087cc3214997156f7f51879cc0a17749042f99a4eff0027fe4ffff232"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-compile.stderr.log",
+      "bytes": 2248449,
+      "sha256": "5a02269598f7db3c02850536efafee0942b388561df6ce4ffee8da13779635b0"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-functional.log",
+      "bytes": 12438,
+      "sha256": "84010643935da89548d2d031f9b2ca8e8cc4e1e74a8de0e09f494017fbd67986"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-list.log",
+      "bytes": 968,
+      "sha256": "3225156c75096dff3f6d49a236a9bf08767313b601f6c68019dd5bc2657c365d"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-caching-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-expected.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-expected.json",
+      "bytes": 2630,
+      "sha256": "625a549a36ee75991f3a74ad69c9db8f24de2d4034678e119a112046e30d8d1b"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-buildinfo.log",
+      "bytes": 1922,
+      "sha256": "a35aea0413a1c8ebb179280d3390d9e81a6467af77129dc29bc7d0ebc5b8ed65"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-compile.stderr.log",
+      "bytes": 589290,
+      "sha256": "bf9ecca9f52501ca296732cfbdef849c2874499d9a61b2731cd161ad558230fe"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-functional.log",
+      "bytes": 18441,
+      "sha256": "a7b132184252ea2de2ee7c208101d5a952afc9028be1ab8c5e2cf453c6a0cb6e"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-list.log",
+      "bytes": 1358,
+      "sha256": "7fc2f0b22c03a57040979de9c0d8b04cd7a035f635cf44f9b3709bb2b7a92115"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-workflow-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-workflow-list.log",
+      "bytes": 573,
+      "sha256": "5e46d71e41dca7f8957959b1d784f64fd05f40f27ed317e69d25d5f1840af112"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-workflow-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-harness-workflow-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inputs.json",
+      "bytes": 499035,
+      "sha256": "c60a923e84ac55aa66ca8da21eb642d6cca020d27b3d1c7b896b94dd1cbf5533"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inputs.log",
+      "bytes": 1079099,
+      "sha256": "8a4232db22bdaee740acd4017087240165ba9ee638da9261ebd08db89145527f"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inputs.stderr.log",
+      "bytes": 537,
+      "sha256": "d5f3083f8890f6342ea7ccb3c43364507ce399fc3ab555de96ea4ee3bd8ef568"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-inventory.json",
+      "bytes": 2587,
+      "sha256": "bdc848376a62a6d88b69b5e2c4bd5dbf996be3e2b1d8caefe89e4920853cc7ff"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-workflow-declarations.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/race-workflow-declarations.json",
+      "bytes": 225,
+      "sha256": "fbad9870ba09faa1184c6d331e8cd52344a35f7178bb504424db0c4b63ec3826"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/readback-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/readback-outer-receipt.json",
+      "bytes": 309,
+      "sha256": "62ae38c4a0a001acab9e30d41063ea6f4d4333fae4b6b73845d592ec80532eb3"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/receipt.json",
+      "bytes": 45557,
+      "sha256": "f6343b337c418329eeaefc08338ed05efb18d7ddda22cea19483f4a569c00eb5"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/remote-stage-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/remote-stage-receipt.json",
+      "bytes": 995,
+      "sha256": "213ef6dde0134cf3f36ec54ecdcfe2ea4d6b1fcf8d239808f26f68fd8b2443ba"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/remote-supervisor-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/remote-supervisor-receipt.json",
+      "bytes": 411,
+      "sha256": "1355680217cdda2d6fcfd651cfe4ab76f85705f35478d800e590459d81699130"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/resource-plan.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/resource-plan.json",
+      "bytes": 4142,
+      "sha256": "914150b1c7f922fe46c320e6eaba351d70ffc4bc3672787ff08f10a3a1213cf9"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/resource-samples.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/resource-samples.json",
+      "bytes": 58643,
+      "sha256": "af3189fe811478a246cd692307acf192005671aea1bba4027cd0f865c979a0ff"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/run-spec.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/run-spec.json",
+      "bytes": 10926,
+      "sha256": "27955d6ce18c332ee5cf740cea39b1720982f247dde36804e59476f11e39c34f"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/server111-window-ACK.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/server111-window-ACK.json",
+      "bytes": 862,
+      "sha256": "0b490101697d7acd6efb3a9d66bc6e04dc368a3c9e028dc102228bb451dd67e9"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/source-tests-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/source-tests-selection.json",
+      "bytes": 833,
+      "sha256": "7fdc3f75da2f7768d66aaf67bcbf64e814a64b301c8ecd09db4300b95abb2fff"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/source.json",
+      "bytes": 1527864,
+      "sha256": "4546b6c47ce4f521d73ca3ff9b848b2a90c378b5ae4cfad916e41e1f9a86f891"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/stage-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/stage-outer-receipt.json",
+      "bytes": 647,
+      "sha256": "7d362793f2ac18dbc4959f3bacbacbe0c52e99d0a505b592f90fe7687273eda9"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-buildinfo.log",
+      "bytes": 360,
+      "sha256": "79071f1647cb43852569d0655eefdb7b8b99b4dd1f4bcc29521e4e524efab1e9"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-compile.stderr.log",
+      "bytes": 220383,
+      "sha256": "02e1661d92b0e87bb68f5367fa37b183dfb2a97329f96f0e59da84a1bead62ec"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-compiler-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-compiler-inputs.json",
+      "bytes": 124910,
+      "sha256": "0caa3e5c3a4764aaac9504936ff7e348b0a9efbb6f7839cc91eadea9276dcb2a"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-inputs.log",
+      "bytes": 174219,
+      "sha256": "24154dd23607dc88449f08ceccbdb131ce1882cc0dc49219602bd21de4f49547"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/test2json-inputs.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/version.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/version.log",
+      "bytes": 32,
+      "sha256": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/fetched/version.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/fetched/version.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/ROOT-driver-v5-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/ROOT-driver-v5-selection.json",
+      "bytes": 574,
+      "sha256": "4aa1495cc3c3743024d652f3ee3f1c28433296f2e55c8832c83ac6deaf48e6fe"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/ROOT-independent-S-diagnostic-reassessment.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/ROOT-independent-S-diagnostic-reassessment.json",
+      "bytes": 10630,
+      "sha256": "765e062c6752eb0523a28c77cd90a3cb6480cf70819f3442bc87f49082e3edc8"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/ROOT-source-preparation-acceptance.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/ROOT-source-preparation-acceptance.json",
+      "bytes": 814,
+      "sha256": "b3f76eb808080b4a8121705dc19e92a6ff646c55bcd279d3c2c208fe90e03b51"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/actual-tools.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/actual-tools.json",
+      "bytes": 4373,
+      "sha256": "3a73c520a56106d9add07b26a1b2155c99a4879f218d76e998d6541884018a34"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/authorization.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/authorization.json",
+      "bytes": 4874,
+      "sha256": "4dc4e680dc186eecabdeaeb4ada66c3c589b4e748e9d0e5581dcab8bbe462eb7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/commands.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/commands.json",
+      "bytes": 27264,
+      "sha256": "d4fbebea6c5ce8904469170b4940121b828c2998f6b162527c6138c918dd4aec"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/custody.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/custody.json",
+      "bytes": 28563,
+      "sha256": "2aab125a4e113cc29e4920f8ee9a6103e139d91238de043ca3b97c6ca09925b7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/driver3-independent-review-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/driver3-independent-review-receipt.json",
+      "bytes": 623,
+      "sha256": "9a6d877e167202b93f4339a56ec7252e5a9600aa12cce3a03b5fe67a1a8f43c7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/environment.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/environment.json",
+      "bytes": 1345,
+      "sha256": "6c1acb4ca7b315218c6f822095b5cb63034a4f410f4bd7cb02c49286c9cba693"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/external-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/external-release.json",
+      "bytes": 1169,
+      "sha256": "2425dce69226e2eb562d8e225a8bcbb13a0c929ec29ec7d318e13efdbab5a46d"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/format-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/format-receipt.json",
+      "bytes": 641,
+      "sha256": "a7a5d47beb7cc2355f8abbcc1797c4a25c1a3af6e532d53722de5f86f4f8f93a"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/fresh-process-preflight.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/fresh-process-preflight.json",
+      "bytes": 424,
+      "sha256": "5e31a1a1b3ab2876f7b6513247a2fa2bf6735fb9ca3fd37c7e2435771b6d03d1"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/grant-stage-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/grant-stage-receipt.json",
+      "bytes": 2969,
+      "sha256": "496e8069d340a04347c1b159ecc50d9d4252a477b4c5548dfb268fb663464d19"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-buildinfo.log",
+      "bytes": 444,
+      "sha256": "ecdf2362ade107f9eb20dc99776fdec91c7ea7632657a1b3a2db12262d8d37bd"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-compile.stderr.log",
+      "bytes": 553046,
+      "sha256": "d959d3d651d03c302bba2e12c5788c3a156f8f4a5f6209714cfc4c421df81537"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-functional.log",
+      "bytes": 12438,
+      "sha256": "9d2fb83dcb196d0df0bae8d845178e39d794229ff19094e832834d5a1debd029"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-list.log",
+      "bytes": 968,
+      "sha256": "3225156c75096dff3f6d49a236a9bf08767313b601f6c68019dd5bc2657c365d"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-caching-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-caching-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-expected.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-expected.json",
+      "bytes": 2660,
+      "sha256": "b8b4dcb55bf724904124e8fa9ac6d7fb26f73a77f6a9a710a9387093db5a9867"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-buildinfo.log",
+      "bytes": 1909,
+      "sha256": "023e88bc221502debba28c90ae6257a955e7962004220bff83137aa38bf80bf1"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-compile.stderr.log",
+      "bytes": 428803,
+      "sha256": "f3781273f1562f87fd1207fb344865bb90dffddfceb81a313f820912e563f7e7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-functional.log",
+      "bytes": 18441,
+      "sha256": "e0b61794d754c9096c1161c3c4ae6a002baf4dae230bb90ec0d054a526432287"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-list.log",
+      "bytes": 1358,
+      "sha256": "7fc2f0b22c03a57040979de9c0d8b04cd7a035f635cf44f9b3709bb2b7a92115"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-workflow-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-workflow-list.log",
+      "bytes": 573,
+      "sha256": "5e46d71e41dca7f8957959b1d784f64fd05f40f27ed317e69d25d5f1840af112"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-harness-workflow-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-harness-workflow-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-inputs.json",
+      "bytes": 506674,
+      "sha256": "0c0410f743279fd10f75855d3ac840db65df8fa467c08148d8d5f23459349919"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-inputs.log",
+      "bytes": 1062238,
+      "sha256": "37017a165a1e30aea9c04da01e1003e95d1100d5f70c3f7d2f18d65d15de58c8"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-inputs.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-inventory.json",
+      "bytes": 2587,
+      "sha256": "bdc848376a62a6d88b69b5e2c4bd5dbf996be3e2b1d8caefe89e4920853cc7ff"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/normal-workflow-declarations.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/normal-workflow-declarations.json",
+      "bytes": 225,
+      "sha256": "fbad9870ba09faa1184c6d331e8cd52344a35f7178bb504424db0c4b63ec3826"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/pinned-toolchain-source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/pinned-toolchain-source.json",
+      "bytes": 1336598,
+      "sha256": "cfbf27003420164cef9440ae61e8dcc43aaf7f7b8854c3fc55ce0d7a459c4a44"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/preflight-driver-v5.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/preflight-driver-v5.py",
+      "bytes": 30124,
+      "sha256": "702fe09fd739662688f4cd316e05790f3ff5639174fe27bc37ec5fb8505be601"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/preparation-tool-join.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/preparation-tool-join.json",
+      "bytes": 181,
+      "sha256": "16370740810525f4d59e3289bbff6fa6e8842d50129462aba46a7b1bb48c7ae0"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/preserved-binaries.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/preserved-binaries.json",
+      "bytes": 768,
+      "sha256": "339057c6d5d142d0f0842a265c3ef707375a8d5a589ca408667acb8c70a263b2"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/prior-S-ROOT-RED-audit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/prior-S-ROOT-RED-audit.json",
+      "bytes": 3681,
+      "sha256": "5a39224ffdf647c29bd2f30692e0396d33599fdff89ebf5e6060f64acd9e1068"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/prior-S-ROOT-runtime-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/prior-S-ROOT-runtime-release.json",
+      "bytes": 1126,
+      "sha256": "a6dc912fa638a9212be290e16d43f39d514bb28aa4e4837bfd2c04386dd8d300"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-buildinfo.log",
+      "bytes": 460,
+      "sha256": "00b54fee9621e166245eac625d2ce0afb6e833c9f1b3913e6ff38fba210ace76"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-compile.stderr.log",
+      "bytes": 554317,
+      "sha256": "f5209e1554e889884cd49a6fabe8311b87a36555cf0f0d61c5bcbd2782e194a7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-functional.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-functional.log",
+      "bytes": 12438,
+      "sha256": "84010643935da89548d2d031f9b2ca8e8cc4e1e74a8de0e09f494017fbd67986"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-functional.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-functional.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-list.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-list.log",
+      "bytes": 968,
+      "sha256": "3225156c75096dff3f6d49a236a9bf08767313b601f6c68019dd5bc2657c365d"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-caching-list.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-caching-list.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-expected.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-expected.json",
+      "bytes": 2660,
+      "sha256": "b8b4dcb55bf724904124e8fa9ac6d7fb26f73a77f6a9a710a9387093db5a9867"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-harness-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-harness-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-harness-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-harness-compile.stderr.log",
+      "bytes": 431134,
+      "sha256": "749c27e36fca238e682476b6d1003dba235252e061bab97964629ffa37433a9d"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-inputs.json",
+      "bytes": 508495,
+      "sha256": "7847507436156944d3c533154407a0c7e8a499ab4cda7bdf1360759fe2a98016"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-inputs.log",
+      "bytes": 1065798,
+      "sha256": "eff51f268aca5e27a3bb35d07148c7e6e56e0605ccca59d441c7236debac9f59"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/race-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/race-inputs.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/readback-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/readback-outer-receipt.json",
+      "bytes": 308,
+      "sha256": "a92d6bab202d19cd820359c079906e5268c321f0d39921448c59dd95c699972f"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/receipt.json",
+      "bytes": 34780,
+      "sha256": "e6e326c479390f17c27230df074f284ecda31e628d26804fcb1312464d8eadf5"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/remote-stage-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/remote-stage-receipt.json",
+      "bytes": 918,
+      "sha256": "0f69a9b92e3c895f86713a5cf01b6d093a3317b121926fced0d832b68ae4c12c"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/remote-supervisor-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/remote-supervisor-receipt.json",
+      "bytes": 411,
+      "sha256": "905ccf4ec0bbc91ee2f8ec1e4a49f857ee4a6742401c072d5d35a0cc939ec869"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/resource-plan.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/resource-plan.json",
+      "bytes": 4383,
+      "sha256": "bd4fc9c5d21218bb47ac301d1714eb3ce54365ef869ba7c8f563a3d8ad7c83da"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/resource-samples.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/resource-samples.json",
+      "bytes": 41603,
+      "sha256": "14c02a9a911e23f689da71f08e4a61936d0ff91b4a9eb84c584546e0687b2ac5"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/run-spec.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/run-spec.json",
+      "bytes": 10936,
+      "sha256": "c94eeb7a9ebcdedcb84046927b91954ac36ce32cfeeca28c597042329e01f090"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/server111-window-ACK.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/server111-window-ACK.json",
+      "bytes": 474,
+      "sha256": "28108af6a31f408be83beb4f64ac51b2fb4a503618e198092cbc5f0e611b7410"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/source-tests-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/source-tests-selection.json",
+      "bytes": 197,
+      "sha256": "cec01f095db84414129c8d547a6b9f334f020c7ea6d8e275ff42c7445f0374f6"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/source.json",
+      "bytes": 1527864,
+      "sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/source05-independent-review.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/source05-independent-review.json",
+      "bytes": 634,
+      "sha256": "c59089342f85203616fdacaec3dbecefeded00b3d420da55fe486474b5283273"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/source05-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/source05-receipt.json",
+      "bytes": 1154,
+      "sha256": "fabcc91fc229457d8283c038ac334c768257c65215ad86ba346c02831f7112bd"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/stage-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/stage-outer-receipt.json",
+      "bytes": 643,
+      "sha256": "95ee4ba460c2f1f2533c59b18377adc00e10aec52f88074171f09f5206bc9c1b"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/test2json-buildinfo.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/test2json-buildinfo.log",
+      "bytes": 363,
+      "sha256": "59d206ec1048b2a49ed650bf21c7683521980f3f2b41d0beff384377a97b84b1"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/test2json-buildinfo.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/test2json-buildinfo.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/test2json-compile.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/test2json-compile.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/test2json-compile.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/test2json-compile.stderr.log",
+      "bytes": 17422,
+      "sha256": "a898feb5c5fa35f6b6cf54478cc11b507c80bd84748b705c8a03837c125916c3"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/test2json-compiler-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/test2json-compiler-inputs.json",
+      "bytes": 124910,
+      "sha256": "0caa3e5c3a4764aaac9504936ff7e348b0a9efbb6f7839cc91eadea9276dcb2a"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/test2json-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/test2json-inputs.log",
+      "bytes": 169004,
+      "sha256": "9da308303cf5cf6267cbc8435f69837cd8c56402378a18c8c05ad2cbbd8e9f1c"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/test2json-inputs.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/test2json-inputs.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/version.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/version.log",
+      "bytes": 32,
+      "sha256": "8ccf388c477b87cd5032fe803a73f16df6ed23ec5e3fcfea99800136c2d18bb7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/fetched/version.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/fetched/version.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/authorization.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/authorization.json",
+      "bytes": 292,
+      "sha256": "555602659901956151d897293e5cf3a3c26d9afa8df705dfe4982b9e04fb9eb9"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/commands.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/commands.json",
+      "bytes": 4962,
+      "sha256": "87ba66060b656b817be3dba22e2ba4db0972de0255cf376df6155836db7d7eac"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/format.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/format.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/normal-expected.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/normal-expected.json",
+      "bytes": 30189,
+      "sha256": "913c03ce95b9e82600bb08893a69ccee7efe69d15199fc1f8e8a7d40b12cfc42"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/normal-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/normal-inputs.json",
+      "bytes": 327199,
+      "sha256": "3caad47f5b9cef487af1d1e2ce5c83c06e44cd0bda83f3b43beb6ec31bcdb3a4"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/normal-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/normal-inputs.log",
+      "bytes": 320951,
+      "sha256": "c22ac7ee6d9437d927b48a7b40041af76dd5c9f91a2297dde19dee7303ffdbe2"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/normal-public-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/normal-public-inventory.json",
+      "bytes": 30951,
+      "sha256": "738e71631e37b2fda99e2a4e85387b4911c8ce8f5161751a17117e36a1e0ea2c"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/normal-public.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/normal-public.log",
+      "bytes": 321413,
+      "sha256": "8a422b2862a77b1f5abe395ee6a20530e5ef092cbd7b6fd278fe3f9c90b252ab"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/race-expected.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/race-expected.json",
+      "bytes": 30189,
+      "sha256": "913c03ce95b9e82600bb08893a69ccee7efe69d15199fc1f8e8a7d40b12cfc42"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/race-inputs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/race-inputs.json",
+      "bytes": 328703,
+      "sha256": "d9c3c88b610045b239b89d13abce3c2b7d05ede532202aed704dce5b0d0425a2"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/race-inputs.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/race-inputs.log",
+      "bytes": 322422,
+      "sha256": "9b11508a06e21644687d5728c21c727fbb4d4fc9682b2be915743797ce1b831f"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/race-public-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/race-public-inventory.json",
+      "bytes": 30951,
+      "sha256": "738e71631e37b2fda99e2a4e85387b4911c8ce8f5161751a17117e36a1e0ea2c"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/race-public.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/race-public.log",
+      "bytes": 321463,
+      "sha256": "55268283a244f6c7744cde8eb1f353db84bad8585d982e486726d2fdde567d87"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/receipt.json",
+      "bytes": 69973,
+      "sha256": "44bb9c39501fcce8bedba4c55bce4e49ba60ae1cfa91f9efc61845b5c2a62f9d"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/root-audit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/root-audit.json",
+      "bytes": 1091,
+      "sha256": "2015b950cd7361e95e94620439c539b066e788c0a406aa5f4c42d73b2ff04ee3"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/root-grant.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/root-grant.json",
+      "bytes": 417,
+      "sha256": "5a918bf89f7069857ecf802d798d6969836a75484a0109a8dee14ab6b2d266fe"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/run-driver.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/run-driver.py",
+      "bytes": 9440,
+      "sha256": "3cbf719d848af22fb65c860c517602c36963690e04b384ee6823e7cbf290147a"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/selected-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/selected-before.json",
+      "bytes": 126,
+      "sha256": "6c7a5e352553ba8c9949e08d82b50ff57bfcde9734c911be40163f0b5195e02a"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/source-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/source-before.json",
+      "bytes": 1549112,
+      "sha256": "e0ebf8077407cc097be1eea719f0a1e16645838d0e9ebb84d8da23add14c21f0"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/source.json",
+      "bytes": 1549112,
+      "sha256": "7adfb92c8b6ed1c927a1a6e406abcec2629dded6715bfc27face8a8aa8dc44c0"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/tools.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/tools.json",
+      "bytes": 2052,
+      "sha256": "79f23ab4ad2de87116d4e76e3fc2acc3f430162d4b10ad67a1439d1939927f21"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-v2/version.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-v2/version.log",
+      "bytes": 33,
+      "sha256": "b2fdffd04ae5a836eca9bfdd1d3d10c524b2920dcd5aca393f80258a93a3f0f4"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-outer-v2/active.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-outer-v2/active.json",
+      "bytes": 173,
+      "sha256": "747ec932c4c1c9b6540dfb78390faad993f80a3e620aefba83e0006201653747"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-outer-v2/receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-outer-v2/receipt.json",
+      "bytes": 257,
+      "sha256": "825872224dc6c75381c1cbbb4afde57dedbe408858a9b1fb78c1aae92e82c7df"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-outer-v2/stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-outer-v2/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-packet-image-membership-control-outer-v2/stdout.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-packet-image-membership-control-outer-v2/stdout.log",
+      "bytes": 360,
+      "sha256": "d22391fdf4c94f11d3702f7f2c4e175b398e9d0643bbe65feef56cd3538a3c41"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-RED-audit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-RED-audit.json",
+      "bytes": 1566,
+      "sha256": "bdaf4b17750ec39e7b508cffed849a95df5bd93e53f2634dc8fe651598e94365"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-fetch-outer.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-fetch-outer.json",
+      "bytes": 274,
+      "sha256": "d8ee0c7b0eae888aa6c272fbe36fd96b9017331e86a447835e5b87a962ec93bb"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-fetch-remote.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-fetch-remote.py",
+      "bytes": 2812,
+      "sha256": "292ba046a6288dbe359cb1c9e31ddb240fb71b7518ae4281170f1b8df22a20bc"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-fetch.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-fetch.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-live-audit-evidence.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-live-audit-evidence.json",
+      "bytes": 16850,
+      "sha256": "cc446a3800cb02cf14c67af6db1a294c1352024c55e4e0486b07f2b51868c392"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-release-outer.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-release-outer.json",
+      "bytes": 274,
+      "sha256": "e71e535d68eecf598b9d36c6948ecbb9cc2944255f5764682d068f1d0b34cb7f"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-release-remote.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-release-remote.py",
+      "bytes": 1521,
+      "sha256": "fe24b4a48af376c1f7466b96d84f2b4de68130c2f7f8fb13c56970c9a26f02d4"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-release.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-release.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-release.stdout.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-release.stdout.json",
+      "bytes": 927,
+      "sha256": "e36bb531053a50781f4e0331d794874bb461ce8f434d15d88d30359066f7c2bc"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-runtime-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-runtime-release.json",
+      "bytes": 1127,
+      "sha256": "c35388f3b758dcae400900d109f33ff55c7ffd4a2c718d92c26aa86b23a61222"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-source-preparation-acceptance.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-source-preparation-acceptance.json",
+      "bytes": 1907,
+      "sha256": "7890d7cbdf812653dc6882e219f63c162e726d10148d9890c78c07bbecb3fd3f"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/driver.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/driver.py",
+      "bytes": 22045,
+      "sha256": "1dc96eb19432c3062dd762bd6028076ec0c95f07437ffb8d8970703600179af6"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/outer-receipt.json",
+      "bytes": 647,
+      "sha256": "614aec169582a92e88b1d87b75a022cc3c097670aa02db798094915949d7787d"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/remote-supervisor-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/remote-supervisor-receipt.json",
+      "bytes": 411,
+      "sha256": "cf7d946374f1d38e158a6664c936ff57e45ecd14466695758afa4cac506fada2"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/run-spec.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/run-spec.json",
+      "bytes": 54395,
+      "sha256": "4445bcc97ad7f01850c5540e3c20bc52e344f09bb4bb043a1b5b4abab0144799"
+    },
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/source-tests-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/source-tests-selection.json",
+      "bytes": 6924,
+      "sha256": "84a740527178be51578c8fc5fe71173c45aaf8c9cad5f7028c1f76acf207f4ad"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-RED-audit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-RED-audit.json",
+      "bytes": 3681,
+      "sha256": "5a39224ffdf647c29bd2f30692e0396d33599fdff89ebf5e6060f64acd9e1068"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-fetch-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-fetch-outer-receipt.json",
+      "bytes": 291,
+      "sha256": "3c70e5d65d960b97b2ab6481605b498a5a9aa1f4aaad3fd4ee27fd86b5a35fb3"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-fetch.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-fetch.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-independent-S-diagnostic-reassessment.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-independent-S-diagnostic-reassessment.json",
+      "bytes": 10376,
+      "sha256": "b77865d339e3d3d5805445fb22e58cea9921ecb2fdf3d85f2a8ebbb61473fe36"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-live-audit-evidence.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-live-audit-evidence.json",
+      "bytes": 44792,
+      "sha256": "6fa489017f2f5585527de26a277c4d61d1da5499de49e8e16452737049d561d8"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release-outer.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release-outer.json",
+      "bytes": 274,
+      "sha256": "fbfc21b6c837b34466fdab69c5aa7c3ebd4721077c296784af00b11a5c72a204"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release-remote.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release-remote.py",
+      "bytes": 1527,
+      "sha256": "4dffc6aeb0c8653f07f60935a91132103f6955c50642525e8dfd56c72fe9c051"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release.stdout.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-release.stdout.json",
+      "bytes": 926,
+      "sha256": "afceff13210c8e22d0bdc12dbc14b229e3472d596baf5605310acb0f69673636"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-runtime-driver-v4-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-runtime-driver-v4-selection.json",
+      "bytes": 702,
+      "sha256": "74f61f7bfda005a8b76144a8e4095d95dc9663e2f41fe774b2d3ba1bec75b3c1"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-runtime-release.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-runtime-release.json",
+      "bytes": 1126,
+      "sha256": "a6dc912fa638a9212be290e16d43f39d514bb28aa4e4837bfd2c04386dd8d300"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-source-preparation-acceptance.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-source-preparation-acceptance.json",
+      "bytes": 1286,
+      "sha256": "03b9d47abd2ff1f5c427233ddcecee1f8dd092a516c10704b25a3186124b62ec"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-unlaunched-window-precondition-v6.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-unlaunched-window-precondition-v6.json",
+      "bytes": 373,
+      "sha256": "8b88ac1d5aa1730c6375e3ad5df12b97c2534ca4559f1c4d000ab59e1f0cdffd"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-window-budget-v6-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-window-budget-v6-selection.json",
+      "bytes": 601,
+      "sha256": "443e48a65d9f08b2f630cd6becd24abe6b0ce4db45e8d6606f63600bd15650bd"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-window-budget-v7-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-window-budget-v7-selection.json",
+      "bytes": 878,
+      "sha256": "4c1810ca071dea159edfbadf57bb0df8dfba285ef417f5b07173cb46b6367a0e"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/driver3-independent-review-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/driver3-independent-review-receipt.json",
+      "bytes": 623,
+      "sha256": "9a6d877e167202b93f4339a56ec7252e5a9600aa12cce3a03b5fe67a1a8f43c7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/outer-receipt.json",
+      "bytes": 647,
+      "sha256": "e4703105648ec704cf37ef70776d9f1450db5848e12dade0ffcd867095fabc4d"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/preflight-driver-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/preflight-driver-selection.json",
+      "bytes": 871,
+      "sha256": "470ec24fa419d3be6d2853b8f3446abf333b1eb875446014148b1b8ec8966889"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/preflight-driver-v3-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/preflight-driver-v3-selection.json",
+      "bytes": 563,
+      "sha256": "eb9f8ee4aa188f2ae22d41745d7bc1fde104db86ae736fb389def55a1b970b98"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/preflight-driver-v4.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/preflight-driver-v4.py",
+      "bytes": 30111,
+      "sha256": "2d3dc675db9b1f348c49e54c38e3bc52117c5909cf17580d3ac1ed212b8badc7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/remote-supervisor-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/remote-supervisor-receipt.json",
+      "bytes": 411,
+      "sha256": "1355680217cdda2d6fcfd651cfe4ab76f85705f35478d800e590459d81699130"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/resource-plan.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/resource-plan.json",
+      "bytes": 4142,
+      "sha256": "914150b1c7f922fe46c320e6eaba351d70ffc4bc3672787ff08f10a3a1213cf9"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/run-spec.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/run-spec.json",
+      "bytes": 10926,
+      "sha256": "27955d6ce18c332ee5cf740cea39b1720982f247dde36804e59476f11e39c34f"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/source-tests-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/source-tests-selection.json",
+      "bytes": 833,
+      "sha256": "7fdc3f75da2f7768d66aaf67bcbf64e814a64b301c8ecd09db4300b95abb2fff"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-RED-audit-v2.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-RED-audit-v2.json",
+      "bytes": 3145,
+      "sha256": "69f7634491649a60d6ee8f69cf108f8c5b3610cb2ec14a6c1010c54aaa830bb1"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-RED-audit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-RED-audit.json",
+      "bytes": 3145,
+      "sha256": "eedfc5f51ada604d4a3a9b374cd7c69ae2d6565bab770a88c65fbf6ef3167401"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-driver-v5-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-driver-v5-selection.json",
+      "bytes": 574,
+      "sha256": "4aa1495cc3c3743024d652f3ee3f1c28433296f2e55c8832c83ac6deaf48e6fe"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-fetch-outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-fetch-outer-receipt.json",
+      "bytes": 290,
+      "sha256": "8dc6ae0fe3cdce8f05072226a9608f55088e09681a7648452ecb28764bfe68c9"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-fetch.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-fetch.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-independent-S-diagnostic-reassessment.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-independent-S-diagnostic-reassessment.json",
+      "bytes": 10630,
+      "sha256": "765e062c6752eb0523a28c77cd90a3cb6480cf70819f3442bc87f49082e3edc8"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-live-audit-evidence.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-live-audit-evidence.json",
+      "bytes": 43289,
+      "sha256": "1a23d58ee2638d2a65db7d821926d57d984f58c4c848deaebb8bb554d63a0843"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release-outer.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release-outer.json",
+      "bytes": 274,
+      "sha256": "b77dd1b7be607e648f6b1e9aa5f560fe64787ee2d18530af2cc43a2dea4a3515"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release-remote-v2.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release-remote-v2.py",
+      "bytes": 1523,
+      "sha256": "6384b05680df653caebfc650bd6e4e02721af571a250bbe677afab7581a6485b"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release-remote.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release-remote.py",
+      "bytes": 1520,
+      "sha256": "5f456071e3d6d729e4026d171ef3656810a829afe8d60642e6ff1528d0e727bd"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release-v2-outer.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release-v2-outer.json",
+      "bytes": 274,
+      "sha256": "67dd48b8a7b61c600eab7cc074333d8b7e5fd035c3804fe4bea33c5fbc598466"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release-v2.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release-v2.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release-v2.stdout.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release-v2.stdout.json",
+      "bytes": 917,
+      "sha256": "bd54449c58f28ae632a9b01ade9382724e6664e28a907931d915a44372a3a9e2"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release.stderr.log",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release.stderr.log",
+      "bytes": 258,
+      "sha256": "7dedbba800ab68783b0da9c6e5d6385eff46e11fa102511d35bfff74797176fb"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release.stdout.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-release.stdout.json",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "historical_non_json_or_empty": true
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-runtime-release-v2.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-runtime-release-v2.json",
+      "bytes": 1117,
+      "sha256": "f2f88db3d0337754106c743eeedb060ecb67f5000c541cf13d951dc1b00a9022"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-source-preparation-acceptance.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-source-preparation-acceptance.json",
+      "bytes": 814,
+      "sha256": "b3f76eb808080b4a8121705dc19e92a6ff646c55bcd279d3c2c208fe90e03b51"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/driver3-independent-review-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/driver3-independent-review-receipt.json",
+      "bytes": 623,
+      "sha256": "9a6d877e167202b93f4339a56ec7252e5a9600aa12cce3a03b5fe67a1a8f43c7"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/outer-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/outer-receipt.json",
+      "bytes": 646,
+      "sha256": "dc7b3c386b9b13570f4104115a4f0e05963bc22f6f26f908db6b6e2c7bdee154"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/preflight-driver-v5.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/preflight-driver-v5.py",
+      "bytes": 30124,
+      "sha256": "702fe09fd739662688f4cd316e05790f3ff5639174fe27bc37ec5fb8505be601"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/remote-supervisor-receipt.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/remote-supervisor-receipt.json",
+      "bytes": 411,
+      "sha256": "905ccf4ec0bbc91ee2f8ec1e4a49f857ee4a6742401c072d5d35a0cc939ec869"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/resource-plan.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/resource-plan.json",
+      "bytes": 4383,
+      "sha256": "bd4fc9c5d21218bb47ac301d1714eb3ce54365ef869ba7c8f563a3d8ad7c83da"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/run-spec.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/run-spec.json",
+      "bytes": 10936,
+      "sha256": "c94eeb7a9ebcdedcb84046927b91954ac36ce32cfeeca28c597042329e01f090"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/source-tests-selection.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/source-tests-selection.json",
+      "bytes": 197,
+      "sha256": "cec01f095db84414129c8d547a6b9f334f020c7ea6d8e275ff42c7445f0374f6"
+    },
+    {
+      "path": "evidence/state/M23-online-vacuum-constructor-owner-selection-v2.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-online-vacuum-constructor-owner-selection-v2.json",
+      "bytes": 4251,
+      "sha256": "34a2917a0d0eead54389504b8fe8de3c454f69f7bcae3083dfe48c446ce0971d"
+    },
+    {
+      "path": "evidence/state/M23-phase3-index-constructor-closure-selection-v1.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase3-index-constructor-closure-selection-v1.json",
+      "bytes": 2618,
+      "sha256": "54d382f49abe50f967ac122e9b6070b69fe9005074cbf62480b0e59d5abf4604"
+    },
+    {
+      "path": "evidence/state/M23-phase2-fallback-custody-selection-v1.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-fallback-custody-selection-v1.json",
+      "bytes": 2095,
+      "sha256": "2e0da3285060f8cfbec273edc04b4ae259653586dedcb0f54db1c2d0890c8db2"
+    },
+    {
+      "path": "evidence/state/root-S5098-census-v3-RED-audit-release-v2.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/root-S5098-census-v3-RED-audit-release-v2.py",
+      "bytes": 6743,
+      "sha256": "474e144b9e87d5ece274797ae1748bf652edaff059cd5429ff8abea4303c337e"
+    },
+    {
+      "path": "evidence/state/root-M23-phase2-v11-RED-audit-release.py",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/root-M23-phase2-v11-RED-audit-release.py",
+      "bytes": 7666,
+      "sha256": "426179745ef32247d3527a0f45f06a4db7038f60b02c85243ac29722fb5bf486"
+    },
+    {
+      "path": "source/source-publication.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/source-publication.json",
+      "bytes": 22669,
+      "sha256": "45e6c0b0a2dbd9e5be15de96d0ad02974107440760b3db09facd450dc2e24758"
+    },
+    {
+      "path": "source/M-commit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/M-commit.json",
+      "bytes": 16435,
+      "sha256": "f712824da796e968a8bc5c5e9ec0e6705f07089bb9a7f198dd4a163bc46ae2c1"
+    },
+    {
+      "path": "source/L-commit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/L-commit.json",
+      "bytes": 2982,
+      "sha256": "ca2f0c3ecadd75b8d59281ac60d03f490f020c473569362b2646398a07e9f0d7"
+    },
+    {
+      "path": "source/S-commit.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/S-commit.json",
+      "bytes": 1452,
+      "sha256": "f770089b5a05030430659dece02630261765aba9f1e457a0e57a9668a58aaa2d"
+    },
+    {
+      "path": "source/draft-PRs.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/draft-PRs.json",
+      "bytes": 1105,
+      "sha256": "9830d43800377a60299b6f22863463dde6a855e0d0ae67b9fb117bddadc2bba4"
+    },
+    {
+      "path": "source/local-worktree-inventory.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/local-worktree-inventory.json",
+      "bytes": 20262,
+      "sha256": "32acc4dbf7e5df436ebe86444c6ee7cfd3739d3fe4bcb7134524ccea344b1971"
+    },
+    {
+      "path": "source/M-source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/M-source.json",
+      "bytes": 1552440,
+      "sha256": "7b1ffd5da22b9c0cd1807679533cc8b322eeb77e2b5501b96e1e9fcc9fa7ae83"
+    },
+    {
+      "path": "source/L-source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/L-source.json",
+      "bytes": 1535901,
+      "sha256": "63123da83b3b68a0f060b6a1f5fd2c8c3a7a5737e694a2b0295ba48d35efed78"
+    },
+    {
+      "path": "source/S-source.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/S-source.json",
+      "bytes": 1527864,
+      "sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918"
+    },
+    {
+      "path": "graph-at-handoff/issue-5090-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5090-before.json",
+      "bytes": 43465,
+      "sha256": "ed3a0a2dc7eee600eee1bdc1102f1ecc275bb6c306a117911b5c0817db74640a"
+    },
+    {
+      "path": "graph-at-handoff/issue-5092-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5092-before.json",
+      "bytes": 9165,
+      "sha256": "1bc032180a84db6a310263ba9f192a736031ef732aaabcec67ab11f6570d63b9"
+    },
+    {
+      "path": "graph-at-handoff/issue-5093-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5093-before.json",
+      "bytes": 11250,
+      "sha256": "b317245860cf1fe7388d5916fe29f8de4eacd1e7c69fe50a38aee1310bcd7914"
+    },
+    {
+      "path": "graph-at-handoff/issue-5094-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5094-before.json",
+      "bytes": 9294,
+      "sha256": "b533d8a30951a4d9d3df30f570f58f3c68c2a1e1e8f2d890c0f0bb532b804cf7"
+    },
+    {
+      "path": "graph-at-handoff/issue-5095-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5095-before.json",
+      "bytes": 11451,
+      "sha256": "ba203bf8e4ce2c5032d7677de89c19ae5b5d081ab75d0223f1072c45cd4cb0b9"
+    },
+    {
+      "path": "graph-at-handoff/issue-5096-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5096-before.json",
+      "bytes": 6412,
+      "sha256": "8a9c0b2720ff22ce9e6764d10b805385fc57b19d9a52f64e50b897f4243f1735"
+    },
+    {
+      "path": "graph-at-handoff/issue-5097-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5097-before.json",
+      "bytes": 6044,
+      "sha256": "f4c6e0b5e01a1dd3c7834165d32222fdf9a33ff3c1bc2568bb52d3e989324126"
+    },
+    {
+      "path": "graph-at-handoff/issue-5098-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5098-before.json",
+      "bytes": 11582,
+      "sha256": "c0c8067fa91ae66724891ffd22577636ee4a0ab3654291532b1b2ca0d9de3ee7"
+    },
+    {
+      "path": "graph-at-handoff/issue-5099-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5099-before.json",
+      "bytes": 10153,
+      "sha256": "4ab9b70c30f0877522a31e99f6bb342b5d0b49f421e6d9926cc24a7b1892c80f"
+    },
+    {
+      "path": "graph-at-handoff/issue-5103-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5103-before.json",
+      "bytes": 5503,
+      "sha256": "41e1c264b5f3cca3746db5224574be1cd43043b3c69009475d90ffee80800e14"
+    },
+    {
+      "path": "graph-at-handoff/issue-5105-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5105-before.json",
+      "bytes": 7001,
+      "sha256": "bc7e446a9f42dbe031c8007653468511f873eed4654f81988d103711657be1ad"
+    },
+    {
+      "path": "graph-at-handoff/issue-5108-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5108-before.json",
+      "bytes": 10177,
+      "sha256": "598923b9ba09c4b23b8ef3d35b83ab626b8f865b0041fb69970a321194197e91"
+    },
+    {
+      "path": "graph-at-handoff/issue-5113-before.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/handoff-20261008/issue-5113-before.json",
+      "bytes": 12901,
+      "sha256": "b8794121ea082d8d30fdfb41ddc18c8e01ea9db8cd63536ff8415b8d0a936637"
+    }
+  ],
+  "bytes": 53630228,
+  "retained_only_duplicates": [
+    {
+      "path": "evidence/state/M23-phase2-preparation-v11/ROOT-fetch.stdout.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/M23-phase2-preparation-v11/ROOT-fetch.stdout.json",
+      "bytes": 9915760,
+      "sha256": "373b96ba0447a7dda5b386ed4b513879733ae9a9724eeddd1f732ed1fb183395"
+    },
+    {
+      "path": "evidence/state/S5098-storage-preflight-runtime-retry-v3/ROOT-fetch.stdout.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-preflight-runtime-retry-v3/ROOT-fetch.stdout.json",
+      "bytes": 17579987,
+      "sha256": "6dcfe1c201ed4ececb1470d596120ec25e605eb66b1fb1b9db714f36a7f77579"
+    },
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-fetch.stdout.json",
+      "retained_original": "/private/tmp/gomap-r1-arch-5090-local-20261008/state/S5098-storage-census-runtime-v3/ROOT-fetch.stdout.json",
+      "bytes": 11459721,
+      "sha256": "7a3adfb5c3287d76b8b7bd21ffe78b0022d7e4d23c6be4756ba066893fd5418e"
+    }
+  ],
+  "historical_format_exceptions": [
+    {
+      "path": "evidence/state/S5098-storage-census-runtime-v3/ROOT-release.stdout.json",
+      "bytes": 0,
+      "error": "Expecting value: line 1 column 1 (char 0)"
+    }
+  ]
+}

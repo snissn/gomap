@@ -1,0 +1,16 @@
+{
+  "Go_build": false,
+  "actual_wait": true,
+  "exception": null,
+  "exit": 0,
+  "group_absent": true,
+  "pid": 5580,
+  "remote_actual_join_requires_completion_readback": true,
+  "remote_control": "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/state/S5098-census-stage-v3",
+  "remote_custody_unresolved": true,
+  "remote_released": false,
+  "source_manifest_sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_sha256": "5443ff12860f43f312ead4a0fd613b646f7bfbeed6c3f02d2dce3a1686b3c584",
+  "tests": false
+}

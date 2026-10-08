@@ -1,0 +1,13 @@
+/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-census-v3/binaries/normal/caching.test: go1.26.3
+	path	github.com/snissn/gomap/TreeDB/caching.test
+	mod	github.com/snissn/gomap	(devel)	
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	CGO_ENABLED=1
+	build	CGO_CFLAGS="-O2 -g"
+	build	CGO_CPPFLAGS=
+	build	CGO_CXXFLAGS="-O2 -g"
+	build	CGO_LDFLAGS="-O2 -g"
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1

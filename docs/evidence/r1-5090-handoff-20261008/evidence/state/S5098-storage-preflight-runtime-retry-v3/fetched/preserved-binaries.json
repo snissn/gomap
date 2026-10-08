@@ -1,0 +1,7 @@
+{
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-retry3/binaries/normal/caching.test": "9577d5cbf6ddd8b917204d81a05df8a201c5ed74ce4388459865cf1f690c88c2",
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-retry3/binaries/normal/harness.test": "1713341ce710937c5bc187d6655835db950ededcf2997ff41c1f7a1199d3f8c9",
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-retry3/binaries/race/caching.test": "55a66667bb393de80742b23afce0cc4d0ea2ebaec64551657104548d18a483de",
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-retry3/binaries/race/harness.test": "2d7199b3dd35c65c4cfbc85293927d35d258bb781a085775f3fe4afed78b9d96",
+  "/home/mikers/dev/codex-r1-5090-functional-linux111-20261008/S5098-preflight-v2/run-retry3/tools/test2json": "4941b132d09420cf4845878a7ec384bf8c8a1fbc0d6243b5a902e556c5e0802c"
+}

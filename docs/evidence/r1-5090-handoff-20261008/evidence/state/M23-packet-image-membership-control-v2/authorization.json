@@ -1,0 +1,10 @@
+{
+  "authorized": true,
+  "driver_sha256": "3cbf719d848af22fb65c860c517602c36963690e04b384ee6823e7cbf290147a",
+  "host": "Mac",
+  "source_hold_M": true,
+  "source_hold_L": true,
+  "Go_queue": "sole pinned ROOT FL normal/race; no hook or other Go",
+  "finite": false,
+  "performance": false
+}

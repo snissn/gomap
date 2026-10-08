@@ -1,0 +1,207 @@
+{
+  "M_RED_audit_sha256": "bdaf4b17750ec39e7b508cffed849a95df5bd93e53f2634dc8fe651598e94365",
+  "M_genuine_release_sha256": "c35388f3b758dcae400900d109f33ff55c7ffd4a2c718d92c26aa86b23a61222",
+  "M_phase2_acceptance": "REJECT and remains blocking M delivery; five mergecases failure not waived; no full128MiB/finite/performance",
+  "ROOT_graph_reassessment": true,
+  "S_scope": "unchanged twoarm256call diagnostic; no discoveryN or fixed15campaign/productqualification",
+  "S_source_sha256": "5e5acae9d69c8d31c1c440d7a475c5e118d00903fb7a30b7727e51d9b5c44918",
+  "at": "2026-10-08T18:14:43.946572+00:00",
+  "node": 5098,
+  "old_prerequisite": "Mphase2 all253normalracePASS before short storage diagnostic",
+  "parent": 5090,
+  "prior_S_RED_audit_sha256": "5a39224ffdf647c29bd2f30692e0396d33599fdff89ebf5e6060f64acd9e1068",
+  "prior_reassessment_sha256": "b77865d339e3d3d5805445fb22e58cea9921ecb2fdf3d85f2a8ebbb61473fe36",
+  "product_resource_limits_unchanged": true,
+  "reason": "Same accepted independent S basis; only independently reviewed fresh public maindb/index.db diagnostic correction. M phase2 remains rejected and cannot deliver full finite accounting.",
+  "revised_prerequisite": "Mphase2 allactualruntime/SSH/tooljoins ROOTaudited; fresh conflictfree111; source-identical S14normalrace PASS required before short diagnostic",
+  "selected_failure_production_path": "TreeDB/internal/rootpublication/resource_set.go",
+  "source05_review_sha256": "c59089342f85203616fdacaec3dbecefeded00b3d420da55fe486474b5283273",
+  "source_bindings": {
+    "TreeDB/db/api.go": {
+      "M_phase2": "1465ccd5485abda935eb14c1a08ee48dcb0eea6f24378db22e279e675dc3f04c",
+      "S": "521cec2fca5059f244e7ea55a391accc8ddeccb7274237e5e075ea67e51a8ad6",
+      "S_selects_phase2": false,
+      "phase1": "51c25b52b6b947c90893cdcf47eb7e34335f39b988c62e64978b7582f2b2be6b"
+    },
+    "TreeDB/db/db.go": {
+      "M_phase2": "e3b7de0bbaa08a772b47de7b1d3677262a03c59f29640e04ee192f33e0091d05",
+      "S": "a7e17157acfd06239b025d252ab061692c3535191b98b2181f3ad604d3f52c50",
+      "S_selects_phase2": false,
+      "phase1": "64fcb0ad237708219d05dce4648b2cc01899727b92b34bd4980d658ecef422c6"
+    },
+    "TreeDB/db/durable_root_runtime.go": {
+      "M_phase2": "a128381e9c5095d6f068de9dd1b57e92f382ca4651624487ec0a35967cd621fd",
+      "S": "48c0ed7a0f08b01697396807beb6d901794aa341d751985462135d09d8522a39",
+      "S_selects_phase2": false,
+      "phase1": "4cd68c073f93e337215d453c0e13d65e3dfce818a96427f0d91a6f9e75481d6c"
+    },
+    "TreeDB/db/durable_snapshot_constructor_lifetime_v1_test.go": {
+      "M_phase2": "b17b560888074e137be721579d51b003a52b0d35b7da7c0607b56de36481eb9b",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": "5f5202dd47855f92ae2d8672367e9006a5db9f8bfc8ce7061fa70d140e8ffa8d"
+    },
+    "TreeDB/db/leaf_generation_gc_test.go": {
+      "M_phase2": "209946f85c39d96b50da901706901cd7188137993fc5d47913855a065d6813e4",
+      "S": "744413c1dbe47e6304f991d9e4e72f60e6abd7390aad3a018c787bf2319f79df",
+      "S_selects_phase2": false,
+      "phase1": "744413c1dbe47e6304f991d9e4e72f60e6abd7390aad3a018c787bf2319f79df"
+    },
+    "TreeDB/db/pager_holder_lifetime.go": {
+      "M_phase2": "be1fb8dd08e51ffac2456d3d505d50392e1e542412f47e28c96a5a3d1721599f",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": "a209f2113c987975f9758d690a11783f91c2271ce1d45fa6866998f0b75a0bcf"
+    },
+    "TreeDB/db/pools.go": {
+      "M_phase2": "656bce88709e57248fa96e159a0181f64551a1f428986e319d277082c82f383e",
+      "S": "b3b654da47cdb783392196f303ce614b3ed06994bd9d431dd292ced04f5dd76e",
+      "S_selects_phase2": false,
+      "phase1": "f57b8ccf0e03f01b941be1b10cc3518448f58acc13e39c45a9f0fdc6d8588717"
+    },
+    "TreeDB/db/snapshot_cleanup_completion_v1.go": {
+      "M_phase2": "40260482b3ab3c179ff0e9785b6c2d231d31be694a5287da25fcee962a54b5a7",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/db/snapshot_cleanup_completion_v1_test.go": {
+      "M_phase2": "a63d3145add09669abd449e1cb5618324f00e1a4c2be3c0c6cfe081b3eaeafdc",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/db/snapshot_cleanup_constructor_v1.go": {
+      "M_phase2": "a026e0599fddfdc8ea26719ecb578a7dee10e7b728e268b40086f1ae38d56639",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/db/snapshot_cleanup_constructor_v1_test.go": {
+      "M_phase2": "63739a371fcc0b3f4d5c0f1197de702e6789e64c0dc429d886d6a4fea39b7256",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/db/snapshot_cleanup_custody_v1_test.go": {
+      "M_phase2": "5d3a8be8cb3a2c3a7600d59d3d4c97fc25c37d997f971bd4c35aabfb677b4eab",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/db/snapshot_iterator_lifetime.go": {
+      "M_phase2": "9edb9a6d0e630836bac8d7ba4ef93e2dc82e41e643f79f1e1ebe3f2bf35bc3b2",
+      "S": "5e157ff85f2c7b03ee719760b8b2bc716803b38f69f8e24e4d72f7bc7c19ef57",
+      "S_selects_phase2": false,
+      "phase1": "5e157ff85f2c7b03ee719760b8b2bc716803b38f69f8e24e4d72f7bc7c19ef57"
+    },
+    "TreeDB/db/snapshot_read_lifetime.go": {
+      "M_phase2": "96ba8345d7dcbabf2d6204db63a7d796b186abda51d08ba477ae4c60634c9421",
+      "S": "40ad6a277191ffa9feb281bcbb0c21686d1634bed5003a4697ff8708fa5aaa9a",
+      "S_selects_phase2": false,
+      "phase1": "9c7f2186fc8521f4af6e857759494f929b56452f46010e69c2d08a8fb5388c78"
+    },
+    "TreeDB/db/stable_index_callback_lifetime_v1_test.go": {
+      "M_phase2": "722d2bf26adf7084e3e0f2f65d6a721842585ac04ee52da1b810fba1889ca7f7",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": "b21960ab468e4a2127affb5b8534a12bac1cf542cd8a189fcb5d674b9d18a8a3"
+    },
+    "TreeDB/db/stable_resource.go": {
+      "M_phase2": "25614c096763f33b937b5e8c0eb5ecbe59f01f6587ffcf334f799269082b9915",
+      "S": "b3e781111d25d63c1fe2d20229e1949eab6a2c2f719b70680a8b649786039ded",
+      "S_selects_phase2": false,
+      "phase1": "24da03261366add5c7ea8000a8c7c295d0ca46a1205744ada162fd4d4503b3fb"
+    },
+    "TreeDB/internal/dictdb/resource_capture.go": {
+      "M_phase2": "ee845f7ddfd0674d105cb752b856506c3f26040892fcf73c31fcfdd973a1cc93",
+      "S": "2333c6e26ee63e1d6f09169bbc0bfa46f68c9578f43cc1c71367a0274fe20c95",
+      "S_selects_phase2": false,
+      "phase1": "15284cca06e315ca602757f4b33ec63b7be888f0dbc2c474fa0a7538b9bd1cca"
+    },
+    "TreeDB/internal/dictdb/resource_capture_custody_v1_test.go": {
+      "M_phase2": "0ba877e18fbd1c08f2facd9cdee8ba046eb2d591e79fe08c37965f64b4299ac8",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/internal/dictdb/store.go": {
+      "M_phase2": "4f4fcdfd0fc3cfebffe93ea5c7bc836146b51a637bc6a17b91bc865f1691b4bc",
+      "S": "17794451688f4bbd35a019f9b28098f69db9280e43949673f129b2d50d02730d",
+      "S_selects_phase2": false,
+      "phase1": "17794451688f4bbd35a019f9b28098f69db9280e43949673f129b2d50d02730d"
+    },
+    "TreeDB/internal/residentcredit/owner.go": {
+      "M_phase2": "8a16b97a8e03c704beeecfc84cd740f137b9e9b8c3384ac9a717fdaaa31ebf45",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": "2306dabf9e4cf37707531f792cb4519c4308ecb4e32731e43bd438e704194c7b"
+    },
+    "TreeDB/internal/residentcredit/private_snapshot_backing_v1_test.go": {
+      "M_phase2": "a0a510dbfe06ef7daa733440733778077c8d7ecb22c07b91f7a8126a754a56f4",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/internal/rootpublication/coordinator.go": {
+      "M_phase2": "56bc1d8e43fcf675a36dff05cc2e81c4dd5ed18e36e7e79162504416659f624f",
+      "S": "dde7980cd81996ddf3b999c19027ba5a63c4fedc72ef2585defa7f9fb3fda93f",
+      "S_selects_phase2": false,
+      "phase1": "cd2d8c34c01b660136bca075779d7dac9af165a449fbfefc27bcfd97219455a5"
+    },
+    "TreeDB/internal/rootpublication/resource_cleanup_custody_v1_test.go": {
+      "M_phase2": "7a3fbf3e6446c2aaef7e1f07bc306293d95e8b38cf079751f3367614948415ac",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/internal/rootpublication/resource_cleanup_outcome_v1.go": {
+      "M_phase2": "7dd7c869c46dc922acb3788dcde5a64cd64f1e39ce3711cd6803e6c7313eb220",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/internal/rootpublication/resource_entry_view.go": {
+      "M_phase2": "49cfe64aff5b9e3df78343e0185d6d62c0ea8a5687b7b1b743f77e0069c98bd8",
+      "S": "10f50a1b5514363eeb36080569c9d4bca6d6634cb7c340f8d31787f3812ebe20",
+      "S_selects_phase2": false,
+      "phase1": "1d6a47387726885541256f03f48a47b305b7e4de82185ea5824e51d7fe6f43f4"
+    },
+    "TreeDB/internal/rootpublication/resource_set.go": {
+      "M_phase2": "75afae05bc654ee380fe0303c6ff4a0424ab9a80250d93af58cfde0f531f91ae",
+      "S": "53b0714239f35a7237e1c25140c9cff74736bed8dccfd15b9058bfd1ddaacef5",
+      "S_selects_phase2": false,
+      "phase1": "038017d04d74854b2aef6786c1869cd6a39a46c2c446897b9ec0cbff055f0bbf"
+    },
+    "TreeDB/internal/rootpublication/resource_token.go": {
+      "M_phase2": "3c1381c91427fec9db73c4807a997ca84fb4e60d5703536eeb288bfca52e8ea1",
+      "S": "4ba704c69d9ddcc7cb32985f9b56df3e39bbae2f551bb2f1ffc3a55c3b742243",
+      "S_selects_phase2": false,
+      "phase1": "ebb8f0999f5f2384cd0d2acbb90179f9d7930301df7aca8862733b6e4e07c4ee"
+    },
+    "TreeDB/internal/templatedb/resource_capture.go": {
+      "M_phase2": "6b96f5d1b6f61b3f9ee06ae12f726b00d957a6ef2be3aac94b6963194ce1df7a",
+      "S": "afb12a8825b30717285e9c44426b016ac5a4caa7f6e8c223e4fa33b88cd5246a",
+      "S_selects_phase2": false,
+      "phase1": "04552a8cec7ef1d972f849da02db3b08b746a0b80cbc6b93aac630698d759e4a"
+    },
+    "TreeDB/internal/templatedb/resource_capture_custody_v1_test.go": {
+      "M_phase2": "02b2d7380a661ab53b696f8f3bcfc0eac4da4330606ee9af763c16c7de02bd65",
+      "S": null,
+      "S_selects_phase2": false,
+      "phase1": null
+    },
+    "TreeDB/internal/templatedb/store.go": {
+      "M_phase2": "116f6f136ef9a1640a0936b8239aafad68f60543d58f2eab776af94a9dcf9126",
+      "S": "a616bff816ac4b8fa5012ce862d07c1f76643319d90400f0b7a6fe327e7c6ded",
+      "S_selects_phase2": false,
+      "phase1": "a616bff816ac4b8fa5012ce862d07c1f76643319d90400f0b7a6fe327e7c6ded"
+    },
+    "TreeDB/template_stable_resource.go": {
+      "M_phase2": "685afa21edb6f5b3df42143e5d71cc2536882fbf05a1060093e609c864155dc1",
+      "S": "f854f15e5cc733315ba20683bd4389a7263f4e3c073b0d823203f9d8663f7858",
+      "S_selects_phase2": false,
+      "phase1": "f854f15e5cc733315ba20683bd4389a7263f4e3c073b0d823203f9d8663f7858"
+    }
+  }
+}

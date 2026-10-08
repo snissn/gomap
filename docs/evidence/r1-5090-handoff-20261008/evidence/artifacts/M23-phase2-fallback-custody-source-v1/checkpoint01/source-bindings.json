@@ -1,0 +1,54 @@
+{
+  "fixed_provider_path": {
+    "path": "TreeDB/internal/rootpublication/resource_token.go",
+    "sha256": "3c1381c91427fec9db73c4807a997ca84fb4e60d5703536eeb288bfca52e8ea1"
+  },
+  "scope_path": {
+    "path": "TreeDB/internal/residentcredit/owner.go",
+    "sha256": "8a16b97a8e03c704beeecfc84cd740f137b9e9b8c3384ac9a717fdaaa31ebf45"
+  },
+  "source": [
+    {
+      "line": 1119,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f",
+      "symbol": "pauseCleanupOwnerV1"
+    },
+    {
+      "line": 1125,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f",
+      "symbol": "addWithCleanupBoundaryV1"
+    },
+    {
+      "line": 1824,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f",
+      "symbol": "cloneStableResourceEntryIntoBuilder"
+    },
+    {
+      "line": 2727,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f",
+      "symbol": "cloneStableResourceEntriesToKindViewWithCleanupV1"
+    },
+    {
+      "line": 2843,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f",
+      "symbol": "mergeAppendOnlyLogicalObligationsFlatWithCleanupV1"
+    },
+    {
+      "line": 3190,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f",
+      "symbol": "AbandonCheckedV1"
+    },
+    {
+      "line": 3191,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "d84a0946d009a831d5876423acd3406b504b914d1fdc76e14975a8f7bacbe40f",
+      "symbol": "AbandonCheckedV1"
+    }
+  ]
+}

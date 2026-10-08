@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-08T18:18:01.298938+00:00",
+  "attributable_logical_bytes": 29693411965,
+  "conflicts": [],
+  "host_free_bytes": 180782223360,
+  "loadavg": "0.12 0.11 0.17 1/1195 2190498\n",
+  "own_relevant_processes": [
+    {
+      "comm": "python3",
+      "exe": "/usr/bin/python3.14",
+      "pid": 2190498
+    }
+  ],
+  "previous_reservation_sha256": "5ab240a0e60cb2e4b5b79f873a3ae73bf08612cd810c81a3a637b1f33431f42a"
+}

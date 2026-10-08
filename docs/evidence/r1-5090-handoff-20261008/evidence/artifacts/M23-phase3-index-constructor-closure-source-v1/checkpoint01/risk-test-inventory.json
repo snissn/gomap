@@ -1,0 +1,22 @@
+{
+  "existing_related_controls": [
+    "TestDBGhostOrdinaryScavengeKeepsPreparedCOWCustodyUntilRetry",
+    "TestDBHeldSnapshotCreatorSurvivesCloseAndScrubsAtActualTerminal",
+    "TestDBPhysicallyClosedIndexRemainsActualOwnerUntilRuntimeTerminal",
+    "TestDurableCandidateSnapshotRetainsExactConstructorBeforeAdmission"
+  ],
+  "new_top_count": 5,
+  "new_top_tests": {
+    "TreeDB/db/index_constructor_closure_v1_test.go": [
+      "TestIndexConstructorClosureRefusesHeaderOnlyHeadroomBeforeWriterBind",
+      "TestIndexConstructorClosureChargesIndependentClasses",
+      "TestIndexConstructorClosureRetainsAcrossReaderCutoverAndCloseRetry",
+      "TestIndexConstructorClosureRetainsPreparedWriterAfterPhysicalClose"
+    ],
+    "TreeDB/lifecycle/graveyard_constructor_layout_v1_test.go": [
+      "TestGraveyardInitialBatchBackingMatchesActualConstructor"
+    ]
+  },
+  "normal_race_required": true,
+  "runtime_executed": false
+}

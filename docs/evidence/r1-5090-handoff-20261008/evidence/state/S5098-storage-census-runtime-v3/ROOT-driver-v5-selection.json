@@ -1,0 +1,11 @@
+{
+  "Go": false,
+  "accepted_namespace_only_derivative": true,
+  "at": "2026-10-08T18:14:43.890194+00:00",
+  "defaults_work_oracles_controls_resources_unchanged": true,
+  "driver_sha256": "702fe09fd739662688f4cd316e05790f3ff5639174fe27bc37ec5fb8505be601",
+  "prior_sha256": "2d3dc675db9b1f348c49e54c38e3bc52117c5909cf17580d3ac1ed212b8badc7",
+  "qualification": false,
+  "source05_independent_review_sha256": "c59089342f85203616fdacaec3dbecefeded00b3d420da55fe486474b5283273",
+  "source05_receipt_sha256": "fabcc91fc229457d8283c038ac334c768257c65215ad86ba346c02831f7112bd"
+}

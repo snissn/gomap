@@ -1,0 +1,51 @@
+{"Action":"start","Package":"github.com/snissn/gomap/TreeDB/pager"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorClosedOwnerRefusesBeforeFileBirth"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorClosedOwnerRefusesBeforeFileBirth","Output":"=== RUN   TestPagerConstructorClosedOwnerRefusesBeforeFileBirth\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorClosedOwnerRefusesBeforeFileBirth","Output":"--- PASS: TestPagerConstructorClosedOwnerRefusesBeforeFileBirth (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorClosedOwnerRefusesBeforeFileBirth"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorFailureRetainsActualFileForCloseRetry"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorFailureRetainsActualFileForCloseRetry","Output":"=== RUN   TestPagerConstructorFailureRetainsActualFileForCloseRetry\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorFailureRetainsActualFileForCloseRetry","Output":"--- PASS: TestPagerConstructorFailureRetainsActualFileForCloseRetry (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerConstructorFailureRetainsActualFileForCloseRetry"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerPartialUnmapRetrySkipsSuccessfulChunks"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerPartialUnmapRetrySkipsSuccessfulChunks","Output":"=== RUN   TestPagerPartialUnmapRetrySkipsSuccessfulChunks\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerPartialUnmapRetrySkipsSuccessfulChunks","Output":"--- PASS: TestPagerPartialUnmapRetrySkipsSuccessfulChunks (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerPartialUnmapRetrySkipsSuccessfulChunks"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks","Output":"=== RUN   TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks","Output":"--- PASS: TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerCloseJoinsAdmittedOperationOutsideRequiredLocks"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen","Output":"=== RUN   TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen","Output":"--- PASS: TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen (0.01s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerIndependentStableSyncSurvivesMappedCloseAndReopen"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerDurabilityObserverMayCloseWithoutSelfJoin"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerDurabilityObserverMayCloseWithoutSelfJoin","Output":"=== RUN   TestPagerDurabilityObserverMayCloseWithoutSelfJoin\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerDurabilityObserverMayCloseWithoutSelfJoin","Output":"--- PASS: TestPagerDurabilityObserverMayCloseWithoutSelfJoin (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerDurabilityObserverMayCloseWithoutSelfJoin"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan","Output":"=== RUN   TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan","Output":"--- PASS: TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerRawExportRefusesBeforeExposureDuringSelectedLoan"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLifecycle"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLifecycle","Output":"=== RUN   TestPagerLifecycle\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLifecycle","Output":"--- PASS: TestPagerLifecycle (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerLifecycle"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks","Output":"=== RUN   TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks","Output":"--- PASS: TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerSyncPagesPersistsRequestedPagesWithoutClearingDirtyChunks"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncate"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncate","Output":"=== RUN   TestPagerTruncate\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncate","Output":"--- PASS: TestPagerTruncate (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncate"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncateSerializesConcurrentGrowth"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncateSerializesConcurrentGrowth","Output":"=== RUN   TestPagerTruncateSerializesConcurrentGrowth\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncateSerializesConcurrentGrowth","Output":"--- PASS: TestPagerTruncateSerializesConcurrentGrowth (0.00s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerTruncateSerializesConcurrentGrowth"}
+{"Action":"run","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerAsyncPreGrow_DefaultChunkEnabled"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerAsyncPreGrow_DefaultChunkEnabled","Output":"=== RUN   TestPagerAsyncPreGrow_DefaultChunkEnabled\n"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerAsyncPreGrow_DefaultChunkEnabled","Output":"--- PASS: TestPagerAsyncPreGrow_DefaultChunkEnabled (0.01s)\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager","Test":"TestPagerAsyncPreGrow_DefaultChunkEnabled"}
+{"Action":"output","Package":"github.com/snissn/gomap/TreeDB/pager","Output":"PASS\n"}
+{"Action":"pass","Package":"github.com/snissn/gomap/TreeDB/pager"}

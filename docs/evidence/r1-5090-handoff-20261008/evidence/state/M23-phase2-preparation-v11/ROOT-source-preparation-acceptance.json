@@ -1,0 +1,26 @@
+{
+  "Fuzz_excluded": 3,
+  "ROOT_accepted_source_preparation": true,
+  "TestMain_bodies_reviewed": 7,
+  "actual_preparation_tool_join": {
+    "exit": 0,
+    "session": 43646
+  },
+  "at": "2026-10-08T17:28:53.506342+00:00",
+  "checkpoint05_receipt_sha256": "be2af3abffc68e12627ffa3fd1829213449fab1372624dc6d68ae8433a824d8c",
+  "checkpoint05_source_sha256": "70e0b3d6a39dd9301d0d44c565a4cb04dfde004097427dba3e0c903c713fd095",
+  "expected_top_tests": 253,
+  "finite": false,
+  "fixture08_independent_review_receipt_sha256": "b836a4d294774df3ce2bf4e29153aa1576aed26e52c24294c8534459428b3000",
+  "fixture_checkpoint08_receipt_sha256": "d0981b46184d40366b5fb8b47472480b20d43808d9f3f6f2214497d86b5293cb",
+  "fixture_review": "L independent review and ROOT accept fixture-only exact known injected callback acknowledgment after uncertainty/noReplay/Busy assertions, normal remaining physical cleanup and checked DB.Close;10072outside exact; no production relaxation",
+  "format_receipt_sha256": "22efdf3802c508aac656943eb82de117f74dc23698fb9770ffb3927867ec0aae",
+  "formatted_source_sha256": "3491dcbae1acf2a1d8758fabd3b62020b63355e697cc44335f806abe9b10e9ff",
+  "mandatory_risks": 57,
+  "new_risk_tests": 23,
+  "performance": false,
+  "preparation_review": "Accepted v2 custody template; ROOT v7 only handles dict or list delta records, new namespace, infrastructure floor176GiB, same23 new risks and pinned formatter; ROOT accepted exact known callback panic fixture recovery checkpoint08",
+  "preparer_sha256": "7111de278f00a1f5b9819f6f14847863d48f09f4da27b367ac5c4c48198c33e0",
+  "reviewer": "/root/l9_independent_review and ROOT",
+  "source_fix_review": "L ACCEPT checkpoint05 exact receipt/patch/source: one combined actual scanned Snapshot allocation, immutable inline cleanup identity, two Scope edges, private last observer refund, public cumulative and no address reuse; unchanged <=1.1 allocation guard"
+}
