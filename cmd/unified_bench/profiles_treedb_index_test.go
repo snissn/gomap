@@ -481,6 +481,7 @@ func TestBuildTreeDBOptions_MaintenanceModeBenchDisablesBackgroundLoops(t *testi
 }
 
 type savedTreeDBFlagState struct {
+	primaryDirectory        bool
 	indexOptimizations      bool
 	indexOuterLeavesInVlog  bool
 	preferAppendAlloc       bool
@@ -527,6 +528,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 		copyMap[k] = v
 	}
 	return savedTreeDBFlagState{
+		primaryDirectory:        *treedbIndexPrimaryDirectory,
 		indexOptimizations:      *treedbIndexOptimizations,
 		indexOuterLeavesInVlog:  *treedbIndexOuterLeavesInVlog,
 		preferAppendAlloc:       *treedbPreferAppendAlloc,
@@ -569,6 +571,7 @@ func saveTreeDBFlagState() savedTreeDBFlagState {
 }
 
 func restoreTreeDBFlagState(s savedTreeDBFlagState) {
+	*treedbIndexPrimaryDirectory = s.primaryDirectory
 	*treedbIndexOptimizations = s.indexOptimizations
 	*treedbIndexOuterLeavesInVlog = s.indexOuterLeavesInVlog
 	*treedbPreferAppendAlloc = s.preferAppendAlloc
@@ -610,6 +613,7 @@ func restoreTreeDBFlagState(s savedTreeDBFlagState) {
 }
 
 func resetTreeDBIndexFlagsForTest() {
+	*treedbIndexPrimaryDirectory = false
 	*treedbIndexOptimizations = false
 	*treedbIndexOuterLeavesInVlog = true
 	*treedbLeafPageReadCacheEntries = 0

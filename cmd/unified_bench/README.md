@@ -63,6 +63,50 @@ Growth records use `source_directory_file_bytes_before_export` for the source
 directory size before export and `archive_bytes` for the streamed archive size.
 Foreground records use `archive_bytes` for the native snapshot size.
 
+## PRIMARY directory selection
+
+`-treedb-index-primary-directory` is an independent opt-in selector (default
+`false`) for `Options.IndexPrimaryDirectory`. A supporting build receives the
+actual boolean option. An older build without that option rejects `true` before
+opening a TreeDB database or executing its workload; `false` keeps the baseline
+path. The benchmark compatibility alias `-profile fast` alone selects
+`no_wal_fast` and may attach a PRIMARY arena, but does not enable the separate
+PRIMARY directory.
+
+The direct-open `column_store` and `collection_storage` suites (including their
+hyphenated aliases) reject this selector before reports, artifacts, or database
+opens. They do not use the adapter's options builder. Their default `false`
+behavior is unchanged.
+
+For example, build from a clean checkout with the supporting product change and
+this harness, then run in a fresh, task-owned database/output directory:
+
+```sh
+# Benchmark compatibility alias: fast selects the no_wal_fast production profile.
+./bin/unified-bench -dbs treedb -profile fast -test write_seq,batch_write \
+  -keys 10000 -treedb-index-primary-directory=true -profile-dir /path/to/fresh-output
+```
+
+The stderr banner and single/sweep Markdown reports include PRIMARY selector
+evidence for every selected TreeDB adapter, including explicitly selected
+`treedb_*` variants and registry aliases. Hidden-only selections retain a clearly
+scoped selector report. Full resolved options describe canonical `treedb`;
+variant profile/compression overrides are excluded from that full report. The resolved-options text reports `index_primary_directory_requested`,
+`index_primary_directory_supported`, and
+`index_primary_directory_configured_enabled`. Configured enablement is read from
+the constructed options; it is not proof that a measured operation used the
+path. Qualify actual routing separately with product operation/path counters.
+Benchmark names, profile filenames, and structured artifact schemas are unchanged.
+
+Freeze exact product and harness source identities before retained collection.
+Use matched disabled-directory controls for existing public write, batch,
+checkpoint, and vacuum regression checks. Older main has no identical enabled
+directory baseline: enabled results establish incremental/scaling costs, not
+before/after improvement. Results from the `no_wal_fast` production profile do
+not establish command-WAL DURABLE or RELAXED contracts; use the appropriate command-WAL adapter/profile
+and its contract checks for those claims. Expensive retained collection waits
+for independent exact-candidate harness review and landing.
+
 ## Guardrail Check (Read Snapshot + Append-Only)
 
 Targeted regression guardrail for append-only writes plus read-heavy snapshot acquisition:
