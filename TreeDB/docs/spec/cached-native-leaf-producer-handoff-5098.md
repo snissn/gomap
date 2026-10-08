@@ -77,6 +77,13 @@ reserved leaf lane; a sequence comparison alone is not retirement authority.
 No-work maintenance and an unsuccessful backend callback use this same rule.
 Native pack/GC and CompactStorage retain their explicit generation handoff.
 
+Shared hot value-log writers follow this same binding rule. A peer's newer
+sequence advances the future reservation floor without retiring a healthy
+installed writer. Hot writer creation and rollback restoration install the
+shared identity-pin registry, so reconciliation validates the writer against
+both Managers and the retained namespace. Invalid physical metadata refuses
+before a replacement writer is created.
+
 Preservation requires the concrete writer and both real Managers to agree on
 the exact file ID, physical identity, current registration and shared pin
 registry. The retained writer parent must match the current parent, and the
@@ -104,6 +111,13 @@ rotation, idle-rotation and append counters. Creation remains part of the old
 rotation total; threshold and maintenance counters distinguish their actual
 call sites. Constructors, routing, leaf/hot limits, formats and ACK behavior are
 unchanged.
+
+The physical observer reports every configured leaf-worker slot, including an
+explicit `installed=false` for unused slots. Installed slots require complete
+identity and counter fields. Physical value-log writer indices are likewise
+checked against the declared configured count; there is no 64-writer observer
+limit. Missing installed writers, unexpected indices, and lane/sequence values
+that cannot be represented as canonical FileIDs invalidate rollover evidence.
 
 The causal support inquiry showed that reopening without new typed updates
 removed six formerly-current physical files. It establishes the writer-frontier
