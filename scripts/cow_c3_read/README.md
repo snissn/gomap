@@ -442,6 +442,15 @@ warmup describes its 1-epoch history and layout cardinality even when measured
 processes execute 8 epochs. The command, row and raw lifecycle count must agree.
 At released, preclose and reopened boundaries, COW owner counters must match the
 single published database cut, including generations, roots and external leases.
+Every retained COW boundary and each representation diagnostic's before/after
+owner census also enforces the applicable finite budget. Live views, generations
+and frozen sources use the shared budget limits; charged bytes retain their
+total, retirement and in-flight bounds. Aggregate history uses the observed
+generation count times the per-generation byte limit. External leases are
+charged owners, not generation-local `MaxResources` slots; active cuts retain
+external leases. Published current/frozen roots must fit the shard/source and
+generation census. Cumulative `*_total` counters retain unsigned-domain and
+nonregression checks rather than live-owner caps.
 
 `c4_analyze.py` calls the shared provenance validator using an explicit closed
 protocol and dependency selection. Its raw summary retains foreground call
@@ -464,7 +473,7 @@ native/product/C4 claim; copied packets cannot promote that claim. Use `--case`
 to select named refusal checks when only an affected validator needs rechecking.
 `python3 -B scripts/cow_c3_read/c4_contract_test.py` checks the phase contract.
 
-The C4 schema v2 finite construction disables generational maintenance and all
+The finite C4 construction disables generational maintenance and all
 three background checkpoint triggers plus background index vacuum using actual
 requested options. Every real Stats boundary must resolve to that policy with
 zero background work. Manual checkpoint deltas are exact, including zero during

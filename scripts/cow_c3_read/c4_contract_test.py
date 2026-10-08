@@ -145,5 +145,100 @@ class OwnerContractTest(unittest.TestCase):
                         c4_protocol.quiescent_owners(stats(overflow), phase)
 
 
+class COWBudgetContractTest(unittest.TestCase):
+    def setUp(self):
+        self.values = dict(total_bytes=4096, peak_bytes=4096, control_bytes=128,
+                           history_bytes=1024, reserved_bytes=256, deferred_bytes=128,
+                           retired_bytes=512, external_bytes=128, views=2,
+                           generations=4, sources=1, external_leases=7,
+                           active_cuts=2, current_roots=3, frozen_roots=1)
+
+    def validate(self, values=None, owners_only=False, limits=None):
+        values = self.values if values is None else values
+        stats = {"treedb.cache.cow." + key: str(value) for key, value in values.items()}
+        c4_protocol.validate_cow_budget(stats, c4_protocol.LIMITS if limits is None else limits, 4,
+                                        "test boundary", owners_only=owners_only)
+
+    def test_coherent_budget_and_exact_view_limit(self):
+        self.validate()
+        self.validate(dict(self.values, views=c4_protocol.LIMITS["MaxViews"],
+                           total_bytes=1 << 20, peak_bytes=1 << 20))
+
+    def test_all_live_gauges_refuse_over_their_applicable_caps(self):
+        bounds = {"views": "MaxViews", "generations": "MaxGenerations",
+                  "sources": "MaxSources", "frozen_roots": "MaxSources",
+                  "total_bytes": "MaxTotalBytes", "peak_bytes": "MaxTotalBytes",
+                  "control_bytes": "MaxTotalBytes", "history_bytes": "MaxRetiredBytes",
+                  "deferred_bytes": "MaxRetiredBytes", "retired_bytes": "MaxRetiredBytes",
+                  "reserved_bytes": "MaxInFlightBytes", "external_bytes": "MaxInFlightBytes",
+                  "external_leases": "MaxInFlightBytes", "active_cuts": "MaxInFlightBytes"}
+        for name, limit in bounds.items():
+            with self.subTest(counter=name):
+                bad = dict(self.values, **{name: c4_protocol.LIMITS[limit] + 1})
+                with self.assertRaisesRegex(ValueError, "COW budget exceeded.*" + name):
+                    self.validate(bad)
+        with self.assertRaisesRegex(ValueError, "COW budget exceeded.*current_roots"):
+            self.validate(dict(self.values, current_roots=5))
+
+    def test_aggregate_history_uses_generation_count(self):
+        generation = c4_protocol.LIMITS["MaxGenerationBytes"]
+        # Several generations may legitimately retain more than one generation's cap.
+        good = dict(self.values, history_bytes=generation + 1,
+                    total_bytes=generation + 1024, peak_bytes=generation + 1024)
+        self.validate(good)
+        bad = dict(good, history_bytes=4 * generation + 1,
+                   total_bytes=4 * generation + 1024, peak_bytes=4 * generation + 1024)
+        with self.assertRaisesRegex(ValueError, "generation history budget exceeded"):
+            self.validate(bad)
+
+    def test_external_lease_count_is_not_generation_resource_slots(self):
+        self.validate(dict(self.values, external_leases=c4_protocol.LIMITS["MaxResources"] + 1,
+                           external_bytes=64 << 10, reserved_bytes=128 << 10,
+                           total_bytes=1 << 20, peak_bytes=1 << 20))
+        with self.assertRaisesRegex(ValueError, "external/reserved accounting"):
+            self.validate(dict(self.values, external_leases=129))
+        with self.assertRaisesRegex(ValueError, "cut/lease accounting"):
+            self.validate(dict(self.values, active_cuts=8))
+
+    def test_charged_components_and_retirement_remain_distinct(self):
+        for name, bad in (("peak", dict(self.values, peak_bytes=4095)),
+                          ("total", dict(self.values, total_bytes=128)),
+                          ("reserved", dict(self.values, external_bytes=257)),
+                          ("retired", dict(self.values, retired_bytes=1153))):
+            with self.subTest(accounting=name), self.assertRaises(ValueError):
+                self.validate(bad)
+        # Retired bytes include deferred cancelled resources as well as generations.
+        self.validate(dict(self.values, retired_bytes=1152))
+        retired = c4_protocol.LIMITS["MaxGenerationBytes"]
+        with self.assertRaisesRegex(ValueError, "retirement accounting"):
+            self.validate(dict(self.values, history_bytes=retired - 128,
+                               total_bytes=retired + 512, peak_bytes=retired + 512,
+                               control_bytes=0, deferred_bytes=0),
+                          limits=dict(c4_protocol.LIMITS, MaxRetiredBytes=retired))
+
+    def test_published_roots_and_global_generations_need_not_be_equal(self):
+        self.validate(dict(self.values, generations=8))  # Older pins may retain generations.
+        for bad in (dict(self.values, sources=5),
+                    dict(self.values, frozen_roots=2),
+                    dict(self.values, current_roots=4)):
+            with self.subTest(values=bad), self.assertRaisesRegex(ValueError, "generation/root accounting"):
+                self.validate(bad)
+
+    def test_layout_owner_subset_enforces_available_bounds(self):
+        owners = {key: self.values[key] for key in ("views", "active_cuts", "external_leases")}
+        self.validate(owners, owners_only=True)
+        for name, value in (("views", 257), ("active_cuts", 8),
+                            ("external_leases", c4_protocol.LIMITS["MaxInFlightBytes"] + 1)):
+            with self.subTest(counter=name), self.assertRaises(ValueError):
+                self.validate(dict(owners, **{name: value}), owners_only=True)
+
+    def test_cumulative_counters_do_not_use_live_owner_caps(self):
+        values = dict(self.values)
+        for name in c4_protocol.COW_COUNTERS:
+            if name.endswith("_total"):
+                values[name] = (1 << 64) - 1
+        self.validate(values)
+
+
 if __name__ == "__main__":
     unittest.main()

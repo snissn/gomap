@@ -244,6 +244,30 @@ def main():
                           "treedb.cache.cow.generations": str(generations),
                           "treedb.cache.cow.external_leases": str(generations + 3)})
         cases["quiescent-balanced-overflow-" + phase] = raw_mutation(overflow_owner, mode="cow_btree")
+    # Every case below damages copied genuine raw observations. They require
+    # an actual positive packet and do not synthesize new capture provenance.
+    for phase in ("opened", "seed", "epoch_1_growth", "epoch_1_joined", "pinned_checkpoint"):
+        def over_views(raw, p=phase):
+            next(b for b in raw["boundaries"] if b["phase"] == p)["stats"]["treedb.cache.cow.views"] = str(raw["limits"]["MaxViews"] + 1)
+        cases["cow-budget-views-" + phase] = raw_mutation(over_views, mode="cow_btree")
+    budget_caps = {"generations": "MaxGenerations", "sources": "MaxSources",
+                   "frozen_roots": "MaxSources", "total_bytes": "MaxTotalBytes",
+                   "peak_bytes": "MaxTotalBytes", "control_bytes": "MaxTotalBytes",
+                   "history_bytes": "MaxRetiredBytes", "retired_bytes": "MaxRetiredBytes",
+                   "deferred_bytes": "MaxRetiredBytes", "reserved_bytes": "MaxInFlightBytes",
+                   "external_bytes": "MaxInFlightBytes", "external_leases": "MaxInFlightBytes",
+                   "active_cuts": "MaxInFlightBytes"}
+    for name, limit in budget_caps.items():
+        def over_budget(raw, k=name, bound=limit):
+            raw["boundaries"][0]["stats"]["treedb.cache.cow." + k] = str(raw["limits"][bound] + 1)
+        cases["cow-budget-opened-" + name] = raw_mutation(over_budget, mode="cow_btree")
+    cases["cow-budget-opened-current_roots"] = raw_mutation(
+        lambda r:r["boundaries"][0]["stats"].update({"treedb.cache.cow.current_roots":str(r["shards"] + 1)}), mode="cow_btree")
+    for phase in ("seed_layout", "checkpoint_layout", "reopen_layout"):
+        for side in ("owners_before", "owners_after"):
+            def over_layout_views(raw, p=phase, s=side):
+                next(proof for proof in raw["layout_proofs"] if proof["phase"] == p)[s]["treedb.cache.cow.views"] = str(raw["limits"]["MaxViews"] + 1)
+            cases["cow-budget-layout-" + phase + "-" + side] = raw_mutation(over_layout_views, mode="cow_btree")
     if args.case:
         need(len(args.case)==len(set(args.case)) and set(args.case)<=set(cases),"unknown/duplicate refusal selection")
         cases={name:cases[name] for name in args.case}

@@ -277,6 +277,49 @@ RAW_FIELDS=("lifecycle_outcome","lifecycle_error","schema_version","leaf","profi
 CALL_FIELDS=("phase","operation","input","output","start_ns","completion_ns","duration_ns","outcome","error")
 COW_COUNTERS=("total_bytes","history_bytes","reserved_bytes","retired_bytes","peak_bytes","control_bytes","deferred_bytes","external_bytes","views","generations","sources","external_leases","active_cuts","current_roots","frozen_roots","capture_calls_total","prepare_calls_total","publications_total","rollovers_total","handoffs_total")
 
+def validate_cow_budget(stats, limits, shards, scope, owners_only=False):
+    # MaxViews/Generations/Sources are shared budget gauges. MaxResources is
+    # generation-local resource slots, not a global external-lease count.
+    names = ("views", "active_cuts", "external_leases") if owners_only else tuple(
+        name for name in COW_COUNTERS if not name.endswith("_total"))
+    values = {name: counter(stats.get("treedb.cache.cow." + name), scope + " " + name)
+              for name in names}
+    bounds = {"views": limits["MaxViews"],
+              # Every external lease charges its own nonempty wrapper before
+              # admission, and every active cut owns an external lease.
+              "external_leases": limits["MaxInFlightBytes"],
+              "active_cuts": limits["MaxInFlightBytes"]}
+    if not owners_only:
+        bounds.update(total_bytes=limits["MaxTotalBytes"], peak_bytes=limits["MaxTotalBytes"],
+                      control_bytes=limits["MaxTotalBytes"], history_bytes=limits["MaxRetiredBytes"],
+                      deferred_bytes=limits["MaxRetiredBytes"], retired_bytes=limits["MaxRetiredBytes"],
+                      reserved_bytes=limits["MaxInFlightBytes"], external_bytes=limits["MaxInFlightBytes"],
+                      generations=limits["MaxGenerations"], sources=limits["MaxSources"],
+                      current_roots=shards, frozen_roots=limits["MaxSources"])
+    for name, maximum in bounds.items():
+        need(values[name] <= maximum, "COW budget exceeded " + scope + " " + name)
+    need(values["active_cuts"] <= values["external_leases"],
+         "COW cut/lease accounting mismatch " + scope)
+    if owners_only:
+        return
+    need(values["external_leases"] <= values["external_bytes"] <= values["reserved_bytes"],
+         "COW external/reserved accounting mismatch " + scope)
+    need(values["peak_bytes"] >= values["total_bytes"]
+         and sum(values[name] for name in ("history_bytes", "reserved_bytes", "deferred_bytes", "control_bytes")) <= values["total_bytes"],
+         "COW total accounting mismatch " + scope)
+    need(values["history_bytes"] + values["reserved_bytes"] + values["deferred_bytes"] <= limits["MaxRetiredBytes"]
+         and values["retired_bytes"] <= values["history_bytes"] + values["deferred_bytes"],
+         "COW retirement accounting mismatch " + scope)
+    # History is aggregated across generations; MaxGenerationBytes is not an
+    # aggregate cap. Current/frozen roots refer to the published cut, while the
+    # shared budget may also retain generations through older pinned cuts.
+    need(values["history_bytes"] <= values["generations"] * limits["MaxGenerationBytes"],
+         "COW generation history budget exceeded " + scope)
+    need(values["sources"] <= values["generations"]
+         and values["frozen_roots"] <= values["sources"]
+         and values["current_roots"] + values["frozen_roots"] <= values["generations"],
+         "COW generation/root accounting mismatch " + scope)
+
 def validate_raw(r,case,epochs):
     exact(r,RAW_FIELDS,"raw lifecycle")
     need(type(r["schema_version"]) is int and r["schema_version"]==2 and r["lifecycle_outcome"]=="success" and r["lifecycle_error"]=="","failed lifecycle")
@@ -316,6 +359,8 @@ def validate_raw(r,case,epochs):
         for side in ("owners_before","owners_after"):
             exact(proof[side],LAYOUT_OWNER_KEYS if mode=="cow_btree" else (),"representation owner census")
             for k,value in proof[side].items():counter(value,"representation owner counter "+k)
+            if mode=="cow_btree":
+                validate_cow_budget(proof[side], r["limits"], r["shards"], phase + " " + side, owners_only=True)
         need(proof["owners_before"]==proof["owners_after"],"representation diagnostic owner leak")
     overlap=0
     for epoch in range(1,epochs+1):
@@ -340,6 +385,8 @@ def validate_raw(r,case,epochs):
         for k in required:
             value=counter(stats.get(k),"required counter "+k)
             if k.endswith("_total") and k in previous:need(value>=int(previous[k]),"counter regression "+k)
+        if mode=="cow_btree":
+            validate_cow_budget(stats, r["limits"], r["shards"], boundary["phase"])
         need(stats.get("treedb.profile.resolved")==case["profile"] and stats.get("treedb.cache.memtable_mode")==mode and stats.get("treedb.profile.ordinary_ack_class")==ACK[case["profile"]],"resolved boundary profile/mode/ACK mismatch")
         route=ACK_ROUTE if case["profile"]!="no_wal_fast" else dict(ACK_ROUTE, **{"treedb.command_wal.enabled":"false","treedb.cache.command_wal.external_durability":"false","treedb.cache.redo_log.mode":"disabled_unsafe"})
         need(all(stats.get(k)==v for k,v in route.items()),"actual WAL/redo routing mismatch")
