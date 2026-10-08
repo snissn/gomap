@@ -1,0 +1,7 @@
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup
+    durable_root_bench_test.go:646: actual retained/residual cohort: map[closed-governor-bytes:0 drained-gc-deleted-files:0 held-cohort-bytes:1632 held-cohort-files:2 held-gc-deleted-files:0 held-governor-bytes:291008 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:21533 scope-after-reader-governor-bytes:279040 scope-complete-governor-bytes:268832]
+--- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup (0.01s)
+=== RUN   TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests
+--- PASS: TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.019s

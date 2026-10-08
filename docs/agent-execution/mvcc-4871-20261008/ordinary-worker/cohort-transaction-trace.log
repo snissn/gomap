@@ -1,0 +1,31 @@
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup
+TXTRACE new=0x1b0556210400 owner=0x1b05562720d0 charge=2560 root={PageID:5764607523034234882 Incarnation:1}
+TXTRACE bind=0x1b0556210400 sequence=2 charge=5152
+TXTRACE promote=0x1b0556210400 sequence=2 charge=22560
+TXTRACE transfer=0x1b0556210400 sequence=2 charge=6176
+TXTRACE finish=0x1b0556210400 sequence=2 refund=6176
+    durable_root_bench_test.go:639: original metadata owner=0x1b05562720d0
+TXTRACE new=0x1b0556210a00 owner=0x1b05562720d0 charge=2560 root={PageID:5764607523034234884 Incarnation:1}
+TXTRACE bind=0x1b0556210a00 sequence=3 charge=5152
+TXTRACE promote=0x1b0556210a00 sequence=3 charge=22560
+TXTRACE transfer=0x1b0556210a00 sequence=3 charge=6176
+TXTRACE finish=0x1b0556210a00 sequence=3 refund=6176
+TXTRACE new=0x1b0556211000 owner=0x1b05562720d0 charge=2560 root={PageID:5764607523034234886 Incarnation:1}
+TXTRACE bind=0x1b0556211000 sequence=4 charge=5152
+TXTRACE promote=0x1b0556211000 sequence=4 charge=22560
+TXTRACE transfer=0x1b0556211000 sequence=4 charge=6176
+TXTRACE finish=0x1b0556211000 sequence=4 refund=6176
+TXTRACE new=0x1b0556211400 owner=0x1b05562720d0 charge=2560 root={PageID:5764607523034234888 Incarnation:1}
+TXTRACE bind=0x1b0556211400 sequence=5 charge=5152
+TXTRACE promote=0x1b0556211400 sequence=5 charge=22560
+TXTRACE transfer=0x1b0556211400 sequence=5 charge=6176
+TXTRACE finish=0x1b0556211400 sequence=5 refund=6176
+    durable_root_bench_test.go:639: before Close original generation refs=0 ghosts=1
+    durable_root_bench_test.go:639: actual DB Close=<nil>
+    durable_root_bench_test.go:639: after Close original generation refs=0 ghosts=0 stats={TotalBytes:42816 HistoryBytes:0 ReservedBytes:42560 RetiredBytes:0 PeakBytes:343520 ControlBytes:256 DeferredBytes:0 ExternalBytes:42560 Views:0 Generations:0 Sources:0 ExternalLeases:1} oldArenaBytes=42528 closed=true ownerRefs=0 cleanup=<nil>
+    durable_root_bench_test.go:639: completed cohort retained temporary governor: stats={TotalBytes:42816 HistoryBytes:0 ReservedBytes:42560 RetiredBytes:0 PeakBytes:343520 ControlBytes:256 DeferredBytes:0 ExternalBytes:42560 Views:0 Generations:0 Sources:0 ExternalLeases:1} oldArenaBytes=42528 oldArenaClosed=true ownerRefs=0 cleanup=<nil> cost=map[drained-governor-bytes:269696 held-cohort-bytes:1632 held-cohort-files:2 held-gc-deleted-files:0 held-governor-bytes:291872 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:22895 scope-after-reader-governor-bytes:279904]
+    durable_root_bench_test.go:435: cohort final cleanup retained temporary governor
+--- FAIL: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.015s
+FAIL

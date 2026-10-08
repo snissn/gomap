@@ -1,0 +1,1474 @@
+--- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters (0.01s)
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_cached_command_wal/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_cached_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_cached_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_cached_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_cached_command_wal
+            
+            ```text
+            Test  treedb_public_command_wal
+            ----  -------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_cached_command_wal
+            
+            ```text
+            Test  treedb_public_command_wal
+            ----  -------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_cached_command_wal
+            
+            ```text
+            Test  treedb_public_command_wal
+            ----  -------------------------
+            ```
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_command_wal/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_command_wal
+            
+            ```text
+            Test  treedb_backend_command_wal
+            ----  --------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_command_wal
+            
+            ```text
+            Test  treedb_backend_command_wal
+            ----  --------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_command_wal
+            
+            ```text
+            Test  treedb_backend_command_wal
+            ----  --------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_command_wal
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_off/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_off
+            
+            ```text
+            Test  treedb_vlog_dict_off
+            ----  --------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_off
+            
+            ```text
+            Test  treedb_vlog_dict_off
+            ----  --------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_off
+            
+            ```text
+            Test  treedb_vlog_dict_off
+            ----  --------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_off
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_off
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_off
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on_level_better/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_better
+            ----  --------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_better
+            ----  --------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_better
+            ----  --------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_bench_unsafe/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_bench_unsafe
+            
+            ```text
+            Test  treedb_bench_unsafe
+            ----  -------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_bench_unsafe
+            
+            ```text
+            Test  treedb_bench_unsafe
+            ----  -------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_bench_unsafe
+            
+            ```text
+            Test  treedb_bench_unsafe
+            ----  -------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_bench_unsafe
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_bench_unsafe
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_bench_unsafe
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_block_zstd/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_zstd
+            
+            ```text
+            Test  treedb_vlog_block_zstd
+            ----  ----------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_zstd
+            
+            ```text
+            Test  treedb_vlog_block_zstd
+            ----  ----------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_zstd
+            
+            ```text
+            Test  treedb_vlog_block_zstd
+            ----  ----------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_zstd
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_zstd
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_zstd
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on_level_default/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_default
+            ----  ---------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_default
+            ----  ---------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_default
+            ----  ---------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on_level_best/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_best
+            ----  ------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_best
+            ----  ------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_best
+            ----  ------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on_level_best_entropy/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_best_entropy
+            ----  --------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_best_entropy
+            ----  --------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_best_entropy
+            ----  --------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_best_entropy
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_block_snappy/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_snappy
+            
+            ```text
+            Test  treedb_vlog_block_snappy
+            ----  ------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_snappy
+            
+            ```text
+            Test  treedb_vlog_block_snappy
+            ----  ------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_snappy
+            
+            ```text
+            Test  treedb_vlog_block_snappy
+            ----  ------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_snappy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_snappy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_snappy
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on_level_default_entropy/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_default_entropy
+            ----  -----------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_default_entropy
+            ----  -----------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_default_entropy
+            ----  -----------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_default_entropy
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_auto/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_auto
+            
+            ```text
+            Test  treedb_vlog_auto
+            ----  ----------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_auto
+            
+            ```text
+            Test  treedb_vlog_auto
+            ----  ----------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_auto
+            
+            ```text
+            Test  treedb_vlog_auto
+            ----  ----------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_auto
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_auto
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_auto
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_public_command_wal/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_public_command_wal
+            
+            ```text
+            Test  treedb_public_command_wal
+            ----  -------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_public_command_wal
+            
+            ```text
+            Test  treedb_public_command_wal
+            ----  -------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_public_command_wal
+            
+            ```text
+            Test  treedb_public_command_wal
+            ----  -------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_public_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_public_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_public_command_wal
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_block_lz4/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_lz4
+            
+            ```text
+            Test  treedb_vlog_block_lz4
+            ----  ---------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_lz4
+            
+            ```text
+            Test  treedb_vlog_block_lz4
+            ----  ---------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_lz4
+            
+            ```text
+            Test  treedb_vlog_block_lz4
+            ----  ---------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_lz4
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_lz4
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_block_lz4
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_backend/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend
+            
+            ```text
+            Test  treedb_backend
+            ----  --------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend
+            
+            ```text
+            Test  treedb_backend
+            ----  --------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend
+            
+            ```text
+            Test  treedb_backend
+            ----  --------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on
+            
+            ```text
+            Test  treedb_vlog_dict_on
+            ----  -------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on
+            
+            ```text
+            Test  treedb_vlog_dict_on
+            ----  -------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on
+            
+            ```text
+            Test  treedb_vlog_dict_on
+            ----  -------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on_entropy/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_entropy
+            ----  ---------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_entropy
+            ----  ---------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_entropy
+            ----  ---------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_entropy
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict
+            
+            ```text
+            Test  treedb_vlog_dict
+            ----  ----------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict
+            
+            ```text
+            Test  treedb_vlog_dict
+            ----  ----------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict
+            
+            ```text
+            Test  treedb_vlog_dict
+            ----  ----------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_dict_on_level_better_entropy/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_better_entropy
+            ----  ----------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_better_entropy
+            ----  ----------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better_entropy
+            
+            ```text
+            Test  treedb_vlog_dict_on_level_better_entropy
+            ----  ----------------------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better_entropy
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_dict_on_level_better_entropy
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_backend_command_wal/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend_command_wal
+            
+            ```text
+            Test  treedb_backend_command_wal
+            ----  --------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend_command_wal
+            
+            ```text
+            Test  treedb_backend_command_wal
+            ----  --------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend_command_wal
+            
+            ```text
+            Test  treedb_backend_command_wal
+            ----  --------------------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend_command_wal
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_backend_command_wal
+            
+    --- FAIL: TestTreeDBPrimaryDirectoryReportsHiddenAdapters/treedb_vlog_off/false (0.00s)
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_requested=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_supported=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: banner report contains "index_primary_directory_configured_enabled=false"=false; output=
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_requested=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_off
+            
+            ```text
+            Test  treedb_vlog_off
+            ----  ---------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_supported=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_off
+            
+            ```text
+            Test  treedb_vlog_off
+            ----  ---------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: single report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_off
+            
+            ```text
+            Test  treedb_vlog_off
+            ----  ---------------
+            ```
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_requested=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_off
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_supported=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_off
+            
+        adapter_treedb_primary_directory_test.go:218: sweep report contains "index_primary_directory_configured_enabled=false"=false; output=# unified_bench sweep
+            
+            - keys: 0
+            - valsize: 0
+            - batchsize: 0
+            - range-queries: 0
+            - range-span: 0
+            - dbs: treedb_vlog_off
+            
+FAIL
+FAIL	github.com/snissn/gomap/cmd/unified_bench	0.020s
+FAIL

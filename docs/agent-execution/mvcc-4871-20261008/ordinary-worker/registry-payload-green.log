@@ -1,0 +1,12 @@
+=== RUN   TestRegistryKeyPayloadRefusalPreservesBacking
+--- PASS: TestRegistryKeyPayloadRefusalPreservesBacking (0.00s)
+=== RUN   TestRegistryCapacityOverlapRefusalAndPhysicalAliases
+--- PASS: TestRegistryCapacityOverlapRefusalAndPhysicalAliases (0.00s)
+=== RUN   TestRegistryTerminalCloseWaitsExactPin
+--- PASS: TestRegistryTerminalCloseWaitsExactPin (0.00s)
+=== RUN   TestRegistryNamespaceCapacityFailurePreservesExistingProof
+--- PASS: TestRegistryNamespaceCapacityFailurePreservesExistingProof (0.00s)
+=== RUN   TestRegistryRepeatedIdentityChurnKeepsFiniteBacking
+--- PASS: TestRegistryRepeatedIdentityChurnKeepsFiniteBacking (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.007s

@@ -1,0 +1,298 @@
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup
+ALLOCTRACE new=0x2634fd7be420 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd7be438 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd7be450 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd7be420 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd7be468 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE refund=0x2634fd7be468 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE refund=0x2634fd7be450 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd7be438 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE new=0x2634fd69c060 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69c078 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69c090 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c060 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c0a8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69c0c0 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69c0d8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c0a8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c0f0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69c108 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69c120 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69c138 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c138 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c180 owner=0x2634fd8720d0 charge=192 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69c198 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_rid_allocation.go:27
+ALLOCTRACE new=0x2634fd69c1b0 owner=0x2634fd8720d0 charge=1280 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69c1c8 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE refund=0x2634fd69c198 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE new=0x2634fd69c1e0 owner=0x2634fd8720d0 charge=576 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_entry_allocation.go:30
+ALLOCTRACE new=0x2634fd69c1f8 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go:70
+ALLOCTRACE new=0x2634fd69c210 owner=0x2634fd8720d0 charge=144 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_field_allocation.go:349
+ALLOCTRACE new=0x2634fd69c228 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_logical_allocation.go:15
+ALLOCTRACE new=0x2634fd69c240 owner=0x2634fd8720d0 charge=176 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_physical_allocation.go:23
+ALLOCTRACE new=0x2634fd69c258 owner=0x2634fd8720d0 charge=144 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_field_allocation.go:65
+ALLOCTRACE new=0x2634fd69c270 owner=0x2634fd8720d0 charge=208 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69c288 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_rid_allocation.go:27
+ALLOCTRACE new=0x2634fd69c2a0 owner=0x2634fd8720d0 charge=1280 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69c2b8 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE refund=0x2634fd69c288 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE new=0x2634fd69c2d0 owner=0x2634fd8720d0 charge=576 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_entry_allocation.go:30
+ALLOCTRACE new=0x2634fd69c2e8 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go:70
+ALLOCTRACE new=0x2634fd69c300 owner=0x2634fd8720d0 charge=144 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_field_allocation.go:349
+ALLOCTRACE new=0x2634fd69c318 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_logical_allocation.go:15
+ALLOCTRACE new=0x2634fd69c330 owner=0x2634fd8720d0 charge=176 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_physical_allocation.go:23
+ALLOCTRACE new=0x2634fd69c348 owner=0x2634fd8720d0 charge=144 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_field_allocation.go:65
+ALLOCTRACE new=0x2634fd69c360 owner=0x2634fd8720d0 charge=208 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69c378 owner=0x2634fd8720d0 charge=336 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_merge_allocation.go:76
+ALLOCTRACE new=0x2634fd69c390 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_logical_allocation.go:15
+ALLOCTRACE new=0x2634fd69c3a8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_logical_allocation.go:15
+ALLOCTRACE new=0x2634fd69c3c0 owner=0x2634fd8720d0 charge=176 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_physical_allocation.go:23
+ALLOCTRACE new=0x2634fd69c3d8 owner=0x2634fd8720d0 charge=176 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_physical_allocation.go:23
+ALLOCTRACE new=0x2634fd69c3f0 owner=0x2634fd8720d0 charge=224 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_field_allocation.go:65
+ALLOCTRACE refund=0x2634fd69c318 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c330 owner=0x2634fd8720d0 charge=176
+ALLOCTRACE refund=0x2634fd69c348 owner=0x2634fd8720d0 charge=144
+ALLOCTRACE refund=0x2634fd69c360 owner=0x2634fd8720d0 charge=208
+ALLOCTRACE refund=0x2634fd69c228 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c240 owner=0x2634fd8720d0 charge=176
+ALLOCTRACE refund=0x2634fd69c258 owner=0x2634fd8720d0 charge=144
+ALLOCTRACE refund=0x2634fd69c270 owner=0x2634fd8720d0 charge=208
+ALLOCTRACE new=0x2634fd69c408 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c180 owner=0x2634fd8720d0 charge=192
+ALLOCTRACE refund=0x2634fd69c408 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c0d8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c420 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c0f0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c0c0 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c120 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c108 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c090 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c078 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE new=0x2634fd69c438 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c480 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c498 owner=0x2634fd8720d0 charge=304 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE new=0x2634fd69c4b0 owner=0x2634fd8720d0 charge=32 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:277
+ALLOCTRACE new=0x2634fd69c4c8 owner=0x2634fd8720d0 charge=928 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:120
+ALLOCTRACE refund=0x2634fd69c4b0 owner=0x2634fd8720d0 charge=32
+ALLOCTRACE new=0x2634fd69c4e0 owner=0x2634fd8720d0 charge=32 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:277
+ALLOCTRACE new=0x2634fd69c4f8 owner=0x2634fd8720d0 charge=928 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:120
+ALLOCTRACE refund=0x2634fd69c4e0 owner=0x2634fd8720d0 charge=32
+ALLOCTRACE new=0x2634fd69c528 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69c540 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69c558 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69c570 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69c588 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69c5a0 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69c5b8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c588 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c5d0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c5b8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c570 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c558 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69c540 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c528 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69c498 owner=0x2634fd8720d0 charge=304
+ALLOCTRACE refund=0x2634fd69c420 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c648 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c660 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c648 owner=0x2634fd8720d0 charge=160
+    durable_root_bench_test.go:639: original metadata owner=0x2634fd8720d0
+ALLOCTRACE refund=0x2634fd69c660 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c6c0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c6d8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c6f0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69c708 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69c720 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c6f0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c738 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69c750 owner=0x2634fd8720d0 charge=1216 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69c7c8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69c7e0 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69c7f8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c7f8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c720 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c7e0 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE new=0x2634fd69c810 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c738 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c7c8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c750 owner=0x2634fd8720d0 charge=1216
+ALLOCTRACE refund=0x2634fd69c6d8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c828 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c828 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c840 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c438 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c888 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c8a0 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE new=0x2634fd69c8d0 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69c8e8 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69c900 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69c918 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69c930 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c948 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c930 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c918 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c900 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69c8e8 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c8d0 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69c8a0 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE refund=0x2634fd69c810 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c6c0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69c9c0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c9d8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69c9f0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69ca08 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69ca20 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c9f0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69ca38 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69ca50 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69ca68 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69ca80 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69ca80 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ca20 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69ca98 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69ca38 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ca68 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ca50 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c9d8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cab0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69cab0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cac8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69c840 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cb10 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69cb28 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE new=0x2634fd69cb58 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69cb70 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69cb88 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69cba0 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69cbb8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69cbd0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69cbb8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c480 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c5d0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c5a0 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69cba0 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69cb88 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69cb70 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69cb58 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69cb28 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE refund=0x2634fd69ca98 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c9c0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cc48 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69cc60 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69cc78 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69cc90 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_kind_allocation.go:89
+ALLOCTRACE new=0x2634fd69cca8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69cc78 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69ccc0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_builder_allocation.go:33
+ALLOCTRACE new=0x2634fd69ccd8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69ccf0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69cd08 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69cd08 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cca8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cd20 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69ccc0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ccf0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ccd8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cc60 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cd38 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69cd38 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cd50 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69cac8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69cd98 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69cdb0 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE new=0x2634fd69cde0 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69cdf8 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69ce10 owner=0x2634fd8720d0 charge=1264 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_token_allocation.go:132
+ALLOCTRACE new=0x2634fd69ce28 owner=0x2634fd8720d0 charge=64 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_obligation_allocation.go:67
+ALLOCTRACE new=0x2634fd69ce40 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69ce58 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69ce40 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c888 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c948 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ce28 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69ce10 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69cdf8 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69cde0 owner=0x2634fd8720d0 charge=1264
+ALLOCTRACE refund=0x2634fd69cdb0 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE refund=0x2634fd69cd20 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cc48 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69ce88 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69ceb8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69ced0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69cee8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69cf00 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE new=0x2634fd69d0e0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69d0f8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE refund=0x2634fd69d0f8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69d110 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69d128 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69d110 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69d0e0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69d140 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69d158 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE refund=0x2634fd69d158 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69d170 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69d188 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69d170 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69d140 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69d1a0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69d1b8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE refund=0x2634fd69d1b8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69d1d0 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_diagnostics_allocation.go:141
+ALLOCTRACE new=0x2634fd69d1e8 owner=0x2634fd8720d0 charge=160 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_set_allocation.go:15
+ALLOCTRACE refund=0x2634fd69d1d0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69d1a0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE new=0x2634fd69d218 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE new=0x2634fd69d260 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE new=0x2634fd69d2a8 owner=0x2634fd8720d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_allocation.go:262
+ALLOCTRACE new=0x2634fd69d320 owner=0x2634fde5c0d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_load.go:41
+ALLOCTRACE refund=0x2634fd69d320 owner=0x2634fde5c0d0 charge=304
+ALLOCTRACE new=0x2634fd69d350 owner=0x2634fde5c0d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_load.go:41
+ALLOCTRACE refund=0x2634fd69d350 owner=0x2634fde5c0d0 charge=304
+ALLOCTRACE new=0x2634fd69d380 owner=0x2634fde5c0d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_load.go:41
+ALLOCTRACE refund=0x2634fd69d380 owner=0x2634fde5c0d0 charge=304
+ALLOCTRACE new=0x2634fd69d3b0 owner=0x2634fde5c0d0 charge=288 at=/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/rootpublication/resource_manifest_load.go:41
+ALLOCTRACE refund=0x2634fd69d3b0 owner=0x2634fde5c0d0 charge=304
+ALLOCTRACE refund=0x2634fd69d1e8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69d188 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cd98 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cb10 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ce58 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cbd0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cd50 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69d128 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ce88 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ceb8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cc90 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69ced0 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69cee8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69ca08 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69cf00 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c708 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c3a8 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c390 owner=0x2634fd8720d0 charge=160
+ALLOCTRACE refund=0x2634fd69c3d8 owner=0x2634fd8720d0 charge=176
+ALLOCTRACE refund=0x2634fd69c3c0 owner=0x2634fd8720d0 charge=176
+ALLOCTRACE refund=0x2634fd69c3f0 owner=0x2634fd8720d0 charge=224
+ALLOCTRACE refund=0x2634fd69c300 owner=0x2634fd8720d0 charge=144
+ALLOCTRACE refund=0x2634fd69c4f8 owner=0x2634fd8720d0 charge=928
+ALLOCTRACE refund=0x2634fd69c2e8 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE refund=0x2634fd69c2b8 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c2a0 owner=0x2634fd8720d0 charge=1280
+ALLOCTRACE refund=0x2634fd69c2d0 owner=0x2634fd8720d0 charge=576
+ALLOCTRACE refund=0x2634fd69c210 owner=0x2634fd8720d0 charge=144
+ALLOCTRACE refund=0x2634fd69c4c8 owner=0x2634fd8720d0 charge=928
+ALLOCTRACE refund=0x2634fd69c1f8 owner=0x2634fd8720d0 charge=288
+ALLOCTRACE refund=0x2634fd69c1c8 owner=0x2634fd8720d0 charge=64
+ALLOCTRACE refund=0x2634fd69c1b0 owner=0x2634fd8720d0 charge=1280
+ALLOCTRACE refund=0x2634fd69c1e0 owner=0x2634fd8720d0 charge=576
+ALLOCTRACE refund=0x2634fd69c378 owner=0x2634fd8720d0 charge=336
+    durable_root_bench_test.go:639: before Close original generation refs=0 ghosts=1
+    durable_root_bench_test.go:639: actual DB Close=<nil>
+    durable_root_bench_test.go:639: after Close original generation refs=0 ghosts=0 stats={TotalBytes:42816 HistoryBytes:0 ReservedBytes:42560 RetiredBytes:0 PeakBytes:343520 ControlBytes:256 DeferredBytes:0 ExternalBytes:42560 Views:0 Generations:0 Sources:0 ExternalLeases:1} oldArenaBytes=42528 closed=true ownerRefs=0 cleanup=<nil>
+    durable_root_bench_test.go:639: completed cohort retained temporary governor: stats={TotalBytes:42816 HistoryBytes:0 ReservedBytes:42560 RetiredBytes:0 PeakBytes:343520 ControlBytes:256 DeferredBytes:0 ExternalBytes:42560 Views:0 Generations:0 Sources:0 ExternalLeases:1} oldArenaBytes=42528 oldArenaClosed=true ownerRefs=0 cleanup=<nil> cost=map[drained-governor-bytes:269696 held-cohort-bytes:1632 held-cohort-files:2 held-gc-deleted-files:0 held-governor-bytes:291872 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:22715 scope-after-reader-governor-bytes:279904]
+    durable_root_bench_test.go:435: cohort final cleanup retained temporary governor
+--- FAIL: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.016s
+FAIL

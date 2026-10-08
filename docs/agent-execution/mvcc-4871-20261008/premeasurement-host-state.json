@@ -1,0 +1,94 @@
+{
+  "self_cgroup": "0::/\n",
+  "cgroup_pids": [
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "1",
+    "2",
+    "5"
+  ],
+  "processes": [
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "0",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/0/cmdline'"
+    },
+    {
+      "pid": "1",
+      "cmd": "/usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisord.conf "
+    },
+    {
+      "pid": "2",
+      "unavailable": "[Errno 2] No such file or directory: '/proc/2/cmdline'"
+    },
+    {
+      "pid": "5",
+      "cmd": "/bin/bash /usr/local/scripts/sync_share.sh "
+    }
+  ],
+  "cpu.max": "800000 100000\n",
+  "cpuset.cpus.effective": "0-8\n",
+  "memory.max": "8589934592\n",
+  "memory.current": "5501296640\n",
+  "cpu.stat": "usage_usec 8384787065\nuser_usec 7444792398\nsystem_usec 939994666\nnice_usec 0\nnr_periods 51654\nnr_throttled 642\nthrottled_usec 27156521\nnr_bursts 0\nburst_usec 0\n",
+  "cpu.pressure": "[Errno 2] No such file or directory: '/sys/fs/cgroup/cpu.pressure'",
+  "io.pressure": "[Errno 2] No such file or directory: '/sys/fs/cgroup/io.pressure'"
+}

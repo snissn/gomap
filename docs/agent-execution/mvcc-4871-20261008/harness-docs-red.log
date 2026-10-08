@@ -1,0 +1,12 @@
+go: downloading github.com/buger/jsonparser v1.1.2
+go: downloading github.com/cespare/xxhash/v2 v2.3.0
+go: downloading github.com/tidwall/gjson v1.14.3
+go: downloading go.mongodb.org/mongo-driver/v2 v2.6.0
+go: downloading github.com/tphakala/simd v1.0.22
+go: downloading github.com/tidwall/match v1.1.1
+go: downloading github.com/tidwall/pretty v1.2.0
+--- FAIL: TestCommandWALLegacyTermsInCurrentDocsNeedContext (0.09s)
+    command_wal_docs_test.go:352: /workspace/scratch/1ecfdb811b25/harness-5118/cmd/unified_bench/README.md:80 mentions legacy profile alias without legacy/compatibility/benchmark context: ./bin/unified-bench -dbs treedb -profile fast -test write_seq,batch_write \
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/docs	0.093s
+FAIL

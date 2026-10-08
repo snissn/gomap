@@ -1,0 +1,7 @@
+{
+  "action": "launch /usr/bin/time wrapper",
+  "status": "INFRASTRUCTURE_UNAVAILABLE",
+  "reason": "/usr/bin/time does not exist",
+  "benchmarks_started": 0,
+  "fallback": "Python os.wait4 exact child rusage plus wall time"
+}

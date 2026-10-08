@@ -1,0 +1,18 @@
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded
+--- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead (0.01s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary (0.00s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded (0.01s)
+=== RUN   TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot
+--- PASS: TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot (0.00s)
+PASS
+goleak: Errors on successful test run: found unexpected goroutines:
+[Goroutine 47 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x145346bd8780)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/pager/grow.go:55 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 42
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/pager/grow.go:13 +0x116
+]
+FAIL	github.com/snissn/gomap/TreeDB/db	0.467s
+FAIL

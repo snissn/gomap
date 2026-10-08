@@ -1,0 +1,7 @@
+=== RUN   TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests
+    durable_root_bench_test.go:696: refused rebuild retained completed private manifests: metadata=44112 stats={TotalBytes:44400 HistoryBytes:0 ReservedBytes:44144 RetiredBytes:0 PeakBytes:219296 ControlBytes:256 DeferredBytes:0 ExternalBytes:44144 Views:0 Generations:0 Sources:0 ExternalLeases:1}
+    durable_root_bench_test.go:437: cohort final cleanup retained temporary governor
+--- FAIL: TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.011s
+FAIL

@@ -1,0 +1,40 @@
+=== RUN   TestReadOnlyPreparePrimaryAbsenceCoverageAndReuse
+--- PASS: TestReadOnlyPreparePrimaryAbsenceCoverageAndReuse (0.00s)
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/exact
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/ranges
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/span_width
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/generic_inexact_missing
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/overlap
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/span_gap
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/generic_inexact_gap
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/zero_root
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/cold
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/duplicate
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/gap
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/negative_count
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/negative_position
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/outside
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/unsorted
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/span_zero
+=== RUN   TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/capacity
+--- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/exact (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/ranges (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/span_width (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/generic_inexact_missing (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/overlap (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/span_gap (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/generic_inexact_gap (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/zero_root (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/cold (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/duplicate (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/gap (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/negative_count (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/negative_position (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/outside (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/unsorted (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/span_zero (0.00s)
+    --- PASS: TestReadOnlyPreparePrimaryAbsenceProofFailsClosed/capacity (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/zipper	0.005s

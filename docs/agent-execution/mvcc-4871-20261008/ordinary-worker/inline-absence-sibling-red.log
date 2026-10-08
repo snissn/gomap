@@ -1,0 +1,14 @@
+=== RUN   TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts
+=== RUN   TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/replace
+    primary_directory_test.go:52: node: invalid primary directory
+=== RUN   TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/consolidate
+    primary_directory_test.go:57: consolidation write 48: prepare visible root COW generation: cannot free page 0
+--- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts (0.08s)
+    --- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/replace (0.01s)
+    --- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/consolidate (0.07s)
+=== RUN   TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens
+    primary_leaf_pack_v5_test.go:60: leaf generation pack: rewrite leaf refs: vlog-rewrite: rewrite user leaf root: node: invalid primary directory
+--- FAIL: TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.093s
+FAIL

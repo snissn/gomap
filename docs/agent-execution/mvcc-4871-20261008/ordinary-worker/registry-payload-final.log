@@ -1,0 +1,8 @@
+=== RUN   TestRegistryKeyPayloadRefusalPreservesBacking
+=== RUN   TestRegistryKeyPayloadRefusalPreservesBacking/0
+=== RUN   TestRegistryKeyPayloadRefusalPreservesBacking/7
+--- PASS: TestRegistryKeyPayloadRefusalPreservesBacking (0.00s)
+    --- PASS: TestRegistryKeyPayloadRefusalPreservesBacking/0 (0.00s)
+    --- PASS: TestRegistryKeyPayloadRefusalPreservesBacking/7 (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.002s

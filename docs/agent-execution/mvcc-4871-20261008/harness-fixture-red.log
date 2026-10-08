@@ -1,0 +1,184 @@
+EE.EFEEEEE.FEEE
+======================================================================
+ERROR: test_coordinated_matrix_metadata_and_members_cannot_pass_source_check (__main__.RefreshSnapshotContract.test_coordinated_matrix_metadata_and_members_cannot_pass_source_check)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 286, in test_coordinated_matrix_metadata_and_members_cannot_pass_source_check
+    original = self.refresh()
+               ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_impact_shadow_is_excluded_only_from_treedb_control_workflow (__main__.RefreshSnapshotContract.test_impact_shadow_is_excluded_only_from_treedb_control_workflow)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 320, in test_impact_shadow_is_excluded_only_from_treedb_control_workflow
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_partially_staged_harness_bindings_use_same_snapshot (__main__.RefreshSnapshotContract.test_partially_staged_harness_bindings_use_same_snapshot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 218, in test_partially_staged_harness_bindings_use_same_snapshot
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_partially_staged_source_and_workflow_use_index_bytes (__main__.RefreshSnapshotContract.test_partially_staged_source_and_workflow_use_index_bytes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 166, in test_partially_staged_source_and_workflow_use_index_bytes
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_partially_staged_source_uses_index_bytes (__main__.RefreshSnapshotContract.test_partially_staged_source_uses_index_bytes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 153, in test_partially_staged_source_uses_index_bytes
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_refresh_upgrades_blob_only_policy_and_restores_later_docs_qualification (__main__.RefreshSnapshotContract.test_refresh_upgrades_blob_only_policy_and_restores_later_docs_qualification)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/ci_impact.py", line 127, in git
+    return subprocess.check_output(['git', '-C', str(repo), *args], stderr=subprocess.PIPE,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 466, in check_output
+    return run(*popenargs, stdout=PIPE, timeout=timeout, check=True,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['git', '-C', '/tmp/tmp9f638kz_', 'rev-parse', ':scripts/cow_c3_read/collect.py']' returned non-zero exit status 128.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 252, in test_refresh_upgrades_blob_only_policy_and_restores_later_docs_qualification
+    policy['harness_inputs'] = {p: self.git('rev-parse', ':' + p) for p in policy['harness_inputs']}
+                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 44, in git
+    return ci_impact.git(self.repo, *args).decode().strip()
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/ci_impact.py", line 130, in git
+    raise ContractError('git-discovery-error') from error
+ci_impact.ContractError: git-discovery-error
+
+======================================================================
+ERROR: test_staged_harness_chmod_ignores_worktree_permissions (__main__.RefreshSnapshotContract.test_staged_harness_chmod_ignores_worktree_permissions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 237, in test_staged_harness_chmod_ignores_worktree_permissions
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_staged_source_and_workflow_additions_and_deletions (__main__.RefreshSnapshotContract.test_staged_source_and_workflow_additions_and_deletions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 186, in test_staged_source_and_workflow_additions_and_deletions
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_unstaged_workflow_deletion_does_not_change_snapshot (__main__.RefreshSnapshotContract.test_unstaged_workflow_deletion_does_not_change_snapshot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 197, in test_unstaged_workflow_deletion_does_not_change_snapshot
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_untracked_sources_do_not_enter_snapshot (__main__.RefreshSnapshotContract.test_untracked_sources_do_not_enter_snapshot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 138, in test_untracked_sources_do_not_enter_snapshot
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+ERROR: test_untracked_workflows_do_not_enter_snapshot (__main__.RefreshSnapshotContract.test_untracked_workflows_do_not_enter_snapshot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 145, in test_untracked_workflows_do_not_enter_snapshot
+    policy = self.refresh()
+             ^^^^^^^^^^^^^^
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 53, in refresh
+    refresh_ci_impact_inventory.refresh(self.repo)
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/refresh_ci_impact_inventory.py", line 111, in refresh
+    raise ci_impact.ContractError('missing-harness-input')
+ci_impact.ContractError: missing-harness-input
+
+======================================================================
+FAIL: test_partially_staged_maintenance_algorithms_require_matching_executing_bytes (__main__.RefreshSnapshotContract.test_partially_staged_maintenance_algorithms_require_matching_executing_bytes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 107, in test_partially_staged_maintenance_algorithms_require_matching_executing_bytes
+    self.prepare_cli_policy()
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 62, in prepare_cli_policy
+    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+AssertionError: 2 != 0 : Inventory error; manifest not written: missing-harness-input
+
+
+======================================================================
+FAIL: test_unstaged_helper_and_generator_algorithms_reject_both_cli_commands (__main__.RefreshSnapshotContract.test_unstaged_helper_and_generator_algorithms_reject_both_cli_commands)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 76, in test_unstaged_helper_and_generator_algorithms_reject_both_cli_commands
+    self.prepare_cli_policy()
+  File "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/test_refresh_ci_impact_inventory.py", line 62, in prepare_cli_policy
+    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+AssertionError: 2 != 0 : Inventory error; manifest not written: missing-harness-input
+
+
+----------------------------------------------------------------------
+Ran 15 tests in 3.651s
+
+FAILED (failures=2, errors=11)

@@ -1,0 +1,4 @@
+=== RUN   TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow
+--- PASS: TestPrimaryRuntimeBackingGrowthScrubsOldAliasesAndRefusesOverflow (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.005s

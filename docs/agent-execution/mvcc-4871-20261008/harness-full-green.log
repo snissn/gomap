@@ -1,0 +1,521 @@
+--- FAIL: TestIntegration_NoHangLargeKeys (0.11s)
+    integration_test.go:22: failed to build unified-bench: exit status 1
+--- FAIL: TestIntegration_ProfileDir_AutoRunsBenchprof (0.12s)
+    integration_test.go:83: failed to build unified-bench: exit status 1
+       Test         TreeDB
+-----------  -------------
+Random Read              -
+  Full Scan              -
+Prefix Scan              -
+Random Read / TreeDB = 2,331,924
+Full Scan / TreeDB = 5,741,715
+Prefix Scan / TreeDB = 3,832,130
+       Test   ScanViewOnly
+-----------  -------------
+  Full Scan              -
+Prefix Scan              -
+Full Scan / ScanViewOnly = 6,812,134
+Prefix Scan / ScanViewOnly = 1,694,245
+               Test         TreeDB        LevelDB
+-------------------  -------------  -------------
+   Sequential Write              -              -
+Random Read (Batch)              -              -
+Sequential Write / TreeDB = 374,400
+Sequential Write / LevelDB = 626,052
+Random Read (Batch) / TreeDB = 1,949,688
+Random Read (Batch) / LevelDB = 1,479,301
+                Test         TreeDB
+--------------------  -------------
+Batch Write (Steady)              -
+Batch Write (Steady) / TreeDB = 374,397
+                Test  BatchWriteSteadyProfileTimedSpan
+--------------------  --------------------------------
+Batch Write (Steady)                                 -
+Batch Write (Steady) / BatchWriteSteadyProfileTimedSpan = 2,632,986
+                        Test  BatchDeleteRangeMemory
+----------------------------  ----------------------
+Batch DeleteRange (ranges/s)                       -
+Batch DeleteRange (ranges/s) / BatchDeleteRangeMemory = 458,033
+                        Test  BatchDeleteRangeAfterRead
+----------------------------  -------------------------
+                 Random Read                          -
+Batch DeleteRange (ranges/s)                          -
+Random Read / BatchDeleteRangeAfterRead = 14,460,009
+Batch DeleteRange (ranges/s) / BatchDeleteRangeAfterRead = 333,806
+                        Test  BatchWithoutRange
+----------------------------  -----------------
+Batch DeleteRange (ranges/s)                  -
+Batch DeleteRange (ranges/s) / BatchWithoutRange = -
+                        Test         TreeDB         Pebble        LevelDB
+----------------------------  -------------  -------------  -------------
+Batch DeleteRange (ranges/s)              -              -              -
+Batch DeleteRange (ranges/s) / TreeDB = 46,829
+Batch DeleteRange (ranges/s) / Pebble = 1,712,329
+Batch DeleteRange (ranges/s) / LevelDB = 77,003
+                        Test  BatchDeleteRangeNoop
+----------------------------  --------------------
+Batch DeleteRange (ranges/s)                     -
+                        Test  BatchDeleteRangeReporting
+----------------------------  -------------------------
+Batch DeleteRange (ranges/s)                          -
+Batch DeleteRange (ranges/s) / BatchDeleteRangeReporting = 751,456
+                        Test  GethHotKVArtifactsMemory
+----------------------------  ------------------------
+            Sequential Write                         -
+                 Random Read                         -
+                   Full Scan                         -
+Batch DeleteRange (ranges/s)                         -
+Sequential Write / GethHotKVArtifactsMemory = 4,389,575
+Random Read / GethHotKVArtifactsMemory = 10,796,221
+Full Scan / GethHotKVArtifactsMemory = 4,203,889
+Batch DeleteRange (ranges/s) / GethHotKVArtifactsMemory = 1,272,265
+wrote markdown: /tmp/TestRunGethHotKVSuiteWritesBenchprofArtifacts2734865521/001/insights.md
+wrote json:     /tmp/TestRunGethHotKVSuiteWritesBenchprofArtifacts2734865521/001/insights.json
+wrote html:     /tmp/TestRunGethHotKVSuiteWritesBenchprofArtifacts2734865521/001/insights.html
+                        Test  BatchDeleteRangeProfileExcludesPreload
+----------------------------  --------------------------------------
+Batch DeleteRange (ranges/s)                                       -
+Batch DeleteRange (ranges/s) / BatchDeleteRangeProfileExcludesPreload = 732,131
+               Test  ReadBatchSentinel
+-------------------  -----------------
+Random Read (Batch)                  -
+Random Read (Batch) / ReadBatchSentinel = 44,920,161
+               Test  PreferGetMany
+-------------------  -------------
+Random Read (Batch)              -
+Random Read (Batch) / PreferGetMany = 51,845,875
+               Test  PreferGetManyView
+-------------------  -----------------
+Random Read (Batch)                  -
+Random Read (Batch) / PreferGetManyView = 45,583,540
+               Test  ErrGetManyView
+-------------------  --------------
+Random Read (Batch)               -
+               Test     ErrGetMany
+-------------------  -------------
+Random Read (Batch)              -
+               Test         ErrGet
+-------------------  -------------
+Random Read (Batch)              -
+                  Test         TreeDB        LevelDB
+----------------------  -------------  -------------
+      Sequential Write              -              -
+Random Read (Parallel)              -              -
+Sequential Write / TreeDB = 370,050
+Sequential Write / LevelDB = 775,019
+Random Read (Parallel) / TreeDB = 10,855,288
+Random Read (Parallel) / LevelDB = 2,597,449
+                                    Test         TreeDB
+----------------------------------------  -------------
+                        Sequential Write              -
+Random Read (Parallel, Snapshot Per Key)              -
+Sequential Write / TreeDB = 336,099
+Random Read (Parallel, Snapshot Per Key) / TreeDB = 806,049
+                                    Test  SnapshotCounter
+----------------------------------------  ---------------
+                        Sequential Write                -
+Random Read (Parallel, Snapshot Per Key)                -
+Sequential Write / SnapshotCounter = 165,428,110
+Random Read (Parallel, Snapshot Per Key) / SnapshotCounter = 4,855,036
+                                    Test         TreeDB
+----------------------------------------  -------------
+                        Sequential Write              -
+Random Read (Parallel, Snapshot Per Key)              -
+Sequential Write / TreeDB = 341,915
+Random Read (Parallel, Snapshot Per Key) / TreeDB = 721,940
+                                    Test         TreeDB        LevelDB
+----------------------------------------  -------------  -------------
+                        Sequential Write              -              -
+                            Random Write              -              -
+                  Dataset Write (Random)              -              -
+                  Dataset Write (Sorted)              -              -
+                             Batch Write              -              -
+                    Batch Write (Steady)              -              -
+                            Batch Random              -              -
+                            Batch Delete              -              -
+                         Batch Small Seq              -              -
+                           Random Delete              -              -
+                             Random Read              -              -
+                  Random Read (Parallel)              -              -
+Random Read (Parallel, Snapshot Per Key)              -              -
+                     Random Read (Batch)              -              -
+                               Full Scan              -              -
+                             Prefix Scan              -              -
+Sequential Write / TreeDB = 341,067
+Sequential Write / LevelDB = 700,629
+Random Write / TreeDB = 357,735
+Random Write / LevelDB = 585,468
+Dataset Write (Random) / TreeDB = 220,426
+Dataset Write (Random) / LevelDB = 588,300
+Dataset Write (Sorted) / TreeDB = 310,589
+Dataset Write (Sorted) / LevelDB = 650,972
+Batch Write / TreeDB = 1,704,100
+Batch Write / LevelDB = 2,533,772
+Batch Write (Steady) / TreeDB = 174,101
+Batch Write (Steady) / LevelDB = 39,065
+Batch Random / TreeDB = 1,441,270
+Batch Random / LevelDB = 2,147,116
+Batch Delete / TreeDB = 1,142,983
+Batch Delete / LevelDB = 1,681,458
+Batch Small Seq / TreeDB = 1,739,578
+Batch Small Seq / LevelDB = 1,709,776
+Random Delete / TreeDB = 327,429
+Random Delete / LevelDB = 424,610
+Random Read / TreeDB = 1,769,451
+Random Read / LevelDB = 1,042,933
+Random Read (Parallel) / TreeDB = 2,583,834
+Random Read (Parallel) / LevelDB = 994,483
+Random Read (Parallel, Snapshot Per Key) / TreeDB = 687,331
+Random Read (Parallel, Snapshot Per Key) / LevelDB = 752,092
+Random Read (Batch) / TreeDB = 1,950,354
+Random Read (Batch) / LevelDB = 1,845,131
+Full Scan / TreeDB = 3,677,232
+Full Scan / LevelDB = 4,403,849
+Prefix Scan / TreeDB = 536,426
+Prefix Scan / LevelDB = 198,910
+                                    Test  AllPlusBatchDeleteRange
+----------------------------------------  -----------------------
+                        Sequential Write                        -
+                            Random Write                        -
+                  Dataset Write (Random)                        -
+                  Dataset Write (Sorted)                        -
+                             Batch Write                        -
+                    Batch Write (Steady)                        -
+                            Batch Random                        -
+                            Batch Delete                        -
+                         Batch Small Seq                        -
+                           Random Delete                        -
+                             Random Read                        -
+                  Random Read (Parallel)                        -
+Random Read (Parallel, Snapshot Per Key)                        -
+                     Random Read (Batch)                        -
+                               Full Scan                        -
+                             Prefix Scan                        -
+            Batch DeleteRange (ranges/s)                        -
+Sequential Write / AllPlusBatchDeleteRange = 4,819,277
+Random Write / AllPlusBatchDeleteRange = 6,174,030
+Dataset Write (Random) / AllPlusBatchDeleteRange = 14,456,743
+Dataset Write (Sorted) / AllPlusBatchDeleteRange = 5,039,767
+Batch Write / AllPlusBatchDeleteRange = 4,600,676
+Batch Write (Steady) / AllPlusBatchDeleteRange = 7,396,279
+Batch Random / AllPlusBatchDeleteRange = 6,726,222
+Batch Delete / AllPlusBatchDeleteRange = 10,274,522
+Batch Small Seq / AllPlusBatchDeleteRange = 6,133,206
+Random Delete / AllPlusBatchDeleteRange = 22,582,922
+Random Read / AllPlusBatchDeleteRange = 18,259,629
+Random Read (Parallel) / AllPlusBatchDeleteRange = 3,073,008
+Random Read (Parallel, Snapshot Per Key) / AllPlusBatchDeleteRange = -
+Random Read (Batch) / AllPlusBatchDeleteRange = 14,525,647
+Full Scan / AllPlusBatchDeleteRange = 4,917,065
+Prefix Scan / AllPlusBatchDeleteRange = 61,536
+Batch DeleteRange (ranges/s) / AllPlusBatchDeleteRange = 195,065
+       Test         TreeDB
+-----------  -------------
+Batch Write              -
+  Full Scan              -
+Prefix Scan              -
+Batch Write / TreeDB = 2,315,943
+Full Scan / TreeDB = 5,924,311
+Prefix Scan / TreeDB = 4,463,278
+         Test         TreeDB        LevelDB
+-------------  -------------  -------------
+ Random Write              -              -
+Random Delete              -              -
+    Full Scan              -              -
+  Prefix Scan              -              -
+Random Write / TreeDB = 235,731
+Random Write / LevelDB = 656,737
+Random Delete / TreeDB = 277,493
+Random Delete / LevelDB = 630,776
+Settling DBs (Close/Open) before full_scan...
+Full Scan / TreeDB = 5,986,395
+Full Scan / LevelDB = 4,596,569
+Prefix Scan / TreeDB = 289,891
+Prefix Scan / LevelDB = 64,987
+                      Test  TreeDB (bench_unsafe)        LevelDB
+--------------------------  ---------------------  -------------
+              Random Write                      -              -
+             Random Delete                      -              -
+                 Full Scan                      -              -
+               Prefix Scan                      -              -
+            VACUUM (Index)                      -              -
+  Full Scan (After VACUUM)                      -              -
+Prefix Scan (After VACUUM)                      -              -
+Random Write / TreeDB (bench_unsafe) = 2,618,322
+Random Write / LevelDB = 535,457
+Random Delete / TreeDB (bench_unsafe) = 2,241,090
+Random Delete / LevelDB = 547,087
+Settling DBs (Close/Open) before full_scan...
+Full Scan / TreeDB (bench_unsafe) = 6,939,093
+Full Scan / LevelDB = 4,843,029
+Prefix Scan / TreeDB (bench_unsafe) = 298,858
+Prefix Scan / LevelDB = 149,466
+VACUUM (Index) / TreeDB (bench_unsafe) = -
+VACUUM (Index) / LevelDB = -
+Full Scan (After VACUUM) / TreeDB (bench_unsafe) = 7,302,289
+Full Scan (After VACUUM) / LevelDB = 3,981,253
+Prefix Scan (After VACUUM) / TreeDB (bench_unsafe) = 302,799
+Prefix Scan (After VACUUM) / LevelDB = 123,747
+        Test         TreeDB        LevelDB
+------------  -------------  -------------
+Random Write              -              -
+ Batch Write              -              -
+Random Write / TreeDB = 325,765
+Random Write / LevelDB = 478,612
+Batch Write / TreeDB = 1,633,244
+Batch Write / LevelDB = 1,702,255
+                              Test         TreeDB        LevelDB
+----------------------------------  -------------  -------------
+                      Random Write              -              -
+                     Random Delete              -              -
+ Fragmentation Report (Pre-Settle)              -              -
+Fragmentation Report (Post-Settle)              -              -
+                         Full Scan              -              -
+                       Prefix Scan              -              -
+Random Write / TreeDB = 124,752
+Random Write / LevelDB = 323,544
+Random Delete / TreeDB = 323,546
+Random Delete / LevelDB = 624,366
+
+fragmentation report (pre_settle): TreeDB
+  treedb.collection_roots.count=0
+  treedb.collection_roots.leafref_roots=0
+  treedb.collection_roots.pager_roots=0
+  treedb.collection_roots.pages=0
+  treedb.collection_roots.pages.duplicate_refs=0
+  treedb.collection_roots.pages.internal=0
+  treedb.collection_roots.pages.leaf=0
+  treedb.freelist.alloc_pages_total=0
+  treedb.freelist.append_alloc_pages_total=0
+  treedb.freelist.free_ids=0
+  treedb.freelist.free_pages_total=0
+  treedb.freelist.head=8
+  treedb.freelist.pages=0
+  treedb.freelist.reclaimable_pages=0
+  treedb.freelist.reclaimable_ratio_ppm=0
+  treedb.freelist.reuse_alloc_pages_total=0
+  treedb.graveyard.batches=0
+  treedb.graveyard.max_seq=0
+  treedb.graveyard.min_seq=0
+  treedb.graveyard.pages=0
+  treedb.pages.total=9
+  treedb.user.leaf_fill_ppm_avg=3906
+  treedb.user.leaf_fill_ppm_max=3906
+  treedb.user.leaf_fill_ppm_min=3906
+  treedb.user.leaf_fill_ppm_p10=3906
+  treedb.user.leaf_fill_ppm_p50=3906
+  treedb.user.leaf_fill_ppm_p90=3906
+  treedb.user.leaf_fill_ppm_p99=3906
+  treedb.user.pages=1
+  treedb.user.pages.internal=0
+  treedb.user.pages.leaf=1
+  treedb.user.pages.max=2
+  treedb.user.pages.min=2
+  treedb.user.pages.span=1
+  treedb.user.pages.span_ratio_ppm=1000000
+Fragmentation Report (Pre-Settle) / TreeDB = -
+Fragmentation Report (Pre-Settle) / LevelDB = -
+
+fragmentation report (post_settle): TreeDB
+  treedb.collection_roots.count=0
+  treedb.collection_roots.leafref_roots=0
+  treedb.collection_roots.pager_roots=0
+  treedb.collection_roots.pages=0
+  treedb.collection_roots.pages.duplicate_refs=0
+  treedb.collection_roots.pages.internal=0
+  treedb.collection_roots.pages.leaf=0
+  treedb.freelist.alloc_pages_total=0
+  treedb.freelist.append_alloc_pages_total=0
+  treedb.freelist.free_ids=0
+  treedb.freelist.free_pages_total=0
+  treedb.freelist.head=8
+  treedb.freelist.pages=0
+  treedb.freelist.reclaimable_pages=0
+  treedb.freelist.reclaimable_ratio_ppm=0
+  treedb.freelist.reuse_alloc_pages_total=0
+  treedb.graveyard.batches=0
+  treedb.graveyard.max_seq=0
+  treedb.graveyard.min_seq=0
+  treedb.graveyard.pages=0
+  treedb.pages.total=9
+  treedb.user.leaf_fill_ppm_avg=3906
+  treedb.user.leaf_fill_ppm_max=3906
+  treedb.user.leaf_fill_ppm_min=3906
+  treedb.user.leaf_fill_ppm_p10=3906
+  treedb.user.leaf_fill_ppm_p50=3906
+  treedb.user.leaf_fill_ppm_p90=3906
+  treedb.user.leaf_fill_ppm_p99=3906
+  treedb.user.pages=1
+  treedb.user.pages.internal=0
+  treedb.user.pages.leaf=1
+  treedb.user.pages.max=2
+  treedb.user.pages.min=2
+  treedb.user.pages.span=1
+  treedb.user.pages.span_ratio_ppm=1000000
+Fragmentation Report (Post-Settle) / TreeDB = -
+Fragmentation Report (Post-Settle) / LevelDB = -
+Settling DBs (Close/Open) before full_scan...
+Full Scan / TreeDB = 614,735
+Full Scan / LevelDB = 433,152
+Prefix Scan / TreeDB = 201,390
+Prefix Scan / LevelDB = 103,302
+        Test         TreeDB
+------------  -------------
+Random Write              -
+ Batch Write              -
+Random Write / TreeDB = 324,963
+Batch Write / TreeDB = 2,930,725
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+    Random Write              -
+Sequential Write / TreeDB = 249,006
+Random Write / TreeDB = 363,268
+            Test  CheckpointCountingDB
+----------------  --------------------
+Sequential Write                     -
+Sequential Write / CheckpointCountingDB = 2,217,295
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+     Random Read              -
+Sequential Write / TreeDB = 4,975,124
+Random Read / TreeDB = 723,589
+            Test  treedb_close_stats_mock
+----------------  -----------------------
+Sequential Write                        -
+Sequential Write / treedb_close_stats_mock = 2,375,297
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+Sequential Write / TreeDB = 228,299
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+Sequential Write / TreeDB = 223,886
+       Test         TreeDB
+-----------  -------------
+Batch Write              -
+Batch Write / TreeDB = 2,225,686
+            Test  close_error_mock
+----------------  ----------------
+Sequential Write                 -
+Sequential Write / close_error_mock = 1,148,106
+            Test  final_stats_checkpoint_error_mock
+----------------  ---------------------------------
+Sequential Write                                  -
+Sequential Write / final_stats_checkpoint_error_mock = 7,692,308
+                      Test    SettleProbe
+--------------------------  -------------
+          Sequential Write              -
+Random Read (Dataset Keys)              -
+Sequential Write / SettleProbe = 56,939,502
+Settling DBs (Close/Open) before dataset_read_random...
+Random Read (Dataset Keys) / SettleProbe = 29,090,909
+       Test  TreeDB (vlog_dict=off)  TreeDB (vlog_dict=on)  LevelDB (block=off)  LevelDB (block=on)
+-----------  ----------------------  ---------------------  -------------------  ------------------
+Batch Write                       -                      -                    -                   -
+Batch Write / TreeDB (vlog_dict=off) = 2,269,514
+Batch Write / TreeDB (vlog_dict=on) = 2,506,897
+Batch Write / LevelDB (block=off) = 2,646,178
+Batch Write / LevelDB (block=on) = 2,441,996
+       Test  TreeDB (vlog=off)  TreeDB (vlog=dict)  TreeDB (vlog=block/snappy)  TreeDB (vlog=block/lz4)  TreeDB (vlog=block/zstd)  TreeDB (vlog=auto)  LevelDB (block=off)  LevelDB (block=on)
+-----------  -----------------  ------------------  --------------------------  -----------------------  ------------------------  ------------------  -------------------  ------------------
+Batch Write                  -                   -                           -                        -                         -                   -                    -                   -
+Batch Write / TreeDB (vlog=off) = 1,794,704
+Batch Write / TreeDB (vlog=dict) = 2,000,106
+Batch Write / TreeDB (vlog=block/snappy) = 2,338,971
+Batch Write / TreeDB (vlog=block/lz4) = 2,545,789
+Batch Write / TreeDB (vlog=block/zstd) = 2,365,878
+Batch Write / TreeDB (vlog=auto) = 2,289,050
+Batch Write / LevelDB (block=off) = 2,238,980
+Batch Write / LevelDB (block=on) = 2,485,028
+       Test         TreeDB
+-----------  -------------
+Batch Write              -
+  Full Scan              -
+Prefix Scan              -
+Batch Write / TreeDB = 2,678,262
+Full Scan / TreeDB = 6,990,465
+Prefix Scan / TreeDB = 4,182,720
+        Test         TreeDB
+------------  -------------
+Random Write              -
+ Random Read              -
+Random Write / TreeDB = 18,217
+pre-random_read treedb.cache (TreeDB): treedb.cache.memtable_mode=append_only treedb.cache.memtable_mode_config=adaptive treedb.cache.queue_len=0 treedb.cache.queue_backlog_bytes=0 treedb.cache.memtable_residency.mutable.append_only.entry_backing_bytes=11264 treedb.cache.memtable_residency.queue.append_only.entry_backing_bytes=0 treedb.process.memtable_residency.mutable.append_only.entry_backing_bytes=11264 treedb.process.memtable_residency.queue.append_only.entry_backing_bytes=0 treedb.cache.flush_threshold_bytes=67108864 treedb.cache.mutable_flush_threshold_base_bytes=16777216 treedb.cache.mutable_flush_threshold_effective_bytes=16777216 treedb.cache.max_queued_memtables=16 treedb.cache.flush_bps_ewma=0 treedb.cache.stats.backend_write_batches_total=0 treedb.cache.wal_bytes_estimate=0 treedb.cache.vlog_retained_bytes_estimate=0 treedb.cache.materialization.lag_age_ms=0.000 treedb.cache.batch_arena.pool_budget_bytes=8388608 treedb.cache.batch_arena.pool_budget_effective_bytes=8388608 treedb.cache.batch_arena.pool_bytes_estimate=8192 treedb.cache.batch_arena.pool_bytes_global_max_estimate=8192 treedb.cache.batch_arena.in_flight_bytes_estimate=0 treedb.cache.batch_arena.in_flight_bytes_global_max_estimate=8192 treedb.cache.batch_arena.leased_bytes=0 treedb.cache.batch_arena.leased_bytes_max=0 treedb.cache.batch_arena.leased_bytes_global_estimate=0 treedb.cache.batch_arena.leased_bytes_global_max_estimate=0 treedb.cache.batch_arena.retained_bytes_global_estimate=8192 treedb.cache.batch_arena.retained_bytes_global_max_estimate=8192 treedb.cache.batch_arena.alloc_requested_bytes_total=0 treedb.cache.batch_arena.alloc_class_bytes_total=0 treedb.cache.batch_arena.used_bytes_total=0 treedb.cache.batch_arena.tail_waste_bytes_total=0 treedb.cache.batch_arena.tail_compact_runs_total=0 treedb.cache.batch_arena.tail_compact_copied_bytes_total=0 treedb.cache.batch_arena.tail_compact_saved_bytes_total=0 treedb.cache.batch_arena.pool_skip_zero_budget_total=0 treedb.cache.batch_arena.pool_drop_bytes_total=0 treedb.cache.batch_arena.pool_drop_hard_cap_bytes_total=0 treedb.cache.batch_arena.borrow_blocked_total=489 treedb.cache.batch_arena.borrow_preflight_blocked_total=0 treedb.cache.batch_arena.borrow_preflight_blocked_bytes_total=0 treedb.cache.batch_arena.steal_suppressed_deferred_total=0 treedb.cache.batch_arena.steal_suppressed_deferred_entries_total=0 treedb.cache.entry_slice.pool_budget_bytes=67108864 treedb.cache.entry_slice.pool_budget_effective_bytes=67108864 treedb.cache.entry_slice.retained_bytes_estimate=7390592 treedb.cache.entry_slice.trim_runs_total=75 treedb.cache.entry_slice.trim_drop_bytes_total=0 treedb.cache.entry_slice.get.lease_hits_total=41 treedb.cache.entry_slice.get.lease_hit_bytes_total=64159744 treedb.cache.entry_slice.get.pool_hits_total=0 treedb.cache.entry_slice.get.pool_hit_bytes_total=0 treedb.cache.entry_slice.get.fresh_alloc_total=4 treedb.cache.entry_slice.get.fresh_alloc_bytes_total=7390592 treedb.cache.entry_slice.put.lease_total=45 treedb.cache.entry_slice.put.lease_bytes_total=71550336 treedb.cache.entry_slice.put.pool_total=0 treedb.cache.entry_slice.put.pool_bytes_total=0 treedb.cache.entry_slice.put.drop_budget_total=0 treedb.cache.entry_slice.put.drop_budget_bytes_total=0 treedb.cache.flush_merge.shadowed_ops_total=0 treedb.cache.flush_merge.applied_ops_total=568242 treedb.cache.flush_merge.shadowed_per_applied=0.000000 treedb.cache.flush_merge.deferred.shadowed_ops_total=0 treedb.cache.flush_merge.deferred.applied_ops_total=0 treedb.cache.flush_merge.parallel.shadowed_ops_total=0 treedb.cache.flush_merge.parallel.applied_ops_total=568242 treedb.cache.flush_merge.parallel.shadowed_per_applied=0.000000 treedb.cache.append_only.entry_hint_entries=0 treedb.cache.append_only.entry_hint_capacity_bytes=0 treedb.cache.append_only.entry_pool_retained_bytes_estimate=72248968 treedb.cache.append_only.entry_pool_retained_bytes_max_estimate=110707784 treedb.cache.append_only.mem_lease_count=0 treedb.cache.append_only.mem_lease_entry_capacity=0 treedb.cache.append_only.mem_lease_entry_backing_bytes=0 treedb.cache.append_only.mutable_count=4 treedb.cache.append_only.mutable_entry_capacity=128 treedb.cache.append_only.mutable_entry_backing_bytes=11264 treedb.cache.append_only.mutable_trim_total=4 treedb.cache.append_only.mutable_trim_dropped_bytes_total=19223776 treedb.cache.append_only.mutable_from_lease_total=0 treedb.cache.append_only.mutable_from_pool_total=0 treedb.cache.append_only.mutable_pool_puts_total=0 treedb.cache.append_only.mutable_pool_entry_backing_dropped_bytes_total=0 treedb.cache.append_only.mutable_new_alloc_total=0 treedb.cache.append_only.mutable_new_alloc_with_queue_total=0 treedb.cache.append_only.mutable_new_alloc_queue_bytes_sum=0 treedb.cache.append_only_direct_arena.retain_max_bytes_effective=8388608 treedb.cache.append_only_direct_arena.retain_max_chunks_effective=256 treedb.cache.append_only_direct_arena.pool_hit_chunks_total=4 treedb.cache.append_only_direct_arena.pool_hit_bytes_total=131072 treedb.cache.append_only_direct_arena.retained_hit_chunks_total=490 treedb.cache.append_only_direct_arena.retained_hit_bytes_total=16056320 treedb.cache.append_only_direct_arena.fresh_alloc_chunks_total=1617 treedb.cache.append_only_direct_arena.fresh_alloc_bytes_total=52985856 treedb.process.memory.pool_pressure_level=normal treedb.process.memory.rss_bytes=766783488 treedb.process.memory.rss_hwm_bytes=1031110656 treedb.process.memory.rss_minus_heap_inuse_bytes=0 treedb.process.memory.rss_minus_total_sys_bytes=0 treedb.process.memory.peak_rss_bytes=1031110656 treedb.process.memory.peak_heap_alloc_bytes=1122599232 treedb.process.memory.peak_heap_inuse_bytes=1123844096 treedb.process.memory.peak_total_sys_bytes=1628912264 treedb.process.memory.heap_alloc_bytes=1122599232 treedb.process.memory.heap_inuse_bytes=1123844096 treedb.process.memory.heap_sys_bytes=1615921152 treedb.process.memory.heap_idle_unreleased_bytes=452460544 treedb.process.memory.gomemlimit_bytes=9223372036854775807 treedb.process.memory.pool_pressure_normal_samples_total=251 treedb.process.memory.pool_pressure_high_samples_total=0 treedb.process.memory.pool_pressure_critical_samples_total=0 treedb.process.memory.vlog_mmap_active_bytes=0 treedb.process.memory.vlog_mmap_current_bytes=0 treedb.process.memory.vlog_mmap_sealed_bytes=0 treedb.process.memory.vlog_mmap_active_segments=0 treedb.process.memory.vlog_mmap_current_segments=0 treedb.process.memory.vlog_mmap_sealed_segments=0 treedb.process.memory.peak_vlog_mmap_active_bytes=0 treedb.process.memory.peak_vlog_mmap_current_bytes=0 treedb.process.memory.peak_vlog_mmap_sealed_bytes=0 treedb.process.memory.peak_vlog_mmap_active_segments=0 treedb.process.memory.peak_vlog_mmap_current_segments=0 treedb.process.memory.peak_vlog_mmap_sealed_segments=0 treedb.cache.vlog_auto.frames.off=0 treedb.cache.vlog_auto.frames.dict=0 treedb.cache.vlog_auto.frames.block_snappy=0 treedb.cache.vlog_auto.frames.block_lz4=0 treedb.cache.vlog_auto.frames.block_zstd=0 treedb.cache.vlog_auto.probe_attempts=0 treedb.cache.vlog_auto.probe_successes=0 treedb.cache.vlog_auto.hold_enters=0 treedb.cache.vlog_auto.hold_exits=0 treedb.cache.vlog_auto.bypass_bytes=0 treedb.cache.vlog_write_mode.raw_bytes.off=0 treedb.cache.vlog_write_mode.raw_bytes.block=0 treedb.cache.vlog_write_mode.raw_bytes.dict=0 treedb.cache.vlog_write_mode.stored_bytes.off=0 treedb.cache.vlog_write_mode.stored_bytes.block=0 treedb.cache.vlog_write_mode.stored_bytes.dict=0 treedb.cache.vlog_write_mode.frames.off=0 treedb.cache.vlog_write_mode.frames.block=0 treedb.cache.vlog_write_mode.frames.dict=0 treedb.cache.vlog_payload_kind.raw_bytes.single_value=0 treedb.cache.vlog_payload_kind.raw_bytes.outer_leaf=0 treedb.cache.vlog_payload_kind.raw_bytes.mixed=0 treedb.cache.vlog_payload_kind.stored_bytes.single_value=0 treedb.cache.vlog_payload_kind.stored_bytes.outer_leaf=0 treedb.cache.vlog_payload_kind.stored_bytes.mixed=0 treedb.cache.vlog_payload_kind.frames.single_value=0 treedb.cache.vlog_payload_kind.frames.outer_leaf=0 treedb.cache.vlog_payload_kind.frames.mixed=0 treedb.cache.vlog_payload_split.raw_bytes.single_value=0 treedb.cache.vlog_payload_split.raw_bytes.outer_leaf=0 treedb.cache.vlog_payload_split.stored_bytes.single_value=0 treedb.cache.vlog_payload_split.stored_bytes.outer_leaf=0 treedb.cache.vlog_payload_split.records.single_value=0 treedb.cache.vlog_payload_split.records.outer_leaf=0 treedb.cache.vlog_outer_leaf_codec.raw_bytes.none=0 treedb.cache.vlog_outer_leaf_codec.raw_bytes.snappy=0 treedb.cache.vlog_outer_leaf_codec.raw_bytes.lz4=0 treedb.cache.vlog_outer_leaf_codec.raw_bytes.legacy_page=0 treedb.cache.vlog_outer_leaf_codec.raw_bytes.unknown=0 treedb.cache.vlog_outer_leaf_codec.raw_bytes.mixed=0 treedb.cache.vlog_outer_leaf_codec.stored_bytes.none=0 treedb.cache.vlog_outer_leaf_codec.stored_bytes.snappy=0 treedb.cache.vlog_outer_leaf_codec.stored_bytes.lz4=0 treedb.cache.vlog_outer_leaf_codec.stored_bytes.legacy_page=0 treedb.cache.vlog_outer_leaf_codec.stored_bytes.unknown=0 treedb.cache.vlog_outer_leaf_codec.stored_bytes.mixed=0 treedb.cache.vlog_outer_leaf_codec.frames.none=0 treedb.cache.vlog_outer_leaf_codec.frames.snappy=0 treedb.cache.vlog_outer_leaf_codec.frames.lz4=0 treedb.cache.vlog_outer_leaf_codec.frames.legacy_page=0 treedb.cache.vlog_outer_leaf_codec.frames.unknown=0 treedb.cache.vlog_outer_leaf_codec.frames.mixed=0 treedb.cache.vlog_block.k.count.snappy=0 treedb.cache.vlog_block.k.max.snappy=0 treedb.cache.vlog_block.k.count.lz4=0 treedb.cache.vlog_block.k.max.lz4=0 treedb.cache.vlog_dict.last_applied_dict_id=0 treedb.cache.vlog_dict.frames_attempted=0 treedb.cache.vlog_dict.frames_kept=0 treedb.cache.vlog_dict.current_k=0 treedb.cache.vlog_writev.syscalls=0 treedb.cache.vlog_writev.bytes=0 treedb.cache.vlog_writev.iovecs=0 treedb.cache.vlog_writev.flushes=0 treedb.cache.vlog_write.syscalls=0 treedb.cache.vlog_write.bytes=0 treedb.cache.vlog_write.calls=0 treedb.cache.vlog_io.syscalls=0 treedb.cache.vlog_io.bytes=0 treedb.cache.vlog_mmap.remaps=0 treedb.cache.vlog_mmap.dead_mappings=0 treedb.cache.vlog_mmap.dead_mappings.cap_base=64 treedb.cache.vlog_mmap.current_writable_map_target_bytes=33554432 treedb.cache.vlog_mmap.max_mapped_sealed_segments=8 treedb.cache.vlog_mmap.max_mapped_sealed_bytes=67108864 treedb.cache.vlog_mmap.max_mapped_leaf_sealed_segments=512 treedb.cache.vlog_mmap.max_mapped_leaf_sealed_bytes=1610612736 treedb.cache.vlog_mmap.sealed_map_denied=0 treedb.cache.vlog_mmap.sealed_map_denied.count_cap=0 treedb.cache.vlog_mmap.sealed_map_denied.bytes_cap=0 treedb.cache.vlog_mmap.read.hits=0 treedb.cache.vlog_mmap.read.miss_out_of_range=0 treedb.cache.vlog_mmap.read.miss_no_mapping=0 treedb.cache.vlog_mmap.read.miss_dead_mapping_cap=0 treedb.cache.vlog_mmap.read.fallback_readat=0 treedb.cache.vlog_grouped_frame_cache.hits=0 treedb.cache.vlog_grouped_frame_cache.misses=0 treedb.cache.vlog_grouped_frame_cache.stores=0 treedb.cache.vlog_grouped_frame_cache.evictions=0 treedb.cache.vlog_grouped_frame_cache.releases=0 treedb.cache.vlog_grouped_frame_cache.retained_bytes=0 treedb.cache.vlog_grouped_frame_cache.budget_bytes=67108864 treedb.cache.vlog_grouped_frame_cache.skipped_disabled=0 treedb.cache.vlog_grouped_frame_cache.skipped_oversize=0 treedb.cache.vlog_grouped_frame_cache.skipped_budget=0 treedb.cache.vlog_grouped_frame_cache.skipped_contention=0 treedb.cache.vlog_grouped_frame_cache.entries=0 treedb.cache.vlog_grouped_frame_cache.capacity=0 treedb.cache.vlog_grouped_frame_cache.allocated_shards=0 treedb.cache.vlog_grouped_frame_cache.allocated_slots=0 treedb.vlog.grouped_frame_cache.hits=0 treedb.vlog.grouped_frame_cache.misses=0 treedb.vlog.grouped_frame_cache.stores=0 treedb.vlog.grouped_frame_cache.evictions=0 treedb.vlog.grouped_frame_cache.releases=0 treedb.vlog.grouped_frame_cache.retained_bytes=0 treedb.vlog.grouped_frame_cache.budget_bytes=67108864 treedb.vlog.grouped_frame_cache.skipped_disabled=0 treedb.vlog.grouped_frame_cache.skipped_oversize=0 treedb.vlog.grouped_frame_cache.skipped_budget=0 treedb.vlog.grouped_frame_cache.skipped_contention=0 treedb.vlog.grouped_frame_cache.entries=0 treedb.vlog.grouped_frame_cache.capacity=0 treedb.vlog.grouped_frame_cache.allocated_shards=0 treedb.vlog.grouped_frame_cache.allocated_slots=0 treedb.process.read_path.outer_leaf.cache.hits=0 treedb.process.read_path.outer_leaf.cache.misses=0 treedb.process.read_path.outer_leaf.cache.stores=0 treedb.process.read_path.outer_leaf.cache.evictions=0 treedb.process.read_path.outer_leaf.cache.conflict_evictions=0 treedb.process.read_path.outer_leaf.cache.capacity_evictions=0 treedb.process.read_path.outer_leaf.cache.entries=0 treedb.process.read_path.outer_leaf.cache.capacity=8192 treedb.process.read_path.outer_leaf.cache.buckets=2048 treedb.process.read_path.outer_leaf.cache.ways=4 treedb.process.read_path.outer_leaf.cache.write_admission_policy=adaptive treedb.process.read_path.outer_leaf.cache.read_miss_admission_skips=0 treedb.process.read_path.outer_leaf.cache.read_miss_admission_candidate_skips=0 treedb.process.read_path.outer_leaf.cache.read_miss_admission_lock_skips=0 treedb.process.read_path.outer_leaf.cache.read_miss_admission_stores=0 treedb.process.read_path.outer_leaf.cache.write_admission_attempts=0 treedb.process.read_path.outer_leaf.cache.write_admission_stores=0 treedb.process.read_path.outer_leaf.cache.write_admission_skips=0 treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips=0 treedb.vlog.decode_buffer_grow.calls_total=1783 treedb.vlog.decode_buffer_grow.realloc_calls_total=3 treedb.vlog.decode_buffer_grow.realloc_rate=0.001683 treedb.cache.vlog_generation.enabled=true treedb.cache.vlog_generation.policy=2 treedb.cache.vlog_generation.scheduler_state=idle treedb.cache.vlog_generation.scheduler_last_reason=none treedb.cache.vlog_generation.maintenance_phase=steady treedb.cache.vlog_generation.maintenance.attempts=0 treedb.cache.vlog_generation.maintenance.acquired=0 treedb.cache.vlog_generation.maintenance.collisions=0 treedb.cache.vlog_generation.maintenance.skip.wal_on_periodic=0 treedb.cache.vlog_generation.maintenance.skip.maintenance_phase=0 treedb.cache.vlog_generation.maintenance.skip.stage_gate=0 treedb.cache.vlog_generation.maintenance.skip.stage_gate_not_due=0 treedb.cache.vlog_generation.maintenance.skip.stage_gate_due_reserved=0 treedb.cache.vlog_generation.maintenance.skip.age_blocked_gate=0 treedb.cache.vlog_generation.maintenance.skip.priority_pending=0 treedb.cache.vlog_generation.maintenance.skip.quiet_window=0 treedb.cache.vlog_generation.maintenance.skip.before_first_checkpoint=0 treedb.cache.vlog_generation.maintenance.skip.checkpoint_inflight=0 treedb.cache.vlog_generation.churn_bytes_total=0 treedb.cache.vlog_generation.churn_bytes_per_sec=0 treedb.cache.vlog_generation.rewrite_trigger.stale_ratio_ppm=200000 treedb.cache.vlog_generation.rewrite_trigger.total_bytes=4294967296 treedb.cache.vlog_generation.rewrite_trigger.churn_per_sec=0 treedb.cache.vlog_generation.rewrite.min_segment_age_ms=30000 treedb.cache.vlog_generation.bytes.live.total=0 treedb.cache.vlog_generation.bytes.live.hot=0 treedb.cache.vlog_generation.bytes.live.warm=0 treedb.cache.vlog_generation.bytes.live.cold=0 treedb.cache.vlog_generation.bytes.stale.total=0 treedb.cache.vlog_generation.bytes.total.total=0 treedb.cache.vlog_generation.bytes.total.hot=0 treedb.cache.vlog_generation.bytes.total.warm=0 treedb.cache.vlog_generation.bytes.total.cold=0 treedb.cache.vlog_generation.segments.total=0 treedb.cache.vlog_generation.segments.hot=0 treedb.cache.vlog_generation.segments.warm=0 treedb.cache.vlog_generation.segments.cold=0 treedb.cache.vlog_generation.rewrite.queue_len=0 treedb.cache.vlog_generation.rewrite.queue_loaded=false treedb.cache.vlog_generation.rewrite.queue_run_segment_cap=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter=none treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.checkpoint_kick=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.checkpoint_kick=none treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.checkpoint_kick=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.checkpoint_kick=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.fresh_plan=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter.fresh_plan=none treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.by_budget.fresh_plan=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.per_segment_budget_bytes.fresh_plan=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.decisions.fresh_plan=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.budget_tokens=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.debt_drain_cap=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.checkpoint_kick_safety=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_queue_threshold.fresh_plan=0 treedb.cache.vlog_generation.rewrite.queue_run_segment_cap.limiter_count.fresh_plan_cap.fresh_plan=0 treedb.cache.vlog_generation.rewrite.queue_config.resume_max_segments=1 treedb.cache.vlog_generation.rewrite.queue_config.debt_drain_max_segments=8 treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_min_segments=4 treedb.cache.vlog_generation.rewrite.queue_config.fresh_plan_debt_drain_max_segments=4 treedb.cache.vlog_generation.rewrite.ledger_segments=0 treedb.cache.vlog_generation.rewrite.ledger_bytes_total=0 treedb.cache.vlog_generation.rewrite.ledger_bytes_live=0 treedb.cache.vlog_generation.rewrite.ledger_bytes_stale=0 treedb.cache.vlog_generation.rewrite.ledger_stale_ratio_ppm=0 treedb.cache.vlog_generation.rewrite.stage_pending=false treedb.cache.vlog_generation.rewrite.stage_observed_unix_nano=0 treedb.cache.vlog_generation.rewrite.penalties_active=0 treedb.cache.vlog_generation.rewrite.age_blocked_until_unix_nano=0 treedb.cache.vlog_generation.rewrite.age_blocked_remaining_ms=0 treedb.cache.vlog_generation.rewrite.plan_runs=0 treedb.cache.vlog_generation.rewrite.plan_canceled=0 treedb.cache.vlog_generation.rewrite.plan_errors=0 treedb.cache.vlog_generation.rewrite.plan_empty=0 treedb.cache.vlog_generation.rewrite.plan_empty.age_blocked=0 treedb.cache.vlog_generation.rewrite.plan_empty.no_selection=0 treedb.cache.vlog_generation.rewrite.plan_selected=0 treedb.cache.vlog_generation.rewrite.plan_selected_segments_total=0 treedb.cache.vlog_generation.rewrite.plan_selected_bytes_total=0 treedb.cache.vlog_generation.rewrite.plan_selected_bytes_live=0 treedb.cache.vlog_generation.rewrite.plan_selected_bytes_stale=0 treedb.cache.vlog_generation.rewrite.bytes_in=0 treedb.cache.vlog_generation.rewrite.bytes_out=0 treedb.cache.vlog_generation.rewrite.value_records_copied=0 treedb.cache.vlog_generation.rewrite.value_bytes_copied=0 treedb.cache.vlog_generation.rewrite.reclaim_ratio=0.000000 treedb.cache.vlog_generation.rewrite.output_ratio=0.000000 treedb.cache.vlog_generation.rewrite.processed_stale_ratio=0.000000 treedb.cache.vlog_generation.rewrite.exec.bytes_in_per_sec=0.000 treedb.cache.vlog_generation.rewrite.exec.bytes_out_per_sec=0.000 treedb.cache.vlog_generation.rewrite.exec.reclaimed_bytes_per_sec=0.000 treedb.cache.vlog_generation.rewrite.exec.reclaimed_vs_churn_ratio=0.000000 treedb.cache.vlog_generation.rewrite.no_reclaim_runs=0 treedb.cache.vlog_generation.rewrite.no_reclaim_stale_bytes=0 treedb.cache.vlog_generation.rewrite.canceled_runs=0 treedb.cache.vlog_generation.rewrite.deadline_runs=0 treedb.cache.vlog_generation.rewrite.ineffective_runs=0 treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_per_sec=0.000 treedb.cache.vlog_generation.rewrite_budget.consumed_share_of_budget_pct=0.000 treedb.cache.vlog_generation.rewrite_budget.bytes_per_sec=134217728 treedb.cache.vlog_generation.rewrite_budget.records_per_sec=0 treedb.cache.vlog_generation.rewrite_budget.tokens_bytes=0 treedb.cache.vlog_generation.rewrite_budget.tokens_cap_bytes=4294967296 treedb.cache.vlog_generation.rewrite_budget.tokens_utilization_pct=0.000 treedb.cache.vlog_generation.rewrite_budget.consumed_bytes_total=0 treedb.cache.vlog_generation.rewrite.runs=0 treedb.cache.vlog_generation.gc.deleted_segments=0 treedb.cache.vlog_generation.gc.deleted_bytes=0 treedb.cache.vlog_generation.gc.last_observed_source.segments=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_referenced=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_active=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_protected=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_eligible=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_deleted=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_pending=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_retained=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_in_use=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_overlap=0 treedb.cache.vlog_generation.gc.last_observed_source.segments_protected_other=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_referenced=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_active=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_eligible=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_deleted=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_pending=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_retained=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_in_use=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_overlap=0 treedb.cache.vlog_generation.gc.last_observed_source.bytes_protected_other=0 treedb.cache.vlog_generation.gc.runs=0 treedb.cache.vlog_retained_prune.runs=0 treedb.cache.vlog_retained_prune.forced_runs=0 treedb.cache.vlog_retained_prune.schedule_requests=1 treedb.cache.vlog_retained_prune.schedule_forced_requests=0 treedb.cache.vlog_retained_prune.schedule_skip.closing=0 treedb.cache.vlog_retained_prune.schedule_skip.inflight=0 treedb.cache.vlog_retained_prune.schedule_skip.no_closed_bytes=0 treedb.cache.vlog_retained_prune.schedule_skip.below_pressure=1 treedb.cache.vlog_retained_prune.schedule_skip.min_interval=0 treedb.cache.vlog_retained_prune.force_pending=false treedb.cache.vlog_retained_prune.closed_bytes=0 treedb.cache.vlog_retained_prune.removed_segments=0 treedb.cache.vlog_retained_prune.removed_bytes=0 treedb.cache.vlog_retained_prune.in_use_skipped_segments=0 treedb.cache.vlog_retained_prune.in_use_skipped_bytes=0 treedb.cache.vlog_retained_prune.live_skipped_segments=0 treedb.cache.vlog_retained_prune.live_skipped_bytes=0 treedb.cache.vlog_retained_prune.zombie_marked_segments=0 treedb.cache.vlog_retained_prune.zombie_marked_bytes=0 treedb.cache.vlog_generation.vacuum.runs=0 treedb.cache.vlog_generation.vacuum.failures=0 treedb.cache.vlog_generation.checkpoint_kick.pending=false treedb.cache.vlog_generation.checkpoint_kick.runs=0 treedb.cache.vlog_generation.checkpoint_kick.rewrite_runs=0 treedb.cache.vlog_generation.checkpoint_kick.gc_runs=0 treedb.cache.vlog_generation.remap.successes=0 treedb.cache.vlog_generation.remap.failures=0 treedb.process.read_path.outer_leaf.cache.bytes=0 treedb.process.read_path.outer_leaf.cache.write_admission_policy=adaptive treedb.process.read_path.outer_leaf.cache.write_admission_attempts=0 treedb.process.read_path.outer_leaf.cache.write_admission_stores=0 treedb.process.read_path.outer_leaf.cache.write_admission_skips=0 treedb.process.read_path.outer_leaf.cache.write_admission_lock_skips=0 treedb.process.read_path.outer_leaf.cache.record_checksum_verified_stores=0 treedb.process.read_path.outer_leaf.cache.page_checksum_verified_marks=0 treedb.process.read_path.outer_leaf.cache.page_checksum_verified_hits=0 treedb.process.read_path.outer_leaf.cache.page_checksum_unverified_hits=0 treedb.process.read_path.outer_leaf.checksum.verifications_total=241 treedb.process.read_path.outer_leaf.checksum.skips_total=102 treedb.vlog.mmap_remaps=0 treedb.vlog.mmap_dead_mappings=0 treedb.vlog.mmap_dead_mappings.cap_base=64 treedb.vlog.mmap_current_writable_map_target_bytes=33554432 treedb.vlog.mmap_max_mapped_sealed_segments=8 treedb.vlog.mmap_max_mapped_sealed_bytes=67108864 treedb.vlog.mmap_max_mapped_leaf_sealed_segments=512 treedb.vlog.mmap_max_mapped_leaf_sealed_bytes=1610612736 treedb.vlog.mmap_sealed_map_denied=0 treedb.vlog.mmap_sealed_map_denied.count_cap=0 treedb.vlog.mmap_sealed_map_denied.bytes_cap=0 treedb.vlog.mmap_read.hits=0 treedb.vlog.mmap_read.miss_out_of_range=0 treedb.vlog.mmap_read.miss_no_mapping=0 treedb.vlog.mmap_read.miss_dead_mapping_cap=0 treedb.vlog.mmap_read.fallback_readat=0
+Random Read / TreeDB = 49,478
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+Sequential Write / TreeDB = 258,633
+                  Test         TreeDB
+----------------------  -------------
+Dataset Write (Random)              -
+Dataset Write (Random) / TreeDB = 21,478
+                  Test         TreeDB
+----------------------  -------------
+Dataset Write (Sorted)              -
+Dataset Write (Sorted) / TreeDB = 24,348
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+                Test         TreeDB
+--------------------  -------------
+Batch Write (Steady)              -
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+Sequential Write / TreeDB = 292,422
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+Sequential Write / TreeDB = 183,146
+            Test         TreeDB
+----------------  -------------
+Sequential Write              -
+Sequential Write / TreeDB = 176,523
+--- FAIL: TestQuicksilverCLIProfileArtifacts (0.10s)
+    profile_artifact_dir_test.go:193: build: exit status 1: error obtaining VCS status: exit status 128
+        	Use -buildvcs=false to disable VCS stamping.
+                                    Test         TreeDB
+----------------------------------------  -------------
+                        Sequential Write              -
+                  Random Read (Parallel)              -
+Random Read (Parallel, Snapshot Per Key)              -
+Sequential Write / TreeDB = 534,572
+Random Read (Parallel) / TreeDB = 599,102
+Random Read (Parallel, Snapshot Per Key) / TreeDB = 457,481
+2026/10/08 10:30:12 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=131072 stored=2034 ratio=0.016
+                  Test         TreeDB
+----------------------  -------------
+      Sequential Write              -
+Random Read (Parallel)              -
+Sequential Write / TreeDB = 3,835,176
+Random Read (Parallel) / TreeDB = 2,320,772
+                  Test         TreeDB
+----------------------  -------------
+      Sequential Write              -
+Random Read (Parallel)              -
+Sequential Write / TreeDB = 4,996,593
+Random Read (Parallel) / TreeDB = 2,113,300
+                  Test         TreeDB
+----------------------  -------------
+      Sequential Write              -
+Random Read (Parallel)              -
+Sequential Write / TreeDB = 5,111,442
+Random Read (Parallel) / TreeDB = 1,907,718
+wrote markdown: /tmp/TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A1447237573/001/insights.md
+wrote json:     /tmp/TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A1447237573/001/insights.json
+wrote html:     /tmp/TestRunColumnStoreSuiteWritesArtifactsAndMetricsM11A1447237573/001/insights.html
+2026/10/08 10:30:19 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=39410 stored=757 ratio=0.019
+--- FAIL: TestQuicksilverRealisticCLIContract (0.12s)
+    suite_quicksilver_realistic_test.go:428: build exit status 1: error obtaining VCS status: exit status 128
+        	Use -buildvcs=false to disable VCS stamping.
+FAIL
+FAIL	github.com/snissn/gomap/cmd/unified_bench	25.148s
+--- FAIL: TestCommandWALLegacyTermsInCurrentDocsNeedContext (0.09s)
+    command_wal_docs_test.go:352: /workspace/scratch/1ecfdb811b25/harness-5118/cmd/unified_bench/README.md:96 mentions legacy profile alias without legacy/compatibility/benchmark context: before/after improvement. No-WAL `fast` results do not establish command-WAL
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/docs	2.607s
+FAIL

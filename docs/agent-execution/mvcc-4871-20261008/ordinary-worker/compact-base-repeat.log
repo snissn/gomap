@@ -1,0 +1,18 @@
+=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut
+=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast
+    cow_public_drain_test.go:53: checksum mismatch on page 0
+--- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut (0.02s)
+    --- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast (0.02s)
+=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut
+=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast
+    cow_public_drain_test.go:53: checksum mismatch on page 0
+--- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut (0.01s)
+    --- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast (0.01s)
+=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut
+=== RUN   TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast
+    cow_public_drain_test.go:53: checksum mismatch on page 0
+--- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut (0.01s)
+    --- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.046s
+FAIL

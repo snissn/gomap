@@ -1,0 +1,6 @@
+goos: linux
+goarch: amd64
+pkg: github.com/snissn/gomap/TreeDB/db
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkPublishDurableRootV1/inline-2         	     100	   3698466 ns/op	         0 dependency-stable-calls/op	         0 dependency-stable-ns/op	         1.000 index-stable-calls/op	     37970 index-stable-ns/op	        16.00 manifest-bytes	         0 manifest-entries	         1.000 meta-stable-calls/op	     42069 meta-stable-ns/op	      4096 meta-write-B/op	         1.000 meta-writes/op	         0 namespace-stable-calls/op	         0 namespace-stable-ns/op	   3698466 publish-ns/op	         2.000 recoverable-slots	         0 resource-file-stable-calls/op	         0 resource-file-stable-ns/op	         0 resource-flush-calls/op	         0 resource-flush-ns/op	         0 resource-namespace-stable-calls/op	         0 resource-namespace-stable-ns/op	         0 resource-sync-calls/op	         0 resource-sync-ns/op	         1.000 userspace-flush-calls/op	      5972 userspace-flush-ns/op	  302275 B/op	     558 allocs/op
+PASS

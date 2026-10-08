@@ -1,0 +1,5 @@
+WORK=/tmp/go-build2720419814
+cd /workspace
+git status --porcelain
+error obtaining VCS status: exit status 128
+	Use -buildvcs=false to disable VCS stamping.

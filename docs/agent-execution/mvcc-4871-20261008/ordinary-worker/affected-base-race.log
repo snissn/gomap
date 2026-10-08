@@ -1,0 +1,22 @@
+ok  	github.com/snissn/gomap/TreeDB/db	21.831s
+ok  	github.com/snissn/gomap/TreeDB/caching	1.214s
+ok  	github.com/snissn/gomap/TreeDB/mvcc	1.571s
+--- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut (0.09s)
+    --- FAIL: TestCOWPublicCompactIndexIncludesDirtyActiveCut/no_wal_fast (0.02s)
+        cow_public_drain_test.go:53: checksum mismatch on page 0
+2026/10/08 11:33:29 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 11:33:29 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 11:33:32 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 11:33:33 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=262656 stored=438 ratio=0.002
+2026/10/08 11:33:34 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 11:33:36 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=123392 stored=2931 ratio=0.024
+2026/10/08 11:33:37 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=86 raw=33024 stored=2140 ratio=0.065
+2026/10/08 11:33:41 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=262656 stored=438 ratio=0.002
+2026/10/08 11:33:41 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=262656 stored=439 ratio=0.002
+2026/10/08 11:33:42 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 11:33:43 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=524288 stored=412 ratio=0.001
+2026/10/08 11:33:43 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=65536 stored=673 ratio=0.010
+2026/10/08 11:33:43 treedb: value-log dict published class=single_value dict_id=4896081607128564543 k=32 payload_ratio=0.000 total_ratio=0.007
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	17.871s
+FAIL

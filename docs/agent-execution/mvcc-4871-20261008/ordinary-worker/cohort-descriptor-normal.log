@@ -1,0 +1,15 @@
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2
+    durable_root_bench_test.go:705: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:1632 drained-cohort-files:2 drained-gc-deleted-files:0 held-cohort-bytes:1632 held-cohort-files:2 held-gc-deleted-files:0 held-governor-bytes:291008 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:25219 scope-after-reader-governor-bytes:279040 scope-complete-governor-bytes:268832]
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8
+    durable_root_bench_test.go:705: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:6528 drained-cohort-files:8 drained-gc-deleted-files:0 held-cohort-bytes:6528 held-cohort-files:8 held-gc-deleted-files:0 held-governor-bytes:319312 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:22033 scope-after-reader-governor-bytes:305104 scope-complete-governor-bytes:268832]
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16
+    durable_root_bench_test.go:705: actual retained/residual cohort: map[closed-governor-bytes:0 descriptor-only-gc-deleted-files:0 drained-cohort-bytes:13056 drained-cohort-files:16 drained-gc-deleted-files:0 held-cohort-bytes:13056 held-cohort-files:16 held-gc-deleted-files:0 held-governor-bytes:358416 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:27571 scope-after-reader-governor-bytes:339856 scope-complete-governor-bytes:268832]
+--- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup (0.03s)
+    --- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=2 (0.01s)
+    --- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=8 (0.01s)
+    --- PASS: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup/files=16 (0.01s)
+=== RUN   TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests
+--- PASS: TestPrimaryBorrowedCohortRebuildFailureReleasesPrivateManifests (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.042s

@@ -1,0 +1,424 @@
+=== RUN   TestClosedDB_ValueLogGC
+--- PASS: TestClosedDB_ValueLogGC (0.00s)
+=== RUN   TestCompactStorageM0DocsUsePortablePrimaryCommand
+--- PASS: TestCompactStorageM0DocsUsePortablePrimaryCommand (0.00s)
+=== RUN   TestPrimaryV5SelectionIndependentSlotsActualDataAndParentFrontier
+--- PASS: TestPrimaryV5SelectionIndependentSlotsActualDataAndParentFrontier (0.00s)
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory
+--- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot (0.03s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest (0.02s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory (0.01s)
+=== RUN   TestValueLogGC_KeepsSegmentReferencedOnlyByCollectionRoot
+--- PASS: TestValueLogGC_KeepsSegmentReferencedOnlyByCollectionRoot (0.00s)
+=== RUN   TestValueLogGC_KeepsSegmentMadeReachableBySystemDescriptorOnly
+--- PASS: TestValueLogGC_KeepsSegmentMadeReachableBySystemDescriptorOnly (0.00s)
+=== RUN   TestValueLogGC_KeepsSegmentMadeReachableByDeltaGroupSystemDescriptorOnly
+--- PASS: TestValueLogGC_KeepsSegmentMadeReachableByDeltaGroupSystemDescriptorOnly (0.00s)
+=== RUN   TestValueLogGC_RemovesSegmentAfterSystemDescriptorRemoval
+--- PASS: TestValueLogGC_RemovesSegmentAfterSystemDescriptorRemoval (0.00s)
+=== RUN   TestValueLogGC_RemovesSegmentAfterGroupedSystemDescriptorRemoval
+--- PASS: TestValueLogGC_RemovesSegmentAfterGroupedSystemDescriptorRemoval (0.00s)
+=== RUN   TestValueLogGC_RemovesSegmentAfterDeltaGroupSystemDescriptorRemoval
+--- PASS: TestValueLogGC_RemovesSegmentAfterDeltaGroupSystemDescriptorRemoval (0.00s)
+=== RUN   TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsPrimaryRootAlias
+--- PASS: TestOrderedRootCollectionDescriptorTransitionsCoveredRejectsPrimaryRootAlias (0.00s)
+=== RUN   TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6
+    primary_capsule_v6_test.go:82: pre-corruption slot0 commit3 parent2 newest0 prior2
+    primary_capsule_v6_test.go:82: pre-corruption slot1 commit2 parent1 newest0 prior2
+--- PASS: TestPrimaryCapsuleOrdinaryAuthorityAndExactFallbackV6 (0.01s)
+=== RUN   TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6
+--- PASS: TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6 (0.01s)
+=== RUN   TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6
+--- PASS: TestPrimaryCapsuleCapturedRecoverableReadRootsSurviveSlotReuseV6 (0.01s)
+=== RUN   TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6
+--- PASS: TestPrimaryCapsuleVacuumCutRefusesBeforeNamespaceMutationV6 (0.01s)
+=== RUN   TestPrimaryDependencyFailedLeaseRemainsOnActualOwner
+--- PASS: TestPrimaryDependencyFailedLeaseRemainsOnActualOwner (0.00s)
+=== RUN   TestPrimaryDirectoryOrdinarySnapshotCoalesceReopen
+    primary_directory_test.go:39: initial directory count 4
+--- PASS: TestPrimaryDirectoryOrdinarySnapshotCoalesceReopen (0.02s)
+=== RUN   TestPrimaryDirectoryOrdinaryCapacityAndDeferredPhysicalExport
+    primary_directory_test.go:136: last root type 11
+--- PASS: TestPrimaryDirectoryOrdinaryCapacityAndDeferredPhysicalExport (0.08s)
+=== RUN   TestPrimaryDirectoryPhysicalBaseValueLogRetention
+--- PASS: TestPrimaryDirectoryPhysicalBaseValueLogRetention (0.01s)
+=== RUN   TestPrimaryDirectoryLargeKeyFallbackAndEmptyBound
+--- PASS: TestPrimaryDirectoryLargeKeyFallbackAndEmptyBound (0.01s)
+=== RUN   TestPrimaryDirectoryRealSlotsCorruptionFallback
+--- PASS: TestPrimaryDirectoryRealSlotsCorruptionFallback (0.01s)
+=== RUN   TestPrimaryDirectoryRequiredDependencyEmptyNoopReopen
+--- PASS: TestPrimaryDirectoryRequiredDependencyEmptyNoopReopen (0.01s)
+=== RUN   TestPrimaryJointVacuumV6SuccessfulReplacement
+--- PASS: TestPrimaryJointVacuumV6SuccessfulReplacement (0.01s)
+=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback
+=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/false
+=== RUN   TestPrimaryJointVacuumV6PointersAndIndependentFallback/true
+--- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/false (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PointersAndIndependentFallback/true (0.01s)
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-commit
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-data-rename
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-data-rename
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-data-barrier
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-data-barrier
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-primary-rename
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-primary-rename
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-primary-barrier
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-primary-barrier
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-decision-delete
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-decision-delete
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-deletion-barrier
+=== RUN   TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-deletion-barrier
+--- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody (0.14s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-commit (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-data-rename (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-data-rename (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-data-barrier (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-data-barrier (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-primary-rename (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-primary-rename (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-primary-barrier (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-primary-barrier (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-decision-delete (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-decision-delete (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/before-deletion-barrier (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6PostCommitRecoveryAndCustody/after-deletion-barrier (0.01s)
+=== RUN   TestPrimaryJointCrashProcessV6
+    primary_joint_vacuum_v6_test.go:299: subprocess entry
+--- SKIP: TestPrimaryJointCrashProcessV6 (0.00s)
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-staging-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-staging-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-commit
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-commit-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-commit-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-commit
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-data-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-data-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-data-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-data-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-primary-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-primary-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-primary-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-primary-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-decision-delete
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-decision-delete
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-deletion-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-deletion-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-data-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-data-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-data-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-data-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-primary-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-primary-rename
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-primary-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-primary-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-decision-delete
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-decision-delete
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-deletion-barrier
+=== RUN   TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-deletion-barrier
+--- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery (0.66s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-staging-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-staging-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-commit (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-commit-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-commit-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-commit (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-data-rename (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-data-rename (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-data-barrier (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-data-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-primary-rename (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-primary-rename (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-primary-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-primary-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-decision-delete (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-decision-delete (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/before-deletion-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/publication/after-deletion-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-data-rename (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-data-rename (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-data-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-data-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-primary-rename (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-primary-rename (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-primary-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-primary-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-decision-delete (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-decision-delete (0.03s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/before-deletion-barrier (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6UncleanPublicationAndRecovery/recovery/after-deletion-barrier (0.10s)
+=== RUN   TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair
+=== RUN   TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/truncated
+=== RUN   TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/unknown
+=== RUN   TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/checksum
+=== RUN   TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/version
+=== RUN   TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/missing-identity
+--- PASS: TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair (0.09s)
+    --- PASS: TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/truncated (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/unknown (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/checksum (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/version (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6MalformedDecisionDoesNotCleanPair/missing-identity (0.02s)
+=== RUN   TestPrimaryJointVacuumV6OfflineUsesPairAuthority
+--- PASS: TestPrimaryJointVacuumV6OfflineUsesPairAuthority (0.02s)
+=== RUN   TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision
+--- PASS: TestPrimaryJointVacuumV6CancellationAfterCommitRetainsDecision (0.01s)
+=== RUN   TestPrimaryJointVacuumV6CommandFrontierAndRevisions
+--- PASS: TestPrimaryJointVacuumV6CommandFrontierAndRevisions (0.01s)
+=== RUN   TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback
+=== RUN   TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback/0
+=== RUN   TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback/1
+--- PASS: TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback (0.04s)
+    --- PASS: TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback/0 (0.02s)
+    --- PASS: TestPrimaryJointVacuumV6CommittedPairPreservesIndependentFallback/1 (0.02s)
+=== RUN   TestPrimaryJointVacuumV6NamespaceObserverUncertainty
+=== RUN   TestPrimaryJointVacuumV6NamespaceObserverUncertainty/create
+=== RUN   TestPrimaryJointVacuumV6NamespaceObserverUncertainty/data
+=== RUN   TestPrimaryJointVacuumV6NamespaceObserverUncertainty/primary
+=== RUN   TestPrimaryJointVacuumV6NamespaceObserverUncertainty/unlink
+--- PASS: TestPrimaryJointVacuumV6NamespaceObserverUncertainty (0.05s)
+    --- PASS: TestPrimaryJointVacuumV6NamespaceObserverUncertainty/create (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6NamespaceObserverUncertainty/data (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6NamespaceObserverUncertainty/primary (0.01s)
+    --- PASS: TestPrimaryJointVacuumV6NamespaceObserverUncertainty/unlink (0.01s)
+=== RUN   TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair
+--- PASS: TestPrimaryJointVacuumV6OldRuntimeRetirementErrorRetainsPublishedPair (0.01s)
+=== RUN   TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens
+--- PASS: TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens (0.02s)
+=== RUN   TestPrimaryOwnedPromotionV6ConstructorSurvivesVisibilityAndPromotion
+--- PASS: TestPrimaryOwnedPromotionV6ConstructorSurvivesVisibilityAndPromotion (0.01s)
+=== RUN   TestPrimaryOwnedPromotionV6RoutingEmission
+--- PASS: TestPrimaryOwnedPromotionV6RoutingEmission (0.00s)
+=== RUN   TestPrimaryOwnedPromotionV6DoesNotGrowAdmittedReaderClosure
+--- PASS: TestPrimaryOwnedPromotionV6DoesNotGrowAdmittedReaderClosure (0.01s)
+=== RUN   TestPrimaryManifestScratchRefusesBeforeBankClaim
+--- PASS: TestPrimaryManifestScratchRefusesBeforeBankClaim (0.00s)
+=== RUN   TestPrimaryBankConstructionReplacementOverlapAndOnceDisposal
+--- PASS: TestPrimaryBankConstructionReplacementOverlapAndOnceDisposal (0.00s)
+=== RUN   TestPrimaryRecordScratchRefusalBeforeCodecAndSeal
+--- PASS: TestPrimaryRecordScratchRefusalBeforeCodecAndSeal (0.01s)
+=== RUN   TestPrimaryDependencySealFramesRefuseBeforeChildAndRejectCycle
+--- PASS: TestPrimaryDependencySealFramesRefuseBeforeChildAndRejectCycle (0.00s)
+=== RUN   TestPrimarySharedTransactionV6ReusesExactDataCertificate
+--- PASS: TestPrimarySharedTransactionV6ReusesExactDataCertificate (0.01s)
+=== RUN   TestPrimarySharedTransactionV6FreshOwnedDirectoryRefusal
+--- PASS: TestPrimarySharedTransactionV6FreshOwnedDirectoryRefusal (0.01s)
+=== RUN   TestPrimarySharedTransactionV6TypedCodecOwnedOperandAndRefusal
+    primary_shared_transaction_v6_test.go:172: typed codec 5R/81152B; actual ordinary relaxed member, private destination refusal
+--- PASS: TestPrimarySharedTransactionV6TypedCodecOwnedOperandAndRefusal (0.01s)
+=== RUN   TestPrimarySharedTransactionV6SinglePublicationOwner
+--- PASS: TestPrimarySharedTransactionV6SinglePublicationOwner (0.00s)
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/manifest
+=== RUN   TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/directory
+--- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots (0.28s)
+    --- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/manifest (0.13s)
+    --- PASS: TestPrimaryVacuumSharedArenaHeldSnapshotCutAndIndependentSlots/directory (0.14s)
+=== RUN   TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery
+=== RUN   TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/primary-sync
+=== RUN   TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/ready-create
+=== RUN   TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/old-rename
+=== RUN   TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/new-rename
+--- PASS: TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery (0.04s)
+    --- PASS: TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/primary-sync (0.01s)
+    --- PASS: TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/ready-create (0.01s)
+    --- PASS: TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/old-rename (0.01s)
+    --- PASS: TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/new-rename (0.01s)
+=== RUN   TestRecoverableRootSetCloneStableResourceForExactRoot
+--- PASS: TestRecoverableRootSetCloneStableResourceForExactRoot (0.00s)
+=== RUN   TestPrimaryMetadataCaptureFinalizesAfterLastRead
+--- PASS: TestPrimaryMetadataCaptureFinalizesAfterLastRead (0.01s)
+=== RUN   TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer
+--- PASS: TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer (0.00s)
+=== RUN   TestStableResourceCaptureLeaseRetainSerializesWithRelease
+--- PASS: TestStableResourceCaptureLeaseRetainSerializesWithRelease (0.01s)
+=== RUN   TestValueLogGC_EmptySet_NoValueLogSegments
+--- PASS: TestValueLogGC_EmptySet_NoValueLogSegments (0.00s)
+=== RUN   TestValueLogGC_PostRefreshNilSetReturnsEmptyStats
+--- PASS: TestValueLogGC_PostRefreshNilSetReturnsEmptyStats (0.00s)
+=== RUN   TestValueOnlyValueLogFiles_KeepsReservedLaneInPrimaryValueLog
+--- PASS: TestValueOnlyValueLogFiles_KeepsReservedLaneInPrimaryValueLog (0.00s)
+=== RUN   TestValueLogGC_IgnoresInlineLeafLogWhenDBDefaultUsesPagerLeaves
+--- PASS: TestValueLogGC_IgnoresInlineLeafLogWhenDBDefaultUsesPagerLeaves (0.00s)
+=== RUN   TestValueLogGC_RemovesUnreferencedSegment
+    vlog_gc_test.go:356: pointer-bearing root: visible=2 durable=2 active_slot=1 slot_commits=[1 2] slot_records=[{commit:1 user:2 system:3 lsn:0} {commit:2 user:9 system:3 lsn:0}]
+    vlog_gc_test.go:367: delete visible: visible=3 durable=2 active_slot=1 slot_commits=[1 2] slot_records=[{commit:1 user:2 system:3 lsn:0} {commit:2 user:9 system:3 lsn:0}]
+    vlog_gc_test.go:377: delete durable: visible=3 durable=3 active_slot=0 slot_commits=[3 2] slot_records=[{commit:3 user:48 system:3 lsn:0} {commit:2 user:9 system:3 lsn:0}]
+    vlog_gc_test.go:382: both slots settled: visible=4 durable=4 active_slot=1 slot_commits=[3 4] slot_records=[{commit:3 user:48 system:3 lsn:0} {commit:4 user:48 system:8 lsn:0}]
+--- PASS: TestValueLogGC_RemovesUnreferencedSegment (0.00s)
+=== RUN   TestValueLogGC_StableIdentityPinDefersUnreferencedSegmentDelete
+--- PASS: TestValueLogGC_StableIdentityPinDefersUnreferencedSegmentDelete (0.21s)
+=== RUN   TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment
+--- PASS: TestValueLogGC_VisibleDeleteCannotUnlinkOlderDurableRootSegment (0.01s)
+=== RUN   TestValueLogGC_ObservedSourceCannotZombieOlderRecoverableRootSegment
+--- PASS: TestValueLogGC_ObservedSourceCannotZombieOlderRecoverableRootSegment (0.00s)
+=== RUN   TestValueLogGC_KeepsPendingValueLogAppenderSegments
+--- PASS: TestValueLogGC_KeepsPendingValueLogAppenderSegments (0.00s)
+=== RUN   TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase
+--- PASS: TestValueLogGC_FullScanDoesNotBlockPublishBeforeLockedPhase (0.00s)
+=== RUN   TestValueLogGC_PostScanFirstReferenceToOldSegmentIsSafe
+--- PASS: TestValueLogGC_PostScanFirstReferenceToOldSegmentIsSafe (0.00s)
+=== RUN   TestValueLogGC_PostScanNewSegmentIsSafe
+--- PASS: TestValueLogGC_PostScanNewSegmentIsSafe (0.00s)
+=== RUN   TestValueLogGC_RepeatedPostScanPublicationAbortsWithoutDelete
+--- PASS: TestValueLogGC_RepeatedPostScanPublicationAbortsWithoutDelete (0.00s)
+=== RUN   TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes
+--- PASS: TestValueLogGC_ProtectedPathsDoNotKeepHistoricalRewriteLanes (0.00s)
+=== RUN   TestValueLogGC_ObservedSourceReclaimActiveRequiresExplicitOption
+--- PASS: TestValueLogGC_ObservedSourceReclaimActiveRequiresExplicitOption (0.00s)
+=== RUN   TestValueLogGC_KeepsEveryCurrentWritableInMultiCurrentLane
+--- PASS: TestValueLogGC_KeepsEveryCurrentWritableInMultiCurrentLane (0.00s)
+=== RUN   TestValueLogGC_ProtectedPathBreakdownStats
+--- PASS: TestValueLogGC_ProtectedPathBreakdownStats (0.00s)
+=== RUN   TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog
+--- PASS: TestValueLogGC_KeepsReferencedPointerSegments_WithOuterLeavesInValueLog (0.00s)
+=== RUN   TestValueLogGC_IncrementalParityWithFullScan
+--- PASS: TestValueLogGC_IncrementalParityWithFullScan (0.00s)
+=== RUN   TestValueLogGC_IncrementalTrackerPersistsOnClose
+--- PASS: TestValueLogGC_IncrementalTrackerPersistsOnClose (0.00s)
+=== RUN   TestValueLogGC_IncrementalCounterRollbackOnFailedCommit
+--- PASS: TestValueLogGC_IncrementalCounterRollbackOnFailedCommit (0.00s)
+=== RUN   TestValueLogGC_IncrementalMode_RebuildOnCorruption
+--- PASS: TestValueLogGC_IncrementalMode_RebuildOnCorruption (0.00s)
+=== RUN   TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite
+--- PASS: TestValueLogGC_HealthMetadata_UpdatesAfterDeleteAndRewrite (0.01s)
+=== RUN   TestValueLogGC_HealthMetadata_PreservesPinnedZombieSegment
+--- PASS: TestValueLogGC_HealthMetadata_PreservesPinnedZombieSegment (0.00s)
+=== RUN   TestValueLogGC_IgnoresLeafVlogSegmentsInSplitMode
+--- PASS: TestValueLogGC_IgnoresLeafVlogSegmentsInSplitMode (0.01s)
+=== RUN   TestValueLogGC_RefreshesFullInventoryAfterBoundedOpen
+--- PASS: TestValueLogGC_RefreshesFullInventoryAfterBoundedOpen (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	2.003s
+=== RUN   TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor
+--- PASS: TestCOWDictionaryPrimaryTemporaryCaptureDetachesGovernor (0.01s)
+=== RUN   TestCOWPrimaryProducerSurvivesBasisUntilPhysicalDisposal
+--- PASS: TestCOWPrimaryProducerSurvivesBasisUntilPhysicalDisposal (0.01s)
+=== RUN   TestPublishInstalledRootSet_RetriesWholeGroupedPrimaryIndexStateSecondaryAndSystem
+--- PASS: TestPublishInstalledRootSet_RetriesWholeGroupedPrimaryIndexStateSecondaryAndSystem (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	0.032s
+=== RUN   TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability
+--- PASS: TestPrimaryAdjacentWriteAdmissionPhysicalViewsAndDurability (0.00s)
+=== RUN   TestPrimaryCapsuleFixedSpanDurabilityAndIndependentSlots
+--- PASS: TestPrimaryCapsuleFixedSpanDurabilityAndIndependentSlots (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/pager	0.003s
+=== RUN   TestFileDecodeScratch_TrimsAfterPrimaryRefill
+--- PASS: TestFileDecodeScratch_TrimsAfterPrimaryRefill (0.00s)
+=== RUN   TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities
+--- PASS: TestRotateToWithStableResourcesRetainsClosedAndActiveIdentities (0.00s)
+=== RUN   TestRotateToWithStableResourcesOwnsRegistryObservations
+--- PASS: TestRotateToWithStableResourcesOwnsRegistryObservations (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	0.006s
+=== RUN   TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut
+    primary_joint_vacuum_v6_test.go:112: primary arena: stale ownership
+--- FAIL: TestPrimaryJointVacuumV6DefaultOuterLeafMaterializationReaderAndCut (0.04s)
+=== RUN   TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut
+    primary_owned_promotion_v6_test.go:93: primary arena: stale ownership
+--- FAIL: TestPrimaryOwnedPromotionV6DefaultMaterializationReaderAndCut (0.02s)
+=== RUN   TestPrimaryNoWALFastOrdinaryHeldSnapshotReopen
+--- PASS: TestPrimaryNoWALFastOrdinaryHeldSnapshotReopen (0.03s)
+=== RUN   TestPrimaryNoWALFastDependencyPointerHeldSnapshotReopen
+--- PASS: TestPrimaryNoWALFastDependencyPointerHeldSnapshotReopen (0.02s)
+=== RUN   TestPrimaryNoWALFastActualParentsAfterMaterializationV6
+    primary_profile_v5_test.go:170: initial actual registered Snapshot Set files0 physicalParents0
+    primary_profile_v5_test.go:168: initial-materialization commit2 file2147483649 actualParent={Platform:linux VolumeID:27 ObjectID:[27 0 0 0 0 0 0 0 121 95 14 0 0 0 0 0] Generation:0} path=/tmp/TestPrimaryNoWALFastActualParentsAfterMaterializationV63946207905/001/maindb/value_vlog
+    primary_profile_v5_test.go:168: initial-materialization commit2 file4286578689 actualParent={Platform:linux VolumeID:27 ObjectID:[27 0 0 0 0 0 0 0 122 95 14 0 0 0 0 0] Generation:0} path=/tmp/TestPrimaryNoWALFastActualParentsAfterMaterializationV63946207905/001/maindb/leaf_vlog
+    primary_profile_v5_test.go:170: initial-materialization actual registered Snapshot Set files2 physicalParents2
+    primary_profile_v5_test.go:168: between-turn-materialization-and-write commit4 file2147483649 actualParent={Platform:linux VolumeID:27 ObjectID:[27 0 0 0 0 0 0 0 121 95 14 0 0 0 0 0] Generation:0} path=/tmp/TestPrimaryNoWALFastActualParentsAfterMaterializationV63946207905/001/maindb/value_vlog
+    primary_profile_v5_test.go:168: between-turn-materialization-and-write commit4 file4286578689 actualParent={Platform:linux VolumeID:27 ObjectID:[27 0 0 0 0 0 0 0 122 95 14 0 0 0 0 0] Generation:0} path=/tmp/TestPrimaryNoWALFastActualParentsAfterMaterializationV63946207905/001/maindb/leaf_vlog
+    primary_profile_v5_test.go:170: between-turn-materialization-and-write actual registered Snapshot Set files2 physicalParents2
+--- PASS: TestPrimaryNoWALFastActualParentsAfterMaterializationV6 (0.03s)
+=== RUN   TestTemplateKVStableResourceReleaseRacesDatabaseClose
+=== RUN   TestTemplateKVStableResourceReleaseRacesDatabaseClose/inline
+=== RUN   TestTemplateKVStableResourceReleaseRacesDatabaseClose/pointer
+--- PASS: TestTemplateKVStableResourceReleaseRacesDatabaseClose (0.03s)
+    --- PASS: TestTemplateKVStableResourceReleaseRacesDatabaseClose/inline (0.02s)
+    --- PASS: TestTemplateKVStableResourceReleaseRacesDatabaseClose/pointer (0.01s)
+=== RUN   TestReopenVerify_WALOn_Checkpoint
+2026/10/08 10:29:51 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 10:29:51 treedb: value-log dict published class=single_value dict_id=3028385870171281762 k=2 payload_ratio=0.001 total_ratio=0.005
+--- PASS: TestReopenVerify_WALOn_Checkpoint (0.10s)
+=== RUN   TestReopenVerify_WALOn_Checkpoint_LeafPagesInValueLog
+2026/10/08 10:29:51 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 10:29:51 treedb: value-log dict published class=single_value dict_id=4658099919979829758 k=2 payload_ratio=0.001 total_ratio=0.005
+--- PASS: TestReopenVerify_WALOn_Checkpoint_LeafPagesInValueLog (0.11s)
+=== RUN   TestReopenVerify_ParallelFlushLeafLogOutput
+--- PASS: TestReopenVerify_ParallelFlushLeafLogOutput (0.75s)
+=== RUN   TestReopenVerify_LeafPageLogGroupedFrameCRCIntegrityModes
+2026/10/08 10:29:52 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+--- PASS: TestReopenVerify_LeafPageLogGroupedFrameCRCIntegrityModes (0.06s)
+=== RUN   TestReopenVerify_CurrentSetPublishedOnCheckpoint
+--- PASS: TestReopenVerify_CurrentSetPublishedOnCheckpoint (0.02s)
+=== RUN   TestReopenVerify_CommitFence_CheckpointAndWriteSync
+--- PASS: TestReopenVerify_CommitFence_CheckpointAndWriteSync (0.02s)
+=== RUN   TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity
+--- PASS: TestReopenVerify_ValueLogRewrite_BatchedPointerSwap_ReopenParity (0.04s)
+=== RUN   TestReopenVerify_ValueLogGC_LeafPagesInValueLog_ReopenParity
+--- PASS: TestReopenVerify_ValueLogGC_LeafPagesInValueLog_ReopenParity (0.02s)
+=== RUN   TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint
+2026/10/08 10:29:52 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 10:29:52 treedb: value-log dict published class=single_value dict_id=129788978351133540 k=2 payload_ratio=0.001 total_ratio=0.005
+--- PASS: TestReopenVerify_InternalBaseDelta_WALOn_Checkpoint (0.10s)
+=== RUN   TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn
+--- PASS: TestReopenVerify_OuterLeavesExplicitInternalBaseDeltaDisabled_Churn (0.06s)
+=== RUN   TestReopenVerify_WALOn_WriteSync
+2026/10/08 10:29:52 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=32 raw=262656 stored=438 ratio=0.002
+2026/10/08 10:29:52 treedb: value-log dict published class=single_value dict_id=745560119537671155 k=2 payload_ratio=0.001 total_ratio=0.005
+--- PASS: TestReopenVerify_WALOn_WriteSync (0.10s)
+=== RUN   TestReopenVerify_SplitMergeDeleteRange_IteratorParity
+2026/10/08 10:29:53 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=123392 stored=2931 ratio=0.024
+--- PASS: TestReopenVerify_SplitMergeDeleteRange_IteratorParity (0.15s)
+=== RUN   TestReopenVerify_CompactIndex_ReopenParity
+2026/10/08 10:29:53 treedb: dict training trained dict stream=0 dict_bytes=65536 samples=86 raw=33024 stored=2172 ratio=0.066
+    reopen_verify_test.go:1196: CompactIndex: primary arena: stale ownership
+--- FAIL: TestReopenVerify_CompactIndex_ReopenParity (0.03s)
+=== RUN   TestReopenVerify_WALOn_Checkpoint_CompressionModes
+=== RUN   TestReopenVerify_WALOn_Checkpoint_CompressionModes/off
+=== RUN   TestReopenVerify_WALOn_Checkpoint_CompressionModes/block_snappy
+=== RUN   TestReopenVerify_WALOn_Checkpoint_CompressionModes/block_lz4
+=== RUN   TestReopenVerify_WALOn_Checkpoint_CompressionModes/block_zstd
+=== RUN   TestReopenVerify_WALOn_Checkpoint_CompressionModes/dict
+2026/10/08 10:29:54 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 10:29:54 treedb: value-log dict published class=single_value dict_id=8959798810111413589 k=2 payload_ratio=0.001 total_ratio=0.005
+=== RUN   TestReopenVerify_WALOn_Checkpoint_CompressionModes/auto
+2026/10/08 10:29:54 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=262656 stored=439 ratio=0.002
+2026/10/08 10:29:54 treedb: value-log dict published class=single_value dict_id=2933441670530890583 k=2 payload_ratio=0.001 total_ratio=0.005
+--- PASS: TestReopenVerify_WALOn_Checkpoint_CompressionModes (1.76s)
+    --- PASS: TestReopenVerify_WALOn_Checkpoint_CompressionModes/off (0.09s)
+    --- PASS: TestReopenVerify_WALOn_Checkpoint_CompressionModes/block_snappy (0.18s)
+    --- PASS: TestReopenVerify_WALOn_Checkpoint_CompressionModes/block_lz4 (0.66s)
+    --- PASS: TestReopenVerify_WALOn_Checkpoint_CompressionModes/block_zstd (0.64s)
+    --- PASS: TestReopenVerify_WALOn_Checkpoint_CompressionModes/dict (0.10s)
+    --- PASS: TestReopenVerify_WALOn_Checkpoint_CompressionModes/auto (0.09s)
+=== RUN   TestReopenVerify_WALOff_NoJournal
+2026/10/08 10:29:54 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=32 raw=262656 stored=420 ratio=0.002
+2026/10/08 10:29:54 treedb: value-log dict published class=single_value dict_id=14036609979365147213 k=2 payload_ratio=0.001 total_ratio=0.005
+--- PASS: TestReopenVerify_WALOff_NoJournal (0.10s)
+=== RUN   TestReopenVerify_IndexColumnarLeaves
+2026/10/08 10:29:55 treedb: dict training trained dict stream=0 dict_bytes=131072 samples=32 raw=524288 stored=462 ratio=0.001
+2026/10/08 10:29:55 treedb: value-log dict published class=single_value dict_id=14442025530127152555 k=4 payload_ratio=0.000 total_ratio=0.002
+--- PASS: TestReopenVerify_IndexColumnarLeaves (0.16s)
+=== RUN   TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages
+2026/10/08 10:29:55 treedb: dict training trained dict stream=0 dict_bytes=98304 samples=32 raw=65536 stored=673 ratio=0.010
+2026/10/08 10:29:55 treedb: value-log dict published class=single_value dict_id=11631864874933100351 k=32 payload_ratio=0.000 total_ratio=0.007
+--- PASS: TestReopenVerify_AdaptiveLeafEncoding_MixedEncodingPages (0.12s)
+=== RUN   TestValueLogGCOnline_ProtectedSetSafety
+--- PASS: TestValueLogGCOnline_ProtectedSetSafety (0.03s)
+=== RUN   TestValueLogGC_OnlineMode_HealthStateNoUnsafeDeletes
+--- PASS: TestValueLogGC_OnlineMode_HealthStateNoUnsafeDeletes (0.02s)
+=== RUN   TestReopenVerify_DurableWALCoalescedInlineWrites
+--- PASS: TestReopenVerify_DurableWALCoalescedInlineWrites (0.03s)
+=== RUN   TestReopenVerify_DurableWALForcedValueLogPointers
+--- PASS: TestReopenVerify_DurableWALForcedValueLogPointers (0.02s)
+=== RUN   TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords
+--- PASS: TestReopenVerify_DurableWALCoalescedInlineAroundPointerRecords (0.02s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	3.984s
+FAIL

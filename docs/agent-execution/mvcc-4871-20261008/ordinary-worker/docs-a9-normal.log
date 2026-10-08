@@ -1,0 +1,5 @@
+--- FAIL: TestCommandWALLegacyTermsInCurrentDocsNeedContext (0.01s)
+    command_wal_docs_test.go:357: /workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/docs/spec/storage-format.md:897 mentions legacy WAL terminology without legacy/compatibility/benchmark context: are not rewritten as a second selector. Ordinary relaxed no-WAL visibility
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/docs	3.160s
+FAIL

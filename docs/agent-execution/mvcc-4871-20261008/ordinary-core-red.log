@@ -1,0 +1,1156 @@
+go: downloading golang.org/x/sys v0.41.0
+go: downloading go.uber.org/goleak v1.3.0
+go: downloading github.com/tidwall/btree v1.8.1
+go: downloading github.com/snissn/compress v1.18.2-snissn.0.0.20260506201017-87fb149e4721
+go: downloading github.com/golang/snappy v0.0.4
+go: downloading github.com/pierrec/lz4/v4 v4.1.22
+go: downloading github.com/snissn/go-crc32-asm v0.0.0-20260522204125-08945951423a
+go: downloading github.com/zeebo/xxh3 v1.1.0
+go: downloading github.com/klauspost/cpuid/v2 v2.2.10
+=== RUN   TestOwnerSharedDistinctAdmissionAndFailureUnwind
+--- PASS: TestOwnerSharedDistinctAdmissionAndFailureUnwind (0.00s)
+=== RUN   TestOwnerRetiredOrFailedCleanupKeepsExactGovernor
+--- PASS: TestOwnerRetiredOrFailedCleanupKeepsExactGovernor (0.00s)
+=== RUN   TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner
+--- PASS: TestOwnerPhysicalCloseWithActiveCaptureKeepsFixedOwner (0.00s)
+=== RUN   TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture
+--- PASS: TestOwnerPhysicalCloseKeepsPendingTailThroughLastCapture (0.00s)
+=== RUN   TestOwnerPairBorrowProducerAndRollback
+--- PASS: TestOwnerPairBorrowProducerAndRollback (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/retainedalloc	0.002s
+=== RUN   TestFakeClockDueTimersUseDeadlineThenCreationOrder
+--- PASS: TestFakeClockDueTimersUseDeadlineThenCreationOrder (0.00s)
+=== RUN   TestStaleStoppedTimerFiringCannotReplaceCurrentTimer
+--- PASS: TestStaleStoppedTimerFiringCannotReplaceCurrentTimer (0.00s)
+=== RUN   TestFixedPublishDelayOverridesAdaptiveDelayWithinProductionBounds
+--- PASS: TestFixedPublishDelayOverridesAdaptiveDelayWithinProductionBounds (0.00s)
+=== RUN   TestBenchmarkHelpersRecognizeExpectedStop
+--- PASS: TestBenchmarkHelpersRecognizeExpectedStop (0.00s)
+=== RUN   TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation
+=== RUN   TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation/foreign
+=== RUN   TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation/released
+=== RUN   TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation/nested
+--- PASS: TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation (0.00s)
+    --- PASS: TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation/foreign (0.00s)
+    --- PASS: TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation/released (0.00s)
+    --- PASS: TestEnqueueBuiltRejectsForeignReleasedAndNestedLeasesBeforeCandidateMutation/nested (0.00s)
+=== RUN   TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease
+--- PASS: TestEnqueueBuiltValidationAndActivationFailurePreserveFinalLease (0.00s)
+=== RUN   TestEnqueueBuiltAppendsBeforeFinalLeaseReleaseAndHardAdmissionWait
+--- PASS: TestEnqueueBuiltAppendsBeforeFinalLeaseReleaseAndHardAdmissionWait (0.00s)
+=== RUN   TestEnqueueBuiltConcurrentReleaseHasNoLockInversionOrDoubleConsume
+--- PASS: TestEnqueueBuiltConcurrentReleaseHasNoLockInversionOrDoubleConsume (0.00s)
+=== RUN   TestPublisherPrepareBlocksBuildersButStablePublishDoesNot
+--- PASS: TestPublisherPrepareBlocksBuildersButStablePublishDoesNot (0.03s)
+=== RUN   TestPublisherPrepareFailureIsRetryableAndRetryPreparesAgain
+--- PASS: TestPublisherPrepareFailureIsRetryableAndRetryPreparesAgain (0.00s)
+=== RUN   TestStopCancelsPrepareAndWakesBuilderBlockedOnGate
+--- PASS: TestStopCancelsPrepareAndWakesBuilderBlockedOnGate (0.00s)
+=== RUN   TestCoordinatorEnqueueRetainedClosureAllocation
+    coordinator_resource_count_test.go:117: pending=1 entries=128 RIDs/entry=512 enqueue bytes=156112 mallocs=48
+    coordinator_resource_count_test.go:117: pending=2 entries=128 RIDs/entry=512 enqueue bytes=158032 mallocs=58
+--- PASS: TestCoordinatorEnqueueRetainedClosureAllocation (0.10s)
+=== RUN   TestCoordinatorEnqueueUnionCountParity
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/advancing_sparse_frontier
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/logical_identity_changed
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/immutable_generations_remain_separate
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/immutable_cross_generation_digest
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/mutable_kinds_remain_separate
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/mutable_generations_remain_separate
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/mutable_header_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/stability_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/third_alias_obligation_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/third_alias_namespace_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=0/namespace_representative_then_old_logical_identity
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/advancing_sparse_frontier
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/logical_identity_changed
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/immutable_generations_remain_separate
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/immutable_cross_generation_digest
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/mutable_kinds_remain_separate
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/mutable_generations_remain_separate
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/mutable_header_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/stability_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/third_alias_obligation_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/third_alias_namespace_conflict
+=== RUN   TestCoordinatorEnqueueUnionCountParity/padding=17/namespace_representative_then_old_logical_identity
+--- PASS: TestCoordinatorEnqueueUnionCountParity (0.02s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/advancing_sparse_frontier (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/logical_identity_changed (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/immutable_generations_remain_separate (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/immutable_cross_generation_digest (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/mutable_kinds_remain_separate (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/mutable_generations_remain_separate (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/mutable_header_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/stability_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/third_alias_obligation_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/third_alias_namespace_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=0/namespace_representative_then_old_logical_identity (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/advancing_sparse_frontier (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/logical_identity_changed (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/immutable_generations_remain_separate (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/immutable_cross_generation_digest (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/mutable_kinds_remain_separate (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/mutable_generations_remain_separate (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/mutable_header_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/stability_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/third_alias_obligation_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/third_alias_namespace_conflict (0.00s)
+    --- PASS: TestCoordinatorEnqueueUnionCountParity/padding=17/namespace_representative_then_old_logical_identity (0.00s)
+=== RUN   TestPreparedCandidateCopiesAndNormalizesObligations
+--- PASS: TestPreparedCandidateCopiesAndNormalizesObligations (0.00s)
+=== RUN   TestCoalescingUnionsEveryReservedExtensionSlot
+--- PASS: TestCoalescingUnionsEveryReservedExtensionSlot (0.00s)
+=== RUN   TestCoalesceCandidatesDuplicatePinsHasBoundedAllocationGrowth
+--- PASS: TestCoalesceCandidatesDuplicatePinsHasBoundedAllocationGrowth (1.30s)
+=== RUN   TestNewRejectsRecoverableFrontierNewerThanDurable
+--- PASS: TestNewRejectsRecoverableFrontierNewerThanDurable (0.00s)
+=== RUN   TestReachabilityEpochInvalidatesOnEnqueueAndDurablePublish
+--- PASS: TestReachabilityEpochInvalidatesOnEnqueueAndDurablePublish (0.00s)
+=== RUN   TestReachabilityEpochSurvivesRetryableFailure
+--- PASS: TestReachabilityEpochSurvivesRetryableFailure (0.00s)
+=== RUN   TestReachabilityRevalidationFailsClosedAfterAmbiguousPublish
+--- PASS: TestReachabilityRevalidationFailsClosedAfterAmbiguousPublish (0.00s)
+=== RUN   TestVisibleFrontierDoesNotSatisfyDurabilityWaiter
+--- PASS: TestVisibleFrontierDoesNotSatisfyDurabilityWaiter (0.00s)
+=== RUN   TestWaiterRemovalClearsDiscardedBackingSlots
+=== RUN   TestWaiterRemovalClearsDiscardedBackingSlots/remove
+=== RUN   TestWaiterRemovalClearsDiscardedBackingSlots/captured_failure
+=== RUN   TestWaiterRemovalClearsDiscardedBackingSlots/durable_satisfaction
+=== RUN   TestWaiterRemovalClearsDiscardedBackingSlots/terminal_failure
+--- PASS: TestWaiterRemovalClearsDiscardedBackingSlots (0.00s)
+    --- PASS: TestWaiterRemovalClearsDiscardedBackingSlots/remove (0.00s)
+    --- PASS: TestWaiterRemovalClearsDiscardedBackingSlots/captured_failure (0.00s)
+    --- PASS: TestWaiterRemovalClearsDiscardedBackingSlots/durable_satisfaction (0.00s)
+    --- PASS: TestWaiterRemovalClearsDiscardedBackingSlots/terminal_failure (0.00s)
+=== RUN   TestStopDropsWaiterBackingStorage
+--- PASS: TestStopDropsWaiterBackingStorage (0.00s)
+=== RUN   TestSupersedeRetainsDebtWaitersAndDeterministicObligationUnion
+--- PASS: TestSupersedeRetainsDebtWaitersAndDeterministicObligationUnion (0.00s)
+=== RUN   TestCoalescedSupersedeUnionsAllUncoveredObligations
+--- PASS: TestCoalescedSupersedeUnionsAllUncoveredObligations (0.00s)
+=== RUN   TestTimerAnchorsFirstCandidateAndAdaptiveDelay
+--- PASS: TestTimerAnchorsFirstCandidateAndAdaptiveDelay (0.00s)
+=== RUN   TestSatisfiedInFlightWaiterDoesNotLeakImmediateWake
+--- PASS: TestSatisfiedInFlightWaiterDoesNotLeakImmediateWake (0.00s)
+=== RUN   TestSuccessfulPublishPreservesRealRemainingImmediateTriggers
+=== RUN   TestSuccessfulPublishPreservesRealRemainingImmediateTriggers/waiter
+=== RUN   TestSuccessfulPublishPreservesRealRemainingImmediateTriggers/drain
+=== RUN   TestSuccessfulPublishPreservesRealRemainingImmediateTriggers/soft_debt
+--- PASS: TestSuccessfulPublishPreservesRealRemainingImmediateTriggers (0.00s)
+    --- PASS: TestSuccessfulPublishPreservesRealRemainingImmediateTriggers/waiter (0.00s)
+    --- PASS: TestSuccessfulPublishPreservesRealRemainingImmediateTriggers/drain (0.00s)
+    --- PASS: TestSuccessfulPublishPreservesRealRemainingImmediateTriggers/soft_debt (0.00s)
+=== RUN   TestHardAdmissionBlocksBeforeAcknowledgement
+--- PASS: TestHardAdmissionBlocksBeforeAcknowledgement (0.00s)
+=== RUN   TestExactHardByteBoundaryAcknowledgesWithoutWaiting
+--- PASS: TestExactHardByteBoundaryAcknowledgesWithoutWaiting (0.00s)
+=== RUN   TestExactHardCommitBoundaryAcknowledgesThenNextCommitWaits
+--- PASS: TestExactHardCommitBoundaryAcknowledgesThenNextCommitWaits (4.33s)
+=== RUN   TestHardAdmissionReturnsPublisherErrorOrContext
+--- PASS: TestHardAdmissionReturnsPublisherErrorOrContext (0.00s)
+=== RUN   TestRetryableFailureRetainsDebtAndFailsOnlyCapturedWaiters
+--- PASS: TestRetryableFailureRetainsDebtAndFailsOnlyCapturedWaiters (0.00s)
+=== RUN   TestRetryableFailureDoesNotFailWaiterAddedInFlight
+--- PASS: TestRetryableFailureDoesNotFailWaiterAddedInFlight (0.00s)
+=== RUN   TestCanceledInFlightWaiterDoesNotLeakRetryWake
+--- PASS: TestCanceledInFlightWaiterDoesNotLeakRetryWake (0.00s)
+=== RUN   TestInFlightEnqueueCrossingSoftBoundaryRetainsRetryWake
+--- PASS: TestInFlightEnqueueCrossingSoftBoundaryRetainsRetryWake (0.00s)
+=== RUN   TestDrainIdentityTurnoverPreservesFreshInFlightDrain
+--- PASS: TestDrainIdentityTurnoverPreservesFreshInFlightDrain (0.00s)
+=== RUN   TestErroredCapturedDrainDoesNotOwnRetryWakeAfterFreshDrainEnds
+--- PASS: TestErroredCapturedDrainDoesNotOwnRetryWakeAfterFreshDrainEnds (0.00s)
+=== RUN   TestHardAdmissionAddedInFlightIgnoresPriorGroupFailure
+--- PASS: TestHardAdmissionAddedInFlightIgnoresPriorGroupFailure (0.00s)
+=== RUN   TestAmbiguousResultPoisonsFutureOperations
+--- PASS: TestAmbiguousResultPoisonsFutureOperations (0.00s)
+=== RUN   TestPoisonedWaitThroughFailsClosedBeforeDurableFastPath
+--- PASS: TestPoisonedWaitThroughFailsClosedBeforeDurableFastPath (0.00s)
+=== RUN   TestStopCancelsStalledPublisherWithoutLeaks
+--- PASS: TestStopCancelsStalledPublisherWithoutLeaks (0.00s)
+=== RUN   TestStopReturnsSameDebtResultToEveryCaller
+--- PASS: TestStopReturnsSameDebtResultToEveryCaller (0.00s)
+=== RUN   TestConcurrentDrainAndStop
+--- PASS: TestConcurrentDrainAndStop (0.00s)
+=== RUN   TestNestedAdmissionUsesOneTokenAndCallbackRunsUnlocked
+--- PASS: TestNestedAdmissionUsesOneTokenAndCallbackRunsUnlocked (0.00s)
+=== RUN   TestCopiedAndReleasedBuilderHandleCannotResurrectOrDoubleReleaseLease
+--- PASS: TestCopiedAndReleasedBuilderHandleCannotResurrectOrDoubleReleaseLease (0.00s)
+=== RUN   TestWaitCancellationRaceRechecksDurableFrontier
+--- PASS: TestWaitCancellationRaceRechecksDurableFrontier (0.00s)
+=== RUN   TestCanceledDrainDoesNotLeavePermanentDrainMode
+--- PASS: TestCanceledDrainDoesNotLeavePermanentDrainMode (0.02s)
+=== RUN   TestCanceledDrainRestoresAnchoredTimerInsteadOfLeakingImmediateWake
+--- PASS: TestCanceledDrainRestoresAnchoredTimerInsteadOfLeakingImmediateWake (0.00s)
+=== RUN   TestCanceledWaiterRestoresAnchoredTimerInsteadOfLeakingImmediateWake
+--- PASS: TestCanceledWaiterRestoresAnchoredTimerInsteadOfLeakingImmediateWake (0.00s)
+=== RUN   TestCanceledExplicitWakePublishesWhenAnchoredDeadlineElapsed
+=== RUN   TestCanceledExplicitWakePublishesWhenAnchoredDeadlineElapsed/waiter
+=== RUN   TestCanceledExplicitWakePublishesWhenAnchoredDeadlineElapsed/drain
+--- PASS: TestCanceledExplicitWakePublishesWhenAnchoredDeadlineElapsed (0.00s)
+    --- PASS: TestCanceledExplicitWakePublishesWhenAnchoredDeadlineElapsed/waiter (0.00s)
+    --- PASS: TestCanceledExplicitWakePublishesWhenAnchoredDeadlineElapsed/drain (0.00s)
+=== RUN   TestReportPublishResultRejectsStaleMismatchedAndDuplicateAttempts
+--- PASS: TestReportPublishResultRejectsStaleMismatchedAndDuplicateAttempts (0.00s)
+=== RUN   TestSuccessCannotClaimDifferentDurableSequence
+--- PASS: TestSuccessCannotClaimDifferentDurableSequence (0.00s)
+=== RUN   TestOldestRecoverableMustAdvanceMonotonicallyWithinDurableFrontier
+=== RUN   TestOldestRecoverableMustAdvanceMonotonicallyWithinDurableFrontier/regression
+=== RUN   TestOldestRecoverableMustAdvanceMonotonicallyWithinDurableFrontier/beyond-durable
+--- PASS: TestOldestRecoverableMustAdvanceMonotonicallyWithinDurableFrontier (0.00s)
+    --- PASS: TestOldestRecoverableMustAdvanceMonotonicallyWithinDurableFrontier/regression (0.00s)
+    --- PASS: TestOldestRecoverableMustAdvanceMonotonicallyWithinDurableFrontier/beyond-durable (0.00s)
+=== RUN   TestRandomizedCoordinatorModel
+--- PASS: TestRandomizedCoordinatorModel (0.00s)
+=== RUN   TestRandomizedPoisonAdmissionAndShutdownModel
+--- PASS: TestRandomizedPoisonAdmissionAndShutdownModel (0.00s)
+=== RUN   TestOrdinaryEnqueueHasZeroStableIOAndNoPerEnqueueGoroutine
+--- PASS: TestOrdinaryEnqueueHasZeroStableIOAndNoPerEnqueueGoroutine (0.08s)
+=== RUN   TestCowFreelistExtensionCarriesExactOrderedReferences
+--- PASS: TestCowFreelistExtensionCarriesExactOrderedReferences (0.00s)
+=== RUN   TestCowFreelistExtensionRejectsWrongType
+--- PASS: TestCowFreelistExtensionRejectsWrongType (0.00s)
+=== RUN   TestPrimaryDependencyMetadataAdmissionAndLastRead
+--- PASS: TestPrimaryDependencyMetadataAdmissionAndLastRead (0.00s)
+=== RUN   TestPrimaryDependencyMetadataFailedPhysicalReleaseRetainsDebt
+--- PASS: TestPrimaryDependencyMetadataFailedPhysicalReleaseRetainsDebt (0.00s)
+=== RUN   TestDependencyDirectoryV2ExactIdentityAndCanonicalRecords
+--- PASS: TestDependencyDirectoryV2ExactIdentityAndCanonicalRecords (0.00s)
+=== RUN   TestDependencyDirectoryV2PinnedPointAndStreamingChecks
+--- PASS: TestDependencyDirectoryV2PinnedPointAndStreamingChecks (0.00s)
+=== RUN   TestDurableRootRecordV2DirectoryOneOf
+--- PASS: TestDurableRootRecordV2DirectoryOneOf (0.00s)
+=== RUN   TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles
+=== RUN   TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/beyond-selected-extent
+=== RUN   TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/cycle
+--- PASS: TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles (0.00s)
+    --- PASS: TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/beyond-selected-extent (0.00s)
+    --- PASS: TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/cycle (0.00s)
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/exact
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/different-valid
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/malformed-value
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/wrong-owner-key
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/missing-owner
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/corrupt-page
+--- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/exact (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/different-valid (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/malformed-value (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/wrong-owner-key (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/missing-owner (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/corrupt-page (0.00s)
+=== RUN   TestDependencyManifestV1DeterministicMultiPageRoundTrip
+=== RUN   TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=false
+=== RUN   TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=true
+--- PASS: TestDependencyManifestV1DeterministicMultiPageRoundTrip (0.01s)
+    --- PASS: TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=false (0.01s)
+    --- PASS: TestDependencyManifestV1DeterministicMultiPageRoundTrip/cached=true (0.00s)
+=== RUN   TestDependencyManifestV1ReferenceEmptyAndNil
+--- PASS: TestDependencyManifestV1ReferenceEmptyAndNil (0.00s)
+=== RUN   TestDurableRootRecordV1RoundTripBindsMetaFreelistAndManifest
+--- PASS: TestDurableRootRecordV1RoundTripBindsMetaFreelistAndManifest (0.00s)
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/0
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/1
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/2
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/3
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/4
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/0
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/1
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/2
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/3
+=== RUN   TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/4
+--- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership (0.00s)
+    --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/0 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/1 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/2 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/3 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=false/4 (0.00s)
+    --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/0 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/1 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/2 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/3 (0.00s)
+        --- PASS: TestDependencyManifestV1PageBoundaryAndSinkOwnership/cached=true/4 (0.00s)
+=== RUN   TestPrimaryRootV5BindsActualDataAndCompleteBanks
+=== RUN   TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_actual_base_root
+=== RUN   TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_base_generation
+=== RUN   TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_base_bytes
+=== RUN   TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_system_bytes
+=== RUN   TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_directory_bytes
+=== RUN   TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_DATA_sequence
+--- PASS: TestPrimaryRootV5BindsActualDataAndCompleteBanks (0.00s)
+    --- PASS: TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_actual_base_root (0.00s)
+    --- PASS: TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_base_generation (0.00s)
+    --- PASS: TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_base_bytes (0.00s)
+    --- PASS: TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_system_bytes (0.00s)
+    --- PASS: TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_directory_bytes (0.00s)
+    --- PASS: TestPrimaryRootV5BindsActualDataAndCompleteBanks/different_DATA_sequence (0.00s)
+=== RUN   TestDurableRootTransactionCopiesPayloadAndCandidateAbandonAbortsExactCOW
+--- PASS: TestDurableRootTransactionCopiesPayloadAndCandidateAbandonAbortsExactCOW (0.00s)
+=== RUN   TestDurableRootTransactionAllowsCallbackTimeSealWithoutPayloadOrAuxiliaryPage
+--- PASS: TestDurableRootTransactionAllowsCallbackTimeSealWithoutPayloadOrAuxiliaryPage (0.00s)
+=== RUN   TestDurableRootGroupRetainsOrderedExactMembersAcrossRetryThenConsumesThroughLatest
+--- PASS: TestDurableRootGroupRetainsOrderedExactMembersAcrossRetryThenConsumesThroughLatest (0.00s)
+=== RUN   TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility
+--- PASS: TestDurableRootActivationFailureRollsBackOwnershipBeforeVisibility (0.00s)
+=== RUN   TestCoordinatorRejectsUnrelatedOrGappedDurableRootLineageBeforeTransfer
+--- PASS: TestCoordinatorRejectsUnrelatedOrGappedDurableRootLineageBeforeTransfer (0.00s)
+=== RUN   TestDurableRootAmbiguityHandsOffEveryUnconsumedMember
+--- PASS: TestDurableRootAmbiguityHandsOffEveryUnconsumedMember (0.00s)
+=== RUN   TestPrimaryNamespaceMetadataRefusalAndIndependentBinding
+--- PASS: TestPrimaryNamespaceMetadataRefusalAndIndependentBinding (0.00s)
+=== RUN   TestPrimaryNamespaceFailedSyncUnwindsOwnedBacking
+--- PASS: TestPrimaryNamespaceFailedSyncUnwindsOwnedBacking (0.00s)
+=== RUN   TestPrimaryNamespaceMetadataConcurrentCleanup
+--- PASS: TestPrimaryNamespaceMetadataConcurrentCleanup (0.00s)
+=== RUN   TestNamespaceExistingProofSuppliedMetadataIndependentNoResync
+--- PASS: TestNamespaceExistingProofSuppliedMetadataIndependentNoResync (0.00s)
+=== RUN   TestIdentityPinRegistrySerializesPinAndDelete
+--- PASS: TestIdentityPinRegistrySerializesPinAndDelete (0.00s)
+=== RUN   TestIdentityDeleteLeaseCommitForgetsStableNamespaceLinksForDeletedChild
+--- PASS: TestIdentityDeleteLeaseCommitForgetsStableNamespaceLinksForDeletedChild (0.00s)
+=== RUN   TestIdentityPinRegistryCoalescesLogicalGenerations
+--- PASS: TestIdentityPinRegistryCoalescesLogicalGenerations (0.00s)
+=== RUN   TestIdentityPinRegistryRejectsUnobservedPin
+--- PASS: TestIdentityPinRegistryRejectsUnobservedPin (0.00s)
+=== RUN   TestIdentityPinRegistryRejectsLatePinAfterFinalObserverRetires
+--- PASS: TestIdentityPinRegistryRejectsLatePinAfterFinalObserverRetires (0.00s)
+=== RUN   TestIdentityPinRegistrySerializesDeleteNamespace
+--- PASS: TestIdentityPinRegistrySerializesDeleteNamespace (0.00s)
+=== RUN   TestIdentityPinRegistryRebindsOnlyExactKnownStableNamespaceLink
+--- PASS: TestIdentityPinRegistryRebindsOnlyExactKnownStableNamespaceLink (0.00s)
+=== RUN   TestIdentityPinRegistryRejectsUnbalancedRelease
+--- PASS: TestIdentityPinRegistryRejectsUnbalancedRelease (0.00s)
+=== RUN   TestIdentityPinRegistryRejectsLatePinAfterCommittedDelete
+--- PASS: TestIdentityPinRegistryRejectsLatePinAfterCommittedDelete (0.00s)
+=== RUN   TestIdentityPinRegistryDeletionStressDoesNotRetainState
+--- PASS: TestIdentityPinRegistryDeletionStressDoesNotRetainState (0.01s)
+=== RUN   TestStableResourceTokenPinsIdentityRegistryUntilExactRelease
+--- PASS: TestStableResourceTokenPinsIdentityRegistryUntilExactRelease (0.00s)
+=== RUN   TestPrimaryRootV5MetadataBanksRecoverBothIndependentSlotsAndRetainedCut
+--- PASS: TestPrimaryRootV5MetadataBanksRecoverBothIndependentSlotsAndRetainedCut (0.00s)
+=== RUN   TestPrimaryRootV5ExactReplacementBundleUsesRealCodecAndCustody
+    primary_bank_metadata_v5_test.go:292: isolated actual Dir+V5 record bundle: 17R/229440B; cache/meta/fences/Accepted/Finish/releases excluded and whole-F UNQUALIFIED
+--- PASS: TestPrimaryRootV5ExactReplacementBundleUsesRealCodecAndCustody (0.00s)
+=== RUN   TestOwnedPrimaryBankMetadataScratchParityRefusalAndDisposal
+--- PASS: TestOwnedPrimaryBankMetadataScratchParityRefusalAndDisposal (0.00s)
+=== RUN   TestPrimaryCapsuleV6CompleteIndependentSlots
+--- PASS: TestPrimaryCapsuleV6CompleteIndependentSlots (0.00s)
+=== RUN   TestPrimaryCapsuleV6ActualIndependentPhysicalClosures
+--- PASS: TestPrimaryCapsuleV6ActualIndependentPhysicalClosures (0.00s)
+=== RUN   TestRegistryCapacityOverlapRefusalAndPhysicalAliases
+--- PASS: TestRegistryCapacityOverlapRefusalAndPhysicalAliases (0.00s)
+=== RUN   TestRegistryTerminalCloseWaitsExactPin
+--- PASS: TestRegistryTerminalCloseWaitsExactPin (0.00s)
+=== RUN   TestRegistryNamespaceCapacityFailurePreservesExistingProof
+--- PASS: TestRegistryNamespaceCapacityFailurePreservesExistingProof (0.00s)
+=== RUN   TestRegistryRepeatedIdentityChurnKeepsFiniteBacking
+--- PASS: TestRegistryRepeatedIdentityChurnKeepsFiniteBacking (0.00s)
+=== RUN   TestResourceIndexBackingAliasesAndRefusedPathCopy
+--- PASS: TestResourceIndexBackingAliasesAndRefusedPathCopy (0.00s)
+=== RUN   TestResourceIndexBackingConcurrentBorrowers
+--- PASS: TestResourceIndexBackingConcurrentBorrowers (0.00s)
+=== RUN   TestResourceKindViewCloneKeepsIndependentOwnedMetadata
+--- PASS: TestResourceKindViewCloneKeepsIndependentOwnedMetadata (0.00s)
+=== RUN   TestResourceObligationBackingIndependentRootsAndRefusal
+--- PASS: TestResourceObligationBackingIndependentRootsAndRefusal (0.00s)
+=== RUN   TestResourceObligationBackingConflictingNormalizationUnwinds
+--- PASS: TestResourceObligationBackingConflictingNormalizationUnwinds (0.00s)
+=== RUN   TestResourceFieldBackingCapacityOverlapAndLastAlias
+--- PASS: TestResourceFieldBackingCapacityOverlapAndLastAlias (0.00s)
+=== RUN   TestResourceKindBackingSharedSetAndScopedBorrow
+    resource_allocation_test.go:407: set release retired a scoped borrower
+--- FAIL: TestResourceKindBackingSharedSetAndScopedBorrow (0.00s)
+=== RUN   TestOpenStableAnonymousFileLinuxPublishesOnlyExactHandle
+--- PASS: TestOpenStableAnonymousFileLinuxPublishesOnlyExactHandle (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal
+=== RUN   TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal/0
+=== RUN   TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal/32
+--- PASS: TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal/0 (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal/32 (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks
+=== RUN   TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks/stability-conflict
+=== RUN   TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks/digest-conflict
+=== RUN   TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks/immutable-coalesce
+--- PASS: TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks/stability-conflict (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks/digest-conflict (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks/immutable-coalesce (0.00s)
+=== RUN   TestStableLogicalObligationFreshBulkBuildDoesNotPathCopy
+--- PASS: TestStableLogicalObligationFreshBulkBuildDoesNotPathCopy (0.00s)
+=== RUN   TestStableLogicalObligationAppendDiscardDoesNotPoisonRetryBase
+--- PASS: TestStableLogicalObligationAppendDiscardDoesNotPoisonRetryBase (0.00s)
+=== RUN   TestStableLogicalObligationAppendSupportsIndependentCandidateBranches
+--- PASS: TestStableLogicalObligationAppendSupportsIndependentCandidateBranches (0.00s)
+=== RUN   TestStableLogicalObligationAppendPreservesImmutableCommitments
+--- PASS: TestStableLogicalObligationAppendPreservesImmutableCommitments (0.00s)
+=== RUN   TestStableLogicalObligationAppendIsExactSetUnion
+--- PASS: TestStableLogicalObligationAppendIsExactSetUnion (0.00s)
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/2
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/2/empty
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/2/empty
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/2/subset
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/2/subset
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/2/equal
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/2/equal
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/2/overlap
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/2/overlap
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/2/late_conflict
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/2/late_conflict
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/2/indexless
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/2/indexless
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/2/empty
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/2/indexless
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/2/late_conflict
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/2/overlap
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/2/equal
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/2/subset
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/17
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/17/empty
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/17/empty
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/17/subset
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/17/subset
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/17/equal
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/17/equal
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/17/overlap
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/17/overlap
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/17/late_conflict
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/17/late_conflict
+=== RUN   TestStableLogicalObligationMergePreservesSharedViews/17/indexless
+=== PAUSE TestStableLogicalObligationMergePreservesSharedViews/17/indexless
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/17/empty
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/17/overlap
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/17/equal
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/17/indexless
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/17/subset
+=== CONT  TestStableLogicalObligationMergePreservesSharedViews/17/late_conflict
+--- PASS: TestStableLogicalObligationMergePreservesSharedViews (0.00s)
+    --- PASS: TestStableLogicalObligationMergePreservesSharedViews/2 (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/2/empty (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/2/indexless (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/2/late_conflict (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/2/overlap (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/2/equal (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/2/subset (0.00s)
+    --- PASS: TestStableLogicalObligationMergePreservesSharedViews/17 (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/17/empty (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/17/overlap (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/17/equal (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/17/subset (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/17/late_conflict (0.00s)
+        --- PASS: TestStableLogicalObligationMergePreservesSharedViews/17/indexless (0.00s)
+=== RUN   TestStableLogicalObligationMergeReusesExactAncestor
+=== RUN   TestStableLogicalObligationMergeReusesExactAncestor/older_target
+=== RUN   TestStableLogicalObligationMergeReusesExactAncestor/newer_target
+=== RUN   TestStableLogicalObligationMergeReusesExactAncestor/empty_target
+=== RUN   TestStableLogicalObligationMergeReusesExactAncestor/unrelated_equal
+=== RUN   TestStableLogicalObligationMergeReusesExactAncestor/partial_node_count
+--- PASS: TestStableLogicalObligationMergeReusesExactAncestor (0.00s)
+    --- PASS: TestStableLogicalObligationMergeReusesExactAncestor/older_target (0.00s)
+    --- PASS: TestStableLogicalObligationMergeReusesExactAncestor/newer_target (0.00s)
+    --- PASS: TestStableLogicalObligationMergeReusesExactAncestor/empty_target (0.00s)
+    --- PASS: TestStableLogicalObligationMergeReusesExactAncestor/unrelated_equal (0.00s)
+    --- PASS: TestStableLogicalObligationMergeReusesExactAncestor/partial_node_count (0.00s)
+=== RUN   TestAppendOnlyPhysicalClosureCloneIsMutationLocal
+--- PASS: TestAppendOnlyPhysicalClosureCloneIsMutationLocal (0.01s)
+=== RUN   TestAppendOnlyPhysicalClosureCloneExcludingKindSharesRemainingRoots
+--- PASS: TestAppendOnlyPhysicalClosureCloneExcludingKindSharesRemainingRoots (0.01s)
+=== RUN   TestCompositeRegistrarAcceptsSharedRootChild
+--- PASS: TestCompositeRegistrarAcceptsSharedRootChild (0.00s)
+=== RUN   TestAppendOnlyPhysicalClosureCompositePreservesSetContractAndLastRelease
+--- PASS: TestAppendOnlyPhysicalClosureCompositePreservesSetContractAndLastRelease (0.00s)
+=== RUN   TestAppendOnlyPhysicalClosureCandidateMayReleaseBeforeSource
+--- PASS: TestAppendOnlyPhysicalClosureCandidateMayReleaseBeforeSource (0.00s)
+=== RUN   TestStableResourceEntryRopeDeepAppendTraversalAndReleaseAreIterative
+--- PASS: TestStableResourceEntryRopeDeepAppendTraversalAndReleaseAreIterative (0.02s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsRejectsScopedEntryWithoutObligations
+--- PASS: TestMergeAppendOnlyLogicalObligationsRejectsScopedEntryWithoutObligations (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsKeepsSmallBuilderLinear
+--- PASS: TestMergeAppendOnlyLogicalObligationsKeepsSmallBuilderLinear (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal
+--- PASS: TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal (0.06s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducerTokens
+--- PASS: TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducerTokens (0.01s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsMixedDistinctAndCollisionIsAtomic
+--- PASS: TestMergeAppendOnlyLogicalObligationsMixedDistinctAndCollisionIsAtomic (0.00s)
+=== RUN   TestCertifiedAppendOnlyPhysicalCoalesceRejectsMismatchedKindViewKey
+--- PASS: TestCertifiedAppendOnlyPhysicalCoalesceRejectsMismatchedKindViewKey (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsLateMixedConflictLeavesInputsUnchanged
+--- PASS: TestMergeAppendOnlyLogicalObligationsLateMixedConflictLeavesInputsUnchanged (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders
+=== RUN   TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders/source-first
+=== RUN   TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders/candidate-first
+--- PASS: TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders/source-first (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsCollisionReleaseOrders/candidate-first (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsAmbiguousPhysicalCandidatesUseExactFallback
+--- PASS: TestMergeAppendOnlyLogicalObligationsAmbiguousPhysicalCandidatesUseExactFallback (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsCrossKindCollisionUsesExactFallback
+--- PASS: TestMergeAppendOnlyLogicalObligationsCrossKindCollisionUsesExactFallback (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsRepresentativeReplacementUsesExactFallback
+--- PASS: TestMergeAppendOnlyLogicalObligationsRepresentativeReplacementUsesExactFallback (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsRejectsLogicalConflictBeforePhysicalCoalesce
+--- PASS: TestMergeAppendOnlyLogicalObligationsRejectsLogicalConflictBeforePhysicalCoalesce (0.00s)
+=== RUN   TestStableLogicalObligationCommitmentCertifiesOnlyCompleteMutation
+--- PASS: TestStableLogicalObligationCommitmentCertifiesOnlyCompleteMutation (0.00s)
+=== RUN   TestStableLogicalObligationAppendCertificationUsesAggregateCommitments4366
+--- PASS: TestStableLogicalObligationAppendCertificationUsesAggregateCommitments4366 (0.02s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsRepeatedDistinctSegmentsStayMutationLocal4371
+--- PASS: TestMergeAppendOnlyLogicalObligationsRepeatedDistinctSegmentsStayMutationLocal4371 (0.04s)
+=== RUN   TestStableLogicalObligationMembershipSurvivesPhysicalCoalesce4371
+--- PASS: TestStableLogicalObligationMembershipSurvivesPhysicalCoalesce4371 (0.00s)
+=== RUN   TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371
+=== RUN   TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371/same_kind_duplicate
+=== RUN   TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371/cross_kind_duplicate
+=== RUN   TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371/conflicting_immutable_payload
+--- PASS: TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371 (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371/same_kind_duplicate (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371/cross_kind_duplicate (0.00s)
+    --- PASS: TestMergeAppendOnlyLogicalObligationsRejectsDistinctOverlap4371/conflicting_immutable_payload (0.00s)
+=== RUN   TestStableLogicalObligationPackedAliasCertificationKeepsExactMerge4371
+--- PASS: TestStableLogicalObligationPackedAliasCertificationKeepsExactMerge4371 (0.00s)
+=== RUN   TestStableLogicalObligationFlatUnionEvidenceIsTransitive4371
+--- PASS: TestStableLogicalObligationFlatUnionEvidenceIsTransitive4371 (0.00s)
+=== RUN   TestStableLogicalObligationFlatUnionEvidenceFailsClosed4371
+--- PASS: TestStableLogicalObligationFlatUnionEvidenceFailsClosed4371 (0.00s)
+=== RUN   TestStableLogicalObligationAppendCertificationSkipsExcludedProducerKind4366
+--- PASS: TestStableLogicalObligationAppendCertificationSkipsExcludedProducerKind4366 (0.00s)
+=== RUN   TestStableLogicalObligationAppendCertificationDeclinesDistinctResourceDuplicate4366
+--- PASS: TestStableLogicalObligationAppendCertificationDeclinesDistinctResourceDuplicate4366 (0.00s)
+=== RUN   TestStableLogicalObligationAppendCertificationRequiresLiveViewPin4366
+--- PASS: TestStableLogicalObligationAppendCertificationRequiresLiveViewPin4366 (0.00s)
+=== RUN   TestStableLogicalObligationMutationRequiresExactFinalRequirements
+--- PASS: TestStableLogicalObligationMutationRequiresExactFinalRequirements (0.00s)
+=== RUN   TestStableLogicalObligationMutationFinalRequirementsSearchesWithinFieldGroup
+--- PASS: TestStableLogicalObligationMutationFinalRequirementsSearchesWithinFieldGroup (0.00s)
+=== RUN   TestOwnedResourceCoalescingExactFrontierAndLogicalUnion
+--- PASS: TestOwnedResourceCoalescingExactFrontierAndLogicalUnion (0.00s)
+=== RUN   TestOwnedResourceCoalescingRefusalKeepsBothInputs
+--- PASS: TestOwnedResourceCoalescingRefusalKeepsBothInputs (0.00s)
+=== RUN   TestPrimaryRegistryCleanupReportsAllIntrusiveCauses
+--- PASS: TestPrimaryRegistryCleanupReportsAllIntrusiveCauses (0.00s)
+=== RUN   TestOwnedSameIdentityAppendRetainsCanonicalIndexAndCustody
+--- PASS: TestOwnedSameIdentityAppendRetainsCanonicalIndexAndCustody (0.00s)
+=== RUN   TestOwnedCanonicalHistoryBatchAndInheritedFiltering
+--- PASS: TestOwnedCanonicalHistoryBatchAndInheritedFiltering (0.00s)
+=== RUN   TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate
+--- PASS: TestStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate (0.00s)
+=== RUN   TestCloneStableResourceSetUsesExactHandlesAndIndependentPins
+--- PASS: TestCloneStableResourceSetUsesExactHandlesAndIndependentPins (0.00s)
+=== RUN   TestCloneStableResourceSetFiltersExactLogicalObligationClosure
+--- PASS: TestCloneStableResourceSetFiltersExactLogicalObligationClosure (0.00s)
+=== RUN   TestCloneStableResourceSetReportsPhysicalAndLogicalWorkSeparately
+--- PASS: TestCloneStableResourceSetReportsPhysicalAndLogicalWorkSeparately (0.00s)
+=== RUN   TestAppendOnlyResourceClosureCloneWorkIsBoundedByMutation
+--- PASS: TestAppendOnlyResourceClosureCloneWorkIsBoundedByMutation (0.00s)
+=== RUN   TestLogicalObligationRemovalMutationUsesExactFilter
+--- PASS: TestLogicalObligationRemovalMutationUsesExactFilter (0.00s)
+=== RUN   TestStableResourceSetRejectsDataStableNamespaceUnstable
+--- PASS: TestStableResourceSetRejectsDataStableNamespaceUnstable (0.00s)
+=== RUN   TestStableNamespacePinsExactLinkedParentAcrossRenameRecreate
+--- PASS: TestStableNamespacePinsExactLinkedParentAcrossRenameRecreate (0.00s)
+=== RUN   TestStableNamespaceRejectsResourceOutsideExactParent
+--- PASS: TestStableNamespaceRejectsResourceOutsideExactParent (0.00s)
+=== RUN   TestStableResourceNamespaceRequiresExactLinkedChild
+--- PASS: TestStableResourceNamespaceRequiresExactLinkedChild (0.00s)
+=== RUN   TestStableResourceNamespaceAcceptsExactLinkedChild
+--- PASS: TestStableResourceNamespaceAcceptsExactLinkedChild (0.00s)
+=== RUN   TestStableResourceMetricsSeparateFileAndNamespaceOperations
+--- PASS: TestStableResourceMetricsSeparateFileAndNamespaceOperations (0.00s)
+=== RUN   TestStableResourceBuilderDistinctPhysicalLookupWorkIsBounded
+--- PASS: TestStableResourceBuilderDistinctPhysicalLookupWorkIsBounded (0.03s)
+=== RUN   TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries
+    resource_contract_test.go:172: cached manifest assembly: entries=4096 payload=846781 bytes/build=33000 limit=1890170
+--- PASS: TestStableResourceSetDependencyManifestEncodingReusesRetainedEntries (0.04s)
+=== RUN   TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease
+--- PASS: TestStableResourceSetDependencyManifestSurvivesCoalescingAndRelease (0.00s)
+=== RUN   TestStableResourceBuilderMergeDistinctPhysicalLookupWorkIsBounded
+--- PASS: TestStableResourceBuilderMergeDistinctPhysicalLookupWorkIsBounded (0.04s)
+=== RUN   TestStableResourceBuilderRepresentativeReplacementUpdatesLogicalLookup
+--- PASS: TestStableResourceBuilderRepresentativeReplacementUpdatesLogicalLookup (0.00s)
+=== RUN   TestStableResourceBuilderClosureWorkSnapshotConcurrentWithAdd
+--- PASS: TestStableResourceBuilderClosureWorkSnapshotConcurrentWithAdd (0.00s)
+=== RUN   TestCloneStableResourceSetSharesCustomSyncHandle
+--- PASS: TestCloneStableResourceSetSharesCustomSyncHandle (0.00s)
+=== RUN   TestStableResourceSetRetainsRotatedIdentitiesAndGreatestFrontier
+--- PASS: TestStableResourceSetRetainsRotatedIdentitiesAndGreatestFrontier (0.00s)
+=== RUN   TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor
+=== RUN   TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor/reverse=false
+=== RUN   TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor/reverse=true
+--- PASS: TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor (0.00s)
+    --- PASS: TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor/reverse=false (0.00s)
+    --- PASS: TestStableResourceSetUnionsExactRIDMembershipAndExposesCoalescedDescriptor/reverse=true (0.00s)
+=== RUN   TestStableResourceSetRejectsConflictingLogicalObligationAtomically
+--- PASS: TestStableResourceSetRejectsConflictingLogicalObligationAtomically (0.00s)
+=== RUN   TestStableResourceSetLargeLogicalObligationIndexRejectsConflictAtomically
+--- PASS: TestStableResourceSetLargeLogicalObligationIndexRejectsConflictAtomically (0.00s)
+=== RUN   TestStableResourceSetRejectedLogicalObligationBatchDoesNotLeakEarlierAddition
+--- PASS: TestStableResourceSetRejectedLogicalObligationBatchDoesNotLeakEarlierAddition (0.00s)
+=== RUN   TestStableResourceSetRejectedLargeLogicalObligationBatchDoesNotLeakEarlierAddition
+--- PASS: TestStableResourceSetRejectedLargeLogicalObligationBatchDoesNotLeakEarlierAddition (0.00s)
+=== RUN   TestStableResourceTokenCapturesSingleLogicalObligationByValue
+--- PASS: TestStableResourceTokenCapturesSingleLogicalObligationByValue (0.00s)
+=== RUN   TestStableResourceTokenCapturesExactRIDMembershipByValue
+--- PASS: TestStableResourceTokenCapturesExactRIDMembershipByValue (0.00s)
+=== RUN   TestStableResourceTokenRejectsRIDSummaryWithoutExactMembership
+--- PASS: TestStableResourceTokenRejectsRIDSummaryWithoutExactMembership (0.00s)
+=== RUN   TestStableResourceSetSyncUsesCoalescedGreatestFrontier
+--- PASS: TestStableResourceSetSyncUsesCoalescedGreatestFrontier (0.00s)
+=== RUN   TestStableResourceSetLogicalClonePreservesContentCertificate
+=== RUN   TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=false/certified=0
+=== RUN   TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=false/certified=8
+=== RUN   TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=false/certified=16
+=== RUN   TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=true/certified=0
+=== RUN   TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=true/certified=8
+=== RUN   TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=true/certified=16
+--- PASS: TestStableResourceSetLogicalClonePreservesContentCertificate (0.00s)
+    --- PASS: TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=false/certified=0 (0.00s)
+    --- PASS: TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=false/certified=8 (0.00s)
+    --- PASS: TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=false/certified=16 (0.00s)
+    --- PASS: TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=true/certified=0 (0.00s)
+    --- PASS: TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=true/certified=8 (0.00s)
+    --- PASS: TestStableResourceSetLogicalClonePreservesContentCertificate/scoped=true/certified=16 (0.00s)
+=== RUN   TestStableResourceSetMergeFrozenUnsyncedChildPreservesSyncRequirement
+--- PASS: TestStableResourceSetMergeFrozenUnsyncedChildPreservesSyncRequirement (0.00s)
+=== RUN   TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier
+=== RUN   TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier/synced-first=true
+=== RUN   TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier/synced-first=false
+--- PASS: TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier (0.00s)
+    --- PASS: TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier/synced-first=true (0.00s)
+    --- PASS: TestStableResourceSetAlreadySyncedTokenDoesNotCoverAdvancedCoalescedFrontier/synced-first=false (0.00s)
+=== RUN   TestStableResourceTokenSyncedRIDCoverage
+=== RUN   TestStableResourceTokenSyncedRIDCoverage/equal
+=== RUN   TestStableResourceTokenSyncedRIDCoverage/subset
+=== RUN   TestStableResourceTokenSyncedRIDCoverage/empty
+=== RUN   TestStableResourceTokenSyncedRIDCoverage/same_summary_bounds_different_member
+=== RUN   TestStableResourceTokenSyncedRIDCoverage/higher_RID
+=== RUN   TestStableResourceTokenSyncedRIDCoverage/advanced_bytes
+=== RUN   TestStableResourceTokenSyncedRIDCoverage/advanced_LSN
+--- PASS: TestStableResourceTokenSyncedRIDCoverage (0.00s)
+    --- PASS: TestStableResourceTokenSyncedRIDCoverage/equal (0.00s)
+    --- PASS: TestStableResourceTokenSyncedRIDCoverage/subset (0.00s)
+    --- PASS: TestStableResourceTokenSyncedRIDCoverage/empty (0.00s)
+    --- PASS: TestStableResourceTokenSyncedRIDCoverage/same_summary_bounds_different_member (0.00s)
+    --- PASS: TestStableResourceTokenSyncedRIDCoverage/higher_RID (0.00s)
+    --- PASS: TestStableResourceTokenSyncedRIDCoverage/advanced_bytes (0.00s)
+    --- PASS: TestStableResourceTokenSyncedRIDCoverage/advanced_LSN (0.00s)
+=== RUN   TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts
+=== RUN   TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts/frontier_beyond_file
+=== RUN   TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts/digest
+=== RUN   TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts/logical_generation_identity
+--- PASS: TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts (0.00s)
+    --- PASS: TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts/frontier_beyond_file (0.00s)
+    --- PASS: TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts/digest (0.00s)
+    --- PASS: TestStableResourceSetRejectsFrontierIdentityDigestAndGenerationConflicts/logical_generation_identity (0.00s)
+=== RUN   TestStableResourceNestedUnionMustResolveEveryRequiredChild
+--- PASS: TestStableResourceNestedUnionMustResolveEveryRequiredChild (0.00s)
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.dictionary_generation-reverse-false
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.dictionary_generation-reverse-true
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.template_generation-reverse-false
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.template_generation-reverse-true
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.vector_graph_pack_ref-reverse-false
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.vector_graph_pack_ref-reverse-true
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.manifest_asset_ref-reverse-false
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.manifest_asset_ref-reverse-true
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/complete-reverse-false
+=== RUN   TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/complete-reverse-true
+--- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.dictionary_generation-reverse-false (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.dictionary_generation-reverse-true (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.template_generation-reverse-false (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-frame.template_generation-reverse-true (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.vector_graph_pack_ref-reverse-false (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.vector_graph_pack_ref-reverse-true (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.manifest_asset_ref-reverse-false (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/omit-column.manifest_asset_ref-reverse-true (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/complete-reverse-false (0.00s)
+    --- PASS: TestCompositeRegistrarExposesIDsOnlyAfterCompleteTransitiveFreeze/complete-reverse-true (0.00s)
+=== RUN   TestCompositeRegistrarRejectsIDUnrelatedToCoveredChildResource
+--- PASS: TestCompositeRegistrarRejectsIDUnrelatedToCoveredChildResource (0.00s)
+=== RUN   TestMutableIndexAliasesCoalesceByPhysicalIdentity
+--- PASS: TestMutableIndexAliasesCoalesceByPhysicalIdentity (0.00s)
+=== RUN   TestMutableCollectionAndTextRootAliasesCoalesceByPhysicalIdentity
+--- PASS: TestMutableCollectionAndTextRootAliasesCoalesceByPhysicalIdentity (0.00s)
+=== RUN   TestImmutableAliasesCoalesceByIdentityAndDigest
+--- PASS: TestImmutableAliasesCoalesceByIdentityAndDigest (0.00s)
+=== RUN   TestImmutableAliasesPreserveDistinctGenerationPins
+--- PASS: TestImmutableAliasesPreserveDistinctGenerationPins (0.00s)
+=== RUN   TestImmutableGenerationLookupWorkIsBounded
+--- PASS: TestImmutableGenerationLookupWorkIsBounded (0.03s)
+=== RUN   TestImmutableIdentityRejectsConflictingDigest
+--- PASS: TestImmutableIdentityRejectsConflictingDigest (0.00s)
+=== RUN   TestLogicalResourceRejectsDifferentPhysicalIdentity
+--- PASS: TestLogicalResourceRejectsDifferentPhysicalIdentity (0.00s)
+=== RUN   TestBuilderMergeReleasesDroppedDuplicateChildPin
+--- PASS: TestBuilderMergeReleasesDroppedDuplicateChildPin (0.00s)
+=== RUN   TestBuilderMergeDuplicateChildPinStressDoesNotGrowDescriptors
+--- PASS: TestBuilderMergeDuplicateChildPinStressDoesNotGrowDescriptors (0.07s)
+=== RUN   TestBuilderMergeConflictRetainsBothOwnersTransactionally
+--- PASS: TestBuilderMergeConflictRetainsBothOwnersTransactionally (0.00s)
+=== RUN   TestPinnedResourceBlocksExplicitDeletionUntilRelease
+--- PASS: TestPinnedResourceBlocksExplicitDeletionUntilRelease (0.00s)
+=== RUN   TestUnionDeletionGuardRetainsEveryCoalescedSourcePin
+--- PASS: TestUnionDeletionGuardRetainsEveryCoalescedSourcePin (0.00s)
+=== RUN   TestUnionStableResourceSetsDuplicatePinsHasBoundedAllocationGrowth
+--- PASS: TestUnionStableResourceSetsDuplicatePinsHasBoundedAllocationGrowth (0.01s)
+=== RUN   TestStableResourceDefaultFlushDoesNotFsync
+--- PASS: TestStableResourceDefaultFlushDoesNotFsync (0.00s)
+=== RUN   TestStableNamespaceStabilizeIsSingleFlight
+--- PASS: TestStableNamespaceStabilizeIsSingleFlight (0.00s)
+=== RUN   TestStableNamespaceCreationProofSyncsOnceAcrossRepeatedBind
+--- PASS: TestStableNamespaceCreationProofSyncsOnceAcrossRepeatedBind (0.00s)
+=== RUN   TestStableNamespaceRegistrationAndReleaseAreSerialized
+--- PASS: TestStableNamespaceRegistrationAndReleaseAreSerialized (0.01s)
+=== RUN   TestUnsupportedNamespaceFailsBeforeCandidateVisibility
+--- PASS: TestUnsupportedNamespaceFailsBeforeCandidateVisibility (0.00s)
+=== RUN   TestResourceOwnershipSuccessRetryStopAndPoison
+=== RUN   TestResourceOwnershipSuccessRetryStopAndPoison/success_releases_exactly_once
+=== RUN   TestResourceOwnershipSuccessRetryStopAndPoison/retry_retains
+=== RUN   TestResourceOwnershipSuccessRetryStopAndPoison/ambiguous_poison_hands_off
+--- PASS: TestResourceOwnershipSuccessRetryStopAndPoison (0.00s)
+    --- PASS: TestResourceOwnershipSuccessRetryStopAndPoison/success_releases_exactly_once (0.00s)
+    --- PASS: TestResourceOwnershipSuccessRetryStopAndPoison/retry_retains (0.00s)
+    --- PASS: TestResourceOwnershipSuccessRetryStopAndPoison/ambiguous_poison_hands_off (0.00s)
+=== RUN   TestRecoveryHandoffRejectsLiveAndPublishingCoordinator
+--- PASS: TestRecoveryHandoffRejectsLiveAndPublishingCoordinator (0.00s)
+=== RUN   TestStableResourceSetConcurrentReadsAndRelease
+--- PASS: TestStableResourceSetConcurrentReadsAndRelease (0.01s)
+=== RUN   TestCoordinatorResourcePinHighWaterSurvivesRiseAndRelease
+--- PASS: TestCoordinatorResourcePinHighWaterSurvivesRiseAndRelease (0.00s)
+=== RUN   TestCoordinatorResourceActivePinsTrackPublishedPrefix
+--- PASS: TestCoordinatorResourceActivePinsTrackPublishedPrefix (0.00s)
+=== RUN   TestCoordinatorPinMetricsCountDuplicateDescriptorsForCoalescedIdentity
+--- PASS: TestCoordinatorPinMetricsCountDuplicateDescriptorsForCoalescedIdentity (0.00s)
+=== RUN   TestConflictingCandidateRejectedBeforeVisibleFrontier
+--- PASS: TestConflictingCandidateRejectedBeforeVisibleFrontier (0.00s)
+=== RUN   TestStableResourceMetricsDistinguishCoveredSyncAttemptFromPhysicalFileSync
+--- PASS: TestStableResourceMetricsDistinguishCoveredSyncAttemptFromPhysicalFileSync (0.00s)
+=== RUN   TestStableResourceTokenPinnedReadRemainsUsable
+--- PASS: TestStableResourceTokenPinnedReadRemainsUsable (0.00s)
+=== RUN   TestStableResourcePublicationDebtCoverage
+=== RUN   TestStableResourcePublicationDebtCoverage/covered
+=== RUN   TestStableResourcePublicationDebtCoverage/covered_RID_subset
+=== RUN   TestStableResourcePublicationDebtCoverage/advanced_bytes
+=== RUN   TestStableResourcePublicationDebtCoverage/advanced_bytes_and_exact_RID_superset
+=== RUN   TestStableResourcePublicationDebtCoverage/advanced_LSN
+=== RUN   TestStableResourcePublicationDebtCoverage/same_maximum_different_RID
+=== RUN   TestStableResourcePublicationDebtCoverage/different_generation
+=== RUN   TestStableResourcePublicationDebtCoverage/different_digest
+=== RUN   TestStableResourcePublicationDebtCoverage/logical_alias
+=== RUN   TestStableResourcePublicationDebtCoverage/different_identity_same_path
+=== RUN   TestStableResourcePublicationDebtCoverage/cross_kind
+=== RUN   TestStableResourcePublicationDebtCoverage/advanced_coalesced_entry
+=== RUN   TestStableResourcePublicationDebtCoverage/suffix_obligation
+=== RUN   TestStableResourcePublicationDebtCoverage/partial_prefix_obligation
+=== RUN   TestStableResourcePublicationDebtCoverage/missing_durable_obligation
+=== RUN   TestStableResourcePublicationDebtCoverage/immutable_resource
+=== RUN   TestStableResourcePublicationDebtCoverage/index_resource
+--- PASS: TestStableResourcePublicationDebtCoverage (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/covered (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/covered_RID_subset (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/advanced_bytes (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/advanced_bytes_and_exact_RID_superset (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/advanced_LSN (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/same_maximum_different_RID (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/different_generation (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/different_digest (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/logical_alias (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/different_identity_same_path (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/cross_kind (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/advanced_coalesced_entry (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/suffix_obligation (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/partial_prefix_obligation (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/missing_durable_obligation (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/immutable_resource (0.00s)
+    --- PASS: TestStableResourcePublicationDebtCoverage/index_resource (0.00s)
+=== RUN   TestStableResourcePublicationDebtRetainsIndexedOwnership
+    resource_contract_test.go:3594: 128 retained entries: 6 allocations/accounting call
+=== RUN   TestStableResourcePublicationDebtRetainsIndexedOwnership/equal
+    resource_contract_test.go:3655: 128 entries with 512/512 required/durable RIDs: 6 allocations/accounting call
+=== RUN   TestStableResourcePublicationDebtRetainsIndexedOwnership/subset
+    resource_contract_test.go:3655: 128 entries with 256/512 required/durable RIDs: 6 allocations/accounting call
+=== RUN   TestStableResourcePublicationDebtRetainsIndexedOwnership/different
+    resource_contract_test.go:3655: 128 entries with 512/512 required/durable RIDs: 6 allocations/accounting call
+--- PASS: TestStableResourcePublicationDebtRetainsIndexedOwnership (0.02s)
+    --- PASS: TestStableResourcePublicationDebtRetainsIndexedOwnership/equal (0.00s)
+    --- PASS: TestStableResourcePublicationDebtRetainsIndexedOwnership/subset (0.00s)
+    --- PASS: TestStableResourcePublicationDebtRetainsIndexedOwnership/different (0.01s)
+=== RUN   TestSingleStableResourceUnionSnapshotParity
+=== RUN   TestSingleStableResourceUnionSnapshotParity/release
+=== RUN   TestSingleStableResourceUnionSnapshotParity/merge
+=== RUN   TestSingleStableResourceUnionSnapshotParity/transfer
+--- PASS: TestSingleStableResourceUnionSnapshotParity (0.02s)
+    --- PASS: TestSingleStableResourceUnionSnapshotParity/release (0.00s)
+    --- PASS: TestSingleStableResourceUnionSnapshotParity/merge (0.01s)
+    --- PASS: TestSingleStableResourceUnionSnapshotParity/transfer (0.00s)
+=== RUN   TestStableResourceSetExtrasReleasedEvidence
+--- PASS: TestStableResourceSetExtrasReleasedEvidence (0.00s)
+=== RUN   TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput
+--- PASS: TestOwnedDirectoryRecordSerializationAdmissionAndExactOutput (0.00s)
+=== RUN   TestDependencyDirectoryV2ResourceClosureAppendAndLease
+--- PASS: TestDependencyDirectoryV2ResourceClosureAppendAndLease (0.00s)
+=== RUN   TestDependencyDirectoryV2EmptyClosureLease
+--- PASS: TestDependencyDirectoryV2EmptyClosureLease (0.00s)
+=== RUN   TestOwnedResourceEntryKeepsDirectoryAndExactSummary
+--- PASS: TestOwnedResourceEntryKeepsDirectoryAndExactSummary (0.00s)
+=== RUN   TestStableResourcePrioritiesPreserveFNVByteStream
+--- PASS: TestStableResourcePrioritiesPreserveFNVByteStream (0.00s)
+=== RUN   TestMoveStableChildFileNoReplaceCrossParentPreservesIdentity
+--- PASS: TestMoveStableChildFileNoReplaceCrossParentPreservesIdentity (0.00s)
+=== RUN   TestInstallStableFileHandleNoReplacePreservesExactHandleAcrossSourceRebind
+--- PASS: TestInstallStableFileHandleNoReplacePreservesExactHandleAcrossSourceRebind (0.00s)
+=== RUN   TestInstallStableFileHandleNoReplaceLeavesExistingTargetUntouched
+--- PASS: TestInstallStableFileHandleNoReplaceLeavesExistingTargetUntouched (0.00s)
+=== RUN   TestMoveStableChildFileNoReplaceRejectsReplacement
+--- PASS: TestMoveStableChildFileNoReplaceRejectsReplacement (0.00s)
+=== RUN   TestMoveStableChildFileNoReplaceRejectsReboundSourceBeforeMutation
+--- PASS: TestMoveStableChildFileNoReplaceRejectsReboundSourceBeforeMutation (0.00s)
+=== RUN   TestMoveStableChildFileNoReplaceUsesRetainedIdentityAcrossRebindWindow
+--- PASS: TestMoveStableChildFileNoReplaceUsesRetainedIdentityAcrossRebindWindow (0.00s)
+=== RUN   TestProbeStableChildFileNoReplaceInstallExercisesTargetAndCleansAliases
+--- PASS: TestProbeStableChildFileNoReplaceInstallExercisesTargetAndCleansAliases (0.00s)
+=== RUN   TestProbeStableChildFileNoReplaceInstallCleansPostInstallAmbiguity
+--- PASS: TestProbeStableChildFileNoReplaceInstallCleansPostInstallAmbiguity (0.00s)
+=== RUN   TestProbeStableChildFileNoReplaceInstallCleanupFailureBlocks
+--- PASS: TestProbeStableChildFileNoReplaceInstallCleanupFailureBlocks (0.00s)
+=== RUN   TestStableIdentityOverridesForTestingAreScopedToPhysicalObjects
+--- PASS: TestStableIdentityOverridesForTestingAreScopedToPhysicalObjects (0.00s)
+=== RUN   TestStableIdentityOverrideForTestingDoesNotFollowPathRebind
+--- PASS: TestStableIdentityOverrideForTestingDoesNotFollowPathRebind (0.00s)
+=== RUN   TestRenameStableChildFileUsesRetainedParentAfterPathRebind
+--- PASS: TestRenameStableChildFileUsesRetainedParentAfterPathRebind (0.00s)
+=== RUN   TestRenameStableChildFileRejectsNonBaseNames
+--- PASS: TestRenameStableChildFileRejectsNonBaseNames (0.00s)
+=== RUN   TestStableNamespaceParentGenerationTracksExactParentIdentity
+--- PASS: TestStableNamespaceParentGenerationTracksExactParentIdentity (0.00s)
+=== RUN   TestOpenStableParentAndChildRejectLinksAndDoNotBlockOnFIFO
+--- PASS: TestOpenStableParentAndChildRejectLinksAndDoNotBlockOnFIFO (0.00s)
+=== RUN   TestLinkStableChildFileNoReplaceUsesCapturedParent
+--- PASS: TestLinkStableChildFileNoReplaceUsesCapturedParent (0.00s)
+=== RUN   TestOpenStableChildFileUsesCapturedParentAfterPathReplacement
+--- PASS: TestOpenStableChildFileUsesCapturedParentAfterPathReplacement (0.00s)
+=== RUN   TestEnsureStableChildDirectoryUsesCapturedParentAfterPathReplacement
+--- PASS: TestEnsureStableChildDirectoryUsesCapturedParentAfterPathReplacement (0.00s)
+=== RUN   TestRemoveStableChildFileUsesCapturedParentAfterPathReplacement
+--- PASS: TestRemoveStableChildFileUsesCapturedParentAfterPathReplacement (0.00s)
+=== RUN   TestStableNamespaceRejectsChildReplacementBeforeStabilize
+--- PASS: TestStableNamespaceRejectsChildReplacementBeforeStabilize (0.00s)
+=== RUN   TestStableNamespaceCreationProofRejectsReplacementBeforeBind
+--- PASS: TestStableNamespaceCreationProofRejectsReplacementBeforeBind (0.00s)
+=== RUN   TestStableNamespaceCreationProofRejectsWrongParentAndName
+=== RUN   TestStableNamespaceCreationProofRejectsWrongParentAndName/parent
+=== RUN   TestStableNamespaceCreationProofRejectsWrongParentAndName/name
+--- PASS: TestStableNamespaceCreationProofRejectsWrongParentAndName (0.00s)
+    --- PASS: TestStableNamespaceCreationProofRejectsWrongParentAndName/parent (0.00s)
+    --- PASS: TestStableNamespaceCreationProofRejectsWrongParentAndName/name (0.00s)
+=== RUN   TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody
+--- PASS: TestOwnedImportedTokenPreservesForeignOperationsAndLastCustody (0.00s)
+=== RUN   TestOwnedImportedSetAliasAndRefusal
+--- PASS: TestOwnedImportedSetAliasAndRefusal (0.00s)
+=== RUN   TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal
+--- PASS: TestOwnedImportedSetSharedIdentityCoalescingAndBoundedRefusal (0.00s)
+=== RUN   TestEveryDeclaredResourceConstantHasCanonicalPolicy
+--- PASS: TestEveryDeclaredResourceConstantHasCanonicalPolicy (0.01s)
+=== RUN   TestPageAndNamedRootPoliciesRemainAdjacent
+--- PASS: TestPageAndNamedRootPoliciesRemainAdjacent (0.00s)
+=== RUN   TestRebuildableQueryReadyPoliciesAreNotRegisterable
+--- PASS: TestRebuildableQueryReadyPoliciesAreNotRegisterable (0.00s)
+=== RUN   TestLegacyVectorPolicyIsRebuildableAndNotRegisterable
+--- PASS: TestLegacyVectorPolicyIsRebuildableAndNotRegisterable (0.00s)
+=== RUN   TestAdjacentDBPublicationIssueRouting
+--- PASS: TestAdjacentDBPublicationIssueRouting (0.00s)
+=== RUN   TestStableResourceInventoryHasNoUnknownOwnerCells
+--- PASS: TestStableResourceInventoryHasNoUnknownOwnerCells (0.00s)
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/meta.index_file
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/meta.target_page
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/meta.user_root_page_id
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/meta.system_root_page_id
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/meta.freelist_head_id
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/leaf.value_ptr
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/leaf.outer_raw_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/leaf.outer_packed_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/system.outer_leaf_generation_manifest
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/frame.dictionary_generation
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/frame.template_generation
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/system.collection_root_descriptor
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.primary_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.template_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.index_state_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.column_manifest_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.secondary_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.vector_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.text_dictionary_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.text_posting_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.text_position_root
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.manifest_asset_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.typed_multipart_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.typed_value_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.typed_code_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.hnsw_search_pack_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.vector_graph_pack_ref
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/collection.legacy_vector_manifest
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/command_wal.active_segment
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/command_wal.rotated_segment
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/command_wal_v2.external_rid_fence
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.query_ready_base_v1
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.query_ready_delta_v1
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/column.query_ready_consolidated_base_v1
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/meta.legacy_active_slab
+=== RUN   TestCanonicalProducerPolicyRejectsExcludedFields/raft.snapshot_manifest
+--- PASS: TestCanonicalProducerPolicyRejectsExcludedFields (0.01s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/meta.index_file (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/meta.target_page (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/meta.user_root_page_id (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/meta.system_root_page_id (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/meta.freelist_head_id (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/leaf.value_ptr (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/leaf.outer_raw_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/leaf.outer_packed_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/system.outer_leaf_generation_manifest (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/frame.dictionary_generation (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/frame.template_generation (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/system.collection_root_descriptor (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.primary_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.template_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.index_state_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.column_manifest_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.secondary_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.vector_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.text_dictionary_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.text_posting_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.text_position_root (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.manifest_asset_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.typed_multipart_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.typed_value_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.typed_code_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.hnsw_search_pack_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.vector_graph_pack_ref (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/collection.legacy_vector_manifest (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/command_wal.active_segment (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/command_wal.rotated_segment (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/command_wal_v2.external_rid_fence (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.query_ready_base_v1 (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.query_ready_delta_v1 (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/column.query_ready_consolidated_base_v1 (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/meta.legacy_active_slab (0.00s)
+    --- PASS: TestCanonicalProducerPolicyRejectsExcludedFields/raft.snapshot_manifest (0.00s)
+=== RUN   TestProductionConstructorsRejectStableIdentityOverride
+=== RUN   TestProductionConstructorsRejectStableIdentityOverride/policy
+=== RUN   TestProductionConstructorsRejectStableIdentityOverride/domain
+--- PASS: TestProductionConstructorsRejectStableIdentityOverride (0.00s)
+    --- PASS: TestProductionConstructorsRejectStableIdentityOverride/policy (0.00s)
+    --- PASS: TestProductionConstructorsRejectStableIdentityOverride/domain (0.00s)
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/meta.index_file
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/leaf.value_ptr
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/leaf.outer_raw_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/leaf.outer_packed_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/system.outer_leaf_generation_manifest
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/frame.dictionary_generation
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/frame.template_generation
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/column.manifest_asset_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/column.typed_multipart_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/column.typed_value_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/column.typed_code_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/column.hnsw_search_pack_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/column.vector_graph_pack_ref
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/command_wal.active_segment
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/command_wal.rotated_segment
+=== RUN   TestEveryInventoryFieldFailsAllButOneClosure/command_wal_v2.external_rid_fence
+--- PASS: TestEveryInventoryFieldFailsAllButOneClosure (0.01s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/meta.index_file (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/leaf.value_ptr (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/leaf.outer_raw_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/leaf.outer_packed_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/system.outer_leaf_generation_manifest (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/frame.dictionary_generation (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/frame.template_generation (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/column.manifest_asset_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/column.typed_multipart_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/column.typed_value_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/column.typed_code_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/column.hnsw_search_pack_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/column.vector_graph_pack_ref (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/command_wal.active_segment (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/command_wal.rotated_segment (0.00s)
+    --- PASS: TestEveryInventoryFieldFailsAllButOneClosure/command_wal_v2.external_rid_fence (0.00s)
+=== RUN   TestInventoryCoversQueryReadyAndCommandWALV2RIDFence
+--- PASS: TestInventoryCoversQueryReadyAndCommandWALV2RIDFence (0.00s)
+=== RUN   TestCanonicalRIDFrontierBindsSortedSet
+--- PASS: TestCanonicalRIDFrontierBindsSortedSet (0.00s)
+=== RUN   TestResourceOwnedKindMergeBuilderTransferAndLastBorrow
+    resource_kind_merge_allocation_test.go:110: public release stole borrowed closure
+--- FAIL: TestResourceOwnedKindMergeBuilderTransferAndLastBorrow (0.00s)
+=== RUN   TestResourceOwnedKindMergeRefusalPreservesBothOwners
+--- PASS: TestResourceOwnedKindMergeRefusalPreservesBothOwners (0.00s)
+=== RUN   TestResourceKindDirectoryConstructorRefusalDoesNotConsumeView
+--- PASS: TestResourceKindDirectoryConstructorRefusalDoesNotConsumeView (0.00s)
+=== RUN   TestResourceKindConstructorRefusesUnadmittedAliases
+--- PASS: TestResourceKindConstructorRefusesUnadmittedAliases (0.00s)
+=== RUN   TestResourceRopeConstructorRefusesForeignChildren
+--- PASS: TestResourceRopeConstructorRefusesForeignChildren (0.00s)
+=== RUN   TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal
+--- PASS: TestOwnedBorrowedDirectoryCanonicalRecordsAndRefusal (0.00s)
+=== RUN   TestOwnedImportedSharedDirectoryAndExactRIDClosure
+--- PASS: TestOwnedImportedSharedDirectoryAndExactRIDClosure (0.00s)
+=== RUN   TestOwnedImportedEmptyDirectoryRetainsExactLease
+--- PASS: TestOwnedImportedEmptyDirectoryRetainsExactLease (0.00s)
+=== RUN   TestOwnedManifestKeepsEncodedMetadataAfterEntryRelease
+--- PASS: TestOwnedManifestKeepsEncodedMetadataAfterEntryRelease (0.00s)
+=== RUN   TestOwnedManifestCacheIndependentAliasesAndRefusal
+--- PASS: TestOwnedManifestCacheIndependentAliasesAndRefusal (0.00s)
+=== RUN   TestOwnedManifestRejectsUnscopedEntries
+--- PASS: TestOwnedManifestRejectsUnscopedEntries (0.00s)
+=== RUN   TestOwnedManifestScopeRetainsActualMetadataAndRefusesScratch
+--- PASS: TestOwnedManifestScopeRetainsActualMetadataAndRefusesScratch (0.00s)
+=== RUN   TestOwnedManifestPhysicalLoaderCanonicalRebindAndRefusal
+--- PASS: TestOwnedManifestPhysicalLoaderCanonicalRebindAndRefusal (0.00s)
+=== RUN   TestOwnedRecoveredNamespaceIndependentOriginalObservation
+--- PASS: TestOwnedRecoveredNamespaceIndependentOriginalObservation (0.00s)
+=== RUN   TestOwnedDependencyPhysicalRebindCanonicalScopeAndRefusal
+--- PASS: TestOwnedDependencyPhysicalRebindCanonicalScopeAndRefusal (0.00s)
+=== RUN   TestStableNamespaceBatchSyncsEachDistinctParentOnce
+--- PASS: TestStableNamespaceBatchSyncsEachDistinctParentOnce (0.00s)
+=== RUN   TestStabilizeStableNamespaceTokensSyncsParentGenerationOnce
+--- PASS: TestStabilizeStableNamespaceTokensSyncsParentGenerationOnce (0.00s)
+=== RUN   TestStabilizeStableNamespaceTokensRetriesParentSyncFailure
+--- PASS: TestStabilizeStableNamespaceTokensRetriesParentSyncFailure (0.00s)
+=== RUN   TestStableNamespaceBatchFirstSyncFailureClosesEveryRetainedParent
+--- PASS: TestStableNamespaceBatchFirstSyncFailureClosesEveryRetainedParent (0.00s)
+=== RUN   TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody
+--- PASS: TestPrimaryNamespaceFailedCloseKeepsExactRegistryCustody (0.00s)
+=== RUN   TestStableLogicalObligationNamespaceEmptyPreservesSharedToken
+--- PASS: TestStableLogicalObligationNamespaceEmptyPreservesSharedToken (0.00s)
+=== RUN   TestStableLogicalObligationNamespaceNormalizeAndValidate
+=== RUN   TestStableLogicalObligationNamespaceNormalizeAndValidate/empty_namespace
+=== RUN   TestStableLogicalObligationNamespaceNormalizeAndValidate/empty_field
+=== RUN   TestStableLogicalObligationNamespaceNormalizeAndValidate/out_of_scope
+=== RUN   TestStableLogicalObligationNamespaceNormalizeAndValidate/overlapping
+--- PASS: TestStableLogicalObligationNamespaceNormalizeAndValidate (0.00s)
+    --- PASS: TestStableLogicalObligationNamespaceNormalizeAndValidate/empty_namespace (0.00s)
+    --- PASS: TestStableLogicalObligationNamespaceNormalizeAndValidate/empty_field (0.00s)
+    --- PASS: TestStableLogicalObligationNamespaceNormalizeAndValidate/out_of_scope (0.00s)
+    --- PASS: TestStableLogicalObligationNamespaceNormalizeAndValidate/overlapping (0.00s)
+=== RUN   TestImportedOriginalObservationKeepsFailedLastPhysicalCustody
+--- PASS: TestImportedOriginalObservationKeepsFailedLastPhysicalCustody (0.00s)
+=== RUN   TestOriginalObservedCloneOwnsExactActionAndSharedPhysicalBacking
+--- PASS: TestOriginalObservedCloneOwnsExactActionAndSharedPhysicalBacking (0.00s)
+=== RUN   TestOriginalObservedNamespaceFailureAndAdmissionRefusal
+--- PASS: TestOriginalObservedNamespaceFailureAndAdmissionRefusal (0.00s)
+=== RUN   TestStablePhysicalKindSelectionRetainsExactAuthorityAndOtherDomains
+--- PASS: TestStablePhysicalKindSelectionRetainsExactAuthorityAndOtherDomains (0.00s)
+=== RUN   TestStablePhysicalKindSelectionFailsClosed
+=== RUN   TestStablePhysicalKindSelectionFailsClosed/missing
+=== RUN   TestStablePhysicalKindSelectionFailsClosed/malformed
+=== RUN   TestStablePhysicalKindSelectionFailsClosed/duplicate
+--- PASS: TestStablePhysicalKindSelectionFailsClosed (0.00s)
+    --- PASS: TestStablePhysicalKindSelectionFailsClosed/missing (0.00s)
+    --- PASS: TestStablePhysicalKindSelectionFailsClosed/malformed (0.00s)
+    --- PASS: TestStablePhysicalKindSelectionFailsClosed/duplicate (0.00s)
+=== RUN   TestPhysicalDurabilityUnionDirectoryRemovalRetryAndSnapshot
+--- PASS: TestPhysicalDurabilityUnionDirectoryRemovalRetryAndSnapshot (0.00s)
+=== RUN   TestPhysicalReachabilityUnionEmptyDirectoriesOwnsLeasesAndRejectsLogicalAuthority
+--- PASS: TestPhysicalReachabilityUnionEmptyDirectoriesOwnsLeasesAndRejectsLogicalAuthority (0.00s)
+=== RUN   TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer
+=== RUN   TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer/identity
+=== RUN   TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer/digest
+=== RUN   TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer/frontier
+--- PASS: TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer (0.00s)
+    --- PASS: TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer/identity (0.00s)
+    --- PASS: TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer/digest (0.00s)
+    --- PASS: TestPhysicalDurabilityUnionRejectsPhysicalConflictsBeforeTransfer/frontier (0.00s)
+=== RUN   TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority
+=== RUN   TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority/lineage
+=== RUN   TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority/sequence
+=== RUN   TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority/released
+--- PASS: TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority (0.00s)
+    --- PASS: TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority/lineage (0.00s)
+    --- PASS: TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority/sequence (0.00s)
+    --- PASS: TestPhysicalDurabilitySingletonAdmissionRejectsInvalidAuthority/released (0.00s)
+=== RUN   TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs
+=== RUN   TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs/flat
+=== RUN   TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs/directory
+--- PASS: TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs (0.00s)
+    --- PASS: TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs/flat (0.00s)
+    --- PASS: TestConsumedStableResourceUnionRefusesFlatAndDirectoryInputs/directory (0.00s)
+=== RUN   TestPhysicalReachabilityUnionFailedDirectoryRetainCleansOwnedLeases
+--- PASS: TestPhysicalReachabilityUnionFailedDirectoryRetainCleansOwnedLeases (0.00s)
+=== RUN   TestStableLogicalObligationEmptyRequirementsIndexAllocations
+--- PASS: TestStableLogicalObligationEmptyRequirementsIndexAllocations (0.00s)
+=== RUN   TestOwnedImportedRequirementsMatchGenericExactScopes
+--- PASS: TestOwnedImportedRequirementsMatchGenericExactScopes (0.00s)
+=== RUN   TestOwnedRequirementsUnscopedObligationParity
+--- PASS: TestOwnedRequirementsUnscopedObligationParity (0.00s)
+=== RUN   TestOwnedMutationCertificationAndAppendMerge
+--- PASS: TestOwnedMutationCertificationAndAppendMerge (0.00s)
+=== RUN   TestCloneStableResourceForSelector
+=== RUN   TestCloneStableResourceForSelector/key_mismatch
+=== RUN   TestCloneStableResourceForSelector/absent_obligation
+=== RUN   TestCloneStableResourceForSelector/conflicting_obligation
+--- PASS: TestCloneStableResourceForSelector (0.00s)
+    --- PASS: TestCloneStableResourceForSelector/key_mismatch (0.00s)
+    --- PASS: TestCloneStableResourceForSelector/absent_obligation (0.00s)
+    --- PASS: TestCloneStableResourceForSelector/conflicting_obligation (0.00s)
+=== RUN   TestCloneStableResourceForSelectorRejectsReleasedSource
+--- PASS: TestCloneStableResourceForSelectorRejectsReleasedSource (0.00s)
+=== RUN   TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound
+--- PASS: TestCloneStableResourceForSelectorPinsIdentityAndRejectsNamespaceRebound (0.00s)
+=== RUN   TestOwnedSetWrapperFreezeRefusalPreservesSource
+--- PASS: TestOwnedSetWrapperFreezeRefusalPreservesSource (0.00s)
+=== RUN   TestOwnedBuilderAddCoalescesAndRefusesBeforeTransfer
+    resource_set_allocation_test.go:124: actual repeated identity did not coalesce
+--- FAIL: TestOwnedBuilderAddCoalescesAndRefusesBeforeTransfer (0.00s)
+=== RUN   TestOwnedRopeReleaseUsesAdmittedScratch
+--- PASS: TestOwnedRopeReleaseUsesAdmittedScratch (0.00s)
+=== RUN   TestOwnedSetRawDiagnosticsCannotEscapeAdmission
+--- PASS: TestOwnedSetRawDiagnosticsCannotEscapeAdmission (0.00s)
+=== RUN   TestOwnedSetDiagnosticOwnerRefusalAliasesAndLastCleanup
+--- PASS: TestOwnedSetDiagnosticOwnerRefusalAliasesAndLastCleanup (0.00s)
+=== RUN   TestOwnedTelemetryActualCoordinatorDeduplicatesAndDetaches
+--- PASS: TestOwnedTelemetryActualCoordinatorDeduplicatesAndDetaches (0.00s)
+=== RUN   TestOwnedResourceTokenDescriptorOutlivesPhysicalRelease
+--- PASS: TestOwnedResourceTokenDescriptorOutlivesPhysicalRelease (0.00s)
+=== RUN   TestOwnedResourceTokenRefusalKeepsInputsAndCharges
+--- PASS: TestOwnedResourceTokenRefusalKeepsInputsAndCharges (0.00s)
+=== RUN   TestOwnedResourceTokenOperationsLastDescriptorAlias
+--- PASS: TestOwnedResourceTokenOperationsLastDescriptorAlias (0.00s)
+=== RUN   TestStableProducerRotationRetryResourcePlateau
+--- PASS: TestStableProducerRotationRetryResourcePlateau (0.04s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	6.479s
+=== RUN   TestPrimaryArenaIndependentCustodyAndIncrementalReuse
+--- PASS: TestPrimaryArenaIndependentCustodyAndIncrementalReuse (0.00s)
+=== RUN   TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail
+--- PASS: TestPrimaryArenaRecoveryBothCompleteSlotsAndPrivateTail (0.00s)
+=== RUN   TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate
+    arena_test.go:311: isolated physical seal only: records=14 bytes=137824; whole publication remains unqualified
+    arena_test.go:430: isolated second=15R flatten=15R third=14R; complete publication remains unqualified
+--- PASS: TestPrimaryArenaExactReplacementPreservesCompleteRootAndPhysicalCertificate (0.00s)
+=== RUN   TestPrimaryArenaCompanionRoutingKeepsDataExtentIndependent
+--- PASS: TestPrimaryArenaCompanionRoutingKeepsDataExtentIndependent (0.00s)
+=== RUN   TestPrimaryArenaPairReuseWaitsForBothIndependentOwners
+--- PASS: TestPrimaryArenaPairReuseWaitsForBothIndependentOwners (0.00s)
+=== RUN   TestPrimaryArenaPairAlignmentPaddingAndStaleClaim
+--- PASS: TestPrimaryArenaPairAlignmentPaddingAndStaleClaim (0.00s)
+=== RUN   TestPrimaryMetadataPhysicalCloseFailureRetainsActualBacking
+--- PASS: TestPrimaryMetadataPhysicalCloseFailureRetainsActualBacking (0.00s)
+=== RUN   TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody
+--- PASS: TestPrimaryCapsuleReadRootOwnsCopyAndComponentCustody (0.00s)
+=== RUN   TestPrimaryCapsulePromotionCloneAdmissionAndIndependentCustody
+    read_root_v6_test.go:138: distinct promotion clone 5R/31552B plus ordinary outgoing release debt
+--- PASS: TestPrimaryCapsulePromotionCloneAdmissionAndIndependentCustody (0.00s)
+=== RUN   TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance
+--- PASS: TestPrimaryArenaOwnedReleaseQueueCannotReceiveOrdinaryAssistance (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/primaryarena	0.007s
+FAIL

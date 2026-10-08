@@ -1,0 +1,38 @@
+[
+  {
+    "label": "baseline",
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$/^inline$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem",
+      "-test.cpuprofile=/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/baseline-inline-cpu.pprof",
+      "-test.memprofile=/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/baseline-inline-allocs.pprof",
+      "-test.memprofilerate=1"
+    ],
+    "exit": 0,
+    "start_unix": 1791498017.527366,
+    "end_unix": 1791498017.9926553
+  },
+  {
+    "label": "candidate",
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$/^inline$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem",
+      "-test.cpuprofile=/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/candidate-inline-cpu.pprof",
+      "-test.memprofile=/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/candidate-inline-allocs.pprof",
+      "-test.memprofilerate=1"
+    ],
+    "exit": 0,
+    "start_unix": 1791498017.9929745,
+    "end_unix": 1791498018.4579558
+  }
+]

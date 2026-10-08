@@ -1,0 +1,39 @@
+{
+  "head": "18a20c73bf1f4f020b7d10677f56eb90b6fab791",
+  "dirty_diff_sha256": "c45bdfe4aace3d65f658ccf134ae8000a03e92b33342af2e6a5d94d74cf27515",
+  "status": [
+    " M TreeDB/db/durable_root_bench_test.go",
+    " M TreeDB/db/leaf_generation_pack_rewrite.go",
+    " M TreeDB/db/primary_directory_test.go",
+    " M TreeDB/db/primary_leaf_pack_v5_test.go",
+    " M TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+    " M TreeDB/tree/pages.go",
+    " M TreeDB/zipper/primary_directory.go",
+    " M TreeDB/zipper/read_only_prepare.go",
+    " M cmd/benchprof/README.md",
+    " M cmd/unified_bench/README.md"
+  ],
+  "decision_required": "Read-only PRIMARY decoded absence has no physical leaf; existing ValidateLeafSpans requires every canonical point op covered by a span. Explicit bounded absence-position census proposed; generic malformed/gapped plan rejection must remain. No further production edit before coordinator decision.",
+  "logs": {
+    "inline-absence-sibling-red.log": {
+      "sha256": "da4c55ef895af2f46ae19b6176b6106f396ee1092fadb3d909d806086a436f45",
+      "content": "=== RUN   TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts\n=== RUN   TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/replace\n    primary_directory_test.go:52: node: invalid primary directory\n=== RUN   TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/consolidate\n    primary_directory_test.go:57: consolidation write 48: prepare visible root COW generation: cannot free page 0\n--- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts (0.08s)\n    --- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/replace (0.01s)\n    --- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/consolidate (0.07s)\n=== RUN   TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens\n    primary_leaf_pack_v5_test.go:60: leaf generation pack: rewrite leaf refs: vlog-rewrite: rewrite user leaf root: node: invalid primary directory\n--- FAIL: TestPrimaryLeafPackRetainsComponentsSnapshotAndReopens (0.01s)\nFAIL\nFAIL\tgithub.com/snissn/gomap/TreeDB/db\t0.093s\nFAIL\n"
+    },
+    "absence-coherent-normal.log": {
+      "sha256": "a9ef209a9b57ec248e69c085e24a1314ac67ccca410b6f5b0677564eec4fb875",
+      "content": "ok  \tgithub.com/snissn/gomap/TreeDB\t0.177s\n--- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts (0.07s)\n    --- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/replace (0.00s)\n        primary_directory_test.go:53: zipper: invalid read-only prepare plan: zipper: read-only prepare has 1 ops but no leaf spans\nFAIL\nFAIL\tgithub.com/snissn/gomap/TreeDB/db\t1.600s\nok  \tgithub.com/snissn/gomap/TreeDB/zipper\t0.071s\nok  \tgithub.com/snissn/gomap/TreeDB/node\t0.004s\nFAIL\n"
+    },
+    "descriptor-leafpack-race.log": {
+      "sha256": "47260efb3d22d11b78bfdfc51a158720fa3576898c58d4b6e75cc52b50d943e7",
+      "content": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.235s\nok  \tgithub.com/snissn/gomap/TreeDB/caching\t1.049s\n"
+    },
+    "docs-absence-normal.log": {
+      "sha256": "97e5693c51ad9eda4ff9a28f0b6977e1c318813d96c4b70a0fc504cca806b0df",
+      "content": "ok  \tgithub.com/snissn/gomap/TreeDB/docs\t0.691s\n?   \tgithub.com/snissn/gomap/cmd/benchprof\t[no test files]\n--- FAIL: TestQuicksilverRealisticCLIContract (0.12s)\n    suite_quicksilver_realistic_test.go:428: build exit status 1: error obtaining VCS status: exit status 128\n        \tUse -buildvcs=false to disable VCS stamping.\nFAIL\nFAIL\tgithub.com/snissn/gomap/cmd/unified_bench\t0.134s\nFAIL\n"
+    },
+    "docs-cli-environment-normal.log": {
+      "sha256": "c848c82def09abad328545f110542e26af91145a08ccd9aee532b7c553c62fe5",
+      "content": "ok  \tgithub.com/snissn/gomap/TreeDB/docs\t0.492s\nok  \tgithub.com/snissn/gomap/cmd/unified_bench\t10.584s\n"
+    }
+  }
+}

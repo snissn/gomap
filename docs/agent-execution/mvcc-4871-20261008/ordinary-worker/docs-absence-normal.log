@@ -1,0 +1,8 @@
+ok  	github.com/snissn/gomap/TreeDB/docs	0.691s
+?   	github.com/snissn/gomap/cmd/benchprof	[no test files]
+--- FAIL: TestQuicksilverRealisticCLIContract (0.12s)
+    suite_quicksilver_realistic_test.go:428: build exit status 1: error obtaining VCS status: exit status 128
+        	Use -buildvcs=false to disable VCS stamping.
+FAIL
+FAIL	github.com/snissn/gomap/cmd/unified_bench	0.134s
+FAIL

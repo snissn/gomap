@@ -1,0 +1,8 @@
+=== RUN   TestReopenVerify_CompactIndex_ReopenParity
+2026/10/08 10:35:32 treedb: dict training trained dict stream=0 dict_bytes=40960 samples=86 raw=33024 stored=2140 ratio=0.065
+2026/10/08 10:35:32 treedb: value-log dict published class=single_value dict_id=3285552234293538665 k=32 payload_ratio=0.008 total_ratio=0.042
+    reopen_verify_test.go:1196: CompactIndex: primary arena: stale ownership
+--- FAIL: TestReopenVerify_CompactIndex_ReopenParity (0.07s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.078s
+FAIL

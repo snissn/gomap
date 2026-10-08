@@ -1,0 +1,7 @@
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup
+    durable_root_bench_test.go:631: completed cohort retained temporary governor: stats={TotalBytes:269952 HistoryBytes:0 ReservedBytes:269696 RetiredBytes:0 PeakBytes:343520 ControlBytes:256 DeferredBytes:0 ExternalBytes:269696 Views:0 Generations:0 Sources:0 ExternalLeases:1} oldArenaBytes=269664 oldArenaClosed=false ownerRefs=1 cleanup=<nil> cost=map[drained-governor-bytes:269696 held-cohort-bytes:1632 held-cohort-files:2 held-gc-deleted-files:0 held-governor-bytes:291872 held-old-data-bytes:262144 held-old-primary-bytes:1048576 last-reader-cleanup-ns:19980 scope-after-reader-governor-bytes:279904]
+    durable_root_bench_test.go:435: cohort final cleanup retained temporary governor
+--- FAIL: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.015s
+FAIL

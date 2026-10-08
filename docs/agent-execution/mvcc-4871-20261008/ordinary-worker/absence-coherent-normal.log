@@ -1,0 +1,9 @@
+ok  	github.com/snissn/gomap/TreeDB	0.177s
+--- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts (0.07s)
+    --- FAIL: TestPrimaryInlineAbsenceReplacementAndConsolidationPreserveCuts/replace (0.00s)
+        primary_directory_test.go:53: zipper: invalid read-only prepare plan: zipper: read-only prepare has 1 ops but no leaf spans
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	1.600s
+ok  	github.com/snissn/gomap/TreeDB/zipper	0.071s
+ok  	github.com/snissn/gomap/TreeDB/node	0.004s
+FAIL

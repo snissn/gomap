@@ -1,0 +1,5 @@
+EXCERPT ONLY: original whole receipt SHA256 21378e5b59b2d0b6c6f048369346bcb19078ac3f370b2912e7b563103b69ee9a bytes 1087747
+TreeDB/zipper/read_only_prepare.go:1378:22:     from (*Zipper).prepareReadOnlyRecursive(z, childRef, childOps, opBase + startOpIdx, ranges[rangeStart:rangeEnd], rangeBase + rangeStart, childLow, childHigh, result, scratch, depth + uint32(1), absencePoint) (call parameter) at TreeDB/zipper/read_only_prepare.go:1426:40
+TreeDB/zipper/read_only_prepare.go:1363:17:     from (*Zipper).prepareReadOnlyRecursive(z, childRef, childOps, opBase + startOpIdx, ranges[rangeStart:rangeEnd], rangeBase + rangeStart, childLow, childHigh, result, scratch, depth + uint32(1), absencePoint) (call parameter) at TreeDB/zipper/read_only_prepare.go:1426:40
+TreeDB/zipper/read_only_prepare.go:1226:222: absencePoint does not escape
+TreeDB/zipper/read_only_prepare.go:1175:53:     from (*Zipper).prepareReadOnlyRecursive(z, ~r0, ops, 0, ranges, 0, nil, nil, &result, scratch, uint32(1), opts.LogicalAbsencePointCallback) (call parameter) at TreeDB/zipper/read_only_prepare.go:1222:35

@@ -1,0 +1,5 @@
+--- FAIL: TestCommandWALLegacyTermsInCurrentDocsNeedContext (0.08s)
+    command_wal_docs_test.go:352: /workspace/scratch/1ecfdb811b25/harness-5118/cmd/unified_bench/README.md:95 mentions legacy profile alias without legacy/compatibility/benchmark context: before/after improvement. No-WAL `fast` results do not establish command-WAL
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/docs	2.709s
+FAIL

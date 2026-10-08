@@ -1,0 +1,7 @@
+=== RUN   TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup
+    durable_root_bench_test.go:631: completed cohort retained temporary governor
+    durable_root_bench_test.go:435: cohort final cleanup retained temporary governor
+--- FAIL: TestPrimaryBorrowedValueLogCohortUsesSelectedBridgeAndOriginalCleanup (0.01s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.015s
+FAIL

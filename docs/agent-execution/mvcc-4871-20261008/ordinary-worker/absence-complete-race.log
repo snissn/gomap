@@ -1,0 +1,9 @@
+# ./TreeDB/internal/mvcc
+stat /workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/internal/mvcc: directory not found
+FAIL	./TreeDB/internal/mvcc [setup failed]
+ok  	github.com/snissn/gomap/TreeDB	1.578s
+ok  	github.com/snissn/gomap/TreeDB/db	6.018s
+ok  	github.com/snissn/gomap/TreeDB/caching	1.538s
+ok  	github.com/snissn/gomap/TreeDB/zipper	1.387s
+ok  	github.com/snissn/gomap/TreeDB/node	1.021s
+FAIL

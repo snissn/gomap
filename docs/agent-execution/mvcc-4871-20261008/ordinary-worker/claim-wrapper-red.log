@@ -1,0 +1,6 @@
+=== RUN   TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease
+    claim_retention_test.go:21: private claim wrapper unadmitted: got 128352 want 127968
+--- FAIL: TestPrimaryPrivateClaimWrapperAdmissionAndTerminalRelease (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/primaryarena	0.003s
+FAIL

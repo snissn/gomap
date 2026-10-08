@@ -1,0 +1,4 @@
+=== RUN   TestPrimaryScratchRefusalAndExactAliasRefund
+--- PASS: TestPrimaryScratchRefusalAndExactAliasRefund (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/zipper	0.003s

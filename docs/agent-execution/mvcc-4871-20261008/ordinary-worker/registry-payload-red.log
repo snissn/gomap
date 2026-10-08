@@ -1,0 +1,6 @@
+=== RUN   TestRegistryKeyPayloadRefusalPreservesBacking
+    registry_capacity_test.go:57: payload refusal changed backing: owner=1120 budget=1120 capacity=16 count=0
+--- FAIL: TestRegistryKeyPayloadRefusalPreservesBacking (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.003s
+FAIL

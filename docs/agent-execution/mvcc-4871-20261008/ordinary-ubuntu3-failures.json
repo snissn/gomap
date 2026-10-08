@@ -1,0 +1,116 @@
+{
+  "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+  "job": 113567766564,
+  "raw_bytes": 5219375,
+  "events": [
+    {
+      "Time": "2026-10-08T22:17:58.503977552Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurablePagerCandidateWriteLockContract"
+    },
+    {
+      "Time": "2026-10-08T22:17:58.503986037Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurablePagerCandidateWriteLockContract",
+      "Output": "=== RUN   TestDurablePagerCandidateWriteLockContract\n"
+    },
+    {
+      "Time": "2026-10-08T22:17:58.509862379Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurablePagerCandidateWriteLockContract",
+      "Output": "    durable_root_pager_lock_contract_test.go:34: Pager.Write lock contract incomplete: lock=false deferred_unlock=false copy=false\n"
+    },
+    {
+      "Time": "2026-10-08T22:17:58.509880443Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurablePagerCandidateWriteLockContract",
+      "Output": "--- FAIL: TestDurablePagerCandidateWriteLockContract (0.01s)\n"
+    },
+    {
+      "Time": "2026-10-08T22:17:58.509887336Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestDurablePagerCandidateWriteLockContract",
+      "Elapsed": 0.01
+    },
+    {
+      "Time": "2026-10-08T22:18:31.951594296Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestRecoverIndexSwapEmitsNamespaceMutations"
+    },
+    {
+      "Time": "2026-10-08T22:18:31.951598453Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestRecoverIndexSwapEmitsNamespaceMutations",
+      "Output": "=== RUN   TestRecoverIndexSwapEmitsNamespaceMutations\n"
+    },
+    {
+      "Time": "2026-10-08T22:18:31.951884322Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestRecoverIndexSwapEmitsNamespaceMutations",
+      "Output": "    namespace_instrumentation_test.go:88: recoverIndexSwap: collectionwal: recovery required\n"
+    },
+    {
+      "Time": "2026-10-08T22:18:31.951898278Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestRecoverIndexSwapEmitsNamespaceMutations",
+      "Output": "        invalid joint DATA/PRIMARY COMMIT\n"
+    },
+    {
+      "Time": "2026-10-08T22:18:31.952023744Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestRecoverIndexSwapEmitsNamespaceMutations",
+      "Output": "--- FAIL: TestRecoverIndexSwapEmitsNamespaceMutations (0.00s)\n"
+    },
+    {
+      "Time": "2026-10-08T22:18:31.952034474Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestRecoverIndexSwapEmitsNamespaceMutations",
+      "Elapsed": 0
+    },
+    {
+      "Time": "2026-10-08T22:19:06.328433972Z",
+      "Action": "run",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPowerLossCertificationStaleBuildBasePublicReopen"
+    },
+    {
+      "Time": "2026-10-08T22:19:06.328436487Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPowerLossCertificationStaleBuildBasePublicReopen",
+      "Output": "=== RUN   TestPowerLossCertificationStaleBuildBasePublicReopen\n"
+    },
+    {
+      "Time": "2026-10-08T22:19:06.49044213Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPowerLossCertificationStaleBuildBasePublicReopen",
+      "Output": "    power_loss_certification_stale_build_test.go:181: checkpoint emitted 0 completed meta syncs, want one\n"
+    },
+    {
+      "Time": "2026-10-08T22:19:06.493750552Z",
+      "Action": "output",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPowerLossCertificationStaleBuildBasePublicReopen",
+      "Output": "--- FAIL: TestPowerLossCertificationStaleBuildBasePublicReopen (0.17s)\n"
+    },
+    {
+      "Time": "2026-10-08T22:19:06.493775899Z",
+      "Action": "fail",
+      "Package": "github.com/snissn/gomap/TreeDB/db",
+      "Test": "TestPowerLossCertificationStaleBuildBasePublicReopen",
+      "Elapsed": 0.17
+    }
+  ]
+}

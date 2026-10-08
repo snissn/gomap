@@ -1,0 +1,6 @@
+=== RUN   TestPrimaryCompactIndexMaterializationAndRollback
+    compact_index_test.go:114: primary arena: stale ownership
+--- FAIL: TestPrimaryCompactIndexMaterializationAndRollback (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.008s
+FAIL

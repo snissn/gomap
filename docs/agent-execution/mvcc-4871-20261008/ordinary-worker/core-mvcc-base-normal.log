@@ -1,0 +1,5 @@
+ok  	github.com/snissn/gomap/TreeDB/internal/retainedalloc	0.002s
+ok  	github.com/snissn/gomap/TreeDB/internal/primaryarena	0.011s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	7.060s
+ok  	github.com/snissn/gomap/TreeDB/zipper	0.445s
+ok  	github.com/snissn/gomap/TreeDB/mvcc	2.849s

@@ -1,0 +1,12 @@
+=== RUN   TestResourceKindBackingSharedSetAndScopedBorrow
+    resource_allocation_test.go:407: set release retired a scoped borrower: before=1376 after=1216 tokenReleased=false backingRefs=1
+--- FAIL: TestResourceKindBackingSharedSetAndScopedBorrow (0.00s)
+=== RUN   TestResourceOwnedKindMergeBuilderTransferAndLastBorrow
+    resource_kind_merge_allocation_test.go:110: public release stole borrowed closure: before=4784 after=4624 token1Released=false token2Released=false directoryReleases=0 backingRefs=1
+--- FAIL: TestResourceOwnedKindMergeBuilderTransferAndLastBorrow (0.00s)
+=== RUN   TestOwnedBuilderAddCoalescesAndRefusesBeforeTransfer
+    resource_set_allocation_test.go:125: actual repeated identity did not coalesce: len=1 ropeBytes=4 logicalBytes=8 physicalBytes=8 sameToken=true
+--- FAIL: TestOwnedBuilderAddCoalescesAndRefusesBeforeTransfer (0.00s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.004s
+FAIL

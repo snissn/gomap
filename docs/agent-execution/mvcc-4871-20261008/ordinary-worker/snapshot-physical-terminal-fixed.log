@@ -1,0 +1,10 @@
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded
+--- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead (0.01s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary (0.00s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded (0.00s)
+=== RUN   TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot
+--- PASS: TestPrimaryOneShotFailedCleanupPreservesOriginalSnapshot (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.018s

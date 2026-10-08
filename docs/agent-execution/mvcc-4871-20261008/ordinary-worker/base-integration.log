@@ -1,0 +1,13 @@
+Auto-merging .github/ci/ci_impact.json
+CONFLICT (content): Merge conflict in .github/ci/ci_impact.json
+Auto-merging TreeDB/docs/spec/contracts.md
+Auto-merging TreeDB/docs/spec/cow-cache-publication.md
+Auto-merging TreeDB/docs/spec/verification.md
+Auto-merging TreeDB/mvcc/mvcc.go
+CONFLICT (content): Merge conflict in TreeDB/mvcc/mvcc.go
+Auto-merging TreeDB/mvcc/versions.go
+Auto-merging TreeDB/public.go
+Auto-merging cmd/benchprof/README.md
+Auto-merging cmd/unified_bench/README.md
+Auto-merging docs/contracts/CONCURRENCY.md
+Automatic merge failed; fix conflicts and then commit the result.

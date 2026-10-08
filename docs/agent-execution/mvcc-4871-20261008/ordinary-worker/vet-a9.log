@@ -1,0 +1,1 @@
+TreeDB/internal/rootpublication/resource_namespace_cleanup_unix_test.go:64:6: assignment copies lock value to _: github.com/snissn/gomap/TreeDB/internal/retainedalloc.Owner contains sync.Mutex

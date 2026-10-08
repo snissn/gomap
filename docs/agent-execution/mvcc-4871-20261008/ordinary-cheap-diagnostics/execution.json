@@ -1,0 +1,183 @@
+[
+  {
+    "label": "baseline",
+    "rep": 1,
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem"
+    ],
+    "start_unix": 1791497912.5110035,
+    "end_unix": 1791497912.7107456,
+    "wall_seconds": 0.1997417239999777,
+    "exit": 0,
+    "child_rusage": {
+      "user_s": 0.094361,
+      "system_s": 0.021551,
+      "maxrss_KiB": 37012,
+      "major_faults": 21,
+      "voluntary_context_switches": 1002,
+      "involuntary_context_switches": 2
+    },
+    "log": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/baseline-publication-r1.log"
+  },
+  {
+    "label": "candidate",
+    "rep": 1,
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem"
+    ],
+    "start_unix": 1791497912.7110994,
+    "end_unix": 1791497912.906435,
+    "wall_seconds": 0.1953368029990088,
+    "exit": 0,
+    "child_rusage": {
+      "user_s": 0.101199,
+      "system_s": 0.025675999999999997,
+      "maxrss_KiB": 40472,
+      "major_faults": 8,
+      "voluntary_context_switches": 1152,
+      "involuntary_context_switches": 4
+    },
+    "log": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/candidate-publication-r1.log"
+  },
+  {
+    "label": "candidate",
+    "rep": 2,
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem"
+    ],
+    "start_unix": 1791497912.9068332,
+    "end_unix": 1791497913.0873802,
+    "wall_seconds": 0.18054811500041978,
+    "exit": 0,
+    "child_rusage": {
+      "user_s": 0.064745,
+      "system_s": 0.044178999999999996,
+      "maxrss_KiB": 41548,
+      "major_faults": 8,
+      "voluntary_context_switches": 1146,
+      "involuntary_context_switches": 1
+    },
+    "log": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/candidate-publication-r2.log"
+  },
+  {
+    "label": "baseline",
+    "rep": 2,
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem"
+    ],
+    "start_unix": 1791497913.0877855,
+    "end_unix": 1791497913.2616413,
+    "wall_seconds": 0.17385698100042646,
+    "exit": 0,
+    "child_rusage": {
+      "user_s": 0.071786,
+      "system_s": 0.034263,
+      "maxrss_KiB": 32552,
+      "major_faults": 8,
+      "voluntary_context_switches": 1122,
+      "involuntary_context_switches": 7
+    },
+    "log": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/baseline-publication-r2.log"
+  },
+  {
+    "label": "baseline",
+    "rep": 3,
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem"
+    ],
+    "start_unix": 1791497913.262089,
+    "end_unix": 1791497913.4344668,
+    "wall_seconds": 0.1723786629991082,
+    "exit": 0,
+    "child_rusage": {
+      "user_s": 0.073471,
+      "system_s": 0.038682999999999995,
+      "maxrss_KiB": 37120,
+      "major_faults": 8,
+      "voluntary_context_switches": 982,
+      "involuntary_context_switches": 2
+    },
+    "log": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/baseline-publication-r3.log"
+  },
+  {
+    "label": "candidate",
+    "rep": 3,
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^BenchmarkPublishDurableRootV1$",
+      "-test.benchtime=100x",
+      "-test.count=1",
+      "-test.cpu=2",
+      "-test.benchmem"
+    ],
+    "start_unix": 1791497913.4349506,
+    "end_unix": 1791497913.6207952,
+    "wall_seconds": 0.1858452149990626,
+    "exit": 0,
+    "child_rusage": {
+      "user_s": 0.092489,
+      "system_s": 0.028711,
+      "maxrss_KiB": 44004,
+      "major_faults": 8,
+      "voluntary_context_switches": 1111,
+      "involuntary_context_switches": 2
+    },
+    "log": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/candidate-publication-r3.log"
+  },
+  {
+    "label": "candidate-enabled-cohort",
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/qualification-binaries/candidate-db.test",
+      "-test.run=^$",
+      "-test.bench=^Benchmark(PublishPrimaryDurableRootV1|PrimaryBorrowedValueLogCohort)$",
+      "-test.benchtime=100x",
+      "-test.count=3",
+      "-test.cpu=2",
+      "-test.benchmem"
+    ],
+    "start_unix": 1791497925.811101,
+    "end_unix": 1791497926.5186558,
+    "wall_seconds": 0.707554713000718,
+    "exit": 0,
+    "child_rusage": {
+      "user_s": 0.375035,
+      "system_s": 0.10403799999999999,
+      "maxrss_KiB": 48348,
+      "major_faults": 78,
+      "voluntary_context_switches": 3508,
+      "involuntary_context_switches": 65
+    },
+    "log": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-cheap-diagnostics/candidate-enabled-cohort.log"
+  }
+]

@@ -1,0 +1,3 @@
+ok  	github.com/snissn/gomap/TreeDB/zipper	0.005s
+ok  	github.com/snissn/gomap/TreeDB/db	9.213s
+ok  	github.com/snissn/gomap/TreeDB/caching	0.022s

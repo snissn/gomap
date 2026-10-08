@@ -1,0 +1,5 @@
+# ./docs
+no Go files in /workspace/scratch/1ecfdb811b25/harness-5118/docs
+FAIL	./docs [setup failed]
+ok  	github.com/snissn/gomap/cmd/unified_bench	55.516s
+FAIL

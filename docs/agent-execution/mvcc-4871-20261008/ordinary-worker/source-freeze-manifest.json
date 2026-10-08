@@ -1,0 +1,1340 @@
+{
+  "head": "cdfdd2b73e2b7a8975ca58c9f1dfc72343525c74",
+  "tree": "c898094b21de3ae309857453458f27866c8452e0",
+  "parents": [
+    "e43abc1532d7b77d22e76b1cdbc0a5be4b5bb2e0",
+    "463f293ed480599c8187b2980aa981c29135e38f"
+  ],
+  "baseline": "2d6b07f58902537cfe8d2b3e3a8c3c9ba0f3c07c",
+  "latest_verified_main": "73a97b70ff8e247f012014810f273342aa7e610b",
+  "provisional_harness": "463f293ed480599c8187b2980aa981c29135e38f",
+  "dirty": [],
+  "manifest": {
+    ".github/ci/ci_impact.json": {
+      "git_blob": "0c396d50b5203ed1569d3fce3d10a30d63bd7cfb",
+      "sha256": "b9a615db5eb782c6b189fecb2e2a19cf6d269e4cf34a677982df9522afdc15c9"
+    },
+    ".github/scripts/test_ci_impact.py": {
+      "git_blob": "fc7cde6c604a0472266ae04ee8df309ef880dbd5",
+      "sha256": "0ffa443dba0c9bfcc246e014bd6f717cc3dfbb44b1760b20b08113e990d24269"
+    },
+    ".github/scripts/test_mvcc_raw_path_equivalence.py": {
+      "git_blob": "05bffa3550197cd439e0d5348f3eb96548d2ea70",
+      "sha256": "b7743c1a751d9421324fa3f2766e4259fefa947e7972862092d6967892d38908"
+    },
+    ".github/scripts/test_refresh_ci_impact_inventory.py": {
+      "git_blob": "8e42fbb82e3ff94ff4661f0ee8a043007d27fa89",
+      "sha256": "ea4eab39b9dc414287e069acdbb788e1e366ee70c734f1701a0dec33dbb010dc"
+    },
+    ".github/workflows/cow-c3-hosted-qualification.yml": {
+      "git_blob": "bba97a5f5fb109374891c6d790755554f0585553",
+      "sha256": "da6b04d75bee522e4dac3a8cc0fc38d1486d2f350b1aadfdef385306aa4cf161"
+    },
+    "TreeDB/batch/batch.go": {
+      "git_blob": "df962317c6858ffbfd4a90e902aaeb58bf788ae9",
+      "sha256": "c6c7a89d39594d24a1078ff9529b6f7f0eb0de7a284bf55b7a0cd41185ecc22a"
+    },
+    "TreeDB/caching/cow_c3_successor_close_test.go": {
+      "git_blob": "2cfc44a1fb983992915c805ab4b160dfe5f78dbc",
+      "sha256": "e3aa39b1e4d499ad8f75236751c4d43331611cc803dc05026fb23ea430916443"
+    },
+    "TreeDB/caching/cow_checkpoint.go": {
+      "git_blob": "dd4fe91e45e608c4a3436fe738dda12849561b3b",
+      "sha256": "0ade067dd82366aadd28e76eb42f3bdc0daf886ad1b6717b64c3ec42244dd841"
+    },
+    "TreeDB/caching/cow_cut.go": {
+      "git_blob": "7a6db3ce470d7bca55e110d09e350817156fff4a",
+      "sha256": "f0a3f0c5b4a37a9ad1bbd39c0f95801232e7a8a8cf33a89b09b8c49f744ba296"
+    },
+    "TreeDB/caching/cow_dictionary_cleanup_test.go": {
+      "git_blob": "137e3ae2ad158e2856707bd423599a643f646cc7",
+      "sha256": "2367d2076b9788d5ef2283d06af2ea47ddcb9df976644c5e91e8e9c92127db83"
+    },
+    "TreeDB/caching/cow_flush.go": {
+      "git_blob": "1a6ca8bf6ff81395f7a69133dafce599fb40f49b",
+      "sha256": "dcfa313f9202cbd993a1e7b1949b17a51ae238956fc9969200297bb6f73455a6"
+    },
+    "TreeDB/caching/cow_read.go": {
+      "git_blob": "f4912641f5894f3da692bc751cbb55b22017168f",
+      "sha256": "24a0743abcac8ae65ea6a01c1344b2c93d08f05e5d5fdbcfa9158aa432d434d7"
+    },
+    "TreeDB/caching/cow_resources.go": {
+      "git_blob": "3977e70ecc8ffc6330b4a9c38fee7a7fd62f5650",
+      "sha256": "2dd29e01bc9983a8c17df1de2db10d0ee87bd078da0906b1ef7d78a67cc36ba5"
+    },
+    "TreeDB/caching/db.go": {
+      "git_blob": "a9d2e2a251298866b05e8ba3642b3e0bdf47d452",
+      "sha256": "e612e178e2b00206c2290a2cd8a0d1c431ec2ef120c2870fdfdb90dd1a73fdfb"
+    },
+    "TreeDB/caching/mvcc_admission.go": {
+      "git_blob": "a325b32d01a5d25a29581b4fb870d8ea1c2f2fbd",
+      "sha256": "f42a75f729f04289692626dde3356beb435c67f3c4474e1089dfe595aad1bc96"
+    },
+    "TreeDB/caching/point_successor.go": {
+      "git_blob": "97b45181cba570cf48ad95a7bb219b3a4803a7b4",
+      "sha256": "3c05bc4bdbbe4a5269809f86720f50b4437166c7929a62e458bb433baff9c89d"
+    },
+    "TreeDB/caching/stable_dictionary_resource_test.go": {
+      "git_blob": "8fd203e5c94ed52d46fe8b8bcd7e5cf8f6b5a9c1",
+      "sha256": "2e0a9d1e328f2d58d60675534bf7bc15fd6238c3e2fb7fb72b5101a096dccf6c"
+    },
+    "TreeDB/caching/stable_leaf_resource.go": {
+      "git_blob": "76b4ff1588c375e0191ec3a87a90fab8d21f66f4",
+      "sha256": "9e70c54004f46e9a374326f76295aa002fee99dce04f23a4a9e400ae83602c36"
+    },
+    "TreeDB/collections/stable_resource.go": {
+      "git_blob": "e28309f8c358a3abc7d05765e196fc887a45ce07",
+      "sha256": "937b248b1784b86aa1f8e544460cf3f572c79b0f4c80829d79b3607c6b114ba3"
+    },
+    "TreeDB/command_wal_public_cached.go": {
+      "git_blob": "6ee01b4f60e830c56d151995f330cce26e704a14",
+      "sha256": "35de8e3f98d34a5cb60f51ac7ac2eed2cdcd8794d64c4012015403ecbe46d941"
+    },
+    "TreeDB/db/batch.go": {
+      "git_blob": "a75ab92e0769621653f969134e4a6afb8069f84e",
+      "sha256": "a1501f7f0ec5ef3d867fbd7b0c37138977c7be80375109c86ce4975478667451"
+    },
+    "TreeDB/db/command_wal_debt.go": {
+      "git_blob": "265a22263aa32bc3a0e53efca79c60ff89f9e0ed",
+      "sha256": "1dae51d03308350dec0e86861e1d0ee0dceceb9a1633d71250dde01e60da921a"
+    },
+    "TreeDB/db/command_wal_debt_test.go": {
+      "git_blob": "4e3fb00136dcb4b444e790670cf9770c17286543",
+      "sha256": "f403802a28404035b9b3e2dea93fb388ead50004c3e2a9fd0411383f16e636d1"
+    },
+    "TreeDB/db/command_wal_publish.go": {
+      "git_blob": "d66a11789ee3597d71d81508b4ecde70a8287093",
+      "sha256": "ff53c98324efe5ce2bb30435a3b782d8dfe3a68d36e21f9e1e3fdce4b93a9825"
+    },
+    "TreeDB/db/commit_combiner.go": {
+      "git_blob": "0b8fcd87f87da082b3ac9720704e83a80e48e24f",
+      "sha256": "53251026d6e2904704ba678051e8b6c55aece1253de48236a1091aaae9a62f0f"
+    },
+    "TreeDB/db/commit_combiner_mvcc_input_test.go": {
+      "git_blob": "0487f95359b11c97c9cd01ab9ced78d26b31b5bb",
+      "sha256": "f9d7e14823d365e0bd2c7aa52bcc15e433bd69c1a3118569a6c74e21fc73297c"
+    },
+    "TreeDB/db/compact_index_test.go": {
+      "git_blob": "48161719e81cb4c25eb52879f7b60393931ccb97",
+      "sha256": "474d6ab676c20488d0d5994ad7c11263247b4051e549dee7128009e751817d41"
+    },
+    "TreeDB/db/db.go": {
+      "git_blob": "d023a0a8749078bf58c7848ce0e5b7b277a6e8fd",
+      "sha256": "74c37710c36d4412887fc30b21ac5cc68a42c998608e225052628379d676496a"
+    },
+    "TreeDB/db/dependency_directory_rebuild_v2.go": {
+      "git_blob": "c7597083401b35484f895a7b1ee3cd2273832ffe",
+      "sha256": "747565e9bebe5eeb7b522e4d821a88ccef7613f51d016d049bc8878b3f05812c"
+    },
+    "TreeDB/db/dependency_directory_snapshot_rebind_v2.go": {
+      "git_blob": "ea90f99b77ba4f109be5ed86ec7eba34d1834aa8",
+      "sha256": "7719e67c807b2ec9d9582c9eb2e27e74ab25abac76d57a73d3024dce0d227285"
+    },
+    "TreeDB/db/dependency_directory_v2.go": {
+      "git_blob": "9b8415473e4b572a982536bc7b5a92fea037f427",
+      "sha256": "fce18eb39220e6a7b6e5666981edea4a86e5e3b38d3ae8d9cfa2458e0fcfbf39"
+    },
+    "TreeDB/db/durable_primary_rebuild_v5.go": {
+      "git_blob": "f711d22d2004fd24291c03f730a0cdbff2d90e98",
+      "sha256": "3b6d7f3db57950dedeb099423212bc12988a000a26bf9f461e52c85d9118861c"
+    },
+    "TreeDB/db/durable_primary_recovery_v5.go": {
+      "git_blob": "a390c510d723ee16ad00b8d32499daf66ee52ebb",
+      "sha256": "e4a4612e7b5c6ab2d4fda594df5862394377ec907b295aa3790bfddf32a51a3f"
+    },
+    "TreeDB/db/durable_primary_recovery_v5_test.go": {
+      "git_blob": "edca1b11a722a8b7e314d372001fd88cc73eaeb7",
+      "sha256": "9ccc4f7b078029924bf1d91a905437290f8bc6de4dfb6377f1458d0b571b13eb"
+    },
+    "TreeDB/db/durable_primary_runtime_v5.go": {
+      "git_blob": "d514f63e0faf65d8dacc4fc07ed2a2c48774c83e",
+      "sha256": "2509d85a3fea8c440a520d61ea49cbc4bc87e88c72d710f72d510fe410672ab4"
+    },
+    "TreeDB/db/durable_primary_snapshot_rebind_v5.go": {
+      "git_blob": "2c1d252603f07c70beda9c45e532c20ed85490d0",
+      "sha256": "bd2fa117e2c984c41b227934da547c3419cdf040c1d5526fa0935dd39f582540"
+    },
+    "TreeDB/db/durable_primary_snapshot_rebind_v5_test.go": {
+      "git_blob": "f30fb30443e789ae63e98ce5ecdd7e517ed6fc93",
+      "sha256": "23445a393e062e8f0580843518d218c4f5d6de935e3ebdce2612dd8c85603ff0"
+    },
+    "TreeDB/db/durable_root_bench_test.go": {
+      "git_blob": "25df174b0fe5434ea1efda2dbbdad8e82724ae34",
+      "sha256": "4a67e99bb17f0d06f6f9318e659df7a03e7a08e76d453e5f5a38d8a9c73cec92"
+    },
+    "TreeDB/db/durable_root_recovery.go": {
+      "git_blob": "c3d57c06270685aeb5abeb5bd006977ac68fbfa1",
+      "sha256": "305e88851b7bbd2e27ed43a8c314d2f5a52fe123df79eb4e23c4053e014fcf6a"
+    },
+    "TreeDB/db/durable_root_runtime.go": {
+      "git_blob": "dee090591bf369a97533d2f6ac9ed59eefbf736b",
+      "sha256": "a3e7ce171a8c9c44779ad4b8c5c4bdce770ace75acf2fedc5699ce8655a153a3"
+    },
+    "TreeDB/db/durable_root_snapshot_rebind.go": {
+      "git_blob": "01a669623681d45518525f3e46ae9e862163acfc",
+      "sha256": "268a0c254fc9a44e64e3405d6eb875a0cc788d9b85eb695e3df87573e3ca5f18"
+    },
+    "TreeDB/db/flush_span_run_plan.go": {
+      "git_blob": "d3b108906a05c58abb3f6b9fd2ecd9c0c9553613",
+      "sha256": "1b4f032e27b18ecd72635bc528033cd109fd83c59e1c9c77786261a1f41fe6c8"
+    },
+    "TreeDB/db/fragmentation.go": {
+      "git_blob": "7d6f698471d5b77bb260e3eb3f902841b1ebd15c",
+      "sha256": "75d604bca953f72cdc943944636d1c6fa191bf550b3e27dd34957db6921a4bec"
+    },
+    "TreeDB/db/index_gen.go": {
+      "git_blob": "63b8fd0ccab48350271e3fac9314cb5627564d3e",
+      "sha256": "0f5629a168e4288472a0a457b679fc8e37640286e1e1c3fb1794b64098af0352"
+    },
+    "TreeDB/db/index_swap.go": {
+      "git_blob": "193aeb907bbe8fb22d7e61846001471aa792bc6b",
+      "sha256": "e0b37280ab997c54771333c2e18b5fa5306347281919ba50faf8713af4962ed9"
+    },
+    "TreeDB/db/index_swap_test.go": {
+      "git_blob": "77cc18f83688483183bf1468cad0b7423ee39386",
+      "sha256": "0409426d8c1c664d561df85174ab751558ef5441fa001774e6e4af3bf90d48df"
+    },
+    "TreeDB/db/leaf_generation_manifest_stable_prepare.go": {
+      "git_blob": "a1407d7d6ac3d22ee03c419034fdc96561f24212",
+      "sha256": "515432bbfd369ea700af28f13a080e93dd587e093f72be739ceab21498852cdf"
+    },
+    "TreeDB/db/leaf_generation_manifest_store.go": {
+      "git_blob": "fb5ffa1a0bdfc342d0693956d21a613f35f3eecf",
+      "sha256": "1386ee5725812da0bee9ddffec51bd8372e4de4649571be9e5b69c68605d3e9e"
+    },
+    "TreeDB/db/leaf_generation_pack_rewrite.go": {
+      "git_blob": "10a74478216c42a45e4ba2122e3b4f4ccdfa2365",
+      "sha256": "22cde13e28d52357c81fa68e2c84c3795b709d5f964a7c4f3da0cbf7a56d86a7"
+    },
+    "TreeDB/db/leaf_generation_pack_stable_prepare.go": {
+      "git_blob": "13096e960c94d79795b66b94ec6668c185809042",
+      "sha256": "d72ec607f3e8db555fa879903ad58f09869a05d3d8e23b5ef165291de655574f"
+    },
+    "TreeDB/db/leaf_page_log.go": {
+      "git_blob": "d0ece1547d5b8f77fc7028233834decd1af43007",
+      "sha256": "c66f4a743fa5d4abe0e2de69a6db3627ca331fde47475b13ceac0ccb450dcaad"
+    },
+    "TreeDB/db/maintenance_reachability.go": {
+      "git_blob": "69a08ab4c8e586ea747822dcdc954e02adf2df58",
+      "sha256": "f705ef09bc8f7175a6aa3490966e4741c93695398d05eb1fd623783caa47150b"
+    },
+    "TreeDB/db/mvcc_admission.go": {
+      "git_blob": "8b1fcb30e6959e21ec2bb12fc100d28909c79fba",
+      "sha256": "89c327c4f6dd01d0354677c3d0bd95dcb6114497e9e63e4a13df6abdae39efb2"
+    },
+    "TreeDB/db/namespace_mutation.go": {
+      "git_blob": "57d3c94fd4342bd76086f86037806ac2d2879af9",
+      "sha256": "4bddac6495e1af344636efbe2171ab8c268defdef81007b9236112f6e4257f60"
+    },
+    "TreeDB/db/open_readonly.go": {
+      "git_blob": "9f89693f019afa2709baee7210d7cb01dc97d1f3",
+      "sha256": "178dda0c2f8b4d88781181199a1ecb07ed7f70ee301c0f3a7b61d5bb1021e859"
+    },
+    "TreeDB/db/ordered_root_publish.go": {
+      "git_blob": "44a2446e0aa53933568ba7a70dd450da57a28dcb",
+      "sha256": "f4f90d1674b7333cce21f6e5e09fda46c22ccfa3d6f51a1d3262b9c4560d73cd"
+    },
+    "TreeDB/db/owned_finish_callback_scope_v6.go": {
+      "git_blob": "376891677eb74f6c7ae8816c270e93f14ccdd331",
+      "sha256": "b10e98bf69f7e1cd5392afe42f10e3274105f4c407d88bb5d3cde5dbab5bd620"
+    },
+    "TreeDB/db/owned_finish_callback_scope_v6_test.go": {
+      "git_blob": "8b7e2b13fb579d3379298dfb1a38f2ec5f7476b9",
+      "sha256": "804459dfc545810897f821e2c0f689fb4b1f6a91acc4b589b04d09a0f69d8231"
+    },
+    "TreeDB/db/physical_snapshot_cut_v1.go": {
+      "git_blob": "bd5326dafe546072b5c98f4090b7c883b8a61941",
+      "sha256": "2654b5978d788477e0999dcb7af48ef7f7e1bdb2f7d916d8c510a92cfd913830"
+    },
+    "TreeDB/db/pools.go": {
+      "git_blob": "f33c43be1547c9f3b76ba5551f5e62b3229cc506",
+      "sha256": "4004199747ff6e7aad74103c9d8007ccbeffbb657fd4652a7e7992f6b779b061"
+    },
+    "TreeDB/db/prepared_root_publication_profile.go": {
+      "git_blob": "80b471663b187f9e074773d50de58a4abbb44625",
+      "sha256": "2f074556a90aee5b14673b18203b541db06c87851b486640681a4567e3e38c3f"
+    },
+    "TreeDB/db/prepared_root_publication_profile_test.go": {
+      "git_blob": "76ab0a47c6e556b4871ec19fff487a65c3e7fdab",
+      "sha256": "ac86233cf219dec68c1ab5522f6156283fd450e0778cf3009741f8307ebe35dd"
+    },
+    "TreeDB/db/primary_arena_owner_v5.go": {
+      "git_blob": "9b31ae90215f79b5b0f1679e8d39e5544245c320",
+      "sha256": "adaa450ecb0de36e5db314545a7e891efd537fd93ef27b92e7be0af2b104d811"
+    },
+    "TreeDB/db/primary_bank_construction_v5.go": {
+      "git_blob": "a2ee5c1c87190ce75015ffcd2316689669af5004",
+      "sha256": "8808972fbb42d1f34b23d07bbe5638e379fbc2db87933f7d63680f1f23a5b5de"
+    },
+    "TreeDB/db/primary_capsule_recovery_v6.go": {
+      "git_blob": "2b5e12dc4ebe376696f3708fdba392e19f759f97",
+      "sha256": "5270d7f9e7aeda09488d9c5b97591a4b68c95b19e4e7196e1402c56242317a02"
+    },
+    "TreeDB/db/primary_capsule_runtime_v6.go": {
+      "git_blob": "fbfa3f0cdf236dbf8fbb857ab6296d68a2add2e8",
+      "sha256": "1c364de6a6dce45126c2e316562eaacd3ce1360522010f47fce5fcef797e55da"
+    },
+    "TreeDB/db/primary_capsule_snapshot_rebind_v6.go": {
+      "git_blob": "49b72e073d838f8e7afd9597bbdda6f76dd01d6a",
+      "sha256": "5084c35cd485852c88d3aeb70d810bb7aeca91680e94eecc51eb3f88cb74bfdf"
+    },
+    "TreeDB/db/primary_capsule_v6_test.go": {
+      "git_blob": "51efa559c08dc803edc49191d5b3af8c5c6e81e8",
+      "sha256": "b714154f3b51ced17213f166d17a760011debcb93e4ca408388d838feaa6d150"
+    },
+    "TreeDB/db/primary_dependency_cleanup_test.go": {
+      "git_blob": "2c92560d1e6927b41e7a974c2772dd559ae32f39",
+      "sha256": "21d16e881bfcea8980318cf7dfe249eeaf099224f98d11e54523e141b25aac14"
+    },
+    "TreeDB/db/primary_dependency_v5.go": {
+      "git_blob": "51762b545ae9be6a8f1bbde443ddacb39447d778",
+      "sha256": "1152ef4d9430acd62f5aaf63e89c9c80e97bc01c46411d6ef11d211252813e6b"
+    },
+    "TreeDB/db/primary_directory_test.go": {
+      "git_blob": "44c5a0b627d3f69a3374060e583f44d4bd91bc06",
+      "sha256": "e4f3f0106f890b9bf6b915bce73dc4bb336e51119b9bc029a7bd38c871134668"
+    },
+    "TreeDB/db/primary_joint_swap_v6.go": {
+      "git_blob": "69792471f161b72c6cb3f45c7096cb303c154572",
+      "sha256": "ca42015ccc95eaa170542bf0ea11cfc3caedf3af005a097d8a884adfcf5860e7"
+    },
+    "TreeDB/db/primary_joint_vacuum_v6_test.go": {
+      "git_blob": "a3af7057986d38ec18e9bdaf860741cfe372d108",
+      "sha256": "bbf975936fe48651d507ca034251658c4df08dd284891f1f7885a365c2617518"
+    },
+    "TreeDB/db/primary_leaf_pack_v5_test.go": {
+      "git_blob": "0842dc8c63097b2034ca0eab36e38eb9a0e57fc2",
+      "sha256": "a9cf52e33615e7d033a7f6315519a9f4ec15e5bc02d495eb7be7c876fab42069"
+    },
+    "TreeDB/db/primary_owned_promotion_v6_test.go": {
+      "git_blob": "409b8349cb45eb8ae6444770f791fba626e36b98",
+      "sha256": "9ffa27530917d7d83b82e8e62a4ed85c0e630a8a0cfdde469a96ae9334895d1c"
+    },
+    "TreeDB/db/primary_publication_scratch_test.go": {
+      "git_blob": "6832d5fc7d279954a7592dd252cda7bb6a1e2d44",
+      "sha256": "7e4c4b0415d34cb2252d6fa06bb672981477fcafa80c02f64843809dfccea933"
+    },
+    "TreeDB/db/primary_runtime_metadata.go": {
+      "git_blob": "a8b4df55c2e8470ca2ba48e8ea71e9224a2cbfe3",
+      "sha256": "056fee5ba7827f15b6faf636d11a4f7950540099d5795631602629287cb2f977"
+    },
+    "TreeDB/db/primary_runtime_metadata_test.go": {
+      "git_blob": "10383d0caaf385f92103a76dc22bd75327e2ab49",
+      "sha256": "1aa3a116dde3698fa917c96341ca8c0420a207050a0bf9f74cb44555c2ac3b2e"
+    },
+    "TreeDB/db/primary_shared_transaction_v6_test.go": {
+      "git_blob": "f44136e6393c6c8c2eea2fd73e3d60c0dbfa021e",
+      "sha256": "4a865f17863a46440145ac497211bc505dba5246eca06dd55b8c21916ac7c83c"
+    },
+    "TreeDB/db/primary_vacuum_v5_test.go": {
+      "git_blob": "013532720f9ddbde1906f8f30b4b758879eba4f8",
+      "sha256": "6db2f5b2b7ebf4c4c74c285c4de47c5b1d5a449d88b54b00200238355de743ce"
+    },
+    "TreeDB/db/recoverable_root_set.go": {
+      "git_blob": "5a91d14361ec6c9f32d13ffaa99a318e36fcac02",
+      "sha256": "3064cfcc48f5663c820400f52b4822fcf82cbc12c379ef1255b5156969609c77"
+    },
+    "TreeDB/db/root_publication_activation.go": {
+      "git_blob": "9ba10bdfc07ed0cff76be608bb70faa14f945a27",
+      "sha256": "b6785781638aed379922d0eec040c19b1a4f9db33a0503b2e5b798b9b7f37b1c"
+    },
+    "TreeDB/db/snapshot_primary_retention.go": {
+      "git_blob": "c46086fe111430a900e772bd703cfc655d2d1e26",
+      "sha256": "c810943240322504957282e434a6f8238b73df6565179c23b728b037054b8f96"
+    },
+    "TreeDB/db/snapshot_primary_retention_test.go": {
+      "git_blob": "47efe6726b8c3583d757213ee11f292edbf75b59",
+      "sha256": "56e2b9a388c9dfa3ac8244c21f1b856757941b985b96e413bc24e2a741ee6282"
+    },
+    "TreeDB/db/span_run_contract_test.go": {
+      "git_blob": "45f93f134bdc5357562cd2fa37e89e39ef6de5bf",
+      "sha256": "a7eb016793613c6942702893002ad1e51842eeff36a283adfd93fa00a9fdc665"
+    },
+    "TreeDB/db/stable_leaf_rewrite.go": {
+      "git_blob": "88c78253273cd2dd752770a5c3c2a5f183ee23fb",
+      "sha256": "b593d7b0d599a580d7b5154d86ec2a526d315a3b52a59f2fe862293e885c5c97"
+    },
+    "TreeDB/db/stable_pager_owned_operations.go": {
+      "git_blob": "c80c4b62b9511aa744fba857e5fad6a255aa5254",
+      "sha256": "8be7e5ff32deec45fae969c4305438dba487f2cb2a6e1a84d536b01061b0b268"
+    },
+    "TreeDB/db/stable_pager_owned_operations_test.go": {
+      "git_blob": "14515d50534e8a525712ff19bee921d3a30f2874",
+      "sha256": "aa5eab95a27e3bb8d9a8a785e48cb8a7c7e8195c6c8a9aa7e77e37c84ecebf09"
+    },
+    "TreeDB/db/stable_resource.go": {
+      "git_blob": "4a7ae8e47c2eba90731ffdceae4de17a8ec1de0a",
+      "sha256": "2544641c81eeadebd4d2be565e816cc782c39c45e18beb3b131032ee36a5c3a8"
+    },
+    "TreeDB/db/standalone_leaf_page_stable_resource_test.go": {
+      "git_blob": "b0c87864228826f665d8334a7aa070b90d443efd",
+      "sha256": "94d7a157c72255bb07989c6a9a38d8867ce6a491a26eca4579e800a9dfa9eef0"
+    },
+    "TreeDB/db/vacuum_collection_roots.go": {
+      "git_blob": "015fca923b889dbe8090bf9ebd8d8ee5a24df33c",
+      "sha256": "1676d6affc042340861826f201473d0f52d097055dd1fd2e51e05914b0ebfd18"
+    },
+    "TreeDB/db/vacuum_offline.go": {
+      "git_blob": "8d69b4bca33c18393c86e2663111065fa7f36750",
+      "sha256": "a7dd51d1270279e588744b7dabe46454601fc69fb758d67a1bd8f780af82fa07"
+    },
+    "TreeDB/db/vacuum_online.go": {
+      "git_blob": "b16222e3fd2603e75cdfdabb73808b20c9e401b6",
+      "sha256": "55f75844fc26f58e8edbc15233779627b156f444e34cb0a78d8adab19d4ad5f0"
+    },
+    "TreeDB/db/vlog_rewrite.go": {
+      "git_blob": "25626f03493985cf78a6fb4e8ad019f7b31cc753",
+      "sha256": "28fac2a2e6c4266df83731f4852dadf718aa6f4888f063d8cf7107501bed7984"
+    },
+    "TreeDB/docs/benchmarks/cow-c3-read-5076/README.md": {
+      "git_blob": "6d206c351d3a7bfefa9021458eb848f0342ebcbb",
+      "sha256": "82d94ea4df8c6f934f233f7efb8d0f4adca3806ea9c62bd2ba3cf011a4d37ce7"
+    },
+    "TreeDB/docs/design/ordinary-primary-allocation-5111.md": {
+      "git_blob": "37097589c69f702effbe822e418063b2fc0d912f",
+      "sha256": "30c21b3878212449109b8f672f000eeb4cdfbbb5961793703cb64d2ec39667e6"
+    },
+    "TreeDB/docs/spec/architecture.md": {
+      "git_blob": "deed1eb7786b3234b067e63348dafb4ddde486a4",
+      "sha256": "4cb76c663ae6be993c4c58092952ff250b98926fb6a9d5070448e1482fb9cc1a"
+    },
+    "TreeDB/docs/spec/contracts.md": {
+      "git_blob": "16a3215cbdb7a833d6c937be395c7f0f229ef3c3",
+      "sha256": "e6b6bb9ccd8966dd2ae23efeb342551708d70b26fda6d5c6e8bac3b4600ff44e"
+    },
+    "TreeDB/docs/spec/cow-cache-publication.md": {
+      "git_blob": "724463a7a8976f999ac63d158ac0989a8be4fd00",
+      "sha256": "4b3b14b0d1f322ea1a07fb21093db3b3326fd6b31d452235c275c3587e2a1a69"
+    },
+    "TreeDB/docs/spec/dgraph-mvcc-readiness-3673.md": {
+      "git_blob": "3bd814aa898131737babc614b601304a9c259c2b",
+      "sha256": "72a6bbb6d460fd61b078ea3ac6d268949c6dec009ced5af24791a2c1f458f0de"
+    },
+    "TreeDB/docs/spec/recovery.md": {
+      "git_blob": "54a912f4fd4cfbfcaeb5f2761753a74cc8b6fa01",
+      "sha256": "8c0f684189c848644828a578f82520cf98e02e9acd5873d09d3e3eb82bc2d0a8"
+    },
+    "TreeDB/docs/spec/storage-format.md": {
+      "git_blob": "e51985a01a7f6c606166651f882d64ec33207124",
+      "sha256": "ac70e209a4ecb4e5a82c3cf024321ce2f0c83e1b8bed8e1e3b7cd7d15f1dfb80"
+    },
+    "TreeDB/docs/spec/value-log-lifecycle.md": {
+      "git_blob": "769eb4ebfa0bf38e79ee5238bf261c409859cd3c",
+      "sha256": "8b545370d65f1ff75d3c74af4905519eaf67c3bcc75bb122863f43d4da222e8e"
+    },
+    "TreeDB/docs/spec/verification.md": {
+      "git_blob": "a07117dab9d9351869325b861f5b3e44e9de9e26",
+      "sha256": "e9e74be2f21743a27e29a03a02bcf768b64791907c1436a4ebe395b5fc954112"
+    },
+    "TreeDB/docs/spec/write-path-and-durability.md": {
+      "git_blob": "057acda1fe8ed0ea4e8e8aef0924fe41bf6008d5",
+      "sha256": "ef2cdc3f08cd0e8b93aea6af72aa921df063bad9e9c7371de44fec839bb93183"
+    },
+    "TreeDB/freelist/generation_snapshot_v1.go": {
+      "git_blob": "eedd0e3d21dd71ff3e28415bdd5347ca87cc6dd1",
+      "sha256": "b535cc1758f523d5cbf998b6c9e9833a9870be1ba8a56d3a75e884867fe2577b"
+    },
+    "TreeDB/internal/adaptive/controller.go": {
+      "git_blob": "8db7ce9b37e923c638ec33653f2b4325f725a908",
+      "sha256": "542d9d7faa27d3650716bc24762cdc137f1bc00432adaa5a674be56595d21ed2"
+    },
+    "TreeDB/internal/dictdb/read_definition.go": {
+      "git_blob": "27e79a96917b5622066aa00a7601ef654c36c2d9",
+      "sha256": "fa37df4d3c62890e44e9533a9feaccc096f6c3ee8bf8209d08c1b7b59f9035e4"
+    },
+    "TreeDB/internal/dictdb/resource_capture.go": {
+      "git_blob": "7d2173277d549c01e8c12cb5ce95a6f708f16428",
+      "sha256": "ec4ae0248b91c73a99c1dcd38b9f3d539921f95cfd25b85251224ffd00f58191"
+    },
+    "TreeDB/internal/dictdb/stable_resource_capture_test.go": {
+      "git_blob": "3fed05f78633f697cfa4b14f6a37b2156f72c68b",
+      "sha256": "4b51b7a28b6381319b567452196d59d734e759ec34820269bee7f9327dfcbbe9"
+    },
+    "TreeDB/internal/durabilitycut/durabilitycut.go": {
+      "git_blob": "9aefec64c26e60107cf711c915942327a6a394c5",
+      "sha256": "b104538dc206062d4ae992572f3364b0f923a76d7e16c70707e82af089ebbbf4"
+    },
+    "TreeDB/internal/iterator/ordinal.go": {
+      "git_blob": "df21e2d09205a66eba593493489156435c2e6f9e",
+      "sha256": "64973cf26a3a713b48a35ac20a088f25866a7ebae1c98a9aa683849049d8c4ca"
+    },
+    "TreeDB/internal/leafrefscan/walk.go": {
+      "git_blob": "99e893e8677ee6458917b3863296b5a174f8ff88",
+      "sha256": "809faaa68e0a66da9fefe4d59f9f0fd0b5bb091532fb32f9baa074c8a188066f"
+    },
+    "TreeDB/internal/memtable/cow_budget.go": {
+      "git_blob": "1b43c0633020fdca8c4e73a870e5fc9f55044537",
+      "sha256": "c40d0bcab90c4a5fc72322e97e98376e83dd2e16698cef8a50a096b955b9b7ec"
+    },
+    "TreeDB/internal/memtable/cow_test.go": {
+      "git_blob": "6dd3dda07b7d727109a3eec9656a0d1d2186aa57",
+      "sha256": "e8cd0b4dc613a695cf9e107286bce7298885159df256635666563ff31ccab98a"
+    },
+    "TreeDB/internal/mvccadmission/admission.go": {
+      "git_blob": "ee12e743a8b2d1bab41db399f6cb6d6bc4b93dab",
+      "sha256": "14a91279780df01c1cff031e92f33d5dae7d0bb866ee461a60825a906e289a67"
+    },
+    "TreeDB/internal/primaryarena/arena.go": {
+      "git_blob": "a1c31d90295036c9644398717a44dd07edbb3012",
+      "sha256": "d16f2161e70a34725f07eff3cd3e29a8e4953e87c7e4b05110976e01160f4722"
+    },
+    "TreeDB/internal/primaryarena/arena_test.go": {
+      "git_blob": "6091e3da16c76d88f2d2f197a908b83769790f3c",
+      "sha256": "d1e6365b89bc9288469742b158f8248d5ae6503e584362149dbcb012efc4bb0e"
+    },
+    "TreeDB/internal/primaryarena/bundle.go": {
+      "git_blob": "985b0b372e208e24629d8f624da3293dd0b9361d",
+      "sha256": "f3cbde81690330ffe0fab31a07472ec9b780d86b7acef79d9eadbfed9d0d5df7"
+    },
+    "TreeDB/internal/primaryarena/bundle_test.go": {
+      "git_blob": "0da7b5318c097ae0d0a46d6f0ba104c21b2cd37d",
+      "sha256": "408ae71a57d9e0e85a08448c556e6c13a167133745399aa082b46dc4317562e2"
+    },
+    "TreeDB/internal/primaryarena/claim_retention_test.go": {
+      "git_blob": "f858c82ab126b8e07198780a9b79a90a47e9420d",
+      "sha256": "fa225279eafd17863ca4f76131c1925391882cadf505c25d1d7725e16bbfe913"
+    },
+    "TreeDB/internal/primaryarena/custody.go": {
+      "git_blob": "6096a7896c595bff5085f4b5925cca500ed0e4af",
+      "sha256": "456c1dc00d45f1df998714121369a95936250f033877369d1f0a65cdeaddbcad"
+    },
+    "TreeDB/internal/primaryarena/metadata.go": {
+      "git_blob": "b0b65b73e1ed374c0710257aaae7474b85d03e76",
+      "sha256": "429fa487b8d49157f74b479d984b6e008110584f47fae34ca8a82309d23f0f74"
+    },
+    "TreeDB/internal/primaryarena/metadata_range.go": {
+      "git_blob": "261b1ce855af5cba9e1f458c0fcbe62df40547ff",
+      "sha256": "010efb106de1725c06540a022666c23050b8172b802ec1e726a3c15acc6a5f72"
+    },
+    "TreeDB/internal/primaryarena/metadata_retention_test.go": {
+      "git_blob": "e5f020e8510698134e5466f57a7cc6d7b6f5cea3",
+      "sha256": "b83219bc5b7ca061094f776ff1434c632df92944a927ce31a85f2507d8ae454c"
+    },
+    "TreeDB/internal/primaryarena/ownership.go": {
+      "git_blob": "54240efb13173213f2686a24389825ded1974865",
+      "sha256": "301f9a15207d190fdbb2a83e4080853b022947371f19ae315b1b6beb09c77779"
+    },
+    "TreeDB/internal/primaryarena/physical_capture.go": {
+      "git_blob": "aea44fe7b88968e8fd0678a1c2f27b7bdd944ab5",
+      "sha256": "c28d16c76f7f720762d47a29ae2a039eff228ab31848f0b366e5d4adfe478a4c"
+    },
+    "TreeDB/internal/primaryarena/read_root_v6.go": {
+      "git_blob": "d530adfb6213f902628c34ddeb6afc19f3cc8970",
+      "sha256": "756a2f0252f15380bee2b962c36226e4dd9d7d160abe1dd0a0a75e260084d9e9"
+    },
+    "TreeDB/internal/primaryarena/read_root_v6_test.go": {
+      "git_blob": "76ab2b02512ae12290144ba94ec84c12f8dbb426",
+      "sha256": "c4f4d1bdb21bd886b2b0bcfc3a1bd13694cd9296dfea7bb462230e229e3e2ead"
+    },
+    "TreeDB/internal/primaryarena/release_queue.go": {
+      "git_blob": "995b2c580f1fbd23552dd5e16ae099944d78da78",
+      "sha256": "d4eb7b41954468eeef286cbbe05cc25446cba5f009b7312a5d522b6506c5b024"
+    },
+    "TreeDB/internal/primaryarena/release_queue_test.go": {
+      "git_blob": "f2d30e18d9746691b44606de5a19479a8f7fdd8a",
+      "sha256": "5b5b4d05e429f53caa4cd4b47917553732e4fc85cef1380e6cd3ddda24f8a784"
+    },
+    "TreeDB/internal/primaryarena/retention.go": {
+      "git_blob": "cc4af2c7babe6657d78be3cb649fae4503e235a4",
+      "sha256": "c696fb75ccde661f104675986227efe9b144e04a35ffedebdf7797c3dd1fbed0"
+    },
+    "TreeDB/internal/raftfsm/raft_snapshot.go": {
+      "git_blob": "e0c1a031028c306494332f22c75cf366fcbeb5b5",
+      "sha256": "5499ecccecf095db4d6fdbf3dde1853bda021aacd7ec6ad5fc6cb33afd887dd1"
+    },
+    "TreeDB/internal/raftfsm/raft_snapshot_primary_v5_test.go": {
+      "git_blob": "733bddddb85f4b6cd5edd288844f62790eacf039",
+      "sha256": "339d964df5a59f36eb24010697edf5d0301cc02a40781c4d56459983c7bf334b"
+    },
+    "TreeDB/internal/raftfsm/snapshot_capture_files_v1.go": {
+      "git_blob": "576202535147f8f543100ce5f135c85e9d576620",
+      "sha256": "c6f6374fdef2fa4cb73d1df865d8f7768cfae6025f1e4f57bd7627af42036579"
+    },
+    "TreeDB/internal/retainedalloc/owner.go": {
+      "git_blob": "4fdfaba0624c259f19e0da3a65db6903a8943dc0",
+      "sha256": "8ea67caacb91e2c96717333956eb4e2cb8a3c81504c1a92a0ee6d77722b96e29"
+    },
+    "TreeDB/internal/retainedalloc/owner_test.go": {
+      "git_blob": "4045b0e1192d064c335d337ed877d9d6b24c835a",
+      "sha256": "93547cbe38e67f3e77ba95d44f709e69fd3199c92f5c66ba795dedeea801296a"
+    },
+    "TreeDB/internal/rootpublication/coordinator.go": {
+      "git_blob": "c54de595e2db618afb4d0cd0e8c97811801875d2",
+      "sha256": "aafa502b0183d7028349c4cc45adf6e46df75cc7f764cefc618e39b5ebb59a02"
+    },
+    "TreeDB/internal/rootpublication/dependency_directory_metadata_test.go": {
+      "git_blob": "3849e2b1770f5f9361cdb7f76feb7384b793a1bc",
+      "sha256": "201e44289f5e04861b3d465100adc283711ca28c4c13cb046b0fc5886a7d31aa"
+    },
+    "TreeDB/internal/rootpublication/dependency_directory_reader_v2.go": {
+      "git_blob": "3d73c8c5df69dee913bd6826d627fd270930ea3a",
+      "sha256": "74dbb75f6cdc4e6a922ea6837a40edc45033ad0054d2704e9f0458ff2fb564c8"
+    },
+    "TreeDB/internal/rootpublication/dependency_directory_records_v2.go": {
+      "git_blob": "dedb6008f37cc51f4f7dbb7e66b6360aefe9c9cb",
+      "sha256": "d8c33e197551c47a69f13ccc660a1aaec65828727f8208b84ed7a0e5e946c1b6"
+    },
+    "TreeDB/internal/rootpublication/dependency_directory_remove_v2.go": {
+      "git_blob": "b5a229496393a93157493c809921a819dd4c9942",
+      "sha256": "bb89cc3538c7646ce59b2f14276a968976e8243c674a278c7676a453919ede13"
+    },
+    "TreeDB/internal/rootpublication/durable_format_v1.go": {
+      "git_blob": "cd846eb57f4ae2f8a334019214e2ed4cfb2dfadc",
+      "sha256": "433637dc295d7b057aeca6368a79013c9612b291d3296246dff357302aae0ff8"
+    },
+    "TreeDB/internal/rootpublication/durable_format_v1_test.go": {
+      "git_blob": "9fbd48764d8eea12e48f7304300611392159ca99",
+      "sha256": "5755347d1df5ee92a772b6d63c3d8838418a12a9e2702dc80181bc1cffe7d561"
+    },
+    "TreeDB/internal/rootpublication/durable_primary_root_v5.go": {
+      "git_blob": "8336018ed346df226a872598450fbf8a249cb75e",
+      "sha256": "19f9af279938b906c67074757e91facdc9f681d4bc3ba8de5a9238177badfd92"
+    },
+    "TreeDB/internal/rootpublication/durable_primary_root_v5_test.go": {
+      "git_blob": "45d549c30bfe1a253f68c19475b0ab0b79d2261d",
+      "sha256": "b27d0aacbad58b3bac28da077f04ac8c1f29c335f6dc28ee89aa1630713a74d3"
+    },
+    "TreeDB/internal/rootpublication/durable_root_transaction.go": {
+      "git_blob": "1718ee14c27389a40bda4b3f1e38aefd00287b20",
+      "sha256": "a7cd128b4cbc3bc431c9bd4d3b4a5566e9dcf4d88198e2bd7d9eb45fb920f985"
+    },
+    "TreeDB/internal/rootpublication/file_metadata.go": {
+      "git_blob": "26191eea4412f8ed87b9e92301739883c4baf1b6",
+      "sha256": "7a77bb458400ea00767b781ed5c7904ddeb367dd4d9b23b2cd86e3102a7e4354"
+    },
+    "TreeDB/internal/rootpublication/namespace_metadata_test.go": {
+      "git_blob": "d61eaf7c9043d67230273e70785004e7ab403f75",
+      "sha256": "5f0bf423e6aa9aaa00dabb2401141e14734a94aba6d48e4ceafc24940d33f1e7"
+    },
+    "TreeDB/internal/rootpublication/ordinary_finish_v6.go": {
+      "git_blob": "47fdd1e4a6eda9404d3164690c38eda04b4b17ce",
+      "sha256": "95114d67a2706e990830e5e02538a31e06d3990772173f7055c48558964ed27f"
+    },
+    "TreeDB/internal/rootpublication/pin_registry.go": {
+      "git_blob": "e6b2fc69c396d98a094abfd0fdf43a286f1ec53b",
+      "sha256": "88827a89ae60231bc00c702a1d61c208eeae9d55ed0b9d08e4dd2de50eda5998"
+    },
+    "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go": {
+      "git_blob": "44969c81c6849bd227522a373430650f2581f82b",
+      "sha256": "be62d01d1cdfe799c29886c1a578f002485c53106d11b065e2aba9e6f72d51f7"
+    },
+    "TreeDB/internal/rootpublication/primary_bank_metadata_v5_test.go": {
+      "git_blob": "da9f8a28d620f2ef7fe856cc4f8ad5b4ed895705",
+      "sha256": "ea2567857f94a1374610c7694d93a00f273b56f92cd9051f5e26920e09ea9425"
+    },
+    "TreeDB/internal/rootpublication/primary_candidate_v5.go": {
+      "git_blob": "5e3217af89d6b54180e76f233ec3b0e6699af0a3",
+      "sha256": "5a18bf3fae3d0b77a83a4d82ef65bd0b741725f29e63b8ffb797521707cefe7f"
+    },
+    "TreeDB/internal/rootpublication/primary_capsule_v6.go": {
+      "git_blob": "a4fac0131dc3d5a13c4ea78f26e95daacd0ae833",
+      "sha256": "ad781a11eb94149b0c225481d9283baf0fd0b69e6103b70677d462a8492ef4c9"
+    },
+    "TreeDB/internal/rootpublication/primary_capsule_v6_test.go": {
+      "git_blob": "8fbd1153f739e50475764baaa3e4d515d6d585bc",
+      "sha256": "2f23071f875273f6d3a897bc77b1181934d2c6d6de5cdf24c163ef3d7b3a4972"
+    },
+    "TreeDB/internal/rootpublication/primary_data_certificate_v6.go": {
+      "git_blob": "d75d67060b4be40c8d8d8187e69e1652bc974dfe",
+      "sha256": "fceb54a32f1ddf0375d0731e4554a4daf1e6a2da6e97629059ad629d7e1ed229"
+    },
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": {
+      "git_blob": "b92cbc22d37c54814c1d1ac148d4c164aea4038e",
+      "sha256": "1b8e562605d4721f577cd0204d0ffcbe8486f4b7bbcee87b5934b3cbb22f9355"
+    },
+    "TreeDB/internal/rootpublication/registry_capacity.go": {
+      "git_blob": "1687ae8d13f4cd921899439130ff1a702e7437bf",
+      "sha256": "0c35c4c6a0194474ac2134ad8aa1574795f48e0b77ef82e95eb791a52b709b7d"
+    },
+    "TreeDB/internal/rootpublication/registry_capacity_test.go": {
+      "git_blob": "649f67bb5bcc8766f693fe984f8e2af0b0fb0efc",
+      "sha256": "11e791fbfcd53c1b236b3b025a55e4f0573aa9fcb8dac55b6496c144883b9c05"
+    },
+    "TreeDB/internal/rootpublication/resource_allocation.go": {
+      "git_blob": "8454f148086423f4622c8b296b4edda199f04d8d",
+      "sha256": "bc4c8b8a088b8f2af9cc5aeae4ef0301e9a5c9911035953aa67b424279cd02fa"
+    },
+    "TreeDB/internal/rootpublication/resource_allocation_test.go": {
+      "git_blob": "3cf8c2ccbc24a15968901cc506ef76d5e4066610",
+      "sha256": "98f9cfad1282613b31be5c607a92012b783a0cd1830180e7ee1f700660d63b94"
+    },
+    "TreeDB/internal/rootpublication/resource_append_mutation_test.go": {
+      "git_blob": "2b8c2fe27dfaad787779169bca39910d3589c1b6",
+      "sha256": "16784950be8878638086c18c5c245248628360ce164e2c61a69d888dc2d9ec95"
+    },
+    "TreeDB/internal/rootpublication/resource_builder_allocation.go": {
+      "git_blob": "3f7e19f837f08eb727a9a23549bdbc70935afd5c",
+      "sha256": "0440bd2c7086acf9e4e07dfca46b6c4f9cd52ddec4625c3309e1b2fbfea1c184"
+    },
+    "TreeDB/internal/rootpublication/resource_coalesce_allocation.go": {
+      "git_blob": "2e0a9778b8c624e49d5a360ebd80b806f63fd8b0",
+      "sha256": "cd2a96c6e831eb6fece63098ff9496d87df3f375ab4f506ae650a85960e0ab10"
+    },
+    "TreeDB/internal/rootpublication/resource_coalesce_allocation_test.go": {
+      "git_blob": "bd78496bf9e90110b52b116e262d4e634d883e3d",
+      "sha256": "ae627207c67d228dd59595833424d9dd77667b2b20168e4dc268b384bd59fe7d"
+    },
+    "TreeDB/internal/rootpublication/resource_contract_test.go": {
+      "git_blob": "44081c86376a85bad62b2baa9313c858b00d5416",
+      "sha256": "1132de9b97fe8701bae0e593147c567e8dbffec662bea9eb500bde6eea55a4cb"
+    },
+    "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go": {
+      "git_blob": "4a164cba6851ae36f1cd42d5f50a20c4825a5242",
+      "sha256": "08b526eadd4f3db3195f766535b88ad6d21acb77f08f98375a2de9a2616f33ef"
+    },
+    "TreeDB/internal/rootpublication/resource_directory_records_allocation.go": {
+      "git_blob": "da99ec1798b2ddebbf05a5938c9c35ce52801209",
+      "sha256": "401cdc1f2252e1c003fe74cc5cccc2be1deb288eaf7488043f5d767ce1d42fef"
+    },
+    "TreeDB/internal/rootpublication/resource_directory_records_allocation_test.go": {
+      "git_blob": "72c571dc5f741037fe72fe7ad266d9fb9fecb6c4",
+      "sha256": "c0a5a26baa5fa15e13658712a4c0ee5f3aefd5ceef56533f72c15112017595f1"
+    },
+    "TreeDB/internal/rootpublication/resource_directory_view_v2.go": {
+      "git_blob": "844cbdd07c31cbf8ee5c0289b225cbdc1246ec05",
+      "sha256": "03ae811daebbbe37bf26bf55ee309fc2501e701404fb15cd211f19a1a5580462"
+    },
+    "TreeDB/internal/rootpublication/resource_directory_view_v2_test.go": {
+      "git_blob": "d83521ab582eeaf2aba7bb5a549673f295407f50",
+      "sha256": "190231951516480c1fb074de75d47a727c2c0949358b4cde87cb40caded0d14c"
+    },
+    "TreeDB/internal/rootpublication/resource_entry_allocation.go": {
+      "git_blob": "ce82279767dcd1e11c54aca693347f56c639b97c",
+      "sha256": "9777ebf4fe3525241e1c3edb17217d32a3516611129249a946f0e07bb5ad57f1"
+    },
+    "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go": {
+      "git_blob": "a3591b5d8ebe35909f6978aacd388d1b7bc7bc08",
+      "sha256": "706a7400a35c6b9d1a37eea7dfec02469de420e6bc88b3079be5c1a7b3e0556d"
+    },
+    "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation_test.go": {
+      "git_blob": "8deb76fbb90f2503c33d6ae0d86cf7da28a22d27",
+      "sha256": "90735308211a94bd9761c7e4a8cc477b15236c3763df955db169c5acd8e0f51a"
+    },
+    "TreeDB/internal/rootpublication/resource_entry_view.go": {
+      "git_blob": "b2e0f8f41e946fe56db15a60787bea298f5475e7",
+      "sha256": "8494546aef68bcba352e9cada90e20b77594246e91e46aba6c0a0853e1fe2f15"
+    },
+    "TreeDB/internal/rootpublication/resource_field_allocation.go": {
+      "git_blob": "04bf9e7eb983a4df54c17945e22f24040b964b31",
+      "sha256": "36c7eb3b8931e681a8080ec6e82e97b9eea8c9eabe61c82bb3361a3958578f1d"
+    },
+    "TreeDB/internal/rootpublication/resource_identity_unix_test.go": {
+      "git_blob": "19b50425047ea3b1f83627da3e4f120c4066136f",
+      "sha256": "bb5eacdd94b91ce215cbf2aefa578145494e4fea0a17814fa0bffb04c14c34ed"
+    },
+    "TreeDB/internal/rootpublication/resource_identity_windows_test.go": {
+      "git_blob": "9fd3d4233dd6cc5ac8f3c032225ec90b7f4a198c",
+      "sha256": "0291deaffc7e73170e64c80f4ff4051433b7ed8386cd3654e51fc0d4954035dc"
+    },
+    "TreeDB/internal/rootpublication/resource_import_allocation.go": {
+      "git_blob": "8f90ac67660a1bfb5b0ff20bb1d2796614e0730b",
+      "sha256": "3923a45f905479263870a91faf531ab415c889b07996335be4e68eac7641cd69"
+    },
+    "TreeDB/internal/rootpublication/resource_import_allocation_test.go": {
+      "git_blob": "cc4e37323fde4cdbf0ab5716bcd9ad6ae5cc764a",
+      "sha256": "dd305cfc0034c7fb8815a46aec2c434c2c7c7a6f02a1d1a886cee808b448ed61"
+    },
+    "TreeDB/internal/rootpublication/resource_import_directory.go": {
+      "git_blob": "e68d18124e3a06cff79800f184634ddf2b4f4a11",
+      "sha256": "1095969bb9a25492d222a84f5988cc3454f80dbd9e08aef0c4d38e5e8f488fdc"
+    },
+    "TreeDB/internal/rootpublication/resource_import_set.go": {
+      "git_blob": "16026e472c7386325b78ceb6dac5a2d420e4f056",
+      "sha256": "d667ba66ccaa49125634ae1ce5c510ea48a7557ca0b17ce43f14a1762402c3fe"
+    },
+    "TreeDB/internal/rootpublication/resource_kind_allocation.go": {
+      "git_blob": "22afd126911efaf6fce3c7fd2b7a1565a79090d2",
+      "sha256": "2cd7a95a8386c2f49cefe35ba86b5630b33c1991abd55438aab61160997bac02"
+    },
+    "TreeDB/internal/rootpublication/resource_kind_merge_allocation.go": {
+      "git_blob": "b3a5e0e066c73c5ecda482dd25b6c1d57e03ecdb",
+      "sha256": "30b5659d2fdeb39a48e02b5987225e0ed2e3be08f30c9a897115345e8a3e4800"
+    },
+    "TreeDB/internal/rootpublication/resource_kind_merge_allocation_test.go": {
+      "git_blob": "3c480fcb8fff40e7ff07f06b6235a70109f4935d",
+      "sha256": "cbb431f08fc9a833c33b341dff2341d99193b6941f9f07af5ab9b2b5563e8a32"
+    },
+    "TreeDB/internal/rootpublication/resource_logical_allocation.go": {
+      "git_blob": "1c81b6bce4a012528ec3b45b6c4320b23cb4ca23",
+      "sha256": "976ecfbaca4085cfd46db85c2405243f0f0f4c0d9e5293e52ead894881beaa9f"
+    },
+    "TreeDB/internal/rootpublication/resource_logical_borrow.go": {
+      "git_blob": "acee3f2863016471c7db13fb4fa0e1095dcdf798",
+      "sha256": "148b1493c85d49a1f560cd72496ff255676196ed41cf9bc1de772411857ba1cd"
+    },
+    "TreeDB/internal/rootpublication/resource_logical_borrow_test.go": {
+      "git_blob": "bdca40adb17df88cf49471d482f7c9451b904814",
+      "sha256": "04cbec3179f4f44bebb36e51139747d9340b00e939cac937999f641631d0e1d0"
+    },
+    "TreeDB/internal/rootpublication/resource_manifest_allocation.go": {
+      "git_blob": "3814b260ff891cfb5086510b6be8be447431dd65",
+      "sha256": "6b34763a575956cb6e44a4e5a879338a1395bc23e3409c51b5e9b98384f19601"
+    },
+    "TreeDB/internal/rootpublication/resource_manifest_allocation_test.go": {
+      "git_blob": "24ed5021a1b570f7236d40077163b2386725aff3",
+      "sha256": "68a70031337e8f1e76113794897a909423502c5350ea262d28429dedeec2d9fb"
+    },
+    "TreeDB/internal/rootpublication/resource_manifest_load.go": {
+      "git_blob": "dd6008f0a89f66902194cdb1e34321f9486d1200",
+      "sha256": "fce52a80f982b47cdc1c401a03ed6cd36089a327471d72d5c77c9c127ca18929"
+    },
+    "TreeDB/internal/rootpublication/resource_manifest_load_test.go": {
+      "git_blob": "1e984a803e751a92b215da41a035f21c8cd77bc0",
+      "sha256": "c1f5b4ff8512ef86fe5a3d44dd0178af72f6d7611ef824ed8ef984324b0e23a0"
+    },
+    "TreeDB/internal/rootpublication/resource_mutation_allocation.go": {
+      "git_blob": "de7cd8629e0f3f0b8068a79d474f41c67c923a0f",
+      "sha256": "ef6aa4c86c63e0a4e48598eac7e81495025b340f34c642dea8a5a553648deae3"
+    },
+    "TreeDB/internal/rootpublication/resource_namespace_cleanup_unix_test.go": {
+      "git_blob": "d30382196bd5600a55d8f937111158bbbd292b91",
+      "sha256": "14afee5768f5044371704c73b709409ef81c4f7bfe5ac12980892ef0419508a1"
+    },
+    "TreeDB/internal/rootpublication/resource_obligation_allocation.go": {
+      "git_blob": "f4a2d5ed8b3cb2ed0fe9a211fe752562e5c956b9",
+      "sha256": "9c5144b4836053a329dccdb0719c114b5b215768c64206e1ec1a7029edd095ba"
+    },
+    "TreeDB/internal/rootpublication/resource_original_cleanup.go": {
+      "git_blob": "0145445a1a595152fc73711020d96bf88a36ce6b",
+      "sha256": "b59ed8938e659f82adf8731b2abe78e725a0852ad689dbc0955ecb79bb0a516d"
+    },
+    "TreeDB/internal/rootpublication/resource_original_cleanup_unix_test.go": {
+      "git_blob": "c9e8302691f4e8dca8d612d143c12893d3e07d97",
+      "sha256": "2dbbf1ec7b266f56544bc8c1f7da15f7fefdb9f7f8e521e84d1c6d70cd2ce0cc"
+    },
+    "TreeDB/internal/rootpublication/resource_physical_allocation.go": {
+      "git_blob": "cef616b31cb6e3c6efb5493903d55429a4144699",
+      "sha256": "fe635e792952f0e0a8d3cd66cec9beebb491a93bd73c2f6db080871e84f8350e"
+    },
+    "TreeDB/internal/rootpublication/resource_registrar.go": {
+      "git_blob": "9e55cf2bcb9d552ebae28881bab68424b0377051",
+      "sha256": "7e805c76fbc08d32465b261e51235eb663ce182a899c7c2583d9d6c1cc70bfed"
+    },
+    "TreeDB/internal/rootpublication/resource_requirements_allocation.go": {
+      "git_blob": "fe81ce6a1a385082023cce180bec4f9e70b0c1eb",
+      "sha256": "f5ef2041dfd20d73a045848eb94b561babe1417ec3a24958af5aaaeae0382875"
+    },
+    "TreeDB/internal/rootpublication/resource_requirements_allocation_test.go": {
+      "git_blob": "150953926d00fcf14bf51c0dde4f128d09532b31",
+      "sha256": "7db677ef073450f109c2564a9bd6d732665a7eeeb7f9b0f384212c291e7f0d7a"
+    },
+    "TreeDB/internal/rootpublication/resource_rid_allocation.go": {
+      "git_blob": "a0a6e5d26819fe56c61f4e43f3f82354fe238e5f",
+      "sha256": "eca87c385ac0489f788c6999735bcb019517a214fca9ab3f3042bdc0c2cea528"
+    },
+    "TreeDB/internal/rootpublication/resource_rope_allocation.go": {
+      "git_blob": "2ff5861da4569b195f8443bf6dc909a93ac38901",
+      "sha256": "94720b4334af7c8427df0fd23b2aa22c895b5bb23726756f87aa967f3596144e"
+    },
+    "TreeDB/internal/rootpublication/resource_selector.go": {
+      "git_blob": "92a1c418bed9e7326d1bfede2dd6f7473315f55d",
+      "sha256": "bbe6da15147e71426c7eac2312ca2d345eb372c0489c9ea2ad6f00ad68a3d6f3"
+    },
+    "TreeDB/internal/rootpublication/resource_set.go": {
+      "git_blob": "60100f29d9db989e8695e7b5ff57d60c81bc7a13",
+      "sha256": "0e8b5d0fd6707df894e19f5050fb9555faf8220c090b6e40e5593197e7e326f5"
+    },
+    "TreeDB/internal/rootpublication/resource_set_allocation.go": {
+      "git_blob": "82e1a1f73b0dcc2ff45e4ffd39b66350139aa958",
+      "sha256": "347194711d8bdf13687b90baca640c7aea461244e22a60f9b9a0dd29c6c5d899"
+    },
+    "TreeDB/internal/rootpublication/resource_set_allocation_test.go": {
+      "git_blob": "2dd6b46fa9007ce21afac0803d6c7f90bad96212",
+      "sha256": "d03b2116bf2b3cbb0d2f11ff49e0104807b90074ee645b7f7cf8e5945a4928e0"
+    },
+    "TreeDB/internal/rootpublication/resource_telemetry_test.go": {
+      "git_blob": "a196b295dbf0fcc89c1d1eaddd2135dd62f67338",
+      "sha256": "a974bb4f6d9328f5bca4c27eba9d11bbfd2c711ef8686abc41a027547a54ccd9"
+    },
+    "TreeDB/internal/rootpublication/resource_token.go": {
+      "git_blob": "94f771f1e87f52f194383322b0a82cc2f3fc012e",
+      "sha256": "5c8dc51b0ace4886793b825f035cdce08fb5f356ff608224b27bafb396315655"
+    },
+    "TreeDB/internal/rootpublication/resource_token_allocation.go": {
+      "git_blob": "c2a33c4d0e7353dbd63ab25588a2945672c3f901",
+      "sha256": "e098f26492d78b6512aaf710b2a734888b8fac187bbffeb50b2497481353ccd8"
+    },
+    "TreeDB/internal/rootpublication/resource_token_allocation_test.go": {
+      "git_blob": "d89eae1f8a8b9c0111b9cbde6ae50223764467a2",
+      "sha256": "87a3ce4f9604cc0a83927e1428f69b9b93ab8279eb2734f7c4aaccf818979497"
+    },
+    "TreeDB/internal/rootpublication/types.go": {
+      "git_blob": "0b617db74e793864c29372b9c3747ece5726ea8b",
+      "sha256": "9d60b13891c1a3a8d09bae9af5e01f209475e6926697461a0d70d0308e999a83"
+    },
+    "TreeDB/internal/templatedb/resource_capture.go": {
+      "git_blob": "be21c6b7d61971415e653f6f8aad798801b9e42f",
+      "sha256": "6d11f07b268f0b8b8df48ffed844fac0b583fcce0c3f7f3112889688384009ef"
+    },
+    "TreeDB/internal/valuelog/manager.go": {
+      "git_blob": "3d19e408c6fec6d64d1314d4d9c2ad43bb9109ee",
+      "sha256": "521d71b69f7edcafbe45c08a8d33675dd1382145472aed57d45346241447f367"
+    },
+    "TreeDB/internal/valuelog/mmap_owned_v6.go": {
+      "git_blob": "f2a24a57164ca51b5d3a9e2db8b885b38b8b9903",
+      "sha256": "bd7905c6050c8fcdc67fffd69a87f4986d587c73417ee9930494d77d46f6c242"
+    },
+    "TreeDB/internal/valuelog/mmap_unix.go": {
+      "git_blob": "4373a072253dbcf3c8fb3b6cb6a8cf078a432c7d",
+      "sha256": "90bbdc55af6f0204fecd135464083df17d44ab7e87e8a4f9eb88594e48865465"
+    },
+    "TreeDB/internal/valuelog/mmap_windows.go": {
+      "git_blob": "69ec81f355caf1464a0e67bff4db9786a44b3e2e",
+      "sha256": "bc5dedf7eafa892a64e79f0be0e0d1e0a66f54b2108b88410a5469b514a5066c"
+    },
+    "TreeDB/internal/valuelog/reader_mmap.go": {
+      "git_blob": "b0240939cdb521aee3484f1a5b987ec1cf340b42",
+      "sha256": "b1ef5aa29bfb855a0ad6c1adceab3e7a24051a33f390f864ac4692d1be547be8"
+    },
+    "TreeDB/internal/valuelog/retirement_parent_accounting_test.go": {
+      "git_blob": "81723a7801727e5dc598d8e6186f4ed9bda47b10",
+      "sha256": "6f6c7a2362573522becde228092de18375e4bb08c46c576e2a5dd9097486e064"
+    },
+    "TreeDB/internal/valuelog/retirement_parent_pool.go": {
+      "git_blob": "c5492c6d7c33f8dc2b63487f1b6aa81c026dccdf",
+      "sha256": "89d198290ebb8be8b0b3c0240f5316fe26c74f94c2ea56517f866c9c61485ded"
+    },
+    "TreeDB/internal/valuelog/retirement_parent_pool_v6_test.go": {
+      "git_blob": "d7a61c1fbbf43cbe42e33af34ab8b5eda831049a",
+      "sha256": "9c0d20bde76220c084c1c6889fbf404b8f01ffdaa01459f7ff19d14d012a29d7"
+    },
+    "TreeDB/internal/valuelog/retirement_shared_parent_test.go": {
+      "git_blob": "0d8cb7eee748642cfe1fbdf96bd7173061b7d81b",
+      "sha256": "1bb03f1d04275677f0ca63fd015a83323ceb8924e3ef685845d85567e50d2d81"
+    },
+    "TreeDB/internal/valuelog/stable_pending_successor_supported_test.go": {
+      "git_blob": "2d108ea39ff53a1e925942acc9f4b5c3087b1357",
+      "sha256": "199cce078a52f2c259646cf60b6c23ed8d38481f040861ed6326704111f972ba"
+    },
+    "TreeDB/internal/valuelog/stable_resource.go": {
+      "git_blob": "567f2501ba5e2fbad5be4467d827d327c6a68870",
+      "sha256": "164253ca324a7f00fc62e037f6dda2082dca290cf4c7c919a21e1bd148fa0087"
+    },
+    "TreeDB/internal/valuelog/stable_resource_supported_test.go": {
+      "git_blob": "459d91fcd86923541050f3d5428d8c6674e3ead1",
+      "sha256": "55d0398c54c16e0b28ea710df442908089250dac7115fd1db0ff40d35819f9fc"
+    },
+    "TreeDB/internal/valuelog/stable_resource_test.go": {
+      "git_blob": "b2d2cef92e3ed649dcbb7b104eb2503edbdc8341",
+      "sha256": "4fb3b6f1ff65a3470f05754c3534eca1f1d3e91370a3c259b45f4e736fe8dbe3"
+    },
+    "TreeDB/internal/valuelog/writer.go": {
+      "git_blob": "bd939cf756ba3b7cd07f1629ddec84655031cb68",
+      "sha256": "d2bab5102be79c3041423b055464f25ce986fdd9d8a5254d5fa60bbaf508bb67"
+    },
+    "TreeDB/mvcc/cow_c3_admission_test.go": {
+      "git_blob": "6364b3a4f1dd01649304c471fb565b2d9c7d9450",
+      "sha256": "6d6844fd363b8a90e96ad0d3f78a8dbef5b7f463703f02c2bc7795f6892efcca"
+    },
+    "TreeDB/mvcc/cow_c3_read_progress_test.go": {
+      "git_blob": "c3b9de5fa5598e63cae595e9e90411228b8f6c3d",
+      "sha256": "f07f1e9c19af927f78d0d2090b73e3b0c17862edaa5e3a4b5ace24be4d8bfb81"
+    },
+    "TreeDB/mvcc/mvcc.go": {
+      "git_blob": "05eee5c274072fe69937db26797aa957604f1ed0",
+      "sha256": "b0f9fcc0393ef56a94609379a178627c01661cad58940fa8573633a33d1370d5"
+    },
+    "TreeDB/mvcc/versions.go": {
+      "git_blob": "bd38c23f2fc7e54b17b50af53593f95932af4290",
+      "sha256": "9d1c4646b9676749d807ee69e563920268b27d4ecc0e6166a9551040c3e6e277"
+    },
+    "TreeDB/mvcc_read_cut.go": {
+      "git_blob": "19c92f60f0247428cbfc14b01ab71775c4413c38",
+      "sha256": "36909bc9455ed30e448d048dcc9208b269898c6589ab856e3dfc49644a084fab"
+    },
+    "TreeDB/nativewire/fixed_peer_tcp_runtime_v1_test.go": {
+      "git_blob": "bf56a1d7b5936d75fa7c9ffbe50489256a4a974b",
+      "sha256": "e1aae6cc6440bd7778464885c322885ee56979bcca6a1bd50a95dc906eb49180"
+    },
+    "TreeDB/nativewire/fixed_peer_vector_prepare_v1_test.go": {
+      "git_blob": "a10e94f9b49498ffc636d5e8b0ac9350b18e8a1a",
+      "sha256": "abba7dedfbd3010bdd49e64988755e8901e7da2e114be6017762c49b5367b9f1"
+    },
+    "TreeDB/nativewire/peer_runtime_operations_v1_test.go": {
+      "git_blob": "6c35782625ad7cc700845f577246a9a5f482a5ab",
+      "sha256": "4fb94b4e443662c2f26b3f2a5df734d4e6c93ef3ddb58faa809afce5d52d17ee"
+    },
+    "TreeDB/node/primary_directory_v1.go": {
+      "git_blob": "7a83badc4e581a84df425daf927dbf7b1bbd951a",
+      "sha256": "755d3d74bd7e15574e716d273318cd08cc1c5535f7b1b6c57851671f81253a99"
+    },
+    "TreeDB/node/primary_directory_v1_test.go": {
+      "git_blob": "01f88e9a3b9a3d0b9556c9e045108abeebd721a3",
+      "sha256": "a56a1f104fd0e3a9154396ee9fffc67715af91396c710ec1b39f17198527f202"
+    },
+    "TreeDB/page/page.go": {
+      "git_blob": "aaf778164f8bda19ce74016995ddd066d9c9c2e5",
+      "sha256": "a675201b627d72dd47dd3d48b60160b4701453b6a458c5a9da639ef0e0b79322"
+    },
+    "TreeDB/pager/adjacent_write_work_test.go": {
+      "git_blob": "e63240ec10333198cefb89fa43ffd7201a91f4af",
+      "sha256": "5bde7f3ca93d7130fc98d42245f3f7f6edf9493c0d33c918919f977e43694273"
+    },
+    "TreeDB/pager/dirty_chunks.go": {
+      "git_blob": "a00457fa3fd3088d07059bba58eb5ba3598814e2",
+      "sha256": "e617d6d79239caf4b9eeab4ec6dc514cb376fdad1dda1dc5202ed803a0dfd7b3"
+    },
+    "TreeDB/pager/grow.go": {
+      "git_blob": "bbeba9d92828fccb303dcc50cd0f143b73e8b2ff",
+      "sha256": "ef714d08f5ae10db36436b165913b480b79234ddb5c389fd0c5090c58ca1ba33"
+    },
+    "TreeDB/pager/grow_work.go": {
+      "git_blob": "30fba511295b9b57248526f3944690e303641abd",
+      "sha256": "185dd0ffae5ad0b033ab47e11c2c6d1c62c3b1f580407c346e893b0cf642aa60"
+    },
+    "TreeDB/pager/index_data_stable_sync_test.go": {
+      "git_blob": "1b030af86fe0f26132b7658e23f7706cc87c7560",
+      "sha256": "fa4e6e7e372f26418f800df78654d857ad1d14ce5f29056661331612a6c5d4b4"
+    },
+    "TreeDB/pager/mmap_unix.go": {
+      "git_blob": "e7c307b40cbabb6793493b2c4844ec12e3faf48c",
+      "sha256": "b82965789fa53d71a61cdf46b308154cb886ad0c7861a60de1eed8aaeb015c10"
+    },
+    "TreeDB/pager/owned_pair_sync_test.go": {
+      "git_blob": "c5759fa6347d8815c6ab53a73749f0ce8298b0c3",
+      "sha256": "54ab7a348b35f3a89f366643d41854ab9e3aa055f48011a1281d9344ee5e219c"
+    },
+    "TreeDB/pager/pager.go": {
+      "git_blob": "9296ed0e2bd116f9928ccaa8eff6d6d52c051a98",
+      "sha256": "d03dfa2d5fa9bb5bf40e7bcf5c4d10ef3f9d77eb3bf6e1c69386bf13fc11033c"
+    },
+    "TreeDB/pager/pager_test.go": {
+      "git_blob": "ac0edd56b4fc9e1d372c1be0da7106bdee8e0615",
+      "sha256": "79480bb4611ed5e35f94963b3031c84441c77e862d2450c06187a5878da56911"
+    },
+    "TreeDB/pager/primary_capsule_write_test.go": {
+      "git_blob": "43d78907896772755d8d2cba639b3319185e91e2",
+      "sha256": "646200a983c414af36161d22177a94e4a5bab1ba7b901c5fe3f536247aa2a629"
+    },
+    "TreeDB/pager/primary_read_root_v6.go": {
+      "git_blob": "d54dfe972f619155e3f8168650e1b6bdb4415686",
+      "sha256": "a7c80f022d3e8b6cca67ff5debdb369fa40de4911c7fceb3a6c0b36dffe23ed8"
+    },
+    "TreeDB/pager/write_work.go": {
+      "git_blob": "fa7f2e8b4b462cf5623f55c3b781e83644e8796e",
+      "sha256": "0325e536930fff5266b4bca4a57b06ed211dca5e8ad15394d9e90e883bdf86f4"
+    },
+    "TreeDB/primary_joint_vacuum_v6_test.go": {
+      "git_blob": "ab581da112d3dd304c383d593be1dc1786ac8faf",
+      "sha256": "79ea9b361e5ebf537623a83552a828818d9cc3521132aad20d156978b2162d63"
+    },
+    "TreeDB/primary_owned_promotion_v6_test.go": {
+      "git_blob": "a82a3f35b7a3fc868883dd9703cb78cbe8cfa5c7",
+      "sha256": "e6fa5fd0e47514b2268778f2cf869a6faa65ffa788554f18f80bf75fe33d5402"
+    },
+    "TreeDB/primary_profile_v5_test.go": {
+      "git_blob": "fad6a43b6f7be8cf569a77203dc76e2d169f1323",
+      "sha256": "930afdee4cb1aa1814a76142a0284fdd1dd9267cf093c8cf562bbeeda5c46731"
+    },
+    "TreeDB/profile_entrypoint_inventory_test.go": {
+      "git_blob": "e82b5d2d0bd2abe7807a3fdc7c19cfb4b6e18097",
+      "sha256": "9c74fdd8c786a6015aca28de3ee2724db11dae77fea4eeb691b20c05ecd79db5"
+    },
+    "TreeDB/public.go": {
+      "git_blob": "f5089a5b5f69dba780d70794108ad2594ee2a1a2",
+      "sha256": "c87e11e7a2180c88dabfac90ddba95d29c579abda48ea1ae9cfce27e459ea40c"
+    },
+    "TreeDB/side_store_lookups.go": {
+      "git_blob": "659e79b0db017ab7e19519d16a410c87019be105",
+      "sha256": "91c606b8f28e43a886b228d9181470fb0683940906e048e962cd8ca29ee178ef"
+    },
+    "TreeDB/template_adapter.go": {
+      "git_blob": "5d18dc8fbb5a7d1cd7fc268907b5abbd46cec72e",
+      "sha256": "4e39c79555c30f861c902558439b4b92c85acd0dd19f9cb2883b629dbffa482a"
+    },
+    "TreeDB/template_stable_resource.go": {
+      "git_blob": "00c7add5a2113c9eab591be2d96a58bd1aa100cd",
+      "sha256": "d9bcfd47903a6a93a25bc4cd1f76b0297b33f04b5d7673d0ee85abecf2712c1b"
+    },
+    "TreeDB/template_stable_resource_test.go": {
+      "git_blob": "1b373c745b5b43b56d5686b8f9a0abd1e28ca9de",
+      "sha256": "d51238ab5fa3b8b400ff368f803fac7019410dea2326fad01a54e8f64278c8b6"
+    },
+    "TreeDB/tree/iterator.go": {
+      "git_blob": "77dedbf08dbace05492651e5187555a6992ac388",
+      "sha256": "8f9599c1497ab420731a1ef94a0f606d4fdfaec8671a37b32443835b0d1ca9b1"
+    },
+    "TreeDB/tree/owned_iterator.go": {
+      "git_blob": "d545395b0085e9e3c1bd8f24e0d8c36fe2083a1e",
+      "sha256": "27872a7ad16c739c068aa28329256a5ef15786ed01fd426b334882846cc03616"
+    },
+    "TreeDB/tree/pages.go": {
+      "git_blob": "b7ae0ddae1c82559c6274d1333b4727db0d235d6",
+      "sha256": "642d99c8f3d877d20f7aaf7b49c593216fa6d5ee74b67556398d4d636db7749b"
+    },
+    "TreeDB/tree/primary_directory.go": {
+      "git_blob": "0c8c8d5f6d231f522ed911ab385137c131929894",
+      "sha256": "7dbac37fccb175f6989190dc8994fb575a8a8ef93d303fedadef044d474b24fc"
+    },
+    "TreeDB/tree/primary_iterator.go": {
+      "git_blob": "797c1c7fc555be5d666854e3630de9cb5b1bdb1e",
+      "sha256": "1d5482d680ad5eef6be825ea6204b7104806b2784c966e8f8e55e6ffa9ad2bb9"
+    },
+    "TreeDB/tree/tree.go": {
+      "git_blob": "1a4411166c28978dbca1fc701fdd9c3f8c972eb0",
+      "sha256": "c4284554a1b7f64fa7051f0f38cc77159d29f09903746954e489a15f53a1f7ba"
+    },
+    "TreeDB/zipper/primary_arena_test.go": {
+      "git_blob": "a03767fba158e5668de538587dff16b0af792b91",
+      "sha256": "1fab78e5c0c38776a0f03a8d3142636692e4f609252669e3a94fd1483f9409bd"
+    },
+    "TreeDB/zipper/primary_directory.go": {
+      "git_blob": "47df125e6778f79d5e2738da85dce49e91f4ed6d",
+      "sha256": "40a355ab4c33e5f3ba460260a0d2b0193e6da69e2fbed47972cd8ba3afaaf6e5"
+    },
+    "TreeDB/zipper/primary_scratch_test.go": {
+      "git_blob": "6d7f790be38fa02462a058007c63bb2bd1c82c36",
+      "sha256": "9957d9704a96e54d0bcfce5597283bf1ee08644aa19dc6d304c9cdf4a01f452f"
+    },
+    "TreeDB/zipper/read_only_prepare.go": {
+      "git_blob": "b598439cabe9d54ff4df30f2c43d7f04c50ea7be",
+      "sha256": "3f6402f09dcf12ffe4f7946700527d98a0983fe6e5d0e43606ed77c10fd0f013"
+    },
+    "TreeDB/zipper/read_only_prepare_test.go": {
+      "git_blob": "654e96346ae94bfa5ef57b7a39d03c618e9167e2",
+      "sha256": "922a514b2def741d1d5149d45901e487d86d069823265be603eadd22b2f78462"
+    },
+    "TreeDB/zipper/zipper.go": {
+      "git_blob": "d69040357411f423011d8d1e812c0e90e94537f8",
+      "sha256": "074064f8e7b2331e99dbf0bb0b2df744baae074bab7d2024ab1a6d5388e68fd5"
+    },
+    "cmd/benchprof/README.md": {
+      "git_blob": "ebfc7decff1f37992ccf0a076758fc243827e98d",
+      "sha256": "7a6ed94497c8ab9ba3e44e5c96911ddd810810140197e25b023849a8f6410216"
+    },
+    "cmd/unified_bench/README.md": {
+      "git_blob": "ef803ff8679af7431069755ce388fdb07ac2a457",
+      "sha256": "404aa2f0ead4322fc61af4f76c7eb4b43df9fa1676fe9a28b84aa62cb87391cd"
+    },
+    "cmd/unified_bench/adapter_treedb.go": {
+      "git_blob": "c42a48e3175121e65b45c641d38c5a255028d070",
+      "sha256": "9282036acee8fbaf7d34a6fc26ef8a6676e883099f543d3c722a805e814177a8"
+    },
+    "cmd/unified_bench/adapter_treedb_primary_directory_test.go": {
+      "git_blob": "72eeb2623b0286be45fccf2105415e693bd9dadc",
+      "sha256": "fbd9fe0867569d4988f57640d27d1770609a3928906672cb4f6c2526699bf33a"
+    },
+    "cmd/unified_bench/main.go": {
+      "git_blob": "4791a85d30d348a142e0c48deffee0dfe53c37db",
+      "sha256": "d53beb0ffe3755973807404cee915fce2fb6b72819c0fbf126766817df1bbe6a"
+    },
+    "cmd/unified_bench/profiles_treedb_index_test.go": {
+      "git_blob": "78d55a18da0123dfe663ae5a64ae351120afb75e",
+      "sha256": "070bc476bb9cc289a6bdff73af7b5025aa12b1c9f98a28fb64b31f632d4ce930"
+    },
+    "cmd/unified_bench/suite_collection_storage.go": {
+      "git_blob": "8dc7be29f13372c31221dbfe757a3f56543f3293",
+      "sha256": "19ff984b29223e6b1d92c98325a24e0f67be165e04f0b3e4c982b1b696d7a1de"
+    },
+    "cmd/unified_bench/suite_column_store.go": {
+      "git_blob": "ab32fdde32a21ab3e8afab0e40c2c11abb7a61c9",
+      "sha256": "9b9f601b15d7fd747c38e1119bb3eb462ba55fda1f62f359b971a6469de984e4"
+    },
+    "docs/API_STABILITY.md": {
+      "git_blob": "8bf46e852500a1214745857e15fe7532bb936f58",
+      "sha256": "6a1e4363af231bd02b9784956d35250a1d92e4e3c0035f33a50453a5990d674f"
+    },
+    "docs/contracts/CONCURRENCY.md": {
+      "git_blob": "8c9a06487a1e6bc09d38474e027f260f7ccbbafc",
+      "sha256": "e7d0632e2ff70797bec068e48cf34d78cfa81275b1ef8a6394e8c27cd7d7b280"
+    },
+    "scripts/cow_c3_read/README.md": {
+      "git_blob": "42627dd6f58ae8110e2d342803e5dfe6265b4542",
+      "sha256": "4dc25af58392930fa9c935dadf722df1003142f078f00807eb453f70188f747e"
+    },
+    "scripts/cow_c3_read/hosted_census.py": {
+      "git_blob": "78073998cc0fa5714870b5112057d1d46374badb",
+      "sha256": "bcab109d5e894319cc52cb1cb8e38fda6101010509ab1538be09c23253721e5e"
+    },
+    "scripts/cow_c3_read/hosted_collect.py": {
+      "git_blob": "5f61ef5192813bb4bc9b887053511e0a2c4eed36",
+      "sha256": "2e027558eb156e77de69242d5cf2a9fe565c30d1dbe22622507fad6960e64314"
+    },
+    "scripts/cow_c3_read/hosted_contract.py": {
+      "git_blob": "108a17b99663006ce8362f2f4ef2f37bc1705e21",
+      "sha256": "3fd2d2bd2702e36c43d395a4f4f29ae1a7b5fe55f949ab21870d2bf8363c1051"
+    },
+    "scripts/cow_c3_read/hosted_custody.py": {
+      "git_blob": "bcb49eba9b7c6d41f4a71d4057e63d65393b8fcc",
+      "sha256": "c7a6ac8398aa15691376db28fca2dcb4bb93efcbc4e3ea6dee9974660cbc96ca"
+    },
+    "scripts/cow_c3_read/hosted_functional.py": {
+      "git_blob": "2f7a0010235d18904e68cd278fe774909fe2a342",
+      "sha256": "c82e77865500e1dc799cfac7fd23379930e6a34d4874d6c2bbc37428906506c2"
+    },
+    "scripts/cow_c3_read/hosted_runner.py": {
+      "git_blob": "bd47efd917d672238b6011fd81af9c362e2d5988",
+      "sha256": "e039b27e0a873a905c2e9d9497adb419335e98377e86ee678bf28198a328ef51"
+    },
+    "scripts/cow_c3_read/hosted_test.py": {
+      "git_blob": "905630a6eadd64b7a781f5e4f6ff922af0c3ea41",
+      "sha256": "9b1d9f61de91c7b56484cd771d2e1707c868a2ed05f244949099aec6057753bc"
+    },
+    "scripts/mvcc_raw_path_gate.md": {
+      "git_blob": "b9ac9a150b3abed592246e535d5ce0a8b3258370",
+      "sha256": "9eae3fbbca26880ced1b02be4faaefae7938dd4d4fbcf96496ccdc1d9a7c32bd"
+    },
+    "scripts/mvcc_raw_path_gate.sh": {
+      "git_blob": "2858757f6dff07e3b07c9222cd71d2fe812feb4b",
+      "sha256": "e15706dacec82bae316da4c26b5f9a6b83cf85e1066dc7d7f2bfd2ba60149b06"
+    }
+  },
+  "logs": {
+    "inline-absence-sibling-red.log": {
+      "sha256": "da4c55ef895af2f46ae19b6176b6106f396ee1092fadb3d909d806086a436f45",
+      "bytes": 1038
+    },
+    "absence-coherent-normal.log": {
+      "sha256": "a9ef209a9b57ec248e69c085e24a1314ac67ccca410b6f5b0677564eec4fb875",
+      "bytes": 505
+    },
+    "absence-contract-green.log": {
+      "sha256": "78810c3984445d3e438d759886a1e0d17b627127a403069bfd75b74310929a26",
+      "bytes": 3841
+    },
+    "absence-contract-normal.log": {
+      "sha256": "cada380fdde6c21fd3815fa29d26c24738af6b360733138cdd010b667535a983",
+      "bytes": 9168
+    },
+    "absence-census-fixture-normal.log": {
+      "sha256": "97df41f335ba2909f37178e9cc741536e10c60d47d6cff68252f1b700a3812ec",
+      "bytes": 2921
+    },
+    "descriptor-leafpack-race.log": {
+      "sha256": "47260efb3d22d11b78bfdfc51a158720fa3576898c58d4b6e75cc52b50d943e7",
+      "bytes": 97
+    },
+    "absence-complete-race.log": {
+      "sha256": "72ee8b12c3ef003aed6b9c6bb7fb1c48bf1ead0f11ffac5be85fb0f332147162",
+      "bytes": 404
+    },
+    "absence-mvcc-race.log": {
+      "sha256": "7caad2423779335d07a5dff0186d3d282439a1d15cb3b7cee591784164852cd2",
+      "bytes": 48
+    },
+    "docs-census-normal.log": {
+      "sha256": "f885064590e85242733e8eb4f3bd798f296a3cc5887a5259ae099582c45da918",
+      "bytes": 48
+    },
+    "vet-census.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "main73-core-normal.log": {
+      "sha256": "c60c2a3b72c2885c071180cf7318848912610794450d633d2b171899d4827b83",
+      "bytes": 863
+    },
+    "policy-refresh-contract.log": {
+      "sha256": "1b5aa716967ddcbf5c8ce497a82565b3f51203f0b4c8226252698995241311fc",
+      "bytes": 115
+    },
+    "policy-impact-contract.log": {
+      "sha256": "61230ea46090d08067afc79afa539eb58b69d6595ca1b91df8eda3ee986b91e3",
+      "bytes": 120
+    },
+    "policy-treedb-contract.log": {
+      "sha256": "c6b9b1f09add0403cc07e90bfdf272129b1ddfa2f8f7675ea8218862f2516371",
+      "bytes": 104
+    },
+    "policy-windows-headroom.log": {
+      "sha256": "32b81475bc4b47777beb7f66292ecdda27615b41088a88ee34dfb16b4210db8c",
+      "bytes": 115
+    },
+    "freeze-refresh.log": {
+      "sha256": "1f028cd2be7f018e3d8a3b1963b91a5cc87ba45c82de6f812a6e0a2dc3419056",
+      "bytes": 79
+    },
+    "freeze-refresh-check.log": {
+      "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+      "bytes": 83
+    },
+    "freeze-selector-docs.log": {
+      "sha256": "1a992d9a67e307b673b7d85f0bdfc71a19eea38d78136196cdb071a9b6105a54",
+      "bytes": 102
+    },
+    "freeze-policy-impact-contract.log": {
+      "sha256": "5826bb350b79c3fe31a2fcd4fb6eb1e83a4736b84470a6ba694da7c92400710a",
+      "bytes": 120
+    },
+    "freeze-policy-refresh-contract.log": {
+      "sha256": "ab5df625bc76dbd4e163bed2dd888df828f90159bb93556525c31821b6541d46",
+      "bytes": 3
+    },
+    "freeze-policy-refresh-contract-rerun.log": {
+      "sha256": "076f421cbca80dc33ddcd6eaa211bfc28c0c49db7bb364ca02066baea173498c",
+      "bytes": 114
+    },
+    "absence-compiler-escape.log": {
+      "sha256": "21378e5b59b2d0b6c6f048369346bcb19078ac3f370b2912e7b563103b69ee9a",
+      "bytes": 1087747
+    },
+    "docs-absence-normal.log": {
+      "sha256": "97e5693c51ad9eda4ff9a28f0b6977e1c318813d96c4b70a0fc504cca806b0df",
+      "bytes": 389
+    },
+    "docs-cli-environment-normal.log": {
+      "sha256": "c848c82def09abad328545f110542e26af91145a08ccd9aee532b7c553c62fe5",
+      "bytes": 103
+    }
+  },
+  "remaining_gates": [
+    "Supporting harness landing",
+    "Independent full mature exact-head product review",
+    "Root explicit quiet collection grant and matched allocation/performance/cohort-cost acceptance",
+    "Current-head required CI",
+    "Coordinator ordinary dependency-ready acceptance and merge"
+  ],
+  "benchmark_runs": 0,
+  "notes": [
+    "Five affected packages race passed in aggregate command whose additional incorrect internal/mvcc path failed setup; corrected TreeDB/mvcc race separately passed.",
+    "Two isolated zipper fixture setup failures preserved; final fixture reserves meta pages and attaches actual primary arena. No production repair or assertion weakening for those failures.",
+    "New Go benchmark seams remain development diagnostics; expensive collection requires review and landing; bounded diagnostics need separate root grant.",
+    "Fixed absence array+count adds400B/result on64bit and generic containing allocations/copies; no zero cost assertion."
+  ],
+  "command_results": {
+    "inline-absence-sibling-red.log": "FAIL exit1: actualreplace invaliddirectory; consolidate retirementpage0; selectedPRIMARYleafpack invaliddirectory.",
+    "absence-coherent-normal.log": "FAIL exit1: replacement reachesno-physicalspan plan validation; public/zipper/nodePASS; DB newconsolidation+leafpackPASS.",
+    "absence-contract-green.log": "FAIL exit1: actualDB3casesPASS.123s; isolatednewzipperfixture unconfigured PRIMARYarena/meta-page setup failed.",
+    "absence-contract-normal.log": "FAIL exit1: existingReadOnlyPrepare cases+actualDBcasesPASS; newzipperfixture mockbasepage<2 rejected duringconstruction.",
+    "absence-census-fixture-normal.log": "PASS exit0.005s: fixture withactualarena+reservedmeta pages; allmodes/mixed/absence-only/resetreuse+17negativeproof cases.",
+    "absence-complete-race.log": "FAIL aggregate exit1 solely nonexistent ./TreeDB/internal/mvcc setup path; actualpublic1.578/db6.018/caching1.538/zipper1.387/node1.021PASS.",
+    "absence-mvcc-race.log": "PASS exit0 corrected ./TreeDB/mvcc1.717s.",
+    "descriptor-leafpack-race.log": "PASS exit0 DB1.235/caching1.049: descriptor-onlyoriginalinode+CRCpayload, successful/failurecleanup, selectedleafpack, temporarydictionary.",
+    "docs-absence-normal.log": "FAIL aggregate: docsPASS.691; unifiedCLI childVCS stamping failed before assertion.",
+    "docs-cli-environment-normal.log": "PASS exit0 explicitofficialPATH/GOFLAGS=-buildvcs=false docs.492/unified10.584.",
+    "docs-census-normal.log": "PASS exit0 full docs3.373.",
+    "vet-census.log": "PASS exit0 elevenaffectedGo packages; emptystdout.",
+    "main73-core-normal.log": "PASS exit0 nativewire.184/primaryarena.008/rootpublication1.820; retainedalloc no selected tests (notfullcoreclaim).",
+    "freeze-selector-docs.log": "PASS exit0 finalfreeze selector/directsuite-failclosed unitfixture unified.054/docs.505.",
+    "freeze-policy-impact-contract.log": "PASS exit0 finalfreeze21tests4.525.",
+    "freeze-policy-refresh-contract.log": "INCOMPLETE rawreceipt3dots despite reportedexit0; noassertion/conclusion claimed; processinventorynoneactive; retained andrerun.",
+    "freeze-policy-refresh-contract-rerun.log": "PASS exit0 finalfreeze15tests9.559.",
+    "policy-treedb-contract.log": "PASS exit0 sixcontracts.",
+    "policy-windows-headroom.log": "PASS exit0 sixteencontracts.",
+    "freeze-refresh-check.log": "PASS exit0 stagedmergedsourcepolicy15workflows57members; reviewedrulesunchanged, noauthority enabled."
+  },
+  "final_clean": true,
+  "active_worker_commands": [],
+  "caller_bindings": [
+    "ReadOnlyPrepareResult.ValidateLeafSpans: explicit49position boundedlogicalproof+strictphysicalintervalcursor; legacyproofcount0 semantics unchanged.",
+    "ReadOnlyPrepareOptions logicalcallback recursivearg does not escape perGo1.26.4compiler; ResetForReuse andReuseOptions retainnone oflogicalproof/callback.",
+    "db.planFlushSpanRunPointChunks: separatelogicalpointcallback throughfactoredoriginalchunkappend; realop/bytes coverage, physical-only spans/splits.",
+    "caching.flush_run_planner.go889: concreteDBchunkAPIpreferred; exactmetadata planning else-if911 andvalidation923 safelyentrycountfallback onerror.",
+    "PlanFlushSpanRun exactactionablemetadata failsclosed onabsence; no newnative/M8/parallel/span capability.",
+    "PRIMARYleafpackbranches only: skipvalidatedinlineabsencephysicaloperands; realbase/digest/component validation preserved. Heldcomponent/absence and cleanreopen assertions.",
+    "new borrowedcohort uses runtime.cloneVisibleResources/CloneExcludingKinds(ResourceIndex), originalprovider actualWithScopedTokens, fixedarena+registry wrapperlease, activeSnapshotendRead thenretainedoriginalinode+CRCframe/payload. ActualDBClose exactterminalzero; precloseghost/current-proof residuals truthful.",
+    "new publication Go benchmark: actual IndexPrimaryDirectory=true DBSetSync/BatchWriteSync, setup/terminalClose excluded; completeoperation allocations includeobserver/fixture/DATAproducer/resultcopy costs. Noexecution."
+  ],
+  "remote_candidate": {
+    "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+    "tree": "c898094b21de3ae309857453458f27866c8452e0",
+    "authority": "Coordinator adapter publication and ref/tree verification; exact local freeze tree match",
+    "state": "draft; not mature; not merged"
+  },
+  "focused_precollection_review": {
+    "authority": "Coordinator reported independent Sol/high ACCEPT",
+    "comment_id": "6070113525",
+    "scope": "Focused precollection source/fixture review; not full mature PR acceptance"
+  },
+  "m7_scope": "Original generic output-profile bounds and negative assertions are preserved. Selected PRIMARY logical absence proof does not qualify native M7 page/byte/work caps or larger result/copy costs; native negative source and caps remain frozen."
+}

@@ -1,0 +1,8 @@
+--- FAIL: TestTreeDBPrimaryDirectorySuiteOpenFailsClosed (0.01s)
+    --- FAIL: TestTreeDBPrimaryDirectorySuiteOpenFailsClosed/column_store (0.01s)
+        adapter_treedb_primary_directory_test.go:67: suite Open rejection=<nil>
+    --- FAIL: TestTreeDBPrimaryDirectorySuiteOpenFailsClosed/collection_storage (0.00s)
+        adapter_treedb_primary_directory_test.go:67: suite Open rejection=<nil>
+FAIL
+FAIL	github.com/snissn/gomap/cmd/unified_bench	0.016s
+FAIL
