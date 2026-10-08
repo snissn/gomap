@@ -51,6 +51,8 @@ type RootPublicationBuildGroup struct {
 	failed               bool
 	accepted             bool
 	closed               bool
+	finalizing           bool
+	finalizationDone     chan struct{}
 }
 
 type rootPublicationBuildGroupVacuumMutation struct {
@@ -181,7 +183,7 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicatio
 }
 
 func (group *RootPublicationBuildGroup) validateBatchLocked(b *Batch, syncWrite bool) error {
-	if group == nil || group.db == nil || group.closed || group.failed {
+	if group == nil || group.db == nil || group.closed || group.failed || group.finalizing {
 		return errors.New("invalid root publication build group")
 	}
 	if b == nil || b.db != group.db || b.batch == nil || !b.physicalOnly {
@@ -352,86 +354,49 @@ func (group *RootPublicationBuildGroup) observeAcceptedOutputLocked() {
 
 func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool) error {
 	db := group.db
-	group.releaseWriteLocked()
-	publishPrepareGuard, err := db.prepareFlushApplyPublish(syncWrite)
-	if err != nil {
-		return err
-	}
-	defer publishPrepareGuard.Release()
-
-	intent := b.commandWALPublishIntent
-	commandAppended := false
-	if intent != nil {
-		if _, err := db.appendRawKVCommandWALIntent(intent, syncWrite); err != nil {
-			return err
-		}
-		commandAppended = true
-	}
-	recordVacuumMutation := func() {
-		for i := range group.vacuumMutations {
-			mutation := group.vacuumMutations[i]
-			db.vacuum.RecordApplyPlan(mutation.entries, mutation.ranges)
-		}
-	}
+	// The finalizing owner retains every field and resource while detached.
+	// Close and another member must not clean up this private output.
+	group.finalizing = true
+	group.finalizationDone = make(chan struct{})
+	touched := group.touchedValueLogSegmentSliceLocked()
 	opts := finalizeCommitOptions{
 		negativeCoverage:            group.negativeCoverage,
-		skipPrePublishFlush:         true,
-		skipConditionalRootConflict: true,
-		maxEntryRevision:            group.maxEntryRevision,
-		durablePublishLocked:        true,
-		durablePublishRelease:       group.releaseDurablePublishLocked,
-		rootPublicationBuilder:      group.builder,
-		closeTeardownPinned:         true,
-		expectedBaseCommitSeq:       group.baseSeq,
-		hasExpectedBaseCommitSeq:    true,
-		releaseRootSerialization:    func() {},
-		recordVacuumMutation:        recordVacuumMutation,
-		durableIndex:                group.idx,
+		skipConditionalRootConflict: true, maxEntryRevision: group.maxEntryRevision,
+		rootPublicationBuilder: group.builder, closeTeardownPinned: true,
+		expectedBaseCommitSeq: group.baseSeq, hasExpectedBaseCommitSeq: true,
+		writerSerialized: true,
+		recordVacuumMutation: func() {
+			for _, mutation := range group.vacuumMutations {
+				db.vacuum.RecordApplyPlan(mutation.entries, mutation.ranges)
+			}
+		},
 	}
-	if intent != nil {
-		commandOpts := commandWALFinalizeOptions(intent)
-		commandOpts.skipPrePublishFlush = opts.skipPrePublishFlush
-		commandOpts.skipConditionalRootConflict = opts.skipConditionalRootConflict
-		commandOpts.maxEntryRevision = opts.maxEntryRevision
-		commandOpts.durablePublishLocked = opts.durablePublishLocked
-		commandOpts.durablePublishRelease = opts.durablePublishRelease
-		commandOpts.rootPublicationBuilder = opts.rootPublicationBuilder
-		commandOpts.closeTeardownPinned = opts.closeTeardownPinned
-		commandOpts.expectedBaseCommitSeq = opts.expectedBaseCommitSeq
-		commandOpts.hasExpectedBaseCommitSeq = opts.hasExpectedBaseCommitSeq
-		commandOpts.releaseRootSerialization = opts.releaseRootSerialization
-		commandOpts.recordVacuumMutation = opts.recordVacuumMutation
-		commandOpts.durableIndex = opts.durableIndex
-		commandOpts.negativeCoverage = opts.negativeCoverage
-		opts = commandOpts
-	}
-	post, err := db.finalizeCommitLockedWithOptions(
-		group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics,
-		group.touchedValueLogSegmentSliceLocked(), db.indexOuterLeavesInValueLog,
-		group.vlogRefDelta, nil, nil, opts,
-	)
-	// finalizeCommitLockedWithOptions always consumes or releases its builder
-	// handle. Keep cleanup from treating the same token as live ownership.
-	group.builder = nil
-	if err != nil {
-		if commandAppended && !post.accepted {
-			db.poisonCommandWALAfterPostAppendFailure(intent)
-		}
-		if post.accepted {
-			// Accepted error post-work intentionally leaves this producer-owned
-			// delta for cleanup. Observation clears the pointer, so release first.
+	group.mu.Unlock()
+	post, err := b.publishWriterOutput(group.idx, group.currentRoot, group.systemRoot, group.retired, syncWrite, group.metrics, touched, group.vlogRefDelta, b.commandWALPublishIntent, nil, opts,
+		func() { db.writeMu.Unlock() }, func() { db.writeMu.Lock() })
+	group.mu.Lock()
+	group.writeLocked = false
+	group.durablePublishLocked = false
+	// A builder is consumed only by finalization. Pre-capture errors leave its
+	// idempotent Release to cleanup, and accepted paths may release it again.
+	if err == nil || post.accepted {
+		if err != nil {
 			releaseValueLogRefDelta(group.vlogRefDelta)
-			group.observeAcceptedOutputLocked()
-			db.clearLeafGenerationReachabilityCaches()
-		} else {
-			db.observeFlushApplyAbandonedOutput(group.metrics, len(group.retired))
 		}
-		return err
+		group.observeAcceptedOutputLocked()
+		if err == nil {
+			db.finalizeCommitPostWork(post)
+		}
+		db.clearLeafGenerationReachabilityCaches()
+	} else {
+		db.observeFlushApplyAbandonedOutput(group.metrics, len(group.retired))
+		if errors.Is(err, errDurableRootCandidateStale) {
+			err = errors.Join(ErrRootPublicationBasisMismatch, err)
+		}
 	}
-	group.observeAcceptedOutputLocked()
-	db.finalizeCommitPostWork(post)
-	db.clearLeafGenerationReachabilityCaches()
-	return nil
+	group.finalizing = false
+	close(group.finalizationDone)
+	return err
 }
 
 func (group *RootPublicationBuildGroup) writeBatch(b *Batch, syncWrite bool, maxEntryRevision page.EntryRevision) (retErr error) {
@@ -454,7 +419,7 @@ func (group *RootPublicationBuildGroup) writeBatch(b *Batch, syncWrite bool, max
 	}
 	err := group.finalizeLocked(b, syncWrite)
 	group.failed = err != nil
-	cleanupErr := group.cleanupLocked(!group.accepted)
+	cleanupErr := group.cleanupLocked(!group.accepted && !errors.Is(err, ErrRecoveryRequired))
 	return errors.Join(err, cleanupErr)
 }
 
@@ -478,6 +443,7 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 	if group.idx != nil && group.registered {
 		group.idx.registry.Unregister(group.registryID)
 		group.registered = false
+		group.db.maybeReleaseRetiredIndex(group.idx)
 	}
 	if len(group.pinnedValueLogSegments) != 0 && group.db != nil {
 		release := make(map[uint32]int64, len(group.pinnedValueLogSegments))
@@ -517,7 +483,16 @@ func (group *RootPublicationBuildGroup) Close() error {
 	if group == nil {
 		return nil
 	}
-	group.mu.Lock()
-	defer group.mu.Unlock()
-	return group.cleanupLocked(!group.accepted)
+	for {
+		group.mu.Lock()
+		if group.finalizing {
+			done := group.finalizationDone
+			group.mu.Unlock()
+			<-done
+			continue
+		}
+		err := group.cleanupLocked(!group.accepted)
+		group.mu.Unlock()
+		return err
+	}
 }

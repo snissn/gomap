@@ -13,6 +13,18 @@ TreeDB value-log pointers are durable storage references.
 A pointer remains valid while its segment is reachable from any live index state.
 Segments must not be deleted based only on age.
 
+### Writer publication ownership
+
+A detached writer retains the selected root generation and exact registered
+producer handles until publication accepts its complete closure or the private
+attempt is abandoned. Age, a directory scan and the current operational
+manifest are not deletion or publication authority. The candidate's immutable
+manifest must include every required outer-leaf producer; unresolved membership
+fails closed. Pending producer attribution is removed only for the successfully
+visible candidate that selected it. Both recoverable meta slots, snapshots and
+retained handles continue to protect reachable segments throughout preparation,
+publication, Close and GC.
+
 ### 1.1 Decode scratch reuse
 
 The shared compressed-frame decoder limits output to the admitted raw frame

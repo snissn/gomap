@@ -39,6 +39,8 @@ func (mutation conditionalCommitMutation) record(db *DB, commitSeq uint64) {
 }
 
 type finalizeCommitOptions struct {
+	writerPreparation           *writerPublicationPreparation
+	writerSerialized            bool
 	negativeCoverage            *negativeRootCoverage
 	preparedLimits              *PreparedRootPublicationLimits
 	commandWALPublish           bool
