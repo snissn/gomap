@@ -91,6 +91,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 			}
 			dictOpts := *opts
 			dictOpts.PhysicalSnapshotSideStoreCapture = nil
+			dictOpts.DictionaryIndexGenerationLease = nil
 			dictOpts.NegativeLookupFilterBytes = 0
 			dictOpts.Dir = dictDir
 			dictOpts.ReadOnly = opts.ReadOnly
@@ -114,6 +115,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 				return nil, nil, fmt.Errorf("treedb: open dictdb: %w", err)
 			}
 			closers = append(closers, dictBackend.Close)
+			opts.DictionaryIndexGenerationLease = dictBackend.AcquireDictionaryIndexGenerationLease
 			previousCapture := opts.PhysicalSnapshotSideStoreCapture
 			opts.PhysicalSnapshotSideStoreCapture = func(ctx context.Context, name string) (*db.PhysicalSnapshotCutV1, error) {
 				if name == "dictdb" {
@@ -181,6 +183,7 @@ func wireSideStoreLookups(rootDir string, opts *Options) (func() error, db.Stabl
 			}
 			templateOpts := *opts
 			templateOpts.PhysicalSnapshotSideStoreCapture = nil
+			templateOpts.DictionaryIndexGenerationLease = nil
 			templateOpts.NegativeLookupFilterBytes = 0
 			templateOpts.Dir = templateDir
 			templateReadOnly := opts.ReadOnly || opts.ValueLog.TemplateMode == template.TemplateOff

@@ -17621,6 +17621,19 @@ func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []b
 	return ptrs, resources, err
 }
 
+func (db *DB) appendValueLogForApply(l *lane, records []valuelog.Record, handoff *applyLeafTokenHandoff) ([]page.ValuePtr, error) {
+	if err := handoff.checkOpen(); err != nil {
+		return nil, err
+	}
+	capture := &stableOuterLeafCapture{db: db, lane: l, handoff: handoff}
+	ptrs, _, err := db.appendValueLogInternal(l, 0, nil, records, journalDurabilityNone, capture)
+	if err != nil {
+		capture.abandon()
+		handoff.release()
+	}
+	return ptrs, err
+}
+
 func (db *DB) appendValueLogInternal(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, capture *stableOuterLeafCapture) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
 	return db.appendValueLogInternalObserved(l, dictID, dict, records, durability, capture, nil)
 }
@@ -26346,7 +26359,13 @@ func (db *DB) flushSomeBlocking(sync bool, maxMemtables int, maxDuration time.Du
 		if !ok {
 			return flushed
 		}
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Lock()
+		}
 		okFlush := db.flushLaneOnceWithCollectionMode(sync, laneID, nil, flushCollectionStop)
+		if laneID < len(db.flushLaneMu) {
+			db.flushLaneMu[laneID].Unlock()
+		}
 		if !okFlush {
 			return flushed
 		}
@@ -28423,13 +28442,13 @@ func (db *DB) rotateMemtableLockedWithCapacity(triggerFlush bool, newCapacity in
 // serialize behind writeMu just to protect WAL rotation.
 //
 // Caller must hold db.mu.
-func (db *DB) rotateMemtableLockedForIterator(newCapacity int) error {
+func (db *DB) rotateMemtableLockedForIterator(newCapacity int) (int, error) {
 	// Iterator snapshot rotation can be invoked repeatedly under read-heavy
 	// traffic. If we already have queued immutable shards, request a background
 	// flush so repeated snapshot rotations do not let queue depth grow
 	// unboundedly while still preserving snapshot semantics.
 	triggerFlush := len(db.queue) > 0
-	return db.rotateMutableShardsLocked(newCapacity, triggerFlush)
+	return db.rotateMutableShardsLockedWithPolicy(newCapacity, triggerFlush, true)
 }
 
 func (db *DB) rotateMemtableLocked(triggerFlush bool) error {
@@ -28464,6 +28483,17 @@ func (db *DB) maybeRotateMemtable(triggerFlush bool) error {
 // for establishing durable boundaries and trimming old segments. This avoids
 // requiring a global writer barrier around WAL rotation.
 func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) error {
+	_, err := db.rotateMutableShardsLockedWithPolicy(newCapacity, triggerFlush, false)
+	return err
+}
+
+// Iterator cuts can retain truly empty hash-sorted siblings: snapshot roots
+// exclude all mutable tables, so later writes to those siblings remain live-only.
+// Generic rotations and mode/warmup transitions still replace every shard.
+func (db *DB) rotateMutableShardsLockedWithPolicy(newCapacity int, triggerFlush, retainEmpty bool) (int, error) {
+	previousMode := db.currentMemtableMode()
+	retainEmpty = retainEmpty && previousMode == memtable.ModeHashSorted && !db.memtableWarmupActive
+	rotated := 0
 	debugRotate := debugMemtableRotateOn()
 	retiredMems := make([]memtable.Table, 0, len(db.mutableShards))
 	if newCapacity < 0 {
@@ -28476,6 +28506,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		db.memtableWarmupActive = false
 		db.updateAdaptiveObservationLocked()
 	}
+	retainEmpty = retainEmpty && db.currentMemtableMode() == previousMode
 	var walPaths []string
 	if !db.disableJournal {
 		walPaths = db.currentWALPaths()
@@ -28516,6 +28547,13 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 		if _, ok := shard.mem.(*memtable.AppendOnly); ok {
 			db.observeAppendOnlyMutableEntries(oldLen)
 		}
+		// Keep the shard lock through publication, including retained siblings.
+		// Len is necessary: empty-key tombstones can have zero payload bytes.
+		if retainEmpty && oldLen == 0 && shard.bytes == 0 {
+			if _, ok := shard.mem.(*memtable.HashSorted); ok && shard.mem.Size() == 0 {
+				continue
+			}
+		}
 		oldShardBytes := shard.bytes
 
 		// Remove this shard's contribution from the global byte counter before
@@ -28548,9 +28586,10 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 
 		mt, err := db.newMutableMemtableWithCapacityMode(newCapacity, db.currentMemtableMode())
 		if err != nil {
-			return err
+			return rotated, err
 		}
 		shard.mem = mt
+		rotated++
 		var sealed memtable.Table
 		if enqueueShard {
 			sealed = oldMem
@@ -28599,7 +28638,7 @@ func (db *DB) rotateMutableShardsLocked(newCapacity int, triggerFlush bool) erro
 	db.bpMu.Lock()
 	db.bpCond.Broadcast()
 	db.bpMu.Unlock()
-	return nil
+	return rotated, nil
 }
 
 func (db *DB) cleanupLaneWALWriters(l *lane) {
@@ -29296,6 +29335,14 @@ func (db *DB) flushCheckpointFrontierLocked(reqSync bool, commandPublish *checkp
 			commandPublish = nil
 			passCommandPublish = nil
 		}
+		if passCommandPublish == nil {
+			if attempted, progress := db.tryFlushOwnedPointPrefix(syncFlag, reqSync, &frontier, false); attempted {
+				if !progress {
+					return
+				}
+				continue
+			}
+		}
 		var wg sync.WaitGroup
 		var progress atomic.Bool
 		wg.Add(activeCount)
@@ -29360,6 +29407,9 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 				return
 			}
 			db.observeCheckpointFlushAllWorkers(activeCount)
+			if attempted, _ := db.tryFlushOwnedPointPrefix(frontierSyncFlag, true, &activeFrontier, true); attempted {
+				return
+			}
 			var wg sync.WaitGroup
 			var progress atomic.Bool
 			wg.Add(activeCount)
@@ -29427,6 +29477,27 @@ func (db *DB) flushAllLocked(reqSync bool, commandPublish *checkpointCommandWALP
 			// only piggybacked when a single lane owns the whole flush pass.
 			commandPublish = nil
 			passCommandPublish = nil
+		}
+		if passCommandPublish == nil && !db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+			if attempted, progress := db.tryFlushOwnedPointPrefix(syncFlag, reqSync, nil, false); attempted {
+				if !progress {
+					return
+				}
+				db.mu.RLock()
+				queueEmpty := len(db.queue) == 0
+				db.mu.RUnlock()
+				if queueEmpty {
+					if !db.checkpointing.Load() {
+						db.trimRetainedArenasAfterFlush(false)
+					}
+					return
+				}
+				if db.shouldPreemptBackgroundFlushForCheckpoint(reqSync) {
+					db.observeCheckpointBackgroundFlushPreempted()
+					return
+				}
+				continue
+			}
 		}
 		var wg sync.WaitGroup
 		var progress atomic.Bool
@@ -34375,8 +34446,8 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 	// Snapshot Isolation:
 	// To ensure the iterator sees a consistent point-in-time view, we rotate the
 	// mutable memtable into the immutable queue. The iterator then consumes
-	// only the queue and the backend. Any subsequent writes will go to a new
-	// mutable memtable which this iterator ignores.
+	// only the queue and the backend. Subsequent writes go to mutable tables
+	// (new or retained empty siblings), which this iterator ignores.
 	rotate := db.mutableBytes.Load() > 0
 	if !rotate {
 		for i := range db.mutableShards {
@@ -34392,7 +34463,7 @@ func (db *DB) Iterator(start, end []byte) (merging.Iterator, error) {
 		// for the *new* mutable memtable is often wasted (iterator-heavy paths may
 		// not write concurrently). Use a small initial capacity and allow it to grow
 		// if/when writes resume.
-		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
+		if _, err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
 			return db.foregroundIteratorError(err)
 		}
@@ -34828,7 +34899,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 	// Snapshot Isolation:
 	// Mirror Iterator() semantics: rotate mutable memtables into the immutable
 	// queue so the reverse iterator sees a stable point-in-time view (queue +
-	// backend). Subsequent writes land in a new mutable memtable and are ignored.
+	// backend). Subsequent mutable writes, including retained empty siblings, are ignored.
 	rotate := db.mutableBytes.Load() > 0
 	if !rotate {
 		for i := range db.mutableShards {
@@ -34840,7 +34911,7 @@ func (db *DB) ReverseIterator(start, end []byte) (merging.Iterator, error) {
 		}
 	}
 	if rotate {
-		if err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
+		if _, err := db.rotateMemtableLockedForIterator(minMemtablePrealloc); err != nil {
 			db.mu.Unlock()
 			return db.foregroundIteratorError(err)
 		}

@@ -376,6 +376,10 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsV1(idx *indexGen, next pa
 }
 
 func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen, next page.MetaPageBody, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (map[uint32]struct{}, error) {
+	return db.scanCandidateValueLogReferencesWithProjectionV1(idx, next, valueLogPublicationLocked, scanned, limits, nil, nil)
+}
+
+func (db *DB) scanCandidateValueLogReferencesWithProjectionV1(idx *indexGen, next page.MetaPageBody, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits, logical map[uint32]struct{}, ordinary *ordinaryApplyProjection) (map[uint32]struct{}, error) {
 	var snapshot *Snapshot
 	if valueLogPublicationLocked {
 		snapshot = db.acquireSnapshotWithValueLogPublicationLockHeld()
@@ -383,6 +387,9 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
 		snapshot = db.AcquireSnapshot()
 	}
 	if snapshot == nil {
+		if ordinary != nil {
+			return nil, errors.New("ordinary Apply projection requires a live base snapshot")
+		}
 		// Command-WAL recovery publishes roots before Open installs the first
 		// public snapshot view. Build the same bounded candidate projection from
 		// the already-recovered index and the manager's registered file set.
@@ -411,7 +418,7 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
 			reader:            newValueReader(set),
 			registryShardHint: snapshotShardHintUnset,
 		}
-		references, scanErr := db.scanCandidateExternalReferencesWithCountsAndLimitsV1(recoverySnapshot, scanned, limits)
+		references, scanErr := db.scanOrProjectCandidateExternalReferencesV1(recoverySnapshot, scanned, limits, logical, ordinary)
 		closeErr := recoverySnapshot.Close()
 		if scanErr != nil || closeErr != nil {
 			return nil, errors.Join(scanErr, closeErr)
@@ -425,6 +432,10 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
 	if snapshot.idx != idx {
 		_ = snapshot.Close()
 		return nil, errors.New("candidate dependency index changed")
+	}
+	if ordinary != nil && !ordinary.matchesBase(snapshot) {
+		_ = snapshot.Close()
+		return nil, errors.New("ordinary Apply projection base changed")
 	}
 	// Publication registers newly produced value/outer-leaf segments before
 	// this scan, while the visible snapshot may still carry the pre-publication
@@ -453,10 +464,61 @@ func (db *DB) scanCandidateValueLogReferencesWithCountsAndLimitsV1(idx *indexGen
 			return nil, fmt.Errorf("release stale candidate dependency set: %w", err)
 		}
 	}
-	references, scanErr := db.scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot, scanned, limits)
+	references, scanErr := db.scanOrProjectCandidateExternalReferencesV1(snapshot, scanned, limits, logical, ordinary)
 	closeErr := snapshot.Close()
 	if scanErr != nil || closeErr != nil {
 		return nil, errors.Join(scanErr, closeErr)
+	}
+	return references, nil
+}
+
+func (db *DB) recordCandidateReachabilityWorkV1(result maintenanceReachabilityResult) {
+	db.durableRootCandidatePagesVisited.Add(result.counters.PagesVisited)
+	db.durableRootCandidateOuterBodies.Add(result.outerLeafBodiesProjected)
+	db.durableRootCandidateOuterBodyBytes.Add(result.outerLeafBodiesProjected * page.PageSize)
+}
+
+// scanOrProjectCandidateExternalReferencesV1 uses the existing candidate view
+// and collector. Registration precedes descriptor decoding, including descriptors
+// whose payload is stored in an externally produced value-log segment.
+func (db *DB) scanOrProjectCandidateExternalReferencesV1(snapshot *Snapshot, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits, logical map[uint32]struct{}, ordinary *ordinaryApplyProjection) (map[uint32]struct{}, error) {
+	if logical == nil {
+		return db.scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot, scanned, limits)
+	}
+	references := logical
+	collect := func(roots []uint64) error {
+		result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{Collectors: maintenanceReachabilityLeafFileIDs, ExplicitRootIDs: roots})
+		db.durableRootCandidateLeafOnlyScans.Add(1)
+		db.recordCandidateReachabilityWorkV1(result)
+		if err != nil {
+			return err
+		}
+		for fileID := range result.leafFileIDs {
+			references[page.ValueLogFileID(fileID)] = struct{}{}
+		}
+		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
+			return err
+		}
+		return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits)
+	}
+	if err := collect([]uint64{snapshot.state.RootPageID, snapshot.state.SystemRootPageID}); err != nil {
+		return nil, err
+	}
+	var finalRoots []uint64
+	if ordinary != nil {
+		roots, err := collectMaintenanceRootsForSystemRootWithContext(context.Background(), snapshot.idx.pager, &snapshot.reader, snapshot.state.SystemRootPageID)
+		if err != nil {
+			return nil, err
+		}
+		if err := ordinary.rejectAliases(roots); err != nil {
+			return nil, err
+		}
+		// Reuse the verified descriptor frontier; avoid decoding it twice.
+		finalRoots = append([]uint64{snapshot.state.RootPageID}, maintenanceRootIDs(roots)...)
+	}
+	// Rewrite discovers its frontier here; ordinary Apply already verified it.
+	if err := collect(finalRoots); err != nil {
+		return nil, err
 	}
 	return references, nil
 }
@@ -478,6 +540,7 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 	if db == nil || db.valueLogManager == nil || snapshot == nil || snapshot.state == nil || snapshot.idx == nil || snapshot.idx.pager == nil {
 		return nil, errors.New("scan candidate external references: missing snapshot state")
 	}
+	db.durableRootCandidateFullScans.Add(1)
 	if hook := db.testScanCandidateExternalReferencesHook; hook != nil {
 		hook()
 	}
@@ -503,6 +566,7 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 			Collectors:      maintenanceReachabilityValueLogRefCounts,
 			ExplicitRootIDs: rootIDs,
 		})
+		db.recordCandidateReachabilityWorkV1(result)
 		if err != nil {
 			return err
 		}
@@ -545,6 +609,7 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 	result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
 		Collectors: maintenanceReachabilityValueLogRefCounts,
 	})
+	db.recordCandidateReachabilityWorkV1(result)
 	if err != nil {
 		return nil, err
 	}
@@ -640,7 +705,36 @@ func (db *DB) captureDurableValueLogResourcesWithLimitsV1(idx *indexGen, next pa
 	if db.valueLogManager == nil {
 		return nil, nil
 	}
-	references, projected, err := db.projectedValueLogReferencesV1(next, delta)
+	var references map[uint32]struct{}
+	var projected bool
+	var err error
+	if delta != nil && (delta.exactRewriteProjection || delta.ordinaryProjection.idx != nil) {
+		var ordinary *ordinaryApplyProjection
+		if delta.ordinaryProjection.idx != nil {
+			ordinary = &delta.ordinaryProjection
+		}
+		if ordinary != nil && ordinary.matches(idx, next) || ordinary == nil && !delta.requiresCandidateProjection {
+			references, projected, err = db.projectedLogicalValueLogReferencesV1(next, delta)
+		}
+		// A stale or inconsistent tracker cannot certify absence. The unchanged
+		// full scanner also supplies candidate-private count repair on activation.
+		if err != nil {
+			projected = false
+			err = nil
+		}
+		if projected {
+			references, err = db.scanCandidateValueLogReferencesWithProjectionV1(idx, next, valueLogPublicationLocked, nil, limits, references, ordinary)
+			if err != nil {
+				// Unsupported candidate topology cannot certify absence. Retry
+				// through the original scanner; registration/authority failures
+				// remain fail-closed there and never become byte lookup authority.
+				projected = false
+				err = nil
+			}
+		}
+	} else {
+		references, projected, err = db.projectedValueLogReferencesV1(next, delta)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -701,7 +795,9 @@ func (db *DB) planOuterLeafBaseDependencyReuseV1(base, additional *rootpublicati
 				if descriptor.Generation <= uint64(^uint32(0)) {
 					fileID := uint32(descriptor.Generation)
 					known[fileID] = struct{}{}
-					if item.additional {
+					// Ordinary stable append raw tokens are filtered below in favor
+					// of registered immutable handles; include them in recapture.
+					if item.additional && !(delta.ordinaryProducerCapture && descriptor.Kind == rootpublication.ResourceOuterLeafLog) {
 						additionalReferences[fileID] = struct{}{}
 					} else {
 						references[fileID] = struct{}{}
@@ -866,7 +962,12 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 			}
 		}
 	}
-	freshOuterLeafReferences, reuseOuterLeafBase, err := db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
+	var freshOuterLeafReferences map[uint32]struct{}
+	var reuseOuterLeafBase bool
+	var err error
+	if delta == nil || !delta.exactRewriteProjection && delta.ordinaryProjection.idx == nil {
+		freshOuterLeafReferences, reuseOuterLeafBase, err = db.planOuterLeafBaseDependencyReuseV1(base, additional, next, delta)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("plan outer-leaf candidate dependencies: %w", err)
 	}
@@ -876,7 +977,7 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	// A non-nil delta without outer-leaf evidence only changed pager-backed
 	// roots. Raw outer-leaf dependencies are therefore unchanged and must remain
 	// inherited; the logical value-pointer projection cannot rediscover them.
-	if delta == nil || delta.outerLeafDependencyReuse {
+	if delta == nil || delta.outerLeafDependencyReuse || delta.exactRewriteProjection || delta.ordinaryProjection.idx != nil {
 		excludedInheritedKinds = append(excludedInheritedKinds, rootpublication.ResourceOuterLeafLog)
 	}
 	if hasReplacementManifest {
@@ -1002,6 +1103,18 @@ func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, 
 	}
 	if err := merge(fresh); err != nil {
 		return nil, fmt.Errorf("merge candidate value-log resources: %w", err)
+	}
+	// Raw append tokens belong to mutable producer writers; fresh capture above
+	// pins the registered handles and advances their frontier. Keep only the
+	// producer's dictionary/template authority in the final closure, including
+	// additive ordinary publications that used predecessor reuse.
+	if delta != nil && (delta.exactRewriteProjection || delta.ordinaryProducerCapture) && additional != nil {
+		producer, filterErr := rootpublication.CloneStableResourceSetExcludingKinds(additional, rootpublication.ResourceOuterLeafLog)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		defer producer.Release()
+		additional = producer
 	}
 	appendOnlyCertified := appendOnlyMutation && len(mutation.Added) == 0 && additional == nil
 	closureStart := time.Now()
@@ -2718,6 +2831,28 @@ func (db *DB) validateGenericDurableDependencyEntry(builder *rootpublication.Sta
 	if entry.LogicalLane == "" || entry.ResourceID == "" || len(entry.Reachability) == 0 {
 		return fmt.Errorf("%w: durable dependency %q lane=%q resource_id=%q reachability=%d", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath, entry.LogicalLane, entry.ResourceID, len(entry.Reachability))
 	}
+	var generationRelease func()
+	if rootpublication.ClaimsDictionaryIndexGenerationV1(entry) {
+		if err := rootpublication.ValidateDictionaryIndexGenerationEntryV1(entry); err != nil {
+			return err
+		}
+		if db.dictionaryIndexGenerationLease == nil {
+			return fmt.Errorf("%w: canonical dictdb index lacks generation owner", rootpublication.ErrUnresolvedResource)
+		}
+		var err error
+		generationRelease, err = db.dictionaryIndexGenerationLease(entry)
+		defer func() {
+			if generationRelease != nil {
+				generationRelease()
+			}
+		}()
+		if err != nil {
+			return err
+		}
+		if generationRelease == nil {
+			return fmt.Errorf("%w: dictionary generation owner returned no lease", rootpublication.ErrUnresolvedResource)
+		}
+	}
 	path, err := durableDependencyPathForKindV1(db.dir, "", entry.Kind, entry.DiagnosticPath)
 	if err != nil {
 		return fmt.Errorf("%w: invalid durable dependency path %q", rootpublication.ErrUnresolvedResource, entry.DiagnosticPath)
@@ -2777,7 +2912,8 @@ func (db *DB) validateGenericDurableDependencyEntry(builder *rootpublication.Sta
 			Generation: entry.Generation, DiagnosticPath: entry.DiagnosticPath, File: file,
 			Frontier: entry.Frontier, Digest: entry.Digest, Reachability: reachability,
 			Namespace: namespace, LogicalObligations: obligations, ContentSynced: true, PinRegistry: registry,
-			OnRelease: func() { _ = registry.Unobserve(identity) },
+			OnRelease:           func() { _ = registry.Unobserve(identity) },
+			OnLastPinnedRelease: generationRelease,
 		}, policy.Classification)
 		if err != nil {
 			if observed {
@@ -2787,6 +2923,7 @@ func (db *DB) validateGenericDurableDependencyEntry(builder *rootpublication.Sta
 			return err
 		}
 		observed = false
+		generationRelease = nil // Successful construction owns the one pinned family lease.
 		if err := builder.Add(token); err != nil {
 			token.Release()
 			namespace.Release()

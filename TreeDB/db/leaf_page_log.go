@@ -41,6 +41,18 @@ type LeafPageStableLog interface {
 	AppendLeafPageWithStableResources(leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error)
 }
 
+// LeafPageStableAppendLog is an optional mode selector for producers that
+// implement LeafPageStableLog alongside legacy append modes. False means the
+// configured mode cannot emit authoritative raw outer-leaf resources. It is
+// structural capability, not proof that registry/dictionary/template authority
+// is valid; selected stable appends must still fail closed on authority errors.
+// Ordinary publication checks this before Apply and never retries an errored
+// stable append through the legacy API. Producers without it retain the stable
+// interface contract. Strict maintenance capture does not consult this selector.
+type LeafPageStableAppendLog interface {
+	StableLeafPageAppends() bool
+}
+
 // LeafPageStableBatchLog has the same success/error ownership contract as
 // LeafPageStableLog, covering every unique segment in the returned batch.
 type LeafPageStableBatchLog interface {
@@ -105,6 +117,52 @@ type LeafPagePreparedChildRefBatchLog interface {
 // the returned leaf-log child refs.
 type LeafPagePreparedChildRefStableBatchLog interface {
 	AppendPreparedLeafPageChildRefsWithStableResources(leafPages [][]byte, preparedPayloads [][]byte, refs []page.ChildRef) ([]page.ChildRef, *rootpublication.StableResourceSet, error)
+}
+
+// LeafPageLogApplyTokenProvider is an explicit producer opt-in for one Apply
+// attempt. The returned regular appender hands flushed raw tokens to raw, which
+// consumes every token on success or failure. child consumes a full validated
+// dependency set only on success. Public stable append methods keep their owned
+// set contract. Unsupported forwarding wrappers return supported=false.
+// Callbacks run synchronously; pointer slices are borrowed for that call only.
+// The caller joins all appenders before freezing or abandoning the attempt.
+type LeafPageLogApplyTokenProvider interface {
+	LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error)
+}
+
+// LeafPageLogApplyResourceOwner releases private producer families after every
+// appender has joined. Output tokens independently retain their physical pins.
+// Call once on freeze or abandon; public stable APIs have no borrowed lifetime.
+type LeafPageLogApplyResourceOwner interface {
+	ReleaseLeafPageLogApplyResources()
+}
+
+func (l *leafPageLogWithRecordLengthHints) ReleaseLeafPageLogApplyResources() {
+	if l != nil {
+		if owner, ok := l.inner.(LeafPageLogApplyResourceOwner); ok {
+			owner.ReleaseLeafPageLogApplyResources()
+		}
+	}
+}
+
+func (l *leafPageLogWithRecordLengthHints) LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (LeafPageLog, bool, error) {
+	if l == nil {
+		return nil, false, nil
+	}
+	factory, ok := l.inner.(LeafPageLogApplyTokenProvider)
+	if !ok {
+		return nil, false, nil
+	}
+	inner, supported, err := factory.LeafPageLogForApply(raw, child)
+	if err != nil || !supported {
+		return nil, supported, err
+	}
+	if inner == nil {
+		return nil, true, rootpublication.ErrResourceOwnership
+	}
+	view := *l
+	view.inner = inner
+	return &view, true, nil
 }
 
 func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet) error {

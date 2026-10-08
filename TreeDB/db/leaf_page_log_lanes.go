@@ -477,15 +477,19 @@ func (g *leafPageLogLaneGroup) appendLeafPagesAt(index int, leafPages [][]byte) 
 }
 
 func (g *leafPageLogLaneGroup) appendLeafPageStableAt(index int, leafPage []byte) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return g.appendLeafPageWithDictionaryCaptureAt(index, leafPage, nil)
+}
+
+func (g *leafPageLogLaneGroup) appendLeafPageWithDictionaryCaptureAt(index int, leafPage []byte, dictionaries *applyLeafDictionaryCapture) (page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	var ptr page.LeafLogPtr
 	var resources *rootpublication.StableResourceSet
 	err := g.withLane(index, func(lane LeafPageLog) error {
-		stable, ok := lane.(LeafPageStableLog)
+		_, ok := lane.(LeafPageStableLog)
 		if !ok {
 			return fmt.Errorf("%w: leaf page lane lacks stable append", rootpublication.ErrUnresolvedResource)
 		}
 		var err error
-		ptr, resources, err = stable.AppendLeafPageWithStableResources(leafPage)
+		ptr, resources, err = appendLeafPageWithDictionaryCapture(lane, dictionaries, leafPage)
 		return err
 	})
 	if err != nil {
@@ -506,18 +510,22 @@ func (g *leafPageLogLaneGroup) appendLeafPageStableAt(index int, leafPage []byte
 }
 
 func (g *leafPageLogLaneGroup) appendLeafPagesStableAt(index int, leafPages [][]byte) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
+	return g.appendLeafPagesWithDictionaryCaptureAt(index, leafPages, nil)
+}
+
+func (g *leafPageLogLaneGroup) appendLeafPagesWithDictionaryCaptureAt(index int, leafPages [][]byte, dictionaries *applyLeafDictionaryCapture) ([]page.LeafLogPtr, *rootpublication.StableResourceSet, error) {
 	if len(leafPages) == 0 {
 		return nil, nil, nil
 	}
 	var ptrs []page.LeafLogPtr
 	var resources *rootpublication.StableResourceSet
 	err := g.withLane(index, func(lane LeafPageLog) error {
-		stable, ok := lane.(LeafPageStableBatchLog)
+		_, ok := lane.(LeafPageStableBatchLog)
 		if !ok {
 			return fmt.Errorf("%w: leaf page lane lacks stable batch append", rootpublication.ErrUnresolvedResource)
 		}
 		var err error
-		ptrs, resources, err = stable.AppendLeafPagesWithStableResources(leafPages)
+		ptrs, resources, err = appendLeafPagesWithDictionaryCapture(lane, dictionaries, leafPages)
 		return err
 	})
 	if err != nil {

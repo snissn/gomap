@@ -419,6 +419,7 @@ func (f *FSM) snapshotRestoreDBOptionsV1(dir string) backenddb.Options {
 	opts := f.restoreDB
 	// Restored side-store owners must register their own capture authority.
 	opts.PhysicalSnapshotSideStoreCapture = nil
+	opts.DictionaryIndexGenerationLease = nil
 	opts.Dir = dir
 	opts.CommandWAL = true
 	opts.CommandWALStatsScan = true

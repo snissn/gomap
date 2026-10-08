@@ -465,7 +465,18 @@ func mergeCanonicalUnitRuns(unitRuns [][][]batch.Entry, out *canonicalFlushRun, 
 	return nil
 }
 
-func mergeCanonicalStableIteratorUnits(units []flushUnit, out *canonicalFlushRun, emit func(batch.Entry) error) (err error) {
+func mergeCanonicalStableIteratorUnits(units []flushUnit, out *canonicalFlushRun, emit func(batch.Entry) error) error {
+	return mergeCanonicalStableIteratorUnitsWithSource(units, out, func(entry batch.Entry, _ int) error {
+		if emit == nil {
+			return nil
+		}
+		return emit(entry)
+	})
+}
+
+// Source is the actual winning queued unit, including when a newer lane shadows
+// an older key. It is never inferred from the key or from the merge destination.
+func mergeCanonicalStableIteratorUnitsWithSource(units []flushUnit, out *canonicalFlushRun, emit func(batch.Entry, int) error) (err error) {
 	if out == nil {
 		return errors.New("cachingdb: missing canonical flush run")
 	}
@@ -518,7 +529,7 @@ func mergeCanonicalStableIteratorUnits(units []flushUnit, out *canonicalFlushRun
 
 		entry := top.iter.Entry()
 		if emit != nil {
-			if err := emit(entry); err != nil {
+			if err := emit(entry, units[len(units)-1-top.priority].laneID); err != nil {
 				return err
 			}
 		}
@@ -1050,10 +1061,34 @@ func (db *DB) writeCanonicalFlushRunChunks(run *canonicalFlushRun, chunks []back
 func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, laneID int, commandPublish *checkpointCommandWALPublish, units []flushUnit, ids []uint64, totalBytes int64, _ int, totalSpans int, mode flushCollectionMode) bool {
 	flushStart := time.Now()
 	buildStart := flushStart
-	sourcePointOps, sourceDeleteOps, err := countCanonicalStableIteratorUnits(units)
-	if err != nil {
-		db.reportError(err)
-		return false
+	var sourcePointOps, sourceDeleteOps, sourceEntriesCap int
+	var err error
+	if laneID < 0 {
+		runOps, runDeletes := 0, 0
+		for i, unit := range units {
+			n, deletes, countErr := countCanonicalStableIteratorUnits([]flushUnit{unit})
+			if countErr != nil {
+				db.reportError(countErr)
+				return false
+			}
+			sourcePointOps += n
+			sourceDeleteOps += deletes
+			runOps += n
+			runDeletes += deletes
+			if i == len(units)-1 || units[i+1].laneID != unit.laneID {
+				cap := db.flushBackendEntriesCapForOps(runOps, runDeletes, syncFlush)
+				if cap > 0 && (sourceEntriesCap == 0 || cap < sourceEntriesCap) {
+					sourceEntriesCap = cap
+				}
+				runOps, runDeletes = 0, 0
+			}
+		}
+	} else {
+		sourcePointOps, sourceDeleteOps, err = countCanonicalStableIteratorUnits(units)
+		if err != nil {
+			db.reportError(err)
+			return false
+		}
 	}
 	db.observeFlushApplyBuild(time.Since(buildStart))
 
@@ -1065,6 +1100,9 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 		deletePointOps:  sourceDeleteOps,
 	}
 	backendEntriesCap := db.flushBackendEntriesCapForOps(sourcePointOps, sourceDeleteOps, syncFlush)
+	if sourceEntriesCap > 0 && sourceEntriesCap < backendEntriesCap {
+		backendEntriesCap = sourceEntriesCap
+	}
 	if backendEntriesCap <= 0 {
 		backendEntriesCap = sourcePointOps
 		if backendEntriesCap <= 0 {
@@ -1078,15 +1116,25 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 	if chunkEntriesCap <= 0 {
 		chunkEntriesCap = 1
 	}
-	publicationGroup, err := db.beginBackendRootPublicationBuildGroup(sourcePointOps > chunkEntriesCap)
+	publicationGroup, err := db.beginBackendRootPublicationBuildGroup(sourcePointOps > chunkEntriesCap || laneID < 0)
 	if err != nil {
 		db.reportError(err)
 		return false
 	}
+	if laneID < 0 && publicationGroup == nil {
+		db.reportError(errors.New("cachingdb: owned point prefix requires a publication group"))
+		return false
+	}
+	covered := false
 	if publicationGroup != nil {
 		defer func() {
 			if closeErr := publicationGroup.Close(); closeErr != nil {
 				db.reportError(fmt.Errorf("cachingdb: abort root publication build group: %w", closeErr))
+			}
+			if laneID < 0 && !covered && publicationGroup.Accepted() {
+				// Acceptance is irreversible even if Write/Close reported an error. Drop
+				// only the captured IDs to prevent replay, but retain WAL on this path.
+				db.finishFlushedCanonicalUnits(false, units, ids, totalBytes)
 			}
 		}()
 	}
@@ -1096,26 +1144,52 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 	writeStart := time.Now()
 	ops := getEntrySlice(chunkEntriesCap)
 	defer func() { putEntrySlice(ops) }()
-	valueLogNeedsFlush := db.valueLogEnabled()
+	sourceLanes := []int{laneID}
+	if laneID < 0 {
+		sourceLanes = nil
+		for _, unit := range units {
+			found := false
+			for _, source := range sourceLanes {
+				if source == unit.laneID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				sourceLanes = append(sourceLanes, unit.laneID)
+			}
+		}
+	}
+	needsFlush := make([]bool, len(sourceLanes))
+	for i := range needsFlush {
+		needsFlush[i] = db.valueLogEnabled()
+	}
+	var opLanes []int
+	mixedDeferred := laneID < 0 && db.deferredValueLogEnabled()
+	if mixedDeferred {
+		opLanes = make([]int, 0, chunkEntriesCap)
+	}
 	flushValueLogIfNeeded := func() error {
-		if !valueLogNeedsFlush {
-			return nil
-		}
-		flushStart := time.Now()
-		err := db.flushValueLog(laneID)
-		db.observeFlushApplyVLogFlush(time.Since(flushStart))
-		if err != nil {
-			return err
-		}
-		if syncFlush && !db.relaxedSync {
-			syncStart := time.Now()
-			err := db.syncValueLog(laneID)
-			db.observeFlushApplyVLogSync(time.Since(syncStart))
+		for i, source := range sourceLanes {
+			if !needsFlush[i] {
+				continue
+			}
+			flushStart := time.Now()
+			err := db.flushValueLog(source)
+			db.observeFlushApplyVLogFlush(time.Since(flushStart))
 			if err != nil {
 				return err
 			}
+			if syncFlush && !db.relaxedSync {
+				syncStart := time.Now()
+				err := db.syncValueLog(source)
+				db.observeFlushApplyVLogSync(time.Since(syncStart))
+				if err != nil {
+					return err
+				}
+			}
+			needsFlush[i] = false
 		}
-		valueLogNeedsFlush = false
 		return nil
 	}
 	emitChunk := func(last bool) error {
@@ -1123,14 +1197,16 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 			return nil
 		}
 		materializeStart := time.Now()
-		wrotePointers, err := db.materializeCanonicalOpsDeferredValueLogPointers(ops, syncFlush, laneID)
+		for i, source := range sourceLanes {
+			wrotePointers, err := db.materializeCanonicalOpsForSourceLane(ops, opLanes, syncFlush, source)
+			if err != nil {
+				return fmt.Errorf("defer vlog: %w", err)
+			}
+			if wrotePointers {
+				needsFlush[i] = true
+			}
+		}
 		db.observeFlushApplyDeferredVLogPointerMaterialize(time.Since(materializeStart))
-		if err != nil {
-			return fmt.Errorf("defer vlog: %w", err)
-		}
-		if wrotePointers {
-			valueLogNeedsFlush = true
-		}
 		if err := flushValueLogIfNeeded(); err != nil {
 			return fmt.Errorf("vlog: %w", err)
 		}
@@ -1140,13 +1216,14 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 		}
 		putEntrySlice(ops)
 		ops = nil
+		opLanes = opLanes[:0]
 		if !last {
 			ops = getEntrySlice(chunkEntriesCap)
 		}
 		return nil
 	}
 
-	err = mergeCanonicalStableIteratorUnits(units, runStats, func(entry batch.Entry) error {
+	err = mergeCanonicalStableIteratorUnitsWithSource(units, runStats, func(entry batch.Entry, source int) error {
 		if len(ops) >= chunkEntriesCap {
 			if err := emitChunk(false); err != nil {
 				return err
@@ -1156,6 +1233,9 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 			ops = getEntrySlice(chunkEntriesCap)
 		}
 		ops = append(ops, entry)
+		if mixedDeferred {
+			opLanes = append(opLanes, source)
+		}
 		return nil
 	})
 	if err != nil {
@@ -1185,6 +1265,7 @@ func (db *DB) flushCanonicalPointUnitsStableIteratorStreamed(syncFlush bool, lan
 	db.observeFlushApplyBackendWrite(time.Since(writeStart))
 
 	db.finishFlushedCanonicalUnits(syncFlush, units, ids, totalBytes)
+	covered = true
 	flushDur := time.Since(flushStart)
 	if flushDur > 0 && totalBytes > 0 {
 		sample := float64(totalBytes) / flushDur.Seconds()

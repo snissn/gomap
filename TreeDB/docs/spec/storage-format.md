@@ -3451,6 +3451,16 @@ Reservation pages form a contiguous, ordered chain so fragmented transactions
 are not bounded by one page. Unchanged paths retain their existing page
 identities and bytes.
 
+Before materialization, a candidate transaction may clear successive allocated
+free bits in the same chunk on its most recently copied complete radix path.
+It retains only that root identity and chunk number as private-path authority;
+an unmaterialized page identity alone is insufficient. Switching chunks uses
+the persistent copy-on-write path. Staging a transaction revokes this authority
+in both branches, and metadata selection and emission revoke it before sharing
+or annotating tree state. The selector, reservations, summaries and durable
+encoding are unchanged; retained bases, rollback roots and published generations
+remain immutable.
+
 The generation header binds its exact root page identity and CRC; every index
 entry recursively binds its child page CRC. The header also binds the
 reservation chain digest, generation/parent identity, commit sequences, high-water

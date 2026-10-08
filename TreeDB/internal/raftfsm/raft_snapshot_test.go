@@ -1260,6 +1260,24 @@ func TestRaftSnapshotV1RestoreWiresRestoredSideStoreLookups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutDictBytes: %v", err)
 	}
+	resources, err := dictStore.CaptureDictionaryResources(ctx, dictID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, _, err := resources.DependencyManifestV1()
+	resources.Release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var indexEntry rootpublication.DependencyManifestEntryV1
+	for _, entry := range manifest.Entries() {
+		if rootpublication.ClaimsDictionaryIndexGenerationV1(entry) {
+			indexEntry = entry
+		}
+	}
+	if indexEntry.Generation == 0 {
+		t.Fatal("capture did not contain canonical dictionary index")
+	}
 	if err := dictBackend.Close(); err != nil {
 		t.Fatalf("Close dictdb: %v", err)
 	}
@@ -1296,6 +1314,19 @@ func TestRaftSnapshotV1RestoreWiresRestoredSideStoreLookups(t *testing.T) {
 	if opts.ValueLog.DictLookup == nil {
 		t.Fatal("DictLookup was not wired from restored side store")
 	}
+	if opts.DictionaryIndexGenerationLease == nil {
+		t.Fatal("dictionary generation owner was not wired from restored side store")
+	}
+	releaseGeneration, err := opts.DictionaryIndexGenerationLease(indexEntry)
+	if err != nil {
+		t.Fatalf("restored generation owner rejected its exact index: %v", err)
+	}
+	if releaseGeneration == nil {
+		t.Fatal("restored owner returned no generation lease")
+	}
+	releaseGeneration()
+	releaseGeneration() // transferred fence releases exactly once.
+
 	gotDict, err := opts.ValueLog.DictLookup(dictID)
 	if err != nil {
 		t.Fatalf("DictLookup(%d): %v", dictID, err)
@@ -1317,6 +1348,10 @@ func TestRaftSnapshotV1RestoreWiresRestoredSideStoreLookups(t *testing.T) {
 
 func TestRaftSnapshotV1RestoreScrubsMainPlacementOptionsForSideStores(t *testing.T) {
 	opts := backenddb.Options{
+		DictionaryIndexGenerationLease: func(rootpublication.DependencyManifestEntryV1) (func(), error) {
+			t.Fatal("inherited parent generation hook must not run for side stores")
+			return nil, nil
+		},
 		IndexOuterLeavesInValueLog: true,
 		ValueLog: backenddb.ValueLogOptions{
 			PointerThreshold: 1,
@@ -1338,6 +1373,9 @@ func TestRaftSnapshotV1RestoreScrubsMainPlacementOptionsForSideStores(t *testing
 
 	scrubRaftSnapshotSideStoreOptionsV1(&opts)
 
+	if opts.DictionaryIndexGenerationLease != nil {
+		t.Fatal("inherited parent generation hook was not cleared")
+	}
 	if opts.IndexOuterLeavesInValueLog {
 		t.Fatal("IndexOuterLeavesInValueLog was not cleared")
 	}

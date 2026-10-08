@@ -870,7 +870,12 @@ func (t *Tree) lookupLeafValueView(key []byte, dst []byte, appendMode bool) ([]b
 			}
 			if appendMode && flags&(node.FlagPointer|node.FlagTombstone) == 0 {
 				out := dst
-				if val != nil {
+				if dst == nil && len(val) > 0 {
+					// Materialize the exact owned result before releasing the leaf
+					// view or decode scratch; Get can return it without trimming.
+					out = make([]byte, len(val))
+					copy(out, val)
+				} else if val != nil {
 					out = append(dst, val...)
 				}
 				if leafViewLease != nil {
@@ -1023,6 +1028,11 @@ func (t *Tree) GetAppend(key, dst []byte) ([]byte, error) {
 		return dst, nil
 	}
 	recordTreeGetAppendInline(len(val))
+	if dst == nil && len(val) > 0 {
+		owned := make([]byte, len(val))
+		copy(owned, val)
+		return owned, nil
+	}
 	return append(dst, val...), nil
 }
 

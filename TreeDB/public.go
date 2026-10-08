@@ -953,6 +953,7 @@ func openResolved(opts Options) (*DB, error) {
 	if !opts.DisableSideStores {
 		dictOpts := opts
 		dictOpts.PhysicalSnapshotSideStoreCapture = nil
+		dictOpts.DictionaryIndexGenerationLease = nil
 		dictOpts.NegativeLookupFilterBytes = 0
 		dictOpts.Dir = dictdbDir
 		dictOpts.ResolvedProfile = ""
@@ -982,6 +983,7 @@ func openResolved(opts Options) (*DB, error) {
 			return nil, err
 		}
 		dictStore = dictdb.New(dictBackend)
+		opts.DictionaryIndexGenerationLease = dictBackend.AcquireDictionaryIndexGenerationLease
 
 		opts.ValueLog.DictLookup = func(dictID uint64) ([]byte, error) {
 			return dictStore.GetDictBytes(context.Background(), dictID)
@@ -1008,6 +1010,7 @@ func openResolved(opts Options) (*DB, error) {
 	if !opts.DisableSideStores && opts.ValueLog.TemplateMode != template.TemplateOff {
 		templateOpts := opts
 		templateOpts.PhysicalSnapshotSideStoreCapture = nil
+		templateOpts.DictionaryIndexGenerationLease = nil
 		templateOpts.NegativeLookupFilterBytes = 0
 		templateOpts.Dir = templatedbDir
 		templateOpts.ResolvedProfile = ""

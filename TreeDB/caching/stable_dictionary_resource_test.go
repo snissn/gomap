@@ -13,6 +13,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/dictdb"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
+	"github.com/snissn/gomap/TreeDB/page"
 )
 
 type failingStableDictionaryStore struct {
@@ -91,6 +92,38 @@ func TestStableValueLogAppendMergesReusedDictionaryClosure(t *testing.T) {
 	if !hasDictionary || !hasOuterLeaf {
 		t.Fatalf("merged stable closure dictionary=%v outer-leaf=%v", hasDictionary, hasOuterLeaf)
 	}
+
+	t.Run("ApplyChildMergeFailurePrecedesWriterMutation", func(t *testing.T) {
+		before := cached.leafLog.vlog.Size()
+		injected := errors.New("Apply dependency Merge failed")
+		var rejected *rootpublication.StableResourceSet
+		rawCalled := false
+		capture := &stableOuterLeafCapture{db: cached, lane: &cached.leafLog, handoff: &applyLeafTokenHandoff{
+			raw: func(_ []page.ValuePtr, tokens []*rootpublication.StableResourceToken) error {
+				rawCalled = true
+				for _, token := range tokens {
+					token.Release()
+				}
+				return injected
+			},
+			child: func(child *rootpublication.StableResourceSet) error {
+				rejected = child
+				return injected
+			},
+		}}
+		defer capture.abandon()
+		ptrs, output, err := cached.appendValueLogInternal(&cached.leafLog, dictID, dictionary,
+			[]valuelog.Record{{RID: 2, Value: samples[1]}}, journalDurabilityNone, capture)
+		if !errors.Is(err, injected) || ptrs != nil || output != nil {
+			t.Fatalf("child failure ptrs=%v output=%v err=%v", ptrs, output, err)
+		}
+		if rawCalled || rejected == nil || rejected.Owner() != rootpublication.ResourceOwnerReleased {
+			t.Fatal("dependency failure lost child ownership or reached append")
+		}
+		if cached.leafLog.vlog.Size() != before {
+			t.Fatal("dependency failure mutated producer frontier")
+		}
+	})
 }
 
 func TestStableValueLogAppendRejectsDictionaryBytesOutsideCapturedClosure(t *testing.T) {

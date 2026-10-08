@@ -515,3 +515,74 @@ func BenchmarkCaptureDictionaryResources(b *testing.B) {
 		})
 	}
 }
+
+// Repeated publication composes new captures into an unchanged generation.
+// Snapshot reader owners end at original release; the candidate's one physical
+// fence survives filtering and a coordinator-style physical-only view.
+func TestCaptureDictionaryResourcesGenerationFenceSurvivesViews(t *testing.T) {
+	store, err := Open(t.TempDir(), db.Options{ChunkSize: 64 * 1024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	payload := bytes.Repeat([]byte("generation-fence-definition"), 128)
+	id, err := store.PutDictBytes(context.Background(), payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := store.backend.StableResourceIdentityPinRegistry()
+	baseline := registry.ActivePins()
+	var candidate *rootpublication.StableResourceSet
+	defer func() { candidate.Release() }()
+	for i := 0; i < 32; i++ {
+		original, err := store.CaptureDictionaryResources(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		view, err := rootpublication.CloneStableResourceSetExcludingKinds(original)
+		if err != nil {
+			original.Release()
+			t.Fatal(err)
+		}
+		original.Release()
+		builder := rootpublication.NewStableResourceSetBuilder()
+		if candidate != nil {
+			if err := builder.Merge(candidate); err != nil {
+				view.Release()
+				t.Fatal(err)
+			}
+		}
+		if err := builder.Merge(view); err != nil {
+			builder.Abandon()
+			view.Release()
+			t.Fatal(err)
+		}
+		candidate, err = builder.Freeze()
+		if err != nil {
+			builder.Abandon()
+			t.Fatal(err)
+		}
+		if got := registry.ActivePins(); got != baseline+2 {
+			t.Fatalf("publication %d pins=%d want %d", i, got, baseline+2)
+		}
+		if err := store.backend.VacuumIndexOnline(context.Background()); !errors.Is(err, rootpublication.ErrResourcePinned) {
+			t.Fatalf("publication %d vacuum crossed inherited fence: %v", i, err)
+		}
+	}
+	physical, err := rootpublication.ClonePhysicalReachabilityUnion(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer physical.Release()
+	candidate.Release()
+	if err := store.backend.VacuumIndexOnline(context.Background()); !errors.Is(err, rootpublication.ErrResourcePinned) {
+		t.Fatalf("physical-only view lost fence: %v", err)
+	}
+	physical.Release()
+	if registry.ActivePins() != baseline {
+		t.Fatal("last release leaked physical pins")
+	}
+	if err := store.backend.VacuumIndexOnline(context.Background()); err != nil {
+		t.Fatalf("last release retained obsolete fence: %v", err)
+	}
+}

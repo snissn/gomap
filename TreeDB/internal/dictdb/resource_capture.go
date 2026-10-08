@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	dictionaryIndexPhysicalDigest    = sha256.Sum256([]byte("dictdb-index-v1"))
+	dictionaryIndexPhysicalDigest    = rootpublication.DictionaryIndexPhysicalDigestV1()
 	dictionaryValueLogPhysicalDigest = sha256.Sum256([]byte("dictdb-value-log-v1"))
 )
 
@@ -28,6 +28,11 @@ const (
 var addDictionaryStableResourceToken = func(builder *rootpublication.StableResourceSetBuilder, token *rootpublication.StableResourceToken, _ dictionaryStablePhysicalRole) error {
 	return builder.Add(token)
 }
+
+// GenerationScopedDictionaryResources certifies that cloned/coalesced returned
+// authority retains a physical-generation maintenance fence independently of
+// the original snapshot/read-state owner. Private Apply captures may reuse it.
+func (s *Store) GenerationScopedDictionaryResources() bool { return s != nil && s.backend != nil }
 
 // CaptureDictionaryResources returns the exact transitive durable resources
 // needed to decode dictID. The returned set owns its snapshot and deletion pins
@@ -81,7 +86,7 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
 	defer builder.Abandon()
 
-	indexToken, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
+	indexToken, err := snapshot.NewStableIndexGenerationResourceToken(rootpublication.StableResourceSpec{
 		Kind:         rootpublication.ResourceDictionary,
 		LogicalLane:  "dictdb/index",
 		ResourceID:   "index",

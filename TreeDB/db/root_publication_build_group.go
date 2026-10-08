@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -40,6 +42,8 @@ type RootPublicationBuildGroup struct {
 	retired                 []uint64
 	metrics                 adaptive.Metrics
 	vlogRefDelta            *valueLogRefDelta
+	leafCapture             *applyLeafResourceLog
+	projectionComplete      bool
 	touchedValueLogSegments map[uint32]struct{}
 	pinnedValueLogSegments  map[uint32]struct{}
 	maxEntryRevision        page.EntryRevision
@@ -150,6 +154,8 @@ func (db *DB) beginRootPublicationBuildGroup(basis *Snapshot) (_ *RootPublicatio
 	}
 	group.idx = idx
 	group.tracker = newAllocTracker(idx.allocator)
+	group.leafCapture = db.ordinaryLeafResourceCapture()
+	group.projectionComplete = true
 
 	db.rootReuseMu.RLock()
 	db.mu.RLock()
@@ -231,8 +237,28 @@ func (group *RootPublicationBuildGroup) pinBatchValueLogSegmentsLocked(delta *ba
 	}
 }
 
-func (group *RootPublicationBuildGroup) mergeValueLogRefDeltaLocked(delta *valueLogRefDelta) {
+func (group *RootPublicationBuildGroup) mergeValueLogRefDeltaLocked(delta *valueLogRefDelta) error {
+	// Reject overflow before mutating the aggregate or admitting its provenance.
+	// No chunk (including a net-zero one) can certify another chunk's evidence.
+	if err := delta.forEachChange(func(fileID uint32, change int64) error {
+		current := group.vlogRefDelta.changeFor(fileID)
+		if change > 0 && current > math.MaxInt64-change || change < 0 && current < math.MinInt64-change {
+			return fmt.Errorf("group value-log delta overflow for file %d", fileID)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := delta.forEachPositive(func(fileID uint32, count int64) error {
+		if group.vlogRefDelta != nil && group.vlogRefDelta.positives[fileID] > math.MaxInt64-count {
+			return fmt.Errorf("group value-log positive count overflow for file %d", fileID)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	mergeValueLogRefDeltaInto(&group.vlogRefDelta, delta)
+	return nil
 }
 
 func (group *RootPublicationBuildGroup) recordVacuumMutationLocked(entries []batchpkg.Entry, ranges []batchpkg.DeleteRange) {
@@ -262,6 +288,9 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 		applyOpts.ReadOnlyPrepare = prepareBuf.opts
 	}
 	z := group.idx.zipper.CloneWithAllocator(group.tracker)
+	if group.leafCapture != nil {
+		z.SetLeafPageLog(group.leafCapture)
+	}
 	var (
 		newRoot   uint64
 		retired   []uint64
@@ -307,8 +336,12 @@ func (group *RootPublicationBuildGroup) applyBatchLocked(b *Batch) error {
 		db.observeFlushApplyAbandonedOutput(metrics, len(retired))
 		return err
 	}
-	group.mergeValueLogRefDeltaLocked(delta)
+	group.projectionComplete = group.projectionComplete && result.OldPointerRefsCollected
+	mergeErr := group.mergeValueLogRefDeltaLocked(delta)
 	releaseValueLogRefDelta(delta)
+	if mergeErr != nil {
+		return mergeErr
+	}
 	group.recordVacuumMutationLocked(entries, ranges)
 	group.currentRoot = newRoot
 	group.retired = append(group.retired, retired...)
@@ -352,6 +385,12 @@ func (group *RootPublicationBuildGroup) observeAcceptedOutputLocked() {
 
 func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool) error {
 	db := group.db
+	producerResources, err := group.leafCapture.freeze()
+	if err != nil {
+		return err
+	}
+	defer producerResources.Release()
+	certifyOrdinaryApplyProjection(group.vlogRefDelta, group.idx, group.baseSeq, group.baseRoot, group.currentRoot, group.systemRoot, group.projectionComplete, group.leafCapture)
 	group.releaseWriteLocked()
 	publishPrepareGuard, err := db.prepareFlushApplyPublish(syncWrite)
 	if err != nil {
@@ -374,6 +413,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 		}
 	}
 	opts := finalizeCommitOptions{
+		durableResources:            producerResources,
 		negativeCoverage:            group.negativeCoverage,
 		skipPrePublishFlush:         true,
 		skipConditionalRootConflict: true,
@@ -390,6 +430,7 @@ func (group *RootPublicationBuildGroup) finalizeLocked(b *Batch, syncWrite bool)
 	}
 	if intent != nil {
 		commandOpts := commandWALFinalizeOptions(intent)
+		commandOpts.durableResources = opts.durableResources
 		commandOpts.skipPrePublishFlush = opts.skipPrePublishFlush
 		commandOpts.skipConditionalRootConflict = opts.skipConditionalRootConflict
 		commandOpts.maxEntryRevision = opts.maxEntryRevision
@@ -467,6 +508,7 @@ func (group *RootPublicationBuildGroup) cleanupLocked(abandon bool) error {
 		group.capturedBasis = nil
 	}
 	group.closed = true
+	group.leafCapture.abandon()
 	var cleanupErr error
 	if abandon && group.tracker != nil {
 		cleanupErr = errors.Join(cleanupErr, group.tracker.FreeAll())

@@ -9,7 +9,14 @@ import (
 )
 
 type cachingLeafPageLogGroup struct {
-	db *DB
+	db      *DB
+	handoff *applyLeafTokenHandoff
+}
+
+func (g *cachingLeafPageLogGroup) ReleaseLeafPageLogApplyResources() {
+	if g != nil {
+		g.handoff.release()
+	}
 }
 
 var _ backenddb.LeafPageLog = (*cachingLeafPageLogGroup)(nil)
@@ -30,6 +37,13 @@ var _ backenddb.LeafPageLogLaneProvider = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogSequenceReserver = (*cachingLeafPageLogGroup)(nil)
 
+func (g *cachingLeafPageLogGroup) LeafPageLogForApply(raw func([]page.ValuePtr, []*rootpublication.StableResourceToken) error, child func(*rootpublication.StableResourceSet) error) (backenddb.LeafPageLog, bool, error) {
+	if g == nil || g.db == nil || raw == nil || child == nil {
+		return nil, true, rootpublication.ErrResourceOwnership
+	}
+	return &cachingLeafPageLogGroup{db: g.db, handoff: &applyLeafTokenHandoff{raw: raw, child: child}}, true, nil
+}
+
 func (g *cachingLeafPageLogGroup) laneForWorkerIndex(workerIndex int) (*lane, bool) {
 	if g == nil || g.db == nil || !g.db.indexOuterLeavesInValueLog {
 		return nil, false
@@ -46,14 +60,14 @@ func (g *cachingLeafPageLogGroup) laneLog(workerIndex int) (*cachingLeafPageLog,
 	if !ok || l == nil {
 		return nil, false
 	}
-	return &cachingLeafPageLog{db: g.db, lane: l}, true
+	return &cachingLeafPageLog{db: g.db, lane: l, handoff: g.handoff}, true
 }
 
 func (g *cachingLeafPageLogGroup) defaultLog() *cachingLeafPageLog {
 	if g == nil || g.db == nil {
 		return nil
 	}
-	return &cachingLeafPageLog{db: g.db, lane: g.db.leafLogAppendLaneForWorkerIndex(0)}
+	return &cachingLeafPageLog{db: g.db, lane: g.db.leafLogAppendLaneForWorkerIndex(0), handoff: g.handoff}
 }
 
 func (g *cachingLeafPageLogGroup) LeafPageLogLane(workerIndex int) (backenddb.LeafPageLog, bool) {
@@ -158,7 +172,7 @@ func (g *cachingLeafPageLogGroup) CreatedLeafPageLogSegmentsSnapshot() ([]backen
 		if l == nil {
 			continue
 		}
-		log := &cachingLeafPageLog{db: g.db, lane: l}
+		log := &cachingLeafPageLog{db: g.db, lane: l, handoff: g.handoff}
 		laneSegments, err := log.CreatedLeafPageLogSegmentsSnapshot()
 		if err != nil {
 			return nil, err
@@ -187,7 +201,7 @@ func (g *cachingLeafPageLogGroup) CurrentLeafPageLogSegmentsSnapshot() ([]backen
 		if l == nil {
 			continue
 		}
-		log := &cachingLeafPageLog{db: g.db, lane: l}
+		log := &cachingLeafPageLog{db: g.db, lane: l, handoff: g.handoff}
 		laneSegments, err := log.CurrentLeafPageLogSegmentsSnapshot()
 		if err != nil {
 			return nil, err
@@ -252,7 +266,7 @@ func (g *cachingLeafPageLogGroup) MarkLeafPageLogSegmentsRegistered(segments []b
 		if l == nil {
 			continue
 		}
-		(&cachingLeafPageLog{db: g.db, lane: l}).MarkLeafPageLogSegmentsRegistered(segments)
+		(&cachingLeafPageLog{db: g.db, lane: l, handoff: g.handoff}).MarkLeafPageLogSegmentsRegistered(segments)
 	}
 }
 
@@ -291,7 +305,7 @@ func (g *cachingLeafPageLogGroup) forEachLane(fn func(*cachingLeafPageLog) error
 		if l == nil {
 			continue
 		}
-		if err := fn(&cachingLeafPageLog{db: g.db, lane: l}); err != nil {
+		if err := fn(&cachingLeafPageLog{db: g.db, lane: l, handoff: g.handoff}); err != nil {
 			errs = append(errs, err)
 		}
 	}

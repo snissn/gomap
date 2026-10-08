@@ -412,6 +412,13 @@ type StableResourceSpec struct {
 	// must still execute SyncThrough on the pinned identity.
 	ContentSynced bool
 	OnRelease     func()
+	// OnLastPinnedRelease owns a physical-generation lifetime, independent of
+	// per-token OnRelease bookkeeping. It runs once after the last exact-handle
+	// reference closes, including shared logical/physical-only clones. Coalescing
+	// independent captures keeps only the retained representative's lifetime;
+	// this callback must protect the physical generation, not logical aliases.
+	// Construction consumes it only on success.
+	OnLastPinnedRelease func()
 	// PinRegistry is the DB-scoped physical deletion gate. When set, token
 	// construction acquires a pin for the exact handle identity before return.
 	PinRegistry *IdentityPinRegistry
@@ -444,20 +451,21 @@ type StableResourceToken struct {
 	logicalObligations []StableLogicalObligation
 	// directory pins the exact index generation/root backing this token's
 	// logical view. It never retains a predecessor resource set or token.
-	directory         *DependencyDirectoryV2
-	stability         ResourceStability
-	namespace         *StableNamespaceToken
-	pinned            *os.File
-	pinnedRefs        *atomic.Int64
-	flush             resourceOperation
-	sync              resourceOperation
-	syncedFrontier    DurableFrontier
-	hasSyncedFrontier bool
-	onRelease         func()
-	identityPin       *IdentityPin
-	owner             atomic.Uint32
-	released          atomic.Bool
-	metrics           resourceTokenMetrics
+	directory           *DependencyDirectoryV2
+	stability           ResourceStability
+	namespace           *StableNamespaceToken
+	pinned              *os.File
+	pinnedRefs          *atomic.Int64
+	flush               resourceOperation
+	sync                resourceOperation
+	syncedFrontier      DurableFrontier
+	hasSyncedFrontier   bool
+	onRelease           func()
+	onLastPinnedRelease func()
+	identityPin         *IdentityPin
+	owner               atomic.Uint32
+	released            atomic.Bool
+	metrics             resourceTokenMetrics
 }
 
 func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, error) {
@@ -561,7 +569,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
 		reachability: spec.Reachability, logicalObligations: logicalObligations,
 		stability: stability, namespace: spec.Namespace, pinned: pinned, pinnedRefs: pinnedRefs,
-		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, identityPin: identityPin,
+		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, onLastPinnedRelease: spec.OnLastPinnedRelease, identityPin: identityPin,
 	}
 	if spec.ContentSynced {
 		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
@@ -634,7 +642,7 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 		stability: token.stability, namespace: token.namespace, pinned: token.pinned, pinnedRefs: token.pinnedRefs,
 		flush: token.flush, sync: token.sync,
 		syncedFrontier: cloneDurableFrontier(token.syncedFrontier), hasSyncedFrontier: token.hasSyncedFrontier,
-		onRelease: onRelease, identityPin: identityPin,
+		onRelease: onRelease, onLastPinnedRelease: token.onLastPinnedRelease, identityPin: identityPin,
 	}
 	cloned.owner.Store(uint32(ResourceOwnerToken))
 	cloned.metrics.registeredNanos = time.Now().UnixNano()
@@ -654,6 +662,56 @@ func validateDiagnosticPath(path string) error {
 		return fmt.Errorf("%w: diagnostic path escapes DB root", ErrUnresolvedResource)
 	}
 	return nil
+}
+
+// ValidateStableNamespace revalidates the retained exact parent/child binding
+// without materializing a resource set or changing ownership/content frontier.
+func (token *StableResourceToken) ValidateStableNamespace() error {
+	if token == nil || token.released.Load() {
+		return ErrResourceOwnership
+	}
+	return token.namespace.validateStable()
+}
+
+// CertifyFlushedOuterLeafResource issues a new immutable byte certificate from
+// the authoritative producer's just-flushed exact handle. Unlike ordinary
+// clones, this boundary validates physical identity and reads the new frontier.
+// It only supports raw outer-leaf families without caller lifetime callbacks.
+// The caller serializes the writer and retains token through this operation.
+func (token *StableResourceToken) CertifyFlushedOuterLeafResource(file *os.File) (*StableResourceToken, error) {
+	if token == nil || token.released.Load() || file == nil {
+		return nil, ErrResourceOwnership
+	}
+	if token.kind != ResourceOuterLeafLog || token.reachability != ReachabilityOuterLeafRawPointer ||
+		token.identityPin == nil || token.onRelease != nil || token.onLastPinnedRelease != nil ||
+		token.directory != nil || token.hasSyncedFrontier || token.digest != ([32]byte{}) ||
+		len(token.logicalObligations) != 0 || token.frontier != (DurableFrontier{Bytes: token.frontier.Bytes}) {
+		return nil, fmt.Errorf("%w: unsupported outer-leaf producer family", ErrUnresolvedResource)
+	}
+	identity, err := StableIdentityFromFile(file)
+	if err != nil {
+		return nil, err
+	}
+	if identity.Generation != 0 && identity.Generation != token.generation {
+		return nil, fmt.Errorf("%w: outer-leaf producer generation changed", ErrResourceConflict)
+	}
+	identity.Generation = token.generation
+	if identity != token.identity {
+		return nil, fmt.Errorf("%w: outer-leaf producer handle changed", ErrResourceConflict)
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() < 0 || uint64(info.Size()) < token.frontier.Bytes {
+		return nil, fmt.Errorf("%w: outer-leaf producer frontier regressed", ErrResourceConflict)
+	}
+	if err := token.ValidateStableNamespace(); err != nil {
+		return nil, err
+	}
+	frontier := cloneDurableFrontier(token.frontier)
+	frontier.Bytes = uint64(info.Size())
+	return token.cloneSharedPinned(token.logicalLane, token.resourceID, token.diagnosticPath, frontier, token.reachability, token.logicalObligations, nil)
 }
 
 func (token *StableResourceToken) Kind() ResourceKind       { return token.kind }
@@ -803,6 +861,9 @@ func (token *StableResourceToken) releasePinned() {
 func (token *StableResourceToken) releasePinnedReference() {
 	if token.pinnedRefs == nil || token.pinnedRefs.Add(-1) == 0 {
 		_ = token.pinned.Close()
+		if token.onLastPinnedRelease != nil {
+			token.onLastPinnedRelease()
+		}
 	}
 }
 
@@ -1587,16 +1648,19 @@ func ValidateStableChildLink(parent, resource *os.File, name string) error {
 	return validateStableChildLink(parent, resource, name)
 }
 
-func validateStableChildIdentity(parent *os.File, resourceIdentity StableIdentity, name string) error {
-	linked, err := OpenStableChildFile(parent, name, os.O_RDONLY, 0)
-	if err != nil {
-		if errors.Is(err, ErrNamespacePersistenceUnsupported) {
-			return err
-		}
-		return fmt.Errorf("%w: open %q relative to exact parent: %v", ErrResourceConflict, name, err)
+func stableChildIdentityOpenError(name string, err error) error {
+	if errors.Is(err, ErrNamespacePersistenceUnsupported) {
+		return err
 	}
-	defer linked.Close()
-	linkedIdentity, err := stableIdentityFromFile(linked)
+	return fmt.Errorf("%w: open %q relative to exact parent: %v", ErrResourceConflict, name, err)
+}
+
+func validateStableChildIdentity(parent *os.File, resourceIdentity StableIdentity, name string) error {
+	// Preserve OpenStableChildFile's validation before the identity-only probe.
+	if parent == nil || name == "" || filepath.Base(name) != name || name == "." || name == ".." {
+		return stableChildIdentityOpenError(name, fmt.Errorf("%w: stable child requires a base name and exact parent handle", ErrUnresolvedResource))
+	}
+	linkedIdentity, err := platformStableChildIdentity(parent, name)
 	if err != nil {
 		return err
 	}

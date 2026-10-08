@@ -446,6 +446,59 @@ rules, so this admission does not grant an independent indefinite-retention
 or reclamation authority. No directory enumeration or new on-disk format is
 part of this capture.
 
+### 3.4 Ordinary destructive publication
+
+Ordinary user-root overwrite, point-delete, and range-delete publication can use
+successful COW Apply's exact removed-pointer counts instead of decoding values
+from every compressed outer leaf in the candidate. This certificate is private
+and process-local: it names one index, predecessor sequence/user root, final user
+root, and unchanged system root. Optimistic and serialized writers construct it
+only after successful Apply; publication still validates the expected predecessor.
+Cached checkpoint's real physical chunk group fixes that basis and ANDs complete
+Apply evidence across every chunk, including net-zero contributions. Generic,
+ordered-root, and descriptor-changing callers cannot acquire this certificate
+from a delta flag. No certificate is replayed or persisted.
+
+The exact logical-count projection requires a valid tracker at that predecessor
+sequence and checked subtraction/addition. Candidate capture checks a pinned live
+predecessor, registers producer-owned segments, and rejects user-root aliases
+with the system root or any descriptor-selected root. It then uses the existing
+CRC-checking pager topology collector for exact raw membership, without decoding
+ordinary outer-leaf value bodies. Unchanged nonaliased collection/system roots
+remain included. Missing Apply evidence, stale/unknown/underflowing/overflowing
+counts, mismatched bases, aliases, unsupported topology, and recovery before a
+live snapshot use the unchanged full scanner. Fallback count repair remains
+candidate-private until activation; rejected candidates cannot repair the tracker.
+Chunk-delta arithmetic overflow rejects the private group before publication.
+
+The shared COW stable producer capture forwards ordinary, prepared, batch,
+ChildRef, and concurrent lane append APIs. It retains dictionary/template authority
+and exact raw handles/frontiers across each private Apply chain, then transfers
+ownership through finalize. Abort/conflict/partial failure abandons or releases
+those resources through the existing ownership boundary. Known forwarding adapters
+check their actual producers before choosing stable appends. Dual-mode producers
+can declare that their configured legacy mode lacks raw stable append capability;
+replay forwarding preserves this mode selection. This check precedes Apply and
+ignores registry/dictionary/template readiness: an authority failure after selecting
+stable append still aborts, without retrying legacy append. Strict rewrite capture
+retains its original authority requirements. Legacy producers
+retain their existing publication path; missing required dictionary/template authority still
+fails closed. Produced raw segments used only by discarded private intermediate
+roots are filtered from final membership; inherited dictionary/template and packed
+manifest authority keep their existing closure rules. Additive publication keeps
+its existing predecessor-reuse plan, recapturing registered raw handles before
+filtering mutable producer tokens.
+
+This removes repeated compressed outer value-body projection; it still performs
+pager topology and descriptor work per publication. Temporary allocation depends
+on visited pager pages, segment/count membership, and stable producer identities
+for the private Apply chain, rather than retaining decoded outer pages. It adds
+no persistent cache, raw reference tracker, cap, scheduler, format, or batch-size
+change. `treedb.durable_root.candidate.*` counters witness the mechanism; matched
+native workloads and relevant process memory remain performance acceptance gates.
+Exact candidate membership leaves both recoverable slots, queued publication,
+snapshot/replay pins, and GC's deletion authority intact.
+
 ## 4. GC Algorithm (`DB.ValueLogGC`)
 
 For each segment in current value-log set:
@@ -516,6 +569,159 @@ Online rewrite copies live pointer-backed values into fresh value-log segments
 and updates keys in bounded commit batches. Cached-mode callers must checkpoint
 first, protect cached value-log paths, and allocate rewrite RIDs from the shared
 cached allocator.
+
+A supported rewrite publication combines the matched old/new logical pointer
+count delta with the existing leaf-file-ID reachability collector in a private
+candidate snapshot. The collector walks pager topology and discovers collection
+root descriptors, but it does not project logical values from every compressed
+outer leaf. The resulting raw leaf-file and logical value-segment membership is
+exact for the candidate; rewrite explicitly replaces predecessor raw membership
+rather than using the ordinary additive publication superset. Shared logical
+pointers remain counted until their last matching reference disappears. An
+unmatched swap contributes no count change.
+
+Unknown, stale, underflowing, or overflowing reference counts use the original full candidate
+scanner. Replacing collection descriptor aliases can remove pointer-backed
+system descriptor references outside the collection's local delta, so the whole
+publication currently uses that full scanner. A system descriptor rewrite also
+uses it. Exact fallback counts remain private until successful activation;
+aborts and publication conflicts cannot repair the live tracker.
+
+Rewrite and certified ordinary COW Apply use the installed producer's stable append APIs. Its private
+resource builder retains the exact raw handle/frontier and dictionary/template
+closure while candidate projection captures fresh registered raw membership.
+Producer dictionary/template authority then passes through the existing finalize
+resource boundary. Byte lookup alone cannot authorize publication, including on
+the full-scan fallback. An unsupported producer fails with unresolved resource
+authority before publication. This preserves installed producer rotation and
+sequence authority. The builder releases acquired resources on Apply failure;
+frozen resources release on abort/conflict, and successful publication transfers
+ownership to the existing slot/runtime resource sets. Dictionary/template proofs
+and packed-generation authority retain their existing inherited-closure rules.
+
+Within one private Apply chain, the installed rewrite producer captures each
+immutable writer-owned dictionary definition once per identifiable provider that
+explicitly certifies `GenerationScopedDictionaryResources`. Cloned lanes share
+that definition. The attempt owner retains each original closure and provider
+snapshot lease through freeze. It derives an independent exact token view using
+the closure's complete dictionary-generation obligations, then releases the
+original snapshot/read state and provider callbacks; abandon releases originals
+without producing a view. A kind-only clone can share original token chunks and
+their snapshot owner, so that clone alone does not provide this boundary.
+Private append captures omit duplicate
+dictionary closures; public stable append APIs keep their full closure contract.
+A later attempt captures afresh.
+Reconfiguration installs new immutable bytes, including reuse of a logical ID,
+and provider replacement selects new authority. Uncertified or unidentifiable
+providers and arbitrary definitions continue to capture and validate on every
+append. Capture
+errors are never retained. Provider relocation does not invalidate a pinned
+immutable definition: the retained closure still names its exact prior physical
+generation, without reopening paths or substituting a newer generation. Generic
+stable producers keep their original append/capture behavior. This bounds repeated
+dictionary decoding and hashing by definitions per attempt, rather than output
+leaves; retention is limited to the closures needed by that attempt.
+
+dictdb's external index authority explicitly uses
+`NewStableIndexGenerationResourceToken`. Its original token still owns
+`Snapshot.Close` and any caller `OnRelease`; only the stable-index maintenance
+counter follows the exact shared file-handle family through
+`OnLastPinnedRelease`. This lightweight fence prevents online vacuum from
+renaming/unlinking the namespace generation while candidate, queued, pending,
+or physical-only coordinator views still name it. Logical filtering preserves
+the same handle family. Coalescing overlapping captures retains one physical
+representative and ends the discarded capture's fence. If the existing
+representative has namespace authority but no inherited generation fence,
+coalescing selects the fresh fenced representative; certified append falls back
+to exact composition for this replacement. Selection preserves both namespace
+and generation authority. Incomparable generic authorities fail before source
+ownership transfers rather than silently dropping either protection. Coalescing
+never unions lists of prior Apply owners or retains prior snapshot state. The
+surviving fence ends once at the final handle release. The DB's own `ResourceIndex` capture continues
+to use the token-local maintenance lease, so durable candidate clones do not
+introduce a persistent fence against the DB's own index vacuum.
+
+Recovery recognizes dictdb's canonical mutable index digest before accepting its
+lane, ID, path, namespace and single dictionary-generation reachability field.
+The public, backend and restored Raft constructors install the concrete side
+backend's expected-generation lease before main durable-slot selection; side
+options clear inherited parent hooks. A missing owner or malformed canonical
+claim fails closed. Custom immutable dictionary producers and template resources
+keep their existing recovery contract.
+
+Under the side backend's maintenance lock, this lease validates the currently
+owned exact index handle, parent/child namespace identity and required frontier,
+then reserves only the stable-index maintenance counter. Persisted generation
+labels do not substitute for physical identity or have to match a reopened
+backend's runtime generation number. The recovered token transfers the lease to
+one exact shared handle family, including retained slots and physical-only
+views. Acquisition or validation failures unwind it; the final handle release
+ends it exactly once. This holds no snapshot, reader, DB state or historical
+Apply group and performs no nested checkpoint, lookup or publication. Recovery
+cannot let a registry pin alone authorize dictdb vacuum's namespace replacement.
+The side owner remains open through main backend and resource-view teardown.
+
+The Apply wrapper also forwards the installed producer's prepared-payload
+capability and the zipper-compatible lane bridge. A hint wrapper exposing an
+optional stable method does not authorize unsupported prepared output; concurrent
+span output continues to use the actual selected lanes and shared Apply owner.
+
+Registry-owned producer creation uses the narrower stable creation capability.
+Windows can certify this operation by validating the exact retained-parent child
+and flushing the exact child handle; it does not require rename, removal, or
+parent-directory persistence support. The rotated-producer success tests and
+compressed outer-leaf benchmark require this creation capability. Broader
+namespace operations still return the existing typed namespace-persistence error
+on unsupported platforms. No failure permits weaker path-based recapture.
+
+Exact newest-candidate membership is not deletion permission. Both recoverable
+meta slots, queued publication debt, replay references, snapshots, and identity
+pins still contribute to `RecoverableRootSet`; existing GC/rewrite deletion gates
+remain authoritative.
+
+The new `treedb.durable_root.candidate.*` counters report full scans, leaf-only
+scans, pager pages visited, outer bodies projected, and projected body bytes
+(`bodies * page.PageSize`). They cover candidate reachability collection only;
+matching, COW reads, and descriptor-discovery reads remain separate work. Body
+bytes are expanded page bytes, not compressed bytes read from disk. Existing
+value-log record CRC counters cover their actual read paths. The supported
+projection removes repeated outer value-body projection; it still walks pager
+topology and descriptor roots twice per publication. For K fixed-B publications,
+residual work is O(K*(P+D+S)), where P is visited pager topology, D is descriptor
+work, and S is registered segment/count membership. This is not an O(B) total
+publication claim.
+
+Allocation ownership is bounded by one Apply/candidate at a time: matched delta
+entries and COW leaf outputs depend on B; the logical-count copy and unioned file
+membership depend on S; the collector's visited-page and root lists depend on P
+and D. The existing candidate snapshot owns its registered set and reader until
+capture returns. Each collector result and temporary membership map is discarded
+before the candidate completes. Lane wrappers share one mutex-protected stable
+resource builder, consumed exactly once by freeze or abandon. No persistent raw
+reference tracker or new retention cache is introduced; rewrite batching, scratch
+caps, and scheduler defaults are unchanged.
+
+`BenchmarkValueLogRewriteOnline_ValuePointers` retains the pager control and adds
+compressed outer-leaf cells at fixed B=8192 for N=30k, 300k, and 3M live logical
+keys, plus N=30k/B=256 as a causal control. Two logical value segments and two raw
+producer generations seed each outer cell. Half the live keys are in the selected
+rewrite source; each timed operation runs that source rewrite to completion.
+Setup and cleanup are outside the timer. For example:
+
+```sh
+GOWORK=off go test ./TreeDB/db -run '^$' \
+  -bench '^BenchmarkValueLogRewriteOnline_ValuePointers/CompressedOuter/N30000/B8192$' \
+  -benchtime=1x -count=3 -benchmem
+```
+
+Reports include complete-run time, publications, candidate scans/pages/bodies,
+record CRC checks, process-wide rewrite mallocs and allocated bytes, copied value
+records/bytes, and refresh scans. Malloc/byte deltas include concurrent Go runtime
+work and are not peak RSS. Qualification still requires paired frozen-source
+public `ValueLogRewriteOnline` runs with real compressed outer leaves, retained
+profiles and process RSS, correctness/checksum/reopen/retention checks, and the
+N/B matrix above. No performance improvement is claimed solely from these
+mechanism counters.
 
 ### 6.2 Online split leaf-generation pack (`DB.LeafGenerationPack`)
 
@@ -826,6 +1032,73 @@ The bound applies to eligible fresh cached ingestion, not every persisted frame:
 previously written files remain readable and maintenance rewrite independently
 groups up to 4 MiB. Rewriting can consequently restore larger read amplification;
 an ingestion improvement alone is not a global post-maintenance size guarantee.
+
+Command-WAL collection side roots use the same stable outer-leaf producer as
+ordinary COW rewrite through the replay leaf-log wrapper. Installation forwards
+the DB-scoped identity registry and stable dictionary provider resolver before
+opening any leaf segment. Stable single and batch appends preserve the replay
+appender shared RID reservation and register every produced segment. Producer
+capture owns dictionary/template and raw-file frontiers; registration failure
+releases capture authority, while publication transfers or releases the set
+through the existing success, conflict, and abort paths. An absent stable provider
+continues to reject dictionary-dependent publication, including scanner fallback.
+
+### Apply-scoped caching leaf token handoff
+
+The concrete cached value-log writer can retain one physical producer family
+per selected lane within that same Apply owner. The first capture uses the full
+stable producer constructor. Repeated captures flush the actual same writer,
+validate its exact handle identity and retained namespace, and read its current
+file size to issue a new immutable frontier certificate. Ordinary pinned-view
+cloning alone cannot certify frontier growth. Each certificate acquires its own
+registry pin and shared-handle/namespace reference; it inherits no arbitrary
+caller callback or dictionary snapshot owner. A changed writer handle, file ID,
+or complete registration constructs a fresh family before releasing the old
+attempt reference. Rotation's closed/current authority remains independently
+captured, and final candidate membership still recaptures registered resources.
+
+The private view explicitly implements `LeafPageLogApplyResourceOwner`. Group
+and lane views share its bounded family slots, and record-length hint adapters
+forward that ownership. After all appenders join, freeze or abandon releases
+each attempt reference. Output certificates retain the exact physical handle
+independently until their existing builder/candidate ownership ends. Append
+failure closes the private owner; retry creates a new attempt. A terminal private
+view rejects further appends. Per-lane certificate operations remain independent,
+and release synchronizes with in-flight family operations. Public stable APIs
+still construct full owned resources on every call; unknown writer implementations
+use that original validated path. Dictionary/template capture, generation fences,
+durability barriers and final closure validation are unchanged. This reduces
+handle and namespace construction by current writer generations per attempt,
+while frontier validation and token ownership remain per append.
+
+The concrete caching outer-leaf producer explicitly implements
+`LeafPageLogApplyTokenProvider`. Its attempt-bound regular appenders, including
+prepared batches, ChildRefs and group lanes, deliver each append's raw tokens to
+the existing Apply builder. Record-length hints and dependency-append hooks are
+forwarded by the hint wrapper. Wrapper interface presence alone does not grant
+this capability: an unsupported inner producer uses the validated public stable
+append path. Public stable APIs on an attempt-bound view still return complete
+owned resource sets.
+
+Each append retains the same writer preflight, namespace-creation certification,
+rotation capture and the actual writer flush. This is a token ownership
+handoff. Each token's captured segment frontier remains immutable. The receiver
+checks all pointer generations and overflow-safe record ends, complete frontier
+coverage, raw resource kinds/reachability, and exact retained namespace bindings
+before adding tokens. Rotation certificates for the same generation combine
+their maximum immutable frontier. Unreferenced rotation tokens are released. The
+raw callback consumes its entire token inventory on success or failure;
+dependency set Merge transfers ownership only on success. Partial Add failures
+require the Apply owner to abort and abandon the already accepted inventory.
+
+Concurrent lanes share the attempt's synchronized builder. The caller joins all
+appenders before freeze or abort. One final Apply Freeze retains namespace and
+closure checks; exact current logical membership, publication, WAL/replay and
+recovery authority are unchanged. Dictionary/template child sets retain their
+existing validation and ownership; dictionary generation fences remain separate
+from token-local snapshot readers. The optimization removes raw-only child
+Freeze, physical-descriptor copies and child-set Merge topology. It adds no
+persistent cache, generation lease union, durability shortcut or format change.
 
 ## Immutable split-leaf manifest revision reclamation
 

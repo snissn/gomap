@@ -3,6 +3,7 @@ package caching
 import (
 	"fmt"
 	"path/filepath"
+	"sync"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
@@ -24,6 +25,7 @@ type stableOuterLeafCapture struct {
 	builder          *rootpublication.StableResourceSetBuilder
 	tokens           []*rootpublication.StableResourceToken
 	parentGeneration uint64
+	handoff          *applyLeafTokenHandoff
 }
 
 func newStableOuterLeafCapture(db *DB, lane *lane) *stableOuterLeafCapture {
@@ -31,6 +33,97 @@ func newStableOuterLeafCapture(db *DB, lane *lane) *stableOuterLeafCapture {
 		db: db, lane: lane,
 		builder: rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityOuterLeafRawPointer),
 	}
+}
+
+// applyLeafTokenHandoff belongs to one joined Apply attempt. Raw consumes all
+// supplied tokens on every outcome; child moves a validated set on success.
+type applyLeafTokenHandoff struct {
+	raw      func([]page.ValuePtr, []*rootpublication.StableResourceToken) error
+	child    func(*rootpublication.StableResourceSet) error
+	mu       sync.Mutex
+	families map[*lane]*applyOuterLeafResourceFamily
+	closed   bool
+}
+
+func (handoff *applyLeafTokenHandoff) release() {
+	if handoff == nil {
+		return
+	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
+	for _, slot := range handoff.families {
+		slot.mu.Lock()
+		slot.family.Release()
+		slot.mu.Unlock()
+	}
+	handoff.families = nil
+	handoff.closed = true
+}
+
+type applyOuterLeafResourceFamily struct {
+	mu     sync.Mutex
+	family *valuelog.StableOuterLeafResourceFamily
+}
+
+func (handoff *applyLeafTokenHandoff) checkOpen() error {
+	if handoff == nil {
+		return rootpublication.ErrResourceOwnership
+	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
+	if handoff.closed {
+		return rootpublication.ErrResourceOwnership
+	}
+	return nil
+}
+
+func (handoff *applyLeafTokenHandoff) capture(writer stableValueWriter, appendLane *lane, registration valuelog.StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
+	// Only the concrete writer supplies family authority. Wrappers and
+	// unknown writer implementations retain their validated public constructor.
+	producer, ok := writer.(*valuelog.Writer)
+	if !ok {
+		if err := handoff.checkOpen(); err != nil {
+			return nil, err
+		}
+		return writer.StableResourceToken(registration)
+	}
+	handoff.mu.Lock()
+	if handoff.closed {
+		handoff.mu.Unlock()
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	if handoff.families == nil {
+		handoff.families = make(map[*lane]*applyOuterLeafResourceFamily)
+	}
+	slot := handoff.families[appendLane]
+	if slot == nil {
+		slot = &applyOuterLeafResourceFamily{}
+		handoff.families[appendLane] = slot
+	}
+	slot.mu.Lock()
+	handoff.mu.Unlock()
+	defer slot.mu.Unlock()
+	previous := slot.family
+	token, family, err := producer.StableOuterLeafResourceTokenForApply(registration, previous)
+	if err != nil {
+		token.Release()
+		if family != previous {
+			family.Release()
+		}
+		return nil, err
+	}
+	if family == nil || token == nil {
+		token.Release()
+		if family != previous {
+			family.Release()
+		}
+		return nil, rootpublication.ErrResourceOwnership
+	}
+	slot.family = family
+	if family != previous {
+		previous.Release()
+	}
+	return token, nil
 }
 
 func (capture *stableOuterLeafCapture) registration(path string, fileID uint32, namespace rootpublication.NamespaceOperation) (valuelog.StableResourceRegistration, error) {
@@ -76,7 +169,7 @@ func (capture *stableOuterLeafCapture) bindParentGeneration(writer stableValueWr
 }
 
 func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableResourceToken) error {
-	if capture == nil || capture.builder == nil || token == nil {
+	if capture == nil || (capture.builder == nil && capture.handoff == nil) || token == nil {
 		return rootpublication.ErrResourceOwnership
 	}
 	capture.tokens = append(capture.tokens, token)
@@ -84,8 +177,11 @@ func (capture *stableOuterLeafCapture) addToken(token *rootpublication.StableRes
 }
 
 func (capture *stableOuterLeafCapture) mergeChild(child *rootpublication.StableResourceSet) error {
-	if capture == nil || capture.builder == nil || child == nil {
+	if capture == nil || (capture.builder == nil && capture.handoff == nil) || child == nil {
 		return rootpublication.ErrResourceOwnership
+	}
+	if capture.handoff != nil {
+		return capture.handoff.child(child)
 	}
 	return capture.builder.Merge(child)
 }
@@ -130,7 +226,12 @@ func (capture *stableOuterLeafCapture) captureCurrent(writer valueWriter, path s
 	if err != nil {
 		return err
 	}
-	token, err := stableWriter.StableResourceToken(registration)
+	var token *rootpublication.StableResourceToken
+	if capture.handoff != nil {
+		token, err = capture.handoff.capture(stableWriter, capture.lane, registration)
+	} else {
+		token, err = stableWriter.StableResourceToken(registration)
+	}
 	if err != nil {
 		return err
 	}
@@ -142,27 +243,40 @@ func (capture *stableOuterLeafCapture) captureCurrent(writer valueWriter, path s
 }
 
 func (capture *stableOuterLeafCapture) freeze(ptrs []page.ValuePtr) (*rootpublication.StableResourceSet, error) {
-	if capture == nil || capture.builder == nil {
+	if capture == nil || (capture.builder == nil && capture.handoff == nil) {
 		return nil, rootpublication.ErrResourceOwnership
 	}
 	required := make(map[uint64]struct{}, len(ptrs))
 	for _, ptr := range ptrs {
 		required[uint64(ptr.FileID)] = struct{}{}
 	}
-	for _, token := range capture.tokens {
+	tokens := capture.tokens
+	capture.tokens = nil
+	// Rotations may capture a closed/current segment not referenced by this
+	// append. It never becomes a candidate raw authority.
+	retained := tokens[:0]
+	for _, token := range tokens {
 		if _, ok := required[token.Generation()]; !ok {
 			token.Release()
 			continue
 		}
+		retained = append(retained, token)
+	}
+	if capture.handoff != nil {
+		handoff := capture.handoff
+		capture.handoff = nil
+		return nil, handoff.raw(ptrs, retained)
+	}
+	for i, token := range retained {
 		if err := capture.builder.Add(token); err != nil {
-			token.Release()
+			for _, pending := range retained[i:] {
+				pending.Release()
+			}
 			capture.builder.Abandon()
-			capture.releaseTokens()
 			capture.builder = nil
 			return nil, err
 		}
 	}
-	capture.tokens = nil
 	set, err := capture.builder.Freeze()
 	if err != nil {
 		capture.builder.Abandon()
@@ -180,6 +294,7 @@ func (capture *stableOuterLeafCapture) abandon() {
 	}
 	capture.releaseTokens()
 	capture.builder = nil
+	capture.handoff = nil
 }
 
 func (capture *stableOuterLeafCapture) releaseTokens() {

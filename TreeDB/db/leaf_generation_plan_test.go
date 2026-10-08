@@ -4,6 +4,8 @@ import (
 	"context"
 	"math/big"
 	"os"
+	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -900,41 +902,99 @@ func TestLeafGenerationProtectedRootsHashCanonicalizesOrderAndKeepsRootKindsDist
 
 func TestLeafGenerationPlan_ReusesCachedSubtreesAcrossRootChanges(t *testing.T) {
 	db, _ := openLeafGenerationGCTestDB(t)
-	counter := withLeafGenerationSubtreeCacheMissCounter(t)
-
+	var missMu sync.Mutex
+	var misses uint64
+	missedIDs := make(map[uint64]bool)
+	unregister := registerLeafGenerationSubtreeCacheMissHook(func(id uint64) {
+		missMu.Lock()
+		misses++
+		missedIDs[id] = true
+		missMu.Unlock()
+	})
+	defer unregister()
+	resetMisses := func() {
+		missMu.Lock()
+		misses, missedIDs = 0, make(map[uint64]bool)
+		missMu.Unlock()
+	}
+	snapshotMisses := func() (uint64, map[uint64]bool) {
+		missMu.Lock()
+		defer missMu.Unlock()
+		ids := make(map[uint64]bool, len(missedIDs))
+		for id := range missedIDs {
+			ids[id] = true
+		}
+		return misses, ids
+	}
 	writeLeafGenerationKeys(t, db, "k", 4096, 'a')
-	stateBefore := db.State()
-	if stateBefore == nil {
-		t.Fatal("expected published state")
+	before := db.AcquireSnapshot()
+	if before == nil {
+		t.Fatal("missing initial snapshot")
 	}
-	rootBefore := stateBefore.RootPageID
-
+	defer before.Close() // Keep old page IDs alive across the COW update.
+	rootBefore := before.state.RootPageID
+	// The hook also observes publication's file-ID scans. Measure only each plan,
+	// and deliberately establish a cold initial totals-cache baseline.
+	db.clearLeafGenerationReachabilityCaches()
+	resetMisses()
 	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-		t.Fatalf("LeafGenerationPlan first: %v", err)
+		t.Fatal(err)
 	}
-	firstMisses := counter.Load()
+	firstMisses, initialIDs := snapshotMisses()
 	if firstMisses < 2 {
 		t.Fatalf("initial subtree miss count=%d, want at least 2 cached pages", firstMisses)
 	}
-
-	counter.Store(0)
 	writeLeafGenerationKeyRange(t, db, "k", 0, 1, 'b')
-	stateAfterWrite := db.State()
-	if stateAfterWrite == nil {
-		t.Fatal("expected published state after write")
+	state := db.State()
+	if state == nil || state.RootPageID == rootBefore {
+		t.Fatal("write did not change root")
 	}
-	if stateAfterWrite.RootPageID == rootBefore {
-		t.Fatalf("write did not change root: root=%d", stateAfterWrite.RootPageID)
+	// Allocated/recycled page IDs are correctly invalidated. Only entries
+	// surviving the write can claim unchanged subtree authority.
+	retainedIDs := make(map[uint64]bool)
+	for id := range initialIDs {
+		if _, ok := db.loadLeafGenerationSubtreeStats(id); ok {
+			retainedIDs[id] = true
+		}
 	}
-	if _, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{}); err != nil {
-		t.Fatalf("LeafGenerationPlan after root change: %v", err)
+	resetMisses() // Exclude the update's publication scans.
+	plan, err := db.LeafGenerationPlan(context.Background(), LeafGenerationPlanOptions{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	secondMisses := counter.Load()
-	if secondMisses == 0 {
-		t.Fatal("expected some subtree misses after root change")
+	secondMisses, secondIDs := snapshotMisses()
+	if secondMisses == 0 || secondMisses >= firstMisses {
+		t.Fatalf("subtree misses after root change=%d, want 0 < misses < initial %d", secondMisses, firstMisses)
 	}
-	if secondMisses >= firstMisses {
-		t.Fatalf("subtree misses after root change=%d, want less than initial %d", secondMisses, firstMisses)
+	current := db.AcquireSnapshot()
+	if current == nil {
+		t.Fatal("missing current snapshot")
+	}
+	defer current.Close()
+	resetMisses()
+	uncached, err := db.scanLeafGenerationLiveStatsWithOptions(context.Background(), current, leafGenerationLiveStatsScanOptions{DisableCache: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(plan.liveStats.Generations, uncached.Generations) {
+		t.Fatalf("cached totals=%v uncached=%v", plan.liveStats.Generations, uncached.Generations)
+	}
+	_, currentIDs := snapshotMisses()
+	shared := 0
+	for id := range currentIDs {
+		if !retainedIDs[id] {
+			continue
+		}
+		if _, ok := db.loadLeafGenerationSubtreeStats(id); !ok {
+			t.Fatalf("unchanged reachable page %d lost its cached totals", id)
+		}
+		if secondIDs[id] {
+			t.Fatalf("unchanged reachable page %d missed the cache", id)
+		}
+		shared++
+	}
+	if shared == 0 {
+		t.Fatal("fixture has no unchanged reachable cached pager subtree")
 	}
 }
 
