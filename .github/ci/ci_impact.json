@@ -1527,7 +1527,7 @@
         },
         "workflow_dispatch": null
       },
-      "git_blob": "6ed5157fa65e3fca837f20642f50202e0b020ae8",
+      "git_blob": "fe2bfa0fc0fbe28eba4a0407440ec85e890f400e",
       "jobs": {
         "construct": {
           "checkout": [
@@ -1546,7 +1546,7 @@
           ],
           "environment": {
             "C4_HEAD": "${{ github.event.pull_request.head.sha || github.sha }}",
-            "C4_OUTPUT": "${{ runner.temp }}/cow-c4-${{ github.run_id }}-${{ github.run_attempt }}",
+            "C4_OUTPUT": "/tmp/cow-c4-${{ github.run_id }}-${{ github.run_attempt }}",
             "PYTHONDONTWRITEBYTECODE": "1"
           },
           "matrix": null,
@@ -1555,7 +1555,7 @@
           "runs_on": "ubuntu-latest"
         }
       },
-      "sha256": "4e807e7fa114fcf24bdb3f8747e620ac99a623dc5efdfcb37a5d028649a8eea2"
+      "sha256": "37b220a59e580bfa2040c1fad6f76a1104e66ddadd7319b24fd232e918205492"
     },
     "format.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

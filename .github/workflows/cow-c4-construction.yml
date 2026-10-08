@@ -27,7 +27,7 @@ jobs:
     timeout-minutes: 360
     env:
       PYTHONDONTWRITEBYTECODE: '1'
-      C4_OUTPUT: ${{ runner.temp }}/cow-c4-${{ github.run_id }}-${{ github.run_attempt }}
+      C4_OUTPUT: /tmp/cow-c4-${{ github.run_id }}-${{ github.run_attempt }}
       C4_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v4
