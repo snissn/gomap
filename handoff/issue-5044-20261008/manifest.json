@@ -1,0 +1,1769 @@
+{
+  "schema": "cow-5044-host-migration-handoff-v1",
+  "archive": {
+    "file": "recovery-bundle.tar.gz",
+    "bytes": 11905750,
+    "sha256": "1816db940b1a56a222231fbec1d306d7ac0a803d4ef937b8879f7226e35e0132"
+  },
+  "created_utc": "2026-10-08",
+  "code_heads": {
+    "5080": "04fd2951ac56af0e0473c4037e71f2bd81612f29",
+    "5082": "d7328c212285031e3b5dcb76573c5491e1f918fe",
+    "5047": "72d7dcda2ad4922157e61ba8229f283c106579e9"
+  },
+  "entries": {
+    "pr5082-cow-boundary-budget-preparation-r1/candidate/.github/ci/ci_impact.json": {
+      "bytes": 108513,
+      "sha256": "dc5befb0130d9599e3b5a3267bdf275beef0a58d9b71f8bb71cc86e853985161",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/candidate/scripts/cow_c3_read/README.md": {
+      "bytes": 43305,
+      "sha256": "96611448b4394bb5d230d8b1654e4161eab03c2105058ed104f720a1f74dc201",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/candidate/scripts/cow_c3_read/c4_contract_test.py": {
+      "bytes": 14605,
+      "sha256": "b1a5cacad951dcf77f042e93746175ef2d0b098538beabc22935946cf2ebf8bc",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/candidate/scripts/cow_c3_read/c4_packet_smoke.py": {
+      "bytes": 21308,
+      "sha256": "74dd1c978f9e60a90f91672495868ef7db13e2a3b5cafed286bafa90042ec252",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/candidate/scripts/cow_c3_read/c4_protocol.py": {
+      "bytes": 36621,
+      "sha256": "3f07f09cbbd07701767dd86521e68ccaf5c6909d523744898ae3f8e1b92885c0",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/candidate.patch": {
+      "bytes": 17336,
+      "sha256": "35e62b223104375848e54934d63e472635235767d130252e4551fbbe24630f39",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/controls/real_raw_green.py": {
+      "bytes": 4725,
+      "sha256": "e90096f039034059fe3a1c0699a7e895561ddf59ff80122cc1a18f58cb6e1d69",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/controls/real_raw_red.py": {
+      "bytes": 1526,
+      "sha256": "f96660c6d6498111de2ad7b3565b6932a226f0b7402126db75ef1fa1f36be032",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/controls/refresh_inventory.py": {
+      "bytes": 1392,
+      "sha256": "b340271c00e9832c7d35f56d85a85d3448030b9cd7bf9766471222cfdcc0f8aa",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/controls/refresh_inventory_final.py": {
+      "bytes": 1404,
+      "sha256": "e09d9ea72015b86e7fefd74836556cb7337867e5fc47eb6fbfbc9537ce7175ef",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/controls/run_focused.py": {
+      "bytes": 1456,
+      "sha256": "aa8ff1bb1455b4d2cbf64725c11e1efee55f65bedcd8ba6461096e8f6f9f37a1",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-candidate.patch": {
+      "bytes": 17484,
+      "sha256": "0ac0b64e85f5a0ea510ef18426a39007ec08458d38dde4931ba0a020c4be4def",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-protected-go-module-object-map.json": {
+      "bytes": 589024,
+      "sha256": "10b3710bc46f6333840133ca58debea91252b6dcaffb9aa55915cfcdfb46bf03",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/.github/ci/ci_impact.json": {
+      "bytes": 108513,
+      "sha256": "5fedac227ac49c1ba9cd05d390cd9a335f81f466ea9e518bd5378e0790c6b417",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/README.md": {
+      "bytes": 43305,
+      "sha256": "96611448b4394bb5d230d8b1654e4161eab03c2105058ed104f720a1f74dc201",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/analyze.py": {
+      "bytes": 12305,
+      "sha256": "8b576da241cc1fc1d4b6c2a2cb3f66b0825e30dd811857af1fa0f3f027c207b2",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/build.py": {
+      "bytes": 21092,
+      "sha256": "cfe1eab3b9eecdd5957a92e29a636401f7ea1efc546fc7c88e51776803e5f1d6",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/c4_analyze.py": {
+      "bytes": 5643,
+      "sha256": "83bc6efed0ea3573f1ebeada432c99838ec06a97d47fa4e2483353a6e09dccf3",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/c4_contract_test.py": {
+      "bytes": 14750,
+      "sha256": "1966d5a9c3c803f9648776cfb6a680a9eea44b217ea6f79ec5db762956a7e153",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/c4_packet_smoke.py": {
+      "bytes": 21308,
+      "sha256": "74dd1c978f9e60a90f91672495868ef7db13e2a3b5cafed286bafa90042ec252",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/c4_protocol.py": {
+      "bytes": 36621,
+      "sha256": "3f07f09cbbd07701767dd86521e68ccaf5c6909d523744898ae3f8e1b92885c0",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/collect.py": {
+      "bytes": 29122,
+      "sha256": "c21db70c2f94bd480ef2320fdc3104f3ba4fcd48c16c44778fe40a53dd690a2a",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/prepare_c4_config.py": {
+      "bytes": 1894,
+      "sha256": "3c6f41ed7c55939d47ace500ff32f8d96b5764752f9074fad691e3a88b8798a4",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/prepare_config.py": {
+      "bytes": 3553,
+      "sha256": "2b86eba764f860b95d19726a4b87bc749ac14cdb6f5936e44ebb7f09c5057dd0",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source/scripts/cow_c3_read/protocol.py": {
+      "bytes": 64519,
+      "sha256": "a47a147d1b5d0751f16ebb0758e1f0a207c39cf325966a28b8c4388ade5b5d3a",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/final-source-binding.json": {
+      "bytes": 5823,
+      "sha256": "9a83916e99fb57fca2207ef772d66799c83abb0525edbbe30aa5f2e943404017",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/focused-validation.json": {
+      "bytes": 1720,
+      "sha256": "3e4fa406e9723e506930db81521188813e7aed8d017067b93a456f763349356b",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/handoff-commands.json": {
+      "bytes": 2495,
+      "sha256": "4b90f4413549afb692557960497c13b77112ca04641aab3dd41d034dd3dcf5d3",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/handoff-commands.md": {
+      "bytes": 1964,
+      "sha256": "9d1394b44ecd4f82c5d8123e1f58349df847cf67183b238ffe22faf74d1b56dd",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/origins/.github/ci/ci_impact.json": {
+      "bytes": 108513,
+      "sha256": "9b522bf96c6857b4596e1f48d158f20c92e77d3df229f0e8b2b1f35c67b867f5",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/origins/scripts/cow_c3_read/README.md": {
+      "bytes": 42648,
+      "sha256": "043ab9ed4aeed81329460e89f3156af9a0adc60fbc7d21f51db87ce4b0769da2",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/origins/scripts/cow_c3_read/c4_contract_test.py": {
+      "bytes": 8967,
+      "sha256": "22f2d35eeed936c2e5c15d856c99b96e7ad9650e035275fbf837bb61151f7c4c",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/origins/scripts/cow_c3_read/c4_packet_smoke.py": {
+      "bytes": 19298,
+      "sha256": "b3ae80e465dc4ca12af809adf2dfa7662f6d3d09e90d03cb6bf737211192dea3",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/origins/scripts/cow_c3_read/c4_protocol.py": {
+      "bytes": 33368,
+      "sha256": "3467aad54f348e3d600dd780e3b50c76218e490a000febefbb8ea79df7141e19",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/production-semantics-and-controls.json": {
+      "bytes": 4047,
+      "sha256": "0751826c5ccaf6b23c13dc145faff80681f163dfb060ed756441e5eef54c8338",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/protected-go-module-object-map.json": {
+      "bytes": 589024,
+      "sha256": "4be39e9b8086d22a71967fd3230c31270b7abcba5c4ec25de098ebb3601cc201",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/green-receipt.json": {
+      "bytes": 731,
+      "sha256": "87f28a2ace6922adcc1c19e6eba7b83085e480fbf752d20860197937068f17cc",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/green-stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/green-stdout.txt": {
+      "bytes": 74,
+      "sha256": "1d54ba0176d1775596c6c28ebe8a42909e8adbc98c255f757633f759c02fd4df",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-check-receipt.json": {
+      "bytes": 835,
+      "sha256": "9f15f9357fff7164d6ebba6effb17c255ba330ee4cad5f510b26686ff7f7def4",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-check-stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-check-stdout.txt": {
+      "bytes": 83,
+      "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-final-check-receipt.json": {
+      "bytes": 826,
+      "sha256": "5679da56ad1de76e3cc40c7ca11dcadf00fcd5f64db0280178ca3a67b9ffce61",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-final-check-stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-final-check-stdout.txt": {
+      "bytes": 83,
+      "sha256": "4a90d77e83312d4e40674133586a5899aabb38a922cf1c63a5c628d4954a0baa",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-final-refresh-receipt.json": {
+      "bytes": 811,
+      "sha256": "290123b38f331bab6c1008d8829fe1fdc68ee07e4dda562e987c4c032c4da36d",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-final-refresh-stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-final-refresh-stdout.txt": {
+      "bytes": 79,
+      "sha256": "1f028cd2be7f018e3d8a3b1963b91a5cc87ba45c82de6f812a6e0a2dc3419056",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-refresh-receipt.json": {
+      "bytes": 812,
+      "sha256": "3992ae73ad4b7a1bcf56a7342361cd2c1d6c249b6159b008d308bf5c6bc50f34",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-refresh-stderr.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/inventory-refresh-stdout.txt": {
+      "bytes": 79,
+      "sha256": "1f028cd2be7f018e3d8a3b1963b91a5cc87ba45c82de6f812a6e0a2dc3419056",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/original-actual-cow-lifecycle-binding.json": {
+      "bytes": 6214,
+      "sha256": "8d12275f0bf8fd2eaa9410a09738e86033c69ad0f72416cc061d7c4b82fa9815",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/original-actual-cow-lifecycle.json": {
+      "bytes": 4562529,
+      "sha256": "aa7859a8f91695feb3887161c78e410d7519babbea9a8e9d4099186f968e281d",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/unit-final-receipt.json": {
+      "bytes": 611,
+      "sha256": "fae6e011539621f6c9b764622fd84778fa404f17d88b96ab9bdec8b86916f2e0",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/unit-final-stderr.txt": {
+      "bytes": 118,
+      "sha256": "1a21518e19d98b9bfbea8e82f50262c4cb03dfe047a97df6db574b6b574664d9",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/unit-final-stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/unit-first-failure-observation.json": {
+      "bytes": 612,
+      "sha256": "3d9f9b4ba52b9dfbcb33ef1a8b30bf61acedbe1f0be08f9a2708f393db0469a4",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/unit-receipt.json": {
+      "bytes": 648,
+      "sha256": "67ba29a88dc7aa0cbc2bfdd250f6260fc3e125707afa6943f1f9ff158e49b8cf",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/unit-stderr.txt": {
+      "bytes": 118,
+      "sha256": "aae4a5a7b9dc33c857c1fc35ad57ff9490259af62c782dede86a81cfcb709196",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/raw/unit-stdout.txt": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/real-raw-red-result.json": {
+      "bytes": 910,
+      "sha256": "ec5baa31721829358bcbc29f0913a35fa385ddf18141fb113e5c99ebb9406f4c",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/review-report.md": {
+      "bytes": 3075,
+      "sha256": "8cf3a3b3b3184499f0c732d60ed4ddad96d4b0497a394ee543cf8b7be6109af8",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/source-binding.json": {
+      "bytes": 2457,
+      "sha256": "69b88e95430114b8b99ef97bc2da191e00021bb7a38916071ecd7d03710b97c7",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/targeted-green-result.json": {
+      "bytes": 9201,
+      "sha256": "fc9f4b535734350421275459dbbce9a55ee32f4d585b74f321e8392b62df31e1",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/unchanged-applicable-source-snapshot.json": {
+      "bytes": 263906,
+      "sha256": "2587711f3068123331eb1db8004d8a0cf814e3e61b7565a52391919054e4ee77",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/freeze.json": {
+      "bytes": 12515,
+      "sha256": "dc415e7f32963cc43c97e1accc26e9139c7219f3216a25dbd2d484ff60d34933",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "pr5082-cow-boundary-budget-preparation-r1/author-receipt.json": {
+      "bytes": 6614,
+      "sha256": "653daad4c47b5ac62739baf48bb14a515e248a7be0094b41a5fcb357daac3e35",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "d732 source preparation; 19/41 controls pass; independent review and fresh v3 pending"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/bundle-index.json": {
+      "bytes": 6699,
+      "sha256": "68ffb82add87827131f5b8b3fd7520e234cf2f606b6a868ecdee5a8678951c8f",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/c4_affected_runner.py.patch": {
+      "bytes": 12427,
+      "sha256": "54183dde77ab057b974640508089414aad8c28eb6bc988cf642985625798c5b4",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/c4_source.py.patch": {
+      "bytes": 11039,
+      "sha256": "8b3d49a23dd578d9c9f82a8b699f6777bb91295e2d635c82fff2d41f49b9b161",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/close_packet.py.patch": {
+      "bytes": 1838,
+      "sha256": "4385108b5692531a5918ed17ce0d9f889e4b1ef95997005db20ae12174154eae",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/config.draft.json": {
+      "bytes": 107418,
+      "sha256": "6de77a1d110ddf2fbd54874cef0e9a8cbf34d9848c8d185f6f518d774b8a7551",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controller-binding.draft.json": {
+      "bytes": 834,
+      "sha256": "17e6de625480cd6e9a3457a8737fa5e0cd74aad9ed3fb7967e863cc71da7aa55",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controllers/c4_affected_runner.py": {
+      "bytes": 19005,
+      "sha256": "f536d33dcfcef6dc8761d0629d2b27785b5263119b39230227f4d256ae981aa0",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controllers/c4_source.py": {
+      "bytes": 21631,
+      "sha256": "d7c93623498d9b2d0c4e686cb5269f7aa9d3e9a4b0d6c0b242884f8fd1099df2",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controllers/close_packet.py": {
+      "bytes": 7178,
+      "sha256": "c0eb7c9a69db9a658a120f92c80f892a3965381729397e62a0caaf62e3fce029",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controllers/custody.py": {
+      "bytes": 10814,
+      "sha256": "c7a6ac8398aa15691376db28fca2dcb4bb93efcbc4e3ea6dee9974660cbc96ca",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controllers/remote_execute_once.py": {
+      "bytes": 6133,
+      "sha256": "59a19b6f507eb66f831f871b7973c770cba78684c0f1764950442fa9a2e553ed",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controllers/remote_outer.py": {
+      "bytes": 1866,
+      "sha256": "9d7d70df68f1d96b9bfcd2c692ee2556b2f05547ed78492cbdff691602b1939d",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controls/source-controls-result.json": {
+      "bytes": 8368,
+      "sha256": "b08a5899f7b1f75e9cb916114094d9bbfad3d3e727b0db91758da070760b502a",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/controls/source_controls.py": {
+      "bytes": 9464,
+      "sha256": "1c970db3f6aae63ae8441852d42851ec45046aa8836a0fb8452a0c1da45665dc",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-C4-eleven-script-bindings.json": {
+      "bytes": 3147,
+      "sha256": "ff2634216357396aecb64f141cede8476454823d47afcacc4b1bd5d43502c9f7",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-applicability.json": {
+      "bytes": 3165,
+      "sha256": "b53c3af5d9dc9ce95b59a39695fdfe62fdd113f0855306f4119f3396d6c4fdfa",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/c4-fixture-normal-expanded.receipt.json": {
+      "bytes": 787,
+      "sha256": "ab09e107670f546c99ea1c1772d46e899c6512cfc2c0d79f30b79f30321c0ee3",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/c4-fixture-normal-expanded.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/c4-fixture-normal-expanded.stdout": {
+      "bytes": 71869,
+      "sha256": "ae14f0c906d553defa0e3edb2675afde4b178a466c64e9169a9b6c54869320ff",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/c4-fixture-race-expanded.receipt.json": {
+      "bytes": 803,
+      "sha256": "69e9182e5d41a697630cddb738a996a84d3d3cea45193590d40863d50cab0d5c",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/c4-fixture-race-expanded.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/c4-fixture-race-expanded.stdout": {
+      "bytes": 71863,
+      "sha256": "35e476c97d70a42b4e8a2321f8a1fda57a750d0bae8dce84e573a12037f8a8c8",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/freeze.json": {
+      "bytes": 9530,
+      "sha256": "fcee1854f242b3cdcd1a735ad1f614ab139b4905db2aeb24b9aca48683670546",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/functional-local-result.json": {
+      "bytes": 1908,
+      "sha256": "40b52f5826ce6fddb080c777dbf557b09b1048763b901193d775607637b76df7",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/independent-acceptance.json": {
+      "bytes": 1536,
+      "sha256": "7ec7105cf046a4de4919d10300c0cc9546f1e5563c997d6ab520a1e67bf80aba",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/root-acceptance.json": {
+      "bytes": 949,
+      "sha256": "c8ca872af54531d50bb4a18f6cf6969c275c11f0af0afe467429d7266de29cf7",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-inputs/source-binding.json": {
+      "bytes": 1225,
+      "sha256": "f59e7811d41d038e2cf51cdf12f9d49e52a2e838288aa02de129ed73b9461936",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/current-functional-source-applicability.json": {
+      "bytes": 68286,
+      "sha256": "29815318075ccb885b3093e3550c5dd38d73d935a032f771234a1d00d2a62585",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/derive_controllers.py": {
+      "bytes": 11686,
+      "sha256": "ec5655a80bd31b5091b141c4b1ebfce1e056a93208a77b5ff1e08d7862be0c5d",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/expected-current-compiler-closure-origin.json": {
+      "bytes": 847,
+      "sha256": "42137f5fb2a8805e840a3a3b21129ec48bdf4bc0878ea7fbaf09d2b31864aa05",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/expected-current-compiler-closure.json": {
+      "bytes": 319104,
+      "sha256": "b97a256a388a295f7695c7dbd978be264f02d038cfe35d08ce8488628da53098",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/finish_derivative.py": {
+      "bytes": 15459,
+      "sha256": "eb8fa60d8f6608e245b29b15adcd997fff6d82c74f79f03d68494cbd99b25ac9",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/full-current-Git-mode-object-inventory.json": {
+      "bytes": 2071945,
+      "sha256": "2d18a38192eff9f039e6aa769608580e1cbe9a0b3878cbc76dc919bc7732e05c",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/b8-full-tree.receipt.json": {
+      "bytes": 480,
+      "sha256": "3d704c19a000582e8ae354e3fcb09fd18abd6a7fee851e461cb658c8b56493e6",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/b8-full-tree.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/b8-full-tree.stdout": {
+      "bytes": 1335509,
+      "sha256": "d7c1143496a1716cc059158fdde2e8379d957cb4c0f4ad1d7f3f32d5db7cc2d0",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/batch-input": {
+      "bytes": 17302,
+      "sha256": "25abbd44e6f82447bd2489f5533bbe1078ccad5f0bfa6fdcd2554c83ea1f6064",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/current-tree-r2.receipt.json": {
+      "bytes": 457,
+      "sha256": "feed6bf63b09b1f9ced64eb7dfb3f62dce6f3d84f752eee6f3950b01d6c1196c",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/current-tree-r2.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/current-tree-r2.stdout": {
+      "bytes": 41,
+      "sha256": "4cd5e17ca904e61456450cfc747304167e5bd77832547e13d4420eb03b91d5ae",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/full-tree.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/full-tree.stdout": {
+      "bytes": 1336331,
+      "sha256": "aa8f1863331e36235774329289eb3182aab649f8f665b5731aeefebfcad40352",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/selected-blobs.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/selected-blobs.stdout": {
+      "bytes": 7950119,
+      "sha256": "b94267a1918b47d1c3125bdc3e37c43ab40968b73b591e9daeeb870316006773",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/selected-delta.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/tree-pin.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/git-observations/tree-pin.stdout": {
+      "bytes": 41,
+      "sha256": "4cd5e17ca904e61456450cfc747304167e5bd77832547e13d4420eb03b91d5ae",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/initial-proof-failure.json": {
+      "bytes": 249,
+      "sha256": "06f871195533d9b5891b4b1e3102cd7a11003d88b03de4cbd9956eefea2145ef",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/controller-binding.draft.json": {
+      "bytes": 834,
+      "sha256": "ba9edee83eb74474fb9a32bc0c06d2e1211f8f2213aec7c8e4a57bb7a31e2cfa",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/controllers/c4_affected_runner.py": {
+      "bytes": 17254,
+      "sha256": "9efb67f0d063a403f38237cf5e7bf7c7aecd0f3e4c8ef08f3078028c8cc5c0a3",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/controllers/c4_source.py": {
+      "bytes": 14254,
+      "sha256": "91d7e9ab98338a6ce5ab5fdc41090fce9a128bc7158aa849bf817d020da0d2db",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/controllers/close_packet.py": {
+      "bytes": 6897,
+      "sha256": "0881c0f1c84e957a86931eea6bb05566c4c6202ae20695ec4267f5d060fcea9b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/controllers/custody.py": {
+      "bytes": 10814,
+      "sha256": "c7a6ac8398aa15691376db28fca2dcb4bb93efcbc4e3ea6dee9974660cbc96ca",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/controllers/remote_execute_once.py": {
+      "bytes": 6133,
+      "sha256": "59a19b6f507eb66f831f871b7973c770cba78684c0f1764950442fa9a2e553ed",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/controllers/remote_outer.py": {
+      "bytes": 1866,
+      "sha256": "9d7d70df68f1d96b9bfcd2c692ee2556b2f05547ed78492cbdff691602b1939d",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/current-AGENTS.md": {
+      "bytes": 4696,
+      "sha256": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/current-C4-eleven-script-bindings.json": {
+      "bytes": 3366,
+      "sha256": "903569f87d6b7c906262924d143568ebfe6ee51ce6eca91159441f938265cbbb",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/current-C4-fixture-identity.json": {
+      "bytes": 1304,
+      "sha256": "5b8c44976a1dda2fe22ad5fea8bd9ad98f89872a406d7791adfbea64ee5d796a",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/current-README.md": {
+      "bytes": 42648,
+      "sha256": "043ab9ed4aeed81329460e89f3156af9a0adc60fbc7d21f51db87ce4b0769da2",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/current-c4_contract_test.py": {
+      "bytes": 8967,
+      "sha256": "22f2d35eeed936c2e5c15d856c99b96e7ad9650e035275fbf837bb61151f7c4c",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/freeze.json": {
+      "bytes": 10503,
+      "sha256": "08c5b0d268c173ed7f555181655441499e8fea719c912f51ea11b943c2139cfc",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/independent-plan-freeze.json": {
+      "bytes": 1492,
+      "sha256": "54c1609f2fa78b549e3ed344208b6492301ba6899d7d900a50b69163344aaf36",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/independent-plan-plan.json": {
+      "bytes": 10976,
+      "sha256": "ee7959e3b325897fdf254031493e12e4b13c57e2a1bd4dc06b4406ab2e0c3231",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/independent-plan-plan.md": {
+      "bytes": 4788,
+      "sha256": "701502eb14d7a5ce6dfac744e708254f814d5fa0cafde019fe0ff99964f05825",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/independent-plan-receipt.json": {
+      "bytes": 898,
+      "sha256": "631702c24dca96cc5c82ba12e5e801ae9b8e80a7bc449572af23a443ba4ac9ff",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/path-relocation.draft.json": {
+      "bytes": 945,
+      "sha256": "c6a618bec3b316c426791ccafda9841f009f48b16e59da619695459c043b59be",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/prior-accepted-P4-trimpath-acceptance.json": {
+      "bytes": 50122,
+      "sha256": "07d097e21e1b1fdcdd8411ca27fc67460e70069de0bf0c489beb13cfb9bd9909",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/prior-accepted-P4-trimpath-build-receipt.json": {
+      "bytes": 5625,
+      "sha256": "3754385c0d95c0aa6cc8278cd0d4b8e2e79770960733ad85bb6d9032f7cf18c1",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/prior-accepted-P4-trimpath-closure.json": {
+      "bytes": 10752284,
+      "sha256": "f4ff9c602883115f4510e22b7bf2a03ce58a05a88f9e9eab3db2310fcc97cd7b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/prior-original-C4-build-receipt.json": {
+      "bytes": 6017,
+      "sha256": "d5303e1c1716936ff759b1acb4fc6edd508787b2a2b9cb9fac7dde7286fd7050",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/prior-original-C4-compiled-input-closure.json": {
+      "bytes": 546576,
+      "sha256": "78ac87b5c2272583405351b2de5f0390637e0379996e99f4b9f4e7c3f7f72a9b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/prior-prior-C4-acceptance.json": {
+      "bytes": 4608,
+      "sha256": "c64b6493cc5153c7625397f7ac7301c8fcb5de17c7703faab0dbe3f9657a1415",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/prior-selected-compiler-equality.json": {
+      "bytes": 104133,
+      "sha256": "3436a78eecb729028a17ca90648015732c3ac2b723d90a003a0446ee1d46214e",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/root-authorization.pending.json": {
+      "bytes": 797,
+      "sha256": "3ff1ff93324a45b08c45c41e3d786463e7bce1abf79390b916f042a4300a9b9d",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/root-source-products.json": {
+      "bytes": 1356,
+      "sha256": "2921f6b16f9e54b168b9449934492369b226755db423243bd639ee201557c534",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/seal_c4_preparation.py": {
+      "bytes": 12505,
+      "sha256": "7471ed5ad9568122ed9a6d2767a3217dc17cb2feff9f59700823894bbb619728",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/settings.draft.json": {
+      "bytes": 1930,
+      "sha256": "8c2a987def329974e182cfac37fb05dd45e0cc91a74fbd062737b35dc83a79fd",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/source-binding.draft.json": {
+      "bytes": 5228,
+      "sha256": "efc923a70d7c59ad07785eab6729aa8d4c3fa2a209c4012da984a55dc361892c",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/origins/source-products.corrected.pending.json": {
+      "bytes": 1309,
+      "sha256": "4f11c5cc6ef8a5a05a6fbff18ce1ee04c134f0d8186aac1ca0de047b1753bb9b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/path-relocation.json": {
+      "bytes": 972,
+      "sha256": "cad4cd96147e33620cafe93a9d0d687614df3b0d5cc05b8eb78923704f8d9c5b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/plan.json": {
+      "bytes": 5385,
+      "sha256": "a8173d8aed75cf74b0fb10689dcf18f857ba1d48dd7951def404a3e6a2ec029a",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/plan.md": {
+      "bytes": 1309,
+      "sha256": "649b9ca3c338f30b070040eb218618b1e4838624232f3a359be0da32517f3f34",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/preparation-local-result.json": {
+      "bytes": 745,
+      "sha256": "86e75f581ea64dc4c279cf4141548178bf1c565d70b885e37b71c49cc639fb4e",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/prior-scope/accepted-P4-trimpath-acceptance.json": {
+      "bytes": 50122,
+      "sha256": "07d097e21e1b1fdcdd8411ca27fc67460e70069de0bf0c489beb13cfb9bd9909",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/prior-scope/accepted-P4-trimpath-build-receipt.json": {
+      "bytes": 5625,
+      "sha256": "3754385c0d95c0aa6cc8278cd0d4b8e2e79770960733ad85bb6d9032f7cf18c1",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/prior-scope/accepted-P4-trimpath-closure.json": {
+      "bytes": 10752284,
+      "sha256": "f4ff9c602883115f4510e22b7bf2a03ce58a05a88f9e9eab3db2310fcc97cd7b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/prior-scope/current-v3-source-acceptance.json": {
+      "bytes": 12087,
+      "sha256": "f379f5cdfaec708fc662b0fa262e0481d5c536b8456849c475a3f29cb9d02495",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/prior-scope/original-C4-build-receipt.json": {
+      "bytes": 6017,
+      "sha256": "d5303e1c1716936ff759b1acb4fc6edd508787b2a2b9cb9fac7dde7286fd7050",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/prior-scope/original-C4-compiled-input-closure.json": {
+      "bytes": 546576,
+      "sha256": "78ac87b5c2272583405351b2de5f0390637e0379996e99f4b9f4e7c3f7f72a9b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/prior-scope/prior-C4-acceptance.json": {
+      "bytes": 4608,
+      "sha256": "c64b6493cc5153c7625397f7ac7301c8fcb5de17c7703faab0dbe3f9657a1415",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/analyze.py": {
+      "bytes": 12305,
+      "sha256": "8b576da241cc1fc1d4b6c2a2cb3f66b0825e30dd811857af1fa0f3f027c207b2",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/build.py": {
+      "bytes": 21092,
+      "sha256": "cfe1eab3b9eecdd5957a92e29a636401f7ea1efc546fc7c88e51776803e5f1d6",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/c4_analyze.py": {
+      "bytes": 5643,
+      "sha256": "83bc6efed0ea3573f1ebeada432c99838ec06a97d47fa4e2483353a6e09dccf3",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/c4_integer_domain_smoke.py": {
+      "bytes": 6966,
+      "sha256": "9f47ea506478fd8d46503fa110985de9a972404ae4f2fa645646c700d5d2a9b0",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/c4_packet_smoke.py": {
+      "bytes": 19298,
+      "sha256": "b3ae80e465dc4ca12af809adf2dfa7662f6d3d09e90d03cb6bf737211192dea3",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/c4_protocol.py": {
+      "bytes": 33368,
+      "sha256": "3467aad54f348e3d600dd780e3b50c76218e490a000febefbb8ea79df7141e19",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/collect.py": {
+      "bytes": 29122,
+      "sha256": "c21db70c2f94bd480ef2320fdc3104f3ba4fcd48c16c44778fe40a53dd690a2a",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/host_isolation_test.py": {
+      "bytes": 17690,
+      "sha256": "033148c38bdd568913b7d34d307124ad3fe66dbb99a0d5bc0d9e9e3ad2d464eb",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/prepare_c4_config.py": {
+      "bytes": 1894,
+      "sha256": "3c6f41ed7c55939d47ace500ff32f8d96b5764752f9074fad691e3a88b8798a4",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/prepare_config.py": {
+      "bytes": 3553,
+      "sha256": "2b86eba764f860b95d19726a4b87bc749ac14cdb6f5936e44ebb7f09c5057dd0",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/retained-scripts/protocol.py": {
+      "bytes": 64519,
+      "sha256": "a47a147d1b5d0751f16ebb0758e1f0a207c39cf325966a28b8c4388ade5b5d3a",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/root-authorization.pending.json": {
+      "bytes": 976,
+      "sha256": "0386d0807799982d6cd054eef79a458539bb6a4b24d915ab241494d023f5d1b7",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/root-source-products.json": {
+      "bytes": 1770,
+      "sha256": "18cac5db6eaacabf0cdff7d40f40eb57426d6723039cb3fb22231c7e12d8b678",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/seal_c4_preparation.py": {
+      "bytes": 12817,
+      "sha256": "fde659044bb964428c2feece08bab68ee540ec39e2a387a8f740f21c663f1945",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/selected-Go-delta.patch": {
+      "bytes": 3157,
+      "sha256": "a7cc070863dc5179b0792f06ecb3ac589ea7609224ec6d724a4d05984459288d",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/selected-current-compiler-inputs.json": {
+      "bytes": 104509,
+      "sha256": "4515caa2933b50e3976314eb29be914b43b515c37abdc6c740e400c55f2b0d89",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/settings.draft.json": {
+      "bytes": 2114,
+      "sha256": "5ea4195d97c4fbda3dc6a2b9ddd0d389b8fce595be97389d49a0a0af5c6e3f1b",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/source-binding.draft.json": {
+      "bytes": 6253,
+      "sha256": "2129499f8ebe66dc5f4876dee8ed7806ef3e9fc62359cddfb6485d37990beded",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/source-provision-self-contained-c4.py": {
+      "bytes": 6640,
+      "sha256": "b8405cd9d6ff1c960467428b1ad2a108be00edbcca307f5884d781c9a8c7ca94",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/templates/final-post-C3-applicability.pending.json": {
+      "bytes": 835,
+      "sha256": "22f7644c5f0c987b6cbc90e46483239a5a93ec20da79a81f5ac46f4d24b3dc6d",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/templates/owner-window.pending.json": {
+      "bytes": 612,
+      "sha256": "759f38cf506650f255d36f87136b29759f49780cd0ca825ba9798ee79910821f",
+      "mode": 292,
+      "original_freeze_mode": 420,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/freeze.json": {
+      "bytes": 21353,
+      "sha256": "22b1e0c81f7850c8852506039e25b05229e1ed94c1a30557a9b7aea2d09be68a",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "c4-current-v3-finite-construction-preparation-r1/author-receipt.json": {
+      "bytes": 4888,
+      "sha256": "3f655dfb7b506d8f73de031940ba93894ca98a5d2c43e8607e4e6303b3646230",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "HELD old derivative; rebuild and review at final source before runtime"
+    },
+    "pr5081-current-v3-qualification-plan-r1/issue-5081-comments.json": {
+      "bytes": 6146,
+      "sha256": "9fcc4a9b99f41470aa89146f5d88de46cd24d97d7e3497c4c92c84f9ad7dc29e",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "historical plan; update bindings and add 25 bounds refusals"
+    },
+    "pr5081-current-v3-qualification-plan-r1/issue-5081.json": {
+      "bytes": 31520,
+      "sha256": "4a91abc1797f5efdf3ba41cf96cc8e014503072675bfb324940feaf3a4d934dd",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "historical plan; update bindings and add 25 bounds refusals"
+    },
+    "pr5081-current-v3-qualification-plan-r1/plan.json": {
+      "bytes": 10976,
+      "sha256": "ee7959e3b325897fdf254031493e12e4b13c57e2a1bd4dc06b4406ab2e0c3231",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "historical plan; update bindings and add 25 bounds refusals"
+    },
+    "pr5081-current-v3-qualification-plan-r1/plan.md": {
+      "bytes": 4788,
+      "sha256": "701502eb14d7a5ce6dfac744e708254f814d5fa0cafde019fe0ff99964f05825",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "historical plan; update bindings and add 25 bounds refusals"
+    },
+    "pr5081-current-v3-qualification-plan-r1/receipt.json": {
+      "bytes": 898,
+      "sha256": "631702c24dca96cc5c82ba12e5e801ae9b8e80a7bc449572af23a443ba4ac9ff",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "historical plan; update bindings and add 25 bounds refusals"
+    },
+    "pr5081-current-v3-qualification-plan-r1/freeze.json": {
+      "bytes": 1492,
+      "sha256": "54c1609f2fa78b549e3ed344208b6492301ba6899d7d900a50b69163344aaf36",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "historical plan; update bindings and add 25 bounds refusals"
+    },
+    "issue5076-performance-root-acceptance-r1/accepted-all-original-flag-dispositions.json": {
+      "bytes": 326786,
+      "sha256": "b56c55bee84b9db8593d4fd698b8c80da91b80a4dd6f877fdd810b5c7d2aa213",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "accepted original 756-run decision including adverse and inconclusive costs"
+    },
+    "issue5076-performance-root-acceptance-r1/independent-verification.json": {
+      "bytes": 169,
+      "sha256": "30ac70b5b28bf83b10c3f0f6b17188af962fa9847a94640cf588c83c69d5c0a2",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "accepted original 756-run decision including adverse and inconclusive costs"
+    },
+    "issue5076-performance-root-acceptance-r1/root-decision.json": {
+      "bytes": 5703,
+      "sha256": "b72414583bf4f1ec811b800dc9e7158479aaad5254641dccda9ea5a0b2a2a266",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "accepted original 756-run decision including adverse and inconclusive costs"
+    },
+    "issue5076-performance-root-acceptance-r1/freeze.json": {
+      "bytes": 642,
+      "sha256": "d20f8d60f5acf6a5961f19f795157385625b99147c0da0164b9781e942212903",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "accepted original 756-run decision including adverse and inconclusive costs"
+    },
+    "native-5047-floor-wal-test-preparation-r1/TreeDB-agents.md": {
+      "bytes": 3046,
+      "sha256": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/author-receipt.json": {
+      "bytes": 1522,
+      "sha256": "083dfe52a821b7f6929d5fd96004cf1ebea9b393bfb1c6dab5cf4eb8345cd891",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/candidate.patch": {
+      "bytes": 12214,
+      "sha256": "09cd7c7531283c3ae924cf89c3a5c31419a27cd08d8a9b703cacec2a5f16925b",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/commands.json": {
+      "bytes": 6200,
+      "sha256": "cd143bd76027aa1013a15bd63dec15e00920a6d78240e50cc0376627979e1ca5",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/cow_floor_wal_recovery_external_test.go": {
+      "bytes": 11656,
+      "sha256": "72e963925d4694fbb546ba0f8abfb96876733e31eb2949504f0155388292ad67",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/freeze.json": {
+      "bytes": 5540,
+      "sha256": "0b9e4e8dc2fb95a8a3dd86afe27d8791b58de331cd2dff908ed6c028270bfbb0",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/handoff.md": {
+      "bytes": 2891,
+      "sha256": "4836e84f64be45636414a33bc3b74db22513d2e9e07befc72dbaaee3998fe8ee",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/root-agents.md": {
+      "bytes": 4696,
+      "sha256": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-test-preparation-r1/unchanged-production-map.json": {
+      "bytes": 219317,
+      "sha256": "2db40d17c7d66dd546add49df1647b099c16c73d027bf9052b0e8c49bea08f7b",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/acceptance-receipt.json": {
+      "bytes": 4184,
+      "sha256": "3ebef889c12bbb19f2cad537fbf173d4cc6038406427ffdbabd50480671b7454",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/compiler.json": {
+      "bytes": 367,
+      "sha256": "3c5dea49efa5d3792f397d09c00d39c8c097c4fa1493fe76130c5e6bd2b6433e",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/environment-build-failure.json": {
+      "bytes": 813,
+      "sha256": "2505ccb29b8b5a21768fc57a4e82ef8b7e1f238f6c87204bc470e4ced15271c1",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/environment.json": {
+      "bytes": 4445,
+      "sha256": "3b67c4ef7e336e966b970b056ca6a0efb26c4733e23c841a2ceadd96f4126605",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/execution-results.json": {
+      "bytes": 2536,
+      "sha256": "79d6003e0e2391a679583d9ea1739ebd972a940829e6775ccccf9a07f7475bad",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/failed-attempt-freeze.json": {
+      "bytes": 2725,
+      "sha256": "7ec071a1f3b35064874d1b644ca113281e94a187884808b26fe228ab3571fbe2",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/failed-attempt-receipt.json": {
+      "bytes": 574,
+      "sha256": "e661408220ef00b4af1fc50ceb21b660992baedf3ef2997884e6463458b6f3b7",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/finalize_review.py": {
+      "bytes": 9788,
+      "sha256": "497167a29aa47d104166a564c52e852e69613157ea913898ba4442a17e6a534c",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/focused_validation.py": {
+      "bytes": 4552,
+      "sha256": "2ce08e35a6979dbf9662f44ace0b4d03bdd1f1c3068991d61190c0a56d107f48",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/freeze.json": {
+      "bytes": 14395,
+      "sha256": "ce65a2f0e2edd88c5662c2d21b61d093d71d21470061f48374ad7c72c8d621bd",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/minimal-modulecache-preparation.json": {
+      "bytes": 65067,
+      "sha256": "cc31f71c1e1650b089be0609f0e60684b1791d79b173897929ad040fda4858ce",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/minimal-preparation-filter-correction.json": {
+      "bytes": 272,
+      "sha256": "062211dcb490d3df29bfcca00d9e23f1c9b29eb925c9d48f2728074857d023bf",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/normal-command.json": {
+      "bytes": 1972,
+      "sha256": "8f9859f8dda79b180a6b263a798dbcf48fcf687d9634880cc4ee5ae44c0dbe3e",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/normal-result.json": {
+      "bytes": 2300,
+      "sha256": "acaf6ad3cbf44b8a3e6f753ec234724f50c00770bb8147290c9b9473a614f430",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/preparation-interruption.json": {
+      "bytes": 422,
+      "sha256": "a2c5da1978dbcb410e94833b6e0ebc964b6b93bf6585c624fc8d679e4d390874",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/source-post-verification.json": {
+      "bytes": 253,
+      "sha256": "48d5d9ef9eb35f4cb4c79fb77dd1dd57fdf15739932b301c08d14881b24bc548",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "native-5047-floor-wal-independent-review-r1/source-review.json": {
+      "bytes": 1729,
+      "sha256": "16cd457c49693a1a3c64dff2aeebc6987fc972d6dc20619a7e8b20fc811de54e",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/acceptance-receipt.json": {
+      "bytes": 7157,
+      "sha256": "55f0013e5c6168605c5392e892e518add36f13868c600ea50da38d0c2d17721d",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/auditor-command.json": {
+      "bytes": 738,
+      "sha256": "50c440d621be88e3ef3494885d33dcdc1384836f153a4bdfcb63653414f77196",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/auditor.stderr": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/auditor.stdout": {
+      "bytes": 234,
+      "sha256": "d28c9bd96b670cd3567b878703707e190dcfd9c66518c6797fb37a5b25bba48d",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/contract-applicability.json": {
+      "bytes": 412,
+      "sha256": "f384a6677a39f2a53812cc4e468628ac9fdb4cc08ee25859efbef318428e5c30",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/freeze.json": {
+      "bytes": 2143,
+      "sha256": "2bd6c3379906473f0431a6b50213f0ca411156122d947ab1e3a04b77fa93f24e",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/handoff.md": {
+      "bytes": 523,
+      "sha256": "46146ec59dcd778a9c566e3bc377a4445a41548f0dcecbdc2bb14a34ac11f6b0",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/independent-metric-recalculation.json": {
+      "bytes": 95090,
+      "sha256": "194fabf852607aa2148003940d7edf9ca1a516ffe7550bf4c2ccb0331373c3af",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/independent-proposed-disposition-review.json": {
+      "bytes": 28389,
+      "sha256": "bd1a3d1c674733c8288d5a04013cf23ae37a1ad012b6cc1df419d7d4f5c95fb0",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/metrics-and-policy-disposition.md": {
+      "bytes": 4488,
+      "sha256": "fa8aaa869f64ab4333049ee0f0f0294db1e77db623486ff6c5f903fdd00ad656",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "full-r1/final-independent-review-r1/original-input-descriptors.json": {
+      "bytes": 2144,
+      "sha256": "aae96cd8ef0ca1dad594ed4c973a217fb455fe74d521981899bdfac40a5f670b",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/1-scripts__mvcc_raw_path_gate.md": {
+      "bytes": 1125,
+      "sha256": "9eae3fbbca26880ced1b02be4faaefae7938dd4d4fbcf96496ccdc1d9a7c32bd",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/2-TreeDB__mvcc__cow_c3_admission_test.go": {
+      "bytes": 12610,
+      "sha256": "6d6844fd363b8a90e96ad0d3f78a8dbef5b7f463703f02c2bc7795f6892efcca",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/3-TreeDB__mvcc__cow_c3_read_progress_test.go": {
+      "bytes": 13124,
+      "sha256": "f07f1e9c19af927f78d0d2090b73e3b0c17862edaa5e3a4b5ace24be4d8bfb81",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/4-TreeDB__mvcc__cowbench__cow_c3_public_bench_test.go": {
+      "bytes": 14744,
+      "sha256": "9e67942b57a5c3c64560db427938fe406a17e895ae3d8825e6584ce58ec324ee",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/README-original.md": {
+      "bytes": 7340,
+      "sha256": "b6f9ed553d1ebcb6de8d2a7e6c1328efd4c2cd35ce665fb4a433b0d31bf5b1eb",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/README-staged.diff": {
+      "bytes": 710,
+      "sha256": "86469ded7bdaafd7af8c9371dfa7372d3602ccb58486e932ce4d35e49ba81760",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/README-staged.md": {
+      "bytes": 7349,
+      "sha256": "82d94ea4df8c6f934f233f7efb8d0f4adca3806ea9c62bd2ba3cf011a4d37ce7",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/acceptance-receipt.json": {
+      "bytes": 1735,
+      "sha256": "c8309a7c936d5c23ab860350d86a553c22872fc03d55697fb1bc36580c3303c3",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/freeze.json": {
+      "bytes": 2299,
+      "sha256": "c1b4d2efadec0e383a978e55b14a6f206934d92fe778c483315b51727d7c0aa8",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/full-tree-index-proof.json": {
+      "bytes": 2341,
+      "sha256": "323bb60aedf4a374e1e921e21d1b427ccb96ba95bff9bc50f14cca4752334c9b",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/live-review-threads-original.json": {
+      "bytes": 9755,
+      "sha256": "8d8a491bcb3bbc21686172fb9c99f12ce332efca93d023003a2dc2ae2afe663b",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "pr5080-final-doc-and-thread-independent-review-r1/thread-reply-rationale.md": {
+      "bytes": 1782,
+      "sha256": "2a9f792cfba9a6bec640057795b0375f72cd56a6662aa1b51113ebe9d2e346e7",
+      "mode": 292,
+      "original_freeze_mode": 292,
+      "role": "retained review/source receipt; original identities preserved"
+    },
+    "current-functional/c4-current-c3-conflict-independent-review-r1/acceptance-receipt.json": {
+      "bytes": 1536,
+      "sha256": "7ec7105cf046a4de4919d10300c0cc9546f1e5563c997d6ab520a1e67bf80aba",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "65 normal and 65 race ordinary COW proof; not native reclaim qualification"
+    },
+    "current-functional/c4-current-c3-conflict-publication-r1/root-acceptance.json": {
+      "bytes": 949,
+      "sha256": "c8ca872af54531d50bb4a18f6cf6969c275c11f0af0afe467429d7266de29cf7",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "65 normal and 65 race ordinary COW proof; not native reclaim qualification"
+    },
+    "root-checkpoint/handoff-c4-source-publication-r1.json": {
+      "bytes": 923,
+      "sha256": "aaaf60ffb4c1a5d76abef0fae01d304ee0b7dbe29854dcba311b599300896547",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/current-graph-checkpoint.json": {
+      "bytes": 119458,
+      "sha256": "c84e59fff722417ef6efaa8c4fb45d93f4ceee33b6f3c033995a34e174c75971",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/handoff-pr5080-ci-r1.json": {
+      "bytes": 19961,
+      "sha256": "8775ae939c1a726d9e986bc28d312ea579df9050d18b7e6b6897686241784612",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/pr5080-04fd-live-codex-1820-r1.json": {
+      "bytes": 1393,
+      "sha256": "423ec47e17f7da7adc38b7d9a172953a3ef483a770cb4b8f0a39aaf28ed30ae4",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/windows-cost-command-fixture-issue-draft-r1.md": {
+      "bytes": 2732,
+      "sha256": "8cd7441b9d80d7d02b388337b61ce2e6e0cf6b83e485c951a99d4b277e9fd9af",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/windows-cost-command-edges-readback-r2.json": {
+      "bytes": 275,
+      "sha256": "b1d6dbf489e2e9dbf660abbf5ca892d5cc1dcffb167a5502a12adbe9d43a30ca",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/windows-cost-command-setup-retirement-result-r1.json": {
+      "bytes": 1010,
+      "sha256": "adeda62fd15d85338caa5d7445e23edcb7ab33ad2ddbeb7db5f036d18b1b7e4c",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/native-5047-wal-root-actual-acceptance-r1.json": {
+      "bytes": 2969,
+      "sha256": "d883c1d56447593842b94d58f80e406f4437b5993815144da5e414421e647b7a",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    },
+    "root-checkpoint/pr5082-100ca-windows-nativewire-job.log": {
+      "bytes": 1717999,
+      "sha256": "74e507d01f19ffb48113e0603d01b0bdd231739ca990c66fef4295cb3aa17113",
+      "mode": 420,
+      "original_freeze_mode": 420,
+      "role": "historical handoff snapshot; refresh live GitHub"
+    }
+  },
+  "mode_note": "Some retained payloads made read-only after freeze; original freeze modes and actual archived modes are recorded separately.",
+  "runtime_admission": "NONE; held plans do not authorize host use",
+  "artifact_branch": "recovery only; not an implementation candidate or PR"
+}
