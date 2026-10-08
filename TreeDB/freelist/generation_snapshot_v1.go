@@ -59,7 +59,7 @@ func (a *Allocator) publishedSnapshotGenerationLockedV1(expected GenerationRefV1
 	if a.closed {
 		return nil, ErrCandidateConsumed
 	}
-	if a.cow == nil || a.cow.generation == nil || a.cow.generation.ref != expected || a.cow.prepared != nil || len(a.cow.activated) != 0 || a.cow.waitErr != nil {
+	if a.cow == nil || a.cow.generation == nil || a.cow.generation.ref != expected || a.cow.packet != nil || a.cow.prepared != nil || len(a.cow.activated) != 0 || a.cow.waitErr != nil {
 		return nil, ErrCOWCandidatePrepared
 	}
 	if txn := a.cow.txn; txn != nil && (len(txn.allocated) != 0 || len(txn.abandonedAppends) != 0) {

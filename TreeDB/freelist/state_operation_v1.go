@@ -57,7 +57,7 @@ func noteStateBirthV1(r stateRefV1, stats *FreelistTxnStats) {
 		stats.StateCopyBytes += stateNodeCopyCapacityV1
 	}
 }
-func detachStateOwnedOperationV1(r stateRefV1, _ int, stats *FreelistTxnStats, op *allocationOperationV1) (stateRefV1, error) {
+func detachStateOwnedOperationV1(request AllocationRequestCreditV1, r stateRefV1, _ int, stats *FreelistTxnStats, op *allocationOperationV1) (stateRefV1, error) {
 	if r.zero() {
 		return stateRefV1{}, nil
 	}
@@ -67,23 +67,23 @@ func detachStateOwnedOperationV1(r stateRefV1, _ int, stats *FreelistTxnStats, o
 	if r.pageID() != 0 {
 		return retainStateNodeV1(r), nil
 	}
-	out, err := cloneStateRefOwnedV1(r, true, op.creator, op)
+	out, err := cloneStateRefOwnedV1(request, r, true, op.creator, op)
 	if err != nil {
 		return stateRefV1{}, err
 	}
 	noteStateBirthV1(out, stats)
-	if err = detachChildrenOwnedOperationV1(out, 0, stats, op); err != nil {
+	if err = detachChildrenOwnedOperationV1(request, out, 0, stats, op); err != nil {
 		releaseStateNodeV1(out)
 		return stateRefV1{}, err
 	}
 	return out, nil
 }
-func detachChildrenOwnedOperationV1(r stateRefV1, _ int, stats *FreelistTxnStats, op *allocationOperationV1) error {
+func detachChildrenOwnedOperationV1(request AllocationRequestCreditV1, r stateRefV1, _ int, stats *FreelistTxnStats, op *allocationOperationV1) error {
 	if r.branch == nil {
 		return nil
 	}
 	for i, child := range r.branch.child {
-		owned, err := detachStateOwnedOperationV1(child, 0, stats, op)
+		owned, err := detachStateOwnedOperationV1(request, child, 0, stats, op)
 		if err != nil {
 			return err
 		}
@@ -91,9 +91,9 @@ func detachChildrenOwnedOperationV1(r stateRefV1, _ int, stats *FreelistTxnStats
 	}
 	return nil
 }
-func mutateStateOwnedOperationV1(r stateRefV1, key uint64, _ int, f func(*stateChunk), private bool, stats *FreelistTxnStats, op *allocationOperationV1) (stateRefV1, error) {
+func mutateStateOwnedOperationV1(request AllocationRequestCreditV1, r stateRefV1, key uint64, _ int, f func(*stateChunk), private bool, stats *FreelistTxnStats, op *allocationOperationV1) (stateRefV1, error) {
 	if r.zero() || r.freeCount()+r.retiredCount() == 0 || !r.containsChunk(key) {
-		chunk, err := cloneStateChunkOwnedV1(nil, false, op.creator, op)
+		chunk, err := cloneStateChunkOwnedV1(request, nil, false, op.creator, op)
 		if err != nil {
 			return stateRefV1{}, err
 		}
@@ -109,7 +109,7 @@ func mutateStateOwnedOperationV1(r stateRefV1, key uint64, _ int, f func(*stateC
 		if r.zero() || r.freeCount()+r.retiredCount() == 0 {
 			return owned, nil
 		}
-		branch, err := cloneStateBranchOwnedV1(nil, false, op.creator, op)
+		branch, err := cloneStateBranchOwnedV1(request, nil, false, op.creator, op)
 		if err != nil {
 			releaseStateNodeV1(owned)
 			return stateRefV1{}, err
@@ -126,13 +126,13 @@ func mutateStateOwnedOperationV1(r stateRefV1, key uint64, _ int, f func(*stateC
 	out := r
 	if !private || r.pageID() != 0 || r.ownedRefs() != 1 {
 		var err error
-		out, err = cloneStateRefOwnedV1(r, false, op.creator, op)
+		out, err = cloneStateRefOwnedV1(request, r, false, op.creator, op)
 		if err != nil {
 			return stateRefV1{}, err
 		}
 		noteStateBirthV1(out, stats)
 		if private && r.pageID() != 0 {
-			if err = detachChildrenOwnedOperationV1(out, 0, stats, op); err != nil {
+			if err = detachChildrenOwnedOperationV1(request, out, 0, stats, op); err != nil {
 				releaseStateNodeV1(out)
 				return stateRefV1{}, err
 			}
@@ -150,7 +150,7 @@ func mutateStateOwnedOperationV1(r stateRefV1, key uint64, _ int, f func(*stateC
 		return out, nil
 	}
 	i := chunkNibble(key, int(out.branch.depth))
-	child, err := mutateStateOwnedOperationV1(out.branch.child[i], key, 0, f, private, stats, op)
+	child, err := mutateStateOwnedOperationV1(request, out.branch.child[i], key, 0, f, private, stats, op)
 	if err != nil {
 		releaseStateNodeV1(out)
 		return stateRefV1{}, err

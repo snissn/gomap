@@ -7,22 +7,22 @@ import (
 
 func TestIntrinsicTreeCreatingCreditOutlivesTransferredParent5105(t *testing.T) {
 	a, b := &radixCredit5105{limit: ^uint64(0)}, &radixCredit5105{limit: ^uint64(0)}
-	first, err := newAllocationCreditLeaseV1(a)
+	first, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, a)
 	if err != nil {
 		t.Fatal(err)
 	}
-	chunk, err := cloneStateChunkOwnedV1(nil, false, first)
+	chunk, err := cloneStateChunkOwnedV1(requestForCreator5108(first), nil, false, first)
 	if err != nil {
 		t.Fatal(err)
 	}
 	chunk.setFree(2, true)
-	leaf, err := cloneStateBranchOwnedV1(nil, false, first)
+	leaf, err := cloneStateBranchOwnedV1(requestForCreator5108(first), nil, false, first)
 	if err != nil {
 		t.Fatal(err)
 	}
 	chunk.chunkNo = 0
 	refreshChunkSummaryV1(chunk)
-	other, err := cloneStateChunkOwnedV1(nil, false, first)
+	other, err := cloneStateChunkOwnedV1(requestForCreator5108(first), nil, false, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,11 +34,11 @@ func TestIntrinsicTreeCreatingCreditOutlivesTransferredParent5105(t *testing.T) 
 	leaf.child[1] = stateRefV1{chunk: other}
 	recomputeStateNode(leaf, 13)
 	first.release()
-	second, err := newAllocationCreditLeaseV1(b)
+	second, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	copied, err := cloneStateBranchOwnedV1(leaf, false, second)
+	copied, err := cloneStateBranchOwnedV1(requestForCreator5108(second), leaf, false, second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,18 +68,18 @@ func TestIntrinsicTreeCreatingCreditOutlivesTransferredParent5105(t *testing.T) 
 
 func TestIntrinsicTreeBirthDeniedBeforeAliasOrMutation5105(t *testing.T) {
 	account := &radixCredit5105{limit: ^uint64(0)}
-	creator, err := newAllocationCreditLeaseV1(account)
+	creator, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, account)
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := cloneStateBranchOwnedV1(nil, false, creator)
+	original, err := cloneStateBranchOwnedV1(requestForCreator5108(creator), nil, false, creator)
 	if err != nil {
 		t.Fatal(err)
 	}
 	original.freePages = 23
 	account.limit = account.bytes
 	refs := original.ownedRefs
-	if copied, err := cloneStateBranchOwnedV1(original, false, creator); err == nil || copied != nil {
+	if copied, err := cloneStateBranchOwnedV1(requestForCreator5108(creator), original, false, creator); err == nil || copied != nil {
 		t.Fatal("denied node birth succeeded")
 	}
 	if original.freePages != 23 || original.ownedRefs != refs {
@@ -148,18 +148,18 @@ func TestReusedMetadataJointAdmissionBeforeClaim5105(t *testing.T) {
 			for i := range free {
 				free[i] = uint64(i + 2)
 			}
-			base, err := newFreelistGenerationOwnedV1(1, 512, free, nil)
+			base, err := newFreelistGenerationOwnedV1(nil, 1, 512, free, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			ledger := newReservationLedgerOwnedV1()
-			txn, err := beginCandidateOwnedV1(base, GenerationRefV1{}, ledger)
+			txn, err := beginCandidateOwnedV1(nil, nil, base, GenerationRefV1{}, ledger)
 			if err != nil {
 				t.Fatal(err)
 			}
 			releaseGenerationV1(base)
 			account := &metadataAtomicCredit5105{radixCredit5105: radixCredit5105{limit: ^uint64(0)}, ledger: ledger}
-			creator, err := newAllocationCreditLeaseV1(account)
+			creator, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, account)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -170,7 +170,7 @@ func TestReusedMetadataJointAdmissionBeforeClaim5105(t *testing.T) {
 			if deny {
 				account.limit = account.bytes
 			}
-			_, _, _, ok := txn.tryReusedMetadata(candidateIDFromString("joint-admission"))
+			_, _, _, ok := txn.tryReusedMetadata(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), candidateIDFromString("joint-admission"))
 			if account.calls != beforeCalls+1 || account.afterClaim {
 				t.Fatalf("calls=%d afterClaim=%v", account.calls-beforeCalls, account.afterClaim)
 			}

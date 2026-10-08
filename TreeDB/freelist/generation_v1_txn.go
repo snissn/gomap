@@ -29,14 +29,14 @@ type FreelistGenerationV1 struct {
 }
 
 func NewFreelistGenerationV1(generationID, highWater uint64, free []uint64, retired map[uint64]uint64) (*FreelistGenerationV1, error) {
-	g, err := newFreelistGenerationOwnedV1(generationID, highWater, free, retired)
+	g, err := newFreelistGenerationOwnedV1(nil, generationID, highWater, free, retired)
 	if err == nil {
 		g.markOrdinaryEscapeV1()
 	}
 	return g, err
 }
 
-func newFreelistGenerationOwnedV1(generationID, highWater uint64, free []uint64, retired map[uint64]uint64) (*FreelistGenerationV1, error) {
+func newFreelistGenerationOwnedV1(request AllocationRequestCreditV1, generationID, highWater uint64, free []uint64, retired map[uint64]uint64) (*FreelistGenerationV1, error) {
 	if generationID == 0 || highWater < 2 {
 		return nil, ErrGenerationFormat
 	}
@@ -57,7 +57,7 @@ func newFreelistGenerationOwnedV1(generationID, highWater uint64, free []uint64,
 			return nil, ErrGenerationFormat
 		}
 		seen.Set(id, struct{}{})
-		replaceStateNodeV1(&g.root, mutateChunkForPreparation(g.root, id>>freelistChunkShift, 0, func(c *stateChunk) { c.setFree(id&(freelistChunkSize-1), true) }, true, nil))
+		replaceStateNodeV1(&g.root, mutateChunkForPreparation(request, g.root, id>>freelistChunkShift, 0, func(c *stateChunk) { c.setFree(id&(freelistChunkSize-1), true) }, true, nil))
 	}
 	for id, seq := range retired {
 		if err := validateManagedPageID(id, highWater); err != nil || seq == 0 {
@@ -67,7 +67,7 @@ func newFreelistGenerationOwnedV1(generationID, highWater uint64, free []uint64,
 			return nil, ErrGenerationFormat
 		}
 		seen.Set(id, struct{}{})
-		replaceStateNodeV1(&g.root, mutateChunkForPreparation(g.root, id>>freelistChunkShift, 0, func(c *stateChunk) { c.retired[id&(freelistChunkSize-1)] = seq }, true, nil))
+		replaceStateNodeV1(&g.root, mutateChunkForPreparation(request, g.root, id>>freelistChunkShift, 0, func(c *stateChunk) { c.retired[id&(freelistChunkSize-1)] = seq }, true, nil))
 	}
 	if err := g.Validate(); err != nil {
 		return nil, err
@@ -234,11 +234,11 @@ type FreelistTxn struct {
 	// Cleared at materialization; never copied into immutable generation state.
 	privatePreparation bool
 	ledgerOwned        bool
+	allocationRequired bool // intrinsic credited origin survives ending mutable birth authority
 	changedChunks      *numericRadixV1[uint64, struct{}]
 	replacedMetadata   *numericRadixV1[uint64, struct{}]
 	pruneCursor        uint64 // scheduling only; never reuse authority
 	stats              FreelistTxnStats
-	allocationCredit   AllocationCreditV1
 	creator            *allocationCreditLeaseV1 // immutable transaction-header owner
 	buildCreator       *allocationCreditLeaseV1 // mutable future-allocation owner; one real edge
 	allocatedCreator   *allocationCreditLeaseV1 // actual allocated-vector backing owner
@@ -250,8 +250,11 @@ type FreelistTxn struct {
 // are persistent copy-on-write values, so sharing the root is safe; every
 // mutable slice and map must be copied because candidate materialization
 // consumes and annotates the staged transaction.
-func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
+func (t *FreelistTxn) cloneForAllocatorPrepare(request AllocationRequestCreditV1) (*FreelistTxn, error) {
 	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	if err := t.requireBirthCreditV1(request); err != nil {
 		return nil, err
 	}
 	// Sharing a private root revokes the original's edit permission BEFORE
@@ -273,7 +276,7 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 	if bytes == ^uint64(0) {
 		return nil, ErrNoAllocatablePage
 	}
-	if err := t.buildCreator.reserve(bytes, refs); err != nil {
+	if err := t.buildCreator.reserve(request, bytes, refs); err != nil {
 		return nil, err
 	}
 	clone := *t
@@ -297,12 +300,12 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 	copy(clone.abandonedAppends, t.abandonedAppends)
 	clone.changedChunks, clone.replacedMetadata = nil, nil
 	var err error
-	clone.changedChunks, err = t.changedChunks.CloneWithCredit(t.buildCreator)
+	clone.changedChunks, err = t.changedChunks.CloneWithCredit(request, t.buildCreator)
 	if err != nil {
 		releaseTxnV1(&clone)
 		return nil, err
 	}
-	clone.replacedMetadata, err = t.replacedMetadata.CloneWithCredit(t.buildCreator)
+	clone.replacedMetadata, err = t.replacedMetadata.CloneWithCredit(request, t.buildCreator)
 	if err != nil {
 		releaseTxnV1(&clone)
 		return nil, err
@@ -318,18 +321,18 @@ func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 // There is no identity table: the only extra ownership state is this
 // transaction's flag, within the existing consumed-field padding. The tree
 // detachment replaces the isolation previously required at materialization.
-func (t *FreelistTxn) cloneForPrivateAllocatorPrepare() (*FreelistTxn, error) {
-	clone, err := t.cloneForAllocatorPrepare()
+func (t *FreelistTxn) cloneForPrivateAllocatorPrepare(request AllocationRequestCreditV1) (*FreelistTxn, error) {
+	clone, err := t.cloneForAllocatorPrepare(request)
 	if err != nil {
 		return nil, err
 	}
 	plan := dirtyStateBirthPlanV1(clone.root, 0)
-	operation, err := admitAllocationOperationV1(clone.buildCreator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	operation, err := admitAllocationOperationV1(request, clone.buildCreator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err != nil {
 		releaseTxnV1(clone)
 		return nil, err
 	}
-	root, err := detachStateOwnedOperationV1(clone.root, 0, &clone.stats, &operation)
+	root, err := detachStateOwnedOperationV1(request, clone.root, 0, &clone.stats, &operation)
 	operation.close()
 	if err != nil {
 		releaseTxnV1(clone)
@@ -345,10 +348,10 @@ func BeginCandidateV1(base *FreelistGenerationV1, expectedParent GenerationRefV1
 		return nil, ErrFiniteAllocationExportV1
 	}
 	base.markOrdinaryEscapeV1()
-	return beginCandidateOwnedV1(base, expectedParent, ledger)
+	return beginCandidateOwnedV1(nil, nil, base, expectedParent, ledger)
 }
 
-func beginCandidateOwnedV1(base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger, creators ...*allocationCreditLeaseV1) (*FreelistTxn, error) {
+func beginCandidateOwnedV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, base *FreelistGenerationV1, expectedParent GenerationRefV1, ledger *ReservationLedger, creators ...*allocationCreditLeaseV1) (*FreelistTxn, error) {
 	if base == nil || len(creators) > 1 {
 		return nil, ErrGenerationFormat
 	}
@@ -358,6 +361,9 @@ func beginCandidateOwnedV1(base *FreelistGenerationV1, expectedParent Generation
 	var creator *allocationCreditLeaseV1
 	if len(creators) != 0 {
 		creator = creators[0]
+	}
+	if creator == nil && base.creator != nil {
+		return nil, ErrAllocationCertificateIncompleteV1
 	}
 	if creator != nil {
 		// Active birth authority is valid only for the already managed graph.
@@ -375,44 +381,39 @@ func beginCandidateOwnedV1(base *FreelistGenerationV1, expectedParent Generation
 	if ledger == nil {
 		ledger = newReservationLedgerOwnedV1()
 	}
-	if err := creator.reserve(allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true), 2); err != nil {
+	if err := creator.reserve(request, allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true), 2); err != nil {
 		return nil, err
 	}
 	retainReservationLedgerV1(ledger)
-	t := &FreelistTxn{creator: creator, buildCreator: creator, base: retainGenerationV1(base), ledger: ledger, ledgerOwned: true, root: retainStateNodeV1(base.root), highWater: base.highWater}
+	t := &FreelistTxn{allocationRequired: creator != nil, creator: creator, buildCreator: creator, base: retainGenerationV1(base), ledger: ledger, ledgerOwned: true, root: retainStateNodeV1(base.root), highWater: base.highWater}
 	complete := false
 	defer func() {
 		if !complete {
 			releaseTxnV1(t)
 		}
 	}()
-	if creator != nil {
-		creator.mu.Lock()
-		t.allocationCredit = creator.facet
-		creator.mu.Unlock()
-	}
 	var err error
-	t.changedChunks, err = newPageRadixWithCreditV1[struct{}](creator)
+	t.changedChunks, err = newPageRadixWithCreditV1[struct{}](request, creator)
 	if err != nil {
 		return nil, err
 	}
-	t.replacedMetadata, err = newPageRadixWithCreditV1[struct{}](creator)
+	t.replacedMetadata, err = newPageRadixWithCreditV1[struct{}](request, creator)
 	if err != nil {
 		return nil, err
 	}
-	root, err := detachUnmaterializedOwnedV1(t.root, 0, &t.stats, creator)
+	root, err := detachUnmaterializedOwnedV1(request, t.root, 0, &t.stats, creator)
 	if err != nil {
 		return nil, err
 	}
 	replaceStateNodeV1(&t.root, root)
 	t.privatePreparation = true
 	if base.ref.HeaderPageID != 0 {
-		if err := t.replacedMetadata.PutWithCredit(base.ref.HeaderPageID, struct{}{}, creator); err != nil {
+		if err := t.replacedMetadata.PutWithCredit(request, base.ref.HeaderPageID, struct{}{}, creator); err != nil {
 			return nil, err
 		}
 	}
 	for _, id := range base.record.pageIDs {
-		if err := t.replacedMetadata.PutWithCredit(id, struct{}{}, creator); err != nil {
+		if err := t.replacedMetadata.PutWithCredit(request, id, struct{}{}, creator); err != nil {
 			return nil, err
 		}
 	}
@@ -420,11 +421,12 @@ func beginCandidateOwnedV1(base *FreelistGenerationV1, expectedParent Generation
 	if retirementCount > uint64(^uint(0)>>1)/uint64(unsafe.Sizeof(retiredPage{})) {
 		return nil, ErrNoAllocatablePage
 	}
-	if err := reserveMaterializationBackingV1(creator, retirementCount, uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
+	if err := reserveAllocationScratchV1(request, scratch, creator, retirementCount, uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
 		return nil, err
 	}
 	// Exact capacity avoids implicit growth while replaying pending retirement.
 	retired := make([]retiredPage, 0, int(retirementCount))
+	defer func() { clear(retired[:cap(retired)]) }()
 	for _, extent := range base.record.Extents {
 		if extent.Kind != ReservationPendingMetadataRetirement {
 			continue
@@ -433,7 +435,7 @@ func beginCandidateOwnedV1(base *FreelistGenerationV1, expectedParent Generation
 			retired = append(retired, retiredPage{extent.StartPageID + i, extent.LastReachableCommitSeq})
 		}
 	}
-	t.retireMany(retired)
+	t.retireMany(request, retired)
 	if err := t.valid(); err != nil {
 		return nil, err
 	}
@@ -464,12 +466,14 @@ func (t *FreelistTxn) valid() error {
 	return nil
 }
 
-func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
-	if err := t.mutateManyOwnedV1(chunkNo, items, f, 0); err != nil {
+func (t *FreelistTxn) mutateMany(request AllocationRequestCreditV1, chunkNo, items uint64, f func(*stateChunk)) {
+	if err := t.mutateManyOwnedV1(request, chunkNo, items, f, 0); err != nil {
 		t.allocationErr = err
 	}
 }
-func (t *FreelistTxn) mutate(chunkNo uint64, f func(*stateChunk)) { t.mutateMany(chunkNo, 1, f) }
+func (t *FreelistTxn) mutate(request AllocationRequestCreditV1, chunkNo uint64, f func(*stateChunk)) {
+	t.mutateMany(request, chunkNo, 1, f)
+}
 
 // One operation admits tree births, newly tracked metadata/chunk memberships,
 // and optional output-vector growth before any tree or ledger-set mutation.
@@ -535,7 +539,10 @@ func (t *FreelistTxn) planMutationV1(chunkNo uint64, allocatedGrowth int) transa
 	}
 	return plan
 }
-func (t *FreelistTxn) mutateManyOwnedV1(chunkNo, items uint64, f func(*stateChunk), allocatedGrowth int) error {
+func (t *FreelistTxn) mutateManyOwnedV1(request AllocationRequestCreditV1, chunkNo, items uint64, f func(*stateChunk), allocatedGrowth int) error {
+	if err := t.requireBirthCreditV1(request); err != nil {
+		return err
+	}
 	if t.allocationErr != nil {
 		return t.allocationErr
 	}
@@ -543,16 +550,16 @@ func (t *FreelistTxn) mutateManyOwnedV1(chunkNo, items uint64, f func(*stateChun
 	if plan.err != nil {
 		return plan.err
 	}
-	operation, err := admitAllocationOperationV1(t.buildCreator, plan.bytes, plan.refs)
+	operation, err := admitAllocationOperationV1(request, t.buildCreator, plan.bytes, plan.refs)
 	if err != nil {
 		return err
 	}
 	defer operation.close()
-	return t.applyMutationV1(chunkNo, items, f, plan, &operation)
+	return t.applyMutationV1(request, chunkNo, items, f, plan, &operation)
 }
 
 // applyMutationV1 consumes an admitted receipt and never calls the facet.
-func (t *FreelistTxn) applyMutationV1(chunkNo, items uint64, f func(*stateChunk), plan transactionMutationPlanV1, operation *allocationOperationV1) error {
+func (t *FreelistTxn) applyMutationV1(request AllocationRequestCreditV1, chunkNo, items uint64, f func(*stateChunk), plan transactionMutationPlanV1, operation *allocationOperationV1) error {
 	if plan.vectorBytes != 0 {
 		if err := operation.take(plan.vectorBytes, 1); err != nil {
 			return err
@@ -566,16 +573,16 @@ func (t *FreelistTxn) applyMutationV1(chunkNo, items uint64, f func(*stateChunk)
 		oldCreator.release()
 	}
 	for _, id := range plan.replaced[:plan.replacementCount] {
-		if err := t.replacedMetadata.putAdmittedV1(id, struct{}{}, t.buildCreator, operation); err != nil {
+		if err := t.replacedMetadata.putAdmittedV1(request, id, struct{}{}, t.buildCreator, operation); err != nil {
 			return err
 		}
 	}
-	root, err := mutateStateOwnedOperationV1(t.root, chunkNo, 0, f, t.privatePreparation, &t.stats, operation)
+	root, err := mutateStateOwnedOperationV1(request, t.root, chunkNo, 0, f, t.privatePreparation, &t.stats, operation)
 	if err != nil {
 		return err
 	}
 	replaceStateNodeV1(&t.root, root)
-	if err = t.changedChunks.putAdmittedV1(chunkNo, struct{}{}, t.buildCreator, operation); err != nil {
+	if err = t.changedChunks.putAdmittedV1(request, chunkNo, struct{}{}, t.buildCreator, operation); err != nil {
 		return err
 	}
 	t.stats.StateMutationPaths++
@@ -584,19 +591,26 @@ func (t *FreelistTxn) applyMutationV1(chunkNo, items uint64, f func(*stateChunk)
 }
 
 func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
+	return t.AllocateWithAllocationRequestV1(nil, regionHint)
+}
+
+func (t *FreelistTxn) AllocateWithAllocationRequestV1(request AllocationRequestCreditV1, regionHint uint64) (uint64, error) {
 	if err := t.valid(); err != nil {
+		return 0, err
+	}
+	if err := t.requireBirthCreditV1(request); err != nil {
 		return 0, err
 	}
 	if id, ok := chooseUnreservedFreePage(t.root, regionHint, t.ledger, &t.stats.PageVisits); ok {
 		offset := id & (freelistChunkSize - 1)
-		if err := t.mutateManyOwnedV1(id>>freelistChunkShift, 1, func(c *stateChunk) { c.setFree(offset, false) }, 1); err != nil {
+		if err := t.mutateManyOwnedV1(request, id>>freelistChunkShift, 1, func(c *stateChunk) { c.setFree(offset, false) }, 1); err != nil {
 			return 0, err
 		}
 		t.allocated = append(t.allocated, allocatedPage{id, ReservationReusedData})
 		t.stats.ReuseAllocations++
 		return id, nil
 	}
-	return t.allocateAppend()
+	return t.allocateAppend(request)
 }
 
 // AllocateAppend reserves a new page at the logical high-water mark without
@@ -604,13 +618,23 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 // public PreferAppendAlloc contract while still recording exact candidate
 // ownership in the COW transaction.
 func (t *FreelistTxn) AllocateAppend() (uint64, error) {
+	return t.AllocateAppendWithAllocationRequestV1(nil)
+}
+
+func (t *FreelistTxn) AllocateAppendWithAllocationRequestV1(request AllocationRequestCreditV1) (uint64, error) {
 	if err := t.valid(); err != nil {
 		return 0, err
 	}
-	return t.allocateAppend()
+	if err := t.requireBirthCreditV1(request); err != nil {
+		return 0, err
+	}
+	return t.allocateAppend(request)
 }
 
-func (t *FreelistTxn) allocateAppend() (uint64, error) {
+func (t *FreelistTxn) allocateAppend(request AllocationRequestCreditV1) (uint64, error) {
+	if err := t.requireBirthCreditV1(request); err != nil {
+		return 0, err
+	}
 	if t.highWater == math.MaxUint64 {
 		return 0, ErrNoAllocatablePage
 	}
@@ -623,7 +647,7 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
 	if id > start {
 		abandonedGrowth = int((id-start-1)/uint64(^uint32(0)) + 1)
 	}
-	if err := t.growAppendVectorsV1(1, abandonedGrowth); err != nil {
+	if err := t.growAppendVectorsV1(request, 1, abandonedGrowth); err != nil {
 		return 0, err
 	}
 	if id > start {
@@ -637,8 +661,11 @@ func (t *FreelistTxn) allocateAppend() (uint64, error) {
 
 // allocateContiguousRange first tries a bounded reusable extent, then appends.
 // Durable dependency manifests require the returned positional page chain.
-func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
+func (t *FreelistTxn) allocateContiguousRange(request AllocationRequestCreditV1, count int) ([]uint64, error) {
 	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	if err := t.requireBirthCreditV1(request); err != nil {
 		return nil, err
 	}
 	if count < 0 {
@@ -647,7 +674,7 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 	if count == 0 {
 		return nil, nil
 	}
-	if ids, ok := t.allocateReusedRange(count); ok {
+	if ids, ok := t.allocateReusedRange(request, count); ok {
 		return ids, nil
 	}
 	if t.allocationErr != nil {
@@ -678,10 +705,10 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 		if candidate > t.highWater {
 			abandonedGrowth = int((candidate-t.highWater-1)/uint64(^uint32(0)) + 1)
 		}
-		if err := reserveMaterializationBackingV1(t.buildCreator, uint64(count), 8, false); err != nil {
+		if err := reserveMaterializationBackingV1(request, t.buildCreator, uint64(count), 8, false); err != nil {
 			return nil, err
 		}
-		if err := t.growAppendVectorsV1(count, abandonedGrowth); err != nil {
+		if err := t.growAppendVectorsV1(request, count, abandonedGrowth); err != nil {
 			return nil, err
 		}
 		if candidate > t.highWater {
@@ -699,7 +726,14 @@ func (t *FreelistTxn) allocateContiguousRange(count int) ([]uint64, error) {
 }
 
 func (t *FreelistTxn) ReservePage(id uint64) error {
+	return t.ReservePageWithAllocationRequestV1(nil, id)
+}
+
+func (t *FreelistTxn) ReservePageWithAllocationRequestV1(request AllocationRequestCreditV1, id uint64) error {
 	if err := t.valid(); err != nil {
+		return err
+	}
+	if err := t.requireBirthCreditV1(request); err != nil {
 		return err
 	}
 	if !t.base.Allocatable(id) || !t.rootAllocatable(id) || t.ledger.Reserved(id) {
@@ -711,7 +745,7 @@ func (t *FreelistTxn) ReservePage(id uint64) error {
 		}
 	}
 	offset := id & (freelistChunkSize - 1)
-	if err := t.mutateManyOwnedV1(id>>freelistChunkShift, 1, func(c *stateChunk) { c.setFree(offset, false) }, 1); err != nil {
+	if err := t.mutateManyOwnedV1(request, id>>freelistChunkShift, 1, func(c *stateChunk) { c.setFree(offset, false) }, 1); err != nil {
 		return err
 	}
 	t.allocated = append(t.allocated, allocatedPage{id, ReservationReusedData})
@@ -723,20 +757,30 @@ func (t *FreelistTxn) rootAllocatable(id uint64) bool {
 	return c != nil && c.isFree(id&(freelistChunkSize-1))
 }
 
-func (t *FreelistTxn) retire(id, seq uint64) {
+func (t *FreelistTxn) retire(request AllocationRequestCreditV1, id, seq uint64) {
 	if t == nil || t.consumed || id < 2 || id >= t.highWater || seq == 0 {
 		return
 	}
+
+	if err := t.requireBirthCreditV1(request); err != nil {
+		t.allocationErr = err
+		return
+	}
 	offset := id & (freelistChunkSize - 1)
-	t.mutate(id>>freelistChunkShift, func(c *stateChunk) { c.setFree(offset, false); c.retired[offset] = seq })
+	t.mutate(request, id>>freelistChunkShift, func(c *stateChunk) { c.setFree(offset, false); c.retired[offset] = seq })
 }
 
 // retireMany applies all retirements for one state chunk through a single
 // persistent-tree mutation. The previous one-ID-at-a-time path cloned the
 // same chunk and its full trie path repeatedly when a commit retired adjacent
 // index or allocator-metadata pages.
-func (t *FreelistTxn) retireMany(retired []retiredPage) {
+func (t *FreelistTxn) retireMany(request AllocationRequestCreditV1, retired []retiredPage) {
 	if t == nil || t.consumed || len(retired) == 0 {
+		return
+	}
+
+	if err := t.requireBirthCreditV1(request); err != nil {
+		t.allocationErr = err
 		return
 	}
 	valid := retired[:0]
@@ -750,7 +794,7 @@ func (t *FreelistTxn) retireMany(retired []retiredPage) {
 		return
 	}
 	if len(valid) == 1 {
-		t.retire(valid[0].id, valid[0].lastReachableCommitSeq)
+		t.retire(request, valid[0].id, valid[0].lastReachableCommitSeq)
 		return
 	}
 	// Stable ordering preserves last-writer behavior for duplicate IDs with
@@ -765,7 +809,7 @@ func (t *FreelistTxn) retireMany(retired []retiredPage) {
 			end++
 		}
 		items := valid[start:end]
-		t.mutateMany(chunkNo, uint64(len(items)), func(c *stateChunk) {
+		t.mutateMany(request, chunkNo, uint64(len(items)), func(c *stateChunk) {
 			for _, item := range items {
 				offset := item.id & (freelistChunkSize - 1)
 				c.setFree(offset, false)
@@ -776,9 +820,11 @@ func (t *FreelistTxn) retireMany(retired []retiredPage) {
 	}
 }
 
-func (t *FreelistTxn) Retire(id, seq uint64) {
+func (t *FreelistTxn) Retire(id, seq uint64) { t.RetireWithAllocationRequestV1(nil, id, seq) }
+
+func (t *FreelistTxn) RetireWithAllocationRequestV1(request AllocationRequestCreditV1, id, seq uint64) {
 	if t != nil {
-		t.retire(id, seq)
+		t.retire(request, id, seq)
 	}
 }
 
@@ -811,15 +857,25 @@ func collectPrunable(r stateRefV1, _ int, cap ReuseCapability, out *[]retiredPag
 }
 
 func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
-	if t == nil || t.consumed || cap.oldestRecoverableCommitSeq == 0 {
+	t.PruneWithCapabilityWithAllocationRequestV1(nil, nil, cap)
+}
+
+func (t *FreelistTxn) PruneWithCapabilityWithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, capability ReuseCapability) {
+	if t == nil || t.consumed || capability.oldestRecoverableCommitSeq == 0 {
+		return
+	}
+
+	if err := t.requireBirthCreditV1(request); err != nil {
+		t.allocationErr = err
 		return
 	}
 	// The legacy whole-tree API admits one full promotion capacity before
 	// collection. The prepared production caller keeps the bounded API below.
 	var promote []retiredPage
+	defer func() { clear(promote[:cap(promote)]) }()
 	if t.buildCreator != nil {
 		capacity := t.root.retiredCount()
-		if err := reserveMaterializationBackingV1(t.buildCreator, capacity, uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
+		if err := reserveAllocationScratchV1(request, scratch, t.buildCreator, capacity, uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
 			t.allocationErr = err
 			return
 		}
@@ -829,19 +885,19 @@ func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
 		}
 		promote = make([]retiredPage, 0, int(capacity))
 	}
-	t.stats.OldestRecoverableCommitSeq = cap.oldestRecoverableCommitSeq
-	t.stats.MinPinnedSnapshotCommitSeq = cap.minPinnedSnapshotCommitSeq
-	t.stats.HistoryFloorCommitSeq = cap.historyFloorCommitSeq
-	collectPrunable(t.root, 0, cap, &promote, &t.stats.PageVisits)
+	t.stats.OldestRecoverableCommitSeq = capability.oldestRecoverableCommitSeq
+	t.stats.MinPinnedSnapshotCommitSeq = capability.minPinnedSnapshotCommitSeq
+	t.stats.HistoryFloorCommitSeq = capability.historyFloorCommitSeq
+	collectPrunable(t.root, 0, capability, &promote, &t.stats.PageVisits)
 	for _, retired := range promote {
-		if lag := cap.oldestRecoverableCommitSeq - retired.lastReachableCommitSeq; lag > t.stats.ReuseLag {
+		if lag := capability.oldestRecoverableCommitSeq - retired.lastReachableCommitSeq; lag > t.stats.ReuseLag {
 			t.stats.ReuseLag = lag
 		}
 	}
 	if len(promote) == 1 {
 		item := promote[0]
 		offset := item.id & (freelistChunkSize - 1)
-		t.mutate(item.id>>freelistChunkShift, func(c *stateChunk) {
+		t.mutate(request, item.id>>freelistChunkShift, func(c *stateChunk) {
 			c.retired[offset] = 0
 			c.setFree(offset, true)
 		})
@@ -857,7 +913,7 @@ func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
 			end++
 		}
 		items := promote[start:end]
-		t.mutateMany(chunkNo, uint64(len(items)), func(c *stateChunk) {
+		t.mutateMany(request, chunkNo, uint64(len(items)), func(c *stateChunk) {
 			for _, item := range items {
 				offset := item.id & (freelistChunkSize - 1)
 				c.retired[offset] = 0
@@ -868,20 +924,30 @@ func (t *FreelistTxn) PruneWithCapability(cap ReuseCapability) {
 	}
 }
 
-func (t *FreelistTxn) Prune(h RecoveryHorizon) { t.PruneWithCapability(h.capability()) }
+func (t *FreelistTxn) Prune(h RecoveryHorizon) {
+	t.PruneWithCapabilityWithAllocationRequestV1(nil, nil, h.capability())
+}
 
 func (t *FreelistTxn) Reserve(candidate CandidateIDV1) error {
+	return t.ReserveWithAllocationRequestV1(nil, nil, candidate)
+}
+
+func (t *FreelistTxn) ReserveWithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, candidate CandidateIDV1) error {
 	if err := t.valid(); err != nil {
 		return err
 	}
-	if err := reserveMaterializationBackingV1(t.buildCreator, uint64(len(t.allocated)), 8, false); err != nil {
+	if err := t.requireBirthCreditV1(request); err != nil {
+		return err
+	}
+	if err := reserveAllocationScratchV1(request, scratch, t.buildCreator, uint64(len(t.allocated)), 8, false); err != nil {
 		return err
 	}
 	ids := make([]uint64, len(t.allocated))
+	defer clear(ids[:cap(ids)])
 	for i, allocation := range t.allocated {
 		ids[i] = allocation.id
 	}
-	if err := t.ledger.reserve(candidate, ids, t.buildCreator); err != nil {
+	if err := t.ledger.reserve(request, candidate, ids, t.buildCreator); err != nil {
 		return err
 	}
 	t.stats.Reservations = uint64(len(ids))
@@ -894,12 +960,11 @@ type candidatePageV1 struct {
 }
 
 type FreelistCandidateV1 struct {
-	generation       *FreelistGenerationV1
-	pages            []candidatePageV1
-	dirtyIDs         []uint64
-	allocationCredit AllocationCreditV1
-	creator          *allocationCreditLeaseV1
-	writeMu          sync.Mutex
+	generation *FreelistGenerationV1
+	pages      []candidatePageV1
+	dirtyIDs   []uint64
+	creator    *allocationCreditLeaseV1
+	writeMu    sync.Mutex
 }
 
 func (c *FreelistCandidateV1) Generation() *FreelistGenerationV1 {
@@ -1186,11 +1251,12 @@ func countUnmaterializedStatePages(r stateRefV1, _ int) uint64 {
 
 // The allocated vector is sorted once in private scratch; reused/appended ID
 // vectors and sortedUnique copies are unnecessary. Radix traversal is ordered.
-func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
-	if err := reserveMaterializationBackingV1(t.buildCreator, uint64(len(t.allocated)), uint64(unsafe.Sizeof(allocatedPage{})), false); err != nil {
+func (t *FreelistTxn) reservationExtents(request AllocationRequestCreditV1, scratch *AllocationCreatorV1) ([]ReservationExtentV1, error) {
+	if err := reserveAllocationScratchV1(request, scratch, t.buildCreator, uint64(len(t.allocated)), uint64(unsafe.Sizeof(allocatedPage{})), false); err != nil {
 		return nil, err
 	}
 	allocated := make([]allocatedPage, len(t.allocated))
+	defer clear(allocated[:cap(allocated)])
 	copy(allocated, t.allocated)
 	slices.SortFunc(allocated, func(a, b allocatedPage) int {
 		if a.kind != b.kind {
@@ -1199,7 +1265,7 @@ func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
 		return cmp.Compare(a.id, b.id)
 	})
 	capacity := uint64(len(allocated)) + uint64(len(t.abandonedAppends)) + uint64(t.replacedMetadata.Len())
-	if err := reserveMaterializationBackingV1(t.buildCreator, capacity, uint64(unsafe.Sizeof(ReservationExtentV1{})), false); err != nil {
+	if err := reserveAllocationScratchV1(request, scratch, t.buildCreator, capacity, uint64(unsafe.Sizeof(ReservationExtentV1{})), false); err != nil {
 		return nil, err
 	}
 	if capacity > uint64(^uint(0)>>1) {
@@ -1223,20 +1289,23 @@ func (t *FreelistTxn) reservationExtents() ([]ReservationExtentV1, error) {
 }
 
 func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
-	if t != nil && (t.allocationCredit != nil || t.creator != nil || t.allocatedCreator != nil || t.abandonedCreator != nil || stateTreeFiniteV1(t.root)) {
+	if t != nil && (t.creator != nil || t.allocatedCreator != nil || t.abandonedCreator != nil || stateTreeFiniteV1(t.root)) {
 		t.privatePreparation = false
 		return nil, ErrFiniteAllocationExportV1
 	}
-	return t.materializeCandidateOwnedV1(generationID, commitSeq, candidateID, sink)
+	return t.materializeCandidateOwnedV1(nil, nil, generationID, commitSeq, candidateID, sink)
 }
 
-func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
+func (t *FreelistTxn) materializeCandidateOwnedV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, generationID, commitSeq uint64, candidateID CandidateIDV1, sink AppendPageSink) (*FreelistCandidateV1, error) {
 	// Validation errors that do not consume the transaction still revoke its
 	// private edit permission; no error return carries builder authority.
 	if t != nil {
 		defer func() { t.privatePreparation = false }()
 	}
 	if err := t.valid(); err != nil {
+		return nil, err
+	}
+	if err := t.requireBirthCreditV1(request); err != nil {
 		return nil, err
 	}
 	if generationID == 0 || commitSeq == 0 || sink == nil {
@@ -1253,7 +1322,30 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 			return nil, ErrFiniteAllocationExportV1
 		}
 	}
-	metadataStart, reservedMetadataCount, extents, reusedMetadata := t.tryReusedMetadata(candidateID)
+	// Both concrete escaping controls are prepaid before any output/reservation
+	// effect. This stack receipt retains no request. Failed preparation releases
+	// unused creator edges only; cumulative request debit is never refunded.
+	generationControlClass := allocationClassV1(uint64(unsafe.Sizeof(FreelistGenerationV1{})), true)
+	candidateControlClass := allocationClassV1(uint64(unsafe.Sizeof(FreelistCandidateV1{})), true)
+	controlOperation, controlErr := admitAllocationOperationV1(request, t.buildCreator, generationControlClass+candidateControlClass, 2)
+	if controlErr != nil {
+		return nil, controlErr
+	}
+	defer controlOperation.close()
+	if err := controlOperation.take(generationControlClass+candidateControlClass, 2); err != nil {
+		return nil, err
+	}
+	g := &FreelistGenerationV1{creator: t.buildCreator, ownedRefs: 1}
+	candidate := &FreelistCandidateV1{creator: t.buildCreator, generation: g}
+	candidateComplete := false
+	defer func() {
+		if !candidateComplete {
+			releaseCandidateOwnedBackingV1(candidate)
+		}
+	}()
+	metadataStart, reservedMetadataCount, extents, reusedMetadata := t.tryReusedMetadata(request, scratch, candidateID)
+	placementExtents := extents
+	defer func() { clear(placementExtents[:cap(placementExtents)]) }()
 	if t.allocationErr != nil {
 		return nil, t.allocationErr
 	}
@@ -1267,9 +1359,9 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 		if reusedMetadata {
 			// tryReusedMetadata copied the selected path; charge and isolate
 			// only its dirty siblings before assigning emitted identities.
-			isolated, err = detachMetadataSiblingsOwnedV1(t.root, 0, metadataStart>>freelistChunkShift, &t.stats, t.buildCreator)
+			isolated, err = detachMetadataSiblingsOwnedV1(request, t.root, 0, metadataStart>>freelistChunkShift, &t.stats, t.buildCreator)
 		} else {
-			isolated, err = detachUnmaterializedOwnedV1(t.root, 0, &t.stats, t.buildCreator)
+			isolated, err = detachUnmaterializedOwnedV1(request, t.root, 0, &t.stats, t.buildCreator)
 		}
 		if err != nil {
 			return nil, err
@@ -1286,15 +1378,15 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 			bytes += b
 			refs += n
 		}
-		operation, err := admitAllocationOperationV1(t.buildCreator, bytes, refs)
+		operation, err := admitAllocationOperationV1(request, t.buildCreator, bytes, refs)
 		if err != nil {
 			return nil, err
 		}
-		if err = t.replacedMetadata.putAdmittedV1(t.root.pageID(), struct{}{}, t.buildCreator, &operation); err != nil {
+		if err = t.replacedMetadata.putAdmittedV1(request, t.root.pageID(), struct{}{}, t.buildCreator, &operation); err != nil {
 			operation.close()
 			return nil, err
 		}
-		root, err := cloneStateRefOwnedV1(t.root, false, t.buildCreator, &operation)
+		root, err := cloneStateRefOwnedV1(request, t.root, false, t.buildCreator, &operation)
 		operation.close()
 		if err != nil {
 			return nil, err
@@ -1316,18 +1408,20 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 		statePageCount = 1
 	}
 	if !reusedMetadata {
-		if err := reserveMaterializationBackingV1(t.buildCreator, uint64(len(t.allocated)), 8, false); err != nil {
+		if err := reserveAllocationScratchV1(request, scratch, t.buildCreator, uint64(len(t.allocated)), 8, false); err != nil {
 			return nil, err
 		}
 		dataIDs := make([]uint64, 0, len(t.allocated))
+		defer clear(dataIDs[:cap(dataIDs)])
 		for _, allocation := range t.allocated {
 			dataIDs = append(dataIDs, allocation.id)
 		}
-		extents, err = t.reservationExtents()
+		extents, err = t.reservationExtents(request, scratch)
+		placementExtents = extents
 		if err != nil {
 			return nil, err
 		}
-		metadataStart, reservedMetadataCount, err = t.ledger.reserveTail(candidateID, minimumMetadataStart, statePageCount, dataIDs, extents, t.buildCreator)
+		metadataStart, reservedMetadataCount, err = t.ledger.reserveTail(request, candidateID, minimumMetadataStart, statePageCount, dataIDs, extents, t.buildCreator)
 		if err != nil {
 			return nil, err
 		}
@@ -1342,10 +1436,16 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	if capacity < uint64(len(extents)) || capacity > uint64(^uint(0)>>1) {
 		return nil, ErrNoAllocatablePage
 	}
-	if err := reserveMaterializationBackingV1(t.buildCreator, capacity, uint64(unsafe.Sizeof(ReservationExtentV1{})), false); err != nil {
+	if err := reserveMaterializationBackingV1(request, t.buildCreator, capacity, uint64(unsafe.Sizeof(ReservationExtentV1{})), false); err != nil {
 		return nil, err
 	}
 	ownedExtents := make([]ReservationExtentV1, len(extents), int(capacity))
+	extentsTransferred := false
+	defer func() {
+		if !extentsTransferred {
+			clear(ownedExtents[:cap(ownedExtents)])
+		}
+	}()
 	copy(ownedExtents, extents)
 	extents = ownedExtents
 	if metadataStart > minimumMetadataStart {
@@ -1356,7 +1456,7 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	if pageCount > uint64(^uint16(0)) || statePageCount+pageCount+1 != reservedMetadataCount {
 		return nil, ErrGenerationFormat
 	}
-	if err := t.reserveMaterializationOutputsV1(reservedMetadataCount, pageCount); err != nil {
+	if err := t.reserveMaterializationOutputsV1(request, scratch, reservedMetadataCount, pageCount); err != nil {
 		return nil, err
 	}
 	next := metadataStart
@@ -1366,8 +1466,15 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 		ledger: t.ledger, candidate: candidateID,
 		metadataStart: metadataStart, reservedCount: reservedMetadataCount,
 	}
+	defer func() {
+		clear(recorded.indexScratch[:cap(recorded.indexScratch)])
+		if !candidateComplete {
+			clear(recorded.pages[:cap(recorded.pages)])
+		}
+		recorded.indexScratch, recorded.sink, recorded.ledger, recorded.pages = nil, nil, nil, nil
+	}()
 	if t.root.zero() {
-		root, birthErr := cloneStateRefOwnedV1(stateRefV1{}, false, t.buildCreator)
+		root, birthErr := cloneStateRefOwnedV1(request, stateRefV1{}, false, t.buildCreator)
 		if birthErr != nil {
 			return nil, birthErr
 		}
@@ -1397,6 +1504,7 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	}
 	record := ReservationRecordV1{CandidateID: candidateID, GenerationID: generationID, BaseID: t.base.generationID, BaseDigest: t.base.ref.Digest, Extents: extents}
 	recordPages, record, err := encodeNormalizedReservationPages(reservationID, record)
+	defer clear(recordPages[:cap(recordPages)])
 	if err != nil {
 		return nil, err
 	}
@@ -1405,21 +1513,19 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 			return nil, err
 		}
 	}
-	if err := t.buildCreator.reserve(allocationClassV1(uint64(unsafe.Sizeof(FreelistGenerationV1{})), true), 1); err != nil {
-		return nil, err
-	}
-	g := &FreelistGenerationV1{creator: t.buildCreator, generationID: generationID, commitSeq: commitSeq, parentGenerationID: t.base.generationID, parentCommitSeq: t.base.commitSeq, highWater: max(t.highWater, next), root: retainStateNodeV1(t.root), record: record, ownedRefs: 1}
+	extentsTransferred = true
+	g.generationID, g.commitSeq = generationID, commitSeq
+	g.parentGenerationID, g.parentCommitSeq = t.base.generationID, t.base.commitSeq
+	g.highWater, g.root, g.record = max(t.highWater, next), retainStateNodeV1(t.root), record
 	g.metadataPages = make([]uint64, 0, next-metadataStart)
 	for id := metadataStart; id < next; id++ {
 		g.metadataPages = append(g.metadataPages, id)
 	}
 	header := encodeGenerationPage(headerID, g, g.root.checksum())
 	if err := recorded.write(headerID, header); err != nil {
-		releaseGenerationV1(g)
 		return nil, err
 	}
 	if err := recorded.complete(); err != nil {
-		releaseGenerationV1(g)
 		return nil, err
 	}
 	copy(g.ref.Digest[:], header[152:184])
@@ -1441,11 +1547,9 @@ func (t *FreelistTxn) materializeCandidateOwnedV1(generationID, commitSeq uint64
 	for i := range recorded.pages {
 		dirty[i] = recorded.pages[i].PageID
 	}
-	if err := t.buildCreator.reserve(allocationClassV1(uint64(unsafe.Sizeof(FreelistCandidateV1{})), true), 1); err != nil {
-		releaseGenerationV1(g)
-		return nil, err
-	}
-	return &FreelistCandidateV1{creator: t.buildCreator, generation: g, pages: recorded.pages, dirtyIDs: dirty, allocationCredit: t.allocationCredit}, nil
+	candidate.pages, candidate.dirtyIDs = recorded.pages, dirty
+	candidateComplete = true
+	return candidate, nil
 }
 
 func candidateIDFromString(value string) CandidateIDV1 {

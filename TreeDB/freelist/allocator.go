@@ -261,6 +261,10 @@ func (a *Allocator) SetFreelistRegion(pages uint64, radius int) {
 // AllocMany allocates up to count pages in one pass. It returns any allocated
 // IDs even if an error occurs so callers can retire them.
 func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
+	return a.AllocManyWithAllocationRequestV1(nil, count, hint)
+}
+
+func (a *Allocator) AllocManyWithAllocationRequestV1(request AllocationRequestCreditV1, count int, hint uint64) ([]uint64, error) {
 	if count <= 0 {
 		return nil, nil
 	}
@@ -271,9 +275,12 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 		return nil, ErrCandidateConsumed
 	}
 	if a.cow != nil {
+		if err := a.cow.txn.requireBirthCreditV1(request); err != nil {
+			return nil, err
+		}
 		ids := make([]uint64, 0, count)
 		for len(ids) < count {
-			id, err := a.allocCOWLocked(hint)
+			id, err := a.allocCOWLocked(request, hint)
 			if err != nil {
 				return ids, err
 			}
@@ -284,7 +291,7 @@ func (a *Allocator) AllocMany(count int, hint uint64) ([]uint64, error) {
 	}
 
 	if a.regionPages > 0 && a.regionRadius > 0 {
-		return a.allocManyRegionLocked(count, hint)
+		return a.allocManyRegionLocked(request, count, hint)
 	}
 
 	ids := make([]uint64, 0, count)
@@ -377,17 +384,17 @@ func findRegionSlot(data []byte, count int, target, regionPages uint64, radius i
 // semantics while verifying and checksumming each mutated head once. Small
 // selections scan directly; larger selections reuse one transient range-max
 // index across head pages.
-func (a *Allocator) allocManyRegionLocked(count int, hint uint64) ([]uint64, error) {
+func (a *Allocator) allocManyRegionLocked(request AllocationRequestCreditV1, count int, hint uint64) ([]uint64, error) {
 	if count == 2 {
-		return a.allocTwoRegionLocked(hint)
+		return a.allocTwoRegionLocked(request, hint)
 	}
 	if count < regionIndexMinSelections {
-		return a.allocManyRegionScanLocked(count, hint)
+		return a.allocManyRegionScanLocked(request, count, hint)
 	}
-	return a.allocManyRegionIndexedLocked(count, hint)
+	return a.allocManyRegionIndexedLocked(request, count, hint)
 }
 
-func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
+func (a *Allocator) allocTwoRegionLocked(request AllocationRequestCreditV1, hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, 2)
 	if a.preferAppend || a.head == 0 {
 		id, err := a.pager.Alloc(2)
@@ -427,7 +434,7 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 			a.stats.Pages--
 		}
 		ids = append(ids, headID)
-		tail, tailErr := a.allocManyRegionScanLocked(1, headID)
+		tail, tailErr := a.allocManyRegionScanLocked(request, 1, headID)
 		ids = append(ids, tail...)
 		return ids, tailErr
 	}
@@ -478,7 +485,7 @@ func (a *Allocator) allocTwoRegionLocked(hint uint64) ([]uint64, error) {
 	return ids, nil
 }
 
-func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64, error) {
+func (a *Allocator) allocManyRegionScanLocked(request AllocationRequestCreditV1, count int, hint uint64) ([]uint64, error) {
 	ids := make([]uint64, 0, count)
 	target := hint
 	for len(ids) < count {
@@ -571,12 +578,12 @@ func (a *Allocator) allocManyRegionScanLocked(count int, hint uint64) ([]uint64,
 	return ids, nil
 }
 
-func (a *Allocator) allocManyRegionIndexedLocked(count int, hint uint64) ([]uint64, error) {
+func (a *Allocator) allocManyRegionIndexedLocked(request AllocationRequestCreditV1, count int, hint uint64) ([]uint64, error) {
 	var regionSlots regionSlotIndex
-	return a.allocManyRegionWithIndexLocked(count, hint, &regionSlots)
+	return a.allocManyRegionWithIndexLocked(request, count, hint, &regionSlots)
 }
 
-func (a *Allocator) allocManyRegionWithIndexLocked(count int, hint uint64, regionSlots *regionSlotIndex) ([]uint64, error) {
+func (a *Allocator) allocManyRegionWithIndexLocked(request AllocationRequestCreditV1, count int, hint uint64, regionSlots *regionSlotIndex) ([]uint64, error) {
 	ids := make([]uint64, 0, count)
 	target := hint
 	for len(ids) < count {
@@ -694,7 +701,7 @@ func (a *Allocator) recordReuseAllocation(id uint64) {
 	}
 }
 
-func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
+func (a *Allocator) allocLocked(request AllocationRequestCreditV1, hint uint64) (uint64, error) {
 	if a.preferAppend {
 		id, err := a.pager.Alloc(1)
 		if err == nil {
@@ -808,27 +815,33 @@ func (a *Allocator) allocLocked(hint uint64) (uint64, error) {
 // hint is a page ID that the caller would like the new page to be close to.
 // If hint is 0, the allocator uses its own heuristics (e.g. lastAlloc).
 func (a *Allocator) Alloc(hint uint64) (uint64, error) {
+	return a.AllocWithAllocationRequestV1(nil, hint)
+}
+
+func (a *Allocator) AllocWithAllocationRequestV1(request AllocationRequestCreditV1, hint uint64) (uint64, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
 		return 0, ErrCandidateConsumed
 	}
 	if a.cow != nil {
-		return a.allocCOWLocked(hint)
+		return a.allocCOWLocked(request, hint)
 	}
 
-	return a.allocLocked(hint)
+	return a.allocLocked(request, hint)
 }
 
 // Free adds a page to the freelist.
-func (a *Allocator) Free(id uint64) error {
+func (a *Allocator) Free(id uint64) error { return a.FreeWithAllocationRequestV1(nil, nil, id) }
+
+func (a *Allocator) FreeWithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, id uint64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
 		return ErrCandidateConsumed
 	}
 	if a.cow != nil {
-		return a.retireCOWLocked([]uint64{id}, a.cow.generation.CommitSeq()+1)
+		return a.retireCOWLocked(request, scratch, []uint64{id}, a.cow.generation.CommitSeq()+1)
 	}
 
 	if id == 0 {
@@ -891,6 +904,10 @@ func (a *Allocator) Free(id uint64) error {
 // Errors after locking are returned as *FreeManyError so callers can identify
 // the committed prefix and retry only the unprocessed suffix.
 func (a *Allocator) FreeMany(ids []uint64) error {
+	return a.FreeManyWithAllocationRequestV1(nil, nil, ids)
+}
+
+func (a *Allocator) FreeManyWithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, ids []uint64) error {
 	for _, id := range ids {
 		if id == 0 {
 			return errCannotFreePageZero
@@ -906,7 +923,7 @@ func (a *Allocator) FreeMany(ids []uint64) error {
 		return ErrCandidateConsumed
 	}
 	if a.cow != nil {
-		return a.retireCOWLocked(ids, a.cow.generation.CommitSeq()+1)
+		return a.retireCOWLocked(request, scratch, ids, a.cow.generation.CommitSeq()+1)
 	}
 	processed := 0
 

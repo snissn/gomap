@@ -229,8 +229,8 @@ Existing allocator admission precedes isolation and allocation. For C nonempty
 chunks, a canonical tree has at most C-1 branches because every branch has at
 least two children. The selected allocation-class geometry is 352 bytes per
 branch and 2304 bytes per chunk. State backing is therefore at most
-2304*C + 352*(C-1) bytes for C>0; a materialized empty root uses one 352-byte
-sentinel. A valid high-water H bounds C by ceil(H/256). Two complete rollback
+2304*C + 352*(C-1) bytes for C>0; a materialized empty root uses one 2304-byte
+chunk sentinel. A valid high-water H bounds C by ceil(H/256). Two complete rollback
 and private representations require at most twice the corresponding state
 bound, while shared immutable backing may reduce actual overlap. This bound
 excludes separately admitted creator receipts, sets, maps, slices, reservation
@@ -239,7 +239,7 @@ boundary copies and isolation visits remain charged; each whole branch or
 chunk class is prepaid before birth, and the original creator retains its
 backing charge until the final owning reference releases it.
 
-The current transaction and generation raw sizes are 384 and 320 bytes,
+The current transaction and generation raw sizes are 368 and 320 bytes,
 respectively, with selected allocation classes 384 and 320. These are explicit
 layout expectations rather than a padding-based incremental charge claim;
 pinned Linux allocation-class witnesses remain required. Existing input/output
@@ -276,3 +276,13 @@ case (previously 86 and 34); earlier physical inventories and fit forecasts do
 not apply to this candidate. These fixture counts are not general plateau
 bounds. The [accounting contract](allocator-patricia-v2-accounting.md) records
 all additional caller/backing obligations and preserves the 128 MiB gate.
+
+Credited transaction origin survives epoch completion in the existing bool
+padding. Future births require both the synchronously borrowed current request
+and the exact newly admitted mutable resident creator edge. Ending an epoch
+revokes the fixed live, rollback, and preborn activation roles together; ordinary
+uncredited wrappers retain their behavior. Re-admission loans the real existing
+closure to the new request and creates only missing mutable edges, preserving
+all intrinsic historical creators. This origin bit is expected to leave the
+368-byte transaction geometry and 384-byte Linux class unchanged; actual
+compiled class and whole-caller fit remain required before finite activation.

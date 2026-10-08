@@ -29,6 +29,7 @@ type allocatorCOWStateV1 struct {
 	txn                      *FreelistTxn
 	ledger                   *ReservationLedger
 	prepared                 *PreparedCOWCandidateV1
+	packet                   *PreparedCOWPublicationPacketV1
 	activated                []*PreparedCOWCandidateV1
 	creator                  *allocationCreditLeaseV1 // resident allocator/state/condition owner
 	activatedCreator         *allocationCreditLeaseV1 // actual activated-vector backing
@@ -109,11 +110,20 @@ func (a *Allocator) COWPrepareProfileV1() COWPrepareProfileV1 {
 }
 
 func (a *Allocator) cowPrepareProfileLockedV1() COWPrepareProfileV1 {
+	if a.cow == nil {
+		return COWPrepareProfileV1{}
+	}
+	return a.cowPrepareProfileForTxnLockedV1(a.cow.txn)
+}
+
+// Explicit-source profile shares the ordinary limits engine without replacing
+// the live slot while a private packet stages its second generation.
+func (a *Allocator) cowPrepareProfileForTxnLockedV1(transaction *FreelistTxn) COWPrepareProfileV1 {
 	var profile COWPrepareProfileV1
-	if a.cow == nil || a.cow.txn == nil || a.cow.generation == nil {
+	if a.cow == nil || transaction == nil || transaction.base == nil {
 		return profile
 	}
-	transaction, base := a.cow.txn, a.cow.generation
+	base := transaction.base
 	profile.BoundedPruneWork = a.cow.pruneWork
 	profile.PreparationCopyWork = a.cow.preparationCopyWork
 	profile.Valid = true
@@ -210,6 +220,7 @@ type COWRetirementV1 struct {
 // allocator metadata or later index allocation.
 type PreparedCOWCandidateV1 struct {
 	backingMu     sync.RWMutex
+	packet        *PreparedCOWPublicationPacketV1 // nonowning exact private-role binding
 	ownedNext     *PreparedCOWCandidateV1
 	ownedBacking  bool
 	creator       *allocationCreditLeaseV1
@@ -217,6 +228,7 @@ type PreparedCOWCandidateV1 struct {
 	candidate     *FreelistCandidateV1
 	candidateID   CandidateIDV1
 	auxiliary     []uint64
+	activationTxn *FreelistTxn // credited successor preborn before candidate exposure
 	rollbackTxn   *FreelistTxn
 	rollbackStats Stats
 	activated     bool
@@ -267,10 +279,10 @@ func (a *Allocator) EnableCOWV1(generation *FreelistGenerationV1, ledger *Reserv
 	if generation != nil {
 		generation.markOrdinaryEscapeV1()
 	}
-	return a.enableCOWOwnedV1(generation, ledger)
+	return a.enableCOWOwnedV1(nil, nil, generation, ledger)
 }
 
-func (a *Allocator) enableCOWOwnedV1(generation *FreelistGenerationV1, ledger *ReservationLedger) error {
+func (a *Allocator) enableCOWOwnedV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, generation *FreelistGenerationV1, ledger *ReservationLedger) error {
 	if a == nil || a.pager == nil || generation == nil {
 		return ErrGenerationFormat
 	}
@@ -291,7 +303,7 @@ func (a *Allocator) enableCOWOwnedV1(generation *FreelistGenerationV1, ledger *R
 	if ledger == nil {
 		ledger = newReservationLedgerOwnedV1()
 	}
-	txn, err := beginCandidateOwnedV1(generation, generation.GenerationRef(), ledger)
+	txn, err := beginCandidateOwnedV1(request, scratch, generation, generation.GenerationRef(), ledger)
 	if err != nil {
 		return err
 	}
@@ -310,7 +322,7 @@ func (a *Allocator) waitCOWReadyLocked() error {
 		return ErrCandidateConsumed
 	}
 	state := a.cow
-	for state != nil && state.prepared != nil && state.waitErr == nil {
+	for state != nil && (state.prepared != nil || state.packet != nil) && state.waitErr == nil {
 		if TestHookCOWWaitBeforeSleep != nil {
 			TestHookCOWWaitBeforeSleep()
 		}
@@ -332,7 +344,7 @@ func (a *Allocator) waitCOWReadyLocked() error {
 	return nil
 }
 
-func (a *Allocator) allocCOWLocked(hint uint64) (uint64, error) {
+func (a *Allocator) allocCOWLocked(request AllocationRequestCreditV1, hint uint64) (uint64, error) {
 	if err := a.waitCOWReadyLocked(); err != nil {
 		return 0, err
 	}
@@ -344,9 +356,9 @@ func (a *Allocator) allocCOWLocked(hint uint64) (uint64, error) {
 		err error
 	)
 	if a.preferAppend {
-		id, err = a.cow.txn.AllocateAppend()
+		id, err = a.cow.txn.AllocateAppendWithAllocationRequestV1(request)
 	} else {
-		id, err = a.cow.txn.Allocate(hint)
+		id, err = a.cow.txn.AllocateWithAllocationRequestV1(request, hint)
 	}
 	if err != nil {
 		return 0, err
@@ -367,7 +379,9 @@ func (a *Allocator) allocCOWLocked(hint uint64) (uint64, error) {
 // AllocAppend allocates one page above the current logical high-water without
 // consulting reusable pages. Unlike toggling SetPreferAppend around Alloc, the
 // choice is scoped to this allocation while the allocator lock is held.
-func (a *Allocator) AllocAppend() (uint64, error) {
+func (a *Allocator) AllocAppend() (uint64, error) { return a.AllocAppendWithAllocationRequestV1(nil) }
+
+func (a *Allocator) AllocAppendWithAllocationRequestV1(request AllocationRequestCreditV1) (uint64, error) {
 	if a == nil || a.pager == nil {
 		return 0, ErrGenerationFormat
 	}
@@ -399,7 +413,7 @@ func (a *Allocator) AllocAppend() (uint64, error) {
 	if a.cow.txn.highWater < a.pager.PageCount() {
 		return 0, fmt.Errorf("%w: append high-water %d is behind pager pages %d", ErrGenerationFormat, a.cow.txn.highWater, a.pager.PageCount())
 	}
-	id, err := a.cow.txn.AllocateAppend()
+	id, err := a.cow.txn.AllocateAppendWithAllocationRequestV1(request)
 	if err != nil {
 		return 0, err
 	}
@@ -414,12 +428,15 @@ func (a *Allocator) AllocAppend() (uint64, error) {
 	return id, nil
 }
 
-func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64) error {
+func (a *Allocator) retireCOWLocked(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, ids []uint64, lastReachableCommitSeq uint64) error {
 	if err := a.waitCOWReadyLocked(); err != nil {
 		return err
 	}
 	if a.cow == nil || a.cow.txn == nil || lastReachableCommitSeq == 0 {
 		return ErrGenerationFormat
+	}
+	if err := a.cow.txn.requireBirthCreditV1(request); err != nil {
+		return err
 	}
 	for _, id := range ids {
 		if id < 2 {
@@ -427,16 +444,17 @@ func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64)
 		}
 	}
 	if len(ids) == 1 {
-		a.cow.txn.Retire(ids[0], lastReachableCommitSeq)
+		a.cow.txn.RetireWithAllocationRequestV1(request, ids[0], lastReachableCommitSeq)
 	} else {
-		if err := reserveMaterializationBackingV1(a.cow.txn.buildCreator, uint64(len(ids)), uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
+		if err := reserveAllocationScratchV1(request, scratch, a.cow.txn.buildCreator, uint64(len(ids)), uint64(unsafe.Sizeof(retiredPage{})), false); err != nil {
 			return err
 		}
 		retired := make([]retiredPage, len(ids))
+		defer clear(retired[:cap(retired)])
 		for i, id := range ids {
 			retired[i] = retiredPage{id: id, lastReachableCommitSeq: lastReachableCommitSeq}
 		}
-		a.cow.txn.retireMany(retired)
+		a.cow.txn.retireMany(request, retired)
 	}
 	if err := a.cow.txn.valid(); err != nil {
 		return err
@@ -449,6 +467,10 @@ func (a *Allocator) retireCOWLocked(ids []uint64, lastReachableCommitSeq uint64)
 }
 
 func (a *Allocator) RetireCOWV1(ids []uint64, lastReachableCommitSeq uint64) error {
+	return a.RetireCOWV1WithAllocationRequestV1(nil, nil, ids, lastReachableCommitSeq)
+}
+
+func (a *Allocator) RetireCOWV1WithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, ids []uint64, lastReachableCommitSeq uint64) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -460,7 +482,7 @@ func (a *Allocator) RetireCOWV1(ids []uint64, lastReachableCommitSeq uint64) err
 	if a.cow == nil {
 		return ErrGenerationFormat
 	}
-	return a.retireCOWLocked(ids, lastReachableCommitSeq)
+	return a.retireCOWLocked(request, scratch, ids, lastReachableCommitSeq)
 }
 
 func (a *Allocator) PrepareCOWCandidateV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, auxiliaryPageCount int, sink AppendPageSink) (*PreparedCOWCandidateV1, error) {
@@ -487,7 +509,7 @@ func (a *Allocator) PrepareCOWCandidateRetiringV1(generationID, commitSeq uint64
 // exclusive builder. Old and private trees overlap until activation/abort.
 // Existing count admission is not a complete caller byte-reservation proof.
 func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1) (*PreparedCOWCandidateV1, error) {
-	return a.prepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, false)
+	return a.prepareCOWCandidateRetiringWithLimitsV1(nil, nil, generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, false)
 }
 
 // PrepareOwnedCOWCandidateRetiringWithLimitsV1 transfers sole backing ownership
@@ -496,10 +518,18 @@ func (a *Allocator) PrepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 // Scalars and the concrete pager are borrows; raw exports permanently taint
 // resident admission. This uses the ordinary allocator engine.
 func (a *Allocator) PrepareOwnedCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1) (*PreparedCOWCandidateV1, error) {
-	return a.prepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, true)
+	return a.prepareCOWCandidateRetiringWithLimitsV1(nil, nil, generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, true)
 }
 
-func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1, owned bool) (*PreparedCOWCandidateV1, error) {
+// PrepareOwnedCOWCandidateRetiringWithAllocationRequestV1 borrows current request
+// authority and a distinct caller-owned short resident scratch scope. It keeps
+// the legacy finite limits refusal closed; installed owner provenance and the
+// complete pre-WAL role fit are the serialized DB caller's integration gate.
+func (a *Allocator) PrepareOwnedCOWCandidateRetiringWithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1) (*PreparedCOWCandidateV1, error) {
+	return a.prepareCOWCandidateRetiringWithLimitsV1(request, scratch, generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, limits, true)
+}
+
+func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, generationID, commitSeq uint64, candidateID CandidateIDV1, capability ReuseCapability, retirements []COWRetirementV1, auxiliaryPageCount int, sink AppendPageSink, limits *COWPrepareLimitsV1, owned bool) (*PreparedCOWCandidateV1, error) {
 	if auxiliaryPageCount < 0 || sink == nil {
 		return nil, ErrGenerationFormat
 	}
@@ -519,6 +549,9 @@ func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 		// Keep the complete caller/resident certificate closed before every retry.
 		return nil, ErrAllocationCertificateIncompleteV1
 	}
+	if a.cow.packet != nil {
+		return nil, ErrCOWCandidatePrepared
+	}
 	if a.cow.prepared != nil {
 		generation := a.cow.prepared.candidate.generation
 		if generation == nil || generation.GenerationID() != generationID || generation.CommitSeq() != commitSeq ||
@@ -536,69 +569,14 @@ func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 	if err := checkCOWPrepareLimitsV1(a.cowPrepareProfileLockedV1(), retirements, auxiliaryPageCount, limits); err != nil {
 		return nil, err
 	}
-	rollbackTxn := a.cow.txn
-	rollbackStats := a.stats
-	beforeCopyWork := rollbackTxn.stats.FreelistStateCopyWorkV1
-	staged, err := rollbackTxn.cloneForPrivateAllocatorPrepare()
+	rollbackTxn, rollbackStats := a.cow.txn, a.stats
+	staged, prepared, err := a.preparePrivateCOWStageLockedV1(request, scratch, rollbackTxn, generationID, commitSeq, candidateID, capability, retirements, auxiliaryPageCount, sink, owned)
 	if err != nil {
 		return nil, err
 	}
-	// Retain actual work even when logical allocator state is rolled back or
-	// an already-produced candidate is later aborted. Activation cannot erase
-	// this attribution when it begins the next immutable-generation transaction.
-	defer func() {
-		work := staged.stats.FreelistStateCopyWorkV1
-		a.cow.preparationCopyWork.StateNodeCopies += work.StateNodeCopies - beforeCopyWork.StateNodeCopies
-		a.cow.preparationCopyWork.StateChunkCopies += work.StateChunkCopies - beforeCopyWork.StateChunkCopies
-		a.cow.preparationCopyWork.StateCopyBytes += work.StateCopyBytes - beforeCopyWork.StateCopyBytes
-		a.cow.preparationCopyWork.StateIsolationVisits += work.StateIsolationVisits - beforeCopyWork.StateIsolationVisits
-	}()
 	a.cow.txn = staged
-	rollback := func(cause error) (*PreparedCOWCandidateV1, error) {
-		a.cow.txn = rollbackTxn
-		releaseTxnV1(staged)
-		a.stats = rollbackStats
-		if rollbackErr := a.cow.ledger.RollbackPreVisible(candidateID); rollbackErr != nil {
-			return nil, errors.Join(cause, fmt.Errorf("rollback COW reservation: %w", rollbackErr))
-		}
-		return nil, cause
-	}
-	for _, retirement := range retirements {
-		if len(retirement.PageIDs) == 0 {
-			continue
-		}
-		if err := a.retireCOWLocked(retirement.PageIDs, retirement.LastReachableCommitSeq); err != nil {
-			return rollback(err)
-		}
-	}
-	// Encode every page that the caller's sealed reuse capability permits as
-	// free in this exact durable generation. A prepared candidate is immutable;
-	// retry returns it above instead of applying a fresher capability after the
-	// caller releases its reader-admission gate.
-	a.pruneCOWLockedV1(a.cow.txn, capability)
-	preparedCreator := a.cow.txn.buildCreator
-	if err := preparedCreator.reserve(allocationClassV1(uint64(unsafe.Sizeof(PreparedCOWCandidateV1{})), true), 1); err != nil {
-		return rollback(err)
-	}
-	preparedHeaderOwned := false
-	defer func() {
-		if !preparedHeaderOwned {
-			preparedCreator.release()
-		}
-	}()
-	auxiliary, err := a.cow.txn.allocateContiguousRange(auxiliaryPageCount)
-	if err != nil {
-		return rollback(err)
-	}
-	candidate, err := a.cow.txn.materializeCandidateOwnedV1(generationID, commitSeq, candidateID, sink)
-	if err != nil {
-		return rollback(err)
-	}
-	prepared := &PreparedCOWCandidateV1{
-		creator: preparedCreator, allocator: a, candidate: candidate, candidateID: candidateID, auxiliary: auxiliary, ownedBacking: owned,
-		rollbackTxn: rollbackTxn, rollbackStats: rollbackStats,
-	}
-	preparedHeaderOwned = true
+	prepared.rollbackTxn = rollbackTxn
+	prepared.rollbackStats = rollbackStats
 	if owned {
 		prepared.ownedNext = a.cow.ownedCandidates
 		a.cow.ownedCandidates = prepared
@@ -613,7 +591,11 @@ func (a *Allocator) prepareCOWCandidateRetiringWithLimitsV1(generationID, commit
 // Reservation tails accepted by an arbitrary sink remain conservatively
 // burned, while the live allocation and retirement transaction is restored.
 func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error {
-	if a == nil || prepared == nil || prepared.rollbackTxn == nil {
+	return a.AbortCOWCandidateV1WithAllocationRequestV1(nil, prepared)
+}
+
+func (a *Allocator) AbortCOWCandidateV1WithAllocationRequestV1(request AllocationRequestCreditV1, prepared *PreparedCOWCandidateV1) error {
+	if a == nil || prepared == nil {
 		return ErrGenerationFormat
 	}
 	if TestHookAbortCOWCandidateFailure != nil {
@@ -626,6 +608,12 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 	if a.closed {
 		return ErrCandidateConsumed
 	}
+	if prepared.packet != nil {
+		return a.abortCOWPublicationPacketLockedV1(prepared.packet, prepared)
+	}
+	if prepared.rollbackTxn == nil {
+		return ErrGenerationFormat
+	}
 	if a.cow == nil || a.cow.prepared != prepared {
 		return ErrCandidateConsumed
 	}
@@ -634,15 +622,20 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 	}
 	// Admit and build rollback isolation before changing reservation ownership.
 	// Failure leaves the exact prepared/rollback aliases available for retry.
+	if err := prepared.rollbackTxn.requireBirthCreditV1(request); err != nil {
+		return err
+	}
 	rollbackStats := prepared.rollbackTxn.stats
-	rollbackRoot, err := detachUnmaterializedOwnedV1(prepared.rollbackTxn.root, 0, &rollbackStats, prepared.rollbackTxn.buildCreator)
+	rollbackRoot, err := detachUnmaterializedOwnedV1(request, prepared.rollbackTxn.root, 0, &rollbackStats, prepared.rollbackTxn.buildCreator)
 	if err != nil {
 		return err
 	}
-	if err := a.cow.ledger.RollbackPreVisible(prepared.candidateID); err != nil {
+	if err := a.cow.ledger.RollbackPreVisibleWithAllocationRequestV1(request, prepared.candidateID); err != nil {
 		releaseStateNodeV1(rollbackRoot)
 		return err
 	}
+	releaseTxnV1(prepared.activationTxn)
+	prepared.activationTxn = nil
 	stage := a.cow.txn
 	a.cow.txn = prepared.rollbackTxn
 	releaseTxnV1(stage)
@@ -662,6 +655,10 @@ func (a *Allocator) AbortCOWCandidateV1(prepared *PreparedCOWCandidateV1) error 
 // consumes it. This split is what permits several visible COW generations to
 // accumulate behind one dependency-closed durable-root publication.
 func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) error {
+	return a.ActivateCOWCandidateV1WithAllocationRequestV1(nil, nil, prepared)
+}
+
+func (a *Allocator) ActivateCOWCandidateV1WithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, prepared *PreparedCOWCandidateV1) error {
 	if a == nil || prepared == nil || prepared.candidate == nil || prepared.candidate.generation == nil {
 		return ErrGenerationFormat
 	}
@@ -676,18 +673,34 @@ func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) err
 	if a.cow.waitErr != nil {
 		return a.cow.waitErr
 	}
-	generation := prepared.candidate.generation
-	if err := a.growActivatedBackingLockedV1(a.cow.txn.buildCreator); err != nil {
-		return err
+	if prepared.packet != nil {
+		return a.activateCOWPacketRoleLockedV1(prepared)
 	}
-	next, err := beginCandidateOwnedV1(generation, generation.GenerationRef(), a.cow.ledger, a.cow.txn.buildCreator)
-	if err != nil {
-		return err
+	generation := prepared.candidate.generation
+	next := prepared.activationTxn
+	credited := prepared.creator != nil || a.cow.txn.buildCreator != nil
+	if credited {
+		// No request debit, birth or callback is permitted after credited Prepare.
+		if next == nil || next.base != generation || next.ledger != a.cow.ledger || next.consumed || cap(a.cow.activated) <= len(a.cow.activated) {
+			return ErrAllocationCertificateIncompleteV1
+		}
+	} else {
+		if err := a.growActivatedBackingLockedV1(request, nil); err != nil {
+			return err
+		}
+		var err error
+		next, err = beginCandidateOwnedV1(request, scratch, generation, generation.GenerationRef(), a.cow.ledger)
+		if err != nil {
+			return err
+		}
 	}
 	if err := a.cow.ledger.MarkVisible(prepared.candidateID); err != nil {
-		releaseTxnV1(next)
+		if !credited {
+			releaseTxnV1(next)
+		}
 		return err
 	}
+	prepared.activationTxn = nil
 	next.pruneCursor = a.cow.txn.pruneCursor
 	oldGeneration, oldTxn := a.cow.generation, a.cow.txn
 	a.cow.generation = retainGenerationV1(generation)
@@ -709,6 +722,10 @@ func (a *Allocator) ActivateCOWCandidateV1(prepared *PreparedCOWCandidateV1) err
 // reordered, or extra members are rejected before the ledger or allocator is
 // mutated. Newer activated generations remain reserved.
 func (a *Allocator) PublishActivatedCOWPrefixV1(prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
+	return a.PublishActivatedCOWPrefixV1WithAllocationRequestV1(nil, nil, prefix, nextCapability)
+}
+
+func (a *Allocator) PublishActivatedCOWPrefixV1WithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
 	if a == nil || len(prefix) == 0 {
 		return ErrGenerationFormat
 	}
@@ -717,15 +734,18 @@ func (a *Allocator) PublishActivatedCOWPrefixV1(prefix []*PreparedCOWCandidateV1
 	if a.closed {
 		return ErrCandidateConsumed
 	}
-	return a.publishActivatedCOWPrefixLockedV1(prefix, nextCapability)
+	return a.publishActivatedCOWPrefixLockedV1(request, scratch, prefix, nextCapability)
 }
 
-func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
+func (a *Allocator) publishActivatedCOWPrefixLockedV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, prefix []*PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
 	if a.cow == nil {
 		return ErrCandidateConsumed
 	}
 	if a.cow.waitErr != nil {
 		return a.cow.waitErr
+	}
+	if a.cow.packet != nil {
+		return a.publishCOWPacketPrefixLockedV1(prefix, nextCapability)
 	}
 	if len(prefix) > len(a.cow.activated) {
 		return ErrCandidateConsumed
@@ -746,7 +766,10 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	if err := a.validateCOWPhysicalTailLockedV1(generation.HighWater()); err != nil {
 		return err
 	}
-	if err := reserveMaterializationBackingV1(a.cow.txn.buildCreator, uint64(len(prefix)), uint64(unsafe.Sizeof(CandidateIDV1{})), false); err != nil {
+	if err := a.cow.txn.requireBirthCreditV1(request); err != nil {
+		return err
+	}
+	if err := reserveAllocationScratchV1(request, scratch, a.cow.txn.buildCreator, uint64(len(prefix)), uint64(unsafe.Sizeof(CandidateIDV1{})), false); err != nil {
 		return err
 	}
 	// The public bounded route admits all births before changing the ledger.
@@ -756,14 +779,14 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	var pruneStage *FreelistTxn
 	if a.cow.boundedPrune {
 		var err error
-		prunePlan, err = a.cow.txn.prepareBoundedPruneV1(nextCapability)
+		prunePlan, err = a.cow.txn.prepareBoundedPruneV1(request, scratch, nextCapability)
 		if err != nil {
 			return err
 		}
-		defer prunePlan.operation.close()
+		defer func() { prunePlan.operation.close(); prunePlan = boundedPrunePlanV1{} }()
 	} else if a.cow.txn.buildCreator != nil && !a.cow.txn.consumed && nextCapability.oldestRecoverableCommitSeq != 0 {
 		var err error
-		pruneStage, err = a.cow.txn.cloneForAllocatorPrepare()
+		pruneStage, err = a.cow.txn.cloneForAllocatorPrepare(request)
 		if err != nil {
 			return err
 		}
@@ -772,12 +795,13 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 				releaseTxnV1(pruneStage)
 			}
 		}()
-		pruneStage.PruneWithCapability(nextCapability)
+		pruneStage.PruneWithCapabilityWithAllocationRequestV1(request, scratch, nextCapability)
 		if err = pruneStage.valid(); err != nil {
 			return err
 		}
 	}
 	ids := make([]CandidateIDV1, len(prefix))
+	defer clear(ids[:cap(ids)])
 	for i, candidate := range prefix {
 		ids[i] = candidate.candidateID
 	}
@@ -794,7 +818,7 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 	// Pruning it with the newly advanced recovery horizon is conservative and
 	// does not alter any immutable activated generation.
 	if a.cow.boundedPrune {
-		work, err := a.cow.txn.applyBoundedPruneV1(&prunePlan)
+		work, err := a.cow.txn.applyBoundedPruneV1(request, &prunePlan)
 		if err != nil {
 			a.cow.waitErr = err
 			a.cow.ready.Broadcast()
@@ -807,7 +831,7 @@ func (a *Allocator) publishActivatedCOWPrefixLockedV1(prefix []*PreparedCOWCandi
 		pruneStage = nil
 		releaseTxnV1(oldTxn)
 	} else {
-		a.pruneCOWLockedV1(a.cow.txn, nextCapability)
+		a.pruneCOWLockedV1(request, scratch, a.cow.txn, nextCapability)
 	}
 	a.cow.ready.Broadcast()
 	return nil
@@ -847,6 +871,10 @@ func (a *Allocator) validateCOWPhysicalTailLockedV1(requiredHighWater uint64) er
 // identify an activated prefix by its final member. New durable-root code
 // should pass its complete sealed prefix to PublishActivatedCOWPrefixV1.
 func (a *Allocator) PublishActivatedCOWThroughV1(prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
+	return a.PublishActivatedCOWThroughV1WithAllocationRequestV1(nil, nil, prepared, nextCapability)
+}
+
+func (a *Allocator) PublishActivatedCOWThroughV1WithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
 	if a == nil || prepared == nil {
 		return ErrGenerationFormat
 	}
@@ -868,7 +896,7 @@ func (a *Allocator) PublishActivatedCOWThroughV1(prepared *PreparedCOWCandidateV
 	if through < 0 {
 		return ErrCandidateConsumed
 	}
-	return a.publishActivatedCOWPrefixLockedV1(a.cow.activated[:through+1], nextCapability)
+	return a.publishActivatedCOWPrefixLockedV1(request, scratch, a.cow.activated[:through+1], nextCapability)
 }
 
 // FailCOWCandidateV1 preserves the exact prepared candidate for close/reopen
@@ -907,11 +935,18 @@ func (a *Allocator) FailCOWCandidateV1(prepared *PreparedCOWCandidateV1, cause e
 }
 
 func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
+	return a.PublishCOWCandidateV1WithAllocationRequestV1(nil, nil, prepared, nextCapability)
+}
+
+func (a *Allocator) PublishCOWCandidateV1WithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, prepared *PreparedCOWCandidateV1, nextCapability ReuseCapability) error {
 	if prepared == nil || prepared.candidate == nil || prepared.candidate.generation == nil {
 		return ErrGenerationFormat
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if prepared.packet != nil {
+		return ErrAllocationCertificateIncompleteV1
+	}
 	if a.closed {
 		return ErrCandidateConsumed
 	}
@@ -921,18 +956,21 @@ func (a *Allocator) PublishCOWCandidateV1(prepared *PreparedCOWCandidateV1, next
 	if a.cow.waitErr != nil {
 		return a.cow.waitErr
 	}
+	if prepared.creator != nil || a.cow.txn.buildCreator != nil {
+		return ErrAllocationCertificateIncompleteV1
+	}
 	generation := prepared.candidate.generation
 	if pageCount := a.pager.PageCount(); pageCount != generation.HighWater() {
 		return fmt.Errorf("%w: pager pages %d do not match prepared generation high-water %d", ErrGenerationFormat, pageCount, generation.HighWater())
 	}
 	// All fallible builder births precede the shared ledger publication. A
 	// historical prepared creator does not confer a new mutable request edge.
-	next, err := beginCandidateOwnedV1(generation, prepared.candidate.GenerationRef(), a.cow.ledger, a.cow.txn.buildCreator)
+	next, err := beginCandidateOwnedV1(request, scratch, generation, prepared.candidate.GenerationRef(), a.cow.ledger, a.cow.txn.buildCreator)
 	if err != nil {
 		return err
 	}
 	next.pruneCursor = a.cow.txn.pruneCursor
-	a.pruneCOWLockedV1(next, nextCapability)
+	a.pruneCOWLockedV1(request, scratch, next, nextCapability)
 	if err := next.valid(); err != nil {
 		releaseTxnV1(next)
 		return err
@@ -993,12 +1031,12 @@ func (a *Allocator) EnableBoundedPruneV1() {
 		a.cow.boundedPrune = true
 	}
 }
-func (a *Allocator) pruneCOWLockedV1(txn *FreelistTxn, cap ReuseCapability) {
+func (a *Allocator) pruneCOWLockedV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, txn *FreelistTxn, cap ReuseCapability) {
 	if !a.cow.boundedPrune {
-		txn.PruneWithCapability(cap)
+		txn.PruneWithCapabilityWithAllocationRequestV1(request, scratch, cap)
 		return
 	}
-	work := txn.PruneWithCapabilityBounded(cap)
+	work := txn.PruneWithCapabilityBoundedWithAllocationRequestV1(request, scratch, cap)
 	a.recordBoundedPruneWorkV1(work)
 }
 func (a *Allocator) recordBoundedPruneWorkV1(work BoundedPruneStats) {
@@ -1012,6 +1050,10 @@ func (a *Allocator) recordBoundedPruneWorkV1(work BoundedPruneStats) {
 	a.cow.pruneWork.Wrapped = work.Wrapped
 }
 func (a *Allocator) PruneCOWBoundedStepV1(cap ReuseCapability) (BoundedPruneStats, error) {
+	return a.PruneCOWBoundedStepV1WithAllocationRequestV1(nil, nil, cap)
+}
+
+func (a *Allocator) PruneCOWBoundedStepV1WithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, cap ReuseCapability) (BoundedPruneStats, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.closed {
@@ -1023,11 +1065,11 @@ func (a *Allocator) PruneCOWBoundedStepV1(cap ReuseCapability) (BoundedPruneStat
 	if a.cow.waitErr != nil {
 		return BoundedPruneStats{}, a.cow.waitErr
 	}
-	if a.cow.prepared != nil {
+	if a.cow.prepared != nil || a.cow.packet != nil {
 		return BoundedPruneStats{}, ErrCOWCandidatePrepared
 	}
 	before := a.cow.pruneWork
-	a.pruneCOWLockedV1(a.cow.txn, cap)
+	a.pruneCOWLockedV1(request, scratch, a.cow.txn, cap)
 	after := a.cow.pruneWork
 	return BoundedPruneStats{
 		NodeVisits: after.NodeVisits - before.NodeVisits, EntriesExamined: after.EntriesExamined - before.EntriesExamined,

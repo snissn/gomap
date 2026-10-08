@@ -49,7 +49,7 @@ func (a *Allocator) EnableOwnedGenerationHandleV1(handle *OwnedGenerationHandleV
 	if handle.generation == nil {
 		return ErrCandidateConsumed
 	}
-	if err := a.enableCOWOwnedV1(handle.generation, ledger); err != nil {
+	if err := a.enableCOWOwnedV1(nil, nil, handle.generation, ledger); err != nil {
 		return err
 	}
 	g := handle.generation
@@ -68,10 +68,10 @@ func (a *Allocator) EnableNewCOWGenerationV1(generationID, highWater uint64, led
 	if closed {
 		return ErrCandidateConsumed
 	}
-	g, err := newFreelistGenerationOwnedV1(generationID, highWater, nil, nil)
+	g, err := newFreelistGenerationOwnedV1(nil, generationID, highWater, nil, nil)
 	if err != nil {
 		return err
 	}
 	defer releaseGenerationV1(g)
-	return a.enableCOWOwnedV1(g, ledger)
+	return a.enableCOWOwnedV1(nil, nil, g, ledger)
 }

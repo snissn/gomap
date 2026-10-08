@@ -9,11 +9,23 @@ import (
 
 type materializationCredit5108 struct {
 	radixCredit5105
-	reject uint64
+	reject        uint64
+	denyAfterTail *ReservationLedger
+	denyCandidate CandidateIDV1
+	denials       int
+	deniedTail    reservationInterval
 }
 
 func (credit *materializationCredit5108) ReserveAllocation(bytes uint64) error {
 	if credit.reject != 0 && bytes == credit.reject {
+		if credit.denyAfterTail != nil {
+			r := credit.denyAfterTail.candidates.Value(credit.denyCandidate)
+			if r == nil || !r.tailWriteAttempted {
+				return credit.radixCredit5105.ReserveAllocation(bytes)
+			}
+			credit.deniedTail = reservationInterval{start: r.tailStart, count: r.tailCount}
+		}
+		credit.denials++
 		return ErrAllocationCertificateIncompleteV1
 	}
 	return credit.radixCredit5105.ReserveAllocation(bytes)
@@ -27,7 +39,7 @@ func (s *recordingCountSink5108) WritePage(_ uint64, _ []byte) error { s.writes+
 // public constructors deliberately mark escape and cannot acquire finite credit.
 func materializationOwnedBase5108(t *testing.T, highWater uint64, free []uint64, retired map[uint64]uint64) *FreelistGenerationV1 {
 	t.Helper()
-	base, err := newFreelistGenerationOwnedV1(1, highWater, free, retired)
+	base, err := newFreelistGenerationOwnedV1(nil, 1, highWater, free, retired)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,10 +66,10 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		base := MustNewFreelistGenerationV1(1, 300, []uint64{2, 256}, nil)
 		txn := NewFreelistTxn(base, ledger)
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}, reject: allocationClassV1(5*uint64(unsafe.Sizeof(candidatePageV1{})), true)}
-		txn.buildCreator = &allocationCreditLeaseV1{facet: credit, refs: 1}
+		txn.buildCreator = &allocationCreditLeaseV1{resident: credit, refs: 1}
 		sink := NewOwnedCandidatePageSinkV1()
 		id := candidateIDFromString("5108-output-denial")
-		candidate, err := txn.materializeCandidateOwnedV1(2, 2, id, sink)
+		candidate, err := txn.materializeCandidateOwnedV1(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), 2, 2, id, sink)
 		if candidate != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
 			t.Fatalf("candidate=%v err=%v", candidate, err)
 		}
@@ -65,7 +77,7 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		if reservation == nil || reservation.tailWriteAttempted {
 			t.Fatal("output refusal crossed first write")
 		}
-		if err := ledger.RollbackPreVisible(id); err != nil {
+		if err := ledger.RollbackPreVisibleWithAllocationRequestV1(syntheticBorrowedRequest5108{}, id); err != nil {
 			t.Fatal(err)
 		}
 		if credit.released != 0 {
@@ -76,17 +88,34 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 			t.Fatalf("terminal creator releases=%d", credit.released)
 		}
 	})
+	t.Run("candidate-control-refuses-before-reservation-output", func(t *testing.T) {
+		base := materializationOwnedBase5108(t, 300, []uint64{2, 256}, nil)
+		ledger := newReservationLedgerOwnedV1()
+		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}, reject: allocationClassV1(uint64(unsafe.Sizeof(FreelistGenerationV1{})), true) + allocationClassV1(uint64(unsafe.Sizeof(FreelistCandidateV1{})), true)}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
+		txn, err := beginCandidateOwnedV1(requestForCreator5108(creator), scratchForCreator5108(creator), base, base.ref, ledger, creator)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := candidateIDFromString("candidate-control-before-output")
+		candidate, err := txn.materializeCandidateOwnedV1(requestForCreator5108(creator), scratchForCreator5108(creator), 2, 2, id, NewOwnedCandidatePageSinkV1())
+		if candidate != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) || ledger.candidates.Value(id) != nil || credit.denials != 1 || txn.consumed {
+			t.Fatal("candidate control denial crossed reservation/output", err)
+		}
+		releaseTxnV1(txn)
+		creator.release()
+	})
 	t.Run("each-plan-whole-class", func(t *testing.T) {
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
-		if err := reserveMaterializationObjectsV1(creator, 3, uint64(unsafe.Sizeof(indexPagePlanV1{})), false); err != nil {
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
+		if err := reserveMaterializationObjectsV1(requestForCreator5108(creator), creator, 3, uint64(unsafe.Sizeof(indexPagePlanV1{})), false); err != nil {
 			t.Fatal(err)
 		}
 		if credit.bytes != 3*640 || creator.refs != 1 {
 			t.Fatalf("whole-plan debit=%d refs=%d", credit.bytes, creator.refs)
 		}
 		before := credit.bytes
-		if err := reserveMaterializationBackingV1(creator, ^uint64(0), 8, false); !errors.Is(err, ErrNoAllocatablePage) || credit.bytes != before {
+		if err := reserveMaterializationBackingV1(requestForCreator5108(creator), creator, ^uint64(0), 8, false); !errors.Is(err, ErrNoAllocatablePage) || credit.bytes != before {
 			t.Fatalf("overflow debit=%d err=%v", credit.bytes, err)
 		}
 		creator.release()
@@ -98,14 +127,14 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		base := materializationOwnedBase5108(t, 300, []uint64{2, 256}, nil)
 		ledger := newReservationLedgerOwnedV1()
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}, reject: allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true)}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 		root := base.root
-		txn, err := beginCandidateOwnedV1(base, base.ref, ledger, creator)
+		txn, err := beginCandidateOwnedV1(requestForCreator5108(creator), scratchForCreator5108(creator), base, base.ref, ledger, creator)
 		if txn != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) || creator.refs != 1 || ledger.ownedRefs != 0 || base.root != root {
 			t.Fatalf("denied successor changed owner graph: txn=%v err=%v refs=%d ledger=%d", txn, err, creator.refs, ledger.ownedRefs)
 		}
 		credit.reject = 0
-		txn, err = beginCandidateOwnedV1(base, base.ref, ledger, creator)
+		txn, err = beginCandidateOwnedV1(requestForCreator5108(creator), scratchForCreator5108(creator), base, base.ref, ledger, creator)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,13 +166,13 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 				ledger.rawEscaped = true
 			}
 			credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-			creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+			creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 			root := base.root
-			txn, err := beginCandidateOwnedV1(base, base.ref, ledger, creator)
+			txn, err := beginCandidateOwnedV1(requestForCreator5108(creator), scratchForCreator5108(creator), base, base.ref, ledger, creator)
 			if txn != nil || !errors.Is(err, ErrFiniteAllocationExportV1) || credit.bytes != 0 || creator.refs != 1 || ledger.ownedRefs != 0 || base.root != root {
 				t.Fatal(kind, "escaped graph acquired birth authority", err)
 			}
-			txn, err = beginCandidateOwnedV1(base, base.ref, ledger)
+			txn, err = beginCandidateOwnedV1(nil, nil, base, base.ref, ledger)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -159,23 +188,23 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 	})
 	t.Run("bounded-prune-planning-refusal-is-read-only", func(t *testing.T) {
 		base := materializationOwnedBase5108(t, 300, nil, map[uint64]uint64{2: 2, 3: 2})
-		txn, err := beginCandidateOwnedV1(base, base.ref, newReservationLedgerOwnedV1())
+		txn, err := beginCandidateOwnedV1(nil, nil, base, base.ref, newReservationLedgerOwnedV1())
 		if err != nil {
 			t.Fatal(err)
 		}
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}, reject: allocationClassV1(uint64(unsafe.Sizeof(boundedPrunePlanV1{})), true)}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 		if err = txn.bindBuildCreatorV1(creator); err != nil {
 			t.Fatal(err)
 		}
 		root, stats, cursor := txn.root, txn.stats, txn.pruneCursor
 		cap := RecoveryHorizon{OldestRecoverableCommitSeq: 3}.capability()
-		_, err = txn.prepareBoundedPruneV1(cap)
+		_, err = txn.prepareBoundedPruneV1(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), cap)
 		if !errors.Is(err, ErrAllocationCertificateIncompleteV1) || txn.root != root || txn.stats != stats || txn.pruneCursor != cursor || txn.allocationErr != nil {
 			t.Fatal("planning refusal changed live state", err)
 		}
 		credit.reject = 0
-		plan, err := txn.prepareBoundedPruneV1(cap)
+		plan, err := txn.prepareBoundedPruneV1(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), cap)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -184,7 +213,7 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		}
 		before := credit.bytes
 		credit.limit = before // application must not invoke a facet after admission
-		work, err := txn.applyBoundedPruneV1(&plan)
+		work, err := txn.applyBoundedPruneV1(nil, &plan)
 		plan.operation.close()
 		if err != nil || work.PromotedPages != 2 || txn.root.freeCount() != 2 || txn.root.retiredCount() != 0 || credit.bytes != before {
 			t.Fatal("receipt application allocated or lost promotion", err)
@@ -201,28 +230,28 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 	t.Run("unbounded-prune-and-reserve-scratch-refusals", func(t *testing.T) {
 		retired := map[uint64]uint64{2: 2, 3: 2, 4: 2}
 		base := materializationOwnedBase5108(t, 300, nil, retired)
-		txn, err := beginCandidateOwnedV1(base, base.ref, newReservationLedgerOwnedV1())
+		txn, err := beginCandidateOwnedV1(nil, nil, base, base.ref, newReservationLedgerOwnedV1())
 		if err != nil {
 			t.Fatal(err)
 		}
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}, reject: allocationClassV1(3*uint64(unsafe.Sizeof(retiredPage{})), false)}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 		if err = txn.bindBuildCreatorV1(creator); err != nil {
 			t.Fatal(err)
 		}
 		root, stats := txn.root, txn.stats
-		txn.PruneWithCapability(RecoveryHorizon{OldestRecoverableCommitSeq: 3}.capability())
+		txn.PruneWithCapabilityWithAllocationRequestV1(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), RecoveryHorizon{OldestRecoverableCommitSeq: 3}.capability())
 		if !errors.Is(txn.allocationErr, ErrAllocationCertificateIncompleteV1) || txn.root != root || txn.stats != stats {
 			t.Fatal("legacy scratch refusal crossed traversal or mutation")
 		}
 		txn.allocationErr = nil
 		credit.reject = 0
-		if _, err = txn.AllocateAppend(); err != nil {
+		if _, err = txn.AllocateAppendWithAllocationRequestV1(requestForCreator5108(txn.buildCreator)); err != nil {
 			t.Fatal(err)
 		}
 		id := candidateIDFromString("5108-reserve-scratch-denial")
 		credit.reject = allocationClassV1(8, false)
-		if err = txn.Reserve(id); !errors.Is(err, ErrAllocationCertificateIncompleteV1) || txn.ledger.candidates.Value(id) != nil {
+		if err = txn.ReserveWithAllocationRequestV1(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), id); !errors.Is(err, ErrAllocationCertificateIncompleteV1) || txn.ledger.candidates.Value(id) != nil {
 			t.Fatal("reserve scratch refusal changed ledger", err)
 		}
 		if err = txn.endBuildCreatorV1(creator); err != nil {
@@ -237,70 +266,97 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 	t.Run("capacity-overflow-before-facet", func(t *testing.T) {
 		ledger := newReservationLedgerOwnedV1()
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
-		_, err := ledger.admitReservationV1(candidateIDFromString("5108-bad-cap"), nil, int(^uint(0)>>1), 0, 0, creator)
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
+		_, err := ledger.admitReservationV1(requestForCreator5108(creator), candidateIDFromString("5108-bad-cap"), nil, int(^uint(0)>>1), 0, 0, creator)
 		if !errors.Is(err, ErrNoAllocatablePage) || credit.bytes != 0 || creator.refs != 1 {
 			t.Fatal("overflow reached allocation facet", err)
 		}
-		_, err = ledger.admitReservationV1(candidateIDFromString("5108-negative-cap"), nil, -1, 0, 0, creator)
+		_, err = ledger.admitReservationV1(requestForCreator5108(creator), candidateIDFromString("5108-negative-cap"), nil, -1, 0, 0, creator)
 		if !errors.Is(err, ErrNoAllocatablePage) || credit.bytes != 0 {
 			t.Fatal("negative capacity reached allocation facet", err)
 		}
 		creator.release()
 	})
 
-	for _, route := range []string{"activate", "direct-publish"} {
-		t.Run(route+"-birth-refusal-before-ledger", func(t *testing.T) {
-			a := terminalAllocator5105(t, nil)
-			credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-			creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
-			if err := a.cow.txn.bindBuildCreatorV1(creator); err != nil {
-				t.Fatal(err)
-			}
-			prepared := ownedPrepared5105(t, a, "5108-current-"+route)
-			if route == "direct-publish" {
-				materializationGrowPager5108(t, a, prepared)
-				if err := prepared.WritePagesToPagerV1(a.pager); err != nil {
-					t.Fatal(err)
-				}
-			}
-			stage := a.cow.txn
-			credit.reject = allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true)
-			invoke := func() error {
-				if route == "activate" {
-					return a.ActivateCOWCandidateV1(prepared)
-				}
-				return a.PublishCOWCandidateV1(prepared, ReuseCapability{})
-			}
-			if err := invoke(); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
-				t.Fatal("successor birth was not refused", err)
-			}
-			reservation := a.cow.ledger.candidates.Value(prepared.candidateID)
-			if reservation == nil || reservation.state != CandidatePreVisible || a.cow.txn != stage || a.cow.prepared != prepared || prepared.activated || prepared.published {
-				t.Fatal("birth refusal crossed shared ledger/allocator visibility")
-			}
-			credit.reject = 0
-			if err := invoke(); err != nil {
-				t.Fatal("exact candidate retry", err)
-			}
-			if a.cow.txn.creator != creator || a.cow.txn.buildCreator != creator {
-				t.Fatal("successor used a historical or absent birth owner")
-			}
-			if err := a.cow.txn.endBuildCreatorV1(creator); err != nil {
-				t.Fatal(err)
-			}
-			creator.release()
-			a.CloseCOWOwnersAfterShutdownV1()
-			if credit.released != 1 {
-				t.Fatalf("terminal creator releases=%d refs=%d", credit.released, creator.refs)
-			}
-		})
-	}
+	t.Run("credited-activation-consumes-preborn-successor", func(t *testing.T) {
+		a := terminalAllocator5105(t, nil)
+		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
+		if err := a.cow.txn.bindBuildCreatorV1(creator); err != nil {
+			t.Fatal(err)
+		}
+		// The successor-header refusal now belongs to Prepare, before exposure.
+		credit.reject = allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true)
+		before := a.cow.txn
+		id := candidateIDFromString("5108-preborn-activation")
+		prepared, err := a.PrepareOwnedCOWCandidateRetiringWithAllocationRequestV1(requestForCreator5108(creator), scratchForCreator5108(creator), 2, 2, id, ReuseCapability{}, nil, 0, NewOwnedCandidatePageSinkV1(), nil)
+		if !errors.Is(err, ErrAllocationCertificateIncompleteV1) || prepared != nil || a.cow.txn != before || a.cow.prepared != nil {
+			t.Fatal("preparation refusal changed visible state", err)
+		}
+		credit.reject = 0
+		prepared = ownedPrepared5105(t, a, "5108-preborn-activation")
+		next := prepared.activationTxn
+		if next == nil || cap(a.cow.activated) <= len(a.cow.activated) {
+			t.Fatal("successor was not preborn")
+		}
+		bytes := credit.bytes
+		// No current request and a fully refusing resident prove Activate cannot
+		// reserve after Prepare. Missing backing still refuses before visibility.
+		prepared.activationTxn = nil
+		if err := a.ActivateCOWCandidateV1(prepared); !errors.Is(err, ErrAllocationCertificateIncompleteV1) || prepared.activated {
+			t.Fatal("missing successor crossed visibility", err)
+		}
+		prepared.activationTxn = next
+		credit.reject = allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true)
+		if err := a.ActivateCOWCandidateV1(prepared); err != nil || credit.bytes != bytes || a.cow.txn != next || prepared.activationTxn != nil {
+			t.Fatal("activation allocated or lost successor", err)
+		}
+		credit.reject = 0
+		if err := a.cow.txn.endBuildCreatorV1(creator); err != nil {
+			t.Fatal(err)
+		}
+		creator.release()
+		a.CloseCOWOwnersAfterShutdownV1()
+		if credit.released != 1 {
+			t.Fatal("preborn successor leaked creator")
+		}
+	})
+	t.Run("credited-direct-publication-refuses-unprepared-role", func(t *testing.T) {
+		a := terminalAllocator5105(t, nil)
+		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
+		if err := a.cow.txn.bindBuildCreatorV1(creator); err != nil {
+			t.Fatal(err)
+		}
+		prepared := ownedPrepared5105(t, a, "5108-direct-role-refusal")
+		stage, next := a.cow.txn, prepared.activationTxn
+		before := credit.bytes
+		if err := a.PublishCOWCandidateV1(prepared, ReuseCapability{}); !errors.Is(err, ErrAllocationCertificateIncompleteV1) || a.cow.txn != stage || prepared.activationTxn != next || prepared.activated || prepared.published || credit.bytes != before {
+			t.Fatal("direct role refusal changed prepared ownership", err)
+		}
+		if err := a.AbortCOWCandidateV1WithAllocationRequestV1(requestForCreator5108(creator), prepared); err != nil {
+			t.Fatal(err)
+		}
+		if prepared.activationTxn != nil {
+			t.Fatal("abort retained preborn successor")
+		}
+		if err := prepared.ClearTerminalBackingV1(); err != nil {
+			t.Fatal(err)
+		}
+		if err := a.cow.txn.endBuildCreatorV1(creator); err != nil {
+			t.Fatal(err)
+		}
+		creator.release()
+		a.CloseCOWOwnersAfterShutdownV1()
+		if credit.released != 1 {
+			t.Fatal("abort lost creator")
+		}
+	})
 	t.Run("activated-prefix-scratch-before-publish", func(t *testing.T) {
 		a := terminalAllocator5105(t, nil)
 		a.EnableBoundedPruneV1()
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 		if err := a.cow.txn.bindBuildCreatorV1(creator); err != nil {
 			t.Fatal(err)
 		}
@@ -309,11 +365,11 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		if err := prepared.WritePagesToPagerV1(a.pager); err != nil {
 			t.Fatal(err)
 		}
-		if err := a.ActivateCOWCandidateV1(prepared); err != nil {
+		if err := a.ActivateCOWCandidateV1WithAllocationRequestV1(requestForAllocator5108(a), scratchForAllocator5108(a), prepared); err != nil {
 			t.Fatal(err)
 		}
 		credit.reject = allocationClassV1(uint64(unsafe.Sizeof(CandidateIDV1{})), false)
-		if err := a.PublishActivatedCOWThroughV1(prepared, ReuseCapability{}); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
+		if err := a.PublishActivatedCOWThroughV1WithAllocationRequestV1(requestForAllocator5108(a), scratchForAllocator5108(a), prepared, ReuseCapability{}); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
 			t.Fatal("prefix scratch was not refused", err)
 		}
 		reservation := a.cow.ledger.candidates.Value(prepared.candidateID)
@@ -321,7 +377,7 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 			t.Fatal("scratch refusal crossed PublishBatch")
 		}
 		credit.reject = 0
-		if err := a.PublishActivatedCOWThroughV1(prepared, ReuseCapability{}); err != nil {
+		if err := a.PublishActivatedCOWThroughV1WithAllocationRequestV1(requestForAllocator5108(a), scratchForAllocator5108(a), prepared, ReuseCapability{}); err != nil {
 			t.Fatal("exact prefix retry", err)
 		}
 		if err := a.cow.txn.endBuildCreatorV1(creator); err != nil {
@@ -335,9 +391,9 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 	})
 	t.Run("abort-isolation-refusal-preserves-exact-retry", func(t *testing.T) {
 		a := terminalAllocator5105(t, nil)
-		a.cow.txn.Retire(2, 1)
+		a.cow.txn.RetireWithAllocationRequestV1(requestForCreator5108(a.cow.txn.buildCreator), 2, 1)
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 		if err := a.cow.txn.bindBuildCreatorV1(creator); err != nil {
 			t.Fatal(err)
 		}
@@ -345,14 +401,14 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		stage, rollback := a.cow.txn, prepared.rollbackTxn
 		root := rollback.root
 		credit.reject = stateChunkCopyCapacityV1
-		if err := a.AbortCOWCandidateV1(prepared); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
+		if err := a.AbortCOWCandidateV1WithAllocationRequestV1(requestForAllocator5108(a), prepared); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
 			t.Fatal("abort isolation was not refused", err)
 		}
 		if a.cow.txn != stage || prepared.rollbackTxn != rollback || rollback.root != root || a.cow.prepared != prepared || a.cow.ledger.candidates.Value(prepared.candidateID) == nil {
 			t.Fatal("abort refusal lost exact candidate/rollback owner")
 		}
 		credit.reject = 0
-		if err := a.AbortCOWCandidateV1(prepared); err != nil {
+		if err := a.AbortCOWCandidateV1WithAllocationRequestV1(requestForAllocator5108(a), prepared); err != nil {
 			t.Fatal("exact abort retry", err)
 		}
 		if a.cow.txn != rollback || a.cow.txn.root == root || a.cow.txn.buildCreator != creator {
@@ -375,18 +431,18 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		for _, sink := range []AppendPageSink{NewCandidatePageSinkV1(), &recordingCountSink5108{}} {
 			base := materializationOwnedBase5108(t, 300, []uint64{2, 256}, nil)
 			ledger := newReservationLedgerOwnedV1()
-			txn, err := beginCandidateOwnedV1(base, base.ref, ledger)
+			txn, err := beginCandidateOwnedV1(nil, nil, base, base.ref, ledger)
 			if err != nil {
 				t.Fatal(err)
 			}
 			credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-			creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+			creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 			if err = txn.bindBuildCreatorV1(creator); err != nil {
 				t.Fatal(err)
 			}
 			before, root := credit.bytes, txn.root
 			id := candidateIDFromString("5108-unowned-sink")
-			candidate, err := txn.materializeCandidateOwnedV1(2, 2, id, sink)
+			candidate, err := txn.materializeCandidateOwnedV1(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), 2, 2, id, sink)
 			if candidate != nil || !errors.Is(err, ErrFiniteAllocationExportV1) || credit.bytes != before || txn.consumed || txn.root != root || ledger.candidates.Value(id) != nil {
 				t.Fatal("wrong sink crossed admission/consumption", err)
 			}
@@ -415,7 +471,7 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		for _, kind := range []string{"wrong", "skipped", "overflow", "full"} {
 			ledger := NewReservationLedger()
 			id := candidateIDFromString("5108-scalar-" + kind)
-			start, count, err := ledger.reserveTail(id, 300, 1, nil, nil)
+			start, count, err := ledger.reserveTail(nil, id, 300, 1, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -437,7 +493,7 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 			if err = recorded.write(bad, make([]byte, page.PageSize)); !errors.Is(err, ErrGenerationFormat) || sink.writes != 0 || ledger.candidates.Value(id).tailWriteAttempted {
 				t.Fatal(kind, "crossed callback/tail mark", err)
 			}
-			if err = ledger.RollbackPreVisible(id); err != nil {
+			if err = ledger.RollbackPreVisibleWithAllocationRequestV1(syntheticBorrowedRequest5108{}, id); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -470,12 +526,12 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 			}
 			base := materializationOwnedBase5108(t, 512, free, nil)
 			ledger := newReservationLedgerOwnedV1()
-			txn, err := beginCandidateOwnedV1(base, base.ref, ledger)
+			txn, err := beginCandidateOwnedV1(nil, nil, base, base.ref, ledger)
 			if err != nil {
 				t.Fatal(err)
 			}
 			credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-			creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+			creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 			if err = txn.bindBuildCreatorV1(creator); err != nil {
 				t.Fatal(err)
 			}
@@ -483,7 +539,7 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 			if reuse {
 				id = candidateIDFromString("5108-owned-reuse")
 			}
-			candidate, err := txn.materializeCandidateOwnedV1(2, 2, id, NewOwnedCandidatePageSinkV1())
+			candidate, err := txn.materializeCandidateOwnedV1(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), 2, 2, id, NewOwnedCandidatePageSinkV1())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -516,25 +572,25 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 	t.Run("skipped-tail-coverage-paid-before-ledger", func(t *testing.T) {
 		ledger := newReservationLedgerOwnedV1()
 		blocker := candidateIDFromString("5108-block-tail")
-		if err := ledger.reserve(blocker, []uint64{300}); err != nil {
+		if err := ledger.reserve(nil, blocker, []uint64{300}); err != nil {
 			t.Fatal(err)
 		}
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 		id := candidateIDFromString("5108-skipped-tail")
 		// Exact reservation/control/chunk classes plus the newly required interval.
-		plan, err := ledger.admitReservationV1(id, nil, 0, 0, 1, creator)
+		plan, err := ledger.admitReservationV1(requestForCreator5108(creator), id, nil, 0, 0, 1, creator)
 		if err != nil {
 			t.Fatal(err)
 		}
 		bytes := plan.operation.bytes
 		plan.operation.close()
 		credit.reject = bytes
-		if _, _, err = ledger.reserveTail(id, 300, 1, nil, nil, creator); !errors.Is(err, ErrAllocationCertificateIncompleteV1) || ledger.candidates.Value(id) != nil {
+		if _, _, err = ledger.reserveTail(requestForCreator5108(creator), id, 300, 1, nil, nil, creator); !errors.Is(err, ErrAllocationCertificateIncompleteV1) || ledger.candidates.Value(id) != nil {
 			t.Fatal("coverage refusal crossed reservation", err)
 		}
 		credit.reject = 0
-		start, _, err := ledger.reserveTail(id, 300, 1, nil, nil, creator)
+		start, _, err := ledger.reserveTail(requestForCreator5108(creator), id, 300, 1, nil, nil, creator)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -542,7 +598,7 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 		if start != 301 || len(r.abandonedCoverage) != 1 || cap(r.abandonedCoverage) != 1 || r.coverageCreator != creator || r.abandonedCoverage[0] != (reservationInterval{start: 300, count: 1}) {
 			t.Fatal("skipped prefix lacks exact paid backing")
 		}
-		if err = ledger.RollbackPreVisible(id); err != nil {
+		if err = ledger.RollbackPreVisibleWithAllocationRequestV1(syntheticBorrowedRequest5108{}, id); err != nil {
 			t.Fatal(err)
 		}
 		creator.release()
@@ -554,31 +610,45 @@ func TestMaterializationBackingPredebitsAndKeepsCreator5108(t *testing.T) {
 	t.Run("owned-partial-output-refusal-restores-backup-and-retries", func(t *testing.T) {
 		a := terminalAllocator5105(t, nil)
 		credit := &materializationCredit5108{radixCredit5105: radixCredit5105{limit: ^uint64(0), retained: 1}}
-		creator := &allocationCreditLeaseV1{facet: credit, refs: 1}
+		creator := &allocationCreditLeaseV1{resident: credit, refs: 1}
 		if err := a.cow.txn.bindBuildCreatorV1(creator); err != nil {
 			t.Fatal(err)
 		}
-		before := a.cow.txn.highWater
+		backup := a.cow.txn
+		before := backup.highWater
 		credit.reject = allocationClassV1(uint64(unsafe.Sizeof(FreelistCandidateV1{})), true)
 		id := candidateIDFromString("5108-owned-output-retry")
+		// Candidate controls now prebirth before images. Class80 also belongs to
+		// the activation successor's radix headers; refuse that actual next-role
+		// birth only after this exact owned sink marked its attempted tail.
+		credit.denyAfterTail, credit.denyCandidate = a.cow.ledger, id
+		request := &componentBorrowedRequest5108{}
+		requestBefore := request.bytes
 		invoke := func() (*PreparedCOWCandidateV1, error) {
-			return a.PrepareOwnedCOWCandidateRetiringWithLimitsV1(2, 2, id, ReuseCapability{}, nil, 0, NewOwnedCandidatePageSinkV1(), nil)
+			return a.PrepareOwnedCOWCandidateRetiringWithAllocationRequestV1(request, scratchForAllocator5108(a), 2, 2, id, ReuseCapability{}, nil, 0, NewOwnedCandidatePageSinkV1(), nil)
 		}
 		prepared, err := invoke()
-		if prepared != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) || a.cow.prepared != nil || a.cow.txn.consumed || a.cow.txn.highWater != before || a.cow.ledger.candidates.Value(id) != nil || len(a.cow.ledger.burnedTails) != 1 {
+		if prepared != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) || a.cow.prepared != nil || a.cow.txn != backup || a.cow.txn.consumed || a.cow.txn.highWater != before || a.cow.ledger.candidates.Value(id) != nil || len(a.cow.ledger.burnedTails) != 1 {
 			t.Fatal("partial owned output refusal lost rollback/burn contract", err)
 		}
 		burned := a.cow.ledger.burnedTails[0]
+		if credit.denials != 1 || credit.deniedTail != burned || burned.count == 0 || request.bytes <= requestBefore {
+			t.Fatal("denial was not after actual owned output/cumulative debit", credit.denials, credit.deniedTail, burned, request.bytes)
+		}
+		failedRequestBytes := request.bytes
 		credit.reject = 0
 		prepared, err = invoke()
 		if err != nil {
 			t.Fatal("exact owned sink retry", err)
 		}
+		if request.bytes <= failedRequestBytes || credit.denials != 1 {
+			t.Fatal("retry refunded cumulative birth debit or repeated denial")
+		}
 		r := a.cow.ledger.candidates.Value(id)
 		if r == nil || r.tailStart < burned.start+burned.count || r.tailCount != uint64(len(prepared.candidate.pages)) {
 			t.Fatal("retry collided with attempted tail")
 		}
-		if err = a.AbortCOWCandidateV1(prepared); err != nil {
+		if err = a.AbortCOWCandidateV1WithAllocationRequestV1(requestForAllocator5108(a), prepared); err != nil {
 			t.Fatal(err)
 		}
 		if err = prepared.ClearTerminalBackingV1(); err != nil {

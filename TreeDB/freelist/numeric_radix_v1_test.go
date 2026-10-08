@@ -78,7 +78,7 @@ func TestNumericRadixPredebitAndIntrinsicLifetime5105(t *testing.T) {
 	radix := newPageRadixV1[CandidateIDV1]()
 	first := candidateIDFromString("first")
 	for _, k := range []uint64{10, 20} {
-		if err := radix.PutWithCredit(k, first, lease); err != nil {
+		if err := radix.PutWithCredit(requestForCreator5108(lease), k, first, lease); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +93,7 @@ func TestNumericRadixPredebitAndIntrinsicLifetime5105(t *testing.T) {
 	if a.released != 0 || chunk.used != 1 {
 		t.Fatal("partly empty chunk released")
 	}
-	if err := radix.PutWithCredit(1, first, next); err != nil {
+	if err := radix.PutWithCredit(requestForCreator5108(next), 1, first, next); err != nil {
 		t.Fatal(err)
 	}
 	next.release()
@@ -109,11 +109,11 @@ func TestNumericRadixPredebitAndIntrinsicLifetime5105(t *testing.T) {
 		t.Fatal("last actual chunk did not scrub and release owner")
 	}
 	c := &radixCredit5105{limit: 32}
-	limited, err := newAllocationCreditLeaseV1(c)
+	limited, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := radix.PutWithCredit(99, first, limited); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
+	if err := radix.PutWithCredit(requestForCreator5108(limited), 99, first, limited); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
 		t.Fatal(err)
 	}
 	if radix.Len() != 0 || radix.root.chunk != nil || radix.head != nil || radix.freeSlots != 0 {
@@ -232,13 +232,13 @@ func TestNumericRadixWholeChunkPlanAndBulkClone5105(t *testing.T) {
 	if refs != 7 || bytes != refs*numericRadixChunkClassV1[uint64, CandidateIDV1]() {
 		t.Fatal("full prospective capacities omitted")
 	}
-	operation, err := admitAllocationOperationV1(lease, bytes, refs)
+	operation, err := admitAllocationOperationV1(requestForCreator5108(lease), lease, bytes, refs)
 	if err != nil {
 		t.Fatal(err)
 	}
 	value := candidateIDFromString("bulk")
 	for i := uint64(0); i < 100; i++ {
-		if err = radix.putAdmittedV1(i*19, value, lease, &operation); err != nil {
+		if err = radix.putAdmittedV1(requestForCreator5108(lease), i*19, value, lease, &operation); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -252,7 +252,7 @@ func TestNumericRadixWholeChunkPlanAndBulkClone5105(t *testing.T) {
 	// reconstruction would invoke it; structural bulk copying must not.
 	radix.diff = func(uint64, uint64) int { panic("clone reconstructed through Insert") }
 	b, cloneOwner := buildCreditLease5105(t)
-	clone, err := radix.CloneWithCredit(cloneOwner)
+	clone, err := radix.CloneWithCredit(requestForCreator5108(cloneOwner), cloneOwner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,14 +285,14 @@ func TestNumericRadixChunkGrowthDeniedBeforeBirth5105(t *testing.T) {
 	a, lease := buildCreditLease5105(t)
 	radix := newPageRadixV1[uint64]()
 	for i := uint64(0); i < 16; i++ {
-		if err := radix.PutWithCredit(i, i, lease); err != nil {
+		if err := radix.PutWithCredit(requestForCreator5108(lease), i, i, lease); err != nil {
 			t.Fatal(err)
 		}
 	}
 	oldHead, oldRoot, oldFree, oldRefs := radix.head, radix.root, radix.freeSlots, lease.refs
 	before := a.bytes
 	a.limit = before
-	if err := radix.PutWithCredit(16, 16, lease); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
+	if err := radix.PutWithCredit(requestForCreator5108(lease), 16, 16, lease); !errors.Is(err, ErrAllocationCertificateIncompleteV1) {
 		t.Fatal(err)
 	}
 	if radix.Len() != 16 || radix.head != oldHead || radix.root != oldRoot || radix.freeSlots != oldFree || a.bytes != before || lease.refs != oldRefs {
@@ -300,7 +300,7 @@ func TestNumericRadixChunkGrowthDeniedBeforeBirth5105(t *testing.T) {
 	}
 	assertRadixChunks5105(t, radix)
 	// Clone admission also rejects before its header or any chunk births.
-	if clone, err := radix.CloneWithCredit(lease); clone != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) || a.bytes != before || lease.refs != oldRefs {
+	if clone, err := radix.CloneWithCredit(requestForCreator5108(lease), lease); clone != nil || !errors.Is(err, ErrAllocationCertificateIncompleteV1) || a.bytes != before || lease.refs != oldRefs {
 		t.Fatal("clone partially admitted", err)
 	}
 	radix.Clear()

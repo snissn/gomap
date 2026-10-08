@@ -428,10 +428,10 @@ func TestReservationLedgerPublishBatchValidatesBeforeMutation(t *testing.T) {
 	first := candidateIDFromString("batch-first")
 	second := candidateIDFromString("batch-second")
 	missing := candidateIDFromString("batch-missing")
-	if err := ledger.reserve(first, []uint64{10}); err != nil {
+	if err := ledger.reserve(nil, first, []uint64{10}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.reserve(second, []uint64{11}); err != nil {
+	if err := ledger.reserve(nil, second, []uint64{11}); err != nil {
 		t.Fatal(err)
 	}
 	if err := ledger.PublishBatch([]CandidateIDV1{first, missing, second}); err == nil {

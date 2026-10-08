@@ -20,7 +20,7 @@ func grownCapacityV1(current, needed int) int {
 	}
 	return max(needed, max(1, current*2))
 }
-func (l *ReservationLedger) admitReservationV1(candidate CandidateIDV1, r *reservation, dataCount, newOwners, coverageCount int, creator *allocationCreditLeaseV1, extra ...allocationOperationV1) (reservationAdmissionV1, error) {
+func (l *ReservationLedger) admitReservationV1(request AllocationRequestCreditV1, candidate CandidateIDV1, r *reservation, dataCount, newOwners, coverageCount int, creator *allocationCreditLeaseV1, extra ...allocationOperationV1) (reservationAdmissionV1, error) {
 	maximum := int(^uint(0) >> 1)
 	if dataCount < 0 || newOwners < 0 || coverageCount < 0 || len(extra) > 1 {
 		return reservationAdmissionV1{}, ErrNoAllocatablePage
@@ -55,7 +55,7 @@ func (l *ReservationLedger) admitReservationV1(candidate CandidateIDV1, r *reser
 		bytes = cowSaturatingAddV1(bytes, extra[0].bytes)
 		refs = cowSaturatingAddV1(refs, extra[0].refs)
 	}
-	operation, err := admitAllocationOperationV1(creator, bytes, refs)
+	operation, err := admitAllocationOperationV1(request, creator, bytes, refs)
 	if err != nil {
 		return reservationAdmissionV1{}, err
 	}

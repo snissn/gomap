@@ -40,6 +40,9 @@ var patriciaCondClassWitness5108 [64]*sync.Cond
 var patriciaRecordingClassWitness5108 [64]*recordingSink
 var patriciaPrunePlanClassWitness5108 [64]*boundedPrunePlanV1
 var patriciaOwnedSinkClassWitness5108 [64]AppendPageSink
+var patriciaPacketClassWitness5108 [64]*PreparedCOWPublicationPacketV1
+var patriciaPacketProofClassWitness5108 [64]*packetReservationProofV1
+var patriciaStageControlClassWitness5108 [64]*privateCOWStageControlV1
 
 func TestCompressedAllocatorActualClassWitness5108(t *testing.T) {
 	t.Run("owned-sink-zero-backing", func(t *testing.T) {
@@ -72,7 +75,7 @@ func TestCompressedAllocatorActualClassWitness5108(t *testing.T) {
 				}
 			},
 			func() { clear(patriciaChunkClassWitness5108[:]) }},
-		{"transaction", uint64(unsafe.Sizeof(FreelistTxn{})), 384, 384,
+		{"transaction", uint64(unsafe.Sizeof(FreelistTxn{})), 368, 384,
 			func() {
 				for i := range patriciaTxnClassWitness5108 {
 					patriciaTxnClassWitness5108[i] = new(FreelistTxn)
@@ -211,6 +214,21 @@ func TestCompressedAllocatorActualClassWitness5108(t *testing.T) {
 			patriciaPrunePlanClassWitness5108[i] = new(boundedPrunePlanV1)
 		}
 	}, func() { clear(patriciaPrunePlanClassWitness5108[:]) }})
+	classes = append(classes, patriciaClassWitnessV25108{"publication-packet", uint64(unsafe.Sizeof(PreparedCOWPublicationPacketV1{})), uint64(unsafe.Sizeof(PreparedCOWPublicationPacketV1{})), allocationClassV1(uint64(unsafe.Sizeof(PreparedCOWPublicationPacketV1{})), true), func() {
+		for i := range patriciaPacketClassWitness5108 {
+			patriciaPacketClassWitness5108[i] = new(PreparedCOWPublicationPacketV1)
+		}
+	}, func() { clear(patriciaPacketClassWitness5108[:]) }})
+	classes = append(classes, patriciaClassWitnessV25108{"publication-proof", uint64(unsafe.Sizeof(packetReservationProofV1{})), uint64(unsafe.Sizeof(packetReservationProofV1{})), allocationClassV1(uint64(unsafe.Sizeof(packetReservationProofV1{})), true), func() {
+		for i := range patriciaPacketProofClassWitness5108 {
+			patriciaPacketProofClassWitness5108[i] = new(packetReservationProofV1)
+		}
+	}, func() { clear(patriciaPacketProofClassWitness5108[:]) }})
+	classes = append(classes, patriciaClassWitnessV25108{"private-stage-control", uint64(unsafe.Sizeof(privateCOWStageControlV1{})), uint64(unsafe.Sizeof(privateCOWStageControlV1{})), allocationClassV1(uint64(unsafe.Sizeof(privateCOWStageControlV1{})), true), func() {
+		for i := range patriciaStageControlClassWitness5108 {
+			patriciaStageControlClassWitness5108[i] = new(privateCOWStageControlV1)
+		}
+	}, func() { clear(patriciaStageControlClassWitness5108[:]) }})
 	for _, tc := range classes {
 		scan := tc.name != "plan"
 		if tc.raw != tc.wantRaw || allocationClassV1(tc.raw, scan) != tc.class {
@@ -270,11 +288,11 @@ func TestCompressedAllocatorTailCountMatchesActualCoalescing5108(t *testing.T) {
 
 func TestCompressedAllocatorBranchBirthDenialPreservesAllAliases5108(t *testing.T) {
 	account := &radixCredit5105{limit: ^uint64(0)}
-	creator, err := newAllocationCreditLeaseV1(account)
+	creator, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, account)
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := mutateChunk(stateRefV1{}, 0, 0, func(c *stateChunk) { c.setFree(2, true) })
+	root := mutateChunk(nil, stateRefV1{}, 0, 0, func(c *stateChunk) { c.setFree(2, true) })
 	defer releaseStateNodeV1(root)
 	before := *root.chunk
 	account.limit = account.bytes + stateChunkCopyCapacityV1 // chunk fits, complete split does not
@@ -282,7 +300,7 @@ func TestCompressedAllocatorBranchBirthDenialPreservesAllAliases5108(t *testing.
 	if plan.nodes != 1 || plan.chunks != 1 {
 		t.Fatalf("split plan=%+v", plan)
 	}
-	op, err := admitAllocationOperationV1(creator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	op, err := admitAllocationOperationV1(requestForCreator5108(creator), creator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err == nil {
 		op.close()
 		t.Fatal("incomplete whole-branch prepayment accepted")
@@ -298,11 +316,11 @@ func TestCompressedAllocatorBranchBirthDenialPreservesAllAliases5108(t *testing.
 
 func TestCompressedAllocatorSplitCollapseRetainsExactCreators5108(t *testing.T) {
 	firstAccount, secondAccount := &radixCredit5105{limit: ^uint64(0)}, &radixCredit5105{limit: ^uint64(0)}
-	first, err := newAllocationCreditLeaseV1(firstAccount)
+	first, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, firstAccount)
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, err := cloneStateChunkOwnedV1(nil, false, first)
+	original, err := cloneStateChunkOwnedV1(requestForCreator5108(first), nil, false, first)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,16 +329,16 @@ func TestCompressedAllocatorSplitCollapseRetainsExactCreators5108(t *testing.T) 
 	refreshChunkSummaryV1(original)
 	root := stateRefV1{chunk: original}
 	first.release() // mutable birth frontier retired; chunk remains owned
-	second, err := newAllocationCreditLeaseV1(secondAccount)
+	second, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, secondAccount)
 	if err != nil {
 		t.Fatal(err)
 	}
 	plan := mutationStateBirthPlanV1(root, 1, 0, true, false, false)
-	op, err := admitAllocationOperationV1(second, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	op, err := admitAllocationOperationV1(requestForCreator5108(second), second, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	split, err := mutateStateOwnedOperationV1(root, 1, 0, func(c *stateChunk) { c.setFree(2, true) }, true, nil, &op)
+	split, err := mutateStateOwnedOperationV1(nil, root, 1, 0, func(c *stateChunk) { c.setFree(2, true) }, true, nil, &op)
 	op.close()
 	if err != nil {
 		t.Fatal(err)
@@ -333,11 +351,11 @@ func TestCompressedAllocatorSplitCollapseRetainsExactCreators5108(t *testing.T) 
 	}
 	before := firstAccount.bytes
 	plan = mutationStateBirthPlanV1(root, 0, 0, true, false, false)
-	op, err = admitAllocationOperationV1(second, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	op, err = admitAllocationOperationV1(requestForCreator5108(second), second, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	edited, err := mutateStateOwnedOperationV1(root, 0, 0, func(c *stateChunk) { c.setFree(2, false) }, true, nil, &op)
+	edited, err := mutateStateOwnedOperationV1(nil, root, 0, 0, func(c *stateChunk) { c.setFree(2, false) }, true, nil, &op)
 	op.close()
 	if err != nil {
 		t.Fatal(err)
@@ -347,11 +365,11 @@ func TestCompressedAllocatorSplitCollapseRetainsExactCreators5108(t *testing.T) 
 		t.Fatal("partial deletion refunded or rebound the original whole chunk")
 	}
 	plan = mutationStateBirthPlanV1(root, 0, 0, true, false, false)
-	op, err = admitAllocationOperationV1(second, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	op, err = admitAllocationOperationV1(requestForCreator5108(second), second, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err != nil {
 		t.Fatal(err)
 	}
-	collapsed, err := mutateStateOwnedOperationV1(root, 0, 0, func(c *stateChunk) { c.setFree(3, false) }, true, nil, &op)
+	collapsed, err := mutateStateOwnedOperationV1(nil, root, 0, 0, func(c *stateChunk) { c.setFree(3, false) }, true, nil, &op)
 	op.close()
 	if err != nil {
 		t.Fatal(err)

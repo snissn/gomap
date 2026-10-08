@@ -29,7 +29,7 @@ func TestManagedWriterEscapeRefusesResidentAdoptionAndFiniteExport5105(t *testin
 		}
 		account, creator := buildCreditLease5105(t)
 		before := account.bytes
-		_, err := a.admitResidentAllocationCreditV1(creator, 1)
+		_, err := a.admitResidentAllocationCreditV1(requestForCreator5108(creator), creator, 1)
 		if escaped {
 			if !errors.Is(err, ErrFiniteAllocationExportV1) || account.bytes != before {
 				t.Fatal("prior writer escaped admission", err)
@@ -68,7 +68,7 @@ func TestManagedWriterCondBorrowOwnsHeadersThroughShutdown5105(t *testing.T) {
 	a := managedTerminalAllocator5105(t)
 	_ = ownedPrepared5105(t, a, "waiter-terminal")
 	account, creator := buildCreditLease5105(t)
-	if _, err := a.admitResidentAllocationCreditV1(creator, 1); err != nil {
+	if _, err := a.admitResidentAllocationCreditV1(requestForCreator5108(creator), creator, 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.endResidentAllocationCreditV1(creator, 1); err != nil {
@@ -79,7 +79,7 @@ func TestManagedWriterCondBorrowOwnsHeadersThroughShutdown5105(t *testing.T) {
 	TestHookCOWWaitBeforeSleep = func() { close(sleeping) }
 	defer func() { TestHookCOWWaitBeforeSleep = nil }()
 	done := make(chan error, 1)
-	go func() { _, err := a.Alloc(0); done <- err }()
+	go func() { _, err := a.AllocWithAllocationRequestV1(requestForAllocator5108(a), 0); done <- err }()
 	select {
 	case <-sleeping:
 	case <-time.After(5 * time.Second):
@@ -114,16 +114,16 @@ func TestManagedWriterCondBorrowOwnsHeadersThroughShutdown5105(t *testing.T) {
 	}
 	// Permanent discriminator prevents legacy pager allocation after cow=nil.
 	before := a.pager.PageCount()
-	if _, err := a.Alloc(0); !errors.Is(err, ErrCandidateConsumed) {
+	if _, err := a.AllocWithAllocationRequestV1(requestForAllocator5108(a), 0); !errors.Is(err, ErrCandidateConsumed) {
 		t.Fatal(err)
 	}
-	if _, err := a.AllocMany(2, 0); !errors.Is(err, ErrCandidateConsumed) {
+	if _, err := a.AllocManyWithAllocationRequestV1(requestForAllocator5108(a), 2, 0); !errors.Is(err, ErrCandidateConsumed) {
 		t.Fatal(err)
 	}
-	if _, err := a.AllocAppend(); !errors.Is(err, ErrCandidateConsumed) {
+	if _, err := a.AllocAppendWithAllocationRequestV1(requestForAllocator5108(a)); !errors.Is(err, ErrCandidateConsumed) {
 		t.Fatal(err)
 	}
-	if err := a.Free(2); !errors.Is(err, ErrCandidateConsumed) {
+	if err := a.FreeWithAllocationRequestV1(requestForAllocator5108(a), scratchForAllocator5108(a), 2); !errors.Is(err, ErrCandidateConsumed) {
 		t.Fatal(err)
 	}
 	if err := a.EnableNewCOWGenerationV1(2, 4, nil); !errors.Is(err, ErrCandidateConsumed) {

@@ -8,9 +8,10 @@ import (
 )
 
 // Materialization backing has the candidate/generation creator's lifetime.
-// Scratch adds debit, never a new retained alias or a refund at publication.
+// Scratch uses a distinct short resident scope, never the candidate creator.
+// Cumulative request debit is never refunded at publication.
 // Public finite preparation remains refused until the whole caller fits.
-func reserveMaterializationBackingV1(creator *allocationCreditLeaseV1, count, width uint64, scan bool) error {
+func reserveMaterializationBackingV1(request AllocationRequestCreditV1, creator *allocationCreditLeaseV1, count, width uint64, scan bool) error {
 	if creator == nil || count == 0 {
 		return nil
 	}
@@ -21,10 +22,10 @@ func reserveMaterializationBackingV1(creator *allocationCreditLeaseV1, count, wi
 	if raw > uint64(^uint(0)>>1) {
 		return ErrNoAllocatablePage
 	}
-	return creator.reserve(allocationClassV1(raw, scan), 0)
+	return creator.reserve(request, allocationClassV1(raw, scan), 0)
 }
 
-func reserveMaterializationObjectsV1(creator *allocationCreditLeaseV1, count, raw uint64, scan bool) error {
+func reserveMaterializationObjectsV1(request AllocationRequestCreditV1, creator *allocationCreditLeaseV1, count, raw uint64, scan bool) error {
 	if creator == nil || count == 0 {
 		return nil
 	}
@@ -38,7 +39,7 @@ func reserveMaterializationObjectsV1(creator *allocationCreditLeaseV1, count, ra
 	if class != 0 && count > math.MaxUint64/class {
 		return ErrNoAllocatablePage
 	}
-	return creator.reserve(count*class, 0)
+	return creator.reserve(request, count*class, 0)
 }
 
 func countUnmaterializedStateKindsV1(root stateRefV1) (branches, chunks uint64) {
@@ -60,13 +61,16 @@ func countUnmaterializedStateKindsV1(root stateRefV1) (branches, chunks uint64) 
 // Charge every materializer-owned output and transient before the first sink
 // write. Full capacity is paid, including unused vector cells and scratch that
 // could escape to the heap. Header/tree births have their own intrinsic refs.
-func (t *FreelistTxn) reserveMaterializationOutputsV1(metadataPages, recordPages uint64) error {
+func (t *FreelistTxn) reserveMaterializationOutputsV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, metadataPages, recordPages uint64) error {
+	if err := t.requireBirthCreditV1(request); err != nil {
+		return err
+	}
 	if t.buildCreator == nil {
 		return nil
 	}
 	branches, chunks := countUnmaterializedStateKindsV1(t.root)
 	if t.root.zero() {
-		branches = 1
+		chunks = 1
 	}
 	creator := t.buildCreator
 	charges := [...]struct {
@@ -77,6 +81,16 @@ func (t *FreelistTxn) reserveMaterializationOutputsV1(metadataPages, recordPages
 		{metadataPages, 8, false}, // generation metadata IDs
 		{metadataPages, 8, false}, // candidate dirty IDs
 		{recordPages, 8, false},   // reservation IDs
+	}
+	for _, charge := range charges {
+		if err := reserveMaterializationBackingV1(request, creator, charge.count, charge.width, charge.scan); err != nil {
+			return err
+		}
+	}
+	scratchCharges := [...]struct {
+		count, width uint64
+		scan         bool
+	}{
 		{recordPages, uint64(unsafe.Sizeof([]byte{})), true},
 
 		{1, uint64(unsafe.Sizeof(recordingSink{})), true},
@@ -85,21 +99,35 @@ func (t *FreelistTxn) reserveMaterializationOutputsV1(metadataPages, recordPages
 		{1, page.PageSize, false},        // canonical reservation digest scratch
 		{1, generationHeaderSize, false}, // generation digest scratch
 	}
-	for _, charge := range charges {
-		if err := reserveMaterializationBackingV1(creator, charge.count, charge.width, charge.scan); err != nil {
+	for _, charge := range scratchCharges {
+		if err := reserveAllocationScratchV1(request, scratch, creator, charge.count, charge.width, charge.scan); err != nil {
 			return err
 		}
 	}
-	if err := reserveMaterializationObjectsV1(creator, cowSaturatingAddV1(cowSaturatingAddV1(chunks, recordPages), 1), page.PageSize, false); err != nil {
+	if err := reserveMaterializationObjectsV1(request, creator, cowSaturatingAddV1(cowSaturatingAddV1(chunks, recordPages), 1), page.PageSize, false); err != nil {
 		return err
 	}
-	if err := reserveMaterializationObjectsV1(creator, branches, uint64(unsafe.Sizeof(indexPagePlanV1{})), false); err != nil {
+	if err := reserveMaterializationObjectsV1(request, creator, branches, uint64(unsafe.Sizeof(indexPagePlanV1{})), false); err != nil {
 		return err
 	}
 	if branches != 0 {
-		if err := reserveMaterializationBackingV1(creator, 1, page.PageSize, false); err != nil {
+		if err := reserveAllocationScratchV1(request, scratch, creator, 1, page.PageSize, false); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// The caller lends a separately constructed short resident scope from the same
+// installed owner. Pointer inequality rejects the permanent creator itself;
+// interface satisfaction alone never certifies installed-owner provenance.
+// The caller releases scratch only after every full-capacity alias is scrubbed.
+func reserveAllocationScratchV1(request AllocationRequestCreditV1, scratch, permanent *AllocationCreatorV1, count, width uint64, scan bool) error {
+	if permanent == nil {
+		return nil
+	}
+	if scratch == nil || scratch == permanent {
+		return ErrAllocationCertificateIncompleteV1
+	}
+	return reserveMaterializationBackingV1(request, scratch, count, width, scan)
 }

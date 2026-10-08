@@ -34,7 +34,7 @@ func (a *Allocator) AcquirePublishedGenerationLeaseV1(expected GenerationRefV1) 
 	}
 	// Ordinary acquisition preserves its contract. A future finite capture must
 	// admit its wrapper/directory/pins before calling this constructor.
-	if a.cow.txn != nil && a.cow.txn.allocationCredit != nil {
+	if a.cow.txn != nil && (a.cow.txn.allocationRequired || a.cow.txn.buildCreator != nil) {
 		return nil, ErrAllocationCertificateIncompleteV1
 	}
 	lease := &PublishedGenerationLeaseV1{allocator: a, generation: retainGenerationV1(g), ref: g.ref, next: a.cow.generationLeases}
@@ -150,6 +150,12 @@ func (a *Allocator) residentGenerationProfileLockedV1() ResidentGenerationProfil
 	}
 	profile.addGeneration(a.cow.generation)
 	profile.addTransaction(a.cow.txn)
+	if packet := a.cow.packet; packet != nil {
+		profile.AllocatorBytes = cowSaturatingAddV1(profile.AllocatorBytes, packet.retainedControlBytesV1())
+		for _, txn := range packet.packetOwnedTransactionsV1() {
+			profile.addTransaction(txn)
+		}
+	}
 	for prepared := a.cow.ownedCandidates; prepared != nil; prepared = prepared.ownedNext {
 		profile.addPrepared(prepared)
 	}
@@ -250,6 +256,7 @@ func (profile *ResidentGenerationProfileV1) addPrepared(prepared *PreparedCOWCan
 	profile.CandidateBytes = cowSaturatingAddV1(profile.CandidateBytes, allocationClassV1(uint64(unsafe.Sizeof(*prepared)), true))
 	profile.CandidateBytes = cowSaturatingAddV1(profile.CandidateBytes, allocationClassV1(cowSaturatingMulV1(uint64(cap(prepared.auxiliary)), 8), false))
 	profile.addTransaction(prepared.rollbackTxn)
+	profile.addTransaction(prepared.activationTxn)
 	c := prepared.candidate
 	if c == nil {
 		return

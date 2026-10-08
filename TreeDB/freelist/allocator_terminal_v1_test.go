@@ -30,11 +30,11 @@ func TestAllocatorTerminalCutLastEdgeReleasesFiniteCredit5105(t *testing.T) {
 		t.Run(debt, func(t *testing.T) {
 			a := terminalAllocator5105(t, nil)
 			account := &radixCredit5105{limit: ^uint64(0)}
-			creator, err := newAllocationCreditLeaseV1(account)
+			creator, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, account)
 			if err != nil {
 				t.Fatal(err)
 			}
-			root, err := cloneStateRefOwnedV1(stateRefV1{}, false, creator)
+			root, err := cloneStateRefOwnedV1(requestForCreator5108(creator), stateRefV1{}, false, creator)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -70,7 +70,7 @@ func TestAllocatorTerminalCutLastEdgeReleasesFiniteCredit5105(t *testing.T) {
 			if _, err = lease.SnapshotPageUnusedV1(2, 1); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = a.Alloc(0); !errors.Is(err, ErrCandidateConsumed) {
+			if _, err = a.AllocWithAllocationRequestV1(requestForAllocator5108(a), 0); !errors.Is(err, ErrCandidateConsumed) {
 				t.Fatalf("closed allocation: %v", err)
 			}
 			lease.Close()
@@ -86,12 +86,12 @@ func TestAllocatorTerminalSharedLedgerCreatingCredit5105(t *testing.T) {
 	ledger := NewReservationLedger()
 	first, second := terminalAllocator5105(t, ledger), terminalAllocator5105(t, ledger)
 	account := &radixCredit5105{limit: ^uint64(0)}
-	creator, err := newAllocationCreditLeaseV1(account)
+	creator, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, account)
 	if err != nil {
 		t.Fatal(err)
 	}
 	candidate := candidateIDFromString("shared-terminal")
-	if err = ledger.reserve(candidate, []uint64{2}, creator); err != nil {
+	if err = ledger.reserve(requestForCreator5108(creator), candidate, []uint64{2}, creator); err != nil {
 		t.Fatal(err)
 	}
 	creator.release()
@@ -115,7 +115,7 @@ func TestAllocatorTerminalPreservesOrdinaryEscapedGenerationAndLedger5105(t *tes
 	g.record.Extents = []ReservationExtentV1{{StartPageID: 2, Count: 1, Kind: ReservationAppendedData}}
 	raw := g.ReservationRecord()
 	candidate := candidateIDFromString("ordinary-terminal")
-	if err = ledger.reserve(candidate, []uint64{2}); err != nil {
+	if err = ledger.reserve(nil, candidate, []uint64{2}); err != nil {
 		t.Fatal(err)
 	}
 	before := g.root

@@ -86,10 +86,10 @@ func (m *numericRadixV1[K, V]) Get(key K) (V, bool) {
 }
 func (m *numericRadixV1[K, V]) Value(key K) V { value, _ := m.Get(key); return value }
 func (m *numericRadixV1[K, V]) Put(key K, value V) error {
-	return m.PutWithCredit(key, value, m.credit)
+	return m.PutWithCredit(nil, key, value, m.credit)
 }
-func (m *numericRadixV1[K, V]) PutWithCredit(key K, value V, credit *allocationCreditLeaseV1) error {
-	return m.putAdmittedV1(key, value, credit, nil)
+func (m *numericRadixV1[K, V]) PutWithCredit(request AllocationRequestCreditV1, key K, value V, credit *allocationCreditLeaseV1) error {
+	return m.putAdmittedV1(request, key, value, credit, nil)
 }
 func (m *numericRadixV1[K, V]) Set(key K, value V) {
 	if err := m.Put(key, value); err != nil {
@@ -122,14 +122,14 @@ func numericRadixChunkClassV1[K comparable, V comparable]() uint64 {
 
 // The complete prospective backing is admitted before its first chunk birth.
 // The operation receipt and this method consume the same whole-chunk classes.
-func (m *numericRadixV1[K, V]) ensureSlotsV1(needed int, credit *allocationCreditLeaseV1, operation *allocationOperationV1) error {
+func (m *numericRadixV1[K, V]) ensureSlotsV1(request AllocationRequestCreditV1, needed int, credit *allocationCreditLeaseV1, operation *allocationOperationV1) error {
 	if needed <= m.freeSlots {
 		return nil
 	}
 	deficit := uint64(needed - m.freeSlots)
 	chunks := (deficit + numericRadixChunkSlotsV1 - 1) / numericRadixChunkSlotsV1
 	charge := cowSaturatingMulV1(chunks, numericRadixChunkClassV1[K, V]())
-	if err := reserveBirthV1(credit, charge, chunks, operation); err != nil {
+	if err := reserveBirthV1(request, credit, charge, chunks, operation); err != nil {
 		return err
 	}
 	for ; chunks != 0; chunks-- {
@@ -159,7 +159,7 @@ func (m *numericRadixV1[K, V]) allocateSlotV1() numericRadixRefV1[K, V] {
 	}
 	return numericRadixRefV1[K, V]{chunk: c, slot: slot}
 }
-func (m *numericRadixV1[K, V]) putAdmittedV1(key K, value V, credit *allocationCreditLeaseV1, operation *allocationOperationV1) error {
+func (m *numericRadixV1[K, V]) putAdmittedV1(request AllocationRequestCreditV1, key K, value V, credit *allocationCreditLeaseV1, operation *allocationOperationV1) error {
 	found := m.root
 	for found.chunk != nil && !found.node().leaf {
 		n := found.node()
@@ -173,7 +173,7 @@ func (m *numericRadixV1[K, V]) putAdmittedV1(key K, value V, credit *allocationC
 	if found.chunk != nil {
 		needed = 2
 	}
-	if err := m.ensureSlotsV1(needed, credit, operation); err != nil {
+	if err := m.ensureSlotsV1(request, needed, credit, operation); err != nil {
 		return err
 	}
 	leaf := m.allocateSlotV1()
@@ -291,7 +291,7 @@ func (m *numericRadixV1[K, V]) copyNodeV1(source numericRadixRefV1[K, V]) numeri
 	}
 	return ref
 }
-func (m *numericRadixV1[K, V]) CloneWithCredit(credit *allocationCreditLeaseV1) (*numericRadixV1[K, V], error) {
+func (m *numericRadixV1[K, V]) CloneWithCredit(request AllocationRequestCreditV1, credit *allocationCreditLeaseV1) (*numericRadixV1[K, V], error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -305,16 +305,16 @@ func (m *numericRadixV1[K, V]) CloneWithCredit(credit *allocationCreditLeaseV1) 
 	chunks := (uint64(nodes) + numericRadixChunkSlotsV1 - 1) / numericRadixChunkSlotsV1
 	header := allocationClassV1(uint64(unsafe.Sizeof(*m)), true)
 	bytes := cowSaturatingAddV1(header, cowSaturatingMulV1(chunks, numericRadixChunkClassV1[K, V]()))
-	operation, err := admitAllocationOperationV1(credit, bytes, chunks+1)
+	operation, err := admitAllocationOperationV1(request, credit, bytes, chunks+1)
 	if err != nil {
 		return nil, err
 	}
 	defer operation.close()
-	if err := reserveBirthV1(credit, header, 1, &operation); err != nil {
+	if err := reserveBirthV1(request, credit, header, 1, &operation); err != nil {
 		return nil, err
 	}
 	clone := &numericRadixV1[K, V]{bit: m.bit, diff: m.diff, credit: credit}
-	if err := clone.ensureSlotsV1(nodes, credit, &operation); err != nil {
+	if err := clone.ensureSlotsV1(request, nodes, credit, &operation); err != nil {
 		clone.Clear()
 		return nil, err
 	}
@@ -323,7 +323,7 @@ func (m *numericRadixV1[K, V]) CloneWithCredit(credit *allocationCreditLeaseV1) 
 	return clone, nil
 }
 func (m *numericRadixV1[K, V]) Clone() *numericRadixV1[K, V] {
-	clone, err := m.CloneWithCredit(m.credit)
+	clone, err := m.CloneWithCredit(nil, m.credit)
 	if err != nil {
 		panic(err)
 	}
@@ -404,16 +404,16 @@ func (m *numericRadixV1[K, V]) residentBytesV1() uint64 {
 	}
 	return bytes
 }
-func newPageRadixWithCreditV1[V comparable](credit *allocationCreditLeaseV1) (*numericRadixV1[uint64, V], error) {
-	if err := credit.reserve(allocationClassV1(uint64(unsafe.Sizeof(numericRadixV1[uint64, V]{})), true), 1); err != nil {
+func newPageRadixWithCreditV1[V comparable](request AllocationRequestCreditV1, credit *allocationCreditLeaseV1) (*numericRadixV1[uint64, V], error) {
+	if err := credit.reserve(request, allocationClassV1(uint64(unsafe.Sizeof(numericRadixV1[uint64, V]{})), true), 1); err != nil {
 		return nil, err
 	}
 	result := newPageRadixV1[V]()
 	result.credit = credit
 	return result, nil
 }
-func newCandidateRadixWithCreditV1[V comparable](credit *allocationCreditLeaseV1) (*numericRadixV1[CandidateIDV1, V], error) {
-	if err := credit.reserve(allocationClassV1(uint64(unsafe.Sizeof(numericRadixV1[CandidateIDV1, V]{})), true), 1); err != nil {
+func newCandidateRadixWithCreditV1[V comparable](request AllocationRequestCreditV1, credit *allocationCreditLeaseV1) (*numericRadixV1[CandidateIDV1, V], error) {
+	if err := credit.reserve(request, allocationClassV1(uint64(unsafe.Sizeof(numericRadixV1[CandidateIDV1, V]{})), true), 1); err != nil {
 		return nil, err
 	}
 	result := newCandidateRadixV1[V]()

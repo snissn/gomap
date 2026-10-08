@@ -47,7 +47,7 @@ func TestCompressedAllocatorThousandActualMutations5108(t *testing.T) {
 		exists := model[key]
 		plan := mutationStateBirthPlanV1(root, key, 0, true, false, false)
 		var births FreelistTxnStats
-		next := mutateChunkForPreparation(root, key, 0, func(c *stateChunk) { c.setFree(2, !exists) }, true, &births)
+		next := mutateChunkForPreparation(nil, root, key, 0, func(c *stateChunk) { c.setFree(2, !exists) }, true, &births)
 		if births.StateNodeCopies != plan.nodes || births.StateChunkCopies != plan.chunks {
 			t.Fatalf("step%d admitted=%+v actual=%+v", step, plan, births)
 		}
@@ -98,7 +98,7 @@ func TestCompressedAllocatorThousandActualMutations5108(t *testing.T) {
 		if step%50 == 0 {
 			held := retainPrivateGraph5105(t, root)
 			extra := uint64(1<<54) | uint64(step)
-			probe := mutateChunkForPreparation(root, extra, 0, func(c *stateChunk) { c.setFree(3, true) }, true, nil)
+			probe := mutateChunkForPreparation(nil, root, extra, 0, func(c *stateChunk) { c.setFree(3, true) }, true, nil)
 			held.assertUnchanged(t)
 			releaseStateNodeV1(probe)
 		}

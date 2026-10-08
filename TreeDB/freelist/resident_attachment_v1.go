@@ -9,9 +9,9 @@ import (
 // of the existing facet wrapper. Census charges actual allocation classes and
 // full capacities; shared representations may be conservatively counted twice.
 type residentAttachmentV1 struct {
-	creator     *allocationCreditLeaseV1
-	bytes, refs uint64
-	attach      bool
+	creator             *allocationCreditLeaseV1
+	bytes, births, refs uint64
+	attach              bool
 }
 
 func (v *residentAttachmentV1) claim(slot **allocationCreditLeaseV1, bytes uint64) {
@@ -26,6 +26,7 @@ func (v *residentAttachmentV1) claim(slot **allocationCreditLeaseV1, bytes uint6
 			v.bytes = cowSaturatingAddV1(v.bytes, allocationClassV1(uint64(unsafe.Sizeof(allocationCreditLeaseV1{})), true))
 		}
 		if *slot == nil {
+			v.births = cowSaturatingAddV1(v.births, bytes)
 			v.refs = cowSaturatingAddV1(v.refs, 1)
 		}
 		return
@@ -89,6 +90,7 @@ func (v *residentAttachmentV1) prepared(p *PreparedCOWCandidateV1) {
 	bytes = cowSaturatingAddV1(bytes, allocationClassV1(cowSaturatingMulV1(uint64(cap(p.auxiliary)), 8), false))
 	v.claim(&p.creator, bytes)
 	v.transaction(p.rollbackTxn)
+	v.transaction(p.activationTxn)
 	c := p.candidate
 	if c == nil {
 		return
@@ -134,6 +136,12 @@ func (v *residentAttachmentV1) allocator(a *Allocator) {
 	v.claim(&state.activatedCreator, allocationClassV1(cowSaturatingMulV1(uint64(cap(state.activated)), 8), true))
 	v.generation(state.generation)
 	v.transaction(state.txn)
+	if packet := state.packet; packet != nil {
+		v.claim(&packet.creator, packet.retainedControlBytesV1())
+		for _, txn := range packet.packetOwnedTransactionsV1() {
+			v.transaction(txn)
+		}
+	}
 	for p := state.ownedCandidates; p != nil; p = p.ownedNext {
 		v.prepared(p)
 	}
@@ -154,7 +162,17 @@ func (a *Allocator) managedGenerationEdgesLockedV1(g *FreelistGenerationV1) uint
 	if a.cow.txn != nil && a.cow.txn.base == g {
 		edges++
 	}
+	if packet := a.cow.packet; packet != nil {
+		for _, txn := range packet.packetOwnedTransactionsV1() {
+			if txn != nil && txn.base == g {
+				edges++
+			}
+		}
+	}
 	for p := a.cow.ownedCandidates; p != nil; p = p.ownedNext {
+		if p.activationTxn != nil && p.activationTxn.base == g {
+			edges++
+		}
 		if p.rollbackTxn != nil && p.rollbackTxn.base == g {
 			edges++
 		}
@@ -185,9 +203,29 @@ func (a *Allocator) residentProvenanceLockedV1() error {
 		return ErrFiniteAllocationExportV1
 	}
 	edges++
+	if packet := state.packet; packet != nil {
+		if packet.allocator.Load() != a || packet.phase > 2 {
+			return ErrFiniteAllocationExportV1
+		}
+		for _, t := range packet.packetOwnedTransactionsV1() {
+			if t == nil {
+				continue
+			}
+			if !check(t.base) || t.ledger != state.ledger || !t.ledgerOwned {
+				return ErrFiniteAllocationExportV1
+			}
+			edges++
+		}
+	}
 	for p := state.ownedCandidates; p != nil; p = p.ownedNext {
 		if !p.ownedBacking || p.allocator != a || p.candidate == nil || !check(p.candidate.generation) {
 			return ErrFiniteAllocationExportV1
+		}
+		if t := p.activationTxn; t != nil {
+			if !check(t.base) || t.ledger != state.ledger || !t.ledgerOwned {
+				return ErrFiniteAllocationExportV1
+			}
+			edges++
 		}
 		if t := p.rollbackTxn; t != nil {
 			if !check(t.base) || t.ledger != state.ledger || !t.ledgerOwned {
@@ -207,6 +245,51 @@ func (a *Allocator) residentProvenanceLockedV1() error {
 	return nil
 }
 
+// mutableCOWTransactionsV1 enumerates legacy and EVERY private packet future.
+// Slots are exact owning roles; identity deduplication excludes phase borrows.
+// Deduplication uses object identity and fixed stack storage, never tree census.
+func mutableCOWTransactionsV1(state *allocatorCOWStateV1) [9]*FreelistTxn {
+	var roles [9]*FreelistTxn
+	if state == nil {
+		return roles
+	}
+	roles[0] = state.txn
+	if state.prepared != nil {
+		roles[1], roles[2] = state.prepared.rollbackTxn, state.prepared.activationTxn
+	}
+	if state.packet != nil {
+		owned := state.packet.packetOwnedTransactionsV1()
+		copy(roles[3:], owned[:])
+	}
+	for i := range roles {
+		for j := 0; j < i; j++ {
+			if roles[i] == roles[j] {
+				roles[i] = nil
+				break
+			}
+		}
+	}
+	return roles
+}
+
+// AdmitManagedResidentAllocationV1 exposes the existing managed attachment
+// operation, not a finite admission certificate. The installed DB must supply
+// its exact concrete creator from the SAME native resident owner and an epoch
+// held by the actual serializer/admission lifetime. Interface satisfaction is
+// not provenance. The request is borrowed only on this synchronous call stack.
+func (a *Allocator) AdmitManagedResidentAllocationV1(request AllocationRequestCreditV1, creator *AllocationCreatorV1, epoch uint64) (uint64, error) {
+	if request == nil {
+		return 0, ErrAllocationCertificateIncompleteV1
+	}
+	return a.admitResidentAllocationCreditV1(request, creator, epoch)
+}
+
+// EndManagedResidentAllocationV1 revokes the epoch's future-birth edges only.
+// Historical intrinsic creators survive until their own exact last edge.
+func (a *Allocator) EndManagedResidentAllocationV1(creator *AllocationCreatorV1, epoch uint64) error {
+	return a.endResidentAllocationCreditV1(creator, epoch)
+}
+
 // admitResidentAllocationCreditV1 is the guarded resident attachment component,
 // not a public finite gate. The caller must already hold the trusted request's
 // admission ownership; limits copies cannot own this edge. The public prepare
@@ -220,7 +303,7 @@ func (a *Allocator) residentProvenanceLockedV1() error {
 // plus exact generation/ledger refs rejects every unknown external owner before
 // debit. Pass one reserves ALL old backing capacities and all new creator refs;
 // pass two only assigns nil intrinsic creators. Debit is cumulative.
-func (a *Allocator) admitResidentAllocationCreditV1(creator *allocationCreditLeaseV1, epoch uint64) (uint64, error) {
+func (a *Allocator) admitResidentAllocationCreditV1(request AllocationRequestCreditV1, creator *allocationCreditLeaseV1, epoch uint64) (uint64, error) {
 	if a == nil || creator == nil || epoch == 0 {
 		return 0, ErrGenerationFormat
 	}
@@ -233,14 +316,25 @@ func (a *Allocator) admitResidentAllocationCreditV1(creator *allocationCreditLea
 	if state == nil || state.closed || state.ledger == nil || state.txn == nil {
 		return 0, ErrGenerationFormat
 	}
+	roles := mutableCOWTransactionsV1(state)
 	if epoch == state.residentAdmissionEpoch {
-		if state.residentAdmissionCreator == creator && state.txn.buildCreator == creator {
+		if state.residentAdmissionCreator == creator {
+			for _, role := range roles {
+				if role != nil && role.buildCreator != creator {
+					return 0, ErrCandidateConsumed
+				}
+			}
 			return state.residentAdmissionBytes, nil
 		}
 		return 0, ErrCandidateConsumed
 	}
-	if epoch < state.residentAdmissionEpoch || state.txn.buildCreator != nil {
+	if epoch < state.residentAdmissionEpoch {
 		return 0, ErrCandidateConsumed
+	}
+	for _, role := range roles {
+		if role != nil && role.buildCreator != nil {
+			return 0, ErrCandidateConsumed
+		}
 	}
 	if state.rawGenerationEscaped || state.prepared != nil && !state.prepared.ownedBacking {
 		return 0, ErrFiniteAllocationExportV1
@@ -271,36 +365,46 @@ func (a *Allocator) admitResidentAllocationCreditV1(creator *allocationCreditLea
 	if err := a.residentProvenanceLockedV1(); err != nil {
 		return 0, err
 	}
-	if state.txn.buildCreator != nil && state.txn.buildCreator != creator {
-		return 0, ErrCandidateConsumed
+	for _, role := range roles {
+		if role != nil && role.buildCreator != nil && role.buildCreator != creator {
+			return 0, ErrCandidateConsumed
+		}
 	}
 	census := residentAttachmentV1{creator: creator}
 	census.allocator(a)
-	if state.txn.buildCreator == nil {
-		census.refs = cowSaturatingAddV1(census.refs, 1)
+	for _, role := range roles {
+		if role != nil && role.buildCreator == nil {
+			census.refs = cowSaturatingAddV1(census.refs, 1)
+		}
 	}
-	operation, err := admitAllocationOperationV1(creator, census.bytes, census.refs)
+	// The current request pays the complete resident loan, including old cuts.
+	// Resident preparation pays ONLY unowned backing; historical creator scopes
+	// already own their classes and are never rebound or charged a second time.
+	operation, err := admitAllocationLoanOperationV1(request, creator, census.bytes, census.births, census.refs)
 	if err != nil {
 		return 0, err
 	}
 	// No fallible engine action may follow the first creator assignment.
 	attached := residentAttachmentV1{creator: creator, attach: true, refs: census.refs}
 	attached.allocator(a)
-	if state.txn.buildCreator == nil {
-		state.txn.buildCreator = creator
-		creator.mu.Lock()
-		state.txn.allocationCredit = creator.facet
-		creator.mu.Unlock()
-		attached.refs--
+	for _, role := range roles {
+		if role == nil {
+			continue
+		}
+		if role.buildCreator == nil {
+			role.buildCreator = creator
+			attached.refs--
+		}
+		role.allocationRequired = true
+		role.privatePreparation = false
 	}
-	state.txn.privatePreparation = false
 	state.residentAdmissionEpoch, state.residentAdmissionBytes, state.residentAdmissionCreator = epoch, census.bytes, creator
 	operation.refs = attached.refs
 	operation.close()
 	return census.bytes, nil
 }
 
-// endResidentAllocationCreditV1 revokes the one mutable admission edge under
+// endResidentAllocationCreditV1 revokes every exact mutable role edge under
 // the same existing allocator control. Copies of limits retain no ownership.
 // The epoch is monotonic; a terminal epoch cannot be admitted again.
 func (a *Allocator) endResidentAllocationCreditV1(creator *allocationCreditLeaseV1, epoch uint64) error {
@@ -319,8 +423,21 @@ func (a *Allocator) endResidentAllocationCreditV1(creator *allocationCreditLease
 	if state.residentAdmissionCreator != creator || state.txn == nil || state.txn.buildCreator != creator {
 		return ErrCandidateConsumed
 	}
-	if err := state.txn.endBuildCreatorV1(creator); err != nil {
-		return err
+	// Validate every mutable role before releasing the first edge. Rollback
+	// isolation is a future birth too; retaining its old epoch would bypass
+	// current-request/destination re-admission after Abort.
+	roles := mutableCOWTransactionsV1(state)
+	for _, role := range roles {
+		if role != nil && role.buildCreator != nil && role.buildCreator != creator {
+			return ErrCandidateConsumed
+		}
+	}
+	for _, role := range roles {
+		if role != nil {
+			if err := role.endBuildCreatorV1(creator); err != nil {
+				return err
+			}
+		}
 	}
 	state.residentAdmissionCreator = nil
 	return nil
@@ -329,21 +446,28 @@ func (a *Allocator) endResidentAllocationCreditV1(creator *allocationCreditLease
 // growActivatedBackingLockedV1 admits the replacement capacity before the
 // activation creates a builder or mutates ledger visibility. The replaced
 // buffer loses all aliases before its historical creating edge is released.
-func (a *Allocator) growActivatedBackingLockedV1(creator *allocationCreditLeaseV1) error {
+func (a *Allocator) growActivatedBackingLockedV1(request AllocationRequestCreditV1, creator *allocationCreditLeaseV1) error {
+	return a.growActivatedCapacityLockedV1(request, creator, 1)
+}
+func (a *Allocator) growActivatedCapacityLockedV1(request AllocationRequestCreditV1, creator *allocationCreditLeaseV1, additional int) error {
 	state := a.cow
-	if len(state.activated) < cap(state.activated) {
+	if additional < 0 || additional > int(^uint(0)>>1)-len(state.activated) {
+		return ErrNoAllocatablePage
+	}
+	required := len(state.activated) + additional
+	if required <= cap(state.activated) {
 		return nil
 	}
 	maximum := int(^uint(0) >> 1)
 	if len(state.activated) == maximum {
 		return ErrNoAllocatablePage
 	}
-	capacity := grownCapacityV1(cap(state.activated), len(state.activated)+1)
+	capacity := grownCapacityV1(cap(state.activated), required)
 	if capacity > maximum/8 {
 		return ErrNoAllocatablePage
 	}
 	bytes := allocationClassV1(uint64(capacity)*8, true)
-	operation, err := admitAllocationOperationV1(creator, bytes, 1)
+	operation, err := admitAllocationOperationV1(request, creator, bytes, 1)
 	if err != nil {
 		return err
 	}

@@ -64,16 +64,16 @@ func releaseStateChunkV1(c *stateChunk) {
 	c.retired = [freelistChunkSize]uint64{}
 	creator.release()
 }
-func cloneStateRefOwnedV1(r stateRefV1, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (stateRefV1, error) {
+func cloneStateRefOwnedV1(request AllocationRequestCreditV1, r stateRefV1, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (stateRefV1, error) {
 	if r.chunk != nil {
-		c, err := cloneStateChunkOwnedV1(r.chunk, preserve, creator, ops...)
+		c, err := cloneStateChunkOwnedV1(request, r.chunk, preserve, creator, ops...)
 		return stateRefV1{chunk: c}, err
 	}
-	n, err := cloneStateBranchOwnedV1(r.branch, preserve, creator, ops...)
+	n, err := cloneStateBranchOwnedV1(request, r.branch, preserve, creator, ops...)
 	return stateRefV1{branch: n}, err
 }
-func cloneStateBranchOwnedV1(n *stateNode, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (*stateNode, error) {
-	if err := reserveBirthV1(creator, stateNodeCopyCapacityV1, 1, ops...); err != nil {
+func cloneStateBranchOwnedV1(request AllocationRequestCreditV1, n *stateNode, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (*stateNode, error) {
+	if err := reserveBirthV1(request, creator, stateNodeCopyCapacityV1, 1, ops...); err != nil {
 		return nil, err
 	}
 	out := &stateNode{ownedRefs: 1, creator: creator}
@@ -89,8 +89,8 @@ func cloneStateBranchOwnedV1(n *stateNode, preserve bool, creator *allocationCre
 	}
 	return out, nil
 }
-func cloneStateChunkOwnedV1(c *stateChunk, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (*stateChunk, error) {
-	if err := reserveBirthV1(creator, stateChunkCopyCapacityV1, 1, ops...); err != nil {
+func cloneStateChunkOwnedV1(request AllocationRequestCreditV1, c *stateChunk, preserve bool, creator *allocationCreditLeaseV1, ops ...*allocationOperationV1) (*stateChunk, error) {
+	if err := reserveBirthV1(request, creator, stateChunkCopyCapacityV1, 1, ops...); err != nil {
 		return nil, err
 	}
 	out := &stateChunk{ownedRefs: 1, creator: creator}
@@ -147,7 +147,7 @@ func (g *FreelistGenerationV1) markOrdinaryEscapeV1() {
 	}
 }
 func (c *FreelistCandidateV1) hasFiniteBackingV1() bool {
-	return c != nil && (c.creator != nil || c.allocationCredit != nil || c.generation.hasFiniteBackingV1())
+	return c != nil && (c.creator != nil || c.generation.hasFiniteBackingV1())
 }
 func (c *FreelistCandidateV1) markOrdinaryEscapeV1() {
 	if c != nil {
@@ -162,7 +162,6 @@ func releaseTxnV1(t *FreelistTxn) {
 	ledger, ledgerOwned := t.ledger, t.ledgerOwned
 	t.ledger, t.ledgerOwned = nil, false
 	t.root, t.base, t.creator, t.buildCreator = stateRefV1{}, nil, nil, nil
-	t.allocationCredit = nil
 	t.privatePreparation = false
 	allocatedCreator, abandonedCreator := t.allocatedCreator, t.abandonedCreator
 	clear(t.allocated[:cap(t.allocated)])
@@ -181,4 +180,18 @@ func releaseTxnV1(t *FreelistTxn) {
 	if ledgerOwned {
 		releaseReservationLedgerV1(ledger)
 	}
+}
+
+// A not-yet-exposed owned materialization has no callback or external view edge.
+// Failure scrubs its full vectors before dropping its exact generation creator.
+func releaseCandidateOwnedBackingV1(candidate *FreelistCandidateV1) {
+	if candidate == nil {
+		return
+	}
+	generation, creator := candidate.generation, candidate.creator
+	clear(candidate.pages[:cap(candidate.pages)])
+	clear(candidate.dirtyIDs[:cap(candidate.dirtyIDs)])
+	candidate.pages, candidate.dirtyIDs, candidate.generation, candidate.creator = nil, nil, nil, nil
+	releaseGenerationV1(generation)
+	creator.release()
 }

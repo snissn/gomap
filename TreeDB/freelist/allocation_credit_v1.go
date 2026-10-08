@@ -8,11 +8,28 @@ import (
 	"unsafe"
 )
 
-// AllocationCreditV1 is the allocator facet of the caller's existing request
-// account. Reservation publication never releases this allocation ownership.
+// AllocationCreditV1 is the legacy combined contract retained by the closed
+// finite limits gate. New backing uses the explicit request/resident split.
 // Admitted adapters allocate no backing, take only their independent account
 // lock, and never call into or acquire allocator/ledger locks.
 type AllocationCreditV1 interface {
+	ReserveAllocation(uint64) error
+	RetainAllocationCredit() error
+	ReleaseAllocationCredit()
+}
+
+// AllocationRequestCreditV1 is borrowed from the current synchronous operation.
+// It pays cumulative births and is never retained by allocator backing. Failed
+// resident preparation does not refund a successful request debit.
+type AllocationRequestCreditV1 interface {
+	ReserveAllocation(uint64) error
+}
+
+// AllocationResidentCreditV1 is the intrinsic creating scope of actual backing.
+// The installed caller supplies an existing scope from its shared resident
+// owner. Interface satisfaction alone is not proof of installed provenance.
+// Scratch uses a distinct short scope from that SAME owner.
+type AllocationResidentCreditV1 interface {
 	ReserveAllocation(uint64) error
 	RetainAllocationCredit() error
 	ReleaseAllocationCredit()
@@ -137,39 +154,66 @@ func (info CandidateInfoV1) FreeCount() uint64              { return info.FreePa
 func (info CandidateInfoV1) RetiredCount() uint64           { return info.RetiredPages }
 
 // allocationCreditLeaseV1 aggregates intrinsic whole-radix-chunk references to one
-// existing request facet. Node erasure releases ownership, never byte debit.
+// existing resident scope. It contains no request facet. Node erasure releases
+// ownership, never a cumulative request debit.
 // All node edits occur under the containing transaction or ledger lock.
-type allocationCreditLeaseV1 struct {
-	mu    sync.Mutex
-	facet AllocationCreditV1
-	refs  uint64
+type AllocationCreatorV1 struct {
+	mu       sync.Mutex
+	resident AllocationResidentCreditV1
+	refs     uint64
 }
 
-func newAllocationCreditLeaseV1(facet AllocationCreditV1) (*allocationCreditLeaseV1, error) {
-	if facet == nil {
+type allocationCreditLeaseV1 = AllocationCreatorV1
+
+// NewAllocationCreatorV1 constructs only allocator accounting backing. It does
+// not open the joint finite gate or certify caller provenance/fit. The request
+// is borrowed for this call; only resident survives in the returned creator.
+func NewAllocationCreatorV1(request AllocationRequestCreditV1, resident AllocationResidentCreditV1) (*AllocationCreatorV1, error) {
+	return newAllocationCreditLeaseV1(request, resident)
+}
+
+// ReleaseAllocationCreatorV1 drops one actual creating edge after its backing
+// has been scrubbed. The caller's original scope edge remains caller-owned.
+func (lease *AllocationCreatorV1) ReleaseAllocationCreatorV1() { lease.release() }
+
+func newAllocationCreditLeaseV1(request AllocationRequestCreditV1, resident AllocationResidentCreditV1) (*allocationCreditLeaseV1, error) {
+	if request == nil && resident == nil {
 		return nil, nil
+	}
+	if request == nil || resident == nil {
+		return nil, ErrAllocationCertificateIncompleteV1
 	}
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || runtime.Version() != "go1.26.3" {
 		return nil, ErrAllocationCertificateIncompleteV1
 	}
-	if err := facet.ReserveAllocation(allocationClassV1(uint64(unsafe.Sizeof(allocationCreditLeaseV1{})), true)); err != nil {
+	bytes := allocationClassV1(uint64(unsafe.Sizeof(allocationCreditLeaseV1{})), true)
+	if err := request.ReserveAllocation(bytes); err != nil {
 		return nil, err
 	}
-	if err := facet.RetainAllocationCredit(); err != nil {
+	if err := resident.ReserveAllocation(bytes); err != nil {
 		return nil, err
 	}
-	return &allocationCreditLeaseV1{facet: facet, refs: 1}, nil
+	if err := resident.RetainAllocationCredit(); err != nil {
+		return nil, err
+	}
+	return &allocationCreditLeaseV1{resident: resident, refs: 1}, nil
 }
-func (lease *allocationCreditLeaseV1) reserve(bytes uint64, refs uint64) error {
+func (lease *allocationCreditLeaseV1) reserve(request AllocationRequestCreditV1, bytes uint64, refs uint64) error {
 	if lease == nil {
 		return nil
 	}
 	lease.mu.Lock()
 	defer lease.mu.Unlock()
-	if lease.refs == 0 || lease.refs > ^uint64(0)-refs {
+	if lease.refs == 0 || lease.resident == nil || lease.refs > ^uint64(0)-refs {
 		return ErrCandidateConsumed
 	}
-	if err := lease.facet.ReserveAllocation(bytes); err != nil {
+	if request == nil {
+		return ErrAllocationCertificateIncompleteV1
+	}
+	if err := request.ReserveAllocation(bytes); err != nil {
+		return err
+	}
+	if err := lease.resident.ReserveAllocation(bytes); err != nil {
 		return err
 	}
 	lease.refs += refs
@@ -200,13 +244,13 @@ func (lease *allocationCreditLeaseV1) release() {
 		panic("freelist: allocation credit lease released twice")
 	}
 	lease.refs--
-	var facet AllocationCreditV1
+	var resident AllocationResidentCreditV1
 	if lease.refs == 0 {
-		facet, lease.facet = lease.facet, nil
+		resident, lease.resident = lease.resident, nil
 	}
 	lease.mu.Unlock()
-	if facet != nil {
-		facet.ReleaseAllocationCredit()
+	if resident != nil {
+		resident.ReleaseAllocationCredit()
 	}
 }
 
@@ -226,9 +270,14 @@ func (prepared *PreparedCOWCandidateV1) ClearTerminalBackingV1() error {
 	if prepared.candidate == nil {
 		return nil
 	}
+	if prepared.packet != nil {
+		return ErrCandidateConsumed
+	}
 	if !prepared.published && (prepared.activated || prepared.rollbackTxn != nil) {
 		return ErrCandidateConsumed
 	}
+	releaseTxnV1(prepared.activationTxn)
+	prepared.activationTxn = nil
 	candidate := prepared.candidate
 	finite := candidate.hasFiniteBackingV1()
 	if !finite && !prepared.ownedBacking {
@@ -259,7 +308,7 @@ func (prepared *PreparedCOWCandidateV1) ClearTerminalBackingV1() error {
 	clear(candidate.dirtyIDs[:cap(candidate.dirtyIDs)])
 	clear(prepared.auxiliary[:cap(prepared.auxiliary)])
 	candidate.pages, candidate.dirtyIDs, candidate.generation = nil, nil, nil
-	candidate.allocationCredit, candidate.creator = nil, nil
+	candidate.creator = nil
 	prepared.candidate, prepared.auxiliary, prepared.creator = nil, nil, nil
 	prepared.allocator = nil
 	releaseGenerationV1(generation)

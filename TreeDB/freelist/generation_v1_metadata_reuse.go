@@ -6,11 +6,11 @@ import "unsafe"
 // persistent mutation copied the selected path. Other dirty branches still
 // need isolation. A private preparation already isolated all dirty aliases and
 // bypasses this helper when materialization consumes its builder.
-func detachMetadataSiblings(r stateRefV1, depth int, chunkNo uint64) stateRefV1 {
-	return detachMetadataSiblingsWithStats(r, depth, chunkNo, nil)
+func detachMetadataSiblings(request AllocationRequestCreditV1, r stateRefV1, depth int, chunkNo uint64) stateRefV1 {
+	return detachMetadataSiblingsWithStats(request, r, depth, chunkNo, nil)
 }
-func detachMetadataSiblingsWithStats(r stateRefV1, depth int, chunkNo uint64, stats *FreelistTxnStats) stateRefV1 {
-	out, err := detachMetadataSiblingsOwnedV1(r, depth, chunkNo, stats, nil)
+func detachMetadataSiblingsWithStats(request AllocationRequestCreditV1, r stateRefV1, depth int, chunkNo uint64, stats *FreelistTxnStats) stateRefV1 {
+	out, err := detachMetadataSiblingsOwnedV1(request, r, depth, chunkNo, stats, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -31,16 +31,16 @@ func metadataSiblingBirthPlanV1(r stateRefV1, chunkNo uint64) stateBirthPlanV1 {
 	}
 	return plan
 }
-func detachMetadataSiblingsOwnedV1(r stateRefV1, _ int, chunkNo uint64, stats *FreelistTxnStats, creator *allocationCreditLeaseV1) (stateRefV1, error) {
+func detachMetadataSiblingsOwnedV1(request AllocationRequestCreditV1, r stateRefV1, _ int, chunkNo uint64, stats *FreelistTxnStats, creator *allocationCreditLeaseV1) (stateRefV1, error) {
 	plan := metadataSiblingBirthPlanV1(r, chunkNo)
-	operation, err := admitAllocationOperationV1(creator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	operation, err := admitAllocationOperationV1(request, creator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err != nil {
 		return stateRefV1{}, err
 	}
 	defer operation.close()
-	return detachMetadataSiblingsOperationV1(r, chunkNo, stats, &operation)
+	return detachMetadataSiblingsOperationV1(request, r, chunkNo, stats, &operation)
 }
-func detachMetadataSiblingsOperationV1(r stateRefV1, chunkNo uint64, stats *FreelistTxnStats, operation *allocationOperationV1) (stateRefV1, error) {
+func detachMetadataSiblingsOperationV1(request AllocationRequestCreditV1, r stateRefV1, chunkNo uint64, stats *FreelistTxnStats, operation *allocationOperationV1) (stateRefV1, error) {
 	owned := retainStateNodeV1(r)
 	if stats != nil {
 		stats.StateIsolationVisits++
@@ -53,9 +53,9 @@ func detachMetadataSiblingsOperationV1(r stateRefV1, chunkNo uint64, stats *Free
 		var next stateRefV1
 		var err error
 		if i == selected {
-			next, err = detachMetadataSiblingsOperationV1(child, chunkNo, stats, operation)
+			next, err = detachMetadataSiblingsOperationV1(request, child, chunkNo, stats, operation)
 		} else {
-			next, err = detachStateOwnedOperationV1(child, 0, stats, operation)
+			next, err = detachStateOwnedOperationV1(request, child, 0, stats, operation)
 		}
 		if err != nil {
 			releaseStateNodeV1(owned)
@@ -183,19 +183,19 @@ func clearReservedChunkRange(free *[4]uint64, base, start, count uint64) {
 
 // claimReusedMetadata atomically owns data plus the metadata interval. Even
 // this candidate's own data reservations cannot overlap its metadata.
-func (l *ReservationLedger) claimReusedMetadata(candidate CandidateIDV1, start, count, highWater uint64, data []allocatedPage, abandoned []ReservationExtentV1, creators ...*allocationCreditLeaseV1) bool {
+func (l *ReservationLedger) claimReusedMetadata(request AllocationRequestCreditV1, candidate CandidateIDV1, start, count, highWater uint64, data []allocatedPage, abandoned []ReservationExtentV1, creators ...*allocationCreditLeaseV1) bool {
 	var creator *allocationCreditLeaseV1
 	if len(creators) != 0 {
 		creator = creators[0]
 	}
-	operation, ok, _ := l.claimReusedMetadataAdmittedV1(candidate, start, count, highWater, data, abandoned, creator, allocationOperationV1{})
+	operation, ok, _ := l.claimReusedMetadataAdmittedV1(request, candidate, start, count, highWater, data, abandoned, creator, allocationOperationV1{})
 	operation.close()
 	return ok
 }
 
 // The combined reserve precedes the first ownership edit and includes the
 // caller's tree and output births. A successful claim lends its unused receipt.
-func (l *ReservationLedger) claimReusedMetadataAdmittedV1(candidate CandidateIDV1, start, count, highWater uint64, data []allocatedPage, abandoned []ReservationExtentV1, creator *allocationCreditLeaseV1, extra allocationOperationV1) (allocationOperationV1, bool, error) {
+func (l *ReservationLedger) claimReusedMetadataAdmittedV1(request AllocationRequestCreditV1, candidate CandidateIDV1, start, count, highWater uint64, data []allocatedPage, abandoned []ReservationExtentV1, creator *allocationCreditLeaseV1, extra allocationOperationV1) (allocationOperationV1, bool, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// A failed physical tail write may be ahead of this transaction. Let the
@@ -239,7 +239,7 @@ func (l *ReservationLedger) claimReusedMetadataAdmittedV1(candidate CandidateIDV
 	if oldIDs > int(^uint(0)>>1)-newOwners || oldCoverage > int(^uint(0)>>1)-coverage {
 		return allocationOperationV1{}, false, ErrNoAllocatablePage
 	}
-	plan, err := l.admitReservationV1(candidate, r, oldIDs+newOwners, newOwners, oldCoverage+coverage, creator, extra)
+	plan, err := l.admitReservationV1(request, candidate, r, oldIDs+newOwners, newOwners, oldCoverage+coverage, creator, extra)
 	if err != nil {
 		return allocationOperationV1{}, false, err
 	}
@@ -254,13 +254,13 @@ func (l *ReservationLedger) claimReusedMetadataAdmittedV1(candidate CandidateIDV
 		return allocationOperationV1{}, false, err
 	}
 	if plan.newReservation {
-		if err = l.candidates.putAdmittedV1(candidate, r, creator, &plan.operation); err != nil {
+		if err = l.candidates.putAdmittedV1(request, candidate, r, creator, &plan.operation); err != nil {
 			return allocationOperationV1{}, false, err
 		}
 	}
 	for _, allocation := range data {
 		if _, exists := l.owners.Get(allocation.id); !exists {
-			if err = l.owners.putAdmittedV1(allocation.id, candidate, creator, &plan.operation); err != nil {
+			if err = l.owners.putAdmittedV1(request, allocation.id, candidate, creator, &plan.operation); err != nil {
 				return allocationOperationV1{}, false, err
 			}
 			r.ids = append(r.ids, allocation.id)
@@ -277,11 +277,12 @@ func (l *ReservationLedger) claimReusedMetadataAdmittedV1(candidate CandidateIDV
 	return plan.operation, true, nil
 }
 
-func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64, []ReservationExtentV1, bool) {
+func (t *FreelistTxn) tryReusedMetadata(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, candidate CandidateIDV1) (uint64, uint64, []ReservationExtentV1, bool) {
 	search := t.metadataChunkSearch()
 	success := false
 	var baseExtents []ReservationExtentV1
 	baseReady := false
+	defer func() { clear(baseExtents[:cap(baseExtents)]) }()
 	defer func() { search.finish(t, success) }()
 	for chunk := search.next(t); chunk != nil; chunk = search.next(t) {
 		start, run := t.reusableChunkRun(chunk)
@@ -311,7 +312,7 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 		// fixed path, without cloning the radix set or rescanning data IDs.
 		if !baseReady {
 			var err error
-			baseExtents, err = t.reservationExtents()
+			baseExtents, err = t.reservationExtents(request, scratch)
 			if err != nil {
 				t.allocationErr = err
 				return 0, 0, nil, false
@@ -360,9 +361,12 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 			t.allocationErr = mutation.err
 			return 0, 0, nil, false
 		}
-		outputBytes := allocationClassV1(uint64(extentCount)*uint64(unsafe.Sizeof(ReservationExtentV1{})), false)
-		extra := allocationOperationV1{bytes: cowSaturatingAddV1(mutation.bytes, outputBytes), refs: mutation.refs}
-		operation, claimed, err := t.ledger.claimReusedMetadataAdmittedV1(candidate, start, count, t.highWater, t.allocated, t.abandonedAppends, t.buildCreator, extra)
+		if err := reserveAllocationScratchV1(request, scratch, t.buildCreator, uint64(extentCount), uint64(unsafe.Sizeof(ReservationExtentV1{})), false); err != nil {
+			t.allocationErr = err
+			return 0, 0, nil, false
+		}
+		extra := allocationOperationV1{bytes: mutation.bytes, refs: mutation.refs}
+		operation, claimed, err := t.ledger.claimReusedMetadataAdmittedV1(request, candidate, start, count, t.highWater, t.allocated, t.abandonedAppends, t.buildCreator, extra)
 		if err != nil {
 			t.allocationErr = err
 			return 0, 0, nil, false
@@ -371,18 +375,13 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 			continue
 		}
 		// No facet callback follows the claim: all births consume this receipt.
-		if err = operation.take(outputBytes, 0); err != nil {
-			operation.close()
-			t.allocationErr = err
-			return 0, 0, nil, false
-		}
 		extents := make([]ReservationExtentV1, extentCount)
 		if _, err = mergeReservationPlanV1(baseExtents, overlay[:overlayCount], extents); err != nil {
 			operation.close()
 			t.allocationErr = err
 			return 0, 0, nil, false
 		}
-		err = t.applyMutationV1(chunk.chunkNo, 1, func(c *stateChunk) {
+		err = t.applyMutationV1(request, chunk.chunkNo, 1, func(c *stateChunk) {
 			for id := start; id < start+count; id++ {
 				c.setFree(id&(freelistChunkSize-1), false)
 			}
@@ -399,7 +398,7 @@ func (t *FreelistTxn) tryReusedMetadata(candidate CandidateIDV1) (uint64, uint64
 	return 0, 0, nil, false
 }
 
-func (t *FreelistTxn) allocateReusedRange(count int) ([]uint64, bool) {
+func (t *FreelistTxn) allocateReusedRange(request AllocationRequestCreditV1, count int) ([]uint64, bool) {
 	if count <= 0 || count > freelistChunkSize {
 		return nil, false
 	}
@@ -417,7 +416,7 @@ func (t *FreelistTxn) allocateReusedRange(count int) ([]uint64, bool) {
 			return nil, false
 		}
 		outputBytes := allocationClassV1(uint64(count)*8, false)
-		operation, err := admitAllocationOperationV1(t.buildCreator, cowSaturatingAddV1(mutation.bytes, outputBytes), mutation.refs)
+		operation, err := admitAllocationOperationV1(request, t.buildCreator, cowSaturatingAddV1(mutation.bytes, outputBytes), mutation.refs)
 		if err != nil {
 			t.allocationErr = err
 			return nil, false
@@ -431,7 +430,7 @@ func (t *FreelistTxn) allocateReusedRange(count int) ([]uint64, bool) {
 		for i := range ids {
 			ids[i] = start + uint64(i)
 		}
-		err = t.applyMutationV1(chunk.chunkNo, uint64(count), func(c *stateChunk) {
+		err = t.applyMutationV1(request, chunk.chunkNo, uint64(count), func(c *stateChunk) {
 			for _, id := range ids {
 				c.setFree(id&(freelistChunkSize-1), false)
 			}

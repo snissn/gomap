@@ -20,7 +20,7 @@ One value edge owns either a branch or a 256-page chunk. Branches split at the
 first differing nibble and have at least two children; deletion removes empty
 chunks and immediately transfers the sole child before releasing a unary
 branch. For C>0 nonempty chunks there are at most C-1 branches. One chunk is the
-direct root; empty materialized state has exactly one branch sentinel. Dirty
+direct root; empty materialized state has exactly one chunk sentinel. Dirty
 emission writes actual dirty chunks and branches, or that sentinel, plus the
 normalized reservation chain and one generation header. A forced unchanged
 nonempty candidate rewrites its root, without rewriting unchanged descendants.
@@ -52,7 +52,7 @@ The Linux/amd64 Go 1.26.3 class expectations are:
 | Patricia branch | 336 | 352 |
 | State chunk including all 256 retirement entries | 2136 | 2304 |
 | Immutable branch encoding plan | 592 | 640 (noscan) |
-| Transaction header | 384 | 384 |
+| Transaction header | 368 | 384 |
 | Generation header object | 320 | 320 |
 | Value edge embedded in its owner | 16 | No separate allocation |
 
@@ -71,7 +71,7 @@ and creator wrapper is prepaid before birth. Full typed numeric-radix chunks
 include all 32 slots and intrusive live/available links. Partial deletion does
 not refund a class or rebind a surviving object to a newer request. Reuse of
 an old creator remains valid after that request retires; its actual owning
-references keep the facet alive. Final release clears aliases and full owned
+references keep the original resident scope alive. Final release clears aliases and full owned
 backing before dropping the last creating edge. Cumulative allocation debit is
 not a live-byte refund ledger.
 
@@ -144,8 +144,8 @@ The materializer now prepays its allocated-sort scratch, exact extent append
 capacity, data-ID scratch, candidate page vector, reservation vector headers
 and IDs, generation metadata IDs, dirty IDs, each separately allocated encoded
 page and index plan, recording control, and conservative digest scratch/control
-before those births. Scratch creates no extra retained ownership edge and no
-refund. The candidate and generation retain the creator of their aggregate
+before those births. Scratch uses a separately created short resident scope; it is released only
+after its full-capacity aliases are scrubbed. Its request debit is not refunded. The candidate and generation retain the creator of their aggregate
 backing. The prepared wrapper prepays its existing creator edge; auxiliary
 reused-range allocation consumes the same admitted mutation receipt as ordinary
 page allocation. Generic retaining sinks remain ordinary-only. The digest
@@ -158,9 +158,12 @@ These predebits do not open the joint caller certificate or replace its ledger.
 
 New mutable births use the current transaction's `buildCreator`; a retained
 candidate's historical creator only owns that candidate's existing backing.
-Activation and direct publication pass the active creator transiently into the
-successor transaction. The successor prepays its header, both tracking radix
-headers, dirty-tree isolation and exact pending-retirement replay scratch. The
+Credited preparation prebirths the activation successor and admits the actual
+activated-vector capacity before exposing the candidate. Activation consumes
+that successor without a request callback, debit or backing birth. The ordinary
+uncredited route still builds its successor during activation. The successor
+prepays its header, both tracking radix headers, dirty-tree isolation and exact
+pending-retirement replay scratch. The
 header and mutable build edge are independent owning references. Ending the
 matching resident epoch revokes private editing and the build edge while every
 retained header, branch, chunk and vector keeps its original creator.
@@ -180,8 +183,10 @@ prefix pays its candidate-ID scratch and prune plan before `PublishBatch`;
 application consumes the receipt without another account callback. A credited
 legacy unbounded caller builds and prunes a private successor before the shared
 transition. The ordinary uncredited legacy route retains its existing policy.
-Direct publication also builds and prunes its successor before ledger
-visibility. Bounds, capabilities and strict horizon comparisons are unchanged.
+Ordinary direct publication builds and prunes its successor before ledger
+visibility. Credited direct publication refuses before visibility because
+Prepare has not staged that route's next-capability prune role; integration must
+prebirth the exact role rather than invoke a debit after WAL durability. Bounds, capabilities and strict horizon comparisons are unchanged.
 
 Abort admits dirty rollback isolation before removing reservation ownership.
 Denial preserves the exact prepared candidate, rollback transaction and ledger
@@ -228,3 +233,55 @@ digest controls. The empty sink has no separately allocated control class.
 Pinned Mac witnesses are semantic/accounting component evidence; actual Linux
 classes, compiler escape behavior, joint retained/cumulative fit and public
 finite caller admission remain open. No production cap or refusal is relaxed.
+
+
+### Explicit current request and retained resident scopes
+
+`AllocationRequestCreditV1` carries only the current synchronous cumulative
+reserve operation. `AllocationResidentCreditV1` is a caller-created scope from
+the SAME installed native resident owner. `NewAllocationCreatorV1` reserves its
+whole control class through request first, resident second, and retains only the
+resident facet. Neither the creator, transaction, candidate nor an admitted
+operation stores a current request. A successful request debit is never refunded
+when resident preparation rejects. Old intrinsic creator slots remain unchanged;
+the resident census charges the current request's complete loan, but charges the
+new destination only for backing with no historical creator.
+
+Birth and growth APIs receive the current request explicitly. Short materializer,
+retirement, reserve, promotion, sort and bounded-plan scratch additionally receives
+a distinct creator constructed from a separate short scope of that same owner.
+Pointer inequality rejects the permanent creator as scratch; interface satisfaction
+cannot prove installed provenance. The caller's scope factory and serializer must
+prove that identity. Missing request or scratch refuses before the corresponding
+birth. Full capacities and replacement overlap are admitted before allocation.
+Scratch aliases are cleared at the operation boundary before the caller drops its
+short scope. Resident refunds occur only at the last actual scope edge.
+
+The credited prepared wrapper owns one additional activation-transaction pointer.
+Resident census, exact generation/ledger edge checks, physical-cut profiles,
+abort, terminal clear and shutdown all include that real transaction. Successful
+activation transfers the edge to the live transaction. Ending an installed
+resident epoch revokes the preborn successor's mutable edge as well as the
+current builder's edge. A missing preborn successor or insufficient admitted
+activated capacity refuses before reservation visibility, retaining exact retry
+owners. This shape changes creator/class and whole-caller fit obligations.
+
+`PrepareOwnedCOWCandidateRetiringWithAllocationRequestV1` is the explicit library
+handoff; legacy nonnil `limits.AllocationCredit` remains unconditionally refused.
+The shared DB caller must still construct all pre-WAL visible and async-seal
+roles, dependency/debt/seal/snapshot/control backing and exact terminal ownership
+through M's actual request and installed resident scope factories. A scalar
+allowance followed by a post-WAL reserve is insufficient. No new standalone
+allocator certificate, account or admission exemption is introduced. Ordinary
+public recovery, queued and direct publication retain their existing nil-credit
+behavior. The integrated finite guard and full fixed-capacity fit remain closed.
+
+Credited transaction origin survives epoch completion in the existing bool
+padding. Future births require both the synchronously borrowed current request
+and the exact newly admitted mutable resident creator edge. Ending an epoch
+revokes the fixed live, rollback, and preborn activation roles together; ordinary
+uncredited wrappers retain their behavior. Re-admission loans the real existing
+closure to the new request and creates only missing mutable edges, preserving
+all intrinsic historical creators. This origin bit is expected to leave the
+368-byte transaction geometry and 384-byte Linux class unchanged; actual
+compiled class and whole-caller fit remain required before finite activation.

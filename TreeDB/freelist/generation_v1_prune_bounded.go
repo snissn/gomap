@@ -56,15 +56,18 @@ type boundedPrunePlanV1 struct {
 	operation                     allocationOperationV1
 }
 
-func (t *FreelistTxn) prepareBoundedPruneV1(cap ReuseCapability) (boundedPrunePlanV1, error) {
+func (t *FreelistTxn) prepareBoundedPruneV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, cap ReuseCapability) (boundedPrunePlanV1, error) {
 	if t == nil || t.consumed || cap.oldestRecoverableCommitSeq == 0 {
 		return boundedPrunePlanV1{}, nil
+	}
+	if err := t.requireBirthCreditV1(request); err != nil {
+		return boundedPrunePlanV1{}, err
 	}
 	if t.allocationErr != nil {
 		return boundedPrunePlanV1{}, t.allocationErr
 	}
 	// Pay the full scratch/control class even if the compiler keeps it on stack.
-	if err := reserveMaterializationBackingV1(t.buildCreator, 1, uint64(unsafe.Sizeof(boundedPrunePlanV1{})), true); err != nil {
+	if err := reserveAllocationScratchV1(request, scratch, t.buildCreator, 1, uint64(unsafe.Sizeof(boundedPrunePlanV1{})), true); err != nil {
 		return boundedPrunePlanV1{}, err
 	}
 	plan := boundedPrunePlanV1{cap: cap, reuseLag: t.stats.ReuseLag}
@@ -103,7 +106,7 @@ func (t *FreelistTxn) prepareBoundedPruneV1(cap ReuseCapability) (boundedPrunePl
 		if plan.mutation.err != nil {
 			return boundedPrunePlanV1{}, plan.mutation.err
 		}
-		operation, err := admitAllocationOperationV1(t.buildCreator, plan.mutation.bytes, plan.mutation.refs)
+		operation, err := admitAllocationOperationV1(request, t.buildCreator, plan.mutation.bytes, plan.mutation.refs)
 		if err != nil {
 			return boundedPrunePlanV1{}, err
 		}
@@ -114,13 +117,13 @@ func (t *FreelistTxn) prepareBoundedPruneV1(cap ReuseCapability) (boundedPrunePl
 
 // No facet callback occurs during application of an admitted plan. The caller
 // closes its operation after success or rejection of the shared transition.
-func (t *FreelistTxn) applyBoundedPruneV1(plan *boundedPrunePlanV1) (BoundedPruneStats, error) {
+func (t *FreelistTxn) applyBoundedPruneV1(request AllocationRequestCreditV1, plan *boundedPrunePlanV1) (BoundedPruneStats, error) {
 	work := plan.work
 	if work.PageCredits == 0 {
 		return work, nil
 	}
 	if work.PromotedPages != 0 {
-		err := t.applyMutationV1(plan.chunkNo, work.PromotedPages, func(c *stateChunk) {
+		err := t.applyMutationV1(request, plan.chunkNo, work.PromotedPages, func(c *stateChunk) {
 			for _, off := range plan.promote[:work.PromotedPages] {
 				c.retired[off] = 0
 				c.setFree(off, true)
@@ -145,15 +148,19 @@ func (t *FreelistTxn) applyBoundedPruneV1(plan *boundedPrunePlanV1) (BoundedPrun
 // omission only delays reclamation; every candidate is checked against the
 // fresh opaque capability supplied by the existing root/pin owner.
 func (t *FreelistTxn) PruneWithCapabilityBounded(cap ReuseCapability) BoundedPruneStats {
-	plan, err := t.prepareBoundedPruneV1(cap)
+	return t.PruneWithCapabilityBoundedWithAllocationRequestV1(nil, nil, cap)
+}
+
+func (t *FreelistTxn) PruneWithCapabilityBoundedWithAllocationRequestV1(request AllocationRequestCreditV1, scratch *AllocationCreatorV1, cap ReuseCapability) BoundedPruneStats {
+	plan, err := t.prepareBoundedPruneV1(request, scratch, cap)
 	if err != nil {
 		if t != nil {
 			t.allocationErr = err
 		}
 		return BoundedPruneStats{}
 	}
-	defer plan.operation.close()
-	work, err := t.applyBoundedPruneV1(&plan)
+	defer func() { plan.operation.close(); plan = boundedPrunePlanV1{} }()
+	work, err := t.applyBoundedPruneV1(request, &plan)
 	if err != nil {
 		t.allocationErr = err
 	}

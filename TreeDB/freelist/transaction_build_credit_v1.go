@@ -33,9 +33,7 @@ func (t *FreelistTxn) bindBuildCreatorV1(creator *allocationCreditLeaseV1) error
 	// New birth authority does not prove existing dirty aliases are private.
 	t.privatePreparation = false
 	t.buildCreator = creator
-	creator.mu.Lock()
-	t.allocationCredit = creator.facet
-	creator.mu.Unlock()
+	t.allocationRequired = true
 	return nil
 }
 
@@ -53,15 +51,31 @@ func (t *FreelistTxn) endBuildCreatorV1(creator *allocationCreditLeaseV1) error 
 		return ErrCandidateConsumed
 	}
 	t.privatePreparation = false
-	t.buildCreator, t.allocationCredit = nil, nil
+	t.buildCreator = nil
 	creator.release()
+	return nil
+}
+
+// requireBirthCreditV1 distinguishes ordinary transactions from credited origin
+// after the mutable epoch edge has ended. This is an O(1) authority check; old
+// intrinsic backing retains its creator and confers no future birth authority.
+func (t *FreelistTxn) requireBirthCreditV1(request AllocationRequestCreditV1) error {
+	if t == nil {
+		return ErrGenerationFormat
+	}
+	if t.allocationRequired && (request == nil || t.buildCreator == nil) {
+		return ErrAllocationCertificateIncompleteV1
+	}
 	return nil
 }
 
 // growAppendVectorsV1 reserves both new buffers and their intrinsic creating
 // edges as one operation before high-water/extent edits. Ordinary and finite
 // transactions use the same explicit capacity growth.
-func (t *FreelistTxn) growAppendVectorsV1(allocatedAdditional, abandonedAdditional int) error {
+func (t *FreelistTxn) growAppendVectorsV1(request AllocationRequestCreditV1, allocatedAdditional, abandonedAdditional int) error {
+	if err := t.requireBirthCreditV1(request); err != nil {
+		return err
+	}
 	maximum := int(^uint(0) >> 1)
 	if allocatedAdditional < 0 || abandonedAdditional < 0 || allocatedAdditional > maximum-len(t.allocated) || abandonedAdditional > maximum-len(t.abandonedAppends) {
 		return ErrNoAllocatablePage
@@ -83,7 +97,7 @@ func (t *FreelistTxn) growAppendVectorsV1(allocatedAdditional, abandonedAddition
 	if refs == 0 {
 		return nil
 	}
-	operation, err := admitAllocationOperationV1(t.buildCreator, bytes, refs)
+	operation, err := admitAllocationOperationV1(request, t.buildCreator, bytes, refs)
 	if err != nil {
 		return err
 	}

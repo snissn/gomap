@@ -743,7 +743,7 @@ func TestFreelistGenerationV1_BatchedRetirementMutatesEachChunkOnce(t *testing.T
 	for id := uint64(2); id < 202; id++ {
 		retired = append(retired, retiredPage{id: id, lastReachableCommitSeq: 1})
 	}
-	txn.retireMany(retired)
+	txn.retireMany(requestForCreator5108(txn.buildCreator), retired)
 
 	stats := txn.Stats()
 	if stats.StateMutationPaths != 1 || stats.StateMutationItems != uint64(len(retired)) {
@@ -812,10 +812,10 @@ func TestFreelistGenerationV1_BatchedRetirementMatchesPerPageBytes(t *testing.T)
 	}
 	legacy := NewFreelistTxn(base, NewReservationLedger())
 	for _, item := range retired {
-		legacy.retire(item.id, item.lastReachableCommitSeq)
+		legacy.retire(requestForCreator5108(legacy.buildCreator), item.id, item.lastReachableCommitSeq)
 	}
 	batched := NewFreelistTxn(base, NewReservationLedger())
-	batched.retireMany(retired)
+	batched.retireMany(requestForCreator5108(batched.buildCreator), retired)
 
 	candidateID := candidateIDFromString("batched-byte-equivalence")
 	legacyCandidate, err := legacy.MaterializeCandidate(3, 3, candidateID, NewMemoryPageStoreV1())
@@ -852,10 +852,10 @@ func BenchmarkFreelistGenerationV1_RetirementMutation(b *testing.B) {
 	}{
 		{name: "per-page-control", apply: func(txn *FreelistTxn) {
 			for _, item := range retired {
-				txn.retire(item.id, item.lastReachableCommitSeq)
+				txn.retire(requestForCreator5108(txn.buildCreator), item.id, item.lastReachableCommitSeq)
 			}
 		}},
-		{name: "batched", apply: func(txn *FreelistTxn) { txn.retireMany(retired) }},
+		{name: "batched", apply: func(txn *FreelistTxn) { txn.retireMany(requestForCreator5108(txn.buildCreator), retired) }},
 	} {
 		b.Run(row.name, func(b *testing.B) {
 			b.ReportAllocs()
@@ -887,7 +887,7 @@ func BenchmarkFreelistGenerationV1_CandidatePageOwnership(b *testing.B) {
 			b.ReportAllocs()
 			for i := 0; i < b.N; i++ {
 				txn := NewFreelistTxn(base, NewReservationLedger())
-				txn.retireMany(retired)
+				txn.retireMany(requestForCreator5108(txn.buildCreator), retired)
 				candidate, err := txn.MaterializeCandidate(2, 2, candidateIDFromString("candidate-page-ownership-bench"), row.sink())
 				if err != nil {
 					b.Fatal(err)

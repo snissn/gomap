@@ -24,8 +24,8 @@ func (writer loanWriter5105) WriteCandidatePageV1(id uint64, view CandidatePageV
 
 func loanCandidate5105() *FreelistCandidateV1 {
 	return &FreelistCandidateV1{
-		generation:       MustNewFreelistGenerationV1(1, 4, nil, nil),
-		allocationCredit: &loanCredit5105{},
+		generation: MustNewFreelistGenerationV1(1, 4, nil, nil),
+		creator:    &allocationCreditLeaseV1{resident: &loanCredit5105{}, refs: 1},
 		pages: []candidatePageV1{
 			{PageID: 2, view: CandidatePageViewV1{data: bytes.Repeat([]byte{17}, page.PageSize)}},
 			{PageID: 3, view: CandidatePageViewV1{data: bytes.Repeat([]byte{31}, page.PageSize)}},
@@ -71,7 +71,7 @@ func TestCandidateFiniteDirectPagerAndOrdinaryRetainingWriter5105(t *testing.T) 
 			t.Fatalf("page %d bytes changed", id)
 		}
 	}
-	candidate.allocationCredit = nil
+	candidate.creator = nil
 	var retained CandidatePageViewV1
 	err = candidate.WritePagesToV1(loanWriter5105(func(_ uint64, view CandidatePageViewV1) error { retained = view; return errors.New("retaining writer") }))
 	if err == nil {
@@ -136,7 +136,7 @@ func TestFiniteTerminalBackingAndAmbiguousRetention5105(t *testing.T) {
 	if err := prepared.ClearTerminalBackingV1(); err != nil {
 		t.Fatal(err)
 	}
-	if prepared.candidate != nil || prepared.auxiliary != nil || candidate.generation != nil || candidate.pages != nil || candidate.dirtyIDs != nil || candidate.allocationCredit != nil {
+	if prepared.candidate != nil || prepared.auxiliary != nil || candidate.generation != nil || candidate.pages != nil || candidate.dirtyIDs != nil || candidate.creator != nil {
 		t.Fatal("terminal backing retained")
 	}
 }

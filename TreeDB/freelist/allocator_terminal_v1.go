@@ -12,7 +12,7 @@ func (a *Allocator) TryCloseCOWOwnersV1() bool {
 		a.closed = true
 		return true
 	}
-	if a.cow.prepared != nil || len(a.cow.activated) != 0 || a.cow.ownedCandidates != nil || a.cow.waitErr != nil {
+	if a.cow.packet != nil || a.cow.prepared != nil || len(a.cow.activated) != 0 || a.cow.ownedCandidates != nil || a.cow.waitErr != nil {
 		return false
 	}
 	a.closeCOWOwnersLockedV1()
@@ -40,12 +40,25 @@ func (a *Allocator) closeCOWOwnersLockedV1() {
 	state.closed = true
 	state.residentAdmissionCreator = nil
 	state.waitErr = ErrCandidateConsumed
+	if packet := state.packet; packet != nil {
+		state.packet = nil
+		if packet.visible != nil {
+			packet.visible.packet = nil
+		}
+		if packet.seal != nil {
+			packet.seal.packet = nil
+		}
+		packet.visible, packet.seal = nil, nil
+		packet.releasePrivateRolesLockedV1()
+	}
 	closePrepared := func(prepared *PreparedCOWCandidateV1) {
 		if prepared == nil {
 			return
 		}
 		prepared.backingMu.Lock()
 		defer prepared.backingMu.Unlock()
+		releaseTxnV1(prepared.activationTxn)
+		prepared.activationTxn = nil
 		releaseTxnV1(prepared.rollbackTxn)
 		prepared.rollbackTxn = nil
 		candidate := prepared.candidate
@@ -66,7 +79,7 @@ func (a *Allocator) closeCOWOwnersLockedV1() {
 		clear(candidate.dirtyIDs[:cap(candidate.dirtyIDs)])
 		clear(prepared.auxiliary[:cap(prepared.auxiliary)])
 		candidate.pages, candidate.dirtyIDs, candidate.generation = nil, nil, nil
-		candidate.allocationCredit, candidate.creator = nil, nil
+		candidate.creator = nil
 		prepared.candidate, prepared.auxiliary, prepared.creator = nil, nil, nil
 		prepared.allocator = nil
 		releaseGenerationV1(generation)

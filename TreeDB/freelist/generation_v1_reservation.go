@@ -372,7 +372,7 @@ func (l *ReservationLedger) reservedByOtherLocked(candidate CandidateIDV1, id ui
 	return reserved
 }
 
-func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64, creators ...*allocationCreditLeaseV1) error {
+func (l *ReservationLedger) reserve(request AllocationRequestCreditV1, candidate CandidateIDV1, ids []uint64, creators ...*allocationCreditLeaseV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if candidate == (CandidateIDV1{}) || len(creators) > 1 {
@@ -390,7 +390,7 @@ func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64, creat
 	if len(creators) != 0 {
 		creator = creators[0]
 	}
-	plan, err := l.admitReservationV1(candidate, nil, len(ids), len(ids), 0, creator)
+	plan, err := l.admitReservationV1(request, candidate, nil, len(ids), len(ids), 0, creator)
 	if err != nil {
 		return err
 	}
@@ -401,11 +401,11 @@ func (l *ReservationLedger) reserve(candidate CandidateIDV1, ids []uint64, creat
 	}
 	r.ids = append(r.ids, ids...)
 	for _, id := range ids {
-		if err := l.owners.putAdmittedV1(id, candidate, creator, &plan.operation); err != nil {
+		if err := l.owners.putAdmittedV1(request, id, candidate, creator, &plan.operation); err != nil {
 			return err
 		}
 	}
-	if err := l.candidates.putAdmittedV1(candidate, r, creator, &plan.operation); err != nil {
+	if err := l.candidates.putAdmittedV1(request, candidate, r, creator, &plan.operation); err != nil {
 		return err
 	}
 
@@ -463,7 +463,7 @@ func tailReservationEntryCountV1(base []ReservationExtentV1, minimum, start uint
 	return count + additional, nil
 }
 
-func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1, creators ...*allocationCreditLeaseV1) (uint64, uint64, error) {
+func (l *ReservationLedger) reserveTail(request AllocationRequestCreditV1, candidate CandidateIDV1, minimumStart, statePageCount uint64, dataIDs []uint64, baseExtents []ReservationExtentV1, creators ...*allocationCreditLeaseV1) (uint64, uint64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if candidate == (CandidateIDV1{}) || minimumStart < 2 {
@@ -544,7 +544,7 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 	if oldIDs > int(^uint(0)>>1)-newOwners || oldCoverage > int(^uint(0)>>1)-coverage {
 		return 0, 0, ErrNoAllocatablePage
 	}
-	plan, err := l.admitReservationV1(candidate, r, oldIDs+newOwners, newOwners, oldCoverage+coverage, creator)
+	plan, err := l.admitReservationV1(request, candidate, r, oldIDs+newOwners, newOwners, oldCoverage+coverage, creator)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -554,13 +554,13 @@ func (l *ReservationLedger) reserveTail(candidate CandidateIDV1, minimumStart, s
 		return 0, 0, err
 	}
 	if plan.newReservation {
-		if err = l.candidates.putAdmittedV1(candidate, r, creator, &plan.operation); err != nil {
+		if err = l.candidates.putAdmittedV1(request, candidate, r, creator, &plan.operation); err != nil {
 			return 0, 0, err
 		}
 	}
 	for _, id := range dataIDs {
 		if _, exists := l.owners.Get(id); !exists {
-			if err = l.owners.putAdmittedV1(id, candidate, creator, &plan.operation); err != nil {
+			if err = l.owners.putAdmittedV1(request, id, candidate, creator, &plan.operation); err != nil {
 				return 0, 0, err
 			}
 			r.ids = append(r.ids, id)
@@ -638,6 +638,10 @@ func (l *ReservationLedger) Shutdown(c CandidateIDV1) error {
 }
 
 func (l *ReservationLedger) Supersede(old, next CandidateIDV1) error {
+	return l.SupersedeWithAllocationRequestV1(nil, old, next)
+}
+
+func (l *ReservationLedger) SupersedeWithAllocationRequestV1(request AllocationRequestCreditV1, old, next CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r := l.candidates.Value(old)
@@ -648,12 +652,12 @@ func (l *ReservationLedger) Supersede(old, next CandidateIDV1) error {
 		return fmt.Errorf("candidate %x exists", next)
 	}
 	bytes, refs := l.candidates.insertionCapacityV1(1)
-	operation, err := admitAllocationOperationV1(r.creator, bytes, refs)
+	operation, err := admitAllocationOperationV1(request, r.creator, bytes, refs)
 	if err != nil {
 		return err
 	}
 	defer operation.close()
-	if err = l.candidates.putAdmittedV1(next, r, r.creator, &operation); err != nil {
+	if err = l.candidates.putAdmittedV1(request, next, r, r.creator, &operation); err != nil {
 		return err
 	}
 	l.candidates.Delete(old)
@@ -685,7 +689,9 @@ func (l *ReservationLedger) release(candidate CandidateIDV1, preVisibleOnly bool
 }
 
 func (l *ReservationLedger) Abandon(c CandidateIDV1) error { return l.release(c, true) }
-func (l *ReservationLedger) Fail(c CandidateIDV1) error {
+func (l *ReservationLedger) Fail(c CandidateIDV1) error    { return l.FailWithAllocationRequestV1(nil, c) }
+
+func (l *ReservationLedger) FailWithAllocationRequestV1(request AllocationRequestCreditV1, c CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r := l.candidates.Value(c)
@@ -697,7 +703,7 @@ func (l *ReservationLedger) Fail(c CandidateIDV1) error {
 	}
 	// Growth is admitted before deleting the first reservation or owner.
 	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
-		if err := l.growBurnedTailsLockedV1(r.creator); err != nil {
+		if err := l.growBurnedTailsLockedV1(request, r.creator); err != nil {
 			return err
 		}
 	}
@@ -717,6 +723,10 @@ func (l *ReservationLedger) Fail(c CandidateIDV1) error {
 // this after a staged allocator preparation error without first determining
 // how far materialization progressed.
 func (l *ReservationLedger) RollbackPreVisible(c CandidateIDV1) error {
+	return l.RollbackPreVisibleWithAllocationRequestV1(nil, c)
+}
+
+func (l *ReservationLedger) RollbackPreVisibleWithAllocationRequestV1(request AllocationRequestCreditV1, c CandidateIDV1) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	r := l.candidates.Value(c)
@@ -728,7 +738,7 @@ func (l *ReservationLedger) RollbackPreVisible(c CandidateIDV1) error {
 	}
 	// Growth is admitted before deleting the first reservation or owner.
 	if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
-		if err := l.growBurnedTailsLockedV1(r.creator); err != nil {
+		if err := l.growBurnedTailsLockedV1(request, r.creator); err != nil {
 			return err
 		}
 	}
@@ -767,6 +777,13 @@ func (l *ReservationLedger) PublishBatch(candidates []CandidateIDV1) error {
 			return fmt.Errorf("unknown candidate %x", candidate)
 		}
 	}
+	l.publishValidatedBatchLockedV1(candidates)
+	return nil
+}
+
+// Called only after complete validation, with the existing ledger lock held.
+// All radix nodes/arrays already exist; deletion can only release old backing.
+func (l *ReservationLedger) publishValidatedBatchLockedV1(candidates []CandidateIDV1) {
 	for _, candidate := range candidates {
 		r := l.candidates.Value(candidate)
 		for _, id := range r.ids {
@@ -792,7 +809,6 @@ func (l *ReservationLedger) PublishBatch(candidates []CandidateIDV1) error {
 		l.candidates.Delete(candidate)
 		releaseReservationBackingV1(r)
 	}
-	return nil
 }
 
 func (l *ReservationLedger) Reservations() uint64 {
@@ -814,20 +830,27 @@ func (l *ReservationLedger) Reservations() uint64 {
 
 // growBurnedTailsLockedV1 preserves creating ownership of the actual buffer,
 // independently of the historical ledger header or deleted reservations.
-func (l *ReservationLedger) growBurnedTailsLockedV1(creator *allocationCreditLeaseV1) error {
-	if len(l.burnedTails) < cap(l.burnedTails) {
+func (l *ReservationLedger) growBurnedTailsLockedV1(request AllocationRequestCreditV1, creator *allocationCreditLeaseV1) error {
+	return l.growBurnedTailCapacityLockedV1(request, creator, 1)
+}
+func (l *ReservationLedger) growBurnedTailCapacityLockedV1(request AllocationRequestCreditV1, creator *allocationCreditLeaseV1, additional int) error {
+	if additional < 0 || additional > int(^uint(0)>>1)-len(l.burnedTails) {
+		return ErrNoAllocatablePage
+	}
+	required := len(l.burnedTails) + additional
+	if required <= cap(l.burnedTails) {
 		return nil
 	}
 	maximum := int(^uint(0) >> 1)
 	if len(l.burnedTails) == maximum {
 		return ErrNoAllocatablePage
 	}
-	capacity := grownCapacityV1(cap(l.burnedTails), len(l.burnedTails)+1)
+	capacity := grownCapacityV1(cap(l.burnedTails), required)
 	if capacity > maximum/int(unsafe.Sizeof(reservationInterval{})) {
 		return ErrNoAllocatablePage
 	}
 	bytes := allocationClassV1(uint64(capacity)*uint64(unsafe.Sizeof(reservationInterval{})), false)
-	operation, err := admitAllocationOperationV1(creator, bytes, 1)
+	operation, err := admitAllocationOperationV1(request, creator, bytes, 1)
 	if err != nil {
 		return err
 	}
@@ -841,5 +864,70 @@ func (l *ReservationLedger) growBurnedTailsLockedV1(creator *allocationCreditLea
 	clear(l.burnedTails[:cap(l.burnedTails)])
 	l.burnedTails, l.burnedCreator = next, creator
 	oldCreator.release()
+	return nil
+}
+
+// rollbackPreparedPacketV1 consumes only previsible private reservations. It
+// validates the WHOLE selected pair and exact preborn burn capacity before the
+// first delete; missing stages are allowed during private construction failure.
+// There is no request, growth, callback, error formatting or radix birth here.
+func (l *ReservationLedger) rollbackPreparedPacketV1(pair [2]CandidateIDV1) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	burns := 0
+	for i, id := range pair {
+		if id == (CandidateIDV1{}) || i > 0 && id == pair[0] {
+			return ErrGenerationFormat
+		}
+		r := l.candidates.Value(id)
+		if r == nil {
+			continue
+		}
+		if r.state != CandidatePreVisible {
+			return ErrCandidateConsumed
+		}
+		if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
+			if r.tailCount == 0 || r.tailStart > ^uint64(0)-r.tailCount {
+				return ErrGenerationFormat
+			}
+			burns++
+		}
+		for _, pageID := range r.ids {
+			owner, ok := l.owners.Get(pageID)
+			if !ok || owner != id {
+				return ErrGenerationFormat
+			}
+		}
+	}
+	if burns > cap(l.burnedTails)-len(l.burnedTails) {
+		return ErrAllocationCertificateIncompleteV1
+	}
+	for _, id := range pair {
+		r := l.candidates.Value(id)
+		if r == nil {
+			continue
+		}
+		for _, pageID := range r.ids {
+			l.owners.Delete(pageID)
+		}
+		if r.tailReserved && r.tailWriteAttempted && !r.reusedMetadata {
+			l.burnedTails = append(l.burnedTails, reservationInterval{start: r.tailStart, count: r.tailCount})
+		}
+		l.candidates.Delete(id)
+		releaseReservationBackingV1(r)
+	}
+	return nil
+}
+
+// markPreparedPacketVisibleV1 preserves ordinary transition ordering without
+// allocating formatted errors after private packet preparation.
+func (l *ReservationLedger) markPreparedPacketVisibleV1(id CandidateIDV1) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	r := l.candidates.Value(id)
+	if r == nil || r.state != CandidatePreVisible && r.state != CandidateRetryable {
+		return ErrCandidateConsumed
+	}
+	r.state = CandidateVisible
 	return nil
 }

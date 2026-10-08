@@ -22,9 +22,9 @@ func TestPrivatePreparationCopiesDirtyPathOnce5105(t *testing.T) {
 		var staged *FreelistTxn
 		var err error
 		if private {
-			staged, err = live.cloneForPrivateAllocatorPrepare()
+			staged, err = live.cloneForPrivateAllocatorPrepare(requestForCreator5108(live.buildCreator))
 		} else {
-			staged, err = live.cloneForAllocatorPrepare()
+			staged, err = live.cloneForAllocatorPrepare(requestForCreator5108(live.buildCreator))
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -80,7 +80,7 @@ func TestPrivatePreparationCapacityAndNoTreeOwner5105(t *testing.T) {
 		stats            [21]uint64
 	}
 	if unsafe.Offsetof(FreelistTxn{}.stats) != unsafe.Offsetof(previousTxnLayout{}.stats) ||
-		unsafe.Sizeof(FreelistTxn{})-unsafe.Sizeof(previousTxnLayout{}) != unsafe.Sizeof(FreelistStateCopyWorkV1{})+unsafe.Sizeof(AllocationCreditV1(nil))+4*unsafe.Sizeof((*allocationCreditLeaseV1)(nil))+unsafe.Sizeof(error(nil)) {
+		unsafe.Sizeof(FreelistTxn{})-unsafe.Sizeof(previousTxnLayout{}) != unsafe.Sizeof(FreelistStateCopyWorkV1{})+4*unsafe.Sizeof((*allocationCreditLeaseV1)(nil))+unsafe.Sizeof(error(nil)) {
 		t.Fatal("transaction capacity grew beyond the admitted fixed copy counters")
 	}
 	t.Logf("measured counter-only-layout/current txn=%d/%d delta=%d; allocator state=%d profile=%d", unsafe.Sizeof(previousTxnLayout{}), unsafe.Sizeof(FreelistTxn{}), unsafe.Sizeof(FreelistTxn{})-unsafe.Sizeof(previousTxnLayout{}), unsafe.Sizeof(allocatorCOWStateV1{}), unsafe.Sizeof(COWPrepareProfileV1{}))
@@ -94,7 +94,7 @@ func TestPrivatePreparationCapacityAndNoTreeOwner5105(t *testing.T) {
 		t.Fatal("private flag no longer fits consumed-field padding")
 	}
 	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, []uint64{2, 257, 513}, nil), NewReservationLedger())
-	private, err := txn.cloneForPrivateAllocatorPrepare()
+	private, err := txn.cloneForPrivateAllocatorPrepare(requestForCreator5108(txn.buildCreator))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +111,12 @@ func TestPrivatePreparationCapacityAndNoTreeOwner5105(t *testing.T) {
 
 func TestPrivatePreparationPersistentCloneRevokesBothAliases5105(t *testing.T) {
 	source := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, []uint64{2, 9, 257}, nil), NewReservationLedger())
-	original, err := source.cloneForPrivateAllocatorPrepare()
+	original, err := source.cloneForPrivateAllocatorPrepare(requestForCreator5108(source.buildCreator))
 	if err != nil {
 		t.Fatal(err)
 	}
 	original.Retire(30, 1)
-	clone, err := original.cloneForAllocatorPrepare()
+	clone, err := original.cloneForAllocatorPrepare(requestForCreator5108(original.buildCreator))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestPrivatePreparationPersistentCloneRevokesBothAliases5105(t *testing.T) {
 		t.Fatal("clone edited original backing")
 	}
 	// A second private preparation also isolates aliases before enabling edits.
-	second, err := clone.cloneForPrivateAllocatorPrepare()
+	second, err := clone.cloneForPrivateAllocatorPrepare(requestForCreator5108(clone.buildCreator))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,9 +160,9 @@ func TestPrivatePreparationExactPersistentCandidateOracle5105(t *testing.T) {
 				var txn *FreelistTxn
 				var err error
 				if private {
-					txn, err = live.cloneForPrivateAllocatorPrepare()
+					txn, err = live.cloneForPrivateAllocatorPrepare(requestForCreator5108(live.buildCreator))
 				} else {
-					txn, err = live.cloneForAllocatorPrepare()
+					txn, err = live.cloneForAllocatorPrepare(requestForCreator5108(live.buildCreator))
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -187,7 +187,7 @@ func TestPrivatePreparationExactPersistentCandidateOracle5105(t *testing.T) {
 					}
 					chosen = append(chosen, id)
 				}
-				aux, err := txn.allocateContiguousRange(3)
+				aux, err := txn.allocateContiguousRange(requestForCreator5108(txn.buildCreator), 3)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -226,7 +226,7 @@ func TestPrivatePreparationExactPersistentCandidateOracle5105(t *testing.T) {
 				t.Fatal(err)
 			}
 			forkLive := NewFreelistTxn(got.Generation(), NewReservationLedger())
-			fork, err := forkLive.cloneForPrivateAllocatorPrepare()
+			fork, err := forkLive.cloneForPrivateAllocatorPrepare(requestForCreator5108(forkLive.buildCreator))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -245,7 +245,7 @@ func TestPrivatePreparationExactPersistentCandidateOracle5105(t *testing.T) {
 func TestPrivatePreparationErrorsRevokeAuthority5105(t *testing.T) {
 	for _, sink := range []AppendPageSink{nil, failingPageSinkV1{}} {
 		live := NewFreelistTxn(MustNewFreelistGenerationV1(1, 64, []uint64{2, 9}, nil), NewReservationLedger())
-		txn, err := live.cloneForPrivateAllocatorPrepare()
+		txn, err := live.cloneForPrivateAllocatorPrepare(requestForCreator5108(live.buildCreator))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -458,9 +458,9 @@ func TestPrivatePreparationCollapsedRebirthPersistentOracle5108(t *testing.T) {
 				var staged *FreelistTxn
 				var err error
 				if private {
-					staged, err = live.cloneForPrivateAllocatorPrepare()
+					staged, err = live.cloneForPrivateAllocatorPrepare(requestForCreator5108(live.buildCreator))
 				} else {
-					staged, err = live.cloneForAllocatorPrepare()
+					staged, err = live.cloneForAllocatorPrepare(requestForCreator5108(live.buildCreator))
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -571,15 +571,15 @@ func TestPrivatePreparationCollapsedRebirthAbortAndFailure5108(t *testing.T) {
 
 func TestPrivatePreparationDurableBranchDirtyChunk5108(t *testing.T) {
 	// A durable ancestor may hold a zero-ID nonempty child in private staging.
-	root := mutateChunk(stateRefV1{}, 0, 0, func(c *stateChunk) { c.setFree(2, true) })
-	next := mutateChunk(root, 1, 0, func(c *stateChunk) { c.setFree(2, true) })
+	root := mutateChunk(nil, stateRefV1{}, 0, 0, func(c *stateChunk) { c.setFree(2, true) })
+	next := mutateChunk(nil, root, 1, 0, func(c *stateChunk) { c.setFree(2, true) })
 	releaseStateNodeV1(root)
 	root = next
 	root.branch.pageID = 20
 	held := retainPrivateGraph5105(t, root)
 	before := lookupChunk(root, 0)
 	var stats FreelistTxnStats
-	private := mutateChunkForPreparation(root, 0, 0, func(c *stateChunk) { c.setFree(3, true) }, true, &stats)
+	private := mutateChunkForPreparation(nil, root, 0, 0, func(c *stateChunk) { c.setFree(3, true) }, true, &stats)
 	defer releaseStateNodeV1(private)
 	defer releaseStateNodeV1(root)
 	held.assertUnchanged(t)

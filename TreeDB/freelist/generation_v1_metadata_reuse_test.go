@@ -103,12 +103,12 @@ func testMetadataPhysicalTailFailure4627(t *testing.T, gap bool) {
 	ledger := NewReservationLedger()
 	earlier := candidateIDFromString("earlier-unwritten-tail")
 	if gap {
-		if _, _, err := ledger.reserveTail(earlier, 512, 100, nil, nil); err != nil {
+		if _, _, err := ledger.reserveTail(nil, earlier, 512, 100, nil, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
 	blocker := candidateIDFromString("occupy-holes")
-	if err := ledger.reserve(blocker, free); err != nil {
+	if err := ledger.reserve(nil, blocker, free); err != nil {
 		t.Fatal(err)
 	}
 	a := New(p, 0)
@@ -301,7 +301,7 @@ func TestFreelistMetadataReusePlacement4627(t *testing.T) {
 			}
 			base := MustNewFreelistGenerationV1(1, 2048, free, nil)
 			txn := NewFreelistTxn(base, NewReservationLedger())
-			aux, err := txn.allocateContiguousRange(tc.aux)
+			aux, err := txn.allocateContiguousRange(requestForCreator5108(txn.buildCreator), tc.aux)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -398,19 +398,19 @@ func TestFreelistMetadataReuseMaximumHighWater4627(t *testing.T) {
 func TestFreelistMetadataReuseAtomicClaim4627(t *testing.T) {
 	ledger := NewReservationLedger()
 	one, two := candidateIDFromString("one"), candidateIDFromString("two")
-	if ledger.claimReusedMetadata(one, 20, 4, 512, []allocatedPage{{21, ReservationReusedData}}, nil) {
+	if ledger.claimReusedMetadata(nil, one, 20, 4, 512, []allocatedPage{{21, ReservationReusedData}}, nil) {
 		t.Fatal("own data overlaps metadata")
 	}
-	if !ledger.claimReusedMetadata(one, 20, 4, 512, nil, nil) {
+	if !ledger.claimReusedMetadata(nil, one, 20, 4, 512, nil, nil) {
 		t.Fatal("first claim")
 	}
-	if ledger.claimReusedMetadata(two, 22, 4, 512, nil, nil) {
+	if ledger.claimReusedMetadata(nil, two, 22, 4, 512, nil, nil) {
 		t.Fatal("overlapping candidate")
 	}
 	if err := ledger.RollbackPreVisible(one); err != nil {
 		t.Fatal(err)
 	}
-	if !ledger.claimReusedMetadata(two, 22, 4, 512, nil, nil) {
+	if !ledger.claimReusedMetadata(nil, two, 22, 4, 512, nil, nil) {
 		t.Fatal("released interval unavailable")
 	}
 }
@@ -480,12 +480,12 @@ func TestFreelistMetadataReuseAuxiliaryClaimConflict4627(t *testing.T) {
 	}
 	// Observe and stage the actual contiguous auxiliary selection before its
 	// eventual combined claim, then let another candidate win those pages.
-	aux, err := a.cow.txn.allocateContiguousRange(3)
+	aux, err := a.cow.txn.allocateContiguousRange(requestForCreator5108(a.cow.txn.buildCreator), 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	other := candidateIDFromString("aux-winner")
-	if err := ledger.reserve(other, aux); err != nil {
+	if err := ledger.reserve(nil, other, aux); err != nil {
 		t.Fatal(err)
 	}
 	beforeTxn, beforeStats := a.cow.txn, a.Counters()
@@ -514,7 +514,7 @@ func TestFreelistMetadataReuseAuxiliaryClaimConflict4627(t *testing.T) {
 func TestFreelistMetadataTailPlacementAfterBurn4627(t *testing.T) {
 	t.Run("no-burn-unchanged", func(t *testing.T) {
 		ledger := NewReservationLedger()
-		start, count, err := ledger.reserveTail(candidateIDFromString("plain"), 512, 16, nil, nil)
+		start, count, err := ledger.reserveTail(nil, candidateIDFromString("plain"), 512, 16, nil, nil)
 		if err != nil || start != 512 || count != 18 {
 			t.Fatalf("placement=%d+%d err=%v", start, count, err)
 		}
@@ -522,12 +522,12 @@ func TestFreelistMetadataTailPlacementAfterBurn4627(t *testing.T) {
 	t.Run("live-tail-remains-owned", func(t *testing.T) {
 		ledger := NewReservationLedger()
 		first := candidateIDFromString("live")
-		start, count, err := ledger.reserveTail(first, 512, 16, nil, nil)
+		start, count, err := ledger.reserveTail(nil, first, 512, 16, nil, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		second := candidateIDFromString("later")
-		next, _, err := ledger.reserveTail(second, 512, 16, nil, nil)
+		next, _, err := ledger.reserveTail(nil, second, 512, 16, nil, nil)
 		if err != nil || next != start+count {
 			t.Fatalf("conflict placement=%d err=%v", next, err)
 		}
@@ -542,7 +542,7 @@ func TestFreelistMetadataTailPlacementAfterBurn4627(t *testing.T) {
 		ledger := NewReservationLedger()
 		ledger.burnedTails = []reservationInterval{{start: math.MaxUint64 - 1, count: 3}}
 		id := candidateIDFromString("overflow")
-		if _, _, err := ledger.reserveTail(id, 512, 16, nil, nil); !errors.Is(err, ErrNoAllocatablePage) {
+		if _, _, err := ledger.reserveTail(nil, id, 512, 16, nil, nil); !errors.Is(err, ErrNoAllocatablePage) {
 			t.Fatalf("overflow=%v", err)
 		}
 		if ledger.candidates.Value(id) != nil {
@@ -598,7 +598,7 @@ func TestFreelistMetadataReuseMixedDirtySiblingSizing4627(t *testing.T) {
 func TestFreelistMetadataReusePublishesBurnedCoverage4627(t *testing.T) {
 	ledger := NewReservationLedger()
 	failed := candidateIDFromString("old-tail")
-	start, count, err := ledger.reserveTail(failed, 500, 16, nil, nil)
+	start, count, err := ledger.reserveTail(nil, failed, 500, 16, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

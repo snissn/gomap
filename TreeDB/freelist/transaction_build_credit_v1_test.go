@@ -8,11 +8,11 @@ import (
 
 func buildCreditTxn5105(t *testing.T, ledger *ReservationLedger) *FreelistTxn {
 	t.Helper()
-	base, err := newFreelistGenerationOwnedV1(1, 512, []uint64{2, 3}, nil)
+	base, err := newFreelistGenerationOwnedV1(nil, 1, 512, []uint64{2, 3}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txn, err := beginCandidateOwnedV1(base, GenerationRefV1{}, ledger)
+	txn, err := beginCandidateOwnedV1(nil, nil, base, GenerationRefV1{}, ledger)
 	releaseGenerationV1(base)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func buildCreditTxn5105(t *testing.T, ledger *ReservationLedger) *FreelistTxn {
 func buildCreditLease5105(t *testing.T) (*radixCredit5105, *allocationCreditLeaseV1) {
 	t.Helper()
 	account := &radixCredit5105{limit: ^uint64(0)}
-	creator, err := newAllocationCreditLeaseV1(account)
+	creator, err := newComponentAllocationCreator5108(&componentBorrowedRequest5108{}, account)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func buildCreditLease5105(t *testing.T) (*radixCredit5105, *allocationCreditLeas
 func TestTransactionHeaderAndCrossRequestBufferCreators5105(t *testing.T) {
 	txn := buildCreditTxn5105(t, nil)
 	a, header := buildCreditLease5105(t)
-	if err := header.reserve(allocationClassV1(uint64(unsafe.Sizeof(*txn)), true), 1); err != nil {
+	if err := header.reserve(requestForCreator5108(header), allocationClassV1(uint64(unsafe.Sizeof(*txn)), true), 1); err != nil {
 		t.Fatal(err)
 	}
 	txn.creator = header
@@ -43,10 +43,10 @@ func TestTransactionHeaderAndCrossRequestBufferCreators5105(t *testing.T) {
 		t.Fatal(err)
 	}
 	birth.release()
-	if err := txn.ledger.reserve(candidateIDFromString("vector-gap"), []uint64{512}, nil); err != nil {
+	if err := txn.ledger.reserve(nil, candidateIDFromString("vector-gap"), []uint64{512}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := txn.AllocateAppend(); err != nil {
+	if _, err := txn.AllocateAppendWithAllocationRequestV1(requestForCreator5108(txn.buildCreator)); err != nil {
 		t.Fatal(err)
 	}
 	if txn.abandonedCreator != birth || len(txn.abandonedAppends) != 1 {
@@ -67,7 +67,7 @@ func TestTransactionHeaderAndCrossRequestBufferCreators5105(t *testing.T) {
 	}
 	next.release()
 	old, oldAbandoned := txn.allocated, txn.abandonedAppends
-	if err := txn.growAppendVectorsV1(cap(old)+1, cap(oldAbandoned)+1); err != nil {
+	if err := txn.growAppendVectorsV1(requestForCreator5108(txn.buildCreator), cap(old)+1, cap(oldAbandoned)+1); err != nil {
 		t.Fatal(err)
 	}
 	if b.released != 1 || txn.allocatedCreator != next || txn.allocated[0].id != 513 || old[0] != (allocatedPage{}) || oldAbandoned[0] != (ReservationExtentV1{}) || txn.abandonedCreator != next {
@@ -95,10 +95,10 @@ func TestTransactionBirthCloneAndRetainedNodeCredit5105(t *testing.T) {
 		t.Fatal(err)
 	}
 	birth.release()
-	if err := txn.ReservePage(2); err != nil {
+	if err := txn.ReservePageWithAllocationRequestV1(requestForCreator5108(txn.buildCreator), 2); err != nil {
 		t.Fatal(err)
 	}
-	clone, err := txn.cloneForAllocatorPrepare()
+	clone, err := txn.cloneForAllocatorPrepare(requestForCreator5108(txn.buildCreator))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestTransactionAppendGrowthDeniedBeforeMutation5105(t *testing.T) {
 	birth.release()
 	account.limit = account.bytes
 	root, high := txn.root, txn.highWater
-	if _, err := txn.AllocateAppend(); err == nil {
+	if _, err := txn.AllocateAppendWithAllocationRequestV1(requestForCreator5108(txn.buildCreator)); err == nil {
 		t.Fatal("growth admitted after credit exhaustion")
 	}
 	if txn.root != root || txn.highWater != high || len(txn.allocated) != 0 || txn.allocatedCreator != nil || len(txn.abandonedAppends) != 0 {
@@ -194,7 +194,7 @@ func TestTransactionAppendGrowthDeniedBeforeMutation5105(t *testing.T) {
 }
 
 func TestManagedRawCandidateEscapeRemainsPermanent5105(t *testing.T) {
-	g, err := newFreelistGenerationOwnedV1(1, 4, nil, nil)
+	g, err := newFreelistGenerationOwnedV1(nil, 1, 4, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,8 +210,8 @@ func TestManagedRawCandidateEscapeRemainsPermanent5105(t *testing.T) {
 }
 
 func TestBuildOwnerPinnedClassWitness5105(t *testing.T) {
-	if got := unsafe.Sizeof(FreelistTxn{}); got != 384 {
-		t.Fatalf("transaction raw bytes=%d want384", got)
+	if got := unsafe.Sizeof(FreelistTxn{}); got != 368 {
+		t.Fatalf("transaction raw bytes=%d want368", got)
 	}
 	if got := allocationClassV1(uint64(unsafe.Sizeof(FreelistTxn{})), true); got != 384 {
 		t.Fatalf("transaction class=%d want384", got)
@@ -220,7 +220,7 @@ func TestBuildOwnerPinnedClassWitness5105(t *testing.T) {
 }
 
 func TestOrdinaryPreparedWriterReentryAcrossTerminalClose5105(t *testing.T) {
-	g, err := newFreelistGenerationOwnedV1(1, 4, nil, nil)
+	g, err := newFreelistGenerationOwnedV1(nil, 1, 4, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -76,10 +76,10 @@ func TestMetadataChunkRunMatchesReservationOracle4627(t *testing.T) {
 
 func TestMetadataFreshPathDoesNotDetachTwice4627(t *testing.T) {
 	base := MustNewFreelistGenerationV1(1, 512, []uint64{2, 3, 4, 5}, nil)
-	root := mutateChunk(base.root, 0, 0, func(c *stateChunk) { c.setFree(2, false) })
+	root := mutateChunk(nil, base.root, 0, 0, func(c *stateChunk) { c.setFree(2, false) })
 	var detached stateRefV1
 	if allocs := testing.AllocsPerRun(100, func() {
-		detached = detachMetadataSiblings(root, 0, 0)
+		detached = detachMetadataSiblings(nil, root, 0, 0)
 	}); allocs != 0 {
 		t.Fatalf("fresh metadata path detached %g allocations, want zero", allocs)
 	}
@@ -98,16 +98,16 @@ func TestMetadataLosingClaimPreservesTransaction4627(t *testing.T) {
 	if err := txn.ReservePage(190); err != nil {
 		t.Fatal(err)
 	}
-	before, err := txn.cloneForAllocatorPrepare()
+	before, err := txn.cloneForAllocatorPrepare(requestForCreator5108(txn.buildCreator))
 	if err != nil {
 		t.Fatal(err)
 	}
 	blocker := candidateIDFromString("data-owner")
-	if err := ledger.reserve(blocker, []uint64{190}); err != nil {
+	if err := ledger.reserve(nil, blocker, []uint64{190}); err != nil {
 		t.Fatal(err)
 	}
 	id := candidateIDFromString("losing-metadata")
-	if _, _, _, ok := txn.tryReusedMetadata(id); ok {
+	if _, _, _, ok := txn.tryReusedMetadata(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), id); ok {
 		t.Fatal("accepted conflicting data ownership")
 	}
 	if txn.root != before.root || !txn.replacedMetadata.Equal(before.replacedMetadata) || !txn.changedChunks.Equal(before.changedChunks) || !slices.Equal(txn.allocated, before.allocated) || !slices.Equal(txn.abandonedAppends, before.abandonedAppends) {
@@ -130,7 +130,7 @@ func TestMetadataImpossibleRunDoesNotAllocate4627(t *testing.T) {
 	root := txn.root
 	id := candidateIDFromString("too-small")
 	allocs := testing.AllocsPerRun(100, func() {
-		if _, _, _, ok := txn.tryReusedMetadata(id); ok {
+		if _, _, _, ok := txn.tryReusedMetadata(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), id); ok {
 			t.Fatal("four pages cannot hold this dirty state plus reservation and header")
 		}
 	})
@@ -183,11 +183,11 @@ func TestMetadataCursorOccupiedChunkAdvancesWithoutOwnershipLoss4627(t *testing.
 	}
 	ledger := NewReservationLedger()
 	blocker := candidateIDFromString("blocker")
-	if err := ledger.reserve(blocker, free); err != nil {
+	if err := ledger.reserve(nil, blocker, free); err != nil {
 		t.Fatal(err)
 	}
 	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 512, free, nil), ledger)
-	_, _, _, ok := txn.tryReusedMetadata(candidateIDFromString("denied"))
+	_, _, _, ok := txn.tryReusedMetadata(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), candidateIDFromString("denied"))
 	if ok || ledger.nextReuseChunk != 1 {
 		t.Fatal("occupied attempt must advance hint only")
 	}
@@ -199,7 +199,7 @@ func TestMetadataCursorOccupiedChunkAdvancesWithoutOwnershipLoss4627(t *testing.
 	if err := ledger.Abandon(blocker); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _, ok = txn.tryReusedMetadata(candidateIDFromString("retry"))
+	_, _, _, ok = txn.tryReusedMetadata(requestForCreator5108(txn.buildCreator), scratchForCreator5108(txn.buildCreator), candidateIDFromString("retry"))
 	if !ok {
 		t.Fatal("wrap retry failed after blocker release")
 	}
@@ -294,7 +294,7 @@ func TestMetadataAuxiliarySharesCursor4627(t *testing.T) {
 	}
 	ledger := NewReservationLedger()
 	txn := NewFreelistTxn(MustNewFreelistGenerationV1(1, 1024, free, nil), ledger)
-	aux, ok := txn.allocateReusedRange(2)
+	aux, ok := txn.allocateReusedRange(nil, 2)
 	if !ok || aux[0]>>freelistChunkShift != 0 {
 		t.Fatal("aux placement")
 	}

@@ -44,8 +44,8 @@ type stateChunk struct {
 	retired              [freelistChunkSize]uint64
 }
 
-func (c *stateChunk) clone() *stateChunk {
-	out, err := cloneStateChunkOwnedV1(c, false, nil)
+func (c *stateChunk) clone(request AllocationRequestCreditV1) *stateChunk {
+	out, err := cloneStateChunkOwnedV1(request, c, false, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -278,18 +278,18 @@ func recomputeStateNode(n *stateNode, _ int) {
 		first = false
 	}
 }
-func cloneStateNode(r stateRefV1) stateRefV1 {
-	out, err := cloneStateRefOwnedV1(r, false, nil)
+func cloneStateNode(request AllocationRequestCreditV1, r stateRefV1) stateRefV1 {
+	out, err := cloneStateRefOwnedV1(request, r, false, nil)
 	if err != nil {
 		panic(err)
 	}
 	return out
 }
-func detachUnmaterialized(r stateRefV1, depth int) stateRefV1 {
-	return detachUnmaterializedWithStats(r, depth, nil)
+func detachUnmaterialized(request AllocationRequestCreditV1, r stateRefV1, depth int) stateRefV1 {
+	return detachUnmaterializedWithStats(request, r, depth, nil)
 }
-func detachUnmaterializedWithStats(r stateRefV1, depth int, stats *FreelistTxnStats) stateRefV1 {
-	out, err := detachUnmaterializedOwnedV1(r, depth, stats, nil)
+func detachUnmaterializedWithStats(request AllocationRequestCreditV1, r stateRefV1, depth int, stats *FreelistTxnStats) stateRefV1 {
+	out, err := detachUnmaterializedOwnedV1(request, r, depth, stats, nil)
 	if err != nil {
 		panic(err)
 	}
@@ -298,26 +298,26 @@ func detachUnmaterializedWithStats(r stateRefV1, depth int, stats *FreelistTxnSt
 
 // The creating facet is supplied by the current serialized builder, never
 // inferred from a retained generation whose request may already have retired.
-func detachUnmaterializedOwnedV1(r stateRefV1, depth int, stats *FreelistTxnStats, creator *allocationCreditLeaseV1) (stateRefV1, error) {
+func detachUnmaterializedOwnedV1(request AllocationRequestCreditV1, r stateRefV1, depth int, stats *FreelistTxnStats, creator *allocationCreditLeaseV1) (stateRefV1, error) {
 	plan := dirtyStateBirthPlanV1(r, depth)
-	op, err := admitAllocationOperationV1(creator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	op, err := admitAllocationOperationV1(request, creator, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err != nil {
 		return stateRefV1{}, err
 	}
 	defer op.close()
-	return detachStateOwnedOperationV1(r, depth, stats, &op)
+	return detachStateOwnedOperationV1(request, r, depth, stats, &op)
 }
-func mutateChunk(r stateRefV1, key uint64, depth int, f func(*stateChunk)) stateRefV1 {
-	return mutateChunkForPreparation(r, key, depth, f, false, nil)
+func mutateChunk(request AllocationRequestCreditV1, r stateRefV1, key uint64, depth int, f func(*stateChunk)) stateRefV1 {
+	return mutateChunkForPreparation(request, r, key, depth, f, false, nil)
 }
-func mutateChunkForPreparation(r stateRefV1, key uint64, depth int, f func(*stateChunk), private bool, stats *FreelistTxnStats) stateRefV1 {
+func mutateChunkForPreparation(request AllocationRequestCreditV1, r stateRefV1, key uint64, depth int, f func(*stateChunk), private bool, stats *FreelistTxnStats) stateRefV1 {
 	plan := mutationStateBirthPlanV1(r, key, depth, private, false, false)
-	op, err := admitAllocationOperationV1(nil, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
+	op, err := admitAllocationOperationV1(request, nil, plan.nodes*stateNodeCopyCapacityV1+plan.chunks*stateChunkCopyCapacityV1, plan.nodes+plan.chunks)
 	if err != nil {
 		panic(err)
 	}
 	defer op.close()
-	out, err := mutateStateOwnedOperationV1(r, key, depth, f, private, stats, &op)
+	out, err := mutateStateOwnedOperationV1(request, r, key, depth, f, private, stats, &op)
 	if err != nil {
 		panic(err)
 	}

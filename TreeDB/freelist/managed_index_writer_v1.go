@@ -31,7 +31,7 @@ func (a *Allocator) MarkOrdinaryWriterEscapeV1() bool {
 		return false
 	}
 	if a.cow != nil && (a.cow.creator != nil || a.cow.generation.hasFiniteBackingV1() ||
-		a.cow.txn != nil && (a.cow.txn.creator != nil || a.cow.txn.buildCreator != nil || a.cow.txn.allocationCredit != nil || stateTreeFiniteV1(a.cow.txn.root))) {
+		a.cow.txn != nil && (a.cow.txn.creator != nil || a.cow.txn.buildCreator != nil || stateTreeFiniteV1(a.cow.txn.root))) {
 		return false
 	}
 	a.rawWriterEscaped = true
