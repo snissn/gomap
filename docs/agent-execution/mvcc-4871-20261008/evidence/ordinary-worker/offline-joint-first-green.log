@@ -1,0 +1,57 @@
+--- FAIL: TestPrimaryJointVacuumV6OfflineUsesPairAuthority (0.01s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x848995]
+
+goroutine 21 [running]:
+testing.tRunner.func1.2({0x1ab0ea0, 0x2c37410})
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1974 +0x232
+testing.tRunner.func1()
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1977 +0x349
+panic({0x1ab0ea0?, 0x2c37410?})
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/runtime/panic.go:860 +0x13a
+github.com/snissn/gomap/TreeDB/zipper.(*Zipper).BuildPrimaryRoot(0x0, 0x6, 0x1)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/zipper/primary_directory.go:690 +0x35
+github.com/snissn/gomap/TreeDB/db.(*DB).writeRebuiltPrimaryRootsWithProducerV5(_, {_, _}, _, _, {{0x2, 0x2, 0x3, 0x0, 0x4, ...}, ...}, ...)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/durable_primary_rebuild_v5.go:190 +0x18f9
+github.com/snissn/gomap/TreeDB/db.(*DB).finishOfflinePrimaryPairV6(0x52284d6e008, 0x52284b04a20, 0x52284a8e808, 0x52284b94ec0, 0x52284b95060)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/primary_offline_pair_v6.go:86 +0x81a
+github.com/snissn/gomap/TreeDB/db.vacuumIndexOffline({0x0, {0x52284ae8140, 0x43}, 0x0, {0x1c57684, 0xb}, {0x0, 0x0}, 0x0, 0x0, ...}, ...)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/vacuum_offline.go:119 +0x997
+github.com/snissn/gomap/TreeDB/db.VacuumIndexOffline(...)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/vacuum_offline.go:39
+github.com/snissn/gomap/TreeDB/db.TestPrimaryJointVacuumV6OfflineUsesPairAuthority(0x52284afcb48)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/primary_joint_vacuum_v6_test.go:472 +0xd0
+testing.tRunner(0x52284afcb48, 0x1d894a0)
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2101 +0x4c5
+FAIL	github.com/snissn/gomap/TreeDB/db	0.017s
+--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity (0.03s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x83a515]
+
+goroutine 21 [running]:
+testing.tRunner.func1.2({0x19c4700, 0x29d0080})
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1974 +0x232
+testing.tRunner.func1()
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1977 +0x349
+panic({0x19c4700?, 0x29d0080?})
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/runtime/panic.go:860 +0x13a
+github.com/snissn/gomap/TreeDB/zipper.(*Zipper).BuildPrimaryRoot(0x0, 0x3, 0x1)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/zipper/primary_directory.go:690 +0x35
+github.com/snissn/gomap/TreeDB/db.(*DB).writeRebuiltPrimaryRootsWithProducerV5(_, {_, _}, _, _, {{0x1, 0x3, 0x2, 0x0, 0x4, ...}, ...}, ...)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/durable_primary_rebuild_v5.go:190 +0x18f9
+github.com/snissn/gomap/TreeDB/db.(*DB).finishOfflinePrimaryPairV6(0x34b26a108008, 0x34b269fabb00, 0x34b26ba29008, 0x34b26c904790, 0x34b26c904a30)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/primary_offline_pair_v6.go:86 +0x81a
+github.com/snissn/gomap/TreeDB/db.ValueLogRewriteOffline({0x0, {0x34b269f7d980, 0x55}, 0x34b26c6d4d60, {0x1b4bfc4, 0xb}, {0x0, 0x0}, 0x0, 0x0, ...})
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/vlog_rewrite.go:3441 +0x1d05
+github.com/snissn/gomap/TreeDB.ValueLogRewriteOffline({0x0, {0x34b269f7d980, 0x55}, 0x34b26c6d4d60, {0x1b4bfc4, 0xb}, {0x0, 0x0}, 0x0, 0x0, ...})
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/vlog_rewrite.go:70 +0x5bc
+github.com/snissn/gomap/TreeDB_test.TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(0x34b269f726c8)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/maintenance_leaf_vlog_test.go:402 +0x5ab
+testing.tRunner(0x34b269f726c8, 0x1c3ec70)
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2101 +0x4c5
+FAIL	github.com/snissn/gomap/TreeDB	0.036s
+FAIL

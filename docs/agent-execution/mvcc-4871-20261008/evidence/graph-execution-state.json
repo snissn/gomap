@@ -115,7 +115,9 @@
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070993290",
-        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071312164"
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071312164",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071379420",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071399552"
       ],
       "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
       "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
@@ -134,7 +136,10 @@
       "consumer_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071082310",
       "landed_harness_source_freeze": "f2ff79bd4b06118f4006d4ca48bcdab4adce0e9d",
       "landed_harness_tree": "27325b1bc8abe3e7924d7d6bb19db6b65def067f",
-      "offline_component_status": "Shared normal packet preserved RED: rebuilt slot/proof closure readable, post-reopen allocator exposed CommitSeq-only stale derived value-log reference counts; predecision cache invalidation repair and closure-error propagation underway. No component qualification yet."
+      "offline_component_status": "Immutable Linux mechanism normal packet passes; exact-parent owned constructor reconciliation underway. Component-only: no race/vet/docs/policy/PR/performance acceptance.",
+      "offline_mechanism_source_freeze": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
+      "offline_mechanism_tree": "b391836d4b9313321222b8e53c5cb69094b0dced",
+      "offline_mechanism_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071421037"
     },
     {
       "issue": "snissn/gomap#5118",

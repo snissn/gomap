@@ -1,0 +1,10 @@
+--- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure (0.01s)
+    --- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vacuum (0.00s)
+        primary_offline_pair_v6_test.go:61: key not found
+    --- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog (0.00s)
+        primary_offline_pair_v6_test.go:61: key not found
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.070s
+ok  	github.com/snissn/gomap/TreeDB	0.065s
+ok  	github.com/snissn/gomap/TreeDB/collections	0.057s
+FAIL

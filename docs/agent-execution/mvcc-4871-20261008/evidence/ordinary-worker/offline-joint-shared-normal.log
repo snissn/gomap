@@ -1,0 +1,8 @@
+--- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure (0.02s)
+    --- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog (0.01s)
+        primary_offline_pair_v6_test.go:170: capture queued root dependencies: stable resource dependency unresolved: value-log file 2147483649 was not registered by its producer
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	1.000s
+ok  	github.com/snissn/gomap/TreeDB	0.107s
+ok  	github.com/snissn/gomap/TreeDB/collections	0.068s
+FAIL

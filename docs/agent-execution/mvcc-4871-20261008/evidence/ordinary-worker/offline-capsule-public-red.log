@@ -1,0 +1,5 @@
+--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity (0.03s)
+    maintenance_leaf_vlog_test.go:420: reopen: treedb: no recoverable durable meta: slot 0: capsule complete physical closure: invalid freelist generation format: page 6 header/type; slot 1: capsule complete physical closure: invalid freelist generation format: page 25 header/type
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.037s
+FAIL

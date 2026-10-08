@@ -1,0 +1,111 @@
+{
+  "baseHead": "b8798b03a5ef9fc14cdc2801b7a6b7dad23132f7",
+  "baseTree": "27325b1bc8abe3e7924d7d6bb19db6b65def067f",
+  "dirtySourceBindings": [
+    {
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go",
+      "sha256": "ccca391a97653ec2a8d50853098eaa1ed1b75d26953250059f4cbbd2de55b992",
+      "bytes": 21877
+    },
+    {
+      "path": "TreeDB/db/primary_joint_swap_v6.go",
+      "sha256": "adb04f9300e4478ab0ab24d6af961db10f59de315e0d1dec367099567ad98609",
+      "bytes": 12962
+    },
+    {
+      "path": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "sha256": "50b3205da5afe5bbd9f193fb412599c8a093e367441a7992480ede0edd18679b",
+      "bytes": 25347
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "sha256": "ab33a41f62f9837872753b3e47605de44ab41d307416e2ba6916611b29d6294e",
+      "bytes": 6567
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6_test.go",
+      "sha256": "3f144abe1a8f1e44c67a5f83436089fd5514671447af2a29905ba58ba4572113",
+      "bytes": 14631
+    },
+    {
+      "path": "TreeDB/db/vacuum_offline.go",
+      "sha256": "163cc131f425ccba09dd83aafb0805417e0487135cad0d40d351beac9a499e92",
+      "bytes": 18895
+    },
+    {
+      "path": "TreeDB/db/vacuum_online.go",
+      "sha256": "52a17308373ae6680b1a64d2864f0d581f8d1f15994f462d6981220ee2bb369f",
+      "bytes": 82652
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "sha256": "dc66fbc852ff68da11920eb0fc5669646b44a2c62d2811f6f9092aa9415ebe32",
+      "bytes": 183844
+    }
+  ],
+  "receipts": [
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-capsule-public-red.log",
+      "sha256": "e613ab4866ccea40557be643e90f51c3662d1ee61a273ae519cbd96393e44b08",
+      "raw": "--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity (0.03s)\n    maintenance_leaf_vlog_test.go:420: reopen: treedb: no recoverable durable meta: slot 0: capsule complete physical closure: invalid freelist generation format: page 6 header/type; slot 1: capsule complete physical closure: invalid freelist generation format: page 25 header/type\nFAIL\nFAIL\tgithub.com/snissn/gomap/TreeDB\t0.037s\nFAIL\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-capsule-corruption-red.log",
+      "sha256": "fa28763332324b334c55a5c16d8e8435c688a5aa28601cb7ac398398d47836a8",
+      "raw": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.006s [no tests to run]\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-joint-existing-red.log",
+      "sha256": "0803a9c4c9f50906d86188e3cd5a0f17188b20b11c8d714e19b0ef3eb5a5cb0a",
+      "raw": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.012s\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-joint-first-green.log",
+      "sha256": "fa06361a5c6ac9f85d28cc9850b73e61f6eef4251e3eba617fddb9b5a938b7b8",
+      "raw": "--- FAIL: TestPrimaryJointVacuumV6OfflineUsesPairAuthority (0.01s)\npanic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]\n[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x848995]\n\ngoroutine 21 [running]:\ntesting.tRunner.func1.2({0x1ab0ea0, 0x2c37410})\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1974 +0x232\ntesting.tRunner.func1()\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1977 +0x349\npanic({0x1ab0ea0?, 0x2c37410?})\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/runtime/panic.go:860 +0x13a\ngithub.com/snissn/gomap/TreeDB/zipper.(*Zipper).BuildPrimaryRoot(0x0, 0x6, 0x1)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/zipper/primary_directory.go:690 +0x35\ngithub.com/snissn/gomap/TreeDB/db.(*DB).writeRebuiltPrimaryRootsWithProducerV5(_, {_, _}, _, _, {{0x2, 0x2, 0x3, 0x0, 0x4, ...}, ...}, ...)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/durable_primary_rebuild_v5.go:190 +0x18f9\ngithub.com/snissn/gomap/TreeDB/db.(*DB).finishOfflinePrimaryPairV6(0x52284d6e008, 0x52284b04a20, 0x52284a8e808, 0x52284b94ec0, 0x52284b95060)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/primary_offline_pair_v6.go:86 +0x81a\ngithub.com/snissn/gomap/TreeDB/db.vacuumIndexOffline({0x0, {0x52284ae8140, 0x43}, 0x0, {0x1c57684, 0xb}, {0x0, 0x0}, 0x0, 0x0, ...}, ...)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/vacuum_offline.go:119 +0x997\ngithub.com/snissn/gomap/TreeDB/db.VacuumIndexOffline(...)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/vacuum_offline.go:39\ngithub.com/snissn/gomap/TreeDB/db.TestPrimaryJointVacuumV6OfflineUsesPairAuthority(0x52284afcb48)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/primary_joint_vacuum_v6_test.go:472 +0xd0\ntesting.tRunner(0x52284afcb48, 0x1d894a0)\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2036 +0xea\ncreated by testing.(*T).Run in goroutine 1\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2101 +0x4c5\nFAIL\tgithub.com/snissn/gomap/TreeDB/db\t0.017s\n--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity (0.03s)\npanic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]\n[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x83a515]\n\ngoroutine 21 [running]:\ntesting.tRunner.func1.2({0x19c4700, 0x29d0080})\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1974 +0x232\ntesting.tRunner.func1()\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:1977 +0x349\npanic({0x19c4700?, 0x29d0080?})\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/runtime/panic.go:860 +0x13a\ngithub.com/snissn/gomap/TreeDB/zipper.(*Zipper).BuildPrimaryRoot(0x0, 0x3, 0x1)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/zipper/primary_directory.go:690 +0x35\ngithub.com/snissn/gomap/TreeDB/db.(*DB).writeRebuiltPrimaryRootsWithProducerV5(_, {_, _}, _, _, {{0x1, 0x3, 0x2, 0x0, 0x4, ...}, ...}, ...)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/durable_primary_rebuild_v5.go:190 +0x18f9\ngithub.com/snissn/gomap/TreeDB/db.(*DB).finishOfflinePrimaryPairV6(0x34b26a108008, 0x34b269fabb00, 0x34b26ba29008, 0x34b26c904790, 0x34b26c904a30)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/primary_offline_pair_v6.go:86 +0x81a\ngithub.com/snissn/gomap/TreeDB/db.ValueLogRewriteOffline({0x0, {0x34b269f7d980, 0x55}, 0x34b26c6d4d60, {0x1b4bfc4, 0xb}, {0x0, 0x0}, 0x0, 0x0, ...})\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/db/vlog_rewrite.go:3441 +0x1d05\ngithub.com/snissn/gomap/TreeDB.ValueLogRewriteOffline({0x0, {0x34b269f7d980, 0x55}, 0x34b26c6d4d60, {0x1b4bfc4, 0xb}, {0x0, 0x0}, 0x0, 0x0, ...})\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/vlog_rewrite.go:70 +0x5bc\ngithub.com/snissn/gomap/TreeDB_test.TestValueLogRewriteOffline_LeafPagesInValueLog_ReopenParity(0x34b269f726c8)\n\t/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/maintenance_leaf_vlog_test.go:402 +0x5ab\ntesting.tRunner(0x34b269f726c8, 0x1c3ec70)\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2036 +0xea\ncreated by testing.(*T).Run in goroutine 1\n\t/workspace/scratch/1ecfdb811b25/toolchain/go/src/testing/testing.go:2101 +0x4c5\nFAIL\tgithub.com/snissn/gomap/TreeDB\t0.036s\nFAIL\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-joint-construction.log",
+      "sha256": "bdcdea81e5c310beb56e620721db284c50684eee6761d5a79e6fa8bee287ff09",
+      "raw": "--- FAIL: TestPrimaryJointVacuumV6OfflineUsesPairAuthority (0.02s)\n    primary_joint_vacuum_v6_test.go:475: sequence 3 want 4\nFAIL\nFAIL\tgithub.com/snissn/gomap/TreeDB/db\t0.030s\nok  \tgithub.com/snissn/gomap/TreeDB\t0.065s\nFAIL\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-joint-closure-normal.log",
+      "sha256": "28f6a7d7996453be27ed516c6ce6da5f61d695f19a8b752f4d2af8a85f664f8b",
+      "raw": "--- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure (0.01s)\n    --- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vacuum (0.00s)\n        primary_offline_pair_v6_test.go:61: key not found\n    --- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog (0.00s)\n        primary_offline_pair_v6_test.go:61: key not found\nFAIL\nFAIL\tgithub.com/snissn/gomap/TreeDB/db\t0.070s\nok  \tgithub.com/snissn/gomap/TreeDB\t0.065s\nok  \tgithub.com/snissn/gomap/TreeDB/collections\t0.057s\nFAIL\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-joint-shared-normal.log",
+      "sha256": "256d49a3183c471e4b7d1a339c68bbd8c569a58f722dd2b2dafa78cd21f11224",
+      "raw": "--- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure (0.02s)\n    --- FAIL: TestPrimaryOfflinePairV6PreservesSlotsProofsAndPointerClosure/vlog (0.01s)\n        primary_offline_pair_v6_test.go:170: capture queued root dependencies: stable resource dependency unresolved: value-log file 2147483649 was not registered by its producer\nFAIL\nFAIL\tgithub.com/snissn/gomap/TreeDB/db\t1.000s\nok  \tgithub.com/snissn/gomap/TreeDB\t0.107s\nok  \tgithub.com/snissn/gomap/TreeDB/collections\t0.068s\nFAIL\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-joint-cache-normal.log",
+      "sha256": "55f35582fd9cb412cdecc520db4906800659de9699ce8d8f53e4ce701700ca9a",
+      "raw": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t0.945s\nok  \tgithub.com/snissn/gomap/TreeDB\t0.110s\nok  \tgithub.com/snissn/gomap/TreeDB/collections\t0.061s\n"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/offline-joint-cleanup-normal.log",
+      "sha256": "8864e35a9c479ad12bd5a21e28ae50a7dc761b57152965885893c30c8f4ddd66",
+      "raw": "ok  \tgithub.com/snissn/gomap/TreeDB/db\t1.238s\nok  \tgithub.com/snissn/gomap/TreeDB\t0.118s\nok  \tgithub.com/snissn/gomap/TreeDB/collections\t0.057s\n"
+    }
+  ],
+  "activeCommands": 0,
+  "status": "Uncommitted Linux mechanism checkpoint; exact-parent path-constructor authority boundary open; no race/vet/docs/policy qualification of this dirty packet yet",
+  "blockedAPIs": [
+    "TreeDB/pager/pager.go:159 OpenWithOptions path only; O_RDWR|O_CREATE and alignment Truncate",
+    "TreeDB/internal/primaryarena/arena.go:147 open path only delegates pager.Open",
+    "TreeDB/db/primary_offline_pair_v6.go: OpenStableParent currently after materialization; diagnostic-path predecision staging cleanup remains pending early-parent reconciliation"
+  ],
+  "remainingGates": [
+    "early captured original-parent source/staging validation and cleanup",
+    "handle-owned producer API or explicit bounded capability decision",
+    "race/vet/docs/policy + exact candidate commit",
+    "Windows relative-parent operations",
+    "remaining inherited CI, terminallease and physical/performance numeric gates"
+  ],
+  "immutable_local_head": "eb91c243e32b61e31fe36bb585efd9302eb91689",
+  "immutable_published_head": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
+  "immutable_tree": "b391836d4b9313321222b8e53c5cb69094b0dced",
+  "root_verification": "All8 exact source byte/hash bindings and all9 raw receipt hashes independently verified; mechanism only, no constructor/race/vet/docs/policy/PR acceptance."
+}

@@ -1,0 +1,6 @@
+--- FAIL: TestPrimaryJointVacuumV6OfflineUsesPairAuthority (0.02s)
+    primary_joint_vacuum_v6_test.go:475: sequence 3 want 4
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.030s
+ok  	github.com/snissn/gomap/TreeDB	0.065s
+FAIL
