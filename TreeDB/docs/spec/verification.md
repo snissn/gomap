@@ -4034,3 +4034,64 @@ relabelled48-write runtime evidence. Actual48-outcome audit/resource costs and
 all49 native truths remain fresh qualification obligations.
 See command README for allocation ownership and planned operational bounds;
 source controls alone establish no sustained service result.
+
+## Pager-owned leaf manifest verification
+
+The optional format's principal correctness witnesses are:
+
+- `TestOwnedLeafManifestPublicationReopenAndPins`,
+  `TestOwnedLeafManifestPublicRowsDependenciesAndVacuum` and
+  `TestOwnedLeafManifestPublicationCutsKeepAuthority`: pointer visibility,
+  held roots, durable dependencies, publication cuts and vacuum.
+- `TestOwnedLeafManifestPhysicalFeatureRefusal`,
+  `TestOwnedLeafManifestFrozenOldReaderRefusesEverySlot`,
+  `TestOwnedLeafManifestOlderSlotRecoveryAndOldReaderRefusal` and
+  `TestOwnedLeafManifestQueuedBuildGroupAndMixedFormatRefusal`: both physical
+  markers, fallback slots, actual old-reader refusal and mixed-layout rejection.
+- `TestOwnedLeafManifestCanonicalCorruptionAndCeiling` and
+  `TestOwnedLeafManifestRejectsMalformedIntrinsicObjects`: canonical dimensions,
+  reserved-key intervals, integrity and malformed objects.
+- `TestOwnedLeafManifestPreparedAllowanceRejectsBeforeCommandWAL`: output credit
+  refusal before command assignment; no enlarged allocation cap.
+- `TestOwnedLeafManifestSameGenerationReuseAndRootEdits`,
+  `TestOwnedLeafManifestActualRolloverAddsRevision` and
+  `TestOwnedLeafManifestFailedStageRetainsPendingAndQueuedReuse`: exact logical
+  reuse, producer rollover, failed pending IDs and root replacement.
+- `TestOwnedLeafManifest512BoundedRetirement`,
+  `TestOwnedLeafManifestDrainedPinsReuseAndHighWaterPlateau` and
+  `TestOwnedLeafManifestCanceledAndClosedMaintenance`: actual bounded work,
+  pin drain, page reuse/debt and cancellation/shutdown.
+
+Use the retained source-bound `TestR1ManifestWholeGC5095` and
+`TestR1ManifestConcurrentACK5095` artifacts for public whole-call/setup,
+first/final retry statistics, complete returned data and observed write waits.
+Retain full multi-line error causes and first/final statistics. Passing semantic
+fixtures alone does not pass #5095's allocation, latency, noise, foreground or
+rollout objectives. Legacy standalone corruption/deletion regressions remain
+required; internal reuse must never be labelled physical file deletion.
+
+### Transaction-private allocator preparation (#5105)
+
+The focused tests in freelist/generation_v1_private_prepare_test.go compare
+private preparation with ordinary persistent mutation. They check repeated
+copies through actual counters, sparse/adjacent chunks and both prune modes,
+identical selected allocations, generation references, complete page bytes/CRC,
+normalized reservations, summaries, metadata/output counts and traversal work.
+They also check dirty rollback aliases, persistent clone permission revocation
+with edits on both sides, candidate/fork retained views, generic retaining/
+mutating sinks, materialization-error permission clearing, partial sink failure,
+abort and idempotent prepared retries without erasing incurred work.
+`TestPrivatePreparationHiddenEmptyRebirthPersistentOracle5105` first creates
+empty descendants through ordinary allocation and materialization, verifies a
+durable-to-zero-ID edge, then compares rebirth with the persistent oracle at
+three trie depths. It retains every backing node/chunk, including objects that
+logical scans skip, plus generic bytes and opaque page views. The companion
+abort/failure test checks retained base/rollback graphs and cumulative work;
+the durable-leaf fixture checks zero-ID chunk isolation independently.
+
+The existing allocator/prefix/metadata-reuse and owned-manifest dual-slot/
+held-root/recovery fault tests remain required. New attribution reads must not
+change credits or authority. These source-written tests require a separately
+granted semantic/compiler lease before claiming results; no allocation savings,
+noise waiver, foreground acceptance or parent completion follows from this
+representation correction.

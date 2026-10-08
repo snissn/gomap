@@ -256,9 +256,9 @@ func (w *Writer) AppendRawFramesWritevInto(records []Record, k int, dst []page.V
 				clear(fullVecs)
 			}
 		}
-		w.rawWritevIovs = iovs[:0]
-		w.rawWritevVecs = vecs[:0]
-		w.rawWritevMeta = meta[:0]
+		w.setWriterIovBacking(iovs[:0])
+		w.setWriterVecBacking(vecs[:0])
+		w.setWriterByteBacking(10, &w.rawWritevMeta, meta[:0])
 	}()
 
 	flush := func() error {
@@ -467,7 +467,7 @@ func (w *Writer) AppendRawFramesBufferedInto(records []Record, k int, dst []page
 		meta = make([]byte, 0, 4096)
 	}
 	defer func() {
-		w.rawWritevMeta = meta[:0]
+		w.setWriterByteBacking(10, &w.rawWritevMeta, meta[:0])
 	}()
 
 	pos := 0

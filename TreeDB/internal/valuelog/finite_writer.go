@@ -18,19 +18,25 @@ import (
 var ErrFiniteWriterLoan = errors.New("valuelog: finite writer loan refused")
 
 type finiteWriterEntry struct {
-	writer     *Writer
-	capacities [11]uint64
+	writer     *Writer // ordinary prototype only; selected collector loans keep this nil
+	owner      *rootpublication.StableSegmentOwner
+	capacities [11]uint64 // full charged classes, never capacity deltas
+	serials    [11]uint64
 }
 
 // FiniteWriterBacking owns one request's concrete writer-capacity ledger. The
 // caller serializes all accesses with the existing lane mutex. This is not a
 // writer lock, registry, codec selector, or public admission certificate.
 type FiniteWriterBacking struct {
-	entries    []finiteWriterEntry
-	maxWriters uint64
-	reserve    func(uint64) error
-	bytes      uint64
-	closed     bool
+	entries     []finiteWriterEntry
+	collector   *rootpublication.StableSegmentFrontierCollector
+	activeLoans uint64
+	selected    bool
+	terminal    bool
+	maxWriters  uint64
+	reserve     func(uint64) error
+	bytes       uint64
+	closed      bool
 }
 
 func NewFiniteWriterBacking(maxWriters uint64, reserve func(uint64) error) (*FiniteWriterBacking, error) {
@@ -38,7 +44,10 @@ func NewFiniteWriterBacking(maxWriters uint64, reserve func(uint64) error) (*Fin
 	if reserve == nil || maxWriters == 0 || maxWriters > uint64(math.MaxInt)/size {
 		return nil, ErrFiniteWriterLoan
 	}
-	n := uint64(unsafe.Sizeof(FiniteWriterBacking{}))
+	n, err := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(FiniteWriterBacking{})), true)
+	if err != nil {
+		return nil, err
+	}
 	if err := reserve(n); err != nil {
 		return nil, err
 	}
@@ -57,6 +66,41 @@ func (b *FiniteWriterBacking) charge(n uint64) error {
 	b.bytes += n
 	return nil
 }
+
+// BindSegmentCollector narrows retained ledger keys to the real physical
+// owner already anchored by this same request's collector. No Writer or producer
+// callback is retained after a scoped append loan ends.
+func (b *FiniteWriterBacking) chargeAllocation(n uint64, scan bool) error {
+	class, err := rootpublication.StableBackingClassBytes(n, scan)
+	if err != nil {
+		return err
+	}
+	return b.charge(class)
+}
+func (b *FiniteWriterBacking) BindSegmentCollector(c *rootpublication.StableSegmentFrontierCollector) error {
+	if b == nil || b.closed || c == nil || b.collector != nil || len(b.entries) != 0 || b.activeLoans != 0 {
+		return ErrFiniteWriterLoan
+	}
+	b.collector = c
+	b.selected = true
+	return nil
+}
+
+// ForgetSegmentKeys runs before collector Freeze/Close transfers or drops its
+// actual source edges. Allocated ledger capacity and cumulative credit remain.
+func (b *FiniteWriterBacking) ForgetSegmentKeys() error {
+	if b == nil || b.closed || b.activeLoans != 0 {
+		return ErrFiniteWriterLoan
+	}
+	if b.collector != nil {
+		clear(b.entries)
+		b.entries = b.entries[:0]
+		b.collector = nil
+		b.terminal = true
+	}
+	return nil
+}
+
 func (b *FiniteWriterBacking) BackingBytes() uint64 {
 	if b == nil {
 		return 0
@@ -67,6 +111,9 @@ func (b *FiniteWriterBacking) Close() error {
 	if b == nil || b.closed {
 		return nil
 	}
+	if b.activeLoans != 0 {
+		return ErrFiniteWriterLoan
+	}
 	for _, e := range b.entries {
 		if e.writer != nil && e.writer.finiteLoan != nil {
 			return ErrFiniteWriterLoan
@@ -75,6 +122,7 @@ func (b *FiniteWriterBacking) Close() error {
 	clear(b.entries)
 	b.entries = nil
 	b.reserve = nil
+	b.collector = nil
 	b.closed = true
 	return nil
 }
@@ -94,12 +142,25 @@ type FiniteWriterLoan struct {
 // maxRecords and maxRaw derive from the admitted actual append batch. It does
 // not allocate a fresh append buffer: existing persistent backing is retained.
 func (w *Writer) BeginFiniteWriterLoan(b *FiniteWriterBacking, maxRecords, maxRaw int) (*FiniteWriterLoan, error) {
-	if w == nil || w.f == nil || w.bw != nil || w.finiteLoan != nil || b == nil || b.closed || maxRecords < 1 || maxRecords > MaxFrameK || maxRaw < 0 || maxRaw > maxRecords*page.PageSize {
+	if w == nil || w.f == nil || w.bw != nil || w.finiteLoan != nil || b == nil || b.closed || b.terminal || maxRecords < 1 || maxRecords > MaxFrameK || maxRaw < 0 || maxRaw > maxRecords*page.PageSize {
+		return nil, ErrFiniteWriterLoan
+	}
+	var owner *rootpublication.StableSegmentOwner
+	if b.collector != nil {
+		owner = w.stableSegmentOwner
+		if !b.collector.HasRetainedSegmentOwner(owner) {
+			return nil, ErrFiniteWriterLoan
+		}
+	}
+	if _, err := w.finiteWriterAllocationCensus(b.selected); err != nil {
+		return nil, err
+	}
+	if w.codecs != nil || w.dictEncoder != nil {
 		return nil, ErrFiniteWriterLoan
 	}
 	i := -1
 	for j := range b.entries {
-		if b.entries[j].writer == w {
+		if owner != nil && b.entries[j].owner == owner || owner == nil && b.entries[j].writer == w {
 			i = j
 			break
 		}
@@ -108,10 +169,14 @@ func (w *Writer) BeginFiniteWriterLoan(b *FiniteWriterBacking, maxRecords, maxRa
 		if err := b.admitEntrySlot(); err != nil {
 			return nil, err
 		}
-		b.entries = append(b.entries, finiteWriterEntry{writer: w})
+		entry := finiteWriterEntry{owner: owner}
+		if owner == nil {
+			entry.writer = w
+		}
+		b.entries = append(b.entries, entry)
 		i = len(b.entries) - 1
 	}
-	if err := b.charge(uint64(unsafe.Sizeof(FiniteWriterLoan{}))); err != nil {
+	if err := b.chargeAllocation(uint64(unsafe.Sizeof(FiniteWriterLoan{})), true); err != nil {
 		return nil, err
 	}
 	l := &FiniteWriterLoan{writer: w, backing: b, entry: i, maxRecords: maxRecords, maxRaw: maxRaw}
@@ -125,6 +190,10 @@ func (w *Writer) BeginFiniteWriterLoan(b *FiniteWriterBacking, maxRecords, maxRa
 	clear(w.rawWritevVecs[:cap(w.rawWritevVecs)])
 	w.encLimiter.buf = nil
 	w.encLimiter.limit = 0
+	if b.activeLoans == math.MaxUint64 {
+		return nil, ErrFiniteWriterLoan
+	}
+	b.activeLoans++
 	w.finiteLoan = l
 	return l, nil
 }
@@ -135,6 +204,10 @@ func (l *FiniteWriterLoan) Close() error {
 	if l.writer == nil || l.writer.finiteLoan != l {
 		return ErrFiniteWriterLoan
 	}
+	if l.backing == nil || l.backing.activeLoans == 0 {
+		return ErrFiniteWriterLoan
+	}
+	l.backing.activeLoans--
 	l.writer.finiteLoan = nil
 	l.writer = nil
 	l.backing = nil
@@ -142,32 +215,27 @@ func (l *FiniteWriterLoan) Close() error {
 	return nil
 }
 func (l *FiniteWriterLoan) observe() error {
-	w := l.writer
-	iovSize := uint64(unsafe.Sizeof([]byte{}))
-	vecSize := uint64(unsafe.Sizeof(writevIovec{}))
-	if uint64(cap(w.rawWritevIovs)) > math.MaxUint64/iovSize || uint64(cap(w.rawWritevVecs)) > math.MaxUint64/vecSize {
-		return ErrFiniteWriterLoan
-	}
-	sizes := [11]uint64{uint64(cap(w.appendBuf)), uint64(cap(w.scratch)), uint64(cap(w.rawScratch)), uint64(cap(w.encScratch)), uint64(cap(w.blockScratch)), uint64(cap(w.prefixBuf)), 0, uint64(unsafe.Sizeof(Writer{})), uint64(cap(w.rawWritevIovs)) * uint64(unsafe.Sizeof([]byte{})), uint64(cap(w.rawWritevVecs)) * uint64(unsafe.Sizeof(writevIovec{})), uint64(cap(w.rawWritevMeta))}
-	if w.blockCodecScratch.lz4Compressor != nil {
-		sizes[6] = uint64(unsafe.Sizeof(lz4.Compressor{}))
+	census, err := l.writer.finiteWriterAllocationCensus(l.backing.selected)
+	if err != nil {
+		return err
 	}
 	e := &l.backing.entries[l.entry]
-	for j, n := range sizes {
-		if n > e.capacities[j] {
-			if err := l.backing.charge(n - e.capacities[j]); err != nil {
+	for i, stamp := range census {
+		if stamp.class == 0 {
+			continue
+		}
+		if stamp.serial == 0 || stamp.serial != e.serials[i] || stamp.class > e.capacities[i] {
+			// A new actual allocation is charged in full while preceding backing may
+			// remain live. An equal class replacement is still a distinct birth.
+			if err := l.backing.charge(stamp.class); err != nil {
 				return err
 			}
-			e.capacities[j] = n
+			e.serials[i], e.capacities[i] = stamp.serial, stamp.class
 		}
-	}
-	// The no-dictionary frame route below does not use writev arrays, but any
-	// already-retained backing must still be charged by the enclosing request.
-	if w.codecs != nil || w.dictEncoder != nil {
-		return ErrFiniteWriterLoan
 	}
 	return nil
 }
+
 func (l *FiniteWriterLoan) grow(index int, p *[]byte, n int) error {
 	if n < 0 || n > math.MaxInt {
 		return ErrFiniteWriterLoan
@@ -177,13 +245,15 @@ func (l *FiniteWriterLoan) grow(index int, p *[]byte, n int) error {
 	}
 	// Cumulative allocation admits the whole new array while old backing remains
 	// reachable; it does not merely debit newCapacity-oldCapacity.
-	if err := l.backing.charge(uint64(n)); err != nil {
+	if err := l.backing.chargeAllocation(uint64(n), false); err != nil {
 		return err
 	}
 	next := make([]byte, len(*p), n)
 	copy(next, *p)
-	*p = next
-	l.backing.entries[l.entry].capacities[index] = uint64(n)
+	l.writer.setWriterByteBacking(index, p, next)
+	stamp := l.writer.backingAllocations[index]
+	l.backing.entries[l.entry].capacities[index] = stamp.class
+	l.backing.entries[l.entry].serials[index] = stamp.serial
 	return nil
 }
 func (l *FiniteWriterLoan) admitFrame(dictID uint64, dict []byte, records []Record) error {
@@ -226,11 +296,14 @@ func (l *FiniteWriterLoan) admitFrame(dictID uint64, dict []byte, records []Reco
 			return err
 		}
 		if w.blockCodec == BlockCodecLZ4 && w.blockCodecScratch.lz4Compressor == nil {
-			if err := l.backing.charge(uint64(unsafe.Sizeof(lz4.Compressor{}))); err != nil {
+			if err := l.backing.chargeAllocation(uint64(unsafe.Sizeof(lz4.Compressor{})), false); err != nil {
 				return err
 			}
 			w.blockCodecScratch.lz4Compressor = &lz4.Compressor{}
-			l.backing.entries[l.entry].capacities[6] = uint64(unsafe.Sizeof(lz4.Compressor{}))
+			w.recordWriterBackingBirth(6, uint64(unsafe.Sizeof(lz4.Compressor{})), false)
+			w.backingAllocations[6].base = unsafe.Pointer(w.blockCodecScratch.lz4Compressor)
+			stamp := w.backingAllocations[6]
+			l.backing.entries[l.entry].capacities[6], l.backing.entries[l.entry].serials[6] = stamp.class, stamp.serial
 		}
 	}
 	return l.admitAppend()
@@ -310,18 +383,23 @@ func NewWriterWithFiniteBacking(path string, fileID uint32, registry *rootpublic
 	return newFileWriter(path, fileID, true, func(f *os.File) error { return f.Sync() }, registry, b)
 }
 func (b *FiniteWriterBacking) admitConstructor() error {
+	if b == nil || b.selected || b.terminal {
+		return ErrFiniteWriterLoan
+	}
 	if err := b.admitEntrySlot(); err != nil {
 		return err
 	}
-	n := uint64(unsafe.Sizeof(Writer{})) + uint64(FrameHeaderSize+MaxFrameK*8+(MaxFrameK+1)*4)
-	return b.charge(n)
+	if err := b.chargeAllocation(uint64(unsafe.Sizeof(Writer{})), true); err != nil {
+		return err
+	}
+	return b.chargeAllocation(uint64(FrameHeaderSize+MaxFrameK*8+(MaxFrameK+1)*4), false)
 }
 func (b *FiniteWriterBacking) recordConstructor(w *Writer) {
 	// admitConstructor proves the existing table has room; this performs no
 	// allocation and is invoked before further constructor allocations.
 	e := finiteWriterEntry{writer: w}
-	e.capacities[5] = uint64(FrameHeaderSize + MaxFrameK*8 + (MaxFrameK+1)*4)
-	e.capacities[7] = uint64(unsafe.Sizeof(Writer{}))
+	e.capacities[5], _ = rootpublication.StableBackingClassBytes(uint64(FrameHeaderSize+MaxFrameK*8+(MaxFrameK+1)*4), false)
+	e.capacities[7], _ = rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(Writer{})), true)
 	b.entries = append(b.entries, e)
 }
 
@@ -337,7 +415,7 @@ func (b *FiniteWriterBacking) admitEntrySlot() error {
 	if count > uint64(math.MaxInt)/size {
 		return ErrFiniteWriterLoan
 	}
-	if err := b.charge(count * size); err != nil {
+	if err := b.chargeAllocation(count*size, true); err != nil {
 		return err
 	}
 	next := make([]finiteWriterEntry, len(b.entries), int(count))
@@ -398,29 +476,45 @@ func (l *FiniteWriterLoan) admitRawBatch(records []Record, k int, buffered bool)
 		if uint64(maxIovs) > uint64(math.MaxInt)/size {
 			return ErrFiniteWriterLoan
 		}
-		if err := l.backing.charge(uint64(maxIovs) * size); err != nil {
+		if err := l.backing.chargeAllocation(uint64(maxIovs)*size, true); err != nil {
 			return err
 		}
 		next := make([][]byte, 0, maxIovs)
 		clear(w.rawWritevIovs[:cap(w.rawWritevIovs)])
-		w.rawWritevIovs = next
-		l.backing.entries[l.entry].capacities[8] = uint64(maxIovs) * size
+		w.setWriterIovBacking(next)
+		stamp := w.backingAllocations[8]
+		l.backing.entries[l.entry].capacities[8], l.backing.entries[l.entry].serials[8] = stamp.class, stamp.serial
 	}
 	if maxIovs > cap(w.rawWritevVecs) {
 		size := uint64(unsafe.Sizeof(writevIovec{}))
 		if uint64(maxIovs) > uint64(math.MaxInt)/size {
 			return ErrFiniteWriterLoan
 		}
-		if err := l.backing.charge(uint64(maxIovs) * size); err != nil {
+		if err := l.backing.chargeAllocation(uint64(maxIovs)*size, false); err != nil {
 			return err
 		}
 		next := make([]writevIovec, 0, maxIovs)
 		clear(w.rawWritevVecs[:cap(w.rawWritevVecs)])
-		w.rawWritevVecs = next
-		l.backing.entries[l.entry].capacities[9] = uint64(maxIovs) * size
+		w.setWriterVecBacking(next)
+		stamp := w.backingAllocations[9]
+		l.backing.entries[l.entry].capacities[9], l.backing.entries[l.entry].serials[9] = stamp.class, stamp.serial
 	}
 	if metaBytes < 4096 {
 		metaBytes = 4096
 	}
 	return l.grow(10, &w.rawWritevMeta, metaBytes)
+}
+
+func (b *FiniteWriterBacking) finishConstructor(w *Writer) {
+	for i := range b.entries {
+		e := &b.entries[i]
+		if e.writer == w {
+			for _, j := range [...]int{5, 7} {
+				e.serials[j] = w.backingAllocations[j].serial
+				e.capacities[j] = w.backingAllocations[j].class
+			}
+			return
+		}
+	}
+	panic("valuelog: missing prepaid writer constructor")
 }

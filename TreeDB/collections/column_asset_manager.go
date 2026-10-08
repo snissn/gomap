@@ -16,6 +16,7 @@ import (
 	"time"
 	"unsafe"
 
+	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/mappedresource"
@@ -51,7 +52,8 @@ const int64ValuesDirectViewAssetAlignment = columnInt64ValuesPayloadAlignment
 // columnAssetSegmentWriteLocks is a bounded stripe set keyed by canonical
 // segment path. Writers to the same segment share a process-local offset lock
 // without retaining one mutex per temp dir or segment path forever.
-var columnAssetSegmentWriteLocks [columnAssetSegmentWriteLockStripes]sync.Mutex
+// The SAME bounded write stripes are shared with synchronous DB retirement.
+// Allocation/path hint caches below retain their existing independent locks.
 
 var columnPhysicalAssetReadScratchPool sync.Pool
 
@@ -981,6 +983,11 @@ func advanceColumnAssetSegmentFileIDCache(cleanSegmentDir string, cache *columnA
 }
 
 type columnPhysicalAssetSegmentAppender struct {
+	producerDB                 *backenddb.DB // operation-side binding only; never in output tokens
+	producerIncarnation        uint64
+	producerReused             bool
+	producerInstalled          bool
+	pendingProducer            *rootpublication.StableSegmentOwner // constructor-owned until checked validation
 	candidateAdmission         *typedGraphFoldAssetAdmission
 	cfg                        ColumnStoreConfig
 	namespace                  columnAssetManagerNamespace
@@ -1198,6 +1205,7 @@ func (s columnPhysicalAssetSegmentCloseStatBucket) CleanupDuration() time.Durati
 }
 
 type columnPhysicalAssetAppendSession struct {
+	producerDB             *backenddb.DB // call-local session, not retained stable authority
 	candidateAdmission     *typedGraphFoldAssetAdmission
 	rootDir                string
 	cfg                    ColumnStoreConfig
@@ -1265,7 +1273,36 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 	}
 	var appender *columnPhysicalAssetSegmentAppender
 	var err error
+	var incarnation uint64
+	var producerReady bool
+	if s.producerDB != nil && fileID == columnAssetM12ASegmentFileID {
+		var path string
+		path, err = columnAssetSegmentPath(s.rootDir, ColumnAssetRef{Namespace: s.cfg.AssetManager.Namespace, FileID: fileID})
+		if err != nil {
+			return nil, err
+		}
+		incarnation, producerReady, err = s.producerDB.BeginColumnSegmentProducerV1(s.cfg.AssetManager.Namespace, fileID, rootpublication.SegmentWriteStripeIndex(path), nil)
+		if errors.Is(err, rootpublication.ErrStableMetadataShapeUnsupported) {
+			incarnation, err = 0, nil
+		} // ordinary bounded-cache miss retains existing engine path
+		if err != nil {
+			return nil, err
+		}
+		if producerReady {
+			appender, err = s.reusedProducerAppender(fileID, incarnation)
+			if err != nil {
+				return nil, err
+			}
+			appender.candidateAdmission = s.candidateAdmission
+			s.active, s.activeFile = appender, fileID
+			return appender, nil
+		}
+	}
 	if err := s.candidateAdmission.charge(0, 1); err != nil {
+		if incarnation != 0 {
+			_ = s.producerDB.CancelColumnSegmentProducerV1(s.cfg.AssetManager.Namespace, fileID, incarnation)
+		}
+
 		return nil, err
 	}
 	if s.stableRegistry != nil {
@@ -1274,7 +1311,13 @@ func (s *columnPhysicalAssetAppendSession) appender(fileID uint32) (*columnPhysi
 		appender, err = newColumnPhysicalAssetSegmentAppendWriter(s.rootDir, s.cfg, fileID)
 	}
 	if err != nil {
+		if incarnation != 0 {
+			_ = s.producerDB.CancelColumnSegmentProducerV1(s.cfg.AssetManager.Namespace, fileID, incarnation)
+		}
 		return nil, err
+	}
+	if incarnation != 0 {
+		appender.producerDB, appender.producerIncarnation = s.producerDB, incarnation
 	}
 	appender.stableRecoveryRetainer = s.stableRecoveryRetainer
 	appender.candidateAdmission = s.candidateAdmission
@@ -1789,11 +1832,21 @@ func (a *columnPhysicalAssetSegmentAppender) appendKind(payload []byte, kind Col
 }
 
 func (a *columnPhysicalAssetSegmentAppender) appendKindWithAlignment(payload []byte, kind ColumnAssetKind, generation, partID uint64, alignment int64) (ColumnAssetRef, error) {
-	if a == nil || a.file == nil {
+	if a == nil || a.file == nil && !a.producerReused {
 		return ColumnAssetRef{}, errors.New("collections: nil column physical asset appender")
 	}
 	if a.failed {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset appender is failed")
+	}
+	if a.producerReused {
+		if alignment != columnAssetSegmentPayloadAlignment(kind, a.cfg) {
+			return ColumnAssetRef{}, rootpublication.ErrStableMetadataShapeUnsupported
+		}
+		refs, err := a.appendKinds([]columnPhysicalAssetAppendItem{{payload: payload, kind: kind, generation: generation, partID: partID}})
+		if err != nil {
+			return ColumnAssetRef{}, err
+		}
+		return refs[0], nil
 	}
 	if len(payload) == 0 {
 		return ColumnAssetRef{}, errors.New("collections: column physical asset payload is empty")
@@ -1998,53 +2051,92 @@ func (w *columnAssetChecksumWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// planColumnPhysicalAssetAppendRefs is shared by the actual appender and the
+// serializer-held native context preparation. Its result carries no resource
+// authority: only the actual append can produce installed stable resources.
+// A selected source account prepays the complete reference array before birth.
+func planColumnPhysicalAssetAppendRefs(cfg ColumnStoreConfig, fileID uint32, start int64, items []columnPhysicalAssetAppendItem, stable bool, account rootpublication.StableMetadataAccount) ([]ColumnAssetRef, int, int64, error) {
+	if cfg.AssetManager == nil || fileID == 0 || start < 0 {
+		return nil, 0, 0, ErrPreparedInsertResourceLimit
+	}
+	const maxInt64 = int64(1<<63 - 1)
+	maxInt := int(^uint(0) >> 1)
+	totalLength, nextOffset := 0, start
+	// Complete immutable input validation precedes selected array construction.
+	for _, item := range items {
+		if len(item.payload) == 0 {
+			if account != nil {
+				return nil, 0, 0, ErrPreparedInsertResourceLimit
+			}
+			return nil, 0, 0, errors.New("collections: column physical asset payload is empty")
+		}
+		if item.generation == 0 || item.partID == 0 {
+			if account != nil {
+				return nil, 0, 0, ErrPreparedInsertResourceLimit
+			}
+			return nil, 0, 0, errors.New("collections: column physical asset append requires generation and part_id")
+		}
+		if stable {
+			if account != nil {
+				if _, _, _, known := stableColumnAssetResourceClassificationFacts(item.kind); !known {
+					return nil, 0, 0, ErrPreparedInsertResourceLimit
+				}
+			}
+			if _, _, _, err := stableColumnAssetResourceClassification(item.kind); err != nil {
+				return nil, 0, 0, err
+			}
+		}
+		padding := columnAssetSegmentPrefixPadding(nextOffset, columnAssetSegmentPayloadAlignment(item.kind, cfg))
+		if len(item.payload) > maxInt-padding || totalLength > maxInt-padding-len(item.payload) {
+			if account != nil {
+				return nil, 0, 0, ErrPreparedInsertResourceLimit
+			}
+			return nil, 0, 0, errors.New("collections: column physical asset append batch is too large")
+		}
+		if nextOffset > maxInt64-int64(padding)-int64(len(item.payload)) {
+			if account != nil {
+				return nil, 0, 0, ErrPreparedInsertResourceLimit
+			}
+			return nil, 0, 0, errors.New("collections: column physical asset append offset overflow")
+		}
+		nextOffset += int64(padding) + int64(len(item.payload))
+		totalLength += padding + len(item.payload)
+	}
+	if account != nil {
+		if uint64(len(items)) > ^uint64(0)/uint64(unsafe.Sizeof(ColumnAssetRef{})) {
+			return nil, 0, 0, ErrPreparedInsertResourceLimit
+		}
+		class, err := rootpublication.StableBackingClassBytes(uint64(len(items))*uint64(unsafe.Sizeof(ColumnAssetRef{})), true)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if err := account.ReserveStableMetadata(class); err != nil {
+			return nil, 0, 0, err
+		}
+	}
+	refs := make([]ColumnAssetRef, len(items))
+	cursor := start
+	for i, item := range items {
+		cursor += int64(columnAssetSegmentPrefixPadding(cursor, columnAssetSegmentPayloadAlignment(item.kind, cfg)))
+		refs[i] = ColumnAssetRef{Kind: item.kind, Namespace: cfg.AssetManager.Namespace, Generation: item.generation, PartID: item.partID, FileID: fileID, Offset: cursor, Length: int64(len(item.payload)), Checksum: page.Checksum(item.payload)}
+		cursor += int64(len(item.payload))
+	}
+	return refs, totalLength, nextOffset, nil
+}
+
 func (a *columnPhysicalAssetSegmentAppender) appendKinds(items []columnPhysicalAssetAppendItem) ([]ColumnAssetRef, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
-	if a == nil || a.file == nil {
+	if a == nil || a.file == nil && !a.producerReused {
 		return nil, errors.New("collections: nil column physical asset appender")
 	}
 	if a.failed {
 		return nil, errors.New("collections: column physical asset appender is failed")
 	}
-	const maxInt64 = int64(1<<63 - 1)
-	maxInt := int(^uint(0) >> 1)
-	refs := make([]ColumnAssetRef, len(items))
-	totalLength := 0
-	nextOffset := a.offset
-	for i, item := range items {
-		if len(item.payload) == 0 {
-			return nil, errors.New("collections: column physical asset payload is empty")
-		}
-		if item.generation == 0 || item.partID == 0 {
-			return nil, errors.New("collections: column physical asset append requires generation and part_id")
-		}
-		if a.stableRegistry != nil {
-			if _, _, _, err := stableColumnAssetResourceClassification(item.kind); err != nil {
-				return nil, err
-			}
-		}
-		padding := columnAssetSegmentPrefixPadding(nextOffset, columnAssetSegmentPayloadAlignment(item.kind, a.cfg))
-		if totalLength > maxInt-padding-len(item.payload) {
-			return nil, errors.New("collections: column physical asset append batch is too large")
-		}
-		if nextOffset > maxInt64-int64(padding)-int64(len(item.payload)) {
-			return nil, errors.New("collections: column physical asset append offset overflow")
-		}
-		nextOffset += int64(padding)
-		refs[i] = ColumnAssetRef{
-			Kind:       item.kind,
-			Namespace:  a.cfg.AssetManager.Namespace,
-			Generation: item.generation,
-			PartID:     item.partID,
-			FileID:     a.fileID,
-			Offset:     nextOffset,
-			Length:     int64(len(item.payload)),
-			Checksum:   page.Checksum(item.payload),
-		}
-		nextOffset += int64(len(item.payload))
-		totalLength += padding + len(item.payload)
+	refs, totalLength, nextOffset, err := planColumnPhysicalAssetAppendRefs(a.cfg, a.fileID, a.offset, items, a.stableRegistry != nil, nil)
+	if err != nil {
+		return nil, err
 	}
 	if err := a.candidateAdmission.charge(int64(totalLength), 0); err != nil {
 		return nil, err
@@ -2065,7 +2157,12 @@ func (a *columnPhysicalAssetSegmentAppender) appendKinds(items []columnPhysicalA
 		payload = append(payload, item.payload...)
 		cursor = refs[i].Offset + refs[i].Length
 	}
-	written, err := writeColumnAssetSegmentPayload(a.file, payload)
+	var written int
+	if a.producerReused {
+		written, err = a.producerDB.WriteColumnSegmentProducerV1(a.cfg.AssetManager.Namespace, a.fileID, a.producerIncarnation, uint64(a.offset), payload, nil)
+	} else {
+		written, err = writeColumnAssetSegmentPayload(a.file, payload)
+	}
 	a.offset += int64(written)
 	if err != nil {
 		a.failed = true
@@ -2170,6 +2267,9 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 	if a == nil || a.stableRegistry == nil {
 		return nil, nil
 	}
+	if a.producerReused {
+		return a.captureProducerResources()
+	}
 	if a.file == nil || a.stableParent == nil {
 		return nil, errors.New("collections: stable column segment capture requires exact file and parent handles")
 	}
@@ -2214,6 +2314,14 @@ func (a *columnPhysicalAssetSegmentAppender) captureStableResources() (*rootpubl
 	}
 	if namespaceToken != nil {
 		defer namespaceToken.Release()
+	}
+	if a.producerDB != nil && a.producerIncarnation != 0 && !a.producerInstalled {
+		if err := a.installProducer(namespaceToken); err != nil {
+			return nil, err
+		}
+	}
+	if a.producerInstalled || a.pendingProducer != nil {
+		return a.captureProducerResources()
 	}
 	refs := append([]ColumnAssetRef(nil), a.stableRefs...)
 	sort.SliceStable(refs, func(i, j int) bool {
@@ -2294,6 +2402,9 @@ func (a *columnPhysicalAssetSegmentAppender) closeWithStableValidation(validate 
 	if a == nil {
 		return nil
 	}
+	if a.producerReused {
+		return a.closeReusedProducer(validate)
+	}
 	a.closeStats = columnPhysicalAssetSegmentCloseStats{}
 	a.closeStats.CloseCount = 1
 	var appenderErr error
@@ -2327,6 +2438,10 @@ func (a *columnPhysicalAssetSegmentAppender) closeWithStableValidation(validate 
 				stableValidationErr = validate(a.stableResources)
 			}
 			if fileSyncErr != nil || stableCaptureErr != nil || stableValidationErr != nil {
+				if a.stableResources != nil {
+					_ = a.stableResources.Release()
+					a.stableResources = nil
+				}
 				stableRollbackAttempted = true
 				stableRollbackComplete, stableRollbackErr = a.rollbackStableAppend()
 				if !stableRollbackComplete {
@@ -2366,6 +2481,21 @@ func (a *columnPhysicalAssetSegmentAppender) closeWithStableValidation(validate 
 		a.stableParent = nil
 	}
 	closeErr := errors.Join(appenderErr, fileSyncErr, stableCaptureErr, stableValidationErr, stableRollbackErr, fileCloseErr, dirSyncErr, constructionReleaseErr, parentCloseErr)
+	if a.pendingProducer != nil && closeErr == nil {
+		installed, installErr := a.producerDB.InstallColumnSegmentProducerV1(a.cfg.AssetManager.Namespace, a.fileID, a.producerIncarnation, a.pendingProducer)
+		if installed {
+			a.producerInstalled = true
+			a.pendingProducer = nil
+		}
+		closeErr = errors.Join(closeErr, installErr)
+		if !installed && installErr == nil {
+			closeErr = rootpublication.ErrResourceOwnership
+		}
+	}
+	if a.pendingProducer != nil {
+		a.pendingProducer.Release()
+		a.pendingProducer = nil
+	}
 	if closeErr != nil && a.stableResources != nil {
 		a.stableResources.Release()
 		a.stableResources = nil
@@ -2375,6 +2505,10 @@ func (a *columnPhysicalAssetSegmentAppender) closeWithStableValidation(validate 
 			a.stableParentIdentity, a.stableChildIdentity, a.stableChildName,
 		))
 		a.stableNamespaceProofAdded = false
+	}
+	if a.producerDB != nil && a.producerIncarnation != 0 && !a.producerInstalled {
+		closeErr = errors.Join(closeErr, a.producerDB.CancelColumnSegmentProducerV1(a.cfg.AssetManager.Namespace, a.fileID, a.producerIncarnation))
+		a.producerIncarnation = 0
 	}
 	if !a.stableRecoveryRetained {
 		a.releaseLock()
@@ -2511,9 +2645,25 @@ func (a *columnPhysicalAssetSegmentAppender) abort() error {
 	if a == nil {
 		return nil
 	}
+	if a.producerReused {
+		defer a.releaseLock()
+		if a.stableResources != nil {
+			_ = a.stableResources.Release()
+			a.stableResources = nil
+		}
+		return a.producerDB.RollbackColumnSegmentProducerV1(a.cfg.AssetManager.Namespace, a.fileID, a.producerIncarnation, uint64(a.offset), uint64(a.appendStart), nil)
+	}
 	var closeErr error
+	if a.pendingProducer != nil {
+		a.pendingProducer.Release()
+		a.pendingProducer = nil
+	}
+	if a.producerDB != nil && a.producerIncarnation != 0 && !a.producerInstalled {
+		closeErr = a.producerDB.CancelColumnSegmentProducerV1(a.cfg.AssetManager.Namespace, a.fileID, a.producerIncarnation)
+		a.producerIncarnation = 0
+	}
 	if a.file != nil && a.closeFile {
-		closeErr = a.file.Close()
+		closeErr = errors.Join(closeErr, a.file.Close())
 		a.closeFile = false
 		a.file = nil
 	}
@@ -3578,7 +3728,7 @@ func columnAssetSegmentAllocationLockIndex(segmentDir string) uint64 {
 }
 
 func columnAssetSegmentWriteLock(assetPath string) *sync.Mutex {
-	return &columnAssetSegmentWriteLocks[columnAssetSegmentLockIndex(filepath.Clean(assetPath))]
+	return rootpublication.SegmentWriteStripe(rootpublication.SegmentWriteStripeIndex(assetPath))
 }
 
 func columnAssetSegmentDirSyncKnown(assetPath string) bool {
@@ -3616,16 +3766,7 @@ func clearColumnAssetSegmentDirSyncKnown(assetPath string) {
 }
 
 func columnAssetSegmentLockIndex(name string) uint64 {
-	const (
-		fnvOffset64 = 14695981039346656037
-		fnvPrime64  = 1099511628211
-	)
-	hash := uint64(fnvOffset64)
-	for i := 0; i < len(name); i++ {
-		hash ^= uint64(name[i])
-		hash *= fnvPrime64
-	}
-	return hash % uint64(len(columnAssetSegmentWriteLocks))
+	return uint64(rootpublication.SegmentWriteStripeIndex(name))
 }
 
 func syncColumnAssetSegmentFileObserved(file *os.File, root string) error {
@@ -3683,6 +3824,9 @@ func syncColumnAssetDir(dir string) error {
 // existingOwnedAppender never creates a missing file or writes before proving
 // its exact physical binding against a retained publication-root resource.
 func (s *columnPhysicalAssetAppendSession) existingOwnedAppender(marker columnManifestSegmentOwnership, resources *rootpublication.StableResourceSet) (*columnPhysicalAssetSegmentAppender, error) {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return nil, err
+	}
 	if s == nil || s.active != nil || s.stableRegistry == nil || resources == nil {
 		return nil, rootpublication.ErrResourceOwnership
 	}

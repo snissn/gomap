@@ -1513,7 +1513,7 @@ func testLeafGenerationGCRetiresPinnedCapture(t *testing.T, private bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		snap, release = &read.snapshot, read.close
+		snap, release = read.snapshot, read.close
 	} else {
 		snap = db.AcquireSnapshot()
 		release = snap.Close

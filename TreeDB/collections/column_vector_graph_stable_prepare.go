@@ -112,6 +112,11 @@ func (closure *ColumnVectorGraphStablePreparedClosure) Release() {
 func (closure *ColumnVectorGraphStablePreparedClosure) Abandon() { closure.Release() }
 
 func (prepared *columnVectorGraphPreparedPhysicalAsset) takeStablePreparedClosure() (*ColumnVectorGraphStablePreparedClosure, error) {
+	if prepared != nil {
+		if err := prepared.stableResources.RequireMetadataExport(); err != nil {
+			return nil, err
+		}
+	}
 	if prepared == nil || prepared.stableResources == nil {
 		return nil, fmt.Errorf("%w: vector graph preparation returned no stable authority", rootpublication.ErrUnresolvedResource)
 	}

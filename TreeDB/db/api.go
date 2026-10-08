@@ -232,12 +232,12 @@ func (db *DB) refreshValueLogSetForReadRetry(observedEpoch uint64) error {
 // Semantics: Returns a safe copy of the value.
 func (db *DB) Get(key []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
-	readOnce := func() ([]byte, error) {
+	readOnce := func() (value []byte, retErr error) {
 		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return nil, err
 		}
-		defer snap.close()
+		defer func() { retErr = errors.Join(retErr, closeOneShotReadV1(&snap)) }()
 		return snap.snapshot.Get(key)
 	}
 
@@ -260,12 +260,12 @@ func (db *DB) Get(key []byte) ([]byte, error) {
 // nil error; tombstones return a nil value with their tombstone revision.
 func (db *DB) GetVersioned(key []byte) ([]byte, page.EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
-	readOnce := func() ([]byte, page.EntryRevision, error) {
+	readOnce := func() (value []byte, revision page.EntryRevision, retErr error) {
 		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return nil, page.LegacyEntryRevision, err
 		}
-		defer snap.close()
+		defer func() { retErr = errors.Join(retErr, closeOneShotReadV1(&snap)) }()
 		return snap.snapshot.GetVersioned(key)
 	}
 
@@ -519,12 +519,12 @@ func (db *DB) CheckStorageMaintenanceReady() error {
 // If the key is not found, it returns dst and ErrKeyNotFound.
 func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 	key = normalizeRawKVPointKey(key)
-	readOnce := func(base []byte) ([]byte, error) {
+	readOnce := func(base []byte) (value []byte, retErr error) {
 		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return base, err
 		}
-		defer snap.close()
+		defer func() { retErr = errors.Join(retErr, closeOneShotReadV1(&snap)) }()
 		// This private capture has one synchronous owner; pins remain held until
 		// deferred close, so the owned append needs no exported Snapshot guard.
 		return snap.snapshot.tree.GetAppend(key, base)
@@ -552,12 +552,12 @@ func (db *DB) GetAppend(key, dst []byte) ([]byte, error) {
 // dst and tree.ErrKeyNotFound; tombstones preserve their stored revision.
 func (db *DB) GetVersionedAppend(key, dst []byte) ([]byte, page.EntryRevision, error) {
 	key = normalizeRawKVPointKey(key)
-	readOnce := func(base []byte) ([]byte, page.EntryRevision, error) {
+	readOnce := func(base []byte) (value []byte, revision page.EntryRevision, retErr error) {
 		snap, err := db.acquireOneShotReadOrErr()
 		if err != nil {
 			return base, page.LegacyEntryRevision, err
 		}
-		defer snap.close()
+		defer func() { retErr = errors.Join(retErr, closeOneShotReadV1(&snap)) }()
 		// This private capture has one synchronous owner; pins remain held until
 		// deferred close, so the owned append needs no exported Snapshot guard.
 		return snap.snapshot.tree.GetVersionedAppend(key, base)

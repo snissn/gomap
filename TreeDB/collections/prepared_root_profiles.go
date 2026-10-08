@@ -137,6 +137,52 @@ func (c *Collection) profilePreparedColumnLateRoots(input columnWritePublishInpu
 		input.rootNames[0] != collectionPrimaryRootName(input.meta.Name) {
 		return nil, empty, fmt.Errorf("%w: unsupported prepared root group shape", ErrPreparedInsertResourceLimit)
 	}
+	return c.profilePreparedColumnContextRoots(input, rootNames, baseRootIDs)
+}
+
+// profilePreparedNativeStringLateRoots shares the existing manifest, locator
+// and system-root census while keeping native point deletes out of the pure-put
+// insert profile. It establishes source counts, not finite publication credit.
+func (c *Collection) profilePreparedNativeStringLateRoots(input columnWritePublishInput, rootNames []string, baseRootIDs map[string]uint64) ([]backenddb.PreparedRootPointProfile, backenddb.PreparedRootPointProfile, error) {
+	var empty backenddb.PreparedRootPointProfile
+	if c == nil || c.db == nil || input.meta.Options.ColumnStore == nil ||
+		input.operation != ColumnPublishOperationUpdate || !input.sparseOnly || !input.declaredRowsReady ||
+		input.preparedInsert || input.metadataOnly || input.colocated != nil || input.splitInsert != nil ||
+		input.splitProjection != nil || input.sourceImportV2 != nil || len(input.sourceDeleteDocuments) != 0 ||
+		len(input.documents) == 0 || len(input.documents) > nativeStringPatchMaxRequests*32 ||
+		len(input.declaredRows) != len(input.documents) || input.rows != len(input.documents) ||
+		len(rootNames) != len(input.rootNames)+2 ||
+		len(input.rootNames) > 2+len(input.meta.Indexes) ||
+		len(input.meta.Indexes) > 2 || !preparedInsertBoundedScalarColumns(input.meta.Options.ColumnStore.Columns) ||
+		!preparedInsertBoundedAggregateMetadata(*input.meta.Options.ColumnStore) {
+		return nil, empty, fmt.Errorf("%w: unsupported native prepared root group shape", ErrPreparedInsertResourceLimit)
+	}
+	if err := validateTypedStringPatchMeta(input.meta, input.meta.Options.ColumnStore.SchemaHash); err != nil {
+		return nil, empty, fmt.Errorf("%w: native prepared root schema: %v", ErrPreparedInsertResourceLimit, err)
+	}
+	// Check the actual root names, rather than treating their count as authority.
+	for i, rootName := range input.rootNames {
+		for _, earlier := range input.rootNames[:i] {
+			if earlier == rootName {
+				return nil, empty, fmt.Errorf("%w: duplicate native prepared root", ErrPreparedInsertResourceLimit)
+			}
+		}
+		found := rootName == collectionPrimaryRootName(input.meta.Name) || rootName == collectionIndexStateRootName(input.meta.Name)
+		for _, index := range input.meta.Indexes {
+			if rootName == collectionSecondaryRootName(input.meta.Name, index.Name) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, empty, fmt.Errorf("%w: foreign native prepared root", ErrPreparedInsertResourceLimit)
+		}
+	}
+	return c.profilePreparedColumnContextRoots(input, rootNames, baseRootIDs)
+}
+
+func (c *Collection) profilePreparedColumnContextRoots(input columnWritePublishInput, rootNames []string, baseRootIDs map[string]uint64) ([]backenddb.PreparedRootPointProfile, backenddb.PreparedRootPointProfile, error) {
+	var empty backenddb.PreparedRootPointProfile
 	limit := preparedInsertRootPointCensusLimit
 	manifestRootName := collectionColumnManifestRootName(input.meta.Name)
 	locatorRootName := collectionColumnRowLocatorRootName(input.meta.Name)

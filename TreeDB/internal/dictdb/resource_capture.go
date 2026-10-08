@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -33,7 +34,7 @@ var addDictionaryStableResourceToken = func(builder *rootpublication.StableResou
 // needed to decode dictID. The returned set owns its snapshot and deletion pins
 // until Release; callers must merge it into the parent publication before the
 // dictionary ID becomes reachable.
-func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (*rootpublication.StableResourceSet, error) {
+func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (result *rootpublication.StableResourceSet, retErr error) {
 	if s == nil || s.backend == nil {
 		return nil, errStoreUnavailable
 	}
@@ -44,14 +45,45 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 		return nil, fmt.Errorf("dictdb: invalid dictionary id 0")
 	}
 
+	s.mu.Lock()
+	if s.captureRunning || s.pendingSnapshot != nil || s.pendingBuilder != nil || s.pendingToken != nil || s.pendingResources != nil {
+		s.mu.Unlock()
+		return nil, rootpublication.ErrStableResourceOperationBusy
+	}
+	s.captureRunning = true
+	s.mu.Unlock()
+	var builder *rootpublication.StableResourceSetBuilder
+	var unownedToken *rootpublication.StableResourceToken
+	var failedResources *rootpublication.StableResourceSet
+	var snapshotOwned bool
+
 	snapshot := s.backend.AcquireStableSnapshot()
 	if snapshot == nil {
+		s.mu.Lock()
+		s.captureRunning = false
+		s.mu.Unlock()
 		return nil, errStoreUnavailable
 	}
-	snapshotOwned := false
 	defer func() {
+		s.mu.Lock()
 		if !snapshotOwned {
-			_ = snapshot.Close()
+			s.pendingSnapshot = snapshot
+		}
+		if result == nil {
+			s.pendingBuilder = builder
+			if unownedToken != nil {
+				s.pendingToken = unownedToken
+			}
+			s.pendingResources = failedResources
+		}
+		s.captureRunning = false
+		s.mu.Unlock()
+		snapshot = nil
+		builder = nil
+		unownedToken = nil
+		failedResources = nil
+		if result == nil || !snapshotOwned {
+			retErr = errors.Join(retErr, s.drainCaptureCustodyV1())
 		}
 	}()
 
@@ -78,8 +110,7 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 		Digest:       digest,
 	}
 
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
-	defer builder.Abandon()
+	builder = rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityDictionaryGeneration)
 
 	indexToken, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
 		Kind:         rootpublication.ResourceDictionary,
@@ -92,15 +123,16 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 		},
 		ContentSynced: true,
 	}, NewStableDictionaryResourceToken)
+	unownedToken = indexToken
 	if err != nil {
 		return nil, fmt.Errorf("dictdb: capture dictionary %d index: %w", dictID, err)
 	}
 	snapshotOwned = true
 	if err := addDictionaryStableResourceToken(builder, indexToken, dictionaryStableIndexRole); err != nil {
-		indexToken.Release()
 		return nil, fmt.Errorf("dictdb: add dictionary %d index: %w", dictID, err)
 	}
 
+	unownedToken = nil
 	if entry.Flags&node.FlagPointer != 0 {
 		state := snapshot.State()
 		if state == nil || state.ValueLogSet == nil {
@@ -132,27 +164,31 @@ func (s *Store) CaptureDictionaryResources(ctx context.Context, dictID uint64) (
 			},
 			ContentSynced: true,
 		}, NewStableDictionaryResourceToken)
+		unownedToken = token
 		if tokenErr != nil {
 			return nil, fmt.Errorf("dictdb: capture dictionary %d value-log: %w", dictID, tokenErr)
 		}
 		if addErr := addDictionaryStableResourceToken(builder, token, dictionaryStableValueLogRole); addErr != nil {
-			token.Release()
 			return nil, fmt.Errorf("dictdb: add dictionary %d value-log: %w", dictID, addErr)
 		}
 	}
+	unownedToken = nil
 
 	resources, err := builder.Freeze()
 	if err != nil {
 		return nil, fmt.Errorf("dictdb: freeze dictionary %d resources: %w", dictID, err)
 	}
+	failedResources = resources
 	if err := validateCapturedDictionaryPhysicalClosure(resources, entry.Flags&node.FlagPointer != 0); err != nil {
-		resources.Release()
 		return nil, fmt.Errorf("dictdb: validate dictionary %d physical closure: %w", dictID, err)
 	}
 	return resources, nil
 }
 
 func validateCapturedDictionaryPhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) error {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return err
+	}
 	if resources == nil {
 		return fmt.Errorf("%w: dictionary capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}

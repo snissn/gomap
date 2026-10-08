@@ -2086,6 +2086,52 @@ func (db *DB) appendRawKVCommandWALIntent(intent *commandWALBatchIntent, sync bo
 	return db.appendCommandWALIntent(intent, sync)
 }
 
+// tentativePublicCommandWALIdentityLocked is used only by the native owned
+// publication packet while the existing raw-publish serializer is held. It
+// neither assigns an intent nor advances the journal. The same guard must
+// remain held through append and the returned final identity must be checked.
+// Already assigned/replay intents and barrier extension belong to the ordinary
+// route and cannot supply a fresh finite packet's late-key authority.
+func (db *DB) tentativePublicCommandWALIdentityLocked(intent *CommandWALIntent) (uint64, error) {
+	if db == nil || !db.CommandWALEnabled() || db.commandJournal == nil || intent == nil {
+		return 0, ErrCommandWALRejected
+	}
+	if db.closing.Load() {
+		return 0, ErrClosed
+	}
+	if err := db.commandWALPoisonedError(); err != nil {
+		return 0, err
+	}
+	if intent.inner.lsn != 0 || intent.inner.fromReplay {
+		return 0, ErrCommandWALRejected
+	}
+	extra := uint64(0)
+	participants := intent.inner.durablePrefixGroup
+	if len(participants) != 0 {
+		if len(participants) < 2 || len(participants) > 4 {
+			return 0, ErrCommandWALRejected
+		}
+		for i, participant := range participants {
+			if participant == nil || participant.inner.lsn != 0 || participant.inner.fromReplay || len(participant.inner.durablePrefixGroup) != 0 {
+				return 0, ErrCommandWALRejected
+			}
+			for j := 0; j < i; j++ {
+				if participants[j] == participant {
+					return 0, ErrCommandWALRejected
+				}
+			}
+		}
+		// N command frames plus the existing durable-prefix barrier: next+N.
+		extra = uint64(len(participants))
+	}
+	next := db.commandJournal.NextLSN()
+	// Leave a valid next identity after the last frame as well.
+	if next == 0 || extra >= ^uint64(0)-next {
+		return 0, ErrCommandWALRejected
+	}
+	return next + extra, nil
+}
+
 func (db *DB) appendPublicCommandWALIntent(intent *CommandWALIntent, sync bool) (uint64, error) {
 	if intent == nil {
 		return 0, nil

@@ -10,10 +10,14 @@ import (
 )
 
 type collectionCommandWALCoordinator struct {
-	mu               sync.Mutex
-	cond             *sync.Cond
-	owner            *collectionWriteDomain
-	typedUpsertGroup *typedUpsertGroup
+	mu                                         sync.Mutex
+	cond                                       *sync.Cond
+	owner                                      *collectionWriteDomain
+	typedUpsertGroup                           *typedUpsertGroup
+	nativePatchGroup                           *nativeStringPatchGroup
+	nativePatchAdmitted                        int
+	nativePatchNextTicket, nativePatchNextJoin uint64
+	nativePatchClosed                          bool
 }
 
 var collectionCommandWALCoordinators sync.Map
@@ -29,6 +33,7 @@ func collectionCommandWALCoordinatorForDB(db *backenddb.DB) *collectionCommandWA
 		actual, loaded = collectionCommandWALCoordinators.LoadOrStore(db, coord)
 		return !loaded
 	}, func() error {
+		coord.closeNativeStringPatchAdmission()
 		collectionCommandWALCoordinators.Delete(db)
 		return nil
 	}); !ok {

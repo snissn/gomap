@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/batch"
@@ -160,6 +161,9 @@ type UpdateFunc = db.UpdateFunc
 
 // DB is the public TreeDB handle (cached mode by default; read-only opens skip caching).
 type DB struct {
+	constructorPending                   bool
+	publicClosing                        atomic.Bool
+	publicCloseRunning                   bool // lifecycleMu; reentrant/concurrent terminal calls refuse
 	cached                               *caching.DB
 	backend                              *db.DB
 	dictdb                               *db.DB
@@ -577,7 +581,7 @@ func forceTemplateCompressionOff(opts *Options) {
 }
 
 func (db *DB) ensureOpen() error {
-	if db == nil || (db.cached == nil && db.backend == nil) {
+	if db == nil || db.publicClosing.Load() || (db.cached == nil && db.backend == nil) {
 		return ErrClosed
 	}
 	return nil
@@ -596,6 +600,10 @@ func (db *DB) captureReadOwners() (*caching.DB, *db.DB, error) {
 	if !db.lifecycleMu.TryRLock() {
 		return nil, nil, ErrClosed
 	}
+	if db.publicClosing.Load() {
+		db.lifecycleMu.RUnlock()
+		return nil, nil, ErrClosed
+	}
 	cached, backend := db.cached, db.backend
 	db.lifecycleMu.RUnlock()
 	if cached == nil && backend == nil {
@@ -609,7 +617,7 @@ func (db *DB) beginPublicOperation() error {
 		return ErrClosed
 	}
 	db.lifecycleMu.RLock()
-	if db.cached == nil && db.backend == nil {
+	if db.publicClosing.Load() || db.cached == nil && db.backend == nil {
 		db.lifecycleMu.RUnlock()
 		return ErrClosed
 	}
@@ -963,6 +971,7 @@ func openResolved(opts Options) (*DB, error) {
 		// not inherit outer-leaf-in-value-log from the main DB, since that mode
 		// requires a leaf-page log wired by the cached layer.
 		dictOpts.IndexOuterLeavesInValueLog = false
+		dictOpts.OwnedLeafManifests = false
 		dictOpts.DisableBackgroundPrune = true
 		dictOpts.ValueLog.DictLookup = nil
 		dictOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
@@ -977,8 +986,11 @@ func openResolved(opts Options) (*DB, error) {
 		dictOpts.ValueLog.CompressionAutotune = AutotuneOptions{Mode: AutotuneOff}
 		dictOpts.ChunkSize = dictChunkSize
 		var err error
-		dictBackend, err = db.Open(dictOpts)
+		dictBackend, err = db.OpenWithFacadeControl(dictOpts, uint64(unsafe.Sizeof(DB{})))
 		if err != nil {
+			if dictBackend != nil {
+				return &DB{dictdb: dictBackend, constructorPending: true}, err
+			}
 			return nil, err
 		}
 		dictStore = dictdb.New(dictBackend)
@@ -1020,6 +1032,7 @@ func openResolved(opts Options) (*DB, error) {
 		// main DB's outer-leaf value-log layout (not needed here, and it adds
 		// unnecessary value-log churn).
 		templateOpts.IndexOuterLeavesInValueLog = false
+		templateOpts.OwnedLeafManifests = false
 		templateOpts.ValueLog.DictLookup = nil
 		templateOpts.ValueLog.DictTrain = TrainConfig{TrainBytes: -1}
 		// templatedb uses batch.Set for small routing/index entries. Do not
@@ -1037,10 +1050,7 @@ func openResolved(opts Options) (*DB, error) {
 		var err error
 		templateDB, err = openResolved(templateOpts)
 		if err != nil {
-			if dictBackend != nil {
-				_ = dictBackend.Close()
-			}
-			return nil, err
+			return failedPublicConstructor(nil, nil, dictBackend, templateDB, err)
 		}
 
 		tcfg := template.NormalizeConfig(opts.ValueLog.TemplateConfig)
@@ -1093,15 +1103,9 @@ func openResolved(opts Options) (*DB, error) {
 		return nil, fmt.Errorf("treedb: snapshot side store %q has no owner", name)
 	}
 	opts.Dir = maindbDir
-	backend, err := db.Open(opts)
+	backend, err := db.OpenWithFacadeControl(opts, uint64(unsafe.Sizeof(DB{})))
 	if err != nil {
-		if dictBackend != nil {
-			_ = dictBackend.Close()
-		}
-		if templateDB != nil {
-			_ = templateDB.Close()
-		}
-		return nil, err
+		return failedPublicConstructor(nil, backend, dictBackend, templateDB, err)
 	}
 
 	if opts.ReadOnly {
@@ -1213,14 +1217,7 @@ func openResolved(opts Options) (*DB, error) {
 		NotifyError:                                opts.NotifyError,
 	})
 	if err != nil {
-		_ = backend.Close()
-		if dictBackend != nil {
-			_ = dictBackend.Close()
-		}
-		if templateDB != nil {
-			_ = templateDB.Close()
-		}
-		return nil, err
+		return failedPublicConstructor(cached, backend, dictBackend, templateDB, err)
 	}
 
 	cached.SetDictStore(dictStore)
@@ -1824,27 +1821,34 @@ func (db *DB) Close() error {
 	if db == nil {
 		return nil
 	}
+	if db.constructorPending {
+		return db.closePendingConstructor()
+	}
+	db.lifecycleMu.Lock()
+	if db.publicCloseRunning {
+		db.lifecycleMu.Unlock()
+		return ErrClosed
+	}
+	db.publicCloseRunning = true
+	db.lifecycleMu.Unlock()
+	defer func() { db.lifecycleMu.Lock(); db.publicCloseRunning = false; db.lifecycleMu.Unlock() }()
+	// Close maintenance uses the ordinary public path before closing admission.
+	// No physical operation join holds the public lifecycle gate.
 	db.bgVac.deferredVectorBuildClosed.Store(true)
 	db.bgVac.Stop()
-	// A service finalizer also owns runMu while draining, checkpointing,
-	// vacuuming, rebuilding, and publishing. Wait for an in-flight owner before
-	// closing storage; new finalizers fail the closed gate on either side of the
-	// lock acquisition.
 	db.bgVac.runMu.Lock()
 	db.endDeferredVectorBuild()
 	db.bgVac.runMu.Unlock()
 	var err error
 	if db.cached != nil || db.backend != nil {
-		if e := db.closeMaintenance(); e != nil {
-			err = errors.Join(err, e)
-		}
+		err = errors.Join(err, db.closeMaintenance())
 	}
-
 	db.lifecycleMu.Lock()
-	defer db.lifecycleMu.Unlock()
-
-	// Close cached layer first if present
-	if db.cached != nil {
+	db.publicClosing.Store(true)
+	cache, backend, dict, templates := db.cached, db.backend, db.dictdb, db.templateDB
+	db.lifecycleMu.Unlock()
+	cacheOK := cache == nil
+	if cache != nil {
 		if db.commandWALCached {
 			if e := db.checkpointCachedForPublicCommandWAL(); e != nil {
 				wrapped := fmt.Errorf("treedb: final command WAL checkpoint during close: %w", e)
@@ -1855,25 +1859,54 @@ func (db *DB) Close() error {
 				testDuringPublicCloseAfterCheckpoint()
 			}
 		}
-		err = errors.Join(err, db.cached.Close())
-		db.cached = nil
+		if e := cache.Close(); e != nil {
+			err = errors.Join(err, e)
+		} else {
+			cacheOK = true
+		}
 	}
 	db.closePublicCommandWALGroupCommit()
-
-	// Always close backend if present
-	if db.backend != nil {
-		err = errors.Join(err, db.backend.Close())
+	// Actual child fields remain installed on failure; side stores survive while
+	// main cleanup may still need their decode bytes. A reentrant Close refuses
+	// above rather than joining the invocation which is calling it.
+	backendOK, dictOK, templateOK := backend == nil, dict == nil, templates == nil
+	if cacheOK && backend != nil {
+		if e := backend.Close(); e != nil {
+			err = errors.Join(err, e)
+		} else {
+			backendOK = true
+		}
+	}
+	if cacheOK && backendOK {
+		if dict != nil {
+			if e := dict.Close(); e != nil {
+				err = errors.Join(err, e)
+			} else {
+				dictOK = true
+			}
+		}
+		if templates != nil {
+			if e := templates.Close(); e != nil {
+				err = errors.Join(err, e)
+			} else {
+				templateOK = true
+			}
+		}
+	}
+	db.lifecycleMu.Lock()
+	if cacheOK && db.cached == cache {
+		db.cached = nil
+	}
+	if backendOK && db.backend == backend {
 		db.backend = nil
 	}
-	if db.dictdb != nil {
-		err = errors.Join(err, db.dictdb.Close())
+	if dictOK && db.dictdb == dict {
 		db.dictdb = nil
 	}
-	if db.templateDB != nil {
-		err = errors.Join(err, db.templateDB.Close())
+	if templateOK && db.templateDB == templates {
 		db.templateDB = nil
 	}
-
+	db.lifecycleMu.Unlock()
 	return errors.Join(err, db.backgroundError())
 }
 
@@ -2926,4 +2959,61 @@ func (db *DB) writeCOWPointAdmitted(key, value []byte, put, syncWrite bool) erro
 		}
 	}
 	return errors.Join(err, b.Close())
+}
+
+// closePendingConstructor owns no active publisher/cached worker. It keeps each
+// real child until checked Close succeeds, including on repeated public Close.
+func (db *DB) closePendingConstructor() error {
+	db.lifecycleMu.Lock()
+	if db.publicCloseRunning {
+		db.lifecycleMu.Unlock()
+		return ErrClosed
+	}
+	db.publicCloseRunning = true
+	db.publicClosing.Store(true)
+	db.lifecycleMu.Unlock()
+	defer func() { db.lifecycleMu.Lock(); db.publicCloseRunning = false; db.lifecycleMu.Unlock() }()
+	if db.cached != nil {
+		if e := db.cached.Close(); e != nil {
+			return e
+		}
+		db.cached = nil
+	}
+	if db.backend != nil {
+		if e := db.backend.Close(); e != nil {
+			return e
+		}
+		db.backend = nil
+	}
+	var err error
+	if db.dictdb != nil {
+		if e := db.dictdb.Close(); e != nil {
+			err = errors.Join(err, e)
+		} else {
+			db.dictdb = nil
+		}
+	}
+	if db.templateDB != nil {
+		if e := db.templateDB.Close(); e != nil {
+			err = errors.Join(err, e)
+		} else {
+			db.templateDB = nil
+		}
+	}
+	return err
+}
+
+// failedPublicConstructor returns actual partial custody with an error until
+// checked cleanup succeeds. Callers must retain that handle and retry Close.
+func failedPublicConstructor(cache *caching.DB, backend, dict *db.DB, templates *DB, cause error) (*DB, error) {
+	if cache == nil && backend == nil && dict == nil && templates == nil {
+		return nil, cause
+	}
+	// A concrete backend/side constructor prepays this known facade class before
+	// its own Pager birth. Complete callback/platform coverage remains unavailable.
+	pending := &DB{cached: cache, backend: backend, dictdb: dict, templateDB: templates, constructorPending: true}
+	if e := pending.Close(); e != nil {
+		return pending, errors.Join(cause, e)
+	}
+	return nil, cause
 }

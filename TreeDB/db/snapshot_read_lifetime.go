@@ -19,11 +19,32 @@ func (s *Snapshot) beginRead() error {
 	}
 }
 
-func (s *Snapshot) endRead() {
+func (s *Snapshot) endRead() { _ = s.endReadChecked() }
+
+// Selected synchronous consumers propagate finalization failure. The real
+// Snapshot retains controlled terminal debt for its checked public Close retry.
+func (s *Snapshot) endReadChecked() error {
 	if s == nil {
-		return
+		return nil
 	}
+	s.iteratorMu.Lock()
+	c := s.originalCleanup
+	if c != nil {
+		if err := c.RetainOriginalCleanupV1(); err != nil {
+			s.iteratorMu.Unlock()
+			return err
+		}
+	}
+	s.iteratorMu.Unlock()
+	defer func() {
+		s = nil
+		if c != nil {
+			c.ReleaseOriginalCleanupV1()
+			c = nil
+		}
+	}()
 	if s.readState.Add(^uint64(0)) == snapshotReadClosedBit {
-		_ = s.finalizeCloseIfUnreferenced()
+		return s.finalizeCloseIfUnreferenced()
 	}
+	return nil
 }

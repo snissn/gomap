@@ -118,3 +118,39 @@ func TestOwnedPointerProjectionExternalLeafRequiresBoundedReader(t *testing.T) {
 		t.Fatal("bounded path used global reader")
 	}
 }
+
+func TestOwnedPointerProjectionAtRootClearsInlineTree(t *testing.T) {
+	p, err := pager.Open(filepath.Join(t.TempDir(), "projection-root.db"), 65536)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	first, err := p.Alloc(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for offset, key := range []string{"first", "second"} {
+		id := first + uint64(offset)
+		raw, err := p.GetForWrite(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := node.NewNode(raw)
+		n.SetPageID(id)
+		n.SetType(page.PageTypeLeaf)
+		n.AddLeafEntry([]byte(key), []byte("inline"), node.FlagInline, page.ValuePtr{})
+		n.UpdateChecksum()
+	}
+	original := New(p, newCountingValueReader(), first)
+	projected := original.OwnedPointerProjectionIteratorAtRoot(first+1, nil, nil, nil).(*Iterator)
+	if !projected.Valid() || string(projected.Key()) != "second" || projected.tree == original || projected.tree.slabReader != nil {
+		t.Fatal("projection inherited wrong or generic operational tree")
+	}
+	bound := projected.tree
+	if err := projected.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if bound.pager != nil || bound.rootPageID != 0 || projected.tree != nil || original.rootPageID != first {
+		t.Fatal("projection Close retained pager or mutated original root")
+	}
+}

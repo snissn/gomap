@@ -525,6 +525,9 @@ func (set *RecoverableRootSet) leafGenerationIDsForFiles(fileIDs map[uint32]stru
 	if current != nil {
 		consumeManifest(current.sourceManifest)
 	}
+	if err := requireStableResourceMetadataExportV1(set.resources...); err != nil {
+		return nil, err
+	}
 	seen := make(map[rootpublication.StableIdentity]struct{})
 	for _, resources := range set.resources {
 		for _, token := range resources.Tokens() {

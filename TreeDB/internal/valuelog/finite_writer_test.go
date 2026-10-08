@@ -3,11 +3,13 @@ package valuelog
 import (
 	"bytes"
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 	"math"
 	"os"
 	"path/filepath"
 	"testing"
+	"unsafe"
 )
 
 func TestFiniteWriterLoanRetainsBackingAndAuthority(t *testing.T) {
@@ -292,6 +294,69 @@ func TestFiniteWriterRawBatchCreditBeforeOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = backing.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFiniteWriterEqualClassReplacementChargesActualInstance(t *testing.T) {
+	w, err := NewWriter(filepath.Join(t.TempDir(), "value.log"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	w.setWriterByteBacking(1, &w.scratch, make([]byte, 0, 31))
+	var charged uint64
+	b, err := NewFiniteWriterBacking(1, func(n uint64) error { charged += n; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	loan, err := w.BeginFiniteWriterLoan(b, 1, page.PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = loan.Close(); err != nil {
+		t.Fatal(err)
+	}
+	stamp := w.backingAllocations[1]
+	held := w.scratch
+	w.setWriterByteBacking(1, &w.scratch, make([]byte, 0, 31))
+	if w.backingAllocations[1].serial == stamp.serial || w.backingAllocations[1].class != stamp.class {
+		t.Fatal("equal class replacement did not receive actual instance identity")
+	}
+	before := charged
+	loan, err = w.BeginFiniteWriterLoan(b, 1, page.PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper, err := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(FiniteWriterLoan{})), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if charged-before != wrapper+stamp.class {
+		t.Fatalf("replacement debit=%d want full instance+loan=%d", charged-before, wrapper+stamp.class)
+	}
+	if unsafe.SliceData(held) == unsafe.SliceData(w.scratch) {
+		t.Fatal("test did not replace actual live backing")
+	}
+	before = charged
+	if err = loan.grow(1, &w.scratch, 63); err != nil {
+		t.Fatal(err)
+	}
+	actual := w.backingAllocations[1]
+	if charged-before != actual.class {
+		t.Fatalf("growth debit=%d actual class=%d", charged-before, actual.class)
+	}
+	before = charged
+	if err = loan.observe(); err != nil {
+		t.Fatal(err)
+	}
+	if charged != before {
+		t.Fatal("prepaid growth was charged a second time")
+	}
+	if err = loan.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = b.Close(); err != nil {
 		t.Fatal(err)
 	}
 }

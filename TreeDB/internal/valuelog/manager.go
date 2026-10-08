@@ -49,7 +49,7 @@ type File struct {
 	Path               string
 	File               *os.File
 	manager            *Manager
-	RefCount           atomic.Int64
+	RefCount           fileReferenceCount
 	IsZombie           atomic.Bool
 	retryDeletePending atomic.Bool
 	stableIdentity     rootpublication.StableIdentity
@@ -185,6 +185,7 @@ func openFile(path string, id uint32, dictLookup DictLookup, templateLookup Temp
 		}
 	}
 	vf := &File{
+		RefCount:                     fileReferenceCount{cell: newSegmentRegistrationCell()},
 		registeredParentIdentity:     parentIdentity,
 		ID:                           id,
 		Path:                         path,
@@ -608,7 +609,11 @@ func (f *File) Close() error {
 	f.mmapData.Store([]byte(nil))
 	f.remapMu.Unlock()
 
-	return f.File.Close()
+	err := f.File.Close()
+	if f.RefCount.cell != nil {
+		f.RefCount.cell.closed.Store(true)
+	}
+	return err
 }
 
 func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
@@ -1410,8 +1415,10 @@ type Manager struct {
 	dir           string
 	extraScanDirs []string
 
-	mu    sync.RWMutex
-	files map[uint32]*File
+	mu                      sync.RWMutex
+	files                   map[uint32]*File
+	registrationIncarnation *managerRegistrationIncarnation
+	registrationGeneration  uint64
 	// retryWaitHook is an internal deterministic lifecycle-test barrier.
 	retryWaitHook func()
 	// Test-only cold admission barrier; set before operations and never changed
@@ -1588,6 +1595,7 @@ func NewReadOnlyManagerForBoundedRecoveryWithStableResourcePinRegistry(dir strin
 
 func newManagerWithStableResourcePinRegistry(dir string, registry *rootpublication.IdentityPinRegistry, recoverStableDeletes, refresh bool) (*Manager, error) {
 	m := &Manager{
+		registrationIncarnation:     newManagerRegistrationIncarnation(),
 		dir:                         dir,
 		files:                       make(map[uint32]*File),
 		currentWritableByLane:       make(map[uint32]uint32),
@@ -1884,6 +1892,9 @@ func (m *Manager) Close() error {
 	}
 	m.mu.Lock()
 	m.closeErr = err
+	if m.registrationIncarnation != nil {
+		m.registrationIncarnation.closed.Store(true)
+	}
 	close(m.closeDone)
 	m.mu.Unlock()
 	return err
@@ -2097,6 +2108,15 @@ func (m *Manager) registerSegmentLocked(path string, id uint32) error {
 		if m.stableResourcePins != nil || !errors.Is(err, rootpublication.ErrStableIdentityUnsupported) {
 			return errors.Join(err, f.Close())
 		}
+	}
+	if f.RefCount.cell != nil && m.registrationIncarnation != nil {
+		if m.registrationGeneration == math.MaxUint64 {
+			return errors.Join(ErrFiniteWriterLoan, f.Close())
+		}
+		m.registrationGeneration++
+		f.RefCount.cell.id = id
+		f.RefCount.cell.generation = m.registrationGeneration
+		f.RefCount.cell.incarnation = m.registrationIncarnation
 	}
 	f.manager = m
 	f.setGroupedFrameCacheBudget(m.groupedFrameCacheBudget)

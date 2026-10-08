@@ -1,6 +1,9 @@
 package pager
 
-import "fmt"
+import (
+	"fmt"
+	"unsafe"
+)
 
 // Keep async pre-grow enabled for the default TreeDB main chunk size (256KiB)
 // while still avoiding excessive churn for very small side-store chunks.
@@ -97,6 +100,10 @@ func (p *Pager) currentCapacityBytes() int64 {
 }
 
 func (p *Pager) growToCapacity(targetCapacity int64) error {
+	if err := p.beginOperation(); err != nil {
+		return err
+	}
+	defer p.endOperation()
 	if targetCapacity < 0 {
 		return fmt.Errorf("invalid target capacity: %d", targetCapacity)
 	}
@@ -126,6 +133,24 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 		return nil
 	}
 
+	chunksNeeded := (targetCapacity - currentCapacity) / p.chunkSize
+	if chunksNeeded <= 0 {
+		return nil
+	}
+	oldCount := int(currentCapacity / p.chunkSize)
+	total := oldCount + int(chunksNeeded)
+	if err := p.reserveKnown(uint64(total)*uint64(unsafe.Sizeof([]byte{})), true); err != nil {
+		return err
+	}
+	if err := p.reserveKnown(uint64(unsafe.Sizeof(chunkList{})), true); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	prefetchErr := p.ensurePrefetchCapacityLocked(total)
+	p.mu.Unlock()
+	if prefetchErr != nil {
+		return prefetchErr
+	}
 	// Best-effort preallocation to fail fast on ENOSPC and reduce SIGBUS risk
 	// on mmap writes (platform/filesystem dependent).
 	if err := preallocateFile(p.file, targetCapacity); err != nil {
@@ -135,31 +160,30 @@ func (p *Pager) growToCapacity(targetCapacity int64) error {
 		return err
 	}
 
-	chunksNeeded := (targetCapacity - currentCapacity) / p.chunkSize
-	if chunksNeeded <= 0 {
-		return nil
-	}
-
-	newChunks := make([][]byte, 0, chunksNeeded)
-	for i := int64(0); i < chunksNeeded; i++ {
-		offset := currentCapacity + (i * p.chunkSize)
-		data, err := mmapFile(p.file.Fd(), offset, int(p.chunkSize), p.mmapPopulate)
+	next := make([][]byte, total)
+	p.mu.Lock()
+	copy(next, p.chunks)
+	p.mu.Unlock()
+	for i := oldCount; i < total; i++ {
+		data, err := mmapFile(p.file.Fd(), int64(i)*p.chunkSize, int(p.chunkSize), p.mmapPopulate)
 		if err != nil {
-			for _, c := range newChunks {
-				_ = munmapFile(c)
-			}
+			// Keep every actual mapped suffix slot on its original owner. Close will
+			// retry them; no temporary cleanup error loses a mapping or FD.
+			p.mu.Lock()
+			p.chunks = next
+			p.atomicChunks.Store(nil)
+			p.mu.Unlock()
+			p.lifetime.mu.Lock()
+			p.lifetime.closing = true
+			p.lifetime.mu.Unlock()
 			return err
 		}
+		next[i] = data
 		madviseChunk(data)
-		newChunks = append(newChunks, data)
 	}
-
 	p.mu.Lock()
-	p.chunks = append(p.chunks, newChunks...)
-	updated := make([][]byte, len(p.chunks))
-	copy(updated, p.chunks)
-	p.atomicChunks.Store(&chunkList{data: updated})
-	p.ensurePrefetchCapacityLocked(len(p.chunks))
-	p.mu.Unlock()
+	defer p.mu.Unlock()
+	p.chunks = next
+	p.atomicChunks.Store(&chunkList{data: next})
 	return nil
 }

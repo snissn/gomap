@@ -296,25 +296,33 @@ func NewStableLegacyVectorResourceToken(spec rootpublication.StableResourceSpec)
 // every currently-declared physical column asset kind. Unknown future kinds
 // fail closed until their durability ownership is reviewed.
 func stableColumnAssetResourceClassification(kind ColumnAssetKind) (rootpublication.ResourceKind, rootpublication.ReachabilityField, string, error) {
+	resource, reachability, authority, known := stableColumnAssetResourceClassificationFacts(kind)
+	if !known {
+		return "", "", "", fmt.Errorf("collections: stable resource inventory missing column asset kind %q", kind)
+	}
+	return resource, reachability, authority, nil
+}
+
+func stableColumnAssetResourceClassificationFacts(kind ColumnAssetKind) (rootpublication.ResourceKind, rootpublication.ReachabilityField, string, bool) {
 	switch kind {
 	case ColumnAssetKindTCS1PartImage:
-		return rootpublication.ResourceColumnAsset, rootpublication.ReachabilityColumnManifest, "authoritative", nil
+		return rootpublication.ResourceColumnAsset, rootpublication.ReachabilityColumnManifest, "authoritative", true
 	case ColumnAssetKindTCS1TypedColumnPart:
-		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnMultipart, "authoritative", nil
+		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnMultipart, "authoritative", true
 	case ColumnAssetKindTCS1AggregateMetadata, ColumnAssetKindTCS1Int64Values:
-		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, "authoritative", nil
+		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnValue, "authoritative", true
 	case ColumnAssetKindTCS1DictionaryCodes:
-		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnCode, "authoritative", nil
+		return rootpublication.ResourceTypedColumnAsset, rootpublication.ReachabilityTypedColumnCode, "authoritative", true
 	case ColumnAssetKindTCS1HNSWSearchPack:
-		return rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityHNSWSearchPack, "authoritative", nil
+		return rootpublication.ResourceVectorGraphPack, rootpublication.ReachabilityHNSWSearchPack, "authoritative", true
 	case ColumnAssetKindQueryReadyBase:
-		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyBase, "rebuildable-non-authoritative", nil
+		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyBase, "rebuildable-non-authoritative", true
 	case ColumnAssetKindQueryReadyDelta:
-		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyDelta, "rebuildable-non-authoritative", nil
+		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyDelta, "rebuildable-non-authoritative", true
 	case ColumnAssetKindQueryReadyConsolidatedBase:
-		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyConsolidatedBase, "rebuildable-non-authoritative", nil
+		return rootpublication.ResourceQueryReadyAsset, rootpublication.ReachabilityQueryReadyConsolidatedBase, "rebuildable-non-authoritative", true
 	default:
-		return "", "", "", fmt.Errorf("collections: stable resource inventory missing column asset kind %q", kind)
+		return "", "", "", false
 	}
 }
 

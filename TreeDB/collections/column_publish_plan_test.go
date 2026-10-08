@@ -469,6 +469,22 @@ func TestColumnPublishPlanRejectsInvalidRootDeltaM10A(t *testing.T) {
 			wantError: "manifest records omitted",
 		},
 		{
+			name: "changed mutation payload",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.MutationDelta = true
+				delta.Mutations[0].record.value = []byte("changed after encoding")
+			},
+			wantError: "mutation delta does not produce logical post-state",
+		},
+		{
+			name: "extra mutation after canonical end",
+			mutate: func(delta *ColumnManifestRootDelta) {
+				delta.MutationDelta = true
+				delta.Mutations = append(delta.Mutations, columnManifestMutation{record: columnManifestRecord{key: []byte("\xffextra"), value: []byte("extra")}})
+			},
+			wantError: "mutation delta does not produce logical post-state",
+		},
+		{
 			name: "omitted manifest mutation",
 			mutate: func(delta *ColumnManifestRootDelta) {
 				delta.MutationDelta = true
@@ -488,6 +504,11 @@ func TestColumnPublishPlanRejectsInvalidRootDeltaM10A(t *testing.T) {
 					Identity:       in.Manifest.Identity,
 					IdentityRecord: encodeColumnManifestIdentityRecordArray(in.Manifest.Identity),
 					Records:        cloneColumnManifestRecords(in.Manifest.Records),
+				}
+				var err error
+				delta.Mutations, err = buildColumnManifestMutationDelta(input.CurrentManifestRecords, delta.Records)
+				if err != nil {
+					return ColumnManifestRootDelta{}, err
 				}
 				tt.mutate(&delta)
 				return delta, nil

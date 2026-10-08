@@ -29,7 +29,7 @@ type PhysicalSnapshotCutV1 struct {
 	file          *os.File
 	directoryLock *lockfile.Lock
 	roots         *RecoverableRootSet
-	generation    *freelist.FreelistGenerationV1
+	generation    *freelist.PublishedGenerationLeaseV1
 	meta          [2][page.PageSize]byte
 	parentIDs     [2]uint64
 	parents       [2][page.PageSize]byte
@@ -92,11 +92,16 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 	if current.pending != nil || len(current.ambiguous) != 0 || current.record.CommitSeq == 0 || current.record.CommitSeq != roots.visible.CommitSeq || roots.idx != db.idx.Load() {
 		return nil, fmt.Errorf("%w: physical snapshot requires fully published current root", ErrRecoverableRootSetStale)
 	}
-	generation, err := roots.idx.allocator.PublishedSnapshotGenerationV1(current.record.Freelist)
+	generation, err := roots.idx.allocator.AcquirePublishedGenerationLeaseV1(current.record.Freelist)
 	if err != nil {
 		return nil, err
 	}
-	if generation.HighWater() != current.record.TotalPages {
+	defer func() {
+		if !owned {
+			generation.Close()
+		}
+	}()
+	if generation.GenerationRefV1().HighWater != current.record.TotalPages {
 		return nil, errors.New("treedb: physical snapshot allocator extent differs from root record")
 	}
 	oldest, err := oldestRecoverableSlotCommitV1(current.slotCommit)
@@ -131,7 +136,7 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 		// slot's parent may already be retired below the registry boundary;
 		// retain these two bounded images while publication is excluded rather
 		// than reading reusable bytes during deferred export.
-		pageSource := &snapshotIndexPageStoreV1{file: file, pageCount: generation.HighWater()}
+		pageSource := &snapshotIndexPageStoreV1{file: file, pageCount: generation.GenerationRefV1().HighWater}
 		for slot, record := range current.slotRecord {
 			if record.CommitSeq == 0 || record.ParentRecordPageID == 0 {
 				continue
@@ -158,7 +163,7 @@ func (db *DB) CapturePhysicalSnapshotCutV1(ctx context.Context) (*PhysicalSnapsh
 
 func (cut *PhysicalSnapshotCutV1) StateToken() StateToken { return cut.state }
 func (cut *PhysicalSnapshotCutV1) SizeBytes() int64 {
-	return int64(cut.generation.HighWater()) * page.PageSize
+	return int64(cut.generation.GenerationRefV1().HighWater) * page.PageSize
 }
 
 // WriteToContext emits one sequential index image using a single page buffer.
@@ -176,7 +181,7 @@ func (cut *PhysicalSnapshotCutV1) WriteToContext(ctx context.Context, dst io.Wri
 		ctx = context.Background()
 	}
 	var buffer [page.PageSize]byte
-	for id := uint64(0); id < cut.generation.HighWater(); id++ {
+	for id := uint64(0); id < cut.generation.GenerationRefV1().HighWater; id++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -221,6 +226,7 @@ func (cut *PhysicalSnapshotCutV1) Close() error {
 	cut.roots = nil
 	err = errors.Join(err, cut.directoryLock.Close())
 	cut.directoryLock = nil
+	cut.generation.Close()
 	return err
 }
 

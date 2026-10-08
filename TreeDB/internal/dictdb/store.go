@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
@@ -21,12 +22,17 @@ var errStoreUnavailable = errors.New("dictdb: store unavailable")
 
 // Store provides access to dictionary storage backed by a TreeDB backend.
 type Store struct {
-	backend *db.DB
-	mu      sync.Mutex
-	dir     string
-	vlog    *valuelog.Writer
-	vlogSeq uint32
-	nextRID uint64
+	backend          *db.DB
+	captureRunning   bool
+	pendingSnapshot  *db.Snapshot
+	pendingBuilder   *rootpublication.StableResourceSetBuilder
+	pendingToken     *rootpublication.StableResourceToken
+	pendingResources *rootpublication.StableResourceSet
+	mu               sync.Mutex
+	dir              string
+	vlog             *valuelog.Writer
+	vlogSeq          uint32
+	nextRID          uint64
 }
 
 const (
@@ -39,6 +45,9 @@ func Open(path string, opts db.Options) (*Store, error) {
 	opts.Dir = path
 	backend, err := db.Open(opts)
 	if err != nil {
+		if backend != nil {
+			return &Store{backend: backend, dir: path}, err
+		}
 		return nil, err
 	}
 	return &Store{backend: backend, dir: path}, nil
@@ -58,13 +67,26 @@ func (s *Store) Close() error {
 	if s == nil || s.backend == nil {
 		return nil
 	}
-	s.mu.Lock()
-	if s.vlog != nil {
-		_ = s.vlog.Close()
-		s.vlog = nil
+	if err := s.drainCaptureCustodyV1(); err != nil {
+		return err
 	}
+	s.mu.Lock()
+	writer := s.vlog
 	s.mu.Unlock()
-	return s.backend.Close()
+	var result error
+	if writer != nil {
+		result = writer.Close()
+		if errors.Is(result, valuelog.ErrFiniteWriterLoan) {
+			return result
+		}
+		s.mu.Lock()
+		if s.vlog == writer {
+			s.vlog = nil
+		}
+		s.mu.Unlock()
+	}
+	// Writer.Close is once-consumed; no writer replay. Its error is observable.
+	return errors.Join(result, s.backend.Close())
 }
 
 // GetCurrent returns the current dictionary ID or 0 if unset.
@@ -493,4 +515,70 @@ func nextValueLogSeq(dir string, lane uint32) (uint32, error) {
 		}
 	}
 	return maxSeq + 1, nil
+}
+
+// One actual failed capture occupies these preborn Store fields. Admission
+// refuses another capture until exact cleanup resolves; nothing is scheduled.
+func (s *Store) drainCaptureCustodyV1() (result error) {
+	s.mu.Lock()
+	if s.captureRunning {
+		s.mu.Unlock()
+		return rootpublication.ErrStableResourceOperationBusy
+	}
+	s.captureRunning = true
+	snapshot, builder, token, resources := s.pendingSnapshot, s.pendingBuilder, s.pendingToken, s.pendingResources
+	s.mu.Unlock()
+	defer func() {
+		snapshot = nil
+		builder = nil
+		token = nil
+		resources = nil
+		s.mu.Lock()
+		s.captureRunning = false
+		s.mu.Unlock()
+	}()
+	// The builder may already own this exact candidate alias after Add failed.
+	// Drain its claimed roles before attempting a token-only release; unfinished
+	// builder cleanup retains both actual fields without another consumption.
+	if builder != nil {
+		err := builder.AbandonCheckedV1()
+		result = errors.Join(result, err)
+		if err != nil {
+			return result
+		}
+		s.mu.Lock()
+		s.pendingBuilder = nil
+		s.mu.Unlock()
+	}
+	if token != nil {
+		err := token.Release()
+		result = errors.Join(result, err)
+		if !token.CleanupCompleteV1() {
+			return errors.Join(result, rootpublication.ErrStableResourceOperationBusy)
+		}
+		s.mu.Lock()
+		s.pendingToken = nil
+		s.mu.Unlock()
+	}
+	if resources != nil {
+		err := resources.Release()
+		result = errors.Join(result, err)
+		if resources.Owner() != rootpublication.ResourceOwnerReleased {
+			return errors.Join(result, rootpublication.ErrStableResourceOperationBusy)
+		}
+		s.mu.Lock()
+		s.pendingResources = nil
+		s.mu.Unlock()
+	}
+	if snapshot != nil {
+		err := snapshot.Close()
+		result = errors.Join(result, err)
+		if !snapshot.CleanupCompleteV1() {
+			return errors.Join(result, rootpublication.ErrStableResourceOperationBusy)
+		}
+		s.mu.Lock()
+		s.pendingSnapshot = nil
+		s.mu.Unlock()
+	}
+	return
 }

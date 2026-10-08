@@ -8,6 +8,10 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/allocclass"
+	"github.com/snissn/gomap/TreeDB/internal/residentcredit"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
@@ -113,6 +117,9 @@ func (db *DB) AcquireStableResourceCaptureLease() (*StableResourceCaptureLease, 
 // ValidateStableDictionaryResourceClosure binds the bytes selected by an
 // encoder to every physical resource returned by a dictionary provider.
 func ValidateStableDictionaryResourceClosure(resources *rootpublication.StableResourceSet, dictID uint64, dictionary []byte) error {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return err
+	}
 	if resources == nil || dictID == 0 || len(dictionary) == 0 {
 		return fmt.Errorf("%w: incomplete dictionary resource closure", rootpublication.ErrUnresolvedResource)
 	}
@@ -122,6 +129,9 @@ func ValidateStableDictionaryResourceClosure(resources *rootpublication.StableRe
 // ValidateStableTemplateResourceClosure binds the immutable definition selected
 // by an encoder to every physical resource returned by a template provider.
 func ValidateStableTemplateResourceClosure(resources *rootpublication.StableResourceSet, templateID uint64, definition []byte) error {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return err
+	}
 	if resources == nil || templateID == 0 || len(definition) == 0 {
 		return fmt.Errorf("%w: incomplete template resource closure", rootpublication.ErrUnresolvedResource)
 	}
@@ -285,14 +295,14 @@ func (snapshot *Snapshot) NewStableValueLogPhysicalResourceToken(
 	fileID uint32,
 	spec rootpublication.StableResourceSpec,
 	constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error),
-) (*rootpublication.StableResourceToken, error) {
+) (result *rootpublication.StableResourceToken, retErr error) {
 	if snapshot == nil || constructor == nil {
 		return nil, fmt.Errorf("%w: stable value-log snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	if err := snapshot.beginRead(); err != nil {
 		return nil, err
 	}
-	defer snapshot.endRead()
+	defer func() { retErr = errors.Join(retErr, snapshot.endReadChecked()) }()
 	if !snapshot.stableIndexCapture || snapshot.vlogManager == nil {
 		return nil, fmt.Errorf("%w: stable value-log manager unavailable", rootpublication.ErrUnresolvedResource)
 	}
@@ -331,38 +341,151 @@ func (snapshot *Snapshot) StableValueLogRecordLength(ptr page.ValuePtr) (uint32,
 	return recordLength, nil
 }
 
-// NewStableIndexResourceToken binds a producer-specific token to the exact
-// index handle and namespace owned by this stable snapshot. The token takes
-// ownership of the snapshot maintenance pin on success.
-func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)) (*rootpublication.StableResourceToken, error) {
+// Generic original-token responsibility is independent of cloned provider edges.
+// The capsule's role cursor, not a reusable handle or finalized CAS, proves cleanup.
+type stableIndexReleaseEnvironment struct {
+	snapshot          *Snapshot
+	completion        *OriginalSnapshotCleanupV1
+	captureCounter    *atomic.Int64
+	transferred       atomic.Bool
+	caller            func()
+	callerEnvironment rootpublication.StableResourceReleaseEnvironment
+}
+
+func (e *stableIndexReleaseEnvironment) ReleaseStableResource() {
+	_, _ = e.AdvanceStableResourceCleanupV1()
+}
+func (e *stableIndexReleaseEnvironment) AdvanceStableResourceCleanupV1() (out rootpublication.StableCleanupOutcomeV1, err error) {
+	if e.completion != nil {
+		snapshot := e.snapshot
+		if snapshot != nil {
+			err = snapshot.Close()
+		}
+		snapshot = nil
+		out = e.completion.ObserveOriginalCleanupV1()
+		if !out.Complete() {
+			if err == nil {
+				err = rootpublication.ErrStableResourceOperationBusy
+			}
+			return out, err
+		}
+		e.snapshot = nil
+	}
+	counter := e.captureCounter
+	if e.transferred.CompareAndSwap(true, false) && counter != nil {
+		counter.Add(-1)
+	}
+	e.captureCounter = nil
+	counter = nil
+	caller := e.caller
+	if caller != nil {
+		caller()
+		e.caller = nil
+	}
+	caller = nil
+	environment := e.callerEnvironment
+	if checked, ok := environment.(rootpublication.StableResourceCleanupEnvironmentV1); ok {
+		var outcome rootpublication.StableCleanupOutcomeV1
+		var cleanupErr error
+		outcome, cleanupErr = checked.AdvanceStableResourceCleanupV1()
+		err = errors.Join(err, cleanupErr)
+		if !outcome.Complete() {
+			environment = nil
+			return outcome, err
+		}
+	} else if environment != nil {
+		environment.ReleaseStableResource()
+	}
+	e.callerEnvironment = nil
+	environment = nil
+	completion := e.completion
+	e.completion = nil
+	out.Phase = rootpublication.StableCleanupCompleteV1
+	out.PendingRoles = 0
+	// Complete means these original metadata roles were consumed, including
+	// consumed-with-error. Namespace debt remains owned by the actual Manager.
+	if completion != nil {
+		completion.ReleaseOriginalCleanupV1()
+		completion = nil
+	}
+	return out, err
+}
+func reserveStableIndexCallbackClass(creator *residentcredit.Scope, n uint64) error {
+	class, err := allocclass.ClassBytes(n, true)
+	if err != nil {
+		return err
+	}
+	return creator.ReserveOriginalLifetime(class)
+}
+
+// NewStableIndexResourceToken binds the exact snapshot constructor lifetime.
+// Hidden caller functions remain ordinary-only and permanently uncertified.
+func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.StableResourceSpec, constructor func(rootpublication.StableResourceSpec) (*rootpublication.StableResourceToken, error)) (result *rootpublication.StableResourceToken, retErr error) {
 	if snapshot == nil || constructor == nil {
 		return nil, fmt.Errorf("%w: stable index snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	if err := snapshot.beginRead(); err != nil {
 		return nil, err
 	}
-	defer snapshot.endRead()
-	if !snapshot.stableIndexCapture || snapshot.idx == nil || snapshot.idx.pager == nil || snapshot.db == nil {
+	defer func() { retErr = errors.Join(retErr, snapshot.endReadChecked()) }()
+	if !snapshot.stableIndexCapture || snapshot.idx == nil || snapshot.idx.pager == nil || snapshot.db == nil || snapshot.pagerCreator == nil {
 		return nil, fmt.Errorf("%w: stable index generation unavailable", rootpublication.ErrUnresolvedResource)
 	}
-	if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
-		pager := snapshot.idx.pager
-		spec.SyncThrough = func(file *os.File, _ rootpublication.DurableFrontier) error {
-			return pager.SyncIndexDataWithStableFile(file)
-		}
+	if spec.MetadataAccount != nil || spec.CallbackCreator != nil && spec.CallbackCreator != snapshot.pagerCreator || spec.CallbackProvider != nil {
+		return nil, rootpublication.ErrStableMetadataShapeUnsupported
 	}
+	creator := snapshot.pagerCreator
+	if err := creator.RetainOriginalLifetime(); err != nil {
+		return nil, err
+	}
+	var provider *rootpublication.StableIndexOperationProvider
+	var environment *stableIndexReleaseEnvironment
+	environmentTransferred := false
+	// Scrub all constructor aliases before the independent local Scope edge ends.
+	defer func() {
+		spec = rootpublication.StableResourceSpec{}
+		constructor = nil
+		if environment != nil && !environmentTransferred && environment.completion != nil {
+			environment.completion.ReleaseOriginalCleanupV1()
+			environment.completion = nil
+		}
+		environment = nil
+		if provider != nil {
+			provider.ReleaseStableResourceProvider()
+			provider = nil
+		}
+		creator.ReleaseStableMetadata()
+		creator = nil
+	}()
+	if spec.Reachability == rootpublication.ReachabilityIndexFile && spec.SyncThrough == nil {
+		var err error
+		provider, err = rootpublication.NewStableIndexOperationProvider(snapshot.idx.pager, creator)
+		if err != nil {
+			return nil, err
+		}
+		spec.CallbackProvider = provider
+	}
+	if err := reserveStableIndexCallbackClass(creator, uint64(unsafe.Sizeof(stableIndexReleaseEnvironment{}))); err != nil {
+		return nil, err
+	}
+	completion := snapshot.originalCleanup
+	if completion == nil {
+		return nil, ErrClosed
+	}
+	if err := completion.RetainOriginalCleanupV1(); err != nil {
+		return nil, err
+	}
+	environment = &stableIndexReleaseEnvironment{completion: completion, snapshot: snapshot, captureCounter: snapshot.stableIndexCaptureCounter, caller: spec.OnRelease, callerEnvironment: spec.ReleaseEnvironment}
+	spec.OnRelease = nil
+	spec.CallbackCreator = creator
+	spec.ReleaseEnvironment = environment
 	database := snapshot.db
-	namespace, err := snapshot.idx.stableIndexNamespaceToken(snapshot.db.dir)
+	namespace, err := snapshot.idx.stableIndexNamespaceToken(database.dir)
 	if err != nil {
 		return nil, err
 	}
 	defer namespace.Release()
-
-	var (
-		token            *rootpublication.StableResourceToken
-		leaseTransferred atomic.Bool
-	)
-	captureCounter := snapshot.stableIndexCaptureCounter
+	var token *rootpublication.StableResourceToken
 	err = snapshot.idx.pager.WithStableResourceFile(func(file *os.File) error {
 		info, err := file.Stat()
 		if err != nil {
@@ -382,31 +505,26 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 		spec.Frontier.Bytes = uint64(info.Size())
 		spec.Namespace = namespace
 		spec.PinRegistry = registry
-		callerRelease := spec.OnRelease
-		spec.OnRelease = func() {
-			_ = snapshot.Close()
-			if leaseTransferred.CompareAndSwap(true, false) && captureCounter != nil {
-				captureCounter.Add(-1)
-			}
-			if callerRelease != nil {
-				callerRelease()
-			}
-		}
 		token, err = constructor(spec)
+		if token != nil {
+			environmentTransferred = true
+		}
 		unobserveErr := registry.Unobserve(identity)
 		if unobserveErr != nil {
 			if token != nil {
-				token.Release()
-				token = nil
+				releaseErr := token.Release()
+				if releaseErr == nil && token.CleanupCompleteV1() {
+					token = nil
+				}
+				err = errors.Join(err, releaseErr)
 			}
 			return errors.Join(err, unobserveErr)
 		}
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return token, err
 	}
-
 	snapshot.iteratorMu.Lock()
 	switch {
 	case snapshot.closed.Load():
@@ -414,13 +532,16 @@ func (snapshot *Snapshot) NewStableIndexResourceToken(spec rootpublication.Stabl
 	case snapshot.stableIndexCaptureTransferred:
 		err = fmt.Errorf("%w: stable index maintenance lease already transferred", rootpublication.ErrResourceOwnership)
 	default:
-		leaseTransferred.Store(true)
+		environment.transferred.Store(true)
 		snapshot.stableIndexCaptureTransferred = true
 	}
 	snapshot.iteratorMu.Unlock()
 	if err != nil {
-		token.Release()
-		return nil, err
+		releaseErr := token.Release()
+		if releaseErr == nil && token.CleanupCompleteV1() {
+			token = nil
+		}
+		return token, errors.Join(err, releaseErr)
 	}
 	return token, nil
 }
@@ -538,4 +659,16 @@ func (lease *StableResourceCaptureLease) ValidateCommandWALStagingCaptureDBV1(db
 		return ErrClosed
 	}
 	return lease.ValidateCommandWALStagingCaptureV1(db, lease.borrowedIntent)
+}
+
+// requireStableResourceMetadataExportV1 certifies every operand before a
+// consumer stages clones or treats unavailable metadata as an empty closure.
+// The shared set provenance invariant makes ordinary checks constant time.
+func requireStableResourceMetadataExportV1(resources ...*rootpublication.StableResourceSet) error {
+	for _, resource := range resources {
+		if err := resource.RequireMetadataExport(); err != nil {
+			return err
+		}
+	}
+	return nil
 }

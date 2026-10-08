@@ -599,3 +599,57 @@ Representative coverage includes:
 - `TreeDB/caching/backpressure_wait_test.go`.
 
 When changing concurrency behavior, these tests SHOULD be reviewed/expanded with the change.
+
+## Pager-owned manifest maintenance fences
+
+Owned-mode manifest GC schedules bounded work outside a whole-directory
+inventory scan. Its existing allocator cursor carries progress, not deletion
+authority. Each destructive step revalidates recoverable roots, exact index
+generation/epoch and held FD identity, publication and snapshot pins under the
+existing write/reuse fences before mutation. A stale basis cannot continue
+destructive work. Both durable slots and queued candidates remain protected.
+The [format contract](../design/owned-leaf-manifest-v1.md) states the cumulative
+per-step entry/page/trie/path bounds and distinguishes canonical validation
+from all additional allocator/physical checks.
+
+Measure complete public GC and concurrent durable write waits, including
+validation, sampling, bounded stale retry and final success. The shared H0 test
+identifies an actual `WriteSync` goroutine waiting at the `writeMu` RWMutex fence;
+a hook rendezvous or scheduling start alone is insufficient. Its fixed stack
+buffer and all samples remain within both layouts' measured windows.
+Standalone segment-hook duration excludes the legacy revision-GC hold, so it
+cannot be presented as the complete legacy fence. Preserve separate setup,
+first/final GC, whole-call and ACK p95/p99 attribution.
+
+### Transaction-private COW allocator preparation (#5105)
+
+Under the existing allocator mutex, preparation first admits the live profile,
+copies mutable transaction collections, and detaches dirty rollback aliases.
+Only then does a transaction-local private flag permit reuse of unmaterialized
+nodes for subsequent edits. Durable nodes can retain shared zero-ID descendants
+whose empty summaries prevented emission. Their first private copies isolate
+all zero-ID immediate-child subtrees through the next durable child, including
+zero-ID chunks at durable leaves; that child repeats isolation on its own first
+copy. Immutable page identities are never edited. Sharing
+a private root through the persistent clone helper revokes the original's
+permission before exposing the alias; a new private clone must isolate again.
+Metadata reuse sizing borrows the tree read-only within one call and returns
+fresh extent values rather than a tree/owner alias.
+
+Materialization consumes and clears the builder permission before exposing
+candidate bytes. Retained opaque page views and generic sink isolation keep
+their existing immutable lifetime. Visible activation and durable sealing stay
+separate; this preparation change supplies no new reuse authority or shortcut
+around dependency/index/meta durability.
+
+FreelistTxnStats attributes StateNodeCopies, StateChunkCopies, StateCopyBytes
+(conservative allocation-class capacity), and StateIsolationVisits.
+COWPrepareProfileV1.PreparationCopyWork accumulates those costs incurred inside
+preparation, including failed and aborted attempts, initial isolation and
+hidden-subtree isolation at durable first-copy boundaries. Isolation visits
+count every nonnil node checked, including durable stop nodes.
+It is observational; reads consume no credits and cannot authorize reuse.
+It excludes ordinary allocation and next-generation bootstrap outside that
+preparation boundary, which remain charged by whole-call/setup costs and their
+existing mutation/visit/output accounting. It is not total allocator work or an
+exemption for intrinsic publication, resource capture, pruning or held roots.

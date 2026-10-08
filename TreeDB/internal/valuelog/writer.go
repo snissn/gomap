@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/compress/zstd"
 	"github.com/snissn/gomap/TreeDB/internal/crc"
@@ -86,68 +87,73 @@ func recordSizeExceedsMax(valueLen uint32) bool {
 }
 
 type Writer struct {
-	finiteLoan             *FiniteWriterLoan
-	producedFrameObserver  ProducedFrameObserver
-	f                      *os.File
-	stableParent           *os.File
-	stableParentErr        error
-	creationProof          *rootpublication.StableNamespaceCreationProof
-	creationUnsupported    bool
-	creationUncertified    bool
-	pendingStableSuccessor *pendingValueLogSuccessor
-	stableResourcePins     *rootpublication.IdentityPinRegistry
-	stableResourceIdentity rootpublication.StableIdentity
-	stableResourceObserved bool
-	bw                     *bufio.Writer
-	size                   int64
-	fileID                 uint32
-	appendBuf              []byte
-	appendMax              int
-	rawWritevMinAvgBytes   int
-	rawWritevMinBatchRecs  int
-	scratch                []byte
-	prefixBuf              []byte
-	rawScratch             []byte
-	rawWritevIovs          [][]byte
-	rawWritevVecs          []writevIovec
-	rawWritevMeta          []byte
-	rawWritevSyscalls      atomic.Uint64
-	rawWritevBytes         atomic.Uint64
-	rawWritevIovecs        atomic.Uint64
-	rawWritevFlushes       atomic.Uint64
-	rawWriteSyscalls       atomic.Uint64
-	rawWriteBytes          atomic.Uint64
-	rawWriteCalls          atomic.Uint64
-	encScratch             []byte
-	encLimiter             limitedSliceWriter
-	blockScratch           []byte
-	blockCodecScratch      blockCodecScratch
-	skipDictID             uint64
-	codecs                 *dictCodecEntry
-	dictEncoder            *zstd.Encoder
-	dictEncoderCodecs      *dictCodecEntry
-	dictEncoderKey         dictCodecKey
-	dictFrameEncodeLevel   zstd.EncoderLevel
-	dictFrameEnableEntropy bool
-	blockCodec             BlockCodec
-	blockCompression       bool
-	noBenefit              uint8
-	skipRemain             uint16
-	syncFn                 func(*os.File) error
-	closeRotateFn          func(*os.File) error
-	fileSyncCalls          atomic.Uint64
-	fileSyncNs             atomic.Uint64
-	fileSyncErrors         atomic.Uint64
-	directorySyncCalls     atomic.Uint64
-	directorySyncNs        atomic.Uint64
-	directorySyncErrors    atomic.Uint64
-	clock                  Clock
-	encodeCostModel        EncodeCostModel
-	encodeSampleStride     uint64
-	encodeSampleCount      uint64
-	keepIoNsPerStoredByte  float64
-	keepEncodeNsPerRawByte float64
-	keepSafetyMargin       float64
+	finiteLoan                *FiniteWriterLoan
+	backingSerial             uint64
+	backingAllocations        [11]writerBackingAllocation
+	producedFrameObserver     ProducedFrameObserver
+	f                         *os.File
+	stableParent              *os.File
+	stableParentErr           error
+	creationProof             *rootpublication.StableNamespaceCreationProof
+	creationUnsupported       bool
+	creationUncertified       bool
+	pendingStableSuccessor    *pendingValueLogSuccessor
+	stableResourcePins        *rootpublication.IdentityPinRegistry
+	stableSegmentOwner        *rootpublication.StableSegmentOwner
+	stableSegmentRegistration StableResourceRegistration
+	stableSegmentFileID       uint32
+	stableResourceIdentity    rootpublication.StableIdentity
+	stableResourceObserved    bool
+	bw                        *bufio.Writer
+	size                      int64
+	fileID                    uint32
+	appendBuf                 []byte
+	appendMax                 int
+	rawWritevMinAvgBytes      int
+	rawWritevMinBatchRecs     int
+	scratch                   []byte
+	prefixBuf                 []byte
+	rawScratch                []byte
+	rawWritevIovs             [][]byte
+	rawWritevVecs             []writevIovec
+	rawWritevMeta             []byte
+	rawWritevSyscalls         atomic.Uint64
+	rawWritevBytes            atomic.Uint64
+	rawWritevIovecs           atomic.Uint64
+	rawWritevFlushes          atomic.Uint64
+	rawWriteSyscalls          atomic.Uint64
+	rawWriteBytes             atomic.Uint64
+	rawWriteCalls             atomic.Uint64
+	encScratch                []byte
+	encLimiter                limitedSliceWriter
+	blockScratch              []byte
+	blockCodecScratch         blockCodecScratch
+	skipDictID                uint64
+	codecs                    *dictCodecEntry
+	dictEncoder               *zstd.Encoder
+	dictEncoderCodecs         *dictCodecEntry
+	dictEncoderKey            dictCodecKey
+	dictFrameEncodeLevel      zstd.EncoderLevel
+	dictFrameEnableEntropy    bool
+	blockCodec                BlockCodec
+	blockCompression          bool
+	noBenefit                 uint8
+	skipRemain                uint16
+	syncFn                    func(*os.File) error
+	closeRotateFn             func(*os.File) error
+	fileSyncCalls             atomic.Uint64
+	fileSyncNs                atomic.Uint64
+	fileSyncErrors            atomic.Uint64
+	directorySyncCalls        atomic.Uint64
+	directorySyncNs           atomic.Uint64
+	directorySyncErrors       atomic.Uint64
+	clock                     Clock
+	encodeCostModel           EncodeCostModel
+	encodeSampleStride        uint64
+	encodeSampleCount         uint64
+	keepIoNsPerStoredByte     float64
+	keepEncodeNsPerRawByte    float64
+	keepSafetyMargin          float64
 }
 
 func (w *Writer) stableRotationFailStopError() error {
@@ -307,13 +313,13 @@ func (w *Writer) flushAppendBuf() error {
 	}
 	if w.f == nil {
 		_, err := w.bw.Write(w.appendBuf)
-		w.appendBuf = w.appendBuf[:0]
+		w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:0])
 		return err
 	}
 	if err := w.writeAllToFile(w.appendBuf); err != nil {
 		return err
 	}
-	w.appendBuf = w.appendBuf[:0]
+	w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:0])
 	return nil
 }
 
@@ -346,10 +352,10 @@ func (w *Writer) trimTransientScratchBuffers() {
 	if w == nil {
 		return
 	}
-	w.scratch = trimTransientWriterScratch(w.scratch)
-	w.rawScratch = trimTransientWriterScratch(w.rawScratch)
-	w.encScratch = trimTransientWriterScratch(w.encScratch)
-	w.blockScratch = trimTransientWriterScratch(w.blockScratch)
+	w.setWriterByteBacking(1, &w.scratch, trimTransientWriterScratch(w.scratch))
+	w.setWriterByteBacking(2, &w.rawScratch, trimTransientWriterScratch(w.rawScratch))
+	w.setWriterByteBacking(3, &w.encScratch, trimTransientWriterScratch(w.encScratch))
+	w.setWriterByteBacking(4, &w.blockScratch, trimTransientWriterScratch(w.blockScratch))
 	w.encLimiter.buf = nil
 	w.encLimiter.limit = 0
 }
@@ -358,10 +364,10 @@ func (w *Writer) releaseTransientScratchBuffers() {
 	if w == nil {
 		return
 	}
-	w.scratch = nil
-	w.rawScratch = nil
-	w.encScratch = nil
-	w.blockScratch = nil
+	w.setWriterByteBacking(1, &w.scratch, nil)
+	w.setWriterByteBacking(2, &w.rawScratch, nil)
+	w.setWriterByteBacking(3, &w.encScratch, nil)
+	w.setWriterByteBacking(4, &w.blockScratch, nil)
 	w.encLimiter.buf = nil
 	w.encLimiter.limit = 0
 }
@@ -413,7 +419,7 @@ func (w *Writer) releaseAppendBuf() {
 		return
 	}
 	putWriterAppendBuf(w.appendBuf)
-	w.appendBuf = nil
+	w.setWriterByteBacking(0, &w.appendBuf, nil)
 }
 
 func (w *Writer) releaseIdleAppendBuf() {
@@ -432,7 +438,7 @@ func (w *Writer) ensureAppendBufCap(capacity int) {
 	next = next[:len(w.appendBuf)]
 	copy(next, w.appendBuf)
 	putWriterAppendBuf(old)
-	w.appendBuf = next
+	w.setWriterByteBacking(0, &w.appendBuf, next)
 }
 
 func (w *Writer) writeBytes(buf []byte) error {
@@ -478,7 +484,7 @@ func (w *Writer) writeBytes(buf []byte) error {
 	if cap(w.appendBuf) < max {
 		w.ensureAppendBufCap(max)
 	}
-	w.appendBuf = append(w.appendBuf, buf...)
+	w.setWriterByteBacking(0, &w.appendBuf, append(w.appendBuf, buf...))
 	if len(w.appendBuf) >= max {
 		return w.flushAppendBuf()
 	}
@@ -518,13 +524,13 @@ func (w *Writer) writeBytesBuffered(buf []byte) error {
 			w.ensureAppendBufCap(max)
 		}
 		if len(buf) <= avail {
-			w.appendBuf = append(w.appendBuf, buf...)
+			w.setWriterByteBacking(0, &w.appendBuf, append(w.appendBuf, buf...))
 			if len(w.appendBuf) >= max {
 				return w.flushAppendBuf()
 			}
 			return nil
 		}
-		w.appendBuf = append(w.appendBuf, buf[:avail]...)
+		w.setWriterByteBacking(0, &w.appendBuf, append(w.appendBuf, buf[:avail]...))
 		buf = buf[avail:]
 		if err := w.flushAppendBuf(); err != nil {
 			return err
@@ -719,6 +725,7 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 		}
 		return nil, errors.Join(err, w.releaseStableResourceObservation())
 	}
+	w.releaseStableSegmentOwner()
 	w.f = f
 	// File-backed writers use direct writes and append buffers; bufio is only
 	// needed for sink-backed writers (tests/benchmarks).
@@ -728,11 +735,16 @@ func newFileWriter(path string, fileID uint32, syncDirectory bool, syncFn func(*
 	w.appendMax = defaultBufferSize
 	w.rawWritevMinAvgBytes = defaultRawWritevMinAvgBytes
 	w.rawWritevMinBatchRecs = defaultRawWritevMinBatchRecords
-	w.prefixBuf = make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4))
+	w.setWriterByteBacking(5, &w.prefixBuf, make([]byte, 0, FrameHeaderSize+(MaxFrameK*8)+((MaxFrameK+1)*4)))
 	w.dictFrameEncodeLevel = zstd.SpeedFastest
 	w.blockCodec = BlockCodecSnappy
 	w.clock = RealClock{}
 	w.keepSafetyMargin = DefaultKeepSafetyMargin
+	w.recordWriterBackingBirth(7, uint64(unsafe.Sizeof(Writer{})), true)
+	w.backingAllocations[7].base = unsafe.Pointer(w)
+	if finiteBacking != nil {
+		finiteBacking.finishConstructor(w)
+	}
 	return w, nil
 }
 
@@ -1087,6 +1099,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		oldStableParent := w.stableParent
 		oldCreationProof := w.creationProof
 		oldObserveErr := w.releaseStableResourceObservation()
+		w.releaseStableSegmentOwner()
 		w.f = f
 		w.stableParent = stableParent
 		w.stableParentErr = stableParentErr
@@ -1098,7 +1111,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 		w.size = info.Size()
 		w.fileID = fileID
 		w.appendMax = defaultBufferSize
-		w.appendBuf = w.appendBuf[:0]
+		w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:0])
 		w.trimTransientScratchBuffers()
 		if newObserved {
 			w.stableResourceIdentity = newIdentity
@@ -1187,6 +1200,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 			return err
 		}
 	}
+	w.releaseStableSegmentOwner()
 	w.f = f
 	w.stableParent = stableParent
 	w.stableParentErr = stableParentErr
@@ -1198,7 +1212,7 @@ func (w *Writer) RotateToWithSync(path string, fileID uint32, syncCurrent bool) 
 	w.bw = nil
 	w.size = info.Size()
 	w.fileID = fileID
-	w.appendBuf = w.appendBuf[:0]
+	w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:0])
 	closeErr := w.closeRotatedResource(old)
 	observeErr := w.releaseStableResourceObservation()
 	if newObserved {
@@ -1304,7 +1318,7 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 				w.ensureAppendBufCap(max)
 			}
 			base := len(w.appendBuf)
-			w.appendBuf = w.appendBuf[:base+recordLen]
+			w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:base+recordLen])
 			buf := w.appendBuf[base : base+recordLen]
 
 			buf[4] = Version
@@ -1351,7 +1365,7 @@ func (w *Writer) Append(dictID uint64, dict []byte, rid uint64, value []byte) (p
 		}
 
 		if cap(w.scratch) < recordLen {
-			w.scratch = make([]byte, recordLen)
+			w.setWriterByteBacking(1, &w.scratch, make([]byte, recordLen))
 		}
 		buf := w.scratch[:recordLen]
 
@@ -1511,7 +1525,7 @@ func (w *Writer) AppendEncodedFrameOne(body []byte) (page.ValuePtr, error) {
 	recordLen := HeaderSize + len(body)
 	start := w.size
 	if cap(w.scratch) < recordLen {
-		w.scratch = make([]byte, recordLen)
+		w.setWriterByteBacking(1, &w.scratch, make([]byte, recordLen))
 	}
 	buf := w.scratch[:recordLen]
 
@@ -1587,7 +1601,7 @@ func (w *Writer) AppendEncodedFrameInto(body []byte, k int, dst []page.ValuePtr)
 	recordLen := HeaderSize + len(body)
 	start := w.size
 	if cap(w.scratch) < recordLen {
-		w.scratch = make([]byte, recordLen)
+		w.setWriterByteBacking(1, &w.scratch, make([]byte, recordLen))
 	}
 	buf := w.scratch[:recordLen]
 
@@ -1662,7 +1676,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		recordLen := HeaderSize + int(bodyLen)
 		start := w.size
 		if cap(w.scratch) < recordLen {
-			w.scratch = make([]byte, recordLen)
+			w.setWriterByteBacking(1, &w.scratch, make([]byte, recordLen))
 		}
 		buf := w.scratch[:recordLen]
 
@@ -1779,7 +1793,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				w.ensureAppendBufCap(max)
 			}
 			base := len(w.appendBuf)
-			w.appendBuf = w.appendBuf[:base+totalLen]
+			w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:base+totalLen])
 			frame := w.appendBuf[base : base+totalLen]
 
 			frame[4] = Version
@@ -1826,7 +1840,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 		} else {
 			if cap(w.prefixBuf) < prefixLen {
-				w.prefixBuf = make([]byte, 0, prefixLen)
+				w.setWriterByteBacking(5, &w.prefixBuf, make([]byte, 0, prefixLen))
 			}
 			prefix := w.prefixBuf[:prefixLen]
 			prefixOff := 0
@@ -1862,7 +1876,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			var frame []byte
 			if totalLen <= maxKeepScratch {
 				if cap(w.rawScratch) < totalLen {
-					w.rawScratch = make([]byte, totalLen)
+					w.setWriterByteBacking(2, &w.rawScratch, make([]byte, totalLen))
 				}
 				frame = w.rawScratch[:totalLen]
 			} else {
@@ -2023,7 +2037,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			recordStart := len(w.appendBuf)
 			headerEnd := recordStart + HeaderSize
 			encodedStart := headerEnd + prefixLen
-			w.appendBuf = w.appendBuf[:encodedStart]
+			w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:encodedStart])
 			header := w.appendBuf[recordStart:headerEnd]
 			prefix := w.appendBuf[headerEnd:encodedStart]
 
@@ -2039,7 +2053,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			for i := 0; i < k; i++ {
 				rid := records[i].RID
 				if rid == 0 {
-					w.appendBuf = w.appendBuf[:recordStart]
+					w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:recordStart])
 					return nil, FrameStats{}, errors.New("valuelog: missing rid")
 				}
 				binary.LittleEndian.PutUint64(prefix[prefixOff:prefixOff+8], rid)
@@ -2059,7 +2073,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				// For small/medium grouped frames, EncodeAll on a contiguous payload
 				// is typically faster than streaming many small writes.
 				if cap(w.rawScratch) < rawPayloadBytes {
-					w.rawScratch = make([]byte, rawPayloadBytes)
+					w.setWriterByteBacking(2, &w.rawScratch, make([]byte, rawPayloadBytes))
 				}
 				payload = w.rawScratch[:rawPayloadBytes]
 				off := 0
@@ -2073,9 +2087,9 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			}
 			encodeStart := w.sampleEncodeStart()
 			if useNoCopyParts {
-				w.appendBuf = enc.EncodeAllParts(parts[:k], w.appendBuf)
+				w.setWriterByteBacking(0, &w.appendBuf, enc.EncodeAllParts(parts[:k], w.appendBuf))
 			} else {
-				w.appendBuf = enc.EncodeAll(payload, w.appendBuf)
+				w.setWriterByteBacking(0, &w.appendBuf, enc.EncodeAll(payload, w.appendBuf))
 			}
 			encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
 
@@ -2085,7 +2099,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				keepCompressed = true
 			}
 			if !keepCompressed {
-				w.appendBuf = w.appendBuf[:recordStart]
+				w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:recordStart])
 				if w.noBenefit < 0xff {
 					w.noBenefit++
 				}
@@ -2095,15 +2109,15 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 
 			bodyLen := prefixLen + encodedLen
 			if limits.MaxRecordSize > 0 && int64(HeaderSize+bodyLen) > limits.MaxRecordSize {
-				w.appendBuf = w.appendBuf[:recordStart]
+				w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:recordStart])
 				return nil, FrameStats{}, ErrRecordTooLarge
 			}
 			if bodyLen > int(^uint32(0)) {
-				w.appendBuf = w.appendBuf[:recordStart]
+				w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:recordStart])
 				return nil, FrameStats{}, ErrRecordTooLarge
 			}
 			if recordSizeExceedsMax(uint32(bodyLen)) {
-				w.appendBuf = w.appendBuf[:recordStart]
+				w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:recordStart])
 				return nil, FrameStats{}, ErrRecordTooLarge
 			}
 
@@ -2153,7 +2167,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		}
 
 		if cap(w.encScratch) < rawPayloadBytes {
-			w.encScratch = make([]byte, 0, rawPayloadBytes)
+			w.setWriterByteBacking(3, &w.encScratch, make([]byte, 0, rawPayloadBytes))
 		}
 		encDst := w.encScratch[:0]
 
@@ -2176,7 +2190,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 				encoded = enc.EncodeAllParts(parts[:k], encDst)
 			} else {
 				if cap(w.rawScratch) < rawPayloadBytes {
-					w.rawScratch = make([]byte, rawPayloadBytes)
+					w.setWriterByteBacking(2, &w.rawScratch, make([]byte, rawPayloadBytes))
 				}
 				payload := w.rawScratch[:rawPayloadBytes]
 				off := 0
@@ -2201,7 +2215,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 			encoded = w.encLimiter.buf
 		}
 		encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
-		w.encScratch = w.encScratch[:0]
+		w.setWriterByteBacking(3, &w.encScratch, w.encScratch[:0])
 
 		keepCompressed := false
 		if encodeErr == nil {
@@ -2245,7 +2259,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 		binary.LittleEndian.PutUint32(header[16:20], uint32(bodyLen))
 
 		if cap(w.prefixBuf) < prefixLen {
-			w.prefixBuf = make([]byte, 0, prefixLen)
+			w.setWriterByteBacking(5, &w.prefixBuf, make([]byte, 0, prefixLen))
 		}
 		prefix := w.prefixBuf[:prefixLen]
 		prefixOff := 0
@@ -2321,7 +2335,7 @@ func (w *Writer) AppendFrameWithStatsInto(dictID uint64, dict []byte, records []
 	recordLen := HeaderSize + len(body)
 	start := w.size
 	if cap(w.scratch) < recordLen {
-		w.scratch = make([]byte, recordLen)
+		w.setWriterByteBacking(1, &w.scratch, make([]byte, recordLen))
 	}
 	buf := w.scratch[:recordLen]
 
@@ -2441,7 +2455,7 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 	payload := records[0].Value
 	if k > 1 && !useNoCopyParts {
 		if cap(w.rawScratch) < rawPayloadBytes {
-			w.rawScratch = make([]byte, rawPayloadBytes)
+			w.setWriterByteBacking(2, &w.rawScratch, make([]byte, rawPayloadBytes))
 		}
 		payload = w.rawScratch[:rawPayloadBytes]
 		off := 0
@@ -2465,9 +2479,9 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 			encodedStart := HeaderSize + prefixLen
 			maxRecordLen := encodedStart + enc.MaxEncodedSize(rawPayloadBytes)
 			if cap(w.scratch) < maxRecordLen {
-				w.scratch = make([]byte, encodedStart, maxRecordLen)
+				w.setWriterByteBacking(1, &w.scratch, make([]byte, encodedStart, maxRecordLen))
 			} else {
-				w.scratch = w.scratch[:encodedStart]
+				w.setWriterByteBacking(1, &w.scratch, w.scratch[:encodedStart])
 			}
 			w.encLimiter.buf = w.scratch
 			w.encLimiter.limit = encodedStart + rawPayloadBytes - 1
@@ -2489,11 +2503,16 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 			}
 		}
 	} else {
+		oldCompressor := w.blockCodecScratch.lz4Compressor
 		encoded, encodeErr = encodeBlockPayloadWithScratch(w.blockCodec, payload, w.blockScratch[:0], &w.blockCodecScratch)
+		if oldCompressor == nil && w.blockCodecScratch.lz4Compressor != nil {
+			w.recordWriterBackingBirth(6, uint64(unsafe.Sizeof(*w.blockCodecScratch.lz4Compressor)), false)
+			w.backingAllocations[6].base = unsafe.Pointer(w.blockCodecScratch.lz4Compressor)
+		}
 	}
 	encodeNs := w.sampleEncodeEnd(encodeStart, rawPayloadBytes, k)
 	if encoded != nil && !useNoCopyParts {
-		w.blockScratch = encoded[:0]
+		w.setWriterByteBacking(4, &w.blockScratch, encoded[:0])
 	}
 	keepCompressed := false
 	if encodeErr == nil {
@@ -2532,10 +2551,10 @@ func (w *Writer) appendBlockFrameWithStats(records []Record, rawPayloadBytes int
 	var buf []byte
 	if encodedFrame != nil {
 		buf = encodedFrame
-		w.scratch = encodedFrame
+		w.setWriterByteBacking(1, &w.scratch, encodedFrame)
 	} else {
 		if cap(w.scratch) < recordLen {
-			w.scratch = make([]byte, recordLen)
+			w.setWriterByteBacking(1, &w.scratch, make([]byte, recordLen))
 		}
 		buf = w.scratch[:recordLen]
 	}
@@ -2642,7 +2661,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 			w.ensureAppendBufCap(max)
 		}
 		base := len(w.appendBuf)
-		w.appendBuf = w.appendBuf[:base+totalLen]
+		w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:base+totalLen])
 		frame := w.appendBuf[base : base+totalLen]
 
 		frame[4] = Version
@@ -2688,7 +2707,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 		}
 	} else {
 		if cap(w.prefixBuf) < prefixLen {
-			w.prefixBuf = make([]byte, 0, prefixLen)
+			w.setWriterByteBacking(5, &w.prefixBuf, make([]byte, 0, prefixLen))
 		}
 		prefix := w.prefixBuf[:prefixLen]
 		prefixOff := 0
@@ -2724,7 +2743,7 @@ func (w *Writer) appendRawFrameWithDictID(dictID uint64, records []Record, offse
 		var frame []byte
 		if totalLen <= maxKeepScratch {
 			if cap(w.rawScratch) < totalLen {
-				w.rawScratch = make([]byte, totalLen)
+				w.setWriterByteBacking(2, &w.rawScratch, make([]byte, totalLen))
 			}
 			frame = w.rawScratch[:totalLen]
 		} else {
@@ -2797,6 +2816,7 @@ func (w *Writer) Close() (retErr error) {
 		return nil
 	}
 	defer func() { retErr = errors.Join(retErr, w.releaseStableResourceObservation()) }()
+	defer w.releaseStableSegmentOwner()
 	defer w.releaseDictEncoder()
 	defer w.releaseAppendBuf()
 	defer w.releaseTransientScratchBuffers()
@@ -2817,6 +2837,10 @@ func (w *Writer) Close() (retErr error) {
 			closeErrs = append(closeErrs, w.stableResourcePins.Unobserve(pending.stableIdentity))
 			pending.stableObserved = false
 		}
+		// The pending wrapper owns its metadata debit independently of the
+		// creation proof. Release only after proof/file/observation cleanup;
+		// installed proofs retain their own owner through their later Release.
+		pending.releaseFiniteMetadata()
 		w.pendingStableSuccessor = nil
 	}
 	if w.f != nil {

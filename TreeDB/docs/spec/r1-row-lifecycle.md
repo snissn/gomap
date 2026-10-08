@@ -404,3 +404,28 @@ GOMEMLIMIT=off and empty GOFLAGS; unset runtime values receive those defaults,
 and conflicting caller values are rejected. Effective caller/subprocess values
 and actual benchmark concurrency are cross-checked. v1 packets retain their
 original raw/source identity and do not qualify this v3 supported-profile schedule.
+
+## Pager-owned manifest lifecycle
+
+The pre-alpha `OwnedLeafManifests` option selects a new database layout with
+`IndexOuterLeavesInValueLog`. Canonical leaf-generation inventories become
+immutable intrinsic entries of the existing system-root COW tree; actual leaf
+and value-log files remain persistent external dependencies. See the
+[pager-owned format and finite bounds](../design/owned-leaf-manifest-v1.md).
+The option defaults to false. Rebuild a fresh directory to select the layout;
+there is no in-place activation or feature-removal path.
+
+Normal durable acknowledgments reuse an unchanged intrinsic object. Explicit
+inventory checkpoints force revisions and therefore retain real publication,
+canonical encoding, allocator and durable-slot costs. Held views keep their
+old intrinsic roots and external pointers readable. Bounded allocator steps
+revalidate fresh root/index/physical/pin authority before promoting retired
+pages; cursor progress alone never authorizes reclamation.
+
+Report internal retired/free/promoted pages, actual reused roots and index
+high-water separately from physical manifest-file unlink and vacuum shrink.
+Drained equal-work groups and held-512 guards establish their stated finite
+fixtures; they do not establish an unlimited storage plateau. The architecture
+qualification in #5090/#5095 includes complete publication and foreground costs,
+matched noise limits, rollover/pin-drain, recovery and exact-source evidence.
+Historical standalone R1 acceptance above does not certify this new layout.

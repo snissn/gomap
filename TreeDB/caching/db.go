@@ -17623,9 +17623,30 @@ func (db *DB) appendValueLog(l *lane, dictID uint64, dict []byte, records []valu
 	return ptrs, err
 }
 
-func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
-	capture := newStableOuterLeafCapture(db, l)
-	ptrs, resources, err := db.appendValueLogInternal(l, dictID, dict, records, durability, capture)
+func (db *DB) appendValueLogWithStableResources(l *lane, dictID uint64, dict []byte, records []valuelog.Record, durability journalDurability, finite ...*PreparedFiniteLeafWorkspace) ([]page.ValuePtr, *rootpublication.StableResourceSet, error) {
+	if len(finite) > 1 {
+		return nil, nil, errPreparedFiniteLeafWorkspace
+	}
+	var owner *PreparedFiniteLeafWorkspace
+	if len(finite) == 1 {
+		owner = finite[0]
+	}
+	var capture *stableOuterLeafCapture
+	if owner == nil {
+		capture = newStableOuterLeafCapture(db, l)
+	} else {
+		// Refuse the missing stable metadata hooks before generic capture
+		// construction or RID/physical side effects. No ordinary fallback.
+		if err := owner.requireStableHooks(len(records)); err != nil {
+			return nil, nil, err
+		}
+		var err error
+		capture, err = newFiniteStableOuterLeafCapture(db, l, owner, len(records))
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	ptrs, resources, err := db.appendValueLogInternalObserved(l, dictID, dict, records, durability, capture, nil, owner)
 	if err != nil {
 		capture.abandon()
 	}
@@ -17650,11 +17671,24 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		workspace = finite[0]
 	}
 	var ownedPtrs []page.ValuePtr
+	if capture != nil && capture.finite != nil && capture.finite != workspace {
+		return nil, nil, errPreparedFiniteLeafWorkspace
+	}
 	if workspace != nil {
-		// Stable capture and producer observers still need a separately reviewed
-		// bounded token/registry owner; do not fall back to their generic allocation.
-		if capture != nil || observer != nil {
+		if workspace.stableCollector != nil {
+			if err := workspace.requireStableHooks(len(records)); err != nil {
+				return nil, nil, err
+			}
+		}
+		// Observers have no finite ownership seam. Stable captures must belong
+		// to this exact finite owner and pass internal metadata hooks first.
+		if observer != nil {
 			return nil, nil, errPreparedFiniteLeafWorkspace
+		}
+		if capture != nil {
+			if err := capture.requireFiniteHooks(workspace); err != nil {
+				return nil, nil, err
+			}
 		}
 		if err := workspace.validateSelectorInputs(db, l, dictID, dict, len(records)); err != nil {
 			return nil, nil, err
@@ -18034,7 +18068,7 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 		// Relaxed ordinary rotation intentionally defers its one namespace sync.
 		// Pay that debt before max-segment rotation or any append can mutate the
 		// newly-created segment.
-		if err := stableWriter.CertifyStableCreationNamespace(); err != nil {
+		if err := capture.certifyCurrent(stableWriter); err != nil {
 			workspace.endLane(l)
 			l.vlogMu.Unlock()
 			return nil, nil, err
@@ -18533,6 +18567,14 @@ func (db *DB) appendValueLogInternalObserved(l *lane, dictID uint64, dict []byte
 			err = encodeErr
 		} else {
 			err = capture.captureCurrent(w, l.vlogPath, fileID)
+		}
+	}
+	if err == nil && workspace != nil && workspace.stableCollector != nil {
+		fileID, encodeErr := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if encodeErr != nil {
+			err = encodeErr
+		} else {
+			err = workspace.recordStableFrontier(w, fileID, l.vlogPath, syncedBoundary)
 		}
 	}
 	if db.testBeforeVlogUnlock != nil {
@@ -28911,6 +28953,16 @@ func (db *DB) rotateValueLogMuHeld(l *lane) error {
 }
 
 func (db *DB) rotateValueLogMuHeldCapture(l *lane, capture *stableOuterLeafCapture) error {
+	if l != nil && l.finiteWorkspace != nil && l.finiteWorkspace.stableCollector != nil && l.vlog != nil {
+		id, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+		if err != nil {
+			return err
+		}
+		if err = l.finiteWorkspace.recordStableFrontier(l.vlog, id, l.vlogPath, false); err != nil {
+			return err
+		}
+	}
+
 	if db.isLeafLogAppendLane(l) {
 		nextSeq, err := db.nextLeafLogAppendSeq()
 		if err != nil {
@@ -28948,6 +29000,20 @@ func (db *DB) rotateValueLogMuHeldToSeq(l *lane, nextSeq int) error {
 func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *stableOuterLeafCapture) error {
 	if l == nil {
 		return errWALUnavailable
+	}
+	if l.finiteWorkspace != nil && l.finiteWorkspace.stableCollector != nil {
+		if err := l.finiteWorkspace.requireStableHooks(1); err != nil {
+			return err
+		}
+		if l.vlog != nil && nextSeq > l.vlogSeq {
+			id, err := valuelog.EncodeFileID(uint32(l.id), uint32(l.vlogSeq))
+			if err != nil {
+				return err
+			}
+			if err = l.finiteWorkspace.recordStableFrontier(l.vlog, id, l.vlogPath, false); err != nil {
+				return err
+			}
+		}
 	}
 	if db.isLeafLogAppendLane(l) {
 		db.advanceLeafLogAppendSeqAtLeast(nextSeq)
@@ -29006,7 +29072,7 @@ func (db *DB) rotateValueLogMuHeldToSeqCapture(l *lane, nextSeq int, capture *st
 			if registrationErr != nil {
 				return registrationErr
 			}
-			rotation, stableErr := stableWriter.RotateToWithStableResources(path, fileID, !db.relaxedSync, closed, active)
+			rotation, stableErr := capture.rotate(stableWriter, path, fileID, !db.relaxedSync, closed, active)
 			if stableErr == nil {
 				stableInstalled = true
 				stableErr = capture.addRotation(rotation)

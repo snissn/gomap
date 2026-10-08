@@ -24,16 +24,16 @@ func (id RegisteredResourceID) Value() string { return id.value }
 type StableCompositeRegistrar struct {
 	mu       sync.Mutex
 	builder  *StableResourceSetBuilder
-	required map[ReachabilityField]struct{}
+	required stableReachabilitySet
 	pending  map[ReachabilityField]string
 	closed   bool
 }
 
 func NewStableCompositeRegistrar(required ...ReachabilityField) *StableCompositeRegistrar {
-	requiredSet := make(map[ReachabilityField]struct{}, len(required))
+	requiredSet := newStableReachabilitySet(len(required))
 	for _, field := range required {
 		if field != "" {
-			requiredSet[field] = struct{}{}
+			requiredSet.set(field, struct{}{})
 		}
 	}
 	return &StableCompositeRegistrar{
@@ -47,6 +47,9 @@ func NewStableCompositeRegistrar(required ...ReachabilityField) *StableComposite
 // covers field and can be merged without conflicts. Recording the ID is the
 // final step, so a failed merge can never leave a publication-ready ID behind.
 func (registrar *StableCompositeRegistrar) RegisterChild(field ReachabilityField, id string, child *StableResourceSet) error {
+	if err := child.RequireMetadataExport(); err != nil {
+		return err
+	}
 	if registrar == nil || child == nil || field == "" || id == "" {
 		return ErrResourceOwnership
 	}
@@ -86,13 +89,16 @@ func (registrar *StableCompositeRegistrar) RegisterChild(field ReachabilityField
 func stableChildIDForField(child *StableResourceSet, field ReachabilityField) (string, error) {
 	child.mu.Lock()
 	defer child.mu.Unlock()
+	if err := requireOrdinaryStableResourceInputs(nil, nil, child); err != nil {
+		return "", err
+	}
 	if ResourceOwnerState(child.owner.Load()) != ResourceOwnerBuilder {
 		return "", ErrResourceOwnership
 	}
 	var id string
 	var bindErr error
 	child.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
-		if _, covered := entry.reachability[field]; !covered {
+		if _, covered := entry.reachability.lookup(field); !covered {
 			return true
 		}
 		if id == "" {
@@ -126,7 +132,8 @@ func (registrar *StableCompositeRegistrar) Freeze() (*StableResourceSet, []Regis
 	if registrar.closed {
 		return nil, nil, ErrResourceOwnership
 	}
-	for field := range registrar.required {
+	for _, stableBinding1 := range registrar.required.records() {
+		field := stableBinding1.key
 		if _, ok := registrar.pending[field]; !ok {
 			return nil, nil, fmt.Errorf("%w: missing registered child ID for %q", ErrUnresolvedResource, field)
 		}

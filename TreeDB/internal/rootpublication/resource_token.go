@@ -8,13 +8,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/residentcredit"
 	"github.com/snissn/gomap/TreeDB/internal/stableio"
+	"github.com/snissn/gomap/TreeDB/pager"
 )
 
 var (
@@ -254,24 +259,27 @@ func normalizeStableLogicalObligations(obligations []StableLogicalObligation, re
 		return []StableLogicalObligation{obligations[0]}, nil
 	}
 	if len(obligations) > stableLogicalObligationLinearLimit {
-		byKey := make(map[stableLogicalObligationIndex]StableLogicalObligation, len(obligations))
+		// This is the same deterministically stamped mutable table used by the
+		// registry and builder. Input strings remain owned by the token constructor;
+		// scratch nodes own no additional keys and never escape normalization.
+		byKey := newStableTable[stableLogicalObligationIndex, StableLogicalObligation](stableLogicalObligationIndexLess)
 		for _, obligation := range obligations {
 			if err := validateStableLogicalObligation(obligation, reachability); err != nil {
 				return nil, err
 			}
 			key := stableLogicalObligationKey(obligation)
-			if existing, ok := byKey[key]; ok && existing != obligation {
-				return nil, fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+			if existing, ok := byKey.lookup(key); ok {
+				if existing != obligation {
+					return nil, fmt.Errorf("%w: logical obligation %+v has conflicting immutable checksum or digest", ErrResourceConflict, key)
+				}
+				continue
 			}
-			byKey[key] = obligation
+			byKey.set(key, obligation)
 		}
-		normalized := make([]StableLogicalObligation, 0, len(byKey))
-		for _, obligation := range byKey {
-			normalized = append(normalized, obligation)
-		}
-		sort.Slice(normalized, func(i, j int) bool {
-			return stableLogicalObligationLess(normalized[i], normalized[j])
-		})
+		// Full input capacity is intentional: the prepaid constructor plan covers
+		// exactly this array even when duplicate inputs reduce logical length.
+		normalized := make([]StableLogicalObligation, 0, len(obligations))
+		appendNormalizedStableLogicalObligations(byKey.root, &normalized)
 		return normalized[:len(normalized):len(normalized)], nil
 	}
 	normalized := make([]StableLogicalObligation, 0, len(obligations))
@@ -292,13 +300,28 @@ func normalizeStableLogicalObligations(obligations []StableLogicalObligation, re
 			break
 		}
 		if !duplicate {
+			// Ordered insertion needs no reflective sort/control allocation.
+			position := len(normalized)
 			normalized = append(normalized, obligation)
+			for position > 0 && stableLogicalObligationLess(obligation, normalized[position-1]) {
+				normalized[position] = normalized[position-1]
+				position--
+			}
+			normalized[position] = obligation
 		}
 	}
-	sort.Slice(normalized, func(i, j int) bool {
-		return stableLogicalObligationLess(normalized[i], normalized[j])
-	})
 	return normalized[:len(normalized):len(normalized)], nil
+}
+
+// In-order traversal writes only the already prepaid output capacity. There is
+// no closure, iterator object, stack slice or second normalization engine.
+func appendNormalizedStableLogicalObligations(node *stableTableNode[stableLogicalObligationIndex, StableLogicalObligation], result *[]StableLogicalObligation) {
+	if node == nil {
+		return
+	}
+	appendNormalizedStableLogicalObligations(node.left, result)
+	*result = append(*result, node.value)
+	appendNormalizedStableLogicalObligations(node.right, result)
 }
 
 func cloneStableLogicalObligations(obligations []StableLogicalObligation) []StableLogicalObligation {
@@ -389,19 +412,108 @@ const (
 
 type resourceOperation func(*os.File, DurableFrontier) error
 
+// StableIndexOperationProvider is concrete named Pager backing. Its reference
+// methods invoke no callbacks; no arbitrary interface implementation can run
+// under a builder/child gate during shared-provider clone rollback.
+// It grants no platform/backing/finite certificate.
+type StableIndexOperationProvider struct {
+	mu      sync.Mutex
+	refs    uint64
+	pager   *pager.Pager
+	creator *residentcredit.Scope
+}
+
+func NewStableIndexOperationProvider(p *pager.Pager, creator *residentcredit.Scope) (*StableIndexOperationProvider, error) {
+	if p == nil || creator == nil {
+		return nil, ErrResourceOwnership
+	}
+	if err := creator.RetainOriginalLifetime(); err != nil {
+		return nil, err
+	}
+	n, err := StableBackingClassBytes(uint64(unsafe.Sizeof(StableIndexOperationProvider{})), true)
+	if err == nil {
+		err = creator.ReserveOriginalLifetime(n)
+	}
+	if err != nil {
+		creator.ReleaseStableMetadata()
+		return nil, err
+	}
+	return &StableIndexOperationProvider{refs: 1, pager: p, creator: creator}, nil
+}
+func (p *StableIndexOperationProvider) RetainStableResourceProvider() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.refs == 0 || p.refs == ^uint64(0) || p.pager == nil {
+		return ErrResourceOwnership
+	}
+	p.refs++
+	return nil
+}
+func (p *StableIndexOperationProvider) ReleaseStableResourceProvider() {
+	p.mu.Lock()
+	if p.refs == 0 {
+		p.mu.Unlock()
+		panic("stable index provider reference imbalance")
+	}
+	p.refs--
+	var creator *residentcredit.Scope
+	if p.refs == 0 {
+		p.pager = nil
+		creator = p.creator
+		p.creator = nil
+	}
+	p.mu.Unlock()
+	if creator != nil {
+		creator.ReleaseStableMetadata()
+		creator = nil
+	}
+}
+func (p *StableIndexOperationProvider) FlushStableResource(*os.File, DurableFrontier) error {
+	if err := p.RetainStableResourceProvider(); err != nil {
+		return err
+	}
+	p.ReleaseStableResourceProvider()
+	return nil
+}
+func (p *StableIndexOperationProvider) SyncStableResource(file *os.File, _ DurableFrontier) error {
+	if err := p.RetainStableResourceProvider(); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	captured := p.pager
+	p.mu.Unlock()
+	defer func() { captured = nil; file = nil; p.ReleaseStableResourceProvider() }()
+	if captured == nil {
+		return ErrResourceOwnership
+	}
+	return captured.SyncIndexDataWithStableFile(file)
+}
+
+// StableResourceReleaseEnvironment is original-token-only release state.
+// Clones have independent registry release environments and never inherit it.
+type StableResourceReleaseEnvironment interface{ ReleaseStableResource() }
+
 // StableResourceSpec is consumed by NewStableResourceToken. File is duplicated
 // immediately; later operations never reopen DiagnosticPath.
 type StableResourceSpec struct {
-	Kind           ResourceKind
-	LogicalLane    string
-	ResourceID     string
-	Generation     uint64
-	DiagnosticPath string
-	File           *os.File
-	Frontier       DurableFrontier
-	Digest         [32]byte
-	Reachability   ReachabilityField
-	Namespace      *StableNamespaceToken
+	// MetadataAccount accounts backing without replacing producer validation.
+	MetadataAccount StableMetadataAccount
+	// CallbackCreator retains the exact existing ordinary constructor Scope.
+	// Provider and ReleaseEnvironment are named operational backing; none grant
+	// generic owned/transfer/finite certification, even after terminal scrub.
+	CallbackCreator    *residentcredit.Scope
+	CallbackProvider   *StableIndexOperationProvider
+	ReleaseEnvironment StableResourceReleaseEnvironment
+	Kind               ResourceKind
+	LogicalLane        string
+	ResourceID         string
+	Generation         uint64
+	DiagnosticPath     string
+	File               *os.File
+	Frontier           DurableFrontier
+	Digest             [32]byte
+	Reachability       ReachabilityField
+	Namespace          *StableNamespaceToken
 	// LogicalObligations retains immutable logical references that share this
 	// physical resource and must survive physical pin coalescing.
 	LogicalObligations []StableLogicalObligation
@@ -431,7 +543,207 @@ type resourceTokenMetrics struct {
 	registeredNanos       int64
 }
 
+// StableMetadataAccount is retained allocation accounting only. It grants no
+// resource, namespace or registry authority. Retain/Release balance actual
+// constructor owners, including a proof retained across a writer error/retry.
+type StableMetadataAccount interface {
+	ReserveStableMetadata(uint64) error
+	RetainStableMetadata() error
+	ReleaseStableMetadata()
+}
+
+var ErrStableMetadataShapeUnsupported = errors.New("rootpublication: finite metadata shape unsupported")
+
+// These layouts are derived from Go1.26.3 linux/amd64 os.file, poll.FD,
+// os.fileStat and runtime.specialfinalizer/finalizer. They account exposed
+// engine-owned heap objects. Shared runtime finalizer/poll allocator tranches
+// are separate process effects, not ownership of an os.File heap instance.
+// The latter and registry/set backing remain separate closed admission gates.
+type finiteLinuxPollFD struct {
+	state             uint64
+	rsema, wsema      uint32
+	sysfd             int
+	iovecs            unsafe.Pointer
+	pollctx           uintptr
+	csema, blocking   uint32
+	stream, eof, file bool
+}
+type finiteLinuxOSFile struct {
+	fd                                  finiteLinuxPollFD
+	name                                string
+	dir                                 unsafe.Pointer
+	nonblock, stdio, appendMode, inRoot bool
+}
+type finiteLinuxStat struct {
+	name    string
+	size    int64
+	mode    uint32
+	modTime time.Time
+	sys     [144]byte
+}
+
+func finiteStablePlatform() error {
+	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" || runtime.Version() != "go1.26.3" {
+		return ErrStableMetadataShapeUnsupported
+	}
+	return nil
+}
+func finiteStableHandleBytes(file *os.File) (uint64, error) {
+	if file == nil {
+		return 0, ErrStableMetadataShapeUnsupported
+	}
+	if err := finiteStablePlatform(); err != nil {
+		return 0, err
+	}
+	n, err := StableBackingClassBytes(uint64(unsafe.Sizeof(os.File{})), true)
+	if err != nil {
+		return 0, err
+	}
+	n, err = finiteStableClassAdd(n, uint64(unsafe.Sizeof(finiteLinuxOSFile{})), true)
+	if err != nil {
+		return 0, err
+	}
+	return finiteStableClassAdd(n, uint64(len(file.Name()))+uint64(len("#stable-pin")), false)
+}
+func finiteStableAdd(a, b uint64) (uint64, error) {
+	if b > ^uint64(0)-a {
+		return 0, ErrStableMetadataShapeUnsupported
+	}
+	return a + b, nil
+}
+func finiteStableCopy(value string) string {
+	if value == "" {
+		return ""
+	}
+	// Exact exposed byte backing, independent of a borrowed substring's source.
+	b := make([]byte, len(value))
+	copy(b, value)
+	return unsafe.String(unsafe.SliceData(b), len(b))
+}
+func finiteStableBegin(account StableMetadataAccount, n uint64) error {
+	if account == nil {
+		return nil
+	}
+	if err := finiteStablePlatform(); err != nil {
+		return err
+	}
+	if err := account.ReserveStableMetadata(n); err != nil {
+		return err
+	}
+	return account.RetainStableMetadata()
+}
+func finiteStableObligationBytes(obligations []StableLogicalObligation) (uint64, error) {
+	// Validate the whole logical input before any copied backing, table node,
+	// pin or account retain. Refusal is scalar and cannot export source aliases.
+	unique := uint64(0)
+	for i, o := range obligations {
+		if o.Class == "" || o.Kind == "" || o.Namespace == "" || o.Generation == 0 ||
+			o.FileID == 0 || o.Offset < 0 || o.Length <= 0 || o.Reachability == "" ||
+			o.Digest == [32]byte{} {
+			return 0, ErrUnresolvedResource
+		}
+		// The plan is allocation-free, including conflicting duplicates. The
+		// normalization table subsequently uses this same immutable key. Preserve
+		// the first declaration and reject its conflicting successor before debit,
+		// borrowed registry admission, copied backing, or any identity pin.
+		key := stableLogicalObligationKey(o)
+		duplicate := false
+		for j := 0; j < i; j++ {
+			if stableLogicalObligationKey(obligations[j]) != key {
+				continue
+			}
+			if obligations[j] != o {
+				return 0, ErrResourceConflict
+			}
+			duplicate = true
+			break
+		}
+		if !duplicate {
+			unique++
+		}
+	}
+	// The owned copy and normalization output are two distinct allocations.
+	// Each uses its actual full capacity/class; rounding their aggregate does not
+	// account either retained backing. Failed normalization keeps both births.
+	element := uint64(unsafe.Sizeof(StableLogicalObligation{}))
+	if uint64(len(obligations)) > ^uint64(0)/element {
+		return 0, ErrStableMetadataShapeUnsupported
+	}
+	class, err := StableBackingClassBytes(uint64(len(obligations))*element, true)
+	if err != nil || class > ^uint64(0)/2 {
+		return 0, ErrStableMetadataShapeUnsupported
+	}
+	n := class * 2
+	if len(obligations) > stableLogicalObligationLinearLimit {
+		// The allocation-free structural pass counted the exact distinct keys:
+		// one real AVL node per first declaration. Array capacities still equal
+		// the full input, including duplicates. The table control is conservatively
+		// prepaid too; failed staging never refunds cumulative attempted work.
+		node, err := StableBackingClassBytes(uint64(unsafe.Sizeof(stableTableNode[stableLogicalObligationIndex, StableLogicalObligation]{})), true)
+		if err != nil || unique > ^uint64(0)/node {
+			return 0, ErrStableMetadataShapeUnsupported
+		}
+		n, err = finiteStableAdd(n, unique*node)
+		if err != nil {
+			return 0, err
+		}
+		n, err = finiteStableClassAdd(n, uint64(unsafe.Sizeof(stableTable[stableLogicalObligationIndex, StableLogicalObligation]{})), true)
+		if err != nil {
+			return 0, err
+		}
+	}
+	for _, o := range obligations {
+		for _, v := range [...]string{string(o.Class), string(o.Kind), o.Namespace, string(o.Reachability)} {
+			var err error
+			n, err = finiteStableClassAdd(n, uint64(len(v)), false)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
+	return n, nil
+}
+func finiteStableOwnObligations(obligations []StableLogicalObligation) []StableLogicalObligation {
+	if len(obligations) == 0 {
+		return nil
+	}
+	out := make([]StableLogicalObligation, len(obligations))
+	copy(out, obligations)
+	for i := range out {
+		out[i].Class = finiteStableCopy(out[i].Class)
+		out[i].Kind = finiteStableCopy(out[i].Kind)
+		out[i].Namespace = finiteStableCopy(out[i].Namespace)
+		out[i].Reachability = ReachabilityField(finiteStableCopy(string(out[i].Reachability)))
+	}
+	return out
+}
+
 type StableResourceToken struct {
+	finiteMetadata   bool // generic refusal remains immutable after terminal scrub
+	backingCensus    BackingCensus
+	backingCertified bool
+	// wholeBackingOwned proves exact freshly owned physical provenance.
+	// Finite transfer additionally requires backingCertified and the full census.
+	// A clone census excludes shared backing and never gains this certificate
+	// merely because it becomes the last reference to the pinned handle.
+	wholeBackingOwned  bool
+	segmentOwner       *StableSegmentOwner
+	registryBorrower   *stableRegistryBorrower
+	segmentRetention   StableSegmentRetention
+	pinRegistry        *IdentityPinRegistry
+	transferPending    bool
+	metadataMu         sync.Mutex // universal short admission, never held over callbacks
+	activeOperations   uint64
+	releasePending     bool
+	cleanupRunning     bool
+	cleanupUncertain   bool
+	cleanupComplete    bool
+	callbackBacked     bool // immutable origin; scrubbing cannot certify a callback
+	callbackCreator    *residentcredit.Scope
+	callbackProvider   *StableIndexOperationProvider
+	releaseEnvironment StableResourceReleaseEnvironment
+	metadataAccount    StableMetadataAccount
+	metadataBacking    uint64
 	kind               ResourceKind
 	logicalLane        string
 	resourceID         string
@@ -467,7 +779,152 @@ func NewStableResourceToken(spec StableResourceSpec) (*StableResourceToken, erro
 // newStableResourceToken accepts an immutable normalized obligation view only
 // for exact-handle clones produced inside this package. Public producers always
 // pass nil and retain the full validation/copy boundary above.
+// NewStableResourceTokenWithMetadataAccount preserves the ordinary validation
+// and FD identity boundary, debiting all admitted constructor backing first.
+func NewStableResourceTokenWithMetadataAccount(spec StableResourceSpec, account StableMetadataAccount) (*StableResourceToken, error) {
+	if account == nil {
+		return nil, ErrStableMetadataShapeUnsupported
+	}
+	return newStableResourceTokenAccount(spec, nil, account)
+}
 func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalObligation) (*StableResourceToken, error) {
+	return newStableResourceTokenAccount(spec, normalized, spec.MetadataAccount)
+}
+func newStableResourceTokenAccount(spec StableResourceSpec, normalized []StableLogicalObligation, account StableMetadataAccount) (*StableResourceToken, error) {
+	var err error
+	account, err = inheritStableMetadataAccount(account, spec.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	if account != nil && (spec.CallbackCreator != nil || spec.CallbackProvider != nil || spec.ReleaseEnvironment != nil) {
+		return nil, ErrStableMetadataShapeUnsupported
+	}
+	callbackCreator := spec.CallbackCreator
+	callbackProvider := spec.CallbackProvider
+	if callbackProvider != nil {
+		callbackProvider.mu.Lock()
+		sameCreator := callbackCreator != nil && callbackProvider.creator == callbackCreator && callbackProvider.refs != 0
+		callbackProvider.mu.Unlock()
+		if !sameCreator {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+	}
+	var flush, syncThrough resourceOperation
+	var logicalObligations []StableLogicalObligation
+	var pinned *os.File
+	var pinnedRefs *atomic.Int64
+	var identityPin *IdentityPin
+	var stat os.FileInfo
+	callbackHeld, providerHeld := false, false
+	defer func() {
+		// Drop constructor aliases before the final local retention ends.
+		spec = StableResourceSpec{}
+		flush, syncThrough, logicalObligations = nil, nil, nil
+		pinned, pinnedRefs, identityPin, stat = nil, nil, nil, nil
+		if providerHeld {
+			callbackProvider.ReleaseStableResourceProvider()
+		}
+		callbackProvider = nil
+		if callbackHeld {
+			callbackCreator.ReleaseStableMetadata()
+		}
+		callbackCreator = nil
+	}()
+	if callbackCreator != nil {
+		if account != nil {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+		if err := retainStableCallbackCreator(callbackCreator, spec.File, false, spec.PinRegistry != nil); err != nil {
+			return nil, err
+		}
+		callbackHeld = true
+	}
+	if callbackProvider != nil {
+		if err := callbackProvider.RetainStableResourceProvider(); err != nil {
+			return nil, err
+		}
+		providerHeld = true
+	}
+	var metadataBacking uint64
+	retainedAccount := false
+	var registryBorrower *stableRegistryBorrower
+	if account != nil {
+		if spec.Frontier.exactRIDs != nil || spec.StableIdentityOverride.valid() || spec.FlushThrough != nil || spec.SyncThrough != nil || spec.OnRelease != nil || spec.CallbackCreator != nil || spec.CallbackProvider != nil || spec.ReleaseEnvironment != nil {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+		n, err := finiteStableHandleBytes(spec.File)
+		if err != nil {
+			return nil, err
+		}
+		for _, size := range [...]uint64{uint64(unsafe.Sizeof(StableResourceToken{})), uint64(unsafe.Sizeof(atomic.Int64{})), uint64(unsafe.Sizeof(IdentityPin{})), uint64(unsafe.Sizeof(finiteLinuxStat{})), uint64(unsafe.Sizeof(finiteLinuxStat{}))} {
+			n, err = finiteStableClassAdd(n, size, true)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range [...]string{string(spec.Kind), spec.LogicalLane, spec.ResourceID, spec.DiagnosticPath, string(spec.Reachability)} {
+			n, err = finiteStableClassAdd(n, uint64(len(v)), false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		obligations := spec.LogicalObligations
+		if normalized != nil {
+			obligations = normalized
+		}
+		b, err := finiteStableObligationBytes(obligations)
+		if err != nil {
+			return nil, err
+		}
+		n, err = finiteStableAdd(n, b)
+		if err != nil {
+			return nil, err
+		}
+		// filepath.Clean may create a full-length transient diagnostic path.
+		n, err = finiteStableClassAdd(n, uint64(len(spec.DiagnosticPath)), false)
+		if err != nil {
+			return nil, err
+		}
+		if spec.PinRegistry != nil {
+			registryBorrower, err = spec.PinRegistry.acquireBorrowerWithBacking(account, n, true)
+			if err != nil {
+				return nil, err
+			}
+		} else if err := finiteStableBegin(account, n); err != nil {
+			return nil, err
+		}
+		retainedAccount = true
+		metadataBacking = n
+		defer func() {
+			if retainedAccount {
+				registryBorrower.release()
+				account.ReleaseStableMetadata()
+			}
+		}()
+		spec.Kind = ResourceKind(finiteStableCopy(string(spec.Kind)))
+		spec.LogicalLane = finiteStableCopy(spec.LogicalLane)
+		spec.ResourceID = finiteStableCopy(spec.ResourceID)
+		spec.DiagnosticPath = finiteStableCopy(spec.DiagnosticPath)
+		spec.Reachability = ReachabilityField(finiteStableCopy(string(spec.Reachability)))
+		owned := finiteStableOwnObligations(obligations)
+		if normalized != nil {
+			normalized = owned
+		} else {
+			spec.LogicalObligations = owned
+		}
+	}
+
+	if account == nil && spec.Frontier.exactRIDs == nil && len(spec.LogicalObligations) == 0 && len(normalized) == 0 && spec.FlushThrough == nil && spec.SyncThrough == nil && spec.OnRelease == nil && spec.CallbackCreator == nil && spec.CallbackProvider == nil && spec.ReleaseEnvironment == nil && !spec.StableIdentityOverride.valid() {
+		spec.Kind = ResourceKind(finiteStableCopy(string(spec.Kind)))
+		spec.LogicalLane = finiteStableCopy(spec.LogicalLane)
+		spec.ResourceID = finiteStableCopy(spec.ResourceID)
+		spec.DiagnosticPath = finiteStableCopy(spec.DiagnosticPath)
+		spec.Reachability = ReachabilityField(finiteStableCopy(string(spec.Reachability)))
+	}
+
 	if spec.Kind == "" || spec.ResourceID == "" || spec.Generation == 0 || spec.Reachability == "" || spec.File == nil {
 		return nil, fmt.Errorf("%w: incomplete resource registration", ErrUnresolvedResource)
 	}
@@ -477,7 +934,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	if err := validateDurableFrontier(spec.Frontier); err != nil {
 		return nil, err
 	}
-	logicalObligations := normalized
+	logicalObligations = normalized
 	if logicalObligations == nil {
 		var err error
 		logicalObligations, err = normalizeStableLogicalObligations(spec.LogicalObligations, spec.Reachability)
@@ -492,18 +949,18 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		return nil, fmt.Errorf("%w: no stability policy for reachability field %q", ErrUnresolvedResource, spec.Reachability)
 	}
 	duplicate := duplicateStableFile
-	if spec.SyncThrough == nil {
+	if spec.SyncThrough == nil && spec.CallbackProvider == nil {
 		// The default Windows durability barrier needs a private write-capable
 		// reopen even when the producer retains only a read handle. A custom
 		// sync callback owns its handle contract, so preserve the source access
 		// rights (and support non-disk handles used by custom barriers).
 		duplicate = duplicateStableSyncFile
 	}
-	pinned, err := duplicate(spec.File)
+	pinned, err = duplicate(spec.File)
 	if err != nil {
 		return nil, fmt.Errorf("duplicate stable resource handle: %w", err)
 	}
-	pinnedRefs := &atomic.Int64{}
+	pinnedRefs = &atomic.Int64{}
 	pinnedRefs.Store(1)
 	closeOnError := true
 	defer func() {
@@ -511,7 +968,7 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 			_ = pinned.Close()
 		}
 	}()
-	stat, err := pinned.Stat()
+	stat, err = pinned.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("stat pinned resource: %w", err)
 	}
@@ -529,7 +986,6 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		return nil, fmt.Errorf("%w: identity generation %d differs from resource generation %d", ErrResourceConflict, identity.Generation, spec.Generation)
 	}
 	identity.Generation = spec.Generation
-	var identityPin *IdentityPin
 	if spec.PinRegistry != nil {
 		identityPin, err = spec.PinRegistry.Pin(identity)
 		if err != nil {
@@ -544,24 +1000,27 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 	if err := spec.Namespace.validateLinkedResource(identity); err != nil {
 		return nil, err
 	}
-	flush := spec.FlushThrough
+	flush = spec.FlushThrough
 	if flush == nil {
 		// Concrete producers drain userspace buffers before registration. The
 		// publication flush phase therefore has no additional file primitive;
 		// SyncThrough below owns the single default content fsync.
 		flush = func(*os.File, DurableFrontier) error { return nil }
 	}
-	syncThrough := spec.SyncThrough
+	syncThrough = spec.SyncThrough
 	if syncThrough == nil {
 		syncThrough = func(file *os.File, _ DurableFrontier) error { return stableio.SyncFile(file) }
 	}
 	token := &StableResourceToken{
+		finiteMetadata: account != nil, metadataAccount: account, metadataBacking: metadataBacking, pinRegistry: spec.PinRegistry, registryBorrower: registryBorrower,
 		kind: spec.Kind, logicalLane: spec.LogicalLane, resourceID: spec.ResourceID,
 		generation: spec.Generation, diagnosticPath: filepath.ToSlash(spec.DiagnosticPath),
 		identity: identity, frontier: cloneDurableFrontier(spec.Frontier), digest: spec.Digest,
 		reachability: spec.Reachability, logicalObligations: logicalObligations,
 		stability: stability, namespace: spec.Namespace, pinned: pinned, pinnedRefs: pinnedRefs,
 		flush: flush, sync: syncThrough, onRelease: spec.OnRelease, identityPin: identityPin,
+		callbackCreator: callbackCreator, callbackProvider: callbackProvider, releaseEnvironment: spec.ReleaseEnvironment,
+		callbackBacked: spec.FlushThrough != nil || spec.SyncThrough != nil || spec.OnRelease != nil || callbackCreator != nil || callbackProvider != nil || spec.ReleaseEnvironment != nil,
 	}
 	if spec.ContentSynced {
 		token.syncedFrontier = cloneDurableFrontier(spec.Frontier)
@@ -569,6 +1028,15 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		// ContentSynced is producer certification that the exact registered
 		// file frontier crossed a physical durability barrier before capture.
 		token.metrics.physicalFileSyncs.Store(1)
+	}
+	// Exact newly owned physical provenance is independent of the finite
+	// platform/class certificate. Ordinary producers use the same installed
+	// handle on every platform supported by stable I/O; finite borrowing and
+	// transfer still require the separate complete backing census.
+	token.wholeBackingOwned = token.frontier.exactRIDs == nil && len(token.logicalObligations) == 0 && spec.FlushThrough == nil && spec.SyncThrough == nil && spec.OnRelease == nil && spec.CallbackCreator == nil && spec.CallbackProvider == nil && spec.ReleaseEnvironment == nil && !spec.StableIdentityOverride.valid()
+	token.backingCertified = finiteStablePlatform() == nil && token.wholeBackingOwned
+	if token.backingCertified {
+		token.backingCensus = stableTokenRetainedCensus(token)
 	}
 	token.owner.Store(uint32(ResourceOwnerToken))
 	token.metrics.registeredNanos = time.Now().UnixNano()
@@ -578,16 +1046,147 @@ func newStableResourceToken(spec StableResourceSpec, normalized []StableLogicalO
 		}
 	}
 	closeOnError = false
+	retainedAccount = false
+	callbackHeld, providerHeld = false, false
 	return token, nil
 }
 
 // cloneSharedPinned retains immutable state and its actual content certificate
 // without re-opening, re-statting, or certifying a larger requested frontier.
 func (token *StableResourceToken) cloneSharedPinned(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, onRelease func()) (*StableResourceToken, error) {
-	return token.cloneSharedPinnedDirectory(logicalLane, resourceID, diagnosticPath, frontier, reachability, logicalObligations, token.directory, onRelease)
+	if token == nil {
+		return nil, ErrResourceOwnership
+	}
+	if err := token.beginOperation(); err != nil {
+		return nil, err
+	}
+	defer func() { token.endOperationOutcome(recover()) }()
+	token.metadataMu.Lock()
+	var directory *DependencyDirectoryV2
+	if token.metadataAccount == nil {
+		directory = token.directory
+	}
+	token.metadataMu.Unlock()
+	return token.cloneSharedPinnedDirectory(logicalLane, resourceID, diagnosticPath, frontier, reachability, logicalObligations, directory, onRelease)
 }
 
 func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func()) (*StableResourceToken, error) {
+	return token.cloneSharedPinnedAccount(logicalLane, resourceID, diagnosticPath, frontier, reachability, logicalObligations, directory, onRelease, nil, 0)
+}
+func (token *StableResourceToken) cloneSharedPinnedAccount(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func(), borrowAccount StableMetadataAccount, loanBytes uint64) (*StableResourceToken, error) {
+	return token.cloneSharedPinnedAccountWithCredit(logicalLane, resourceID, diagnosticPath, frontier, reachability, logicalObligations, directory, onRelease, borrowAccount, loanBytes, false, nil)
+}
+func (token *StableResourceToken) cloneSharedPinnedAccountWithCredit(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func(), borrowAccount StableMetadataAccount, loanBytes uint64, prepaid bool, sourceLoanOwner *StableSegmentOwner) (*StableResourceToken, error) {
+	return token.cloneSharedPinnedEnvironment(logicalLane, resourceID, diagnosticPath, frontier, reachability, logicalObligations, directory, onRelease, nil, borrowAccount, loanBytes, prepaid, sourceLoanOwner)
+}
+func (token *StableResourceToken) cloneSharedPinnedEnvironment(logicalLane, resourceID, diagnosticPath string, frontier DurableFrontier, reachability ReachabilityField, logicalObligations []StableLogicalObligation, directory *DependencyDirectoryV2, onRelease func(), environment StableResourceReleaseEnvironment, borrowAccount StableMetadataAccount, loanBytes uint64, prepaid bool, sourceLoanOwner *StableSegmentOwner) (*StableResourceToken, error) {
+	prepaidHeld := prepaid
+	defer func() {
+		if prepaidHeld {
+			borrowAccount.ReleaseStableMetadata()
+		}
+	}()
+	if token == nil {
+		return nil, ErrResourceOwnership
+	}
+	if err := token.beginOperation(); err != nil {
+		return nil, err
+	}
+	defer func() { token.endOperationOutcome(recover()) }()
+	token.metadataMu.Lock()
+	forbidden := token.transferPending || token.segmentRetention != nil
+	token.metadataMu.Unlock()
+	if forbidden {
+		return nil, ErrResourceOwnership
+	}
+	account, accountErr := inheritStableMetadataAccount(token.metadataAccount, token.namespace)
+	if accountErr != nil {
+		return nil, accountErr
+	}
+	if borrowAccount != nil {
+		if token.callbackBacked || !token.backingCertified || account != nil && (sourceLoanOwner == nil || sourceLoanOwner.token != token) || token.namespace != nil && (!token.namespace.backingCertified || token.namespace.metadataAccount != nil && sourceLoanOwner == nil) {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+		account = borrowAccount
+	}
+	callbackCreator := token.callbackCreator
+	callbackProvider := token.callbackProvider
+	callbackHeld, providerHeld := false, false
+	defer func() {
+		if providerHeld {
+			callbackProvider.ReleaseStableResourceProvider()
+		}
+		callbackProvider = nil
+		if callbackHeld {
+			callbackCreator.ReleaseStableMetadata()
+		}
+		callbackCreator = nil
+	}()
+	if callbackCreator != nil {
+		if account != nil {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+		if err := retainStableCallbackCreator(callbackCreator, token.pinned, true, token.pinRegistry != nil || token.identityPin != nil); err != nil {
+			return nil, err
+		}
+		callbackHeld = true
+	}
+	if callbackProvider != nil {
+		if err := callbackProvider.RetainStableResourceProvider(); err != nil {
+			return nil, err
+		}
+		providerHeld = true
+	}
+	var metadataBacking uint64
+	retainedAccount := false
+	if account != nil {
+		if frontier.exactRIDs != nil || token.syncedFrontier.exactRIDs != nil || directory != nil || onRelease != nil || environment != nil {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+		n, err := finiteStableObligationBytes(logicalObligations)
+		if err != nil {
+			return nil, err
+		}
+		n, err = finiteStableClassAdd(n, uint64(unsafe.Sizeof(StableResourceToken{})), true)
+		if err == nil {
+			n, err = finiteStableClassAdd(n, uint64(unsafe.Sizeof(IdentityPin{})), true)
+		}
+		if err == nil {
+			n, err = finiteStableAdd(n, loanBytes)
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range [...]string{logicalLane, resourceID, diagnosticPath, string(reachability)} {
+			n, err = finiteStableClassAdd(n, uint64(len(v)), false)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !prepaid {
+			if err := finiteStableBegin(account, n); err != nil {
+				return nil, err
+			}
+		}
+		retainedAccount = !prepaid
+		metadataBacking = n
+		defer func() {
+			if retainedAccount {
+				account.ReleaseStableMetadata()
+			}
+		}()
+		logicalLane = finiteStableCopy(logicalLane)
+		resourceID = finiteStableCopy(resourceID)
+		diagnosticPath = finiteStableCopy(diagnosticPath)
+		reachability = ReachabilityField(finiteStableCopy(string(reachability)))
+		logicalObligations = finiteStableOwnObligations(logicalObligations)
+	}
+	if account == nil {
+		logicalLane = finiteStableCopy(logicalLane)
+		resourceID = finiteStableCopy(resourceID)
+		diagnosticPath = finiteStableCopy(diagnosticPath)
+		reachability = ReachabilityField(finiteStableCopy(string(reachability)))
+	}
 	if err := token.retainPinned(); err != nil {
 		return nil, err
 	}
@@ -608,9 +1207,13 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 		}()
 	}
 	var identityPin *IdentityPin
-	if token.identityPin != nil {
+	if token.pinRegistry != nil || token.identityPin != nil {
+		registry := token.pinRegistry
+		if registry == nil {
+			registry = token.identityPin.registry
+		}
 		var err error
-		identityPin, err = token.identityPin.registry.Pin(token.identity)
+		identityPin, err = registry.Pin(token.identity)
 		if err != nil {
 			return nil, fmt.Errorf("pin stable resource identity: %w", err)
 		}
@@ -625,7 +1228,15 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 			return nil, err
 		}
 	}
+	inheritedBorrower := token.registryBorrower
+	if borrowAccount != nil {
+		inheritedBorrower = nil
+	}
+	if inheritedBorrower != nil {
+		inheritedBorrower.retain()
+	}
 	cloned := &StableResourceToken{
+		finiteMetadata: account != nil, metadataAccount: account, metadataBacking: metadataBacking, pinRegistry: token.pinRegistry, registryBorrower: inheritedBorrower,
 		kind: token.kind, logicalLane: logicalLane, resourceID: resourceID,
 		generation: token.generation, diagnosticPath: diagnosticPath,
 		identity: token.identity, frontier: cloneDurableFrontier(frontier), digest: token.digest,
@@ -634,14 +1245,25 @@ func (token *StableResourceToken) cloneSharedPinnedDirectory(logicalLane, resour
 		stability: token.stability, namespace: token.namespace, pinned: token.pinned, pinnedRefs: token.pinnedRefs,
 		flush: token.flush, sync: token.sync,
 		syncedFrontier: cloneDurableFrontier(token.syncedFrontier), hasSyncedFrontier: token.hasSyncedFrontier,
-		onRelease: onRelease, identityPin: identityPin,
+		onRelease: onRelease, releaseEnvironment: environment, identityPin: identityPin,
+		callbackCreator: callbackCreator, callbackProvider: callbackProvider,
+		callbackBacked: token.callbackBacked || onRelease != nil || environment != nil,
 	}
+	cloned.backingCertified = !cloned.callbackBacked && token.backingCertified && frontier.exactRIDs == nil && len(logicalObligations) == 0 && directory == nil && onRelease == nil
+	if cloned.backingCertified {
+		cloned.backingCensus = stableClonedTokenRetainedCensus(cloned)
+	}
+	// Clone-owned census is partial even if all earlier aliases later release.
+	cloned.wholeBackingOwned = false
 	cloned.owner.Store(uint32(ResourceOwnerToken))
 	cloned.metrics.registeredNanos = time.Now().UnixNano()
 	if cloned.hasSyncedFrontier {
 		cloned.metrics.physicalFileSyncs.Store(1)
 	}
 	retainedPinned = false
+	retainedAccount = false
+	prepaidHeld = false
+	callbackHeld, providerHeld = false, false
 	return cloned, nil
 }
 
@@ -656,50 +1278,207 @@ func validateDiagnosticPath(path string) error {
 	return nil
 }
 
-func (token *StableResourceToken) Kind() ResourceKind       { return token.kind }
-func (token *StableResourceToken) LogicalLane() string      { return token.logicalLane }
-func (token *StableResourceToken) ResourceID() string       { return token.resourceID }
-func (token *StableResourceToken) Generation() uint64       { return token.generation }
-func (token *StableResourceToken) DiagnosticPath() string   { return token.diagnosticPath }
+// MetadataBacking reports only constructor-stamped accounting provenance.
+func (token *StableResourceToken) MetadataBacking() (uint64, bool) {
+	if token == nil {
+		return 0, false
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	return token.metadataBacking, token.metadataAccount != nil
+}
+
+// Mutable backing admission always uses metadataMu, including ordinary tokens.
+// Immutable ordinary diagnostics survive terminal release; namespace authority
+// and operational provider aliases are revoked separately.
+func (token *StableResourceToken) Kind() ResourceKind {
+	if token == nil {
+		return ""
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.requireMetadataExportLocked() != nil {
+		return ""
+	}
+	return token.kind
+}
+func (token *StableResourceToken) LogicalLane() string {
+	if token == nil {
+		return ""
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.requireMetadataExportLocked() != nil {
+		return ""
+	}
+	return token.logicalLane
+}
+func (token *StableResourceToken) ResourceID() string {
+	if token == nil {
+		return ""
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.requireMetadataExportLocked() != nil {
+		return ""
+	}
+	return token.resourceID
+}
+func (token *StableResourceToken) Generation() uint64 { return token.generation }
+func (token *StableResourceToken) DiagnosticPath() string {
+	if token == nil {
+		return ""
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.requireMetadataExportLocked() != nil {
+		return ""
+	}
+	return token.diagnosticPath
+}
 func (token *StableResourceToken) Identity() StableIdentity { return token.identity }
 func (token *StableResourceToken) Frontier() DurableFrontier {
+	if token == nil {
+		return DurableFrontier{}
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.requireMetadataExportLocked() != nil && token.frontier.exactRIDs != nil {
+		return DurableFrontier{}
+	}
 	return cloneDurableFrontier(token.frontier)
 }
-func (token *StableResourceToken) Digest() [32]byte                 { return token.digest }
-func (token *StableResourceToken) Reachability() ReachabilityField  { return token.reachability }
-func (token *StableResourceToken) Namespace() *StableNamespaceToken { return token.namespace }
+func (token *StableResourceToken) Digest() [32]byte { return token.digest }
+func (token *StableResourceToken) Reachability() ReachabilityField {
+	if token == nil {
+		return ""
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.requireMetadataExportLocked() != nil {
+		return ""
+	}
+	return token.reachability
+}
+func (token *StableResourceToken) Namespace() *StableNamespaceToken {
+	if token == nil {
+		return nil
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.released.Load() || token.requireMetadataExportLocked() != nil {
+		return nil
+	}
+	return token.namespace
+}
 func (token *StableResourceToken) LogicalObligations() []StableLogicalObligation {
+	if token == nil {
+		return nil
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.requireMetadataExportLocked() != nil {
+		return nil
+	}
 	return cloneStableLogicalObligations(token.logicalObligations)
 }
 
-func (token *StableResourceToken) FlushThrough() error {
-	return token.flushThrough(token.frontier)
-}
+var ErrStableResourceOperationBusy = errors.New("stable resource has an admitted operation or uncertain cleanup")
 
-func (token *StableResourceToken) flushThrough(frontier DurableFrontier) error {
-	if token == nil || token.released.Load() {
+// beginOperation admits only a short actual call. No callbacks, I/O or waiting
+// run under metadataMu; Release can close admission reentrantly without joining
+// the operation that invoked it.
+func (token *StableResourceToken) beginOperation() error {
+	if token == nil {
 		return ErrResourceOwnership
 	}
-	started := time.Now()
-	err := token.flush(token.pinned, frontier)
-	token.metrics.flushes.Add(1)
-	token.metrics.flushNanos.Add(uint64(time.Since(started)))
-	return err
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.released.Load() || token.transferPending || token.cleanupUncertain || token.activeOperations == ^uint64(0) {
+		return ErrResourceOwnership
+	}
+	token.activeOperations++
+	return nil
 }
 
+// endOperationOutcome receives recover at the admitted caller's defer. A panic
+// preserves the actual token/provider/creator debt and never replays cleanup.
+func (token *StableResourceToken) endOperationOutcome(value any) {
+	if value != nil {
+		token.metadataMu.Lock()
+		token.cleanupUncertain = true
+		token.metadataMu.Unlock()
+	}
+	token.endOperation()
+	if value != nil {
+		panic(value)
+	}
+}
+func (token *StableResourceToken) endOperation() {
+	token.metadataMu.Lock()
+	if token.activeOperations == 0 {
+		token.metadataMu.Unlock()
+		panic("stable resource operation imbalance")
+	}
+	token.activeOperations--
+	finish := token.activeOperations == 0 && token.releasePending && !token.cleanupRunning && !token.cleanupUncertain && !token.cleanupComplete
+	token.metadataMu.Unlock()
+	if finish {
+		_ = token.finishRelease(nil)
+	}
+}
+
+func (token *StableResourceToken) FlushThrough() error {
+	return token.runContentOperation(DurableFrontier{}, true, true)
+}
+func (token *StableResourceToken) flushThrough(frontier DurableFrontier) error {
+	return token.runContentOperation(frontier, false, true)
+}
 func (token *StableResourceToken) SyncThrough() error {
-	return token.syncThrough(token.frontier)
+	return token.runContentOperation(DurableFrontier{}, true, false)
 }
-
 func (token *StableResourceToken) syncThrough(frontier DurableFrontier) error {
-	if token == nil || token.released.Load() {
+	return token.runContentOperation(frontier, false, false)
+}
+func (token *StableResourceToken) runContentOperation(frontier DurableFrontier, registered, flushOnly bool) error {
+	if err := token.beginOperation(); err != nil {
+		return err
+	}
+	file, provider, operation := token.pinned, token.callbackProvider, token.sync
+	if registered {
+		frontier = token.frontier
+	}
+	if flushOnly {
+		operation = token.flush
+	}
+	defer func() {
+		// The operation's final edge follows ALL local provider/backing aliases.
+		file, provider, operation = nil, nil, nil
+		frontier = DurableFrontier{}
+		token.endOperationOutcome(recover())
+	}()
+	if file == nil || provider == nil && operation == nil {
 		return ErrResourceOwnership
 	}
 	started := time.Now()
 	var err error
+	if flushOnly {
+		if provider != nil {
+			err = provider.FlushStableResource(file, frontier)
+		} else {
+			err = operation(file, frontier)
+		}
+		token.metrics.flushes.Add(1)
+		token.metrics.flushNanos.Add(uint64(time.Since(started)))
+		return err
+	}
 	if !token.hasSyncedFrontier || !durableFrontierCovers(token.syncedFrontier, frontier) {
 		physicalStarted := time.Now()
-		err = token.sync(token.pinned, frontier)
+		if provider != nil {
+			err = provider.SyncStableResource(file, frontier)
+		} else {
+			err = operation(file, frontier)
+		}
 		if err == nil {
 			token.metrics.physicalFileSyncs.Add(1)
 			token.metrics.physicalFileSyncNanos.Add(uint64(time.Since(physicalStarted)))
@@ -737,67 +1516,381 @@ func durableFrontierCovers(stable, required DurableFrontier) bool {
 }
 
 func (token *StableResourceToken) ReadAt(dst []byte, offset int64) (int, error) {
-	if token == nil || token.released.Load() {
+	if err := token.beginOperation(); err != nil {
+		return 0, err
+	}
+	file := token.pinned
+	defer func() { file = nil; token.endOperationOutcome(recover()) }()
+	if file == nil {
 		return 0, ErrResourceOwnership
 	}
-	return token.pinned.ReadAt(dst, offset)
+	return file.ReadAt(dst, offset)
 }
 
-// WithPinnedFile scopes access to the exact retained resource handle. It is
-// intended for platform adapters, such as the pager's mapped-page durability
-// primitive, that must pair an already-validated identity pin with an
-// operation unavailable through ordinary file Sync. Callers must not retain
-// or close the handle after fn returns.
+// WithPinnedFile preserves the ordinary scoped-handle API. The actual admitted
+// call pins its local alias through a concurrent or reentrant ordinary Release.
 func (token *StableResourceToken) WithPinnedFile(fn func(*os.File) error) error {
-	if token == nil || fn == nil || token.released.Load() || token.pinned == nil {
+	if fn == nil {
 		return ErrResourceOwnership
 	}
-	return fn(token.pinned)
+	if err := token.beginOperation(); err != nil {
+		return err
+	}
+	file := token.pinned
+	defer func() { file, fn = nil, nil; token.endOperationOutcome(recover()) }()
+	if err := token.RequireMetadataExport(); err != nil {
+		return err
+	}
+	if file == nil {
+		return ErrResourceOwnership
+	}
+	return fn(file)
 }
 
-func (token *StableResourceToken) Release() {
-	if token == nil || !token.owner.CompareAndSwap(uint32(ResourceOwnerToken), uint32(ResourceOwnerReleased)) {
-		return
+func (token *StableResourceToken) Release() error {
+	return token.releaseFromWithTerminal(ResourceOwnerToken, nil)
+}
+
+// ReleaseWithTerminal uses a transient trusted consumer. Complete reservation
+// precedes the first owner/pin/FD/account mutation.
+func (token *StableResourceToken) ReleaseWithTerminal(consumer StableSegmentTerminalConsumer) error {
+	if token == nil {
+		return nil
 	}
-	token.releasePinned()
+	token.metadataMu.Lock()
+	if token.cleanupUncertain || token.activeOperations != 0 || token.cleanupRunning {
+		token.metadataMu.Unlock()
+		return ErrStableResourceOperationBusy
+	}
+	token.metadataMu.Unlock()
+	if ResourceOwnerState(token.owner.Load()) == ResourceOwnerReleased {
+		return nil
+	}
+	if ResourceOwnerState(token.owner.Load()) != ResourceOwnerToken {
+		return ErrResourceOwnership
+	}
+	joined := false
+	if consumer != nil {
+		var err error
+		joined, err = consumer.BeginTerminalRelease()
+		if err != nil {
+			return err
+		}
+		defer consumer.EndTerminalRelease(joined)
+	}
+	if err := prepareStableSegmentTerminalTokens([]*StableResourceToken{token}, consumer); err != nil {
+		return err
+	}
+	return token.releaseFromWithTerminal(ResourceOwnerToken, consumer)
 }
 
 func (token *StableResourceToken) claim(owner ResourceOwnerState) error {
-	if token == nil || !token.owner.CompareAndSwap(uint32(ResourceOwnerToken), uint32(owner)) {
+	if token == nil {
+		return ErrResourceOwnership
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	if token.released.Load() || !token.owner.CompareAndSwap(uint32(ResourceOwnerToken), uint32(owner)) {
 		return ErrResourceOwnership
 	}
 	return nil
 }
-
+func (token *StableResourceToken) transferLocked(from, to ResourceOwnerState) error {
+	if token.released.Load() || !token.owner.CompareAndSwap(uint32(from), uint32(to)) {
+		return ErrResourceOwnership
+	}
+	return nil
+}
 func (token *StableResourceToken) transfer(from, to ResourceOwnerState) error {
-	if token == nil || !token.owner.CompareAndSwap(uint32(from), uint32(to)) {
+	if token == nil {
 		return ErrResourceOwnership
 	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	return token.transferLocked(from, to)
+}
+func (token *StableResourceToken) releaseFrom(owner ResourceOwnerState) error {
+	return token.releaseFromWithTerminal(owner, nil)
+}
+func (token *StableResourceToken) releaseFromWithTerminal(owner ResourceOwnerState, consumer StableSegmentTerminalConsumer) error {
+	if token == nil {
+		return nil
+	}
+	token.metadataMu.Lock()
+	if token.cleanupUncertain {
+		token.metadataMu.Unlock()
+		return ErrStableResourceOperationBusy
+	}
+	if token.owner.Load() == uint32(ResourceOwnerReleased) && (token.cleanupComplete || token.releasePending && !token.cleanupUncertain) {
+		token.metadataMu.Unlock()
+		return nil
+	}
+	if token.owner.Load() != uint32(owner) {
+		token.metadataMu.Unlock()
+		return ErrResourceOwnership
+	}
+	_, checkedCleanup := token.releaseEnvironment.(StableResourceCleanupEnvironmentV1)
+	if token.transferPending || (checkedCleanup || consumer != nil || token.metadataAccount != nil || token.segmentRetention != nil) && token.activeOperations != 0 {
+		token.metadataMu.Unlock()
+		return ErrStableResourceOperationBusy
+	}
+	retention := token.segmentRetention
+	token.metadataMu.Unlock()
+	if err := validateStableSegmentTerminalRetention(retention, consumer); err != nil {
+		return err
+	}
+	token.metadataMu.Lock()
+	if token.owner.Load() == uint32(ResourceOwnerReleased) && (token.cleanupComplete || token.releasePending && !token.cleanupUncertain) {
+		token.metadataMu.Unlock()
+		return nil
+	}
+	if token.segmentRetention != retention || token.owner.Load() != uint32(owner) {
+		token.metadataMu.Unlock()
+		return ErrResourceOwnership
+	}
+	if (checkedCleanup || consumer != nil || token.metadataAccount != nil || retention != nil) && token.activeOperations != 0 {
+		token.metadataMu.Unlock()
+		return ErrStableResourceOperationBusy
+	}
+	token.released.Store(true)
+	token.releasePending = true
+	if retention == nil && !checkedCleanup {
+		token.owner.Store(uint32(ResourceOwnerReleased))
+	}
+	pending := token.activeOperations != 0 || token.cleanupRunning
+	token.metadataMu.Unlock()
+	if pending {
+		if checkedCleanup {
+			return ErrStableResourceOperationBusy
+		}
+		return nil
+	}
+	result := token.finishRelease(consumer)
+	if (retention != nil || checkedCleanup) && token.CleanupCompleteV1() {
+		token.metadataMu.Lock()
+		token.owner.Store(uint32(ResourceOwnerReleased))
+		token.metadataMu.Unlock()
+	}
+	return result
+}
+func (token *StableResourceToken) releasePinned() { _ = token.releasePinnedWithTerminal(nil) }
+func (token *StableResourceToken) releasePinnedWithTerminal(consumer StableSegmentTerminalConsumer) error {
+	token.metadataMu.Lock()
+	_, checkedCleanup := token.releaseEnvironment.(StableResourceCleanupEnvironmentV1)
+	if token.cleanupUncertain || token.activeOperations != 0 && (checkedCleanup || consumer != nil || token.metadataAccount != nil || token.segmentRetention != nil) {
+		token.metadataMu.Unlock()
+		return ErrStableResourceOperationBusy
+	}
+	token.released.Store(true)
+	token.releasePending = true
+	pending := token.activeOperations != 0 || token.cleanupRunning
+	token.metadataMu.Unlock()
+	if pending {
+		if checkedCleanup {
+			return ErrStableResourceOperationBusy
+		}
+		return nil
+	}
+	return token.finishRelease(consumer)
+}
+
+// finishRelease performs each existing ordinary cleanup phase once. A panic
+// retains the SAME token's remaining aliases/creator as uncertain custody;
+// neither reentrant Release nor later Release silently replays the callback.
+func (token *StableResourceToken) finishRelease(consumer StableSegmentTerminalConsumer) (result error) {
+	token.metadataMu.Lock()
+	if token.cleanupComplete {
+		token.metadataMu.Unlock()
+		return nil
+	}
+	if token.cleanupUncertain || token.activeOperations != 0 {
+		token.metadataMu.Unlock()
+		return ErrStableResourceOperationBusy
+	}
+	if token.cleanupRunning {
+		_, checked := token.releaseEnvironment.(StableResourceCleanupEnvironmentV1)
+		token.metadataMu.Unlock()
+		if checked {
+			return ErrStableResourceOperationBusy
+		}
+		return nil
+	}
+	token.cleanupRunning = true
+	file, refs, namespace, pin, directory := token.pinned, token.pinnedRefs, token.namespace, token.identityPin, token.directory
+	onRelease, environment, provider, creator := token.onRelease, token.releaseEnvironment, token.callbackProvider, token.callbackCreator
+	token.metadataMu.Unlock()
+	defer func() {
+		file, refs, namespace, pin, directory = nil, nil, nil, nil, nil
+		onRelease, environment, provider, creator = nil, nil, nil, nil
+		token.metadataMu.Lock()
+		token.cleanupRunning = false
+		if value := recover(); value != nil {
+			token.cleanupUncertain = true
+			token.metadataMu.Unlock()
+			panic(value)
+		}
+		token.metadataMu.Unlock()
+	}()
+	if file != nil {
+		if refs == nil || refs.Add(-1) == 0 {
+			_ = file.Close()
+		}
+		file, refs = nil, nil
+		token.metadataMu.Lock()
+		token.pinned, token.pinnedRefs = nil, nil
+		token.metadataMu.Unlock()
+	}
+	if namespace != nil {
+		namespace.release()
+		namespace = nil
+		token.metadataMu.Lock()
+		token.namespace = nil
+		token.metadataMu.Unlock()
+	}
+	if pin != nil {
+		pin.Release()
+		pin = nil
+		token.metadataMu.Lock()
+		token.identityPin = nil
+		token.metadataMu.Unlock()
+	}
+	if directory != nil {
+		directory.Release()
+		directory = nil
+		token.metadataMu.Lock()
+		token.directory = nil
+		token.metadataMu.Unlock()
+	}
+	if onRelease != nil {
+		onRelease()
+		onRelease = nil
+		token.metadataMu.Lock()
+		token.onRelease = nil
+		token.metadataMu.Unlock()
+	}
+	if checked, ok := environment.(StableResourceCleanupEnvironmentV1); ok {
+		outcome, err := checked.AdvanceStableResourceCleanupV1()
+		result = err
+		if !outcome.Complete() {
+			if result == nil {
+				result = ErrStableResourceOperationBusy
+			}
+			return result
+		}
+	} else if environment != nil {
+		environment.ReleaseStableResource()
+	}
+	environment = nil
+	token.metadataMu.Lock()
+	token.onRelease, token.releaseEnvironment = nil, nil
+	token.metadataMu.Unlock()
+	token.metadataMu.Lock()
+	token.flush, token.sync = nil, nil
+	token.metadataMu.Unlock()
+	if provider != nil {
+		provider.ReleaseStableResourceProvider()
+		provider = nil
+		token.metadataMu.Lock()
+		token.callbackProvider = nil
+		token.metadataMu.Unlock()
+	}
+	token.metadataMu.Lock()
+	segmentOwner, retention, borrower := token.segmentOwner, token.segmentRetention, token.registryBorrower
+	token.metadataMu.Unlock()
+	defer func() { segmentOwner, retention, borrower = nil, nil, nil }()
+	if segmentOwner != nil {
+		segmentOwner.release()
+		segmentOwner = nil
+		token.metadataMu.Lock()
+		token.segmentOwner = nil
+		token.metadataMu.Unlock()
+	}
+	if retention != nil {
+		if err := releaseStableSegmentTerminalRetention(retention, consumer); err != nil {
+			return err
+		}
+		retention = nil
+		token.metadataMu.Lock()
+		token.segmentRetention = nil
+		token.metadataMu.Unlock()
+	}
+	if borrower != nil {
+		borrower.release()
+		borrower = nil
+		token.metadataMu.Lock()
+		token.registryBorrower = nil
+		token.metadataMu.Unlock()
+	}
+	token.metadataMu.Lock()
+	account := token.metadataAccount
+	if account != nil {
+		token.kind, token.logicalLane, token.resourceID, token.diagnosticPath = "", "", "", ""
+		token.reachability = ""
+		token.logicalObligations = nil
+		token.metadataAccount = nil
+	}
+	token.callbackCreator = nil
+	token.cleanupComplete = true
+	token.releasePending = false
+	token.metadataMu.Unlock()
+	if account != nil {
+		account.ReleaseStableMetadata()
+		account = nil
+	}
+	// Provider and callback locals are scrubbed BEFORE this final token edge.
+	if creator != nil {
+		creator.ReleaseStableMetadata()
+		creator = nil
+	}
+	return result
+}
+
+// CleanupCompleteV1 reports actual effects/local-scrub completion, never admission closure.
+func (token *StableResourceToken) CleanupCompleteV1() bool {
+	if token == nil {
+		return true
+	}
+	token.metadataMu.Lock()
+	defer token.metadataMu.Unlock()
+	return token.cleanupComplete
+}
+
+// retainStableCallbackCreator prepays known token/pin/control/handle classes
+// before their births. Hidden func backing and non-Linux private FD layout stay
+// ordinary-only, permanently callback-backed and uncertified.
+func retainStableCallbackCreator(creator *residentcredit.Scope, file *os.File, shared, pin bool) error {
+	if err := creator.RetainOriginalLifetime(); err != nil {
+		return err
+	}
+	var plan stableBackingSizePlan
+	plan.add(uint64(unsafe.Sizeof(StableResourceToken{})), true)
+	if !shared {
+		plan.add(uint64(unsafe.Sizeof(atomic.Int64{})), true)
+		if finiteStablePlatform() == nil {
+			n, err := finiteStableHandleBytes(file)
+			if err != nil {
+				creator.ReleaseStableMetadata()
+				return err
+			}
+			plan.bytes, plan.err = finiteStableAdd(plan.bytes, n)
+			plan.add(uint64(unsafe.Sizeof(finiteLinuxStat{})), true)
+			plan.add(uint64(unsafe.Sizeof(finiteLinuxStat{})), true)
+		} else {
+			plan.add(uint64(unsafe.Sizeof(os.File{})), true)
+		}
+	}
+	if pin {
+		plan.add(uint64(unsafe.Sizeof(IdentityPin{})), true)
+	}
+	if plan.err != nil {
+		creator.ReleaseStableMetadata()
+		return plan.err
+	}
+	if err := creator.ReserveOriginalLifetime(plan.bytes); err != nil {
+		creator.ReleaseStableMetadata()
+		return err
+	}
 	return nil
-}
-
-func (token *StableResourceToken) releaseFrom(owner ResourceOwnerState) {
-	if token == nil || !token.owner.CompareAndSwap(uint32(owner), uint32(ResourceOwnerReleased)) {
-		return
-	}
-	token.releasePinned()
-}
-
-func (token *StableResourceToken) releasePinned() {
-	if token.released.Swap(true) {
-		return
-	}
-	token.releasePinnedReference()
-	if token.namespace != nil {
-		token.namespace.release()
-	}
-	token.identityPin.Release()
-	if token.directory != nil {
-		token.directory.Release()
-	}
-	if token.onRelease != nil {
-		token.onRelease()
-	}
 }
 
 func (token *StableResourceToken) releasePinnedReference() {
@@ -811,6 +1904,9 @@ func (token *StableResourceToken) retainPinned() error {
 		return ErrResourceOwnership
 	}
 	for refs := token.pinnedRefs.Load(); refs > 0; refs = token.pinnedRefs.Load() {
+		if refs == int64(^uint64(0)>>1) {
+			return ErrResourceOwnership
+		}
 		if token.pinnedRefs.CompareAndSwap(refs, refs+1) {
 			return nil
 		}
@@ -1140,6 +2236,10 @@ func StableNamespaceParentGeneration(parent *os.File) (uint64, error) {
 }
 
 type StableNamespaceToken struct {
+	backingCensus          BackingCensus
+	backingCertified       bool
+	metadataAccount        StableMetadataAccount
+	metadataBacking        uint64
 	parent                 *os.File
 	parentIdentity         StableIdentity
 	persistence            *os.File
@@ -1168,16 +2268,20 @@ type StableNamespaceToken struct {
 // to carry that one creation sync to later resource registration, where the
 // logical parent generation is finally known.
 type StableNamespaceCreationProof struct {
-	parent      *os.File
-	persistence *os.File
-	parentID    StableIdentity
-	childID     StableIdentity
-	name        string
-	adapter     namespacePersistenceAdapter
-	released    atomic.Bool
-	syncs       atomic.Uint64
-	syncNanos   atomic.Uint64
-	mu          sync.Mutex
+	backingCensus    BackingCensus
+	backingCertified bool
+	metadataAccount  StableMetadataAccount
+	metadataBacking  uint64
+	parent           *os.File
+	persistence      *os.File
+	parentID         StableIdentity
+	childID          StableIdentity
+	name             string
+	adapter          namespacePersistenceAdapter
+	released         atomic.Bool
+	syncs            atomic.Uint64
+	syncNanos        atomic.Uint64
+	mu               sync.Mutex
 }
 
 // NewStableNamespaceCreationProof validates the exact parent/child link and
@@ -1186,7 +2290,42 @@ func NewStableNamespaceCreationProof(parent, child *os.File, name string) (*Stab
 	return newStableNamespaceCreationProof(parent, child, name, nativeNamespaceAdapter{})
 }
 
+func NewStableNamespaceCreationProofWithMetadataAccount(parent, child *os.File, name string, account StableMetadataAccount) (*StableNamespaceCreationProof, error) {
+	if account == nil {
+		return nil, ErrStableMetadataShapeUnsupported
+	}
+	return newStableNamespaceCreationProofAccount(parent, child, name, nativeNamespaceAdapter{}, account)
+}
 func newStableNamespaceCreationProof(parent, child *os.File, name string, adapter namespacePersistenceAdapter) (*StableNamespaceCreationProof, error) {
+	return newStableNamespaceCreationProofAccount(parent, child, name, adapter, nil)
+}
+func newStableNamespaceCreationProofAccount(parent, child *os.File, name string, adapter namespacePersistenceAdapter, account StableMetadataAccount) (*StableNamespaceCreationProof, error) {
+	var backing uint64
+	retainedAccount := false
+	if account != nil {
+		if _, ok := adapter.(nativeNamespaceAdapter); !ok {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+		n, err := finiteStableNamespaceBytes(parent, name, "", uint64(unsafe.Sizeof(StableNamespaceCreationProof{})))
+		if err != nil {
+			return nil, err
+		}
+		if err := finiteStableBegin(account, n); err != nil {
+			return nil, err
+		}
+		backing = n
+		retainedAccount = true
+		defer func() {
+			if retainedAccount {
+				account.ReleaseStableMetadata()
+			}
+		}()
+		name = finiteStableCopy(name)
+	}
+
+	if account == nil {
+		name = finiteStableCopy(name)
+	}
 	if parent == nil || child == nil || !stableChildBaseName(name) {
 		return nil, fmt.Errorf("%w: incomplete namespace creation proof", ErrUnresolvedResource)
 	}
@@ -1226,16 +2365,67 @@ func newStableNamespaceCreationProof(parent, child *os.File, name string, adapte
 		_ = pinned.Close()
 		return nil, err
 	}
-	proof := &StableNamespaceCreationProof{parent: pinned, persistence: persistence, parentID: parentID, childID: childID, name: name, adapter: adapter}
+	proof := &StableNamespaceCreationProof{metadataAccount: account, metadataBacking: backing, parent: pinned, persistence: persistence, parentID: parentID, childID: childID, name: name, adapter: adapter}
+	if _, ok := adapter.(nativeNamespaceAdapter); ok {
+		proof.backingCertified = finiteStablePlatform() == nil
+		var p backingLayout
+		p.add(uint64(unsafe.Sizeof(StableNamespaceCreationProof{})), true)
+		p.file(pinned)
+		if persistence != pinned {
+			p.file(persistence)
+		}
+		p.string(name)
+		proof.backingCensus = p.census
+	}
 	proof.syncs.Store(1)
 	proof.syncNanos.Store(syncNanos)
+	retainedAccount = false
 	return proof, nil
+}
+
+func finiteStableNamespaceBytes(parent *os.File, name, path string, wrapper uint64) (uint64, error) {
+	n, err := finiteStableHandleBytes(parent)
+	if err != nil {
+		return 0, err
+	}
+	// ValidateLink/ValidateIdentity opens one transient exact child. Its name is
+	// the complete parent/name allocation, not merely the basename substring.
+	for _, layout := range [...]struct {
+		bytes uint64
+		scan  bool
+	}{
+		{uint64(unsafe.Sizeof(os.File{})), true}, {uint64(unsafe.Sizeof(finiteLinuxOSFile{})), true},
+		{uint64(len(parent.Name())) + 1 + uint64(len(name)), false}, {wrapper, true},
+		{uint64(len(name)), false}, {uint64(len(path)), false}, {uint64(len(path)), false},
+		// A failing file primitive can construct its owned PathError wrapper.
+		{uint64(unsafe.Sizeof(os.PathError{})), true},
+	} {
+		n, err = finiteStableClassAdd(n, layout.bytes, layout.scan)
+		if err != nil {
+			return 0, err
+		}
+	}
+	return n, nil
 }
 
 // Bind returns an already-stable normal namespace token after proving the
 // retained parent still links the original child. It never syncs again.
 func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneration uint64, name, diagnosticPath string) (*StableNamespaceToken, error) {
-	if proof == nil || proof.released.Load() {
+	return proof.bindAccount(parent, parentGeneration, name, diagnosticPath, nil)
+}
+func (proof *StableNamespaceCreationProof) BindWithMetadataAccount(parent *os.File, parentGeneration uint64, name, diagnosticPath string, account StableMetadataAccount) (*StableNamespaceToken, error) {
+	if account == nil {
+		return nil, ErrStableMetadataShapeUnsupported
+	}
+	return proof.bindAccount(parent, parentGeneration, name, diagnosticPath, account)
+}
+func (proof *StableNamespaceCreationProof) bindAccount(parent *os.File, parentGeneration uint64, name, diagnosticPath string, account StableMetadataAccount) (*StableNamespaceToken, error) {
+	if proof == nil {
+		return nil, ErrResourceOwnership
+	}
+	proof.mu.Lock()
+	defer proof.mu.Unlock()
+	if proof.released.Load() {
 		return nil, ErrResourceOwnership
 	}
 	if parentGeneration == 0 {
@@ -1244,13 +2434,44 @@ func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneratio
 	if parent == nil || name != proof.name || !stableChildBaseName(name) {
 		return nil, fmt.Errorf("%w: namespace creation proof binding differs from the exact parent or child name", ErrResourceConflict)
 	}
+	if account == nil {
+		account = proof.metadataAccount
+	}
+	// An already-accounted proof may only derive objects in the same owner.
+	if proof.metadataAccount != nil && (!reflect.ValueOf(account).Comparable() || !reflect.ValueOf(proof.metadataAccount).Comparable() || account != proof.metadataAccount) {
+		return nil, ErrStableMetadataShapeUnsupported
+	}
+	var backing uint64
+	retainedAccount := false
+	if account != nil {
+		n, err := finiteStableNamespaceBytes(proof.parent, proof.name, diagnosticPath, uint64(unsafe.Sizeof(StableNamespaceToken{})))
+		if err != nil {
+			return nil, err
+		}
+		if err := finiteStableBegin(account, n); err != nil {
+			return nil, err
+		}
+		backing = n
+		retainedAccount = true
+		defer func() {
+			if retainedAccount {
+				account.ReleaseStableMetadata()
+			}
+		}()
+		diagnosticPath = finiteStableCopy(diagnosticPath)
+		name = finiteStableCopy(name)
+	}
+
+	if account == nil {
+		name = finiteStableCopy(name)
+		diagnosticPath = finiteStableCopy(diagnosticPath)
+	}
+
+	if proof == nil || proof.released.Load() {
+		return nil, ErrResourceOwnership
+	}
 	if err := validateDiagnosticPath(diagnosticPath); err != nil {
 		return nil, err
-	}
-	proof.mu.Lock()
-	defer proof.mu.Unlock()
-	if proof.released.Load() {
-		return nil, ErrResourceOwnership
 	}
 	parentID, err := proof.adapter.Identity(parent)
 	if err != nil {
@@ -1274,10 +2495,15 @@ func (proof *StableNamespaceCreationProof) Bind(parent *os.File, parentGeneratio
 	parentID.Generation = parentGeneration
 	persistenceID := parentID
 	persistenceID.Generation = 0
-	token := &StableNamespaceToken{parent: pinned, parentIdentity: parentID, persistence: pinned, persistenceIdentity: persistenceID, linkedResourceIdentity: proof.childID, hasLinkedResource: true, operation: NamespaceCreate, newName: proof.name, diagnosticPath: filepath.ToSlash(diagnosticPath), adapter: proof.adapter}
+	token := &StableNamespaceToken{metadataAccount: account, metadataBacking: backing, parent: pinned, parentIdentity: parentID, persistence: pinned, persistenceIdentity: persistenceID, linkedResourceIdentity: proof.childID, hasLinkedResource: true, operation: NamespaceCreate, newName: name, diagnosticPath: filepath.ToSlash(diagnosticPath), adapter: proof.adapter}
+	if _, ok := proof.adapter.(nativeNamespaceAdapter); ok {
+		token.backingCertified = finiteStablePlatform() == nil
+		token.backingCensus = stableNamespaceRetainedCensus(token)
+	}
 	token.state.Store(namespaceStable)
 	token.syncs.Store(proof.syncs.Load())
 	token.syncNanos.Store(proof.syncNanos.Load())
+	retainedAccount = false
 	return token, nil
 }
 
@@ -1297,6 +2523,11 @@ func (proof *StableNamespaceCreationProof) Release() {
 	}
 	if parent != nil {
 		_ = parent.Close()
+	}
+	proof.name = ""
+	proof.adapter = nil
+	if proof.metadataAccount != nil {
+		proof.metadataAccount.ReleaseStableMetadata()
 	}
 }
 
@@ -1328,7 +2559,51 @@ func NewRecoveredStableNamespaceToken(spec StableNamespaceSpec, expectedParent S
 	return token, nil
 }
 
+func NewStableNamespaceTokenWithMetadataAccount(spec StableNamespaceSpec, account StableMetadataAccount) (*StableNamespaceToken, error) {
+	if account == nil {
+		return nil, ErrStableMetadataShapeUnsupported
+	}
+	return newStableNamespaceTokenAccount(spec, nativeNamespaceAdapter{}, account)
+}
 func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersistenceAdapter) (*StableNamespaceToken, error) {
+	return newStableNamespaceTokenAccount(spec, adapter, nil)
+}
+func newStableNamespaceTokenAccount(spec StableNamespaceSpec, adapter namespacePersistenceAdapter, account StableMetadataAccount) (*StableNamespaceToken, error) {
+	var backing uint64
+	retainedAccount := false
+	if account != nil {
+		if _, ok := adapter.(nativeNamespaceAdapter); !ok {
+			return nil, ErrStableMetadataShapeUnsupported
+		}
+		n, err := finiteStableNamespaceBytes(spec.Parent, spec.NewName, spec.DiagnosticPath, uint64(unsafe.Sizeof(StableNamespaceToken{})))
+		if err != nil {
+			return nil, err
+		}
+		n, err = finiteStableClassAdd(n, uint64(len(spec.OldName)), false)
+		if err != nil {
+			return nil, err
+		}
+		if err := finiteStableBegin(account, n); err != nil {
+			return nil, err
+		}
+		backing = n
+		retainedAccount = true
+		defer func() {
+			if retainedAccount {
+				account.ReleaseStableMetadata()
+			}
+		}()
+		spec.OldName = finiteStableCopy(spec.OldName)
+		spec.NewName = finiteStableCopy(spec.NewName)
+		spec.DiagnosticPath = finiteStableCopy(spec.DiagnosticPath)
+	}
+
+	if account == nil {
+		spec.OldName = finiteStableCopy(spec.OldName)
+		spec.NewName = finiteStableCopy(spec.NewName)
+		spec.DiagnosticPath = finiteStableCopy(spec.DiagnosticPath)
+	}
+
 	if spec.Parent == nil || spec.ParentGeneration == 0 || spec.Operation == NamespaceNone || spec.NewName == "" || adapter == nil {
 		return nil, fmt.Errorf("%w: incomplete namespace registration", ErrUnresolvedResource)
 	}
@@ -1381,12 +2656,19 @@ func newStableNamespaceToken(spec StableNamespaceSpec, adapter namespacePersiste
 		}
 		persistenceIdentity.Generation = 0
 	}
-	return &StableNamespaceToken{
+	token := &StableNamespaceToken{
+		metadataAccount: account, metadataBacking: backing,
 		parent: pinned, parentIdentity: identity, persistence: persistence, persistenceIdentity: persistenceIdentity, linkedResourceIdentity: linkedIdentity,
 		hasLinkedResource: hasLinkedResource, operation: spec.Operation,
 		oldName: spec.OldName, newName: spec.NewName,
 		diagnosticPath: filepath.ToSlash(spec.DiagnosticPath), adapter: adapter,
-	}, nil
+	}
+	if _, ok := adapter.(nativeNamespaceAdapter); ok {
+		token.backingCertified = finiteStablePlatform() == nil
+		token.backingCensus = stableNamespaceRetainedCensus(token)
+	}
+	retainedAccount = false
+	return token, nil
 }
 
 // OpenStableChildFile opens or creates name relative to the exact already-open
@@ -1625,6 +2907,12 @@ func (token *StableNamespaceToken) physicalSyncStats() (uint64, time.Duration) {
 // obligations accumulated by a relaxed publication protocol and therefore
 // leaves pending tokens retryable when the physical sync itself fails.
 func StabilizeStableNamespaceTokens(tokens ...*StableNamespaceToken) error {
+	// Group scratch has no finite owner. Scan every operand before staging it.
+	for _, token := range tokens {
+		if token != nil && token.metadataAccount != nil {
+			return ErrStableMetadataShapeUnsupported
+		}
+	}
 	type namespaceGroup struct {
 		identity StableIdentity
 		tokens   []*StableNamespaceToken
@@ -1780,6 +3068,9 @@ func (token *StableNamespaceToken) validateStable() error {
 		if token.hasLinkedResource {
 			token.mu.Lock()
 			defer token.mu.Unlock()
+			if token.released.Load() {
+				return ErrResourceOwnership
+			}
 			if token.state.Load() == namespaceFailed {
 				return token.stabilizeErr
 			}
@@ -1809,6 +3100,11 @@ func (token *StableNamespaceToken) validateStable() error {
 func (token *StableNamespaceToken) cloneStable() (*StableNamespaceToken, error) {
 	if token == nil {
 		return nil, nil
+	}
+	// Generic namespace cloning has no finite set/registry lifetime contract.
+	// Refuse before validation, descriptor duplication or wrapper allocation.
+	if token.metadataAccount != nil {
+		return nil, ErrStableMetadataShapeUnsupported
 	}
 	if err := token.validateStable(); err != nil {
 		return nil, err
@@ -1848,6 +3144,11 @@ func (token *StableNamespaceToken) compatible(other *StableNamespaceToken) bool 
 func (token *StableNamespaceToken) validateLinkedResource(identity StableIdentity) error {
 	if token == nil {
 		return nil
+	}
+	token.mu.Lock()
+	defer token.mu.Unlock()
+	if token.released.Load() {
+		return ErrResourceOwnership
 	}
 	if !token.hasLinkedResource {
 		return fmt.Errorf("%w: namespace operation %s for %q has no exact linked child", ErrUnresolvedResource, token.operation, token.newName)
@@ -1889,6 +3190,7 @@ func (token *StableNamespaceToken) release() {
 			_ = token.persistence.Close()
 		}
 		_ = token.parent.Close()
+		token.releaseMetadataAccount()
 	}
 }
 
@@ -1905,6 +3207,17 @@ func (token *StableNamespaceToken) Release() {
 		_ = token.persistence.Close()
 	}
 	_ = token.parent.Close()
+	token.releaseMetadataAccount()
+}
+func (token *StableNamespaceToken) releaseMetadataAccount() {
+	if token.metadataAccount != nil {
+		token.oldName = ""
+		token.newName = ""
+		token.diagnosticPath = ""
+		token.adapter = nil
+		token.parent, token.persistence = nil, nil
+		token.metadataAccount.ReleaseStableMetadata()
+	}
 }
 
 type ResourceKindStats struct {
@@ -1932,3 +3245,18 @@ type ResourceKindStats struct {
 }
 
 var _ io.ReaderAt = (*StableResourceToken)(nil)
+
+// StableOwnedOldName and StableOwnedNewName follow the metadata export boundary;
+// ordinary producer caches may retain their immutable constructor-owned names.
+func (t *StableNamespaceToken) StableOwnedOldName() string {
+	if t == nil || t.metadataAccount != nil {
+		return ""
+	}
+	return t.oldName
+}
+func (t *StableNamespaceToken) StableOwnedNewName() string {
+	if t == nil || t.metadataAccount != nil {
+		return ""
+	}
+	return t.newName
+}

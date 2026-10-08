@@ -11,6 +11,7 @@ import (
 	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/allocclass"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -29,12 +30,22 @@ type preparedOwnedZipperConfig struct {
 	outer, piggyback, prefix, columnar, packed, baseDelta, adaptive bool
 }
 
+// A prune header grants only scalar B1 inspection. It deliberately owns no
+// node bytes, key scratch, reader, pager, or full-load authority.
+type preparedOwnedPruneHeader struct {
+	ref    page.ChildRef
+	digest [32]byte
+	typ    page.PageType
+	count  uint16
+}
+
 type preparedOwnedLeafImage struct {
 	ptr  page.ValuePtr
 	data *[page.PageSize]byte
 }
 
-// PreparedOwnedWorkspace owns the external-leaf images for one captured root.
+// PreparedOwnedWorkspace owns touched external-leaf images and scalar B1
+// prune headers for one captured root. Header-only refs refuse all full loads.
 // Its caller must first admit the complete closure, including every touched
 // parent's old direct children, and retain the captured pager/resource pins.
 // CaptureOld's loader supplies the existing bounded, verified file read. Once
@@ -80,48 +91,55 @@ type preparedOwnedSplitList struct {
 }
 
 type PreparedOwnedWorkspace struct {
-	pager             *pager.Pager
-	writer            LeafPageLog
-	root              uint64
-	ops               []preparedOwnedPointOp
-	config            preparedOwnedZipperConfig
-	bound             bool
-	applyStarted      bool
-	work              *preparedOwnedWorkBuffers
-	childrenAllocated uint64
-	entriesAllocated  uint64
-	oldAllocated      int
-	old               []preparedOwnedLeafImage
-	oldPages          []*[page.PageSize]byte
-	output            []preparedOwnedLeafImage
-	pages             []*[page.PageSize]byte
-	keyArenas         *preparedOwnedKeyArena
-	keySlotsAllocated uint64
-	nodeKeyAllocated  uint64
-	splitNodes        []preparedOwnedSplitNode
-	splitArrays       *preparedOwnedSplitArray
-	splitCopied       uint64
-	splitKeyBytes     uint64
-	rootInputUsed     bool
-	builders          []*node.Builder
-	heuristics        []node.LeafHeuristicEntry
-	maxBuilderKey     int
-	prepareKeyScratch []byte
-	buildersAdmitted  bool
-	applyScratch      *mergeScratch
-	retired           []uint64
-	pruneRetired      []uint64
-	retireAdmitted    bool
-	maxOutput         int
-	sealed            bool
-	closed            bool
-	reserve           func(uint64) error
-	backing           uint64
+	pager                *pager.Pager
+	writer               LeafPageLog
+	root                 uint64
+	ops                  []preparedOwnedPointOp
+	config               preparedOwnedZipperConfig
+	bound                bool
+	applyStarted         bool
+	pagerStaging         bool
+	pagerStageReady      bool
+	pagerInstallStarted  bool
+	pagerInstallFinished bool
+	pagerInstallNext     int
+	pagerImages          []preparedOwnedPagerImage
+	work                 *preparedOwnedWorkBuffers
+	childrenAllocated    uint64
+	entriesAllocated     uint64
+	oldAllocated         int
+	old                  []preparedOwnedLeafImage
+	oldPages             []*[page.PageSize]byte
+	pruneHeaders         []preparedOwnedPruneHeader
+	output               []preparedOwnedLeafImage
+	pages                []*[page.PageSize]byte
+	keyArenas            *preparedOwnedKeyArena
+	keySlotsAllocated    uint64
+	nodeKeyAllocated     uint64
+	splitNodes           []preparedOwnedSplitNode
+	splitArrays          *preparedOwnedSplitArray
+	splitCopied          uint64
+	splitKeyBytes        uint64
+	rootInputUsed        bool
+	builders             []*node.Builder
+	heuristics           []node.LeafHeuristicEntry
+	maxBuilderKey        int
+	prepareKeyScratch    []byte
+	buildersAdmitted     bool
+	applyScratch         *mergeScratch
+	retired              []uint64
+	pruneRetired         []uint64
+	retireAdmitted       bool
+	maxOutput            int
+	sealed               bool
+	closed               bool
+	reserve              func(uint64) error
+	backing              uint64
 }
 
 // NewPreparedOwnedWorkspace checks and charges visible Go backing capacities before
-// allocation. Runtime heap size-class/span overhead is separate from this
-// capacity ledger and must be included in the enclosing process-memory proof.
+// allocation. Each actual allocation uses its pinned Go class independently;
+// runtime/process overhead remains in the enclosing process-memory proof.
 // reserve must charge the enclosing request's already admitted
 // backing credit; a nil callback is rejected. Page storage is allocated lazily.
 func NewPreparedOwnedWorkspace(maxOld, maxOutput uint64, reserve func(uint64) error) (*PreparedOwnedWorkspace, error) {
@@ -130,35 +148,94 @@ func NewPreparedOwnedWorkspace(maxOld, maxOutput uint64, reserve func(uint64) er
 	}
 	imageSize := uint64(unsafe.Sizeof(preparedOwnedLeafImage{}))
 	pointerSize := uint64(unsafe.Sizeof((*[page.PageSize]byte)(nil)))
+	headerSize := uint64(unsafe.Sizeof(preparedOwnedPruneHeader{}))
 	// Each make has its own representable byte extent; aggregate uint64
 	// arithmetic alone must not admit a slice whose backing cannot fit int.
 	if maxOld > uint64(math.MaxInt)/imageSize || maxOutput > uint64(math.MaxInt)/imageSize ||
-		maxOld > uint64(math.MaxInt)/pointerSize || maxOutput > uint64(math.MaxInt)/pointerSize {
+		maxOld > uint64(math.MaxInt)/pointerSize || maxOutput > uint64(math.MaxInt)/pointerSize || maxOld > uint64(math.MaxInt)/headerSize {
 		return nil, ErrPreparedOwnedWorkspace
 	}
 	if maxOld > math.MaxUint64-maxOutput || maxOld+maxOutput > math.MaxUint64/imageSize || maxOld+maxOutput > math.MaxUint64/pointerSize {
 		return nil, ErrPreparedOwnedWorkspace
 	}
-	tables := (maxOld + maxOutput) * imageSize
-	if tables > math.MaxUint64-(maxOld+maxOutput)*pointerSize {
-		return nil, ErrPreparedOwnedWorkspace
+	// Every member is one actual allocation, rounded independently before
+	// invoking credit. Nothing is born until all six charges succeed.
+	births := [...]preparedOwnedBirth{
+		{uint64(unsafe.Sizeof(PreparedOwnedWorkspace{})), true},
+		{maxOld * imageSize, true}, {maxOld * pointerSize, true},
+		{maxOutput * imageSize, true}, {maxOutput * pointerSize, true},
+		{maxOld * headerSize, false},
 	}
-	tables += (maxOld + maxOutput) * pointerSize
-	base := uint64(unsafe.Sizeof(PreparedOwnedWorkspace{}))
-	if tables > math.MaxUint64-base {
-		return nil, ErrPreparedOwnedWorkspace
+	var tables uint64
+	for _, birth := range births {
+		n, err := allocclass.ClassBytes(birth.bytes, birth.scan)
+		if err != nil || n > math.MaxUint64-tables {
+			return nil, ErrPreparedOwnedWorkspace
+		}
+		tables += n
 	}
-	tables += base
-	if err := reserve(tables); err != nil {
-		return nil, err
+	for _, birth := range births {
+		n, _ := allocclass.ClassBytes(birth.bytes, birth.scan)
+		if n != 0 {
+			if err := reserve(n); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return &PreparedOwnedWorkspace{
-		old:       make([]preparedOwnedLeafImage, 0, int(maxOld)),
-		oldPages:  make([]*[page.PageSize]byte, 0, int(maxOld)),
-		output:    make([]preparedOwnedLeafImage, 0, int(maxOutput)),
-		pages:     make([]*[page.PageSize]byte, 0, int(maxOutput)),
-		maxOutput: int(maxOutput), reserve: reserve, backing: tables,
+		old:          make([]preparedOwnedLeafImage, 0, int(maxOld)),
+		oldPages:     make([]*[page.PageSize]byte, 0, int(maxOld)),
+		pruneHeaders: make([]preparedOwnedPruneHeader, 0, int(maxOld)),
+		output:       make([]preparedOwnedLeafImage, 0, int(maxOutput)),
+		pages:        make([]*[page.PageSize]byte, 0, int(maxOutput)),
+		maxOutput:    int(maxOutput), reserve: reserve, backing: tables,
 	}, nil
+}
+
+type preparedOwnedBirth struct {
+	bytes uint64
+	scan  bool
+}
+
+// reserveBirths admits each independently rounded allocation before the caller
+// constructs any member. Accepted charges survive later refusal and retries.
+func (w *PreparedOwnedWorkspace) reserveBirths(births ...preparedOwnedBirth) error {
+	if w == nil || w.closed || w.reserve == nil {
+		return ErrPreparedOwnedWorkspace
+	}
+	var total uint64
+	for _, birth := range births {
+		n, err := allocclass.ClassBytes(birth.bytes, birth.scan)
+		if err != nil || n > math.MaxUint64-total {
+			return ErrPreparedOwnedWorkspace
+		}
+		total += n
+	}
+	if total > math.MaxUint64-w.backing {
+		return ErrPreparedOwnedWorkspace
+	}
+	for _, birth := range births {
+		n, _ := allocclass.ClassBytes(birth.bytes, birth.scan)
+		if n == 0 {
+			continue
+		}
+		if err := w.chargeClass(n); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// chargeClass is for constructors that already report one rounded birth.
+func (w *PreparedOwnedWorkspace) chargeClass(n uint64) error {
+	if w == nil || w.closed || n > math.MaxUint64-w.backing {
+		return ErrPreparedOwnedWorkspace
+	}
+	if err := w.reserve(n); err != nil {
+		return err
+	}
+	w.backing += n
+	return nil
 }
 
 func comparePreparedValuePtr(a, b page.ValuePtr) int {
@@ -192,11 +269,75 @@ func (w *PreparedOwnedWorkspace) allocatePage() (*[page.PageSize]byte, error) {
 	if w.backing > math.MaxUint64-page.PageSize {
 		return nil, ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(page.PageSize); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{page.PageSize, false}); err != nil {
 		return nil, err
 	}
-	w.backing += page.PageSize
 	return new([page.PageSize]byte), nil
+}
+
+func (w *PreparedOwnedWorkspace) hasPruneLeafPtr(ptr page.ValuePtr) bool {
+	if w == nil {
+		return false
+	}
+	for _, h := range w.pruneHeaders {
+		if h.ref.Kind == page.ChildRefLeafLog && h.ref.Log.ValuePtr() == ptr {
+			return true
+		}
+	}
+	return false
+}
+
+func (w *PreparedOwnedWorkspace) hasPruneHeader(ref page.ChildRef) bool {
+	if w == nil {
+		return false
+	}
+	for _, h := range w.pruneHeaders {
+		if h.ref == ref {
+			return true
+		}
+	}
+	return false
+}
+
+// CapturePruneHeader binds checked scalar facts from the enclosing captured
+// physical closure. Rebinding, even to identical facts, is refused.
+func (w *PreparedOwnedWorkspace) CapturePruneHeader(ref page.ChildRef, typ page.PageType, count uint16, digest [32]byte) error {
+	if w == nil || w.closed || w.sealed || len(w.pruneHeaders) == cap(w.pruneHeaders) ||
+		typ != page.PageTypeLeaf && typ != page.PageTypeInternal || w.hasPruneHeader(ref) {
+		return ErrPreparedOwnedWorkspace
+	}
+	switch ref.Kind {
+	case page.ChildRefPage:
+		if ref.Page == 0 || ref.Log != (page.LogRecordRef{}) {
+			return ErrPreparedOwnedWorkspace
+		}
+	case page.ChildRefLeafLog:
+		canonical, err := page.LeafLogPtrFromValuePtr(ref.Log.ValuePtr())
+		if err != nil || canonical != ref.Log || ref.Log.FileID == 0 || ref.Log.Offset == 0 || ref.Page != 0 || typ != page.PageTypeLeaf {
+			return ErrPreparedOwnedWorkspace
+		}
+		if _, found := findPreparedOwnedImage(w.old, ref.Log.ValuePtr()); found {
+			return ErrPreparedOwnedWorkspace
+		}
+	default:
+		return ErrPreparedOwnedWorkspace
+	}
+	w.pruneHeaders = append(w.pruneHeaders, preparedOwnedPruneHeader{ref: ref, typ: typ, count: count, digest: digest})
+	return nil
+}
+
+// ProbePruneHeader exposes only the immutable B1 Type/Count facet after Seal.
+// It never returns node bytes or supplies a reader fallback.
+func (w *PreparedOwnedWorkspace) ProbePruneHeader(ref page.ChildRef) (page.PageType, uint16, bool, error) {
+	if w == nil || w.closed || !w.sealed {
+		return 0, 0, false, ErrPreparedOwnedWorkspace
+	}
+	for _, h := range w.pruneHeaders {
+		if h.ref == ref {
+			return h.typ, h.count, ref.Kind == page.ChildRefPage, nil
+		}
+	}
+	return 0, 0, false, ErrPreparedOwnedWorkspace
 }
 
 // CaptureOld copies an exact leaf image into new owned storage. A failed load
@@ -204,6 +345,9 @@ func (w *PreparedOwnedWorkspace) allocatePage() (*[page.PageSize]byte, error) {
 // Duplicates reuse the first frozen image and do not reload mutable contents.
 func (w *PreparedOwnedWorkspace) CaptureOld(ptr page.ValuePtr, load func([]byte) error) error {
 	if w == nil || w.closed || w.sealed || load == nil || ptr.FileID == 0 || ptr.Offset == 0 {
+		return ErrPreparedOwnedWorkspace
+	}
+	if w.hasPruneLeafPtr(ptr) {
 		return ErrPreparedOwnedWorkspace
 	}
 	i, found := findPreparedOwnedImage(w.old, ptr)
@@ -282,6 +426,9 @@ func (w *PreparedOwnedWorkspace) validateOutput(data []byte) error {
 
 func (w *PreparedOwnedWorkspace) RememberOutput(ptr page.ValuePtr, data []byte) error {
 	if w == nil || w.closed || !w.sealed || len(data) != page.PageSize || cap(data) != page.PageSize || ptr.FileID == 0 || ptr.Offset == 0 {
+		return ErrPreparedOwnedWorkspace
+	}
+	if w.hasPruneLeafPtr(ptr) {
 		return ErrPreparedOwnedWorkspace
 	}
 	if _, exists := findPreparedOwnedImage(w.old, ptr); exists {
@@ -379,10 +526,14 @@ func (w *PreparedOwnedWorkspace) Close() {
 	clear(w.builders)
 	clear(w.heuristics)
 	w.builders, w.heuristics = nil, nil
+	clear(w.pruneHeaders[:cap(w.pruneHeaders)])
+	w.pruneHeaders = nil
 	clear(w.old)
 	clear(w.oldPages)
 	clear(w.output)
 	clear(w.pages)
+	clear(w.pagerImages[:cap(w.pagerImages)])
+	w.pagerImages = nil
 	clear(w.ops)
 	w.old, w.output, w.pages, w.oldPages = nil, nil, nil, nil
 	w.ops = nil
@@ -443,10 +594,14 @@ func (w *PreparedOwnedWorkspace) BindRoot(z *Zipper, root uint64, ops []batch.En
 	if w.backing > math.MaxUint64-backing {
 		return ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(backing); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{n * element, true}, preparedOwnedBirth{n * heuristicSize, true}); err != nil {
 		return err
 	}
-	w.backing += backing
+	for _, op := range ops {
+		if err := w.reserveBirths(preparedOwnedBirth{uint64(len(op.Key)), false}); err != nil {
+			return err
+		}
+	}
 	w.ops = make([]preparedOwnedPointOp, len(ops))
 	w.heuristics = make([]node.LeafHeuristicEntry, len(ops))
 	for i, op := range ops {
@@ -525,10 +680,9 @@ func (w *PreparedOwnedWorkspace) newWorkBuffers(children, entries int) (*prepare
 		return nil, ErrPreparedOwnedWorkspace
 	}
 	size += e * es
-	if err := w.reserve(size); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{header, true}, preparedOwnedBirth{c * cs, true}, preparedOwnedBirth{e * es, true}); err != nil {
 		return nil, err
 	}
-	w.backing += size
 	b := &preparedOwnedWorkBuffers{next: w.work}
 	if c != 0 {
 		b.children = make([]childWork, 0, children)
@@ -581,10 +735,13 @@ func (w *PreparedOwnedWorkspace) AdmitBuilderScratch(maxKey uint64) error {
 	if backing > math.MaxUint64-w.backing {
 		return ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(backing); err != nil {
+	if err := w.reserveBirths(
+		preparedOwnedBirth{uint64(w.maxOutput) * uint64(unsafe.Sizeof((*node.Builder)(nil))), true},
+		preparedOwnedBirth{uint64(w.maxOutput) * uint64(unsafe.Sizeof(preparedOwnedSplitNode{})), true},
+		preparedOwnedBirth{scratchSize, true}, preparedOwnedBirth{maxKey, false},
+	); err != nil {
 		return err
 	}
-	w.backing += backing
 	w.builders = make([]*node.Builder, 0, w.maxOutput)
 	w.splitNodes = make([]preparedOwnedSplitNode, 0, w.maxOutput)
 	w.applyScratch = new(mergeScratch) // owner routes use no generic scratch arrays
@@ -631,16 +788,7 @@ func (w *PreparedOwnedWorkspace) newBuilder(data []byte, typ page.PageType, opts
 	if len(entryLimit) == 1 {
 		limit = entryLimit[0]
 	}
-	b, err := node.NewOwnedBuilderWithEntryLimit(data, typ, opts, w.maxBuilderKey, limit, func(n uint64) error {
-		if n > math.MaxUint64-w.backing {
-			return ErrPreparedOwnedWorkspace
-		}
-		if err := w.reserve(n); err != nil {
-			return err
-		}
-		w.backing += n
-		return nil
-	})
+	b, err := node.NewOwnedBuilderWithEntryLimit(data, typ, opts, w.maxBuilderKey, limit, w.chargeClass)
 	if err != nil {
 		return nil, err
 	}
@@ -668,10 +816,9 @@ func (w *PreparedOwnedWorkspace) newInternalKeyArena(count int) ([]byte, error) 
 	if size > math.MaxUint64-header || size+header > math.MaxUint64-w.backing {
 		return nil, ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(size + header); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{header, true}, preparedOwnedBirth{size, false}); err != nil {
 		return nil, err
 	}
-	w.backing += size + header
 	w.keySlotsAllocated += n
 	a := &preparedOwnedKeyArena{next: w.keyArenas, data: make([]byte, 0, int(size))}
 	w.keyArenas = a
@@ -689,10 +836,9 @@ func (w *PreparedOwnedWorkspace) newNodeKeyScratch() ([]byte, error) {
 	if size > math.MaxUint64-w.backing {
 		return nil, ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(size); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{uint64(unsafe.Sizeof(preparedOwnedKeyArena{})), true}, preparedOwnedBirth{uint64(w.maxBuilderKey), false}); err != nil {
 		return nil, err
 	}
-	w.backing += size
 	w.nodeKeyAllocated++
 	a := &preparedOwnedKeyArena{next: w.keyArenas, data: make([]byte, w.maxBuilderKey)}
 	w.keyArenas = a
@@ -715,13 +861,12 @@ func (list *preparedOwnedSplitList) append(split Split) error {
 		return ErrPreparedOwnedWorkspace
 	}
 	if n != 0 {
-		if err := w.reserve(n); err != nil {
+		if err := w.reserveBirths(preparedOwnedBirth{n, false}); err != nil {
 			return err
 		}
 		key := make([]byte, len(split.Key))
 		copy(key, split.Key)
 		split.Key = key
-		w.backing += n
 		w.splitKeyBytes += n
 	} else {
 		split.Key = nil
@@ -765,10 +910,9 @@ func (list *preparedOwnedSplitList) finish() ([]Split, error) {
 	if backing > math.MaxUint64-w.backing {
 		return nil, ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(backing); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{header, true}, preparedOwnedBirth{n * element, true}); err != nil {
 		return nil, err
 	}
-	w.backing += backing
 	w.splitCopied += n
 	a := &preparedOwnedSplitArray{next: w.splitArrays, data: make([]Split, list.count)}
 	w.splitArrays = a
@@ -801,10 +945,9 @@ func (w *PreparedOwnedWorkspace) AdmitRetirementScratch() error {
 	if size > math.MaxUint64-w.backing {
 		return ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(size); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{n * element, false}, preparedOwnedBirth{n * element, false}); err != nil {
 		return err
 	}
-	w.backing += size
 	w.retired = make([]uint64, 0, int(n))
 	w.pruneRetired = make([]uint64, 0, int(n))
 	w.retireAdmitted = true
@@ -841,10 +984,9 @@ func (w *PreparedOwnedWorkspace) rootInput(root page.ChildRef, splits []Split) (
 	if size > math.MaxUint64-w.backing {
 		return nil, ErrPreparedOwnedWorkspace
 	}
-	if err := w.reserve(size); err != nil {
+	if err := w.reserveBirths(preparedOwnedBirth{header, true}, preparedOwnedBirth{n * element, true}); err != nil {
 		return nil, err
 	}
-	w.backing += size
 	w.rootInputUsed = true
 	a := &preparedOwnedSplitArray{next: w.splitArrays, data: make([]Split, int(n))}
 	w.splitArrays = a

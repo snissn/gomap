@@ -5,6 +5,7 @@ import (
 	"math"
 	"unsafe"
 
+	"github.com/snissn/gomap/TreeDB/internal/allocclass"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -23,8 +24,8 @@ type ownedBuilderScratch struct {
 
 // NewOwnedBuilderWithOptions charges visible backing before allocation. The
 // enclosing owner already owns data and must prove its global builder lifetime.
-// No shared pool or backing growth is allowed. maxKey includes reconstructed
-// old keys and all new keys. Heap rounding is a separate whole-call bound.
+// No shared pool or backing growth is allowed. Each allocation is charged at
+// its own pinned Go class; maxKey includes reconstructed old and new keys.
 func NewOwnedBuilderWithOptions(data []byte, typ page.PageType, opts BuilderOptions, maxKey int, reserve func(uint64) error) (*Builder, error) {
 	return NewOwnedBuilderWithEntryLimit(data, typ, opts, maxKey, math.MaxInt, reserve)
 }
@@ -79,25 +80,48 @@ func NewOwnedBuilderWithEntryLimit(data []byte, typ page.PageType, opts BuilderO
 	parts := [...]struct {
 		count int
 		size  uintptr
+		scan  bool
 	}{
-		{leafCount, unsafe.Sizeof(leafColumnarV2Entry{})},
-		{prefixCount, unsafe.Sizeof(leafColumnarPrefixV2Entry{})},
-		{internalCount, unsafe.Sizeof(internalBaseDeltaEntry{})},
-		{arenaSize, 1}, {valueSize, 1}, {previousSize, 1}, {fenceSize, 1}, {fenceSize, 1},
+		{leafCount, unsafe.Sizeof(leafColumnarV2Entry{}), true},
+		{prefixCount, unsafe.Sizeof(leafColumnarPrefixV2Entry{}), true},
+		{internalCount, unsafe.Sizeof(internalBaseDeltaEntry{}), true},
+		{arenaSize, 1, false}, {valueSize, 1, false}, {previousSize, 1, false}, {fenceSize, 1, false}, {fenceSize, 1, false},
 	}
-	total := uint64(unsafe.Sizeof(Builder{})) + uint64(unsafe.Sizeof(ownedBuilderScratch{}))
-	for _, part := range parts {
+	// Compute each real allocation independently. Credit callbacks all
+	// precede construction, so a later denial leaves no partially born scratch.
+	builderClass, err := allocclass.ClassBytes(uint64(unsafe.Sizeof(Builder{})), true)
+	if err != nil {
+		return nil, ErrOwnedBuilderScratch
+	}
+	scratchClass, err := allocclass.ClassBytes(uint64(unsafe.Sizeof(ownedBuilderScratch{})), true)
+	if err != nil || scratchClass > math.MaxUint64-builderClass {
+		return nil, ErrOwnedBuilderScratch
+	}
+	total := builderClass + scratchClass
+	classes := [len(parts)]uint64{}
+	for i, part := range parts {
 		if part.count < 0 || uint64(part.count) > uint64(math.MaxInt)/uint64(part.size) {
 			return nil, ErrOwnedBuilderScratch
 		}
-		n := uint64(part.count) * uint64(part.size)
-		if n > math.MaxUint64-total {
+		n, err := allocclass.ClassBytes(uint64(part.count)*uint64(part.size), part.scan)
+		if err != nil || n > math.MaxUint64-total {
 			return nil, ErrOwnedBuilderScratch
 		}
+		classes[i] = n
 		total += n
 	}
-	if err := reserve(total); err != nil {
+	if err := reserve(builderClass); err != nil {
 		return nil, err
+	}
+	if err := reserve(scratchClass); err != nil {
+		return nil, err
+	}
+	for _, n := range classes {
+		if n != 0 {
+			if err := reserve(n); err != nil {
+				return nil, err
+			}
+		}
 	}
 	s := &ownedBuilderScratch{typ: typ, opts: opts, maxKey: maxKey}
 	if leafCount != 0 {

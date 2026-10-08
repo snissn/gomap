@@ -13,6 +13,9 @@ func (set *StableResourceSet) WalkLogicalObligations(visit func(StableResourcePh
 }
 
 func (set *StableResourceSet) walkLogicalObligationsLocked(visit func(StableResourcePhysicalDescriptor, StableLogicalObligation) error) error {
+	if err := requireOrdinaryStableResourceInputs(nil, nil, set); err != nil {
+		return err
+	}
 	if visit == nil || set.physicalOnly {
 		return ErrResourceOwnership
 	}

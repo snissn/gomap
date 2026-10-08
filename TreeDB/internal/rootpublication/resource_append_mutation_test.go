@@ -139,7 +139,7 @@ func TestMergeAppendOnlyLogicalObligationsSharedMutableKindsAreMutationLocal(t *
 				t.Fatalf("entries=%d want %d", merged.Len(), extraEntries+len(kinds))
 			}
 			for i, kind := range kinds {
-				entry := findStableResourceLogical(merged.kindViews[kind].logical, stableLogicalResourceKey{kind: kind, lane: string(kind), resourceID: "shared", generation: 1})
+				entry := findStableResourceLogical(merged.kindViews.get(kind).logical, stableLogicalResourceKey{kind: kind, lane: string(kind), resourceID: "shared", generation: 1})
 				if entry == nil || entry.logicalObligations.count != 65 || entry.frontier.Bytes != 4096 {
 					t.Fatalf("kind %s lost retained or appended authority", kind)
 				}
@@ -189,10 +189,10 @@ func TestMergeAppendOnlyLogicalObligationsCrossKindCoalescingChecks(t *testing.T
 			if err := candidate.Merge(parent); err != nil {
 				t.Fatal(err)
 			}
-			before := candidate.kindViews[ResourceOuterLeafPack]
+			before := candidate.kindViews.get(ResourceOuterLeafPack)
 			work, err := candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{})
 			if scenario != "immutable-coalesce" {
-				if !errors.Is(err, ErrResourceConflict) || ResourceOwnerState(producer.owner.Load()) != ResourceOwnerBuilder || candidate.kindViews[ResourceOuterLeafPack].logical != before.logical || stableResourceKindViewCount(candidate.kindViews) != 33 {
+				if !errors.Is(err, ErrResourceConflict) || ResourceOwnerState(producer.owner.Load()) != ResourceOwnerBuilder || candidate.kindViews.get(ResourceOuterLeafPack).logical != before.logical || stableResourceKindViewCount(candidate.kindViews) != 33 {
 					t.Fatalf("conflict mutated ownership or candidate: %v", err)
 				}
 				return
@@ -907,7 +907,7 @@ func TestMergeAppendOnlyLogicalObligationsPhysicalCollisionIsMutationLocal(t *te
 	if merged.Len() != retained {
 		t.Fatalf("merged entries=%d want %d (coalesced producer must not remain visible)", merged.Len(), retained)
 	}
-	view := merged.kindViews[ResourceColumnAsset]
+	view := merged.kindViews.get(ResourceColumnAsset)
 	wantCommitment := stableLogicalObligationCommitments([]StableLogicalObligation{baseObligation, added})
 	if view.logicalObligationCount != 2 || view.logicalCommitments[ReachabilityColumnManifest] != wantCommitment[ReachabilityColumnManifest] {
 		t.Fatalf("coalesced aggregate count=%d commitments=%+v want exact set union", view.logicalObligationCount, view.logicalCommitments)
@@ -949,7 +949,7 @@ func TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducer
 	if err := candidate.Merge(resources); err != nil {
 		t.Fatal(err)
 	}
-	root := candidate.kindViews[ResourceColumnAsset].root
+	root := candidate.kindViews.get(ResourceColumnAsset).root
 	var rootDepth func(*stableResourceEntryNode) int
 	rootDepth = func(node *stableResourceEntryNode) int {
 		if node == nil {
@@ -980,7 +980,7 @@ func TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducer
 		if err != nil {
 			t.Fatal(err)
 		}
-		if work.AppendOnlyCollisionFastPath != 1 || candidate.kindViews[ResourceColumnAsset].root != root {
+		if work.AppendOnlyCollisionFastPath != 1 || candidate.kindViews.get(ResourceColumnAsset).root != root {
 			t.Fatalf("publication %d work=%+v root grew on collision-only append", publication, work)
 		}
 		if got := producerReleases.Load(); got != uint64(publication+1) {
@@ -992,8 +992,8 @@ func TestMergeAppendOnlyLogicalObligationsRepeatedCollisionDoesNotRetainProducer
 		ownedEntries++
 		return true
 	})
-	if ownedEntries != stableResourceEntryLinearLookupLimit+1 || stableResourceKindViewCount(candidate.kindViews) != ownedEntries || rootDepth(candidate.kindViews[ResourceColumnAsset].root) != initialDepth {
-		t.Fatalf("ownership entries=%d canonical=%d depth=%d want entries=%d depth=%d", ownedEntries, stableResourceKindViewCount(candidate.kindViews), rootDepth(candidate.kindViews[ResourceColumnAsset].root), stableResourceEntryLinearLookupLimit+1, initialDepth)
+	if ownedEntries != stableResourceEntryLinearLookupLimit+1 || stableResourceKindViewCount(candidate.kindViews) != ownedEntries || rootDepth(candidate.kindViews.get(ResourceColumnAsset).root) != initialDepth {
+		t.Fatalf("ownership entries=%d canonical=%d depth=%d want entries=%d depth=%d", ownedEntries, stableResourceKindViewCount(candidate.kindViews), rootDepth(candidate.kindViews.get(ResourceColumnAsset).root), stableResourceEntryLinearLookupLimit+1, initialDepth)
 	}
 	merged, err := candidate.Freeze()
 	if err != nil {
@@ -1114,8 +1114,8 @@ func TestCertifiedAppendOnlyPhysicalCoalesceRejectsMismatchedKindViewKey(t *test
 		producerBuilder.mu.Unlock()
 		t.Fatal(err)
 	}
-	producerBuilder.kindViews[ResourceValueLog] = producerBuilder.kindViews[ResourceColumnAsset]
-	delete(producerBuilder.kindViews, ResourceColumnAsset)
+	producerBuilder.kindViews.set(ResourceValueLog, producerBuilder.kindViews.get(ResourceColumnAsset))
+	producerBuilder.kindViews.remove(ResourceColumnAsset)
 	producerBuilder.mu.Unlock()
 
 	plan, _, certified, err := certifiedAppendOnlyPhysicalCoalesce(targetBuilder.kindViews, producerBuilder.kindViews, StableLogicalObligationMutation{
@@ -1163,14 +1163,14 @@ func TestMergeAppendOnlyLogicalObligationsLateMixedConflictLeavesInputsUnchanged
 	if err := candidate.Merge(parent); err != nil {
 		t.Fatal(err)
 	}
-	beforeCandidate, beforeProducer := candidate.kindViews[ResourceColumnAsset], producer.kindViews[ResourceColumnAsset]
+	beforeCandidate, beforeProducer := candidate.kindViews.get(ResourceColumnAsset), producer.kindViews.get(ResourceColumnAsset)
 	_, err = candidate.MergeAppendOnlyLogicalObligations(producer, StableLogicalObligationMutation{
 		ScopedFields: []ReachabilityField{ReachabilityColumnManifest}, Added: []StableLogicalObligation{first, late},
 	})
 	if !errors.Is(err, ErrResourceConflict) {
 		t.Fatalf("late conflict=%v want %v", err, ErrResourceConflict)
 	}
-	afterCandidate, afterProducer := candidate.kindViews[ResourceColumnAsset], producer.kindViews[ResourceColumnAsset]
+	afterCandidate, afterProducer := candidate.kindViews.get(ResourceColumnAsset), producer.kindViews.get(ResourceColumnAsset)
 	if ResourceOwnerState(producer.owner.Load()) != ResourceOwnerBuilder || afterCandidate.root != beforeCandidate.root || afterCandidate.logical != beforeCandidate.logical || afterCandidate.physical != beforeCandidate.physical || afterCandidate.count != beforeCandidate.count || afterProducer.root != beforeProducer.root || afterProducer.logical != beforeProducer.logical || afterProducer.physical != beforeProducer.physical || afterProducer.count != beforeProducer.count {
 		t.Fatalf("late conflict mutated inputs: producer owner=%v", ResourceOwnerState(producer.owner.Load()))
 	}
@@ -1418,7 +1418,7 @@ func TestMergeAppendOnlyLogicalObligationsRepresentativeReplacementUsesExactFall
 		t.Fatal(err)
 	}
 	defer resources.Release()
-	entry := findStableResourceLogical(resources.kindViews[ResourceColumnAsset].logical, logicalKey)
+	entry := findStableResourceLogical(resources.kindViews.get(ResourceColumnAsset).logical, logicalKey)
 	if entry == nil || entry.token.namespace == nil {
 		t.Fatal("exact fallback did not install the namespace-bearing representative")
 	}
@@ -1594,19 +1594,19 @@ func TestStableLogicalObligationAppendCertificationUsesAggregateCommitments4366(
 		t.Fatalf("producer mismatch certified=%v err=%v", certified, err)
 	}
 
-	producerView := producer.kindViews[ResourceColumnAsset]
+	producerView := producer.kindViews.get(ResourceColumnAsset)
 	producerCommitments := producerView.logicalCommitments
 	producerView.logicalCommitments = nil
-	producer.kindViews[ResourceColumnAsset] = producerView
+	producer.kindViews.set(ResourceColumnAsset, producerView)
 	if _, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, mutation); err != nil || certified {
 		t.Fatalf("missing producer commitment certified=%v err=%v", certified, err)
 	}
 	producerView.logicalCommitments = producerCommitments
-	producer.kindViews[ResourceColumnAsset] = producerView
+	producer.kindViews.set(ResourceColumnAsset, producerView)
 
-	view := base.kindViews[ResourceColumnAsset]
+	view := base.kindViews.get(ResourceColumnAsset)
 	view.logicalCommitments = nil
-	base.kindViews[ResourceColumnAsset] = view
+	base.kindViews.set(ResourceColumnAsset, view)
 	if _, certified, err := CertifyStableLogicalObligationAppendMutation(base, producer, mutation); err != nil || certified {
 		t.Fatalf("missing source commitment certified=%v err=%v", certified, err)
 	}
@@ -1639,7 +1639,7 @@ func TestMergeAppendOnlyLogicalObligationsRepeatedDistinctSegmentsStayMutationLo
 		t.Fatal(err)
 	}
 	defer resources.Release()
-	view := resources.kindViews[ResourceColumnAsset]
+	view := resources.kindViews.get(ResourceColumnAsset)
 	if resources.Len() != segments || view.logicalMembershipCount != segments || view.logicalObligationCount != segments {
 		t.Fatalf("final entries=%d membership=%d obligations=%d want %d", resources.Len(), view.logicalMembershipCount, view.logicalObligationCount, segments)
 	}
@@ -1771,9 +1771,9 @@ func TestStableLogicalObligationPackedAliasCertificationKeepsExactMerge4371(t *t
 
 	missingBase := freezeAppendMutationResources(t, appendMutationResourceToken(t, file, ResourceColumnAsset, "base", 1, ReachabilityColumnManifest, baseObligation))
 	defer missingBase.Release()
-	view := missingBase.kindViews[ResourceColumnAsset]
+	view := missingBase.kindViews.get(ResourceColumnAsset)
 	view.logicalMembership = nil
-	missingBase.kindViews[ResourceColumnAsset] = view
+	missingBase.kindViews.set(ResourceColumnAsset, view)
 	distinctFile := writeStableResourceFixture(t, dir, "distinct.pack", "distinct")
 	distinct := freezeAppendMutationResources(t, appendMutationResourceToken(t, distinctFile, ResourceColumnAsset, "distinct", 1, ReachabilityColumnManifest, added))
 	defer distinct.Release()

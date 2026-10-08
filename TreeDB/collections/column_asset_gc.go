@@ -83,12 +83,16 @@ type columnAssetGCPlannedSegment struct {
 }
 
 type columnAssetStableSegmentDeleter struct {
-	segmentDir     string
-	parent         *os.File
-	registry       *rootpublication.IdentityPinRegistry
-	parentIdentity rootpublication.StableIdentity
-	leases         []*rootpublication.IdentityDeleteLease
-	removed        bool
+	producerDB           *backenddb.DB // actual synchronous operation binding only
+	producerNamespace    string
+	producerRetired      [32]uint32
+	producerRetiredCount int
+	segmentDir           string
+	parent               *os.File
+	registry             *rootpublication.IdentityPinRegistry
+	parentIdentity       rootpublication.StableIdentity
+	leases               []*rootpublication.IdentityDeleteLease
+	removed              bool
 }
 
 func newColumnAssetStableSegmentDeleter(segmentDir string, registry *rootpublication.IdentityPinRegistry) (*columnAssetStableSegmentDeleter, error) {
@@ -116,6 +120,11 @@ func (deleter *columnAssetStableSegmentDeleter) delete(planned columnAssetGCPlan
 		return false, fmt.Errorf("%w: parent directory rebound for file_id=%d", ErrColumnAssetGCPlanStale, fileID)
 	}
 	name := columnAssetSegmentFileName(fileID)
+	// Append and delete share one existing stripe. Registry reservation follows
+	// exact frontier validation; no registry/owner lock is held while waiting here.
+	stripe := columnAssetSegmentWriteLock(filepath.Join(deleter.segmentDir, name))
+	stripe.Lock()
+	defer stripe.Unlock()
 	resource, err := rootpublication.OpenStableChildFile(deleter.parent, name, os.O_RDONLY, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -170,6 +179,22 @@ func (deleter *columnAssetStableSegmentDeleter) delete(planned columnAssetGCPlan
 			return false, err
 		}
 	}
+	var retiredProducer bool
+	if deleter.producerDB != nil {
+		if deleter.producerRetiredCount >= len(deleter.producerRetired) {
+			return false, rootpublication.ErrStableMetadataShapeUnsupported
+		}
+		retiredProducer, err = deleter.producerDB.RetireColumnSegmentProducerV1(deleter.producerNamespace, fileID, identity, lease)
+		if err != nil {
+			return false, err
+		}
+		if retiredProducer {
+			// The DB slot takes this SAME lease before unlink, including failed unlink.
+			abort = false
+			deleter.producerRetired[deleter.producerRetiredCount] = fileID
+			deleter.producerRetiredCount++
+		}
+	}
 	if removeHook != nil {
 		err = removeHook(filepath.Join(deleter.segmentDir, name))
 	} else {
@@ -178,12 +203,19 @@ func (deleter *columnAssetStableSegmentDeleter) delete(planned columnAssetGCPlan
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return false, err
 	}
+	if retiredProducer {
+		if err := deleter.producerDB.MarkColumnSegmentProducerUnlinkedV1(deleter.producerNamespace, fileID); err != nil {
+			return false, err
+		}
+	}
+	deleter.removed = true
 	if err := deleter.registry.ForgetStableNamespaceLink(deleter.parent, resource, name); err != nil {
 		return false, err
 	}
 	abort = false
-	deleter.leases = append(deleter.leases, lease)
-	deleter.removed = true
+	if !retiredProducer {
+		deleter.leases = append(deleter.leases, lease)
+	}
 	return true, nil
 }
 
@@ -198,6 +230,13 @@ func (deleter *columnAssetStableSegmentDeleter) finish(cause error) error {
 			syncErr = syncHook(deleter.segmentDir)
 		} else if deleter.parent != nil {
 			syncErr = deleter.parent.Sync()
+		}
+	}
+	// A producer-owned lease is never committed/refunded after failed unlink
+	// or sync. Its real slot remains retiring and synchronously retryable.
+	if syncErr == nil && cause == nil && deleter.producerDB != nil {
+		for i := 0; i < deleter.producerRetiredCount; i++ {
+			syncErr = errors.Join(syncErr, deleter.producerDB.CompleteColumnSegmentProducerRetirementV1(deleter.producerNamespace, deleter.producerRetired[i]))
 		}
 	}
 	for _, lease := range deleter.leases {
@@ -338,6 +377,13 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 		stats.Plan = columnAssetGCPlanForDetail(stats.Plan, opts.Detailed, opts.SegmentDetails)
 	}()
 	needSegmentEntries := !opts.DryRun || opts.Detailed || opts.SegmentDetails
+	if !opts.DryRun {
+		// Existing failed GC debt already owns the exact deletion gate and physical
+		// owner. Retry it before taking a new reachability plan; no fresh file/lease.
+		if err := c.retryColumnSegmentProducerRetirements(); err != nil {
+			return stats, err
+		}
+	}
 	planOpts, err := c.columnAssetLifecycleAugmentReachabilityOptionsWithContext(ctx, ColumnAssetReachabilityOptions{
 		MaxSegmentEntries:                     opts.MaxSegmentEntries,
 		MaxManifestRecords:                    opts.MaxManifestRecords,
@@ -474,6 +520,7 @@ func (c *Collection) columnAssetGC(ctx context.Context, opts ColumnAssetGCOption
 	if err != nil {
 		return stats, err
 	}
+	deleter.producerDB, deleter.producerNamespace = c.db, plan.Namespace
 
 	for _, planned := range eligible {
 		entry := planned.entry
@@ -850,4 +897,30 @@ func subColumnAssetReachabilityBytesFloor(total, delta int64) int64 {
 		return 0
 	}
 	return total - delta
+}
+
+func (c *Collection) retryColumnSegmentProducerRetirements() error {
+	if c == nil || c.db == nil {
+		return errCollectionDBNil
+	}
+	// This ordinary maintenance call uses the opened collection metadata;
+	// its scalar recovery debt retains no schema/DB callback.
+	meta := c.Meta()
+	var name string
+	if config := meta.Options.ColumnStore; config != nil && config.AssetManager != nil {
+		name = config.AssetManager.Namespace
+	}
+	if name == "" {
+		return nil
+	}
+	for index := 0; index < 32; index++ {
+		fileID, incarnation := c.db.ColumnSegmentProducerRetiringFileV1(name, index)
+		if fileID == 0 {
+			continue
+		}
+		if err := c.db.RetryColumnSegmentProducerRecoveryV1(name, fileID, incarnation); err != nil {
+			return err
+		}
+	}
+	return nil
 }

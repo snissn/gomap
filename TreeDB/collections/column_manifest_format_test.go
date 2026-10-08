@@ -2,8 +2,11 @@ package collections
 
 import (
 	"bytes"
+	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"strings"
 	"testing"
+	"unsafe"
 )
 
 func TestColumnManifestRecordDecodeAcceptsV1CompatibilityM1634(t *testing.T) {
@@ -268,4 +271,113 @@ func mustEncodeColumnManifestPartRecordVersionM1634(t *testing.T, asset ColumnPr
 		writeColumnManifestSortKey(&b, sortKey)
 	}
 	return b.Bytes()
+}
+
+// Actual changed records, rather than source length, determine the owned
+// mutation backing. Deletes clone only keys; unchanged values create nothing.
+func TestColumnManifestMutationPrebirthOwnsExactMerge(t *testing.T) {
+	current := []columnManifestRecord{{key: []byte("a"), value: []byte("old")}, {key: []byte("b"), value: []byte("same")}, {key: []byte("d"), value: []byte("removed")}}
+	next := []columnManifestRecord{{key: []byte("a"), value: []byte("new")}, {key: []byte("b"), value: []byte("same")}, {key: []byte("c"), value: []byte("added")}}
+	credit, err := newNativeRequestCredit([nativeRequestCreditKinds]uint64{1 << 20, 1 << 20, 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credit.retire()
+	account := &credit.facets[nativeRequestSourceCredit]
+	before := credit.snapshot().Debited[nativeRequestSourceCredit]
+	mutations, err := buildColumnManifestMutationDeltaWithMetadataAccount(current, next, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mutations) != 3 || cap(mutations) != 3 ||
+		string(mutations[0].record.key) != "a" || mutations[0].deleted ||
+		string(mutations[1].record.key) != "c" || mutations[1].deleted ||
+		string(mutations[2].record.key) != "d" || !mutations[2].deleted {
+		t.Fatal("merge semantics changed", mutations)
+	}
+	var expected uint64
+	for _, raw := range []uint64{3 * uint64(unsafe.Sizeof(columnManifestMutation{})), 1, 3, 1, 5, 1} {
+		scan := raw == 3*uint64(unsafe.Sizeof(columnManifestMutation{}))
+		class, err := rootpublication.StableBackingClassBytes(raw, scan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected += class
+	}
+	if debit := credit.snapshot().Debited[nativeRequestSourceCredit] - before; debit != expected {
+		t.Fatalf("actual individual allocation classes = %d want %d", debit, expected)
+	}
+	next[0].key[0], next[0].value[0], current[2].key[0] = 'z', 'z', 'z'
+	if string(mutations[0].record.key) != "a" || string(mutations[0].record.value) != "new" || string(mutations[2].record.key) != "d" {
+		t.Fatal("owned mutation aliases input")
+	}
+}
+
+func TestColumnManifestMutationRefusalBeforeBackingBirth(t *testing.T) {
+	credit, err := newNativeRequestCredit([nativeRequestCreditKinds]uint64{1 << 20, 1 << 20, 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credit.retire()
+	account := &credit.facets[nativeRequestSourceCredit]
+	before := credit.snapshot()
+	bad := []columnManifestRecord{{key: []byte("b"), value: []byte("b")}, {key: []byte("a"), value: []byte("a")}}
+	if mutations, err := buildColumnManifestMutationDeltaWithMetadataAccount(nil, bad, account); err == nil || mutations != nil {
+		t.Fatal("invalid ordering constructed owned backing")
+	}
+	if credit.snapshot() != before {
+		t.Fatal("invalid complete input changed constructor credit")
+	}
+	// A real valid merge whose complete debit is refused creates no partial
+	// cloned key/value or output capacity and does not change cumulative debit.
+	credit.mu.Lock()
+	credit.limits[nativeRequestSourceCredit] = credit.used[nativeRequestSourceCredit]
+	credit.mu.Unlock()
+	before = credit.snapshot()
+	valid := []columnManifestRecord{{key: []byte("a"), value: []byte("new")}}
+	if mutations, err := buildColumnManifestMutationDeltaWithMetadataAccount(nil, valid, account); !errors.Is(err, ErrPreparedInsertResourceLimit) || mutations != nil {
+		t.Fatal("denied merge exposed partial output", err)
+	}
+	if credit.snapshot() != before {
+		t.Fatal("denied complete debit changed credit")
+	}
+}
+
+func TestColumnManifestPrebirthCodecPreservesBytes(t *testing.T) {
+	credit, err := newNativeRequestCredit([nativeRequestCreditKinds]uint64{1 << 20, 1 << 20, 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer credit.retire()
+	account := &credit.facets[nativeRequestSourceCredit]
+	asset := ColumnPreparedAsset{Ref: ColumnAssetRef{Kind: ColumnAssetKindTCS1TypedColumnPart, Namespace: "events_column_assets", Generation: 7, PartID: 3, FileID: 1, Offset: 16, Length: 128, Checksum: 99}, Rows: 42, Bytes: 128, PublishID: 123, GenerationID: 7, Reason: string(ColumnPublishOperationInsert), PartRole: ColumnManifestPartRoleBase, SortKey: columnSortKeyMatchString([]ColumnSortKey{{Column: "time_us"}, {Column: "did"}})}
+	headerInput := ColumnPublishManifestEncodeInput{Collection: "events", Operation: ColumnPublishOperationInsert, AppliedCommandLSN: 123, ColumnStore: ColumnStoreConfig{SchemaHash: 456}, Prepared: ColumnPublishPreparedAssets{Assets: []ColumnPreparedAsset{asset}, RowCount: 42, CommandBytes: 100, RowRemainderBytes: 20, ColumnPayloadBytes: 80}, metadataAccount: account}
+	header, err := encodeColumnManifestHeaderRecord(headerInput, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(header, mustEncodeColumnManifestHeaderRecordVersionM1634(t, columnManifestRecordVersion)) || cap(header) != len(header) {
+		t.Fatal("header grammar/capacity changed")
+	}
+	part, err := encodeColumnManifestPartRecordWithMetadataAccount(asset, account)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(part, mustEncodeColumnManifestPartRecordVersionM1634(t, asset, columnManifestRecordVersion)) || cap(part) != len(part) {
+		t.Fatal("part grammar/capacity changed")
+	}
+	before := credit.snapshot()
+	asset.SortKey = "unterminated"
+	if raw, err := encodeColumnManifestPartRecordWithMetadataAccount(asset, account); err == nil || raw != nil {
+		t.Fatal("malformed sort metadata allocated output")
+	}
+	if credit.snapshot() != before {
+		t.Fatal("malformed sort metadata debited output")
+	}
+	credit.mu.Lock()
+	credit.limits[nativeRequestSourceCredit] = credit.used[nativeRequestSourceCredit]
+	credit.mu.Unlock()
+	if raw, err := encodeColumnManifestHeaderRecord(headerInput, 7); !errors.Is(err, ErrPreparedInsertResourceLimit) || raw != nil {
+		t.Fatal("denied header exposed owned bytes", err)
+	}
 }

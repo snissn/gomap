@@ -3,7 +3,9 @@ package zipper
 import (
 	"bytes"
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/allocclass"
 	"testing"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/batch"
 	"github.com/snissn/gomap/TreeDB/internal/adaptive"
@@ -84,13 +86,12 @@ func TestPreparedOwnedWorkspaceFrozenImagesAndBackingAdmission(t *testing.T) {
 
 func TestPreparedOwnedWorkspaceDenialBeforeLoadAndAppend(t *testing.T) {
 	sentinel := errors.New("credit denied")
-	calls := 0
+	deny := false
 	if _, err := NewPreparedOwnedWorkspace(1, 1, func(uint64) error { return sentinel }); !errors.Is(err, sentinel) {
 		t.Fatal(err)
 	}
 	w, err := NewPreparedOwnedWorkspace(1, 1, func(uint64) error {
-		calls++
-		if calls > 1 {
+		if deny {
 			return sentinel
 		}
 		return nil
@@ -99,6 +100,7 @@ func TestPreparedOwnedWorkspaceDenialBeforeLoadAndAppend(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
+	deny = true
 	loaded := false
 	if err := w.CaptureOld(page.ValuePtr{FileID: 1, Offset: 64}, func([]byte) error { loaded = true; return nil }); !errors.Is(err, sentinel) || loaded {
 		t.Fatalf("load before charge %v %v", loaded, err)
@@ -593,5 +595,214 @@ func TestPreparedOwnedWorkspaceRetirementAndRootInputOwnership(t *testing.T) {
 	w.Close()
 	if retired[0] != 0 || initial[1].Key != nil {
 		t.Fatal("close retained root/retirement aliases")
+	}
+}
+
+func TestPreparedOwnedWorkspaceDistinctBirthClassesAndPartialRefusal(t *testing.T) {
+	var charges []uint64
+	w, err := NewPreparedOwnedWorkspace(3, 7, func(n uint64) error { charges = append(charges, n); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	raws := []uint64{uint64(unsafe.Sizeof(*w)), uint64(cap(w.old)) * uint64(unsafe.Sizeof(preparedOwnedLeafImage{})),
+		uint64(cap(w.oldPages)) * uint64(unsafe.Sizeof((*[page.PageSize]byte)(nil))),
+		uint64(cap(w.output)) * uint64(unsafe.Sizeof(preparedOwnedLeafImage{})),
+		uint64(cap(w.pages)) * uint64(unsafe.Sizeof((*[page.PageSize]byte)(nil))),
+		uint64(cap(w.pruneHeaders)) * uint64(unsafe.Sizeof(preparedOwnedPruneHeader{}))}
+	if len(charges) != len(raws) {
+		t.Fatalf("birth count=%d want=%d", len(charges), len(raws))
+	}
+	var total uint64
+	for i, raw := range raws {
+		want, err := allocclass.ClassBytes(raw, i != len(raws)-1)
+		if err != nil || charges[i] != want {
+			t.Fatalf("birth%d charge=%d want=%d err=%v", i, charges[i], want, err)
+		}
+		total += want
+	}
+	if w.BackingBytes() != total {
+		t.Fatal("distinct backing classes not cumulative")
+	}
+	denied := errors.New("class credit denied")
+	for fail := 1; fail <= len(charges); fail++ {
+		calls := 0
+		owner, err := NewPreparedOwnedWorkspace(3, 7, func(n uint64) error {
+			calls++
+			if calls == fail {
+				return denied
+			}
+			return nil
+		})
+		if owner != nil || !errors.Is(err, denied) || calls != fail {
+			t.Fatalf("constructor denial%d owner=%v calls=%d err=%v", fail, owner, calls, err)
+		}
+	}
+	// A denial after earlier birth charges cannot expose partial root keys or
+	// refund the preceding credit; no key copy is installed until all succeed.
+	before := w.BackingBytes()
+	accepted := uint64(0)
+	calls := 0
+	w.reserve = func(n uint64) error {
+		calls++
+		if calls == 4 {
+			return denied
+		}
+		accepted += n
+		return nil
+	}
+	ops := []batch.Entry{{Type: batch.OpPut, Key: []byte("a")}, {Type: batch.OpPut, Key: []byte("b")}}
+	if err := w.BindRoot(&Zipper{}, 0, ops); !errors.Is(err, denied) {
+		t.Fatal(err)
+	}
+	if w.bound || w.ops != nil || w.heuristics != nil || w.BackingBytes() != before+accepted || accepted == 0 {
+		t.Fatal("partial root assets exposed or preceding debit refunded")
+	}
+}
+
+type pruneHeaderTestReader struct{ calls int }
+
+func (r *pruneHeaderTestReader) ReadUnsafe(page.ValuePtr) ([]byte, error) {
+	r.calls++
+	return nil, errors.New("header probe reached generic reader")
+}
+
+func TestPreparedOwnedWorkspacePruneHeaderAuthority(t *testing.T) {
+	p, z := newParallelApplyTestZipper(t)
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatal(err)
+	} // reserve metadata page zero
+	z.maintenanceOpsPerCoalesce = 400000
+	root := newParallelApplyEmptyLeafRoot(t, z)
+	ref := page.PageChildRef(root)
+	ptr := page.ValuePtr{FileID: page.ValueLogFileID(2), Offset: 64, Length: 128}
+	log, err := page.LeafLogPtrFromValuePtr(ptr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logRef := page.LeafLogChildRef(log)
+	var charges []uint64
+	w, err := NewPreparedOwnedWorkspace(2, 4, func(n uint64) error { charges = append(charges, n); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	digest := [32]byte{1, 2, 3}
+	if err := w.CapturePruneHeader(ref, page.PageTypeLeaf, 0, digest); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CapturePruneHeader(ref, page.PageTypeLeaf, 0, digest); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatalf("duplicate accepted: %v", err)
+	}
+	if err := w.CapturePruneHeader(logRef, page.PageTypeLeaf, 37, digest); err != nil {
+		t.Fatal(err)
+	}
+	before := w.BackingBytes()
+	loaded := false
+	if err := w.CaptureOld(ptr, func([]byte) error { loaded = true; return nil }); !errors.Is(err, ErrPreparedOwnedWorkspace) || loaded || w.BackingBytes() != before {
+		t.Fatalf("header acquired full image: %v loaded=%v", err, loaded)
+	}
+	if _, _, _, err := w.ProbePruneHeader(ref); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatal("unsealed probe")
+	}
+	if err := w.CapturePruneHeader(page.PageChildRef(root+1), page.PageTypeLeaf, 0, digest); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatal("capacity expanded")
+	}
+	if err := w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		ref       page.ChildRef
+		count     uint16
+		fromPager bool
+	}{{ref, 0, true}, {logRef, 37, false}} {
+		typ, count, fromPager, err := w.ProbePruneHeader(tc.ref)
+		if err != nil || typ != page.PageTypeLeaf || count != tc.count || fromPager != tc.fromPager {
+			t.Fatalf("facts %v/%d/%v/%v", typ, count, fromPager, err)
+		}
+	}
+	changed := logRef
+	changed.Log.RecordLengthHint++
+	if _, _, _, err := w.ProbePruneHeader(changed); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatal("partial ref identity accepted")
+	}
+	reader := &pruneHeaderTestReader{}
+	z.SetLeafPageReader(reader)
+	z.preparedOwned = w
+	for _, r := range []page.ChildRef{ref, logRef} {
+		if _, _, _, _, _, err := z.loadNodeRef(r, nil); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+			t.Fatalf("header full-load admitted %v", err)
+		}
+	}
+	if reader.calls != 0 {
+		t.Fatal("header accessed generic reader")
+	}
+	// The pager page really exists; refusing its full load above is a distinct
+	// authority check, rather than an invalid-page error.
+	if _, err := p.Get(root); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	if _, _, _, err := w.ProbePruneHeader(ref); !errors.Is(err, ErrPreparedOwnedWorkspace) || w.pruneHeaders != nil {
+		t.Fatal("closed header authority")
+	}
+}
+
+func TestPreparedOwnedWorkspacePruneHeaderShapeAndB1(t *testing.T) {
+	p, z := newParallelApplyTestZipper(t)
+	if _, err := p.Alloc(1); err != nil {
+		t.Fatal(err)
+	} // reserve metadata page zero
+	z.maintenanceOpsPerCoalesce = 400000
+	root := newParallelApplyEmptyLeafRoot(t, z)
+	w, err := NewPreparedOwnedWorkspace(3, 4, func(uint64) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if err := w.CapturePruneHeader(page.ChildRef{}, page.PageTypeLeaf, 0, [32]byte{}); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatal("zero pager ref")
+	}
+	malformed := page.PageChildRef(root)
+	malformed.Log.Offset = 9
+	if err := w.CapturePruneHeader(malformed, page.PageTypeLeaf, 0, [32]byte{}); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatal("mixed ref")
+	}
+	if err := w.CapturePruneHeader(page.PageChildRef(root), page.PageType(255), 0, [32]byte{}); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatal("invalid type")
+	}
+	if err := w.BindRoot(z, root, []batch.Entry{{Type: batch.OpDelete, Key: []byte("z")}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.AdmitRetirementScratch(); err != nil {
+		t.Fatal(err)
+	}
+	empty := page.PageChildRef(root)
+	internal := page.PageChildRef(root + 1000) // Deliberately absent: probe is scalar.
+	if err := w.CapturePruneHeader(empty, page.PageTypeLeaf, 0, [32]byte{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.CapturePruneHeader(internal, page.PageTypeInternal, 1, [32]byte{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	z.preparedOwned = w
+	budget := &maintenanceBudget{remaining: 1}
+	entries := []internalEntry{{child: internal}, {child: empty}, {child: internal}}
+	var metrics adaptive.Metrics
+	out, retired, err := z.coalesceLeafChildren(entries, budget, &metrics, nil)
+	if err != nil || len(out) != 2 || len(retired) != 1 || retired[0] != root || budget.remaining != 0 {
+		t.Fatalf("B1 out=%v retired=%v budget=%v err=%v", out, retired, budget, err)
+	}
+	if metrics.ZipperNodeLoads != 0 || metrics.ZipperPagerNodeBytesRead != 0 {
+		t.Fatal("scalar probes reported physical loads")
+	}
+	if _, err := p.Get(internal.Page); err == nil {
+		t.Fatal("fixture absent pager unexpectedly present")
+	}
+	if _, _, _, err := w.ProbePruneHeader(page.PageChildRef(root + 2000)); !errors.Is(err, ErrPreparedOwnedWorkspace) {
+		t.Fatal("unknown header accepted")
 	}
 }

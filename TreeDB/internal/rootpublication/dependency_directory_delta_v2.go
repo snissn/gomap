@@ -21,6 +21,9 @@ func WalkDependencyDirectoryChangesV2(source *StableResourceSet, base *Dependenc
 	}
 	source.mu.Lock()
 	defer source.mu.Unlock()
+	if err := requireOrdinaryStableResourceInputs(nil, nil, source); err != nil {
+		return 0, 0, err
+	}
 	if owner := ResourceOwnerState(source.owner.Load()); owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return 0, 0, ErrResourceOwnership
 	}

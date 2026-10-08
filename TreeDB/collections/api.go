@@ -20096,6 +20096,7 @@ func (c *Collection) publishUpdateBatchPlanLocked(plan *updateBatchPlan, command
 			}
 		}
 		if plan.nativeStringDocuments != nil {
+			immediateColumnInput.nativeSnapshot = plan.snap
 			immediateColumnInput.sparseOnly = true
 			immediateColumnInput.documents = plan.nativeStringDocuments
 			immediateColumnInput.declaredRowsReady = true

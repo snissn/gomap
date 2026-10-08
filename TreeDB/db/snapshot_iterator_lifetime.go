@@ -169,8 +169,32 @@ func (it *snapshotBoundIterator) Close() error {
 		if it.inner != nil {
 			it.closeErr = it.inner.Close()
 		}
+		// The original private control protects the final receiver alias through
+		// iterator removal, finalization and local scrub. A public iterator's own
+		// control/backing remains cumulative and is not refunded here.
 		owner := it.owner
 		it.owner = nil
+		var completion *OriginalSnapshotCleanupV1
+		if owner != nil {
+			owner.iteratorMu.Lock()
+			completion = owner.originalCleanup
+			if completion != nil {
+				if err := completion.RetainOriginalCleanupV1(); err != nil {
+					owner.iteratorMu.Unlock()
+					it.owner = owner
+					it.closeErr = errors.Join(it.closeErr, err)
+					return
+				}
+			}
+			owner.iteratorMu.Unlock()
+		}
+		defer func() {
+			owner = nil
+			if completion != nil {
+				completion.ReleaseOriginalCleanupV1()
+				completion = nil
+			}
+		}()
 		if owner != nil {
 			owner.iteratorMu.Lock()
 			delete(owner.iterators, it)

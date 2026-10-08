@@ -1864,7 +1864,11 @@ func BenchmarkProductionAuthorityPreparedClosureCoalescing(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			b.Cleanup(resources.Release)
+			b.Cleanup(func() {
+				if err := resources.Release(); err != nil {
+					b.Error(err)
+				}
+			})
 			benchmarkProductionAuthorityPreparedClosure(b, resources)
 		})
 	}
@@ -1873,7 +1877,11 @@ func BenchmarkProductionAuthorityPreparedClosureCoalescing(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		b.Cleanup(resources.Release)
+		b.Cleanup(func() {
+			if err := resources.Release(); err != nil {
+				b.Error(err)
+			}
+		})
 		benchmarkProductionAuthorityPreparedClosure(b, resources)
 	})
 }

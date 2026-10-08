@@ -21,6 +21,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/keyupdate"
 	"github.com/snissn/gomap/TreeDB/internal/lockfile"
+	"github.com/snissn/gomap/TreeDB/internal/residentcredit"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 	"github.com/snissn/gomap/TreeDB/lifecycle"
@@ -87,6 +88,10 @@ type snapshotView struct {
 }
 
 type DB struct {
+	failedSnapshotCleanup         *OriginalSnapshotCleanupV1 // intrusive actual unfinished point owners, db.mu
+	failedSnapshotCleanupDraining bool                       // short admission; never held across callbacks
+	snapshotPhysicalCloseRunning  bool                       // db.mu; no new cleanup effects during physical Close
+
 	valueLogManager                *valuelog.Manager
 	valueLogIdentityPins           *rootpublication.IdentityPinRegistry
 	snapshotViewRO                 atomic.Pointer[snapshotView]
@@ -185,6 +190,11 @@ type DB struct {
 	commitMu                  sync.Mutex
 	durablePublishMu          sync.Mutex
 	rootPublication           *rootPublicationRuntimeV1
+	rootTerminalHandoff       *rootpublication.RecoveryResourceHandoff
+	closeTerminalManager      *valuelog.Manager // exact saved shutdown holder through checked retry
+	nativePublicationResident *nativePublicationResidentOwner
+	columnSegmentProducersMu  sync.Mutex
+	columnSegmentProducers    *columnSegmentProducerTableV1
 	rootPublicationFixedDelay time.Duration
 	// rootReuseMu seals acquisition of a visible root generation while durable
 	// publication converts retired COW pages into reusable pages. Existing
@@ -201,6 +211,7 @@ type DB struct {
 	pendingValueLogAppendPtrRefs    map[page.ValuePtr]int
 	updateLocks                     keyupdate.Locks
 	maintenanceMu                   sync.Mutex
+	ownedPointTerminalExecutions    sync.WaitGroup // invocation join, admission serialized by maintenanceMu
 	stableIndexCaptures             atomic.Int64
 	durableCandidateIndexCaptures   atomic.Int64
 	combineMu                       sync.RWMutex
@@ -277,10 +288,14 @@ type DB struct {
 	closeHooksOwner          uint64
 	closeHooksCloseRequested bool
 	// closeHooksWaitHook is a deterministic test seam for the concurrent waiter.
-	closeHooksWaitHook func()
-	closeHooksWG       sync.WaitGroup
-	closeTeardownOnce  sync.Once
-	closeTeardownErr   error
+	closeHooksWaitHook   func()
+	closeHooksWG         sync.WaitGroup
+	closeTeardownMu      sync.Mutex
+	closeTeardownStarted bool
+	constructorOnly      bool
+	constructorPager     *pager.Pager
+	constructorCreator   *residentcredit.Scope
+	closeTeardownErr     error
 
 	internalTeardownHooksMu     sync.Mutex
 	internalTeardownHooks       []func() error
@@ -612,6 +627,9 @@ type DB struct {
 	durableRootDirectoryRecordsEncoded atomic.Uint64
 	durableRootDirectoryPagesWritten   atomic.Uint64
 
+	ownedLeafManifests                 bool
+	ownedManifestPublicationWork       OwnedManifestIntrinsicWork
+	ownedManifestPublicationWorkMu     sync.Mutex
 	dependencyDirectoryRequiredFeature bool
 
 	commandWALStatsMu                sync.Mutex
@@ -1323,6 +1341,9 @@ type Options struct {
 	// When enabled, internal nodes store encoded value-log pointers for leaf
 	// children. This is pre-alpha and changes on-disk format/assumptions.
 	IndexOuterLeavesInValueLog bool
+	// OwnedLeafManifests opts a new store into pager-owned manifest history.
+	// TreeDB exclusively owns index writes; external index mutation is unsupported.
+	OwnedLeafManifests bool
 	// IndexAdaptiveLeafEncoding enables per-page adaptive selection of leaf
 	// encoding flags using deterministic heuristics from key/value shape.
 	//
@@ -1560,13 +1581,26 @@ type Options struct {
 // the pointer and any later method call remains invalid even after subsequent
 // snapshots are acquired.
 type Snapshot struct {
-	db                     *DB
-	idx                    *indexGen
-	state                  *DBState
-	vlogManager            *valuelog.Manager
-	vlogPinned             bool
-	systemRootPublishEpoch uint64
-	leafGenerationIDs      []uint64
+	originalCleanup *OriginalSnapshotCleanupV1 // immutable original completion identity; iteratorMu
+	// Inline original storage is one allocation with the never-reused handle.
+	// Its immutable interior address remains valid after Snapshot operational
+	// scrub; never copy or reset this mutex/control after constructor birth.
+	originalCleanupStorage OriginalSnapshotCleanupV1
+	scanOnly               bool // constructor-owned scanner has no fabricated registry role
+
+	ownedPointRegistration       *ownedPointCaptureRegistration        // scalar selected-owner registration, protected by iteratorMu
+	pagerCreator                 *residentcredit.Scope                 // original constructor creator, independent of reader registry refs
+	ownedPointCreatorCredit      rootpublication.StableMetadataAccount // retained until the last exact scalar-cell root drains
+	ownedPointTerminalRetentions *valuelog.SnapshotSetTerminalRetentions
+	ownedPointTerminalExecuting  bool // iteratorMu; excludes simultaneous terminal invocation
+	ownedPointTerminalStarted    bool // iteratorMu; Prepare/capture stay refused after any terminal effects
+	db                           *DB
+	idx                          *indexGen
+	state                        *DBState
+	vlogManager                  *valuelog.Manager
+	vlogPinned                   bool
+	systemRootPublishEpoch       uint64
+	leafGenerationIDs            []uint64
 	// leafGenerationPinnedIDs mirrors the generation IDs retained by this
 	// snapshot for stats/debugging. Release follows leafGenerationPinSet or
 	// leafGenerationRefs when those optimized paths are present.
@@ -1623,6 +1657,9 @@ func (s *Snapshot) Pager() *pager.Pager {
 	if s.idx == nil {
 		return nil
 	}
+	if !s.idx.pager.MarkRawExport() {
+		return nil
+	}
 	return s.idx.pager
 }
 
@@ -1663,9 +1700,8 @@ func (db *DB) acquireSnapshotWithValueLogPublicationLockHeld() *Snapshot {
 	if db == nil {
 		return nil
 	}
-	snap := db.snapPool.Get()
-	if !db.captureSnapshotWithValueLogPublicationLockHeld(snap) {
-		db.snapPool.Put(snap)
+	snap, ok := db.captureSnapshotOwnedHolder(nil)
+	if !ok {
 		return nil
 	}
 	return snap
@@ -1704,14 +1740,19 @@ func (db *DB) AcquireSnapshotWithAllocationAdmission(admit func(SnapshotAllocati
 // Ordinary snapshots keep the established fast capture path. Bounded COW
 // captures below use their separate admission and fixed-registry policy.
 func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) bool {
+	_, ok := db.captureSnapshotOwnedHolder(snap)
+	return ok
+}
+func (db *DB) captureSnapshotOwnedHolder(snap *Snapshot) (*Snapshot, bool) {
+	return db.captureSnapshotOwnedHolderRoleV1(snap, 0)
+}
+func (db *DB) captureSnapshotOwnedHolderRoleV1(snap *Snapshot, role residentcredit.PrivateSnapshotRoleV1) (*Snapshot, bool) {
 	db.rootReuseMu.RLock()
 	defer db.rootReuseMu.RUnlock()
 	if db.closing.Load() || db.publicationPoisoned.Load() {
-		return false
+		return nil, false
 	}
-	if snap.registryShardHint == snapshotShardHintUnset {
-		snap.registryShardHint = registryHintFromSnapshot(snap)
-	}
+
 	acqShard := snapshotAcquireShard()
 	db.snapshotAcquireRO[acqShard].Add(1)
 	db.snapshotAcquireEpoch.Add(1)
@@ -1722,21 +1763,58 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 		db.snapshotAcquireRO[acqShard].Add(-1)
 	}()
 	if db.closing.Load() {
-		return false
+		return nil, false
 	}
 
 	view := db.snapshotViewRO.Load()
 	if view == nil || view.idx == nil || view.state == nil {
-		return false
+		return nil, false
 	}
 	idx := view.idx
+	born := false
+	if snap == nil {
+		var err error
+		snap, err = db.newSnapshotHolderRoleV1(idx, role, false)
+		if err != nil {
+			return nil, false
+		}
+		born = true
+	} else if snap.pagerCreator == nil || snap.originalCleanup == nil {
+		// Already-born unowned synthetic/private holders cannot be retro-stamped.
+		return nil, false
+	}
+
+	captured := false
+	defer func() {
+		if !captured {
+			creator := snap.pagerCreator
+			snap.pagerCreator = nil
+			if creator != nil {
+				creator.ReleaseStableMetadata()
+			}
+			if born {
+				c := snap.originalCleanup
+				snap.originalCleanup = nil
+				db.snapPool.Put(snap)
+				snap = nil
+				if c != nil {
+					c.snapshot = nil
+					c.ReleaseOriginalCleanupV1()
+					c = nil
+				}
+			}
+		}
+	}()
+	if snap.registryShardHint == snapshotShardHintUnset {
+		snap.registryShardHint = registryHintFromSnapshot(snap)
+	}
 	state := view.state
 	vm := view.vlogManager
 	vlogSet := state.ValueLogSet
 	vlogNeedsPin := vlogSet != nil && len(vlogSet.Files) > 0
 	if vlogNeedsPin {
 		if vm == nil {
-			return false
+			return nil, false
 		}
 		vm.Acquire(vlogSet)
 	}
@@ -1747,7 +1825,7 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 			if vlogNeedsPin && vm != nil {
 				_ = vm.Release(vlogSet)
 			}
-			return false
+			return nil, false
 		}
 		registryID, snap.registryShardHint = idx.registry.RegisterWithHint(state.CommitSeq, snap.registryShardHint)
 	}
@@ -1812,9 +1890,11 @@ func (db *DB) captureSnapshotWithValueLogPublicationLockHeld(snap *Snapshot) boo
 	snap.tree.SetNegativeFilter(view.negativeFilter)
 	snap.iteratorMu.Lock()
 	snap.closed.Store(false)
+	snap.finalized.Store(false)
 	snap.readState.Store(0)
 	snap.iteratorMu.Unlock()
-	return true
+	captured = true
+	return snap, true
 }
 
 func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapshot, admit func(SnapshotAllocationSizes) error, bounded bool) (*Snapshot, error) {
@@ -1868,9 +1948,38 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 			return nil, err
 		}
 	}
+	born := false
 	if snap == nil {
-		snap = db.snapPool.Get()
+		var err error
+		snap, err = db.newSnapshotHolder(idx)
+		if err != nil {
+			return nil, err
+		}
+		born = true
+	} else if snap.pagerCreator == nil || snap.originalCleanup == nil {
+		return nil, ErrClosed // no late creator stamp on an already born private holder
 	}
+	captured := false
+	defer func() {
+		if !captured {
+			creator := snap.pagerCreator
+			snap.pagerCreator = nil
+			if creator != nil {
+				creator.ReleaseStableMetadata()
+			}
+			if born {
+				c := snap.originalCleanup
+				snap.originalCleanup = nil
+				db.snapPool.Put(snap)
+				snap = nil
+				if c != nil {
+					c.snapshot = nil
+					c.ReleaseOriginalCleanupV1()
+					c = nil
+				}
+			}
+		}
+	}()
 	if snap.registryShardHint == snapshotShardHintUnset {
 		snap.registryShardHint = registryHintFromSnapshot(snap)
 	}
@@ -1965,8 +2074,10 @@ func (db *DB) captureSnapshotBoundedWithValueLogPublicationLockHeld(snap *Snapsh
 	snap.tree.SetNegativeFilter(view.negativeFilter)
 	snap.iteratorMu.Lock()
 	snap.closed.Store(false)
+	snap.finalized.Store(false)
 	snap.readState.Store(0)
 	snap.iteratorMu.Unlock()
+	captured = true
 	return snap, nil
 }
 
@@ -2071,20 +2182,112 @@ func (s *Snapshot) Close() error {
 		return nil
 	}
 	s.iteratorMu.Lock()
-	if !s.closed.CompareAndSwap(false, true) {
-		s.iteratorMu.Unlock()
-		return nil
+	if s.closed.CompareAndSwap(false, true) {
+		s.readState.Or(snapshotReadClosedBit)
+		s.invalidateBoundIteratorsLocked()
 	}
-	s.readState.Or(snapshotReadClosedBit)
-	s.invalidateBoundIteratorsLocked()
 	s.iteratorMu.Unlock()
 	return s.finalizeCloseIfUnreferenced()
 }
-
-func (s *Snapshot) finalizeCloseIfUnreferenced() error {
+func (s *Snapshot) finalizeCloseIfUnreferenced() (err error) {
+	if s == nil {
+		return nil
+	}
 	s.iteratorMu.Lock()
-	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit || !s.finalized.CompareAndSwap(false, true) {
+	c := s.originalCleanup
+	database := s.db
+	if c == nil {
 		s.iteratorMu.Unlock()
+		if s.finalized.Load() {
+			return nil
+		}
+		return ErrClosed
+	}
+	if c.ObserveOriginalCleanupV1().Complete() {
+		s.iteratorMu.Unlock()
+		return nil
+	}
+	if err = c.RetainOriginalCleanupV1(); err != nil {
+		s.iteratorMu.Unlock()
+		return err
+	}
+	s.iteratorMu.Unlock()
+	admitted := false
+	defer func() {
+		s = nil
+		if admitted {
+			database.endSnapshotCleanupInvocationV1(c)
+		}
+		database = nil
+		c.ReleaseOriginalCleanupV1()
+		c = nil
+	}()
+	if database != nil {
+		if err = database.beginSnapshotCleanupInvocationV1(c); err != nil {
+			return err
+		}
+		admitted = true
+	}
+	_, err = c.AdvanceOriginalCleanupV1()
+	return err
+}
+
+func (s *Snapshot) finalizeCloseEffectsV1(c *OriginalSnapshotCleanupV1) error {
+	var terminalControl *valuelog.SnapshotSetTerminalRetentions
+	s.iteratorMu.Lock()
+	controlled := !c.consumed(snapshotScrubRoleV1) && s.ownedPointTerminalRetentions != nil && len(s.iterators) == 0 && s.readState.Load() == snapshotReadClosedBit
+	database := s.db
+	s.iteratorMu.Unlock()
+	if controlled {
+		if database == nil {
+			return ErrPreparedRootPointProfileLimit
+		}
+		if err := database.releaseScopedSnapshotValueLog(s, nil); err != nil {
+			return err
+		}
+		// The operational I/O binding is gone. Revalidate the exact index under
+		// maintenance before dropping the remaining reader/control creator.
+		if !database.maintenanceMu.TryLock() {
+			return ErrPreparedRootPointProfileLimit
+		}
+
+		if !database.teardownMu.TryLock() {
+			database.maintenanceMu.Unlock()
+			return ErrPreparedRootPointProfileLimit
+		}
+
+		s.iteratorMu.Lock()
+		if s.db != database || s.idx == nil || s.ownedPointTerminalExecuting || s.foregroundReadEnd != nil ||
+			s.idx != database.idx.Load() && !s.idx.handlesClosed.Load() {
+			s.iteratorMu.Unlock()
+			database.teardownMu.Unlock()
+			database.maintenanceMu.Unlock()
+			return ErrPreparedRootPointProfileLimit
+		}
+		if control := s.ownedPointTerminalRetentions; control != nil {
+			if err := control.ValidateDrained(); err != nil {
+				s.iteratorMu.Unlock()
+				database.teardownMu.Unlock()
+				database.maintenanceMu.Unlock()
+				return err
+			}
+			terminalControl = control
+		}
+		s.iteratorMu.Unlock()
+		database.teardownMu.Unlock()
+		database.maintenanceMu.Unlock()
+	}
+	if terminalControl != nil {
+		c.mu.Lock()
+		c.control = terminalControl
+		c.mu.Unlock()
+	}
+	s.iteratorMu.Lock()
+	if len(s.iterators) != 0 || s.readState.Load() != snapshotReadClosedBit {
+		s.iteratorMu.Unlock()
+		c.mu.Lock()
+		c.outcome.Phase = rootpublication.StableCleanupWaitingV1
+		c.mu.Unlock()
 		return nil
 	}
 	endForegroundRead := s.foregroundReadEnd
@@ -2092,40 +2295,96 @@ func (s *Snapshot) finalizeCloseIfUnreferenced() error {
 	s.foregroundReadMarked = false
 	s.iteratorMu.Unlock()
 	var err error
-	if s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
+	if !c.consumed(snapshotVMRoleV1) && s.vlogPinned && s.state != nil && s.state.ValueLogSet != nil && s.vlogManager != nil {
+		c.start(snapshotVMRoleV1)
 		if relErr := s.vlogManager.Release(s.state.ValueLogSet); relErr != nil {
+			// Release consumed the reference. Its Manager retains physical deletion
+			// custody; retrying this Snapshot must never decrement the same Set again.
+			c.mu.Lock()
+			c.outcome.Debt = rootpublication.StableCleanupNamespaceDebtV1
+			c.mu.Unlock()
 			err = relErr
 		}
 	}
-	if s.idx != nil {
+	c.consume(snapshotVMRoleV1)
+	if !c.consumed(snapshotIndexRoleV1) && s.idx != nil && !s.scanOnly {
 		if s.registryID != 0 {
 			s.idx.registry.Unregister(s.registryID)
 		}
 		if s.db != nil {
 			if s.db.idx.Load() != s.idx {
-				s.db.maybeReleaseRetiredIndex(s.idx)
+				if s.ownedPointTerminalStarted && s.idx.handlesClosed.Load() {
+					// Checked shutdown already closed every exact handle. Avoid
+					// ghost insertion/eviction and its fallible IO under the
+					// selected metadata-only maintenance/teardown gates.
+					s.db.releaseClosedRetiredIndexMetadataV1(s.idx)
+				} else {
+					s.db.maybeReleaseRetiredIndex(s.idx)
+				}
 			}
 		}
 	}
-	s.releaseLeafGenerationPins()
-	if s.stableIndexCapture && s.stableIndexCaptureCounter != nil && !s.stableIndexCaptureTransferred {
+	c.consume(snapshotIndexRoleV1)
+	if !c.consumed(snapshotLeafRoleV1) {
+		s.releaseLeafGenerationPins()
+		c.consume(snapshotLeafRoleV1)
+	}
+	if !c.consumed(snapshotCounterRoleV1) && s.stableIndexCapture && s.stableIndexCaptureCounter != nil && !s.stableIndexCaptureTransferred {
 		s.stableIndexCaptureCounter.Add(-1)
 	}
 	if s.stableIndexCapture {
 		s.stableIndexCapture = false
 	}
 	s.stableIndexCaptureCounter = nil
-	if endForegroundRead != nil {
-		endForegroundRead()
+	c.consume(snapshotCounterRoleV1)
+	if !c.consumed(snapshotCallbackRoleV1) {
+		c.start(snapshotCallbackRoleV1)
+		if endForegroundRead != nil {
+			endForegroundRead()
+		}
+		endForegroundRead = nil
+		c.consume(snapshotCallbackRoleV1)
 	}
-	if s.db != nil {
-		s.db.snapPool.Put(s)
+	if !c.consumed(snapshotScrubRoleV1) {
+		if s.db != nil {
+			s.db.snapPool.Put(s)
+		} else {
+			(&SnapshotPool{}).Put(s)
+		}
+		c.consume(snapshotScrubRoleV1)
 	}
+	c.mu.Lock()
+	terminalControl = c.control
+	c.mu.Unlock()
+	if !c.consumed(snapshotControlRoleV1) && terminalControl != nil {
+		// All actual Snapshot/index/leaf edges were discharged above. This
+		// final exact control close alone may retire the creator account.
+		if closeErr := terminalControl.Close(); closeErr != nil {
+			return errors.Join(err, closeErr)
+		}
+	}
+	c.mu.Lock()
+	c.control = nil
+	c.mu.Unlock()
+	terminalControl = nil
+	c.consume(snapshotControlRoleV1)
+
 	return err
 }
 
 // Open opens the database.
-func Open(opts Options) (*DB, error) {
+// Open may return a nonnil DB with an error when checked constructor cleanup
+// failed. That exact handle must be retained and Close retried.
+func Open(opts Options) (*DB, error) { return openWithFacadeControl(opts, 0) }
+
+// OpenWithFacadeControl prepays a concrete public facade's known allocation
+// separately on the SAME constructor creator, before any facade or Pager birth.
+// It neither grants capacity coverage nor accepts a borrowed request authority.
+func OpenWithFacadeControl(opts Options, facadeRaw uint64) (*DB, error) {
+	return openWithFacadeControl(opts, facadeRaw)
+}
+func openWithFacadeControl(opts Options, facadeRaw uint64) (*DB, error) {
+	requestedOwned := opts.OwnedLeafManifests
 	if opts.NegativeLookupFilterBytes < 0 || opts.NegativeLookupFilterBytes > 64<<20 || (opts.NegativeLookupFilterBytes > 0 && opts.NegativeLookupFilterBytes < 8) {
 		return nil, errors.New("negative lookup filter budget must be zero or 8 bytes through 64 MiB")
 	}
@@ -2148,6 +2407,14 @@ func Open(opts Options) (*DB, error) {
 			opts.CommandWAL = opts.CommandWAL || cfg.RequiresCommandWALV1()
 			cfg.ApplyIndexFormatToOptions(&opts)
 		}
+	}
+	ownedFeature, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureOwnedLeafManifestV1)
+	if err != nil {
+		return nil, err
+	}
+	opts.OwnedLeafManifests = requestedOwned || opts.OwnedLeafManifests || ownedFeature
+	if opts.OwnedLeafManifests && !opts.IndexOuterLeavesInValueLog {
+		return nil, errors.New("owned leaf manifests require outer leaves")
 	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize = defaultChunkSize
@@ -2219,7 +2486,7 @@ func Open(opts Options) (*DB, error) {
 	}
 
 	if opts.ReadOnly {
-		return openReadOnly(opts)
+		return openReadOnly(opts, facadeRaw)
 	}
 
 	if err := ensureStorageLayoutDirs(opts.Dir); err != nil {
@@ -2230,15 +2497,22 @@ func Open(opts Options) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := openWithLock(opts, lock)
+	if opts.OwnedLeafManifests && !ownedFeature {
+		if err := SaveFormatConfig(opts.Dir, formatConfigFromOptions(opts)); err != nil {
+			_ = lock.Close()
+			return nil, err
+		}
+	}
+	db, err := openWithLock(opts, lock, facadeRaw)
 	if err != nil {
-		_ = lock.Close()
-		return nil, err
+		if db != nil {
+			return db, err
+		}
+		return nil, errors.Join(err, lock.Close())
 	}
 	if testDBOpenHook != nil {
 		if err := testDBOpenHook(db); err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 	}
 	return db, nil
@@ -2376,7 +2650,23 @@ func resolveInlineThresholdAndAdaptive(opts Options) (*adaptive.Controller, int)
 	return adaptiveCtrl, inlineThreshold
 }
 
-func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
+func openWithLock(opts Options, lock *lockfile.Lock, facadeRaw uint64) (*DB, error) {
+	resident, err := newNativePublicationResidentOwnerV1()
+	if err != nil {
+		return nil, err
+	}
+	control, controlErr := prepayDBConstructorControl(resident, facadeRaw)
+	if controlErr != nil {
+		resident.CloseStableMetadataResidentOwnerV1()
+		return nil, controlErr
+	}
+	residentInstalled := false
+	defer func() {
+		if !residentInstalled {
+			control.ReleaseStableMetadata()
+			resident.CloseStableMetadataResidentOwnerV1()
+		}
+	}()
 	requiresDependencyDirectory, err := requiredFormatFeatureEnabled(opts.Dir, RequiredFeatureDependencyDirectoryV2)
 	if err != nil {
 		return nil, err
@@ -2395,9 +2685,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	p, err := pager.OpenWithOptions(idxPath, opts.ChunkSize, pager.OpenOptions{
 		MmapPopulate:   opts.PagerMmapPopulate,
 		PrefetchOnRead: opts.PagerPrefetchOnRead,
+		ResidentOwner:  (*residentcredit.Owner)(resident),
 	})
 	if err != nil {
-		return nil, err
+		pending, failure := constructorPagerFailure(p, nil, lock, resident, control, err)
+		residentInstalled = pending != nil
+		return pending, failure
 	}
 	if opts.PagerSyncConcurrency > 0 {
 		p.SetSyncConcurrency(opts.PagerSyncConcurrency)
@@ -2408,13 +2701,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	valueLogIdentityPins := rootpublication.NewIdentityPinRegistry()
 	vm, err := valuelog.NewManagerForBoundedRecoveryWithStableResourcePinRegistry(layout.valueVLogDir, valueLogIdentityPins)
 	if err != nil {
-		p.Close()
-		return nil, err
+		pending, failure := constructorPagerFailure(p, nil, lock, resident, control, err)
+		residentInstalled = pending != nil
+		return pending, failure
 	}
 	if err := vm.AddScanDirForBoundedRecovery(layout.leafVLogDir); err != nil {
-		_ = vm.Close()
-		p.Close()
-		return nil, err
+		pending, failure := constructorPagerFailure(p, vm, lock, resident, control, err)
+		residentInstalled = pending != nil
+		return pending, failure
 	}
 	vm.SetDisableReadChecksum(opts.ValueLog.ReadIntegrity == IntegritySkipChecksums)
 	vm.SetCurrentWritableMmapEnabled(opts.ValueLog.CurrentWritableMmap)
@@ -2428,7 +2722,12 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 
 	z := zipper.New(p, alloc)
 
-	gen := newIndexGen(1, p, alloc, z)
+	gen, err := newConstructorIndexGen(1, p, alloc, z)
+	if err != nil {
+		pending, failure := constructorPagerFailure(p, vm, lock, resident, control, err)
+		residentInstalled = pending != nil
+		return pending, failure
+	}
 
 	adaptiveCtrl, inlineThreshold := resolveInlineThresholdAndAdaptive(opts)
 	flushApplyConcurrency := normalizeFlushApplyConcurrency(opts.FlushApplyConcurrency)
@@ -2438,6 +2737,9 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	}
 
 	db := &DB{
+		nativePublicationResident:          resident,
+		constructorCreator:                 control,
+		ownedLeafManifests:                 opts.OwnedLeafManifests,
 		dependencyDirectoryRequiredFeature: requiresDependencyDirectory,
 		physicalSnapshotSideStoreCapture:   opts.PhysicalSnapshotSideStoreCapture,
 
@@ -2501,6 +2803,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		ghostManager: &indexGhostManager{},
 		notifyError:  opts.NotifyError,
 	}
+	residentInstalled = true
 	vm.SetDeferredDeletionSync(func(dir string, resource durabilitycut.Resource) error {
 		return db.syncDeletionNamespaceDirectoryOrPoison(
 			dir,
@@ -2531,47 +2834,40 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	gen.zipper.SetMaintenanceOpsPerCoalesce(opts.MaintenanceOpsPerCoalesce)
 
 	if err := db.recover(); err != nil {
-		_ = db.Close()
-		return nil, err
+		return failedInstalledOpen(db, err)
 	}
 	db.seedEntryRevisionFloor()
 
 	segments, err := listRecoverySegments(opts.Dir)
 	if err != nil {
-		_ = db.Close()
-		return nil, err
+		return failedInstalledOpen(db, err)
 	}
 	needsCommandWALFormat, err := commandWALFormatNeedsActivation(opts)
 	if err != nil {
-		_ = db.Close()
-		return nil, err
+		return failedInstalledOpen(db, err)
 	}
 	if needsCommandWALFormat {
 		if err := ValidateCommandWALActivationClean(opts.Dir); err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		// Persist the required feature gate before running typed recovery so that
 		// if recovery mutates WAL segments (cleanup pass) and then the open fails,
 		// the next open uses typed recovery rather than the legacy path.
 		cfg, err := formatConfigFromOptionsPreservingRequiredFeatures(opts)
 		if err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		// Use the raw writer here because ValidateCommandWALActivationClean was
 		// already called above. Re-checking after recovery would make first
 		// activation depend on the transient post-recovery WAL directory shape
 		// instead of the explicit activation boundary.
 		if err := writeFormatConfig(opts.Dir, cfg); err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 	}
 	if opts.CommandWAL {
 		if err := replayCommandWALIntoBackend(db, segments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		// Re-list segments after replay because V2 recovery may repair or remove
 		// an incomplete suffix. Open the default writer on lane 0 before ordinary
@@ -2583,19 +2879,16 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		commandSegmentSeq := uint64(0)
 		journalSegments, err := listRecoverySegments(opts.Dir)
 		if err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		activeSeqByLane := commandWALActiveSeqByLane(journalSegments)
 		commandSegmentSeq = activeSeqByLane[0]
 		if commandSegmentSeq == ^uint64(0) {
-			_ = db.Close()
-			return nil, fmt.Errorf("%w: dir=%s lane=0 active_seq=%d", ErrCommandWALSegmentSeqExhausted, WALDirPath(opts.Dir), commandSegmentSeq)
+			return failedInstalledOpen(db, fmt.Errorf("%w: dir=%s lane=0 active_seq=%d", ErrCommandWALSegmentSeqExhausted, WALDirPath(opts.Dir), commandSegmentSeq))
 		}
 		hasTerminalTail, err := commandWALLaneActiveHasTerminalTail(journalSegments, 0, opts.WALMaxSegmentBytes)
 		if err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		if commandSegmentSeq != 0 && !hasTerminalTail {
 			commandSegmentSeq++
@@ -2613,8 +2906,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 			CaptureStableResources:          true,
 		})
 		if err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		db.commandJournal = journal
 		db.commandWALSessionAppliedLSN = db.meta.AppliedCommandLSN
@@ -2626,8 +2918,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		if !db.readOnly {
 			if err := db.CleanupCommandWALCoveredSegments(true); err != nil &&
 				!errors.Is(err, errDurableWALCleanupProofUnavailable) {
-				_ = db.Close()
-				return nil, err
+				return failedInstalledOpen(db, err)
 			}
 		}
 		db.cacheCommandWALRequiredFeatureStats()
@@ -2636,17 +2927,14 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// enabled, fail closed before legacy replay can misinterpret typed frames.
 		// Frames already covered by AppliedCommandLSN are filtered below.
 		if err := requireNoUnappliedCommandWALFrames(opts.Dir, db.meta.AppliedCommandLSN, opts.WALMaxSegmentBytes); err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		legacySegments, hasLegacyRedoJournal, err := legacyCachedRedoJournalReplaySegments(db, segments, opts.WALMaxSegmentBytes)
 		if err != nil {
-			_ = db.Close()
-			return nil, err
+			return failedInstalledOpen(db, err)
 		}
 		if hasLegacyRedoJournal && !opts.AllowLegacyCachedRedoJournalReplay {
-			_ = db.Close()
-			return nil, legacyCachedRedoJournalReplayDisabledError(legacySegments, opts.WALMaxSegmentBytes)
+			return failedInstalledOpen(db, legacyCachedRedoJournalReplayDisabledError(legacySegments, opts.WALMaxSegmentBytes))
 		}
 		// The explicit compatibility escape hatch also classifies incomplete-only
 		// legacy segments. They contain no replayable batch, but the authorized
@@ -2654,8 +2942,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 		// rediscovered on every reopen.
 		if opts.Durability != DurabilityWALOffRelaxed || hasLegacyRedoJournal || opts.AllowLegacyCachedRedoJournalReplay {
 			if err := replayWALIntoBackend(db, legacySegments, opts.WALMaxSegmentBytes, opts.ValueLog.DictLookup); err != nil {
-				_ = db.Close()
-				return nil, err
+				return failedInstalledOpen(db, err)
 			}
 		}
 	}
@@ -2754,8 +3041,7 @@ func openWithLock(opts Options, lock *lockfile.Lock) (*DB, error) {
 	// the intended on-disk layout without requiring callers to re-specify flags.
 	if err := saveOpenFormatConfig(opts); err != nil {
 		if opts.ResolvedProfile != "" {
-			_ = db.Close()
-			return nil, fmt.Errorf("treedb: persist durability profile manifest: %w", err)
+			return failedInstalledOpen(db, fmt.Errorf("treedb: persist durability profile manifest: %w", err))
 		}
 		if opts.NotifyError != nil {
 			opts.NotifyError(err)
@@ -3067,19 +3353,104 @@ func (db *DB) Close() error {
 	// Another caller may have started the once-only hook drain. Do not begin
 	// production teardown until those callbacks have returned.
 	db.closeHooksWG.Wait()
+	if err := db.drainFailedSnapshotCleanupV1(); err != nil {
+		errs = append(errs, err)
+	}
+	if err := db.checkSnapshotPhysicalCloseV1(); err != nil {
+		return errors.Join(errors.Join(errs...), err)
+	}
 	if err := db.closeAfterHooksOnce(); err != nil {
 		errs = append(errs, err)
 	}
-	return errors.Join(errs...)
+	if err := db.drainFailedSnapshotCleanupV1(); err != nil {
+		errs = append(errs, err)
+	}
+	result := errors.Join(errs...)
+	if result == nil {
+		db.releaseConstructorControl()
+	}
+	return result
 }
 
 func (db *DB) closeAfterHooksOnce() error {
-	db.closeTeardownOnce.Do(func() {
-		if testDBCloseHook != nil {
-			testDBCloseHook(db)
+	// A callback cannot join the very close owner invoking it.
+	if err := db.checkSnapshotPhysicalCloseV1(); err != nil {
+		return err
+	}
+	db.closeTeardownMu.Lock()
+	defer db.closeTeardownMu.Unlock()
+	if db.constructorOnly {
+		return db.closePartialConstructor()
+	}
+	if db.closeTeardownStarted {
+		if err := db.beginSnapshotPhysicalCloseV1(); err != nil {
+			return err
 		}
-		db.closeTeardownErr = db.closeAfterHooks()
-	})
+		defer db.endSnapshotPhysicalCloseV1()
+		// Retry only actual remaining holders and exact terminal debt, never COW.
+		db.mu.Lock()
+		vm, journal, lock := db.valueLogManager, db.commandJournal, db.lock
+		saved := db.closeTerminalManager
+		db.mu.Unlock()
+		producerErr := db.closeColumnSegmentProducersV1()
+		closedIndexes, err := db.closeAllIndexes()
+		err = errors.Join(err, producerErr)
+		if db.ghostManager != nil {
+			err = errors.Join(err, db.ghostManager.stop())
+		}
+		if vm != nil {
+			if e := vm.Close(); e != nil {
+				err = errors.Join(err, e)
+			} else {
+				db.mu.Lock()
+				db.valueLogManager = nil
+				db.mu.Unlock()
+			}
+		}
+		if journal != nil {
+			if e := journal.Close(); e != nil {
+				err = errors.Join(err, e)
+			} else {
+				db.mu.Lock()
+				db.commandJournal = nil
+				db.mu.Unlock()
+			}
+		}
+		terminalErr := db.releaseCloseTerminalOwnersV1(saved, true)
+		err = errors.Join(err, terminalErr)
+		if terminalErr == nil {
+			if db.ghostManager != nil {
+				db.ghostManager.finishClosedConstructorsV1()
+			}
+			db.closeTerminalManager = nil
+			for _, index := range closedIndexes {
+				if index != nil {
+					index.detachAllocatorWriterV1(true)
+					db.finishClosedIndexConstructorV1(index)
+				}
+			}
+			if db.valueLogIdentityPins != nil {
+				db.valueLogIdentityPins.ClearStableNamespaceLinks()
+			}
+		}
+		if lock != nil && err == nil && !db.hasFailedSnapshotCleanupV1() {
+			if e := lock.Close(); e != nil {
+				err = e
+			} else {
+				db.mu.Lock()
+				db.lock = nil
+				db.mu.Unlock()
+			}
+		}
+		err = errors.Join(err, db.backgroundError())
+		db.closeTeardownErr = err
+		return err
+	}
+	db.closeTeardownStarted = true
+	if testDBCloseHook != nil {
+		testDBCloseHook(db)
+	}
+	db.closeTeardownErr = db.closeAfterHooks()
 	return db.closeTeardownErr
 }
 
@@ -3093,15 +3464,20 @@ func (db *DB) closeAfterHooks() error {
 	db.maintenanceMu.Lock()
 	db.closing.Store(true)
 	db.maintenanceMu.Unlock()
+	// Admission/Add and closing share maintenanceMu. Join only actual in-flight
+	// terminal invocations, never unresolved Snapshot lifetime or cleanup debt.
+	// A no-notify consumer cannot reenter Close while executing its own join.
+	db.ownedPointTerminalExecutions.Wait()
 	// Wait for every already-admitted writer to finish constructing and handing
 	// off its immutable root candidate.
 	db.writeMu.Lock()
-	if db.flushApplyWorkerPool != nil {
-		db.flushApplyWorkerPool.Close()
-		db.flushApplyWorkerPool = nil
-	}
+	workers := db.flushApplyWorkerPool
+	db.flushApplyWorkerPool = nil
 	db.clearFlushApplyReadOnlyPrepareBuffers()
 	db.writeMu.Unlock()
+	if workers != nil {
+		workers.Close()
+	}
 
 	// A root producer releases writeMu after transferring its immutable build to
 	// the durable publisher, but it keeps teardownMu for reading until enqueue,
@@ -3115,7 +3491,9 @@ func (db *DB) closeAfterHooks() error {
 		rootRuntime *rootPublicationRuntimeV1
 		rootHandoff *rootpublication.RecoveryResourceHandoff
 	)
-	if rootRuntime = db.rootPublication; rootRuntime != nil && rootRuntime.coordinator != nil {
+	rootRuntime = db.rootPublication
+	db.teardownMu.Unlock()
+	if rootRuntime != nil && rootRuntime.coordinator != nil {
 		if err := rootRuntime.coordinator.Drain(context.Background()); err != nil {
 			errs = append(errs, fmt.Errorf("drain root publication: %w", publicRootPublicationErrorV1(err)))
 		}
@@ -3127,9 +3505,8 @@ func (db *DB) closeAfterHooks() error {
 		if err != nil {
 			errs = append(errs, fmt.Errorf("take root publication recovery handoff: %w", publicRootPublicationErrorV1(err)))
 		}
-		db.rootPublication = nil
+		db.rootTerminalHandoff = rootHandoff
 	}
-	db.teardownMu.Unlock()
 	// Writers and durable-root publication are now drained, while the command
 	// journal and its exact active namespace identity are still owned by this
 	// handle. Unavailable proof is the expected conservative result when relaxed
@@ -3147,6 +3524,15 @@ func (db *DB) closeAfterHooks() error {
 		}
 	}
 
+	// Coordinator Drain may synchronously release original Snapshot tokens.
+	// Claim physical exclusion only after that call stack and its aliases join.
+	if err := db.drainFailedSnapshotCleanupV1(); err != nil {
+		return errors.Join(errors.Join(errs...), err)
+	}
+	if err := db.beginSnapshotPhysicalCloseV1(); err != nil {
+		return errors.Join(errors.Join(errs...), err)
+	}
+	defer db.endSnapshotPhysicalCloseV1()
 	// No stable root I/O can begin beyond this point. Maintenance and teardown
 	// may now close producer resources and the index without racing Publisher.
 	db.maintenanceMu.Lock()
@@ -3166,25 +3552,27 @@ func (db *DB) closeAfterHooks() error {
 	if err := db.runCaptureTeardownHooksLocked(); err != nil {
 		errs = append(errs, err)
 	}
+	db.teardownMu.Unlock()
+	db.maintenanceMu.Unlock()
 	db.stopCommitCombiner()
 	db.pruner.Stop()
+	db.maintenanceMu.Lock()
+	db.teardownMu.Lock()
 	if db.valueLogRefTracker != nil {
 		if err := db.persistValueLogRefTracker(); err != nil {
 			errs = append(errs, err)
 		}
 	}
-	if db.ghostManager != nil {
-		db.ghostManager.stop()
-	}
-
 	db.mu.Lock()
 	db.clearSnapshotView()
 	vm := db.valueLogManager
+	db.closeTerminalManager = vm
 	db.valueLogManager = nil
 	commandJournal := db.commandJournal
 	db.commandJournal = nil
+	// Keep the actual namespace holder on this DB through every pending
+	// required cleanup. A competing Open must not replace this failed owner.
 	lock := db.lock
-	db.lock = nil
 	db.mu.Unlock()
 
 	drainDeadline := time.Now().Add(closeSnapshotDrainTimeout)
@@ -3197,8 +3585,35 @@ func (db *DB) closeAfterHooks() error {
 	if remaining := db.snapshotAcquireInFlight(); remaining > 0 {
 		errs = append(errs, fmt.Errorf("db: Close timed out waiting for %d in-flight read-only snapshot acquisitions to complete", remaining))
 	}
-	db.releaseDurableRootResourcesV1()
-	if err := db.closeAllIndexes(); err != nil {
+	// The saved exact Manager is still live. Complete every DB/runtime/handoff
+	// role in one preparation; any failure retains real owners on this DB.
+	// Admission is closed and all producers crossed the teardown barrier.
+	// Terminal IO owns its call-local reservation, not inherited teardown gates.
+	db.teardownMu.Unlock()
+	db.maintenanceMu.Unlock()
+	producerErr := db.closeColumnSegmentProducersV1()
+	if producerErr != nil {
+		errs = append(errs, producerErr)
+	}
+	terminalErr := db.releaseCloseTerminalOwnersV1(vm, false)
+	db.maintenanceMu.Lock()
+	db.teardownMu.Lock()
+	if terminalErr != nil {
+		errs = append(errs, terminalErr)
+	}
+	db.teardownMu.Unlock()
+	db.maintenanceMu.Unlock()
+	var ghostCloseErr error
+	if db.ghostManager != nil {
+		ghostCloseErr = db.ghostManager.stop()
+	}
+	closedIndexes, indexCloseErr := db.closeAllIndexes()
+	db.maintenanceMu.Lock()
+	db.teardownMu.Lock()
+	if ghostCloseErr != nil {
+		errs = append(errs, ghostCloseErr)
+	}
+	if err := indexCloseErr; err != nil {
 		errs = append(errs, err)
 	}
 	if group, ok := leafPageLog.(*leafPageLogLaneGroup); ok {
@@ -3207,34 +3622,80 @@ func (db *DB) closeAfterHooks() error {
 		}
 	}
 	db.commandWALDebt.releaseAll()
+	// All admitted producers and the publisher are drained. Closing this DB
+	// edge forbids new resident births; actual cut scopes retain their owner
+	// and backing through the last physical reference, including after Close.
+	db.closeNativePublicationResidentOwnerV1()
+	db.teardownMu.Unlock()
+	db.maintenanceMu.Unlock()
 	if vm != nil {
 		if err := vm.Close(); err != nil {
 			errs = append(errs, err)
+			db.mu.Lock()
+			db.valueLogManager = vm
+			db.mu.Unlock()
 		}
 	}
 	if commandJournal != nil {
 		if err := commandJournal.Close(); err != nil {
 			errs = append(errs, err)
+			db.mu.Lock()
+			db.commandJournal = commandJournal
+			db.mu.Unlock()
 		}
 	}
 	// Pending candidate handles and allocator transactions stay pinned through
 	// resource and index shutdown. Only now may the live-runtime clones and the
 	// coordinator's exact recovery handoff be released.
-	if rootRuntime != nil {
-		rootRuntime.release()
+	// Actual Manager.Close/join establishes the closed-cell boundary. Retry
+	// metadata cleanup only; no reopen, namespace IO or consumed COW retry.
+	terminalResolved := true
+	terminalErr = db.releaseCloseTerminalOwnersV1(vm, true)
+	db.maintenanceMu.Lock()
+	db.teardownMu.Lock()
+	if terminalErr != nil {
+		errs = append(errs, terminalErr)
+		terminalResolved = false
+	} else {
+		db.closeTerminalManager = nil
 	}
-	if rootHandoff != nil {
-		rootHandoff.Release()
+	if terminalResolved && db.ghostManager != nil {
+		db.teardownMu.Unlock()
+		db.maintenanceMu.Unlock()
+		db.ghostManager.finishClosedConstructorsV1()
+		db.maintenanceMu.Lock()
+		db.teardownMu.Lock()
+	}
+	// Exact runtime and recovery callbacks have finished. Close the actual
+	// allocator owners now; independent physical-cut generation edges survive.
+	for _, index := range closedIndexes {
+		if terminalResolved && index != nil {
+			index.detachAllocatorWriterV1(true)
+			db.finishClosedIndexConstructorV1(index)
+		}
 	}
 	// Namespace sync proofs are valid only for this DB lifetime. Stable
 	// publication closures retain exact handles independently and remain usable
 	// after shutdown, while a later DB instance establishes fresh evidence.
-	db.valueLogIdentityPins.ClearStableNamespaceLinks()
-	if lock != nil {
+	if terminalResolved {
+		db.valueLogIdentityPins.ClearStableNamespaceLinks()
+	}
+	db.teardownMu.Unlock()
+	db.maintenanceMu.Unlock()
+	if lock != nil && len(errs) == 0 && !db.hasFailedSnapshotCleanupV1() {
 		if err := lock.Close(); err != nil {
+			// Lock.Close itself consumes its underlying lock state on an OS error.
+			// Keep the observed error/holder for checked retry, but do not claim that
+			// this outside-grant error family preserves namespace exclusion.
 			errs = append(errs, err)
+		} else {
+			db.mu.Lock()
+			db.lock = nil
+			db.mu.Unlock()
 		}
 	}
+	db.maintenanceMu.Lock()
+	db.teardownMu.Lock()
 	if bgErr := db.backgroundError(); bgErr != nil {
 		errs = append(errs, bgErr)
 	}
@@ -3329,13 +3790,20 @@ func (db *DB) recover() error {
 		}
 	}()
 	for _, record := range selected.SlotRecords {
+		if record.CommitSeq != 0 && record.OwnedLeafManifest != db.ownedLeafManifests {
+			return fmt.Errorf("%w: owned leaf manifest feature and physical root disagree", ErrLegacyFormatRebuildRequired)
+		}
 		if record.CommitSeq != 0 && (record.Directory.RootPageID != 0) != db.dependencyDirectoryRequiredFeature {
 			return fmt.Errorf("%w: dependency_directory_v2 feature and persisted root disagree; rebuild required", ErrLegacyFormatRebuildRequired)
 		}
 	}
+	defer selected.closeOwnedFreelistV1()
 	p.SetPageCount(selected.Record.TotalPages)
-	if err := idx.allocator.EnableCOWV1(selected.Freelist, freelist.NewReservationLedger()); err != nil {
+	if err := selected.enableFreelistV1(idx.allocator, nil); err != nil {
 		return fmt.Errorf("enable recovered COW freelist: %w", err)
+	}
+	if db.ownedLeafManifests {
+		idx.allocator.EnableBoundedPruneV1()
 	}
 	db.installDurableRootSelectionV1(selected)
 	selectionInstalled = true
@@ -3553,6 +4021,24 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 			durSync1 = time.Since(t0)
 		}
 	}
+	if db.ownedLeafManifests {
+		// Dependency flush precedes registration so a newly created/rotated leaf
+		// file belongs to this exact intrinsic revision, not the next ACK.
+		if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
+			return post, prePublishErr(err)
+		}
+		var ownedRetired []uint64
+		var err error
+		db.mu.RLock()
+		ownedPublicationSeq := db.meta.CommitSeq + 1
+		db.mu.RUnlock()
+		sysRootID, ownedRetired, leafManifest, leafManifestRawFileIDs, err = db.stageOwnedLeafManifestForCommit(idx, sysRootID, leafManifest, leafManifestRawFileIDs, ownedPublicationSeq, opts.preparedLimits, opts.forceOwnedManifestRevision)
+		if err != nil {
+			return post, prePublishErr(err)
+		}
+		retired = append(retired, ownedRetired...)
+		opts.leafManifestAlreadyPersistent = true
+	}
 	var watermarkWait, watermarkHold time.Duration
 
 	// 1. Data/leaf-log/value-log flush is complete here. Prepared publish callers
@@ -3603,8 +4089,10 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	// immutable manifest captures its exact identity. Visible-state installation
 	// consumes that bounded registered inventory without a directory scan.
 	if db.valueLogManager != nil {
-		if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
-			return post, prePublishErr(err)
+		if !db.ownedLeafManifests {
+			if _, err := db.registerLeafPageLogSegmentsForPublish(); err != nil {
+				return post, prePublishErr(err)
+			}
 		}
 		if valueLogAppender != nil {
 			segments, err := valueLogAppenderCurrentSegments(valueLogAppender)
@@ -3664,6 +4152,40 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if prepareErr != nil {
 		return post, wrapFinalizeCommitError(prepareErr, !errors.Is(prepareErr, ErrRecoveryRequired))
 	}
+	if opts.releaseRootSerialization == nil {
+		// Legacy lock-inheriting callers are ordinary-only. Their absent release
+		// contract cannot authorize a finite terminal operation under write/commit
+		// or maintenance locks.
+		if err := candidate.resources.RequireMetadataExport(); err != nil {
+			return post, wrapFinalizeCommitError(err, true)
+		}
+		if err := candidate.token.RequireMetadataExport(); err != nil {
+			return post, wrapFinalizeCommitError(err, true)
+		}
+		if err := candidate.base.slotResources[candidate.target].RequireMetadataExport(); err != nil {
+			return post, wrapFinalizeCommitError(err, true)
+		}
+	}
+	consumer := stableSegmentTerminalConsumerV1{db: db, manager: db.valueLogManager}
+	joined, terminalErr := consumer.BeginTerminalRelease()
+	if terminalErr != nil {
+		return post, terminalErr
+	}
+	if err := db.beginDurableRootCandidateExecutionV1(candidate); err != nil {
+		consumer.EndTerminalRelease(joined)
+		return post, err
+	}
+	defer func() {
+		consumer.EndTerminalRelease(joined)
+		if !durablePublishLocked {
+			db.durablePublishMu.Lock()
+			defer db.durablePublishMu.Unlock()
+		}
+		candidate.executing = false
+		if candidate.released && db.durableRoot.pending == candidate {
+			db.durableRoot.pending = nil
+		}
+	}()
 	if releaseRootSerialization := opts.releaseRootSerialization; releaseRootSerialization != nil {
 		// The immutable candidate now owns its allocator reservations and exact
 		// resource handles. No root-serialization lock is needed by the remaining
@@ -3673,13 +4195,16 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if hook := db.testDurableRootCandidatePreparedHook; hook != nil {
 		hook()
 	}
-	nextMeta, err = db.executeDurableRootCandidateWithRetryV1(candidate)
+	nextMeta, err = db.executeDurableRootCandidateWithRetryV1(candidate, &consumer)
 	if err != nil {
 		return post, err
 	}
+	// COW and the durable slot are already committed. Even if visible install
+	// fails, callers must not abort/reclaim the published root or restore base.
+	post.accepted = true
 	poisonVisibleInstall := func(err error) (finalizeCommitPost, error) {
-		db.publicationPoisoned.Store(true)
-		return post, wrapFinalizeCommitError(errors.Join(err, ErrRecoveryRequired), false)
+		_, poisoned := db.poisonDurableRootCandidateV1(candidate, err)
+		return post, wrapAcceptedFinalizeCommitError(poisoned)
 	}
 	if db.testFailDurableRootVisibleInstall.Load() {
 		return poisonVisibleInstall(errTestDurableRootVisibleInstallFailpoint)
@@ -3707,15 +4232,18 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 		valueLogSet = db.valueLogManager.CurrentSetNoRefresh()
 	}
 	var leafGenerationView *leafGenerationView
+	if db.ownedLeafManifests {
+		db.clearLeafGenerationPendingFileIDs(leafManifestRawFileIDs)
+	}
 	if leafManifest != nil {
 		db.leafGenerationManifest = leafManifest
 		post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
-		post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent
+		post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent && !db.ownedLeafManifests
 		post.persistLeafGenerationManifestView = leafManifest
 		post.persistLeafGenerationRawFileIDs = append(post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if db.leafPageLog != nil && !db.ownedLeafManifests {
 		stagedLeafManifest, err := db.stagedLeafGenerationManifestWithPendingResult(db.leafGenerationManifest, 0, nextMeta.CommitSeq)
 		if err != nil {
 			db.mu.Unlock()
@@ -3758,7 +4286,7 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	db.publishSnapshotView(idx, newState, db.valueLogManager, opts.negativeCoverage)
 	post.commitSeq = nextMeta.CommitSeq
 	post.vlogRefDelta = vlogRefDelta
-	if db.leafPageLog != nil && len(post.clearLeafGenerationPendingFileIDs) == 0 {
+	if db.leafPageLog != nil && !db.ownedLeafManifests && len(post.clearLeafGenerationPendingFileIDs) == 0 {
 		post.drainLeafGenerationPending = true
 	}
 	db.mu.Unlock()
@@ -3798,7 +4326,14 @@ func (db *DB) finalizeCommitLockedWithOptions(newRootID uint64, sysRootID uint64
 	if opts.recordVacuumMutation != nil {
 		opts.recordVacuumMutation()
 	}
-
+	post.accepted = true
+	if inlinePublishPrepareGuard != nil {
+		inlinePublishPrepareGuard.Release()
+	}
+	releaseDurablePublish()
+	if err := db.releasePreparedDurableRootCandidateV1(candidate, &consumer); err != nil {
+		return post, wrapAcceptedFinalizeCommitError(err)
+	}
 	return post, nil
 }
 
@@ -4427,6 +4962,11 @@ func (db *DB) Prune() {
 	}
 	idx.acquire()
 	defer db.releaseIndex(idx)
+	idx.writerMu.RLock()
+	defer idx.writerMu.RUnlock()
+	if idx.allocator == nil {
+		return
+	}
 
 	min := db.MinPinnedSnapshotCommitSeq()
 	state := db.state.Load()
@@ -4556,11 +5096,19 @@ func (db *DB) Pager() *pager.Pager {
 	if idx == nil {
 		return nil
 	}
+	if !idx.pager.MarkRawExport() {
+		return nil
+	}
 	return idx.pager
 }
 func (db *DB) Zipper() *zipper.Zipper {
 	idx := db.idx.Load()
 	if idx == nil {
+		return nil
+	}
+	idx.writerMu.RLock()
+	defer idx.writerMu.RUnlock()
+	if idx.zipper == nil || idx.allocator == nil || !idx.allocator.MarkOrdinaryWriterEscapeV1() {
 		return nil
 	}
 	return idx.zipper
@@ -4574,8 +5122,12 @@ func (db *DB) SetZipperParallelMergePressureSource(src zipper.ParallelMergePress
 	}
 	db.idxMu.Lock()
 	db.zipperParallelMergeSource = src
-	if idx := db.idx.Load(); idx != nil && idx.zipper != nil {
-		idx.zipper.SetParallelMergePressureSource(src)
+	if idx := db.idx.Load(); idx != nil {
+		idx.writerMu.RLock()
+		if idx.zipper != nil {
+			idx.zipper.SetParallelMergePressureSource(src)
+		}
+		idx.writerMu.RUnlock()
 	}
 	db.idxMu.Unlock()
 }

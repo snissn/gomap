@@ -3,8 +3,10 @@ package collections
 import (
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"os"
 	"sync"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 )
@@ -31,10 +33,11 @@ const (
 type columnPublishPlanLease struct {
 	mu sync.Mutex
 
-	collection  *Collection
-	plan        ColumnPublishPlan
-	state       columnPublishPlanLeaseState
-	transferred bool
+	collection       *Collection
+	plan             ColumnPublishPlan
+	state            columnPublishPlanLeaseState
+	transferred      bool
+	operationAccount rootpublication.StableMetadataAccount // actual borrowed manifest creator, no producer/callback
 
 	preparedLease   *ColumnAssetLifecycleRegistryLease
 	pendingLease    *ColumnAssetLifecycleRegistryLease
@@ -55,7 +58,26 @@ func newColumnPublishPlanLease(collection *Collection, plan ColumnPublishPlan) (
 		return nil, fmt.Errorf("collections: column publish plan lease collection %q does not match %q", plan.Collection, collection.meta.Name)
 	}
 
-	lease := &columnPublishPlanLease{collection: collection, plan: plan, state: columnPublishPlanLeasePrepared}
+	account := plan.preAppendAccount
+	if account != nil {
+		class, err := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(columnPublishPlanLease{})), true)
+		if err == nil {
+			err = account.ReserveStableMetadata(class)
+		}
+		if err == nil {
+			err = account.RetainStableMetadata()
+		}
+		if err != nil {
+			plan.releaseStableResources()
+			return nil, err
+		}
+	}
+	lease := &columnPublishPlanLease{collection: collection, plan: plan, state: columnPublishPlanLeasePrepared, operationAccount: account}
+	defer func() {
+		if retErr != nil {
+			lease.clearOperationManifestLocked()
+		}
+	}()
 	refs := columnPublishPlanPreparedRefs(plan)
 	if len(refs) == 0 {
 		return lease, nil
@@ -121,6 +143,14 @@ func (l *columnPublishPlanLease) beginInstall(collection string, appliedCommandL
 		}
 	}
 	l.state = columnPublishPlanLeaseInstalling
+	if l.operationAccount != nil {
+		// This is the trusted synchronous DB install path, not a generic hook
+		// export. The lease remains the creator through publication completion.
+		plan := l.plan
+		plan.stableResources = nil
+		plan.preAppendAccount = nil
+		return plan, nil
+	}
 	return cloneColumnPublishPlanForHook(l.plan), nil
 }
 
@@ -190,12 +220,14 @@ func (l *columnPublishPlanLease) finishCommit() error {
 	}
 	l.state = columnPublishPlanLeaseCommitted
 	l.plan.releaseStableResources()
-	if l.pendingLease == nil {
-		return nil
+	if l.pendingLease != nil {
+		if err := l.pendingLease.Close(); err != nil {
+			return err
+		}
+		l.pendingLease = nil
 	}
-	err := l.pendingLease.Close()
-	l.pendingLease = nil
-	return err
+	l.clearOperationManifestLocked()
+	return nil
 }
 
 func (l *columnPublishPlanLease) finishFailure(cause error) error {
@@ -247,7 +279,11 @@ func (l *columnPublishPlanLease) abandonLocked() error {
 	}
 	l.plan.releaseStableResources()
 	l.state = columnPublishPlanLeaseAbandoned
-	return errors.Join(cleanupErr, l.closeProtectionLeasesLocked())
+	err := errors.Join(cleanupErr, l.closeProtectionLeasesLocked())
+	if err == nil {
+		l.clearOperationManifestLocked()
+	}
+	return err
 }
 
 func (l *columnPublishPlanLease) quarantineLocked(reason string, refs []ColumnAssetRef) error {
@@ -258,13 +294,16 @@ func (l *columnPublishPlanLease) quarantineLocked(reason string, refs []ColumnAs
 		if err != nil {
 			l.state = columnPublishPlanLeaseQuarantined
 			l.plan.releaseStableResources()
+			l.clearOperationManifestLocked()
 			return err
 		}
 		l.quarantineLease = quarantineLease
 	}
 	l.state = columnPublishPlanLeaseQuarantined
 	l.plan.releaseStableResources()
-	return l.closeProtectionLeasesLocked()
+	err := l.closeProtectionLeasesLocked()
+	l.clearOperationManifestLocked()
+	return err
 }
 
 func (l *columnPublishPlanLease) closeProtectionLeasesLocked() error {
@@ -344,4 +383,25 @@ func cleanupUnpublishedColumnPublishAssets(rootDir string, assets []ColumnPrepar
 		}
 	}
 	return retained, errors.Join(inspectErrs...)
+}
+
+// The selected row-only operation lends manifest bytes only. Physical lifecycle
+// records retain installed scalar refs (namespace is the existing resident
+// config string, Reason is static, SortKey is empty), not these record buffers.
+// Clear every manifest/fallback alias before releasing its creator edge. The
+// process registry's own backing and resident refs still need independent real
+// accounting before finite admission; this is not a credit refund.
+func (l *columnPublishPlanLease) clearOperationManifestLocked() {
+	if l.operationAccount == nil {
+		return
+	}
+	account := l.operationAccount
+	l.plan.RootDelta.Records = nil
+	l.plan.RootDelta.Mutations = nil
+	l.plan.durableResourceRequirements = rootpublication.StableLogicalObligationRequirements{}
+	l.plan.durableResourceMutation = rootpublication.StableLogicalObligationMutation{}
+	l.plan.durableResourceRequirementsFallback = nil
+	l.plan.preAppendAccount = nil
+	l.operationAccount = nil
+	account.ReleaseStableMetadata()
 }

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -43,6 +44,11 @@ type columnWritePublishInput struct {
 	splitInsert          *splitInsertPublicationV1
 	splitProjection      *commitlog.SplitVectorInsertV1
 	sourceImportV2       *sourceImportPublicationV2
+	nativeOperation      *columnPreAppendOperationFacts           // synchronous owned operation; never retained by DB
+	nativePreparedLimits *backenddb.PreparedRootPublicationLimits // canonical complete packet only
+	nativeIdentity       *columnPhysicalAssetIdentityReservation  // transient serialized preparation/install only
+	nativeSource         rootpublication.StableMetadataAccount    // canonical scalar facet; call-local image births only
+	nativeSnapshot       *backenddb.Snapshot                      // exact update-plan basis; synchronous invocation only
 	preparedInsert       bool
 	preparedTypedBatch   *typedColumnAdapterPreparedBatch
 	metadataOnly         bool
@@ -467,6 +473,15 @@ func (c *Collection) publishRootDeltaGroupMaybeColumn(ordered []backenddb.Ordere
 }
 
 func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.OrderedRootDeltaBatchPublishInput, preflight backenddb.OrderedRootGroupPreflight, input columnWritePublishInput) (uint64, []uint64, CollectionMeta, []string, error) {
+	if input.nativeSource != nil {
+		if input.nativeOperation == nil || input.nativeOperation.account != input.nativeSource || input.nativePreparedLimits == nil {
+			return 0, nil, CollectionMeta{}, nil, errColumnNativeContextIncomplete
+		}
+		// Complete packet admission still occurs at the existing publisher boundary.
+		// A bare source facet cannot reach an image or asset constructor here.
+		defer input.nativeOperation.close()
+	}
+
 	if err := c.requireColumnStoreCommandWAL(input.meta, input.commandWALIntent); err != nil {
 		return 0, nil, CollectionMeta{}, nil, err
 	}
@@ -579,7 +594,15 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		materializeStart := time.Now()
-		columnDelta, cleanup, err := plan.RootDelta.OrderedRootDeltaBatchPublishInput()
+		var columnDelta backenddb.OrderedRootDeltaBatchPublishInput
+		var cleanup func()
+		if input.nativeOperation != nil {
+			// The full installed output is checked below before the same pre-WAL
+			// batches leave this call. No duplicate constructor runs after WAL.
+			columnDelta = input.nativeOperation.context[0]
+		} else {
+			columnDelta, cleanup, err = plan.RootDelta.OrderedRootDeltaBatchPublishInput()
+		}
 		recordColumnPublishRootDeltaMaterialization(input.insertStats, time.Since(materializeStart))
 		if err != nil {
 			if cleanup != nil {
@@ -588,6 +611,22 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			return nil, err
 		}
 		cleanupColumnDelta = cleanup
+		if input.nativeOperation != nil {
+			locatorPolicy, err := collectionRootStoragePolicyForDB(c.db, input.meta, locatorRootName)
+			if err != nil {
+				return nil, err
+			}
+			installed, err := input.nativeOperation.installedContext(plan, input.documents, locatorBaseRoot, locatorPolicy)
+			if err != nil {
+				return nil, err
+			}
+			// All exact byte/identity checks dominate resource handoff. The actual
+			// installed closure, not the operation projection, supplies authority.
+			if err := installPrebuiltColumnPublishPlanDurability(ctx, planLease); err != nil {
+				return nil, err
+			}
+			return installed, nil
+		}
 		if err := installPrebuiltColumnPublishPlanDurability(ctx, planLease); err != nil {
 			if cleanupColumnDelta != nil {
 				cleanupColumnDelta()
@@ -617,17 +656,18 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 			}
 			return nil, err
 		}
-		columnCleanup := cleanupColumnDelta
-		cleanupColumnDelta = func() {
-			columnCleanup()
-			locatorCleanup()
+		if input.nativeOperation == nil {
+			columnCleanup := cleanupColumnDelta
+			cleanupColumnDelta = func() { columnCleanup(); locatorCleanup() }
 		}
 		if replayAttempt != nil {
 			replayAttempt.discard()
 		}
 		replayAttempt, err = c.buildVectorPartitionLiveReplayAttemptV1(input, replaySpecs)
 		if err != nil {
-			cleanupColumnDelta()
+			if cleanupColumnDelta != nil {
+				cleanupColumnDelta()
+			}
 			cleanupColumnDelta = nil
 			return nil, err
 		}
@@ -638,7 +678,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 				entry := &replayAttempt.entries[i]
 				policy, policyErr := collectionRootStoragePolicyForDB(c.db, input.meta, entry.spec.rootName)
 				if policyErr != nil {
-					cleanupColumnDelta()
+					if cleanupColumnDelta != nil {
+						cleanupColumnDelta()
+					}
 					cleanupColumnDelta = nil
 					replayAttempt.discard()
 					return nil, policyErr
@@ -646,7 +688,9 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 				entry.iter = entry.publish.NewIterator(nil, nil)
 				entry.batch, err = backenddb.OrderedRootDeltaBatchFromIterator(entry.iter)
 				if err != nil {
-					cleanupColumnDelta()
+					if cleanupColumnDelta != nil {
+						cleanupColumnDelta()
+					}
 					cleanupColumnDelta = nil
 					replayAttempt.discard()
 					return nil, err
@@ -697,7 +741,20 @@ func (c *Collection) publishRootDeltaBatchGroupMaybeColumn(ordered []backenddb.O
 		input.commandWALIntent.SetPublishTiming(previousTiming)
 	}()
 	commitStart := time.Now()
-	if input.rawPublishLocked {
+	if input.nativeOperation != nil {
+		invocation, prepareErr := newColumnPreAppendInvocation(c, input, rootNames, columnBaseRoot, locatorBaseRoot)
+		if prepareErr != nil {
+			return 0, nil, CollectionMeta{}, nil, prepareErr
+		}
+		defer invocation.clear()
+		prepare := invocation.prepare
+		if input.rawPublishLocked {
+			newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreAppendContextAndPreparedLimits(ordered, preflight, input.commandWALIntent, prepare, buildColumnDelta, buildSystemDelta, input.nativePreparedLimits)
+		} else {
+			newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreAppendContextAndPreparedLimits(ordered, preflight, input.commandWALIntent, prepare, buildColumnDelta, buildSystemDelta, input.nativePreparedLimits)
+		}
+		*invocation = columnPreAppendInvocation{}
+	} else if input.rawPublishLocked {
 		newSystemRoot, rootIDs, err = c.db.PublishStagedOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
 	} else {
 		newSystemRoot, rootIDs, err = c.db.PublishOrderedRootDeltaBatchGroupWithPreflightCommandWALContextRootBuilderAndSystemDeltaBuilder(ordered, preflight, input.commandWALIntent, buildColumnDelta, buildSystemDelta)
@@ -1258,7 +1315,13 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 	var currentRecords []columnManifestRecord
 	var sourceDirectory *columnSourceDirectoryAppendV2
 	var err error
-	if input.sourceImportV2 != nil {
+	if input.nativeOperation != nil {
+		if input.nativeOperation.images.commandLSN != appliedCommandLSN || input.nativeOperation.system == nil {
+			return nil, errColumnNativeContextIncomplete
+		}
+		currentRecords = input.nativeOperation.current
+		input.nativeIdentity = &input.nativeOperation.reservation
+	} else if input.sourceImportV2 != nil {
 		sourceDirectory, err = c.prepareColumnSourceDirectoryAppendV2(input, baseManifestRootID)
 	} else {
 		if cfg.ActiveManifest != nil && cfg.ActiveManifest.Format == columnSourceDirectoryFormatV2 {
@@ -1306,6 +1369,8 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 		}
 	}
 	plan, err := BuildColumnPublishPlan(ColumnPublishPlanInput{
+		preAppendOperation:       input.nativeOperation,
+		metadataAccount:          input.nativeSource,
 		sourceDirectoryV2:        sourceDirectory,
 		Collection:               input.meta.Name,
 		ColumnStore:              cfg,
@@ -1319,6 +1384,9 @@ func (c *Collection) prepareColumnPublishPlanLease(input columnWritePublishInput
 		BaseManifestRootID:       baseManifestRootID,
 		Hooks: ColumnPublishPlanHooks{
 			PrepareAssets: func(hookInput ColumnPublishAssetPrepareInput) (ColumnPublishPreparedAssets, error) {
+				if input.nativeOperation != nil {
+					return c.installColumnPhysicalAssetImagePlan(input.nativeOperation.images, input, hookInput)
+				}
 				return c.prepareColumnPhysicalAssetsForCommand(input, hookInput)
 			},
 			EncodeManifest: encodeColumnManifestIdentityForWrite,
@@ -1368,7 +1436,25 @@ func installPrebuiltColumnPublishPlanDurability(ctx backenddb.CommandWALPublishC
 	return lease.installDurability(ctx)
 }
 
-func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collectionName string, cfg ColumnStoreConfig) ([]columnManifestRecord, error) {
+func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collectionName string, cfg ColumnStoreConfig) (records []columnManifestRecord, err error) {
+	if rootID == 0 {
+		return loadColumnManifestRecordsForPublishFromSnapshot(nil, rootID, collectionName, cfg, nil)
+	}
+	snap := c.db.AcquireSnapshot()
+	if snap == nil {
+		return nil, errCollectionDBNil
+	}
+	defer func() { err = errors.Join(err, snap.Close()) }()
+	return loadColumnManifestRecordsForPublishFromSnapshot(snap, rootID, collectionName, cfg, nil)
+}
+
+// The selected native operation borrows its already captured update-plan
+// Snapshot on the synchronous invocation stack. It never captures a later root
+// or stores the Snapshot in the immutable operation facts/installed plan.
+// account admits decoder/copied-record births only; the actual iterator,
+// Snapshot/index/leaf/VM loans and terminal horizon remain mandatory in the
+// complete packet and cannot be certified by this helper's local debit.
+func loadColumnManifestRecordsForPublishFromSnapshot(snap *backenddb.Snapshot, rootID uint64, collectionName string, cfg ColumnStoreConfig, account rootpublication.StableMetadataAccount) (records []columnManifestRecord, err error) {
 	if rootID == 0 {
 		if cfg.ActiveManifest != nil {
 			return nil, fmt.Errorf("collections: active column manifest generation %d for %q is missing manifest root", cfg.ActiveManifest.Generation, collectionName)
@@ -1378,25 +1464,62 @@ func (c *Collection) loadColumnManifestRecordsForPublish(rootID uint64, collecti
 	if cfg.ActiveManifest == nil {
 		return nil, errors.New("collections: column publish existing manifest root requires active manifest identity")
 	}
-	snap := c.db.AcquireSnapshot()
 	if snap == nil {
-		return nil, errCollectionDBNil
+		return nil, errColumnNativeContextIncomplete
 	}
-	defer func() { _ = snap.Close() }()
-	if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
-		return nil, fmt.Errorf("collections: validate existing column manifest identity for publish: %w", err)
+	// Keep an independent cleanup alias: named error returns clear records before
+	// deferred cleanup runs. Ordinary and owned paths share the same decoder.
+	var abandoned []columnManifestRecord
+	accepted := false
+	defer func() {
+		if !accepted {
+			clearColumnManifestOwnedRecords(abandoned)
+		}
+	}()
+	if account != nil {
+		copies, readErr := snap.ReadOwnedInlineRecords(rootID, columnManifestInlineRecordSelection(true), account)
+		if readErr != nil {
+			if errors.Is(readErr, iterator.ErrInlineRecordMissing) {
+				return nil, ErrColumnManifestIdentityMissing
+			}
+			return nil, readErr
+		}
+		if identityErr := validateColumnManifestIdentityFromOwnedRecords(copies, *cfg.ActiveManifest); identityErr != nil {
+			iterator.ClearOwnedInlineRecords(copies)
+			return nil, identityErr
+		}
+		// Identity is validated from the same pinned root but remains outside the
+		// existing manifest checksum/decoder grammar. Scrub its independent copy.
+		clear(copies[0].Key)
+		clear(copies[0].Value)
+		copies[0] = iterator.OwnedInlineRecord{}
+		records, err = columnManifestRecordsFromOwnedCopies(copies[1:], account)
+		if err != nil {
+			return nil, err
+		}
+		abandoned = records
+	} else {
+		if err := validateColumnManifestIdentityAtRoot(snap, rootID, *cfg.ActiveManifest); err != nil {
+			return nil, fmt.Errorf("collections: validate existing column manifest identity for publish: %w", err)
+		}
+		iter, iterErr := snap.IteratorAtRoot(rootID, columnManifestHeaderRecordKeyBytes, nil)
+		if iterErr != nil {
+			return nil, iterErr
+		}
+		defer func() { err = errors.Join(err, iter.Close()) }()
+		records, err = loadColumnManifestRecordsFromIterator(iter, nil)
+		if err != nil {
+			return nil, fmt.Errorf("collections: load existing column manifest records: %w", err)
+		}
 	}
-	records, err := loadColumnManifestRecordsFromRoot(snap, rootID)
-	if err != nil {
-		return nil, fmt.Errorf("collections: load existing column manifest records: %w", err)
-	}
-	manifest, err := decodeColumnManifestRecords(records)
+	manifest, err := decodeColumnManifestRecordsWithMetadataAccount(records, account)
 	if err != nil {
 		return nil, fmt.Errorf("collections: decode existing column manifest records for publish: %w", err)
 	}
-	if err := validateColumnManifestSnapshot(manifest, records, cfg, *cfg.ActiveManifest, collectionName, "column publish"); err != nil {
+	if err := validateColumnManifestSnapshotWithMetadataAccount(manifest, records, cfg, *cfg.ActiveManifest, collectionName, "column publish", account); err != nil {
 		return nil, err
 	}
+	accepted = true
 	return records, nil
 }
 
@@ -1537,15 +1660,363 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentity(prepared ColumnPub
 }
 
 func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (_ ColumnPublishPreparedAssets, retErr error) {
+	images, err := encodeColumnPhysicalAssetImagePlan(prepared, input, hookInput, rows, rowSource, typedSource, generation, rowPartID, typedPartID)
+	if err != nil {
+		return ColumnPublishPreparedAssets{}, err
+	}
+	return c.installColumnPhysicalAssetImagePlan(images, input, hookInput)
+}
+
+func encodeColumnPhysicalAssetImagePlan(prepared ColumnPublishPreparedAssets, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput, rows []columnDeclaredRow, rowSource columnDeclaredRowSource, typedSource typedColumnAdapterRowSource, generation, rowPartID, typedPartID uint64) (columnPhysicalAssetImagePlan, error) {
 	if generation == 0 || rowPartID == 0 || typedPartID == 0 || rowPartID == typedPartID {
-		return ColumnPublishPreparedAssets{}, errors.New("collections: invalid column physical asset identity")
+		return columnPhysicalAssetImagePlan{}, errors.New("collections: invalid column physical asset identity")
 	}
 	rowCount := len(rows)
 	if rowSource != nil {
 		rowCount = rowSource.Len()
 	}
 	isolatedTypedOutput := columnStoreTypedScalarIndexesSupported(input.meta) && columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore)
-	cleanupAssets := make([]ColumnPreparedAsset, 0, 8)
+
+	role := columnManifestPartRoleForPublish(hookInput.Operation)
+
+	assetCapacity := 8
+	if input.nativeSource != nil {
+		// This is the actual native sparse-update row family. Refuse every cold
+		// typed/sidecar/source-replacement family before any image/control birth.
+		if input.operation != ColumnPublishOperationUpdate || hookInput.Operation != ColumnPublishOperationUpdate ||
+			!input.sparseOnly || input.metadataOnly || input.preparedTypedBatch != nil || typedSource != nil ||
+			len(input.sourceDeleteDocuments) != 0 || input.sourcePreparedOutput != nil ||
+			columnStoreHasTypedColumnPartOwners(hookInput.ColumnStore) || isolatedTypedOutput ||
+			rowCount < 1 || rowCount > nativeStringPatchMaxRequests*32 {
+			return columnPhysicalAssetImagePlan{}, ErrPreparedInsertResourceLimit
+		}
+		// A row source is the canonical immutable admitted array, never a generic
+		// callback. Validate its entire closure before reserving the output array.
+		selectedSource := rowSource
+		if selectedSource == nil {
+			selectedSource = columnDeclaredRowsSource(rows)
+		}
+		if err := requireCreditedColumnPhysicalScalarRows(columnPhysicalAssetEncodeInput{
+			Collection: hookInput.Collection, Namespace: hookInput.ColumnStore.AssetManager.Namespace,
+			Generation: generation, PartID: rowPartID, AppliedCommandLSN: hookInput.AppliedCommandLSN,
+			Operation: hookInput.Operation, SchemaHash: hookInput.ColumnStore.SchemaHash,
+			Columns: hookInput.ColumnStore.Columns, Rows: rows,
+		}, selectedSource); err != nil {
+			return columnPhysicalAssetImagePlan{}, err
+		}
+		class, err := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(pendingColumnAsset{})), true)
+		if err != nil {
+			return columnPhysicalAssetImagePlan{}, err
+		}
+		if err := input.nativeSource.ReserveStableMetadata(class); err != nil {
+			return columnPhysicalAssetImagePlan{}, err
+		}
+		assetCapacity = 1
+	}
+	pendingAssets := make([]pendingColumnAsset, 0, assetCapacity)
+	queueRegularAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string) {
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
+			payload: payload,
+			fileID:  columnAssetM12ASegmentFileID,
+			kind:    kind,
+			partID:  partID,
+			rows:    rows,
+			reason:  reason,
+		})
+	}
+	queueRegularManifestAssetToFile := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, fileID uint32) {
+		pendingAssets = append(pendingAssets, pendingColumnAsset{
+			payload:  payload,
+			fileID:   fileID,
+			kind:     kind,
+			partID:   partID,
+			rows:     rows,
+			reason:   reason,
+			partRole: partRole,
+			sortKey:  sortKey,
+		})
+	}
+	queueRegularManifestAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string) {
+		queueRegularManifestAssetToFile(payload, kind, partID, rows, reason, partRole, sortKey, columnAssetM12ASegmentFileID)
+	}
+
+	type rowAssetPrepareResult struct {
+		config   ColumnStoreConfig
+		rows     []columnDeclaredRow
+		encoded  []byte
+		summary  columnPhysicalAssetSummary
+		duration time.Duration
+	}
+	prepareRowAsset := func() (rowAssetPrepareResult, error) {
+		start := time.Now()
+		rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
+		rowAssetRows := rows
+		var err error
+		if rowSource == nil {
+			rowAssetRows, err = projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
+			if err != nil {
+				return rowAssetPrepareResult{}, err
+			}
+		}
+		encodeInput := columnPhysicalAssetEncodeInput{
+			Collection:        hookInput.Collection,
+			Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
+			Generation:        generation,
+			PartID:            rowPartID,
+			AppliedCommandLSN: hookInput.AppliedCommandLSN,
+			Operation:         hookInput.Operation,
+			SchemaHash:        hookInput.ColumnStore.SchemaHash,
+			Columns:           rowAssetConfig.Columns,
+			Rows:              rowAssetRows,
+		}
+		var encoded []byte
+		var summary columnPhysicalAssetSummary
+		if input.nativeSource != nil {
+			selectedSource := rowSource
+			if selectedSource == nil {
+				selectedSource = columnDeclaredRowsSource(rowAssetRows)
+			}
+			encoded, summary, err = encodeColumnPhysicalAssetFromSourceWithMetadataAccount(encodeInput, selectedSource, input.nativeSource)
+		} else if rowSource == nil {
+			encoded, summary, err = encodeColumnPhysicalAsset(encodeInput)
+		} else {
+			encoded, summary, err = encodeColumnPhysicalAssetFromSource(encodeInput, rowSource)
+		}
+		if err != nil {
+			return rowAssetPrepareResult{}, err
+		}
+		return rowAssetPrepareResult{
+			config:   rowAssetConfig,
+			rows:     rowAssetRows,
+			encoded:  encoded,
+			summary:  summary,
+			duration: time.Since(start),
+		}, nil
+	}
+	type typedColumnPrepareResult struct {
+		build    typedColumnPartImageBuildResult
+		duration time.Duration
+		err      error
+	}
+	var typedColumnDone chan typedColumnPrepareResult
+	if !input.metadataOnly && (hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate) && columnStoreHasTypedColumnPartOwners(hookInput.ColumnStore) {
+		typedColumnDone = make(chan typedColumnPrepareResult, 1)
+		go func(done chan<- typedColumnPrepareResult) {
+			start := time.Now()
+			var build typedColumnPartImageBuildResult
+			var err error
+			if input.preparedTypedBatch != nil {
+				build, err = buildTypedColumnPartImageFromPreparedBatchWithResult(input.preparedTypedBatch, typedPartID)
+			} else if typedSource == nil {
+				build, err = buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedPartID, rows)
+			} else {
+				build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)
+			}
+			done <- typedColumnPrepareResult{
+				build:    build,
+				duration: time.Since(start),
+				err:      err,
+			}
+		}(typedColumnDone)
+	}
+	waitTypedColumn := func() (typedColumnPrepareResult, error) {
+		if typedColumnDone == nil {
+			return typedColumnPrepareResult{}, nil
+		}
+		result := <-typedColumnDone
+		typedColumnDone = nil
+		return result, result.err
+	}
+	rowAsset, err := prepareRowAsset()
+	if err != nil {
+		_, _ = waitTypedColumn()
+		return columnPhysicalAssetImagePlan{}, err
+	}
+	typedColumn, err := waitTypedColumn()
+	if err != nil {
+		return columnPhysicalAssetImagePlan{}, err
+	}
+	if prepared.CommandBytes == 0 {
+		prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
+	}
+	prepared.RowCount = rowAsset.summary.RowCount
+	prepared.ColumnPayloadBytes = rowAsset.summary.PayloadBytes
+	prepared.AssetMetrics.RowAssetDuration += rowAsset.duration
+	prepared.AssetMetrics.RowAssetBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.RowAssetBytes, int64(len(rowAsset.encoded)))
+	prepared.AssetMetrics.RowAssetCount++
+	rowFileID := uint32(columnAssetM12ASegmentFileID)
+	if isolatedTypedOutput {
+		// Validate the existing generation bound; the flush assigns a fresh
+		// physical segment shared only within this logical source attempt.
+		rowFileID, err = directViewTypedColumnSegmentFileID(generation)
+		if err != nil {
+			return columnPhysicalAssetImagePlan{}, err
+		}
+	}
+	queueRegularManifestAssetToFile(rowAsset.encoded, ColumnAssetKindTCS1PartImage, rowPartID, rowAsset.summary.RowCount, string(input.operation), role, "", rowFileID)
+	typedGranuleRowOrder := typedColumn.build.TypedGranuleRowOrder
+	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
+		typedColumnImage := typedColumn.build.Bytes
+		typedColumnRows := typedColumn.build.Rows
+		if len(typedColumnImage) != 0 {
+			typedColumnPostStart := time.Now()
+			typedColumnSortKey, err := typedColumnPartPublicationSortKey(hookInput.ColumnStore, columnStoreTypedColumnPartFields(hookInput.ColumnStore))
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+
+			if columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
+				directFileID, err := directViewTypedColumnSegmentFileID(generation)
+				if err != nil {
+					return columnPhysicalAssetImagePlan{}, err
+				}
+				queueRegularManifestAssetToFile(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), directFileID)
+			} else {
+				queueRegularManifestAsset(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey))
+			}
+			prepared.AssetMetrics.TypedColumnPartDuration += typedColumn.duration + time.Since(typedColumnPostStart)
+			prepared.AssetMetrics.TypedColumnDictionaryBuild += typedColumn.build.Metrics.DictionaryBuild
+			prepared.AssetMetrics.TypedColumnRowMaterialization += typedColumn.build.Metrics.RowMaterialization
+			prepared.AssetMetrics.TypedColumnPartBuild += typedColumn.build.Metrics.PartBuild
+			prepared.AssetMetrics.TypedColumnImageBuild += typedColumn.build.Metrics.ImageBuild
+			prepared.AssetMetrics.TypedColumnPartBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.TypedColumnPartBytes, int64(len(typedColumnImage)))
+			prepared.AssetMetrics.TypedColumnPartCount++
+		}
+	}
+	if hookInput.Operation == ColumnPublishOperationInsert {
+		typedMetadataStart := time.Now()
+		typedMetadata := columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore)
+		if rowSource != nil && len(typedMetadata) != 0 {
+			return columnPhysicalAssetImagePlan{}, errors.New("collections: streamed column asset preparation does not support typed aggregate metadata")
+		}
+		typedMetadataAssets, err := buildColumnAggregateMetadataAssetsWithOptions(hookInput.ColumnStore, rows, typedMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedPartID, hookInput.AppliedCommandLSN, columnAggregateMetadataAssetBuildOptions{
+			TypedGranuleRowOrder: typedGranuleRowOrder,
+		})
+		if err != nil {
+			return columnPhysicalAssetImagePlan{}, err
+		}
+		var typedMetadataBytes int64
+		for _, metadata := range typedMetadataAssets {
+			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+			typedMetadataBytes = saturatingAddNonNegativeInt64(typedMetadataBytes, int64(len(encodedMetadata)))
+			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, typedPartID, rowCount, metadata.AggregateName)
+		}
+		if typedMetadataBytes > 0 {
+			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(typedMetadataStart)
+			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, typedMetadataBytes)
+			prepared.AssetMetrics.AggregateMetadataCount += len(typedMetadataAssets)
+		}
+		rowSidecarStart := time.Now()
+		var rowSidecarAssets columnRowSidecarAssets
+		var fusedRowSidecars bool
+		if rowSource == nil {
+			rowSidecarAssets, fusedRowSidecars, err = buildColumnRowSidecarAssets(rowAsset.config, rowAsset.rows, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+		} else {
+			rowSidecarAssets, fusedRowSidecars, err = buildColumnRowSidecarAssetsFromSource(rowAsset.config, rowSource, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+		}
+		rowSidecarBuildDuration := time.Since(rowSidecarStart)
+		if err != nil {
+			if rowSource != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+			rowSidecarAssets = columnRowSidecarAssets{}
+			fusedRowSidecars = false
+			err = nil
+		}
+		if rowSource != nil && !fusedRowSidecars {
+			return columnPhysicalAssetImagePlan{}, errors.New("collections: streamed column asset preparation requires fused row sidecars")
+		}
+		if fusedRowSidecars {
+			prepared.AssetMetrics.RowSidecarSharedBuildDuration += rowSidecarBuildDuration
+		}
+		dictionaryStart := time.Now()
+		dictionaryAssets := rowSidecarAssets.DictionaryCodes
+		if !fusedRowSidecars {
+			dictionaryAssets, err = buildColumnDictionaryCodesAssets(rowAsset.config, rowAsset.rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+		}
+		var dictionaryBytes int64
+		for _, dictionary := range dictionaryAssets {
+			encodedDictionary, err := encodeColumnDictionaryCodesAsset(dictionary)
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+			dictionaryBytes = saturatingAddNonNegativeInt64(dictionaryBytes, int64(len(encodedDictionary)))
+			queueRegularAsset(encodedDictionary, ColumnAssetKindTCS1DictionaryCodes, rowPartID, rowAsset.summary.RowCount, dictionary.ColumnName)
+		}
+		if dictionaryBytes > 0 {
+			prepared.AssetMetrics.DictionarySidecarDuration += time.Since(dictionaryStart)
+			prepared.AssetMetrics.DictionarySidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.DictionarySidecarBytes, dictionaryBytes)
+			prepared.AssetMetrics.DictionarySidecarCount += len(dictionaryAssets)
+		}
+		int64Start := time.Now()
+		int64Assets := rowSidecarAssets.Int64Values
+		if !fusedRowSidecars {
+			int64Assets, err = buildColumnInt64ValuesAssets(rowAsset.config, rowAsset.rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+		}
+		var int64Bytes int64
+		for _, values := range int64Assets {
+			encodedValues, err := encodeColumnInt64ValuesAsset(values)
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+			int64Bytes = saturatingAddNonNegativeInt64(int64Bytes, int64(len(encodedValues)))
+			queueRegularAsset(encodedValues, ColumnAssetKindTCS1Int64Values, rowPartID, rowAsset.summary.RowCount, values.ColumnName)
+		}
+		if int64Bytes > 0 {
+			prepared.AssetMetrics.Int64SidecarDuration += time.Since(int64Start)
+			prepared.AssetMetrics.Int64SidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.Int64SidecarBytes, int64Bytes)
+			prepared.AssetMetrics.Int64SidecarCount += len(int64Assets)
+		}
+		rowMetadataStart := time.Now()
+		rowMetadataAssets := rowSidecarAssets.AggregateMetadata
+		if !fusedRowSidecars {
+			rowMetadataAssets, err = buildColumnAggregateMetadataAssets(rowAsset.config, rowAsset.rows, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+		}
+		var rowMetadataBytes int64
+		for _, metadata := range rowMetadataAssets {
+			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
+			if err != nil {
+				return columnPhysicalAssetImagePlan{}, err
+			}
+			rowMetadataBytes = saturatingAddNonNegativeInt64(rowMetadataBytes, int64(len(encodedMetadata)))
+			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, rowPartID, rowAsset.summary.RowCount, metadata.AggregateName)
+		}
+		if rowMetadataBytes > 0 {
+			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(rowMetadataStart)
+			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, rowMetadataBytes)
+			prepared.AssetMetrics.AggregateMetadataCount += len(rowMetadataAssets)
+		}
+		if fusedRowSidecars {
+			totalFusedBytes := saturatingAddNonNegativeInt64(saturatingAddNonNegativeInt64(dictionaryBytes, int64Bytes), rowMetadataBytes)
+			prepared.AssetMetrics.DictionarySidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, dictionaryBytes, totalFusedBytes)
+			prepared.AssetMetrics.Int64SidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, int64Bytes, totalFusedBytes)
+			prepared.AssetMetrics.AggregateMetadataDuration += columnPublishDurationShare(rowSidecarBuildDuration, rowMetadataBytes, totalFusedBytes)
+		}
+	}
+	return columnPhysicalAssetImagePlan{prepared: prepared, assets: pendingAssets, generation: generation, commandLSN: hookInput.AppliedCommandLSN, isolatedTypedOutput: isolatedTypedOutput}, nil
+}
+
+func (c *Collection) installColumnPhysicalAssetImagePlan(images columnPhysicalAssetImagePlan, input columnWritePublishInput, hookInput ColumnPublishAssetPrepareInput) (_ ColumnPublishPreparedAssets, retErr error) {
+	if images.unboundCommandIdentity || input.nativeSource != nil && (images.commandLSN == 0 || images.commandLSN != hookInput.AppliedCommandLSN) {
+		return ColumnPublishPreparedAssets{}, ErrPreparedInsertResourceLimit
+	}
+	prepared := images.prepared
+	pendingAssets := images.assets
+	generation := images.generation
+	isolatedTypedOutput := images.isolatedTypedOutput
+	cleanupAssets := make([]ColumnPreparedAsset, 0, len(pendingAssets))
 	defer func() {
 		if retErr != nil {
 			if prepared.stableResources != nil {
@@ -1560,50 +2031,7 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			}
 		}
 	}()
-	trackCleanupAsset := func(ref ColumnAssetRef) {
-		cleanupAssets = append(cleanupAssets, ColumnPreparedAsset{Ref: ref})
-	}
-	role := columnManifestPartRoleForPublish(hookInput.Operation)
-	type pendingColumnAsset struct {
-		payload  []byte
-		ref      ColumnAssetRef
-		hasRef   bool
-		fileID   uint32
-		kind     ColumnAssetKind
-		partID   uint64
-		rows     int
-		reason   string
-		partRole ColumnManifestPartRole
-		sortKey  string
-		validate func(ColumnAssetRef) error
-	}
-	pendingAssets := make([]pendingColumnAsset, 0, 8)
-	queueRegularAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string) {
-		pendingAssets = append(pendingAssets, pendingColumnAsset{
-			payload: payload,
-			fileID:  columnAssetM12ASegmentFileID,
-			kind:    kind,
-			partID:  partID,
-			rows:    rows,
-			reason:  reason,
-		})
-	}
-	queueRegularManifestAssetToFile := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, fileID uint32, validate func(ColumnAssetRef) error) {
-		pendingAssets = append(pendingAssets, pendingColumnAsset{
-			payload:  payload,
-			fileID:   fileID,
-			kind:     kind,
-			partID:   partID,
-			rows:     rows,
-			reason:   reason,
-			partRole: partRole,
-			sortKey:  sortKey,
-			validate: validate,
-		})
-	}
-	queueRegularManifestAsset := func(payload []byte, kind ColumnAssetKind, partID uint64, rows int, reason string, partRole ColumnManifestPartRole, sortKey string, validate func(ColumnAssetRef) error) {
-		queueRegularManifestAssetToFile(payload, kind, partID, rows, reason, partRole, sortKey, columnAssetM12ASegmentFileID, validate)
-	}
+	trackCleanupAsset := func(ref ColumnAssetRef) { cleanupAssets = append(cleanupAssets, ColumnPreparedAsset{Ref: ref}) }
 	flushPendingAssets := func() (retErr error) {
 		if len(pendingAssets) == 0 {
 			return nil
@@ -1648,6 +2076,10 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			}
 			appendOpenDuration += time.Since(appendStart)
 			session.candidateAdmission = input.candidateAdmission
+			if prepared.stableResourcesRequired && !isolatedTypedOutput && !columnStoreHasTypedColumnPartOwners(hookInput.ColumnStore) &&
+				len(pendingAssets) == 1 && !pendingAssets[0].hasRef && pendingAssets[0].kind == ColumnAssetKindTCS1PartImage && pendingAssets[0].fileID == columnAssetM12ASegmentFileID {
+				session.producerDB = c.db
+			}
 			defer func() {
 				if retErr != nil && !closed {
 					retErr = errors.Join(retErr, session.abort())
@@ -1700,7 +2132,11 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 					}
 					start := time.Now()
 					if appender == nil {
-						appender, err = session.freshAppender()
+						if input.nativeIdentity != nil {
+							appender, err = session.freshAppenderAtReservedIdentity(input.nativeIdentity)
+						} else {
+							appender, err = session.freshAppender()
+						}
 					}
 					appendOpenDuration += time.Since(start)
 					if err != nil {
@@ -1717,6 +2153,15 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 						pendingAssets[i].fileID = fileID
 					}
 				}
+			}
+		}
+		if input.nativeIdentity != nil && input.nativeIdentity.shared {
+			if isolatedTypedOutput || !needsAppender || session.producerDB == nil || len(pendingAssets) != 1 ||
+				len(images.projectedRefs) != 1 || pendingAssets[0].fileID != columnAssetM12ASegmentFileID {
+				return ErrPreparedInsertResourceLimit
+			}
+			if _, err := session.sharedAppenderAtReservedIdentity(input.nativeIdentity); err != nil {
+				return err
 			}
 		}
 		var appendedBytes int64
@@ -1787,6 +2232,9 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 						sharedSegmentAppendBytes = saturatingAddNonNegativeInt64(sharedSegmentAppendBytes, payloadBytes)
 						sharedSegmentAppendCount++
 					}
+					if images.projectedRefs != nil && (assetIndex >= len(images.projectedRefs) || ref != images.projectedRefs[assetIndex]) {
+						return rootpublication.ErrResourceConflict
+					}
 					if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind ||
 						ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) || ref.FileID != group.fileID {
 						return fmt.Errorf("collections: invalid %s asset ref %+v", asset.kind, ref)
@@ -1802,9 +2250,17 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 				}
 				ref = appendedRefs[i]
 			}
-			if asset.validate != nil {
-				if err := asset.validate(ref); err != nil {
+			if asset.kind == ColumnAssetKindTCS1PartImage {
+				if err := validateColumnPhysicalAssetPreparedRefForManifest(ref, hookInput.ColumnStore, generation, asset.partID, len(asset.payload)); err != nil {
 					return err
+				}
+			}
+			if asset.kind == ColumnAssetKindTCS1TypedColumnPart {
+				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != asset.kind || ref.Generation != generation || ref.PartID != asset.partID || ref.Length != int64(len(asset.payload)) {
+					return fmt.Errorf("collections: invalid typed-column part asset ref %+v", ref)
+				}
+				if columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) && ((!isolatedTypedOutput && ref.FileID != asset.fileID) || ref.Offset%typedColumnPartDirectViewAssetAlignment != 0) {
+					return fmt.Errorf("collections: invalid direct-view typed-column part asset identity or alignment file_id=%d offset=%d", ref.FileID, ref.Offset)
 				}
 			}
 			prepared.Assets = append(prepared.Assets, ColumnPreparedAsset{
@@ -1877,284 +2333,6 @@ func (c *Collection) prepareColumnPhysicalAssetRowsAtIdentityFromSources(prepare
 			prepared.AssetMetrics.DirectViewSegmentAppendCount += directViewSegmentAppendCount
 		}
 		return nil
-	}
-	type rowAssetPrepareResult struct {
-		config   ColumnStoreConfig
-		rows     []columnDeclaredRow
-		encoded  []byte
-		summary  columnPhysicalAssetSummary
-		duration time.Duration
-	}
-	prepareRowAsset := func() (rowAssetPrepareResult, error) {
-		start := time.Now()
-		rowAssetConfig := columnStoreRowAssetConfig(hookInput.ColumnStore)
-		rowAssetRows := rows
-		var err error
-		if rowSource == nil {
-			rowAssetRows, err = projectColumnDeclaredRowsForColumns(hookInput.ColumnStore.Columns, rowAssetConfig.Columns, rows)
-			if err != nil {
-				return rowAssetPrepareResult{}, err
-			}
-		}
-		encodeInput := columnPhysicalAssetEncodeInput{
-			Collection:        hookInput.Collection,
-			Namespace:         hookInput.ColumnStore.AssetManager.Namespace,
-			Generation:        generation,
-			PartID:            rowPartID,
-			AppliedCommandLSN: hookInput.AppliedCommandLSN,
-			Operation:         hookInput.Operation,
-			SchemaHash:        hookInput.ColumnStore.SchemaHash,
-			Columns:           rowAssetConfig.Columns,
-			Rows:              rowAssetRows,
-		}
-		var encoded []byte
-		var summary columnPhysicalAssetSummary
-		if rowSource == nil {
-			encoded, summary, err = encodeColumnPhysicalAsset(encodeInput)
-		} else {
-			encoded, summary, err = encodeColumnPhysicalAssetFromSource(encodeInput, rowSource)
-		}
-		if err != nil {
-			return rowAssetPrepareResult{}, err
-		}
-		return rowAssetPrepareResult{
-			config:   rowAssetConfig,
-			rows:     rowAssetRows,
-			encoded:  encoded,
-			summary:  summary,
-			duration: time.Since(start),
-		}, nil
-	}
-	type typedColumnPrepareResult struct {
-		build    typedColumnPartImageBuildResult
-		duration time.Duration
-		err      error
-	}
-	var typedColumnDone chan typedColumnPrepareResult
-	if !input.metadataOnly && (hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate) && columnStoreHasTypedColumnPartOwners(hookInput.ColumnStore) {
-		typedColumnDone = make(chan typedColumnPrepareResult, 1)
-		go func(done chan<- typedColumnPrepareResult) {
-			start := time.Now()
-			var build typedColumnPartImageBuildResult
-			var err error
-			if input.preparedTypedBatch != nil {
-				build, err = buildTypedColumnPartImageFromPreparedBatchWithResult(input.preparedTypedBatch, typedPartID)
-			} else if typedSource == nil {
-				build, err = buildTypedColumnPartImageForDeclaredRowsWithResult(hookInput.ColumnStore, generation, typedPartID, rows)
-			} else {
-				build, err = buildTypedColumnPartImageFromSourceWithResult(hookInput.ColumnStore, generation, typedPartID, typedSource)
-			}
-			done <- typedColumnPrepareResult{
-				build:    build,
-				duration: time.Since(start),
-				err:      err,
-			}
-		}(typedColumnDone)
-	}
-	waitTypedColumn := func() (typedColumnPrepareResult, error) {
-		if typedColumnDone == nil {
-			return typedColumnPrepareResult{}, nil
-		}
-		result := <-typedColumnDone
-		typedColumnDone = nil
-		return result, result.err
-	}
-	rowAsset, err := prepareRowAsset()
-	if err != nil {
-		_, _ = waitTypedColumn()
-		return ColumnPublishPreparedAssets{}, err
-	}
-	typedColumn, err := waitTypedColumn()
-	if err != nil {
-		return ColumnPublishPreparedAssets{}, err
-	}
-	if prepared.CommandBytes == 0 {
-		prepared.CommandBytes = columnWriteDocumentsBytes(input.documents)
-	}
-	prepared.RowCount = rowAsset.summary.RowCount
-	prepared.ColumnPayloadBytes = rowAsset.summary.PayloadBytes
-	prepared.AssetMetrics.RowAssetDuration += rowAsset.duration
-	prepared.AssetMetrics.RowAssetBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.RowAssetBytes, int64(len(rowAsset.encoded)))
-	prepared.AssetMetrics.RowAssetCount++
-	rowFileID := uint32(columnAssetM12ASegmentFileID)
-	if isolatedTypedOutput {
-		// Validate the existing generation bound; the flush assigns a fresh
-		// physical segment shared only within this logical source attempt.
-		rowFileID, err = directViewTypedColumnSegmentFileID(generation)
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
-	}
-	queueRegularManifestAssetToFile(rowAsset.encoded, ColumnAssetKindTCS1PartImage, rowPartID, rowAsset.summary.RowCount, string(input.operation), role, "", rowFileID, func(ref ColumnAssetRef) error {
-		return validateColumnPhysicalAssetPreparedRefForManifest(ref, rowAsset.config, generation, rowPartID, len(rowAsset.encoded))
-	})
-	typedGranuleRowOrder := typedColumn.build.TypedGranuleRowOrder
-	if hookInput.Operation == ColumnPublishOperationInsert || hookInput.Operation == ColumnPublishOperationUpdate {
-		typedColumnImage := typedColumn.build.Bytes
-		typedColumnRows := typedColumn.build.Rows
-		if len(typedColumnImage) != 0 {
-			typedColumnPostStart := time.Now()
-			typedColumnSortKey, err := typedColumnPartPublicationSortKey(hookInput.ColumnStore, columnStoreTypedColumnPartFields(hookInput.ColumnStore))
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			validateTypedColumnRef := func(ref ColumnAssetRef) error {
-				if ref.Namespace != hookInput.ColumnStore.AssetManager.Namespace || ref.Kind != ColumnAssetKindTCS1TypedColumnPart ||
-					ref.Generation != generation || ref.PartID != typedPartID || ref.Length != int64(len(typedColumnImage)) {
-					return fmt.Errorf("collections: invalid typed-column part asset ref %+v", ref)
-				}
-				return nil
-			}
-			if columnStoreConfigNeedsDirectViewTypedColumnAlignment(hookInput.ColumnStore) {
-				directFileID, err := directViewTypedColumnSegmentFileID(generation)
-				if err != nil {
-					return ColumnPublishPreparedAssets{}, err
-				}
-				queueRegularManifestAssetToFile(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), directFileID, func(ref ColumnAssetRef) error {
-					if err := validateTypedColumnRef(ref); err != nil {
-						return err
-					}
-					if !isolatedTypedOutput && ref.FileID != directFileID {
-						return fmt.Errorf("collections: invalid direct-view typed-column part asset file_id=%d want %d", ref.FileID, directFileID)
-					}
-					if ref.Offset%typedColumnPartDirectViewAssetAlignment != 0 {
-						return fmt.Errorf("collections: invalid direct-view typed-column part asset offset=%d want %d-byte alignment", ref.Offset, typedColumnPartDirectViewAssetAlignment)
-					}
-					return nil
-				})
-			} else {
-				queueRegularManifestAsset(typedColumnImage, ColumnAssetKindTCS1TypedColumnPart, typedPartID, typedColumnRows, string(input.operation), role, columnSortKeyMatchString(typedColumnSortKey), validateTypedColumnRef)
-			}
-			prepared.AssetMetrics.TypedColumnPartDuration += typedColumn.duration + time.Since(typedColumnPostStart)
-			prepared.AssetMetrics.TypedColumnDictionaryBuild += typedColumn.build.Metrics.DictionaryBuild
-			prepared.AssetMetrics.TypedColumnRowMaterialization += typedColumn.build.Metrics.RowMaterialization
-			prepared.AssetMetrics.TypedColumnPartBuild += typedColumn.build.Metrics.PartBuild
-			prepared.AssetMetrics.TypedColumnImageBuild += typedColumn.build.Metrics.ImageBuild
-			prepared.AssetMetrics.TypedColumnPartBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.TypedColumnPartBytes, int64(len(typedColumnImage)))
-			prepared.AssetMetrics.TypedColumnPartCount++
-		}
-	}
-	if hookInput.Operation == ColumnPublishOperationInsert {
-		typedMetadataStart := time.Now()
-		typedMetadata := columnStoreTypedColumnPartAggregateMetadata(hookInput.ColumnStore)
-		if rowSource != nil && len(typedMetadata) != 0 {
-			return ColumnPublishPreparedAssets{}, errors.New("collections: streamed column asset preparation does not support typed aggregate metadata")
-		}
-		typedMetadataAssets, err := buildColumnAggregateMetadataAssetsWithOptions(hookInput.ColumnStore, rows, typedMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, typedPartID, hookInput.AppliedCommandLSN, columnAggregateMetadataAssetBuildOptions{
-			TypedGranuleRowOrder: typedGranuleRowOrder,
-		})
-		if err != nil {
-			return ColumnPublishPreparedAssets{}, err
-		}
-		var typedMetadataBytes int64
-		for _, metadata := range typedMetadataAssets {
-			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			typedMetadataBytes = saturatingAddNonNegativeInt64(typedMetadataBytes, int64(len(encodedMetadata)))
-			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, typedPartID, rowCount, metadata.AggregateName)
-		}
-		if typedMetadataBytes > 0 {
-			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(typedMetadataStart)
-			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, typedMetadataBytes)
-			prepared.AssetMetrics.AggregateMetadataCount += len(typedMetadataAssets)
-		}
-		rowSidecarStart := time.Now()
-		var rowSidecarAssets columnRowSidecarAssets
-		var fusedRowSidecars bool
-		if rowSource == nil {
-			rowSidecarAssets, fusedRowSidecars, err = buildColumnRowSidecarAssets(rowAsset.config, rowAsset.rows, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
-		} else {
-			rowSidecarAssets, fusedRowSidecars, err = buildColumnRowSidecarAssetsFromSource(rowAsset.config, rowSource, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
-		}
-		rowSidecarBuildDuration := time.Since(rowSidecarStart)
-		if err != nil {
-			if rowSource != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			rowSidecarAssets = columnRowSidecarAssets{}
-			fusedRowSidecars = false
-			err = nil
-		}
-		if rowSource != nil && !fusedRowSidecars {
-			return ColumnPublishPreparedAssets{}, errors.New("collections: streamed column asset preparation requires fused row sidecars")
-		}
-		if fusedRowSidecars {
-			prepared.AssetMetrics.RowSidecarSharedBuildDuration += rowSidecarBuildDuration
-		}
-		dictionaryStart := time.Now()
-		dictionaryAssets := rowSidecarAssets.DictionaryCodes
-		if !fusedRowSidecars {
-			dictionaryAssets, err = buildColumnDictionaryCodesAssets(rowAsset.config, rowAsset.rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-		}
-		var dictionaryBytes int64
-		for _, dictionary := range dictionaryAssets {
-			encodedDictionary, err := encodeColumnDictionaryCodesAsset(dictionary)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			dictionaryBytes = saturatingAddNonNegativeInt64(dictionaryBytes, int64(len(encodedDictionary)))
-			queueRegularAsset(encodedDictionary, ColumnAssetKindTCS1DictionaryCodes, rowPartID, rowAsset.summary.RowCount, dictionary.ColumnName)
-		}
-		if dictionaryBytes > 0 {
-			prepared.AssetMetrics.DictionarySidecarDuration += time.Since(dictionaryStart)
-			prepared.AssetMetrics.DictionarySidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.DictionarySidecarBytes, dictionaryBytes)
-			prepared.AssetMetrics.DictionarySidecarCount += len(dictionaryAssets)
-		}
-		int64Start := time.Now()
-		int64Assets := rowSidecarAssets.Int64Values
-		if !fusedRowSidecars {
-			int64Assets, err = buildColumnInt64ValuesAssets(rowAsset.config, rowAsset.rows, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-		}
-		var int64Bytes int64
-		for _, values := range int64Assets {
-			encodedValues, err := encodeColumnInt64ValuesAsset(values)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			int64Bytes = saturatingAddNonNegativeInt64(int64Bytes, int64(len(encodedValues)))
-			queueRegularAsset(encodedValues, ColumnAssetKindTCS1Int64Values, rowPartID, rowAsset.summary.RowCount, values.ColumnName)
-		}
-		if int64Bytes > 0 {
-			prepared.AssetMetrics.Int64SidecarDuration += time.Since(int64Start)
-			prepared.AssetMetrics.Int64SidecarBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.Int64SidecarBytes, int64Bytes)
-			prepared.AssetMetrics.Int64SidecarCount += len(int64Assets)
-		}
-		rowMetadataStart := time.Now()
-		rowMetadataAssets := rowSidecarAssets.AggregateMetadata
-		if !fusedRowSidecars {
-			rowMetadataAssets, err = buildColumnAggregateMetadataAssets(rowAsset.config, rowAsset.rows, rowAsset.config.AggregateMetadata, hookInput.Collection, hookInput.ColumnStore.AssetManager.Namespace, generation, rowPartID, hookInput.AppliedCommandLSN)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-		}
-		var rowMetadataBytes int64
-		for _, metadata := range rowMetadataAssets {
-			encodedMetadata, err := encodeColumnAggregateMetadataAsset(metadata)
-			if err != nil {
-				return ColumnPublishPreparedAssets{}, err
-			}
-			rowMetadataBytes = saturatingAddNonNegativeInt64(rowMetadataBytes, int64(len(encodedMetadata)))
-			queueRegularAsset(encodedMetadata, ColumnAssetKindTCS1AggregateMetadata, rowPartID, rowAsset.summary.RowCount, metadata.AggregateName)
-		}
-		if rowMetadataBytes > 0 {
-			prepared.AssetMetrics.AggregateMetadataDuration += time.Since(rowMetadataStart)
-			prepared.AssetMetrics.AggregateMetadataBytes = saturatingAddNonNegativeInt64(prepared.AssetMetrics.AggregateMetadataBytes, rowMetadataBytes)
-			prepared.AssetMetrics.AggregateMetadataCount += len(rowMetadataAssets)
-		}
-		if fusedRowSidecars {
-			totalFusedBytes := saturatingAddNonNegativeInt64(saturatingAddNonNegativeInt64(dictionaryBytes, int64Bytes), rowMetadataBytes)
-			prepared.AssetMetrics.DictionarySidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, dictionaryBytes, totalFusedBytes)
-			prepared.AssetMetrics.Int64SidecarDuration += columnPublishDurationShare(rowSidecarBuildDuration, int64Bytes, totalFusedBytes)
-			prepared.AssetMetrics.AggregateMetadataDuration += columnPublishDurationShare(rowSidecarBuildDuration, rowMetadataBytes, totalFusedBytes)
-		}
 	}
 	if err := flushPendingAssets(); err != nil {
 		return ColumnPublishPreparedAssets{}, err

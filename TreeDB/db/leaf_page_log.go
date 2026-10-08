@@ -108,6 +108,9 @@ type LeafPagePreparedChildRefStableBatchLog interface {
 }
 
 func validateLeafPageStableResources(ptrs []page.LeafLogPtr, resources *rootpublication.StableResourceSet) error {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return err
+	}
 	if len(ptrs) == 0 {
 		if resources != nil && resources.Len() != 0 {
 			return fmt.Errorf("%w: empty leaf append returned stable resources", rootpublication.ErrResourceConflict)

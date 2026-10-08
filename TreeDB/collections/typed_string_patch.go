@@ -8,11 +8,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
-	"math"
 	"slices"
-	"strings"
-	"unicode/utf8"
-	"unsafe"
 )
 
 var ErrTypedStringPatchInvalid = errors.New("collections: invalid typed string patch")
@@ -47,76 +43,47 @@ func (c *Collection) PatchTypedStringsBatch(requests []TypedStringPatch, expecte
 	if len(requests) == 0 || expectedSchemaHash == 0 {
 		return TypedStringPatchResult{}, fmt.Errorf("%w: nonempty batch and schema hash required", ErrTypedStringPatchInvalid)
 	}
-	admissionMeta := c.Meta()
-	if err := validateTypedStringPatchMeta(admissionMeta, expectedSchemaHash); err != nil {
+	// Borrow stable schema under its existing admission lock. Deep-copying the
+	// full manifest here would duplicate owned metadata before request credit.
+	unlockSchema := c.lockCollectionSchemaRead()
+	if err := validateTypedStringPatchInput(requests, c.MetaView(), expectedSchemaHash); err != nil {
+		unlockSchema()
 		return TypedStringPatchResult{}, err
 	}
-	// Prove the owned-input shape against the existing uint32 WAL section before
-	// allocating ID/edit/residual copies. Actual request credit adds Go backing.
-	inputBytes := uint64(22)
-	addInput := func(n uint64) error {
-		if n > uint64(math.MaxUint32)-inputBytes {
-			return commitlog.ErrRecordTooLarge
+	unlockSchema()
+	var admission nativeStringPatchAdmission
+	if c.db.ResolvedProfile() == backenddb.ProfileCommandWALDurable {
+		var err error
+		admission, err = c.acquireNativeStringPatchAdmission()
+		if err != nil {
+			return TypedStringPatchResult{}, err
 		}
-		inputBytes += n
-		return nil
+		defer admission.release()
 	}
-	if uint64(len(requests)) > uint64(math.MaxInt)/uint64(unsafe.Sizeof(TypedStringPatch{})) {
-		return TypedStringPatchResult{}, commitlog.ErrRecordTooLarge
+	if admission.coord != nil {
+		limits, err := nativeStringPatchInputCreditLimits(requests)
+		if err != nil {
+			return TypedStringPatchResult{}, err
+		}
+		prepared, err := prepareNativeStringPatchInput(requests, limits)
+		if err != nil {
+			return TypedStringPatchResult{}, err
+		}
+		if !prepared.consume() {
+			panic("collections: fresh native input already consumed")
+		}
+		defer prepared.finish()
+		if hook := nativeStringPatchInputCopiedTestHook.Load(); hook != nil {
+			(*hook)()
+		}
+		return c.joinNativeStringPatchGroup(&admission, prepared, expectedSchemaHash)
 	}
-	for _, r := range requests {
-		if len(r.ID) == 0 || !utf8.Valid(r.ID) || r.ResidualMode > TypedStringResidualReplace || r.ResidualMode == TypedStringResidualPreserve && len(r.Residual) != 0 {
-			return TypedStringPatchResult{}, ErrTypedStringPatchInvalid
-		}
-		if len(r.Edits) > len(admissionMeta.Options.ColumnStore.Columns) || uint64(len(r.Edits)) > uint64(math.MaxInt)/uint64(unsafe.Sizeof(TypedStringEdit{})) {
-			return TypedStringPatchResult{}, ErrTypedStringPatchInvalid
-		}
-		if r.Expected != nil && !bytes.Equal(r.Expected.DocumentID, r.ID) {
-			return TypedStringPatchResult{}, ErrTypedStringPatchInvalid
-		}
-		for _, n := range [...]uint64{45, uint64(len(r.ID)), uint64(len(r.Residual))} {
-			if err := addInput(n); err != nil {
-				return TypedStringPatchResult{}, err
-			}
-		}
-		for _, e := range r.Edits {
-			if e.Column == "" || !utf8.ValidString(e.Column) || !utf8.ValidString(e.Value) {
-				return TypedStringPatchResult{}, ErrTypedStringPatchInvalid
-			}
-			for _, n := range [...]uint64{8, uint64(len(e.Column)), uint64(len(e.Value))} {
-				if err := addInput(n); err != nil {
-					return TypedStringPatchResult{}, err
-				}
-			}
-		}
+	owned, err := cloneTypedStringPatchInput(requests)
+	if err != nil {
+		return TypedStringPatchResult{}, err
 	}
-	owned := make([]TypedStringPatch, len(requests))
-	for i, r := range requests {
-		owned[i] = r
-		owned[i].ID = make([]byte, len(r.ID))
-		copy(owned[i].ID, r.ID)
-		owned[i].Residual = make([]byte, len(r.Residual))
-		copy(owned[i].Residual, r.Residual)
-		owned[i].Edits = make([]TypedStringEdit, len(r.Edits))
-		copy(owned[i].Edits, r.Edits)
-		for j, e := range r.Edits {
-			owned[i].Edits[j] = TypedStringEdit{strings.Clone(e.Column), strings.Clone(e.Value)}
-		}
-		if r.Expected != nil {
-			e := *r.Expected
-			e.DocumentID = make([]byte, len(r.Expected.DocumentID))
-			copy(e.DocumentID, r.Expected.DocumentID)
-			if !bytes.Equal(e.DocumentID, r.ID) {
-				return TypedStringPatchResult{}, ErrTypedStringPatchInvalid
-			}
-			owned[i].Expected = &e
-		}
-	}
-	slices.SortFunc(owned, func(a, b TypedStringPatch) int { return bytes.Compare(a.ID, b.ID) })
-	for i := 1; i < len(owned); i++ {
-		if bytes.Equal(owned[i-1].ID, owned[i].ID) {
-			return TypedStringPatchResult{}, ErrDuplicateDocumentID
-		}
+	if hook := nativeStringPatchInputCopiedTestHook.Load(); hook != nil {
+		(*hook)()
 	}
 	return c.patchTypedStringsBatch(owned, expectedSchemaHash, nil, nil)
 }
@@ -158,13 +125,13 @@ func (c *Collection) patchTypedStringsBatch(requests []TypedStringPatch, schema 
 	admissionState := c.lockCollectionCommandWALAdmission()
 	admission := &admissionState
 	defer admission.unlock()
-	if err := validateTypedStringPatchMeta(c.Meta(), schema); err != nil {
+	if err := validateTypedStringPatchMeta(c.MetaView(), schema); err != nil {
 		return TypedStringPatchResult{}, err
 	}
 	if err := c.requireTypedBatchVectorAdmission(); err != nil {
 		return TypedStringPatchResult{}, err
 	}
-	if err := c.requireColumnStoreCommandWAL(c.Meta(), replay); err != nil {
+	if err := c.requireColumnStoreCommandWAL(c.MetaView(), replay); err != nil {
 		return TypedStringPatchResult{}, err
 	}
 	if replay == nil {
@@ -184,6 +151,10 @@ func (c *Collection) patchTypedStringsBatch(requests []TypedStringPatch, schema 
 	if err := c.flushBufferedWritesWithVectorAdmissionLocked(); err != nil {
 		return TypedStringPatchResult{}, err
 	}
+	// Prepare against an immutable cut outside serialized mutation ownership.
+	// Publication retains the existing root preflight and zero-LSN retry rule.
+	unlockMutation.Unlock()
+	mutationLocked = false
 	var lastErr error
 	for attempt := 0; attempt < maxCollectionMutationRetries; attempt++ {
 		plan, payload, result, err := c.buildTypedStringPatchPlan(requests, schema, replayPayload)
@@ -193,6 +164,8 @@ func (c *Collection) patchTypedStringsBatch(requests []TypedStringPatch, schema 
 		if result.ModifiedCount == 0 {
 			plan.close()
 			if replay != nil {
+				unlockMutation = c.lockMutation()
+				mutationLocked = true
 				return result, c.publishCommandWALNoop(replay, false)
 			}
 			return result, nil
@@ -208,8 +181,17 @@ func (c *Collection) patchTypedStringsBatch(requests []TypedStringPatch, schema 
 				return TypedStringPatchResult{}, e
 			}
 		}
+		if hook := nativeStringPatchAfterPrepareTestHook.Load(); hook != nil {
+			(*hook)()
+		}
+		unlockMutation = c.lockMutation()
+		mutationLocked = true
 		_, err = c.publishUpdateBatchPlanLocked(plan, intent, admission)
 		plan.close()
+		if mutationLocked {
+			unlockMutation.Unlock()
+			mutationLocked = false
+		}
 		if intent.AssignedLSN() == 0 && isRetriableCollectionMutationError(err) {
 			lastErr = err
 			waitBeforeCollectionMutationRetry(attempt)
@@ -220,7 +202,15 @@ func (c *Collection) patchTypedStringsBatch(requests []TypedStringPatch, schema 
 	return TypedStringPatchResult{}, collectionMutationRetryExhausted(lastErr)
 }
 
-func (c *Collection) buildTypedStringPatchPlan(requests []TypedStringPatch, schema uint64, replay *commitlog.CollectionTypedStringsPayload) (_ *updateBatchPlan, payload commitlog.CollectionTypedStringsPayload, result TypedStringPatchResult, retErr error) {
+func (c *Collection) buildTypedStringPatchPlan(requests []TypedStringPatch, schema uint64, replay *commitlog.CollectionTypedStringsPayload) (*updateBatchPlan, commitlog.CollectionTypedStringsPayload, TypedStringPatchResult, error) {
+	return c.buildTypedStringPatchPlanWithBoundaries(requests, schema, replay, nil)
+}
+
+func (c *Collection) buildTypedStringPatchPlanForGroup(requests []TypedStringPatch, schema uint64, group *nativeStringPatchGroup) (*updateBatchPlan, commitlog.CollectionTypedStringsPayload, TypedStringPatchResult, error) {
+	return c.buildTypedStringPatchPlanWithBoundaries(requests, schema, nil, group)
+}
+
+func (c *Collection) buildTypedStringPatchPlanWithBoundaries(requests []TypedStringPatch, schema uint64, replay *commitlog.CollectionTypedStringsPayload, group *nativeStringPatchGroup) (_ *updateBatchPlan, payload commitlog.CollectionTypedStringsPayload, result TypedStringPatchResult, retErr error) {
 	plan := newUpdateBatchPlan()
 	defer func() {
 		if retErr != nil {
@@ -444,6 +434,11 @@ func (c *Collection) buildTypedStringPatchPlan(requests []TypedStringPatch, sche
 		result.ModifiedCount++
 	}
 	plan.stats.Items, plan.stats.Matched, plan.stats.Modified = len(requests), result.MatchedCount, result.ModifiedCount
+	if group != nil {
+		if err := group.checkUniqueBoundaries(plan, changed, runtimes); err != nil {
+			return nil, payload, result, err
+		}
+	}
 	if err := buildTypedMutationRootDeltas(plan, changed, runtimes, opts, func(u preparedBatchUpdate) bool { return u.hasPrimaryDocument }); err != nil {
 		return nil, payload, result, err
 	}

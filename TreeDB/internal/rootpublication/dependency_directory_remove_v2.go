@@ -6,6 +6,9 @@ import "fmt"
 // carries only those exact keys until the next directory is built. Physical
 // entries and summaries are bounded by physical resources, not logical rows.
 func cloneDirectoryRemovingV2(source *StableResourceSet, mutation StableLogicalObligationMutation, work StableResourceClosureWork, excluded ...ResourceKind) (*StableResourceSet, StableResourceClosureWork, bool, error) {
+	if err := source.RequireMetadataExport(); err != nil {
+		return nil, work, true, err
+	}
 	if source == nil {
 		return nil, work, false, nil
 	}
@@ -90,12 +93,13 @@ func cloneDirectoryRemovingV2(source *StableResourceSet, mutation StableLogicalO
 				view.count--
 			}
 		}
-		for field := range fields {
+		for i := fields.len() - 1; i >= 0; i-- {
+			field := fields.entries[i].key
 			if _, inScope := scoped[field]; inScope && view.commitments[field].count == 0 {
-				delete(fields, field)
+				fields.remove(field)
 			}
 		}
-		if len(fields) == 0 {
+		if fields.len() == 0 {
 			work.DroppedEntries++
 			work.DroppedObligations += uint64(entry.logicalObligations.count)
 			continue
@@ -132,8 +136,12 @@ func (set *StableResourceSet) hasDependencyDirectoryV2() bool {
 }
 
 func cloneDirectoryForRequirementsV2(source *StableResourceSet, requirements StableLogicalObligationRequirements, index stableLogicalObligationRequirementIndex, work StableResourceClosureWork, excluded ...ResourceKind) (*StableResourceSet, StableResourceClosureWork, error) {
+	if err := source.RequireMetadataExport(); err != nil {
+		return nil, work, err
+	}
 	mutation := StableLogicalObligationMutation{}
-	for field := range index.scoped {
+	for _, binding := range index.scoped.records() {
+		field := binding.key
 		mutation.ScopedFields = append(mutation.ScopedFields, field)
 	}
 	excludedKinds := make(map[ResourceKind]bool, len(excluded))
@@ -157,6 +165,9 @@ func cloneDirectoryForRequirementsV2(source *StableResourceSet, requirements Sta
 }
 
 func validateDirectoryRequirementsV2(resources *StableResourceSet, index stableLogicalObligationRequirementIndex, work StableResourceClosureWork) (StableResourceClosureWork, error) {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return work, err
+	}
 	type fieldKey struct {
 		resource stableLogicalResourceKey
 		field    ReachabilityField
@@ -166,7 +177,7 @@ func validateDirectoryRequirementsV2(resources *StableResourceSet, index stableL
 		work.SourceEntriesInspected++
 		key := stableLogicalResourceKey{kind: physical.Kind, lane: physical.logicalLane, resourceID: physical.resourceID, generation: physical.Generation}
 		for _, field := range physical.reachability {
-			if _, scoped := index.scoped[field]; scoped {
+			if _, scoped := index.scoped.lookup(field); scoped {
 				fields[fieldKey{key, field}] = false
 			}
 		}
@@ -175,7 +186,7 @@ func validateDirectoryRequirementsV2(resources *StableResourceSet, index stableL
 	if err := resources.WalkLogicalObligations(func(physical StableResourcePhysicalDescriptor, obligation StableLogicalObligation) error {
 		work.SourceObligationsInspected++
 		key := stableLogicalResourceKey{kind: physical.Kind, lane: physical.logicalLane, resourceID: physical.resourceID, generation: physical.Generation}
-		if _, scoped := index.scoped[obligation.Reachability]; scoped {
+		if _, scoped := index.scoped.lookup(obligation.Reachability); scoped {
 			fields[fieldKey{key, obligation.Reachability}] = true
 		}
 		if !index.containsScope(obligation) {

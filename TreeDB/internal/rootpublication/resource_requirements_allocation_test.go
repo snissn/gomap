@@ -8,7 +8,7 @@ import (
 func TestStableLogicalObligationEmptyRequirementsIndexAllocations(t *testing.T) {
 	check := func() {
 		index, err := indexStableLogicalObligationRequirements(StableLogicalObligationRequirements{})
-		if err != nil || len(index.scoped) != 0 || len(index.global) != 0 || len(index.namespaces) != 0 || len(index.desired) != 0 {
+		if err != nil || index.scoped.len() != 0 || index.global.len() != 0 || len(index.namespaces) != 0 || len(index.desired) != 0 {
 			t.Fatalf("empty index=%+v err=%v", index, err)
 		}
 	}
@@ -21,7 +21,7 @@ func TestStableLogicalObligationEmptyRequirementsIndexAllocations(t *testing.T) 
 	}
 	// An empty namespace declaration still has replacement semantics.
 	index, err := indexStableLogicalObligationRequirements(StableLogicalObligationRequirements{ScopedNamespaces: []StableLogicalObligationNamespaceScope{{Field: ReachabilityColumnManifest, Namespace: "docs/column-assets"}}})
-	if err != nil || len(index.scoped) != 1 || len(index.namespaces) != 1 || len(index.desired) != 1 {
+	if err != nil || index.scoped.len() != 1 || len(index.namespaces) != 1 || len(index.desired) != 1 {
 		t.Fatalf("empty namespace declaration discarded: index=%+v err=%v", index, err)
 	}
 }

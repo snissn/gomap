@@ -1535,13 +1535,15 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("%w: packed publication did not advance the leaf-generation manifest", rootpublication.ErrResourceConflict))
 		return 0, 0, abandonManifest(cleanupErr)
 	}
-	var persistedLeafManifest *leafGenerationManifest
-	manifestClosure, persistedLeafManifest, manifestErr = db.prepareLeafGenerationManifestStableCandidate(leafManifest)
-	if manifestErr != nil {
-		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: persist exact leaf-generation manifest: %w", manifestErr))
-		return 0, 0, abandonManifest(cleanupErr)
+	if !db.ownedLeafManifests {
+		var persistedLeafManifest *leafGenerationManifest
+		manifestClosure, persistedLeafManifest, manifestErr = db.prepareLeafGenerationManifestStableCandidate(leafManifest)
+		if manifestErr != nil {
+			_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: persist exact leaf-generation manifest: %w", manifestErr))
+			return 0, 0, abandonManifest(cleanupErr)
+		}
+		leafManifest = persistedLeafManifest
 	}
-	leafManifest = persistedLeafManifest
 	publishEvent.Phase = leafGenerationPackAfterManifestPreparation
 	if err := runLeafGenerationPackPublishHook(publishEvent); err != nil {
 		_, _, cleanupErr := cleanupCreatedSegments(fmt.Errorf("vlog-rewrite: manifest preparation failpoint: %w", err))
@@ -1636,9 +1638,16 @@ func (db *DB) rewriteLeafRefsOnline(ctx context.Context, writer *rewriteWriter, 
 	// destination parents once as one namespace batch. Do not issue the former
 	// path-based destination-directory sync here.
 
-	manifestResources, manifestErr := manifestClosure.TakeStableResources()
+	var manifestResources *rootpublication.StableResourceSet
+	if db.ownedLeafManifests {
+		manifestResources, manifestErr = rootpublication.NewStableResourceSetBuilder().Freeze()
+	} else {
+		manifestResources, manifestErr = manifestClosure.TakeStableResources()
+	}
 	if manifestErr != nil {
-		manifestClosure.Release()
+		if manifestClosure != nil {
+			manifestClosure.Release()
+		}
 		return cleanupAndUnlock(fmt.Errorf("vlog-rewrite: transfer exact leaf-generation manifest: %w", manifestErr))
 	}
 	packedResources, resourceErr := authority.takeStableResources()

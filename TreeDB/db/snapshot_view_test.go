@@ -7,7 +7,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/freelist"
 	"github.com/snissn/gomap/TreeDB/internal/valuelog"
-	"github.com/snissn/gomap/TreeDB/lifecycle"
 	"github.com/snissn/gomap/TreeDB/page"
 	"github.com/snissn/gomap/TreeDB/pager"
 )
@@ -64,8 +63,7 @@ func TestDBAndSnapshotStateReturnCopies(t *testing.T) {
 func TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree(t *testing.T) {
 	db := &DB{snapPool: NewSnapshotPool()}
 	state := &DBState{CommitSeq: 17, RootPageID: 23, SystemRootPageID: 29}
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 	db.idx.Store(idx)
 	db.state.Store(state)
 	db.publishSnapshotView(idx, state, nil)
@@ -123,10 +121,8 @@ func TestDBAndSnapshotStateTokenIsCoherentImmutableAndAllocationFree(t *testing.
 }
 
 func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
-	idx1 := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx1.refs.Store(1)
-	idx2 := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx2.refs.Store(1)
+	indexes := newSnapshotFixtureIndexes(t, 1, 2)
+	idx1, idx2 := indexes[0], indexes[1]
 
 	state1 := &DBState{CommitSeq: 101, RootPageID: 11}
 	state2 := &DBState{CommitSeq: 202, RootPageID: 22}
@@ -190,12 +186,8 @@ func TestAcquireSnapshot_UsesPublishedCoherentView(t *testing.T) {
 }
 
 func TestMinPinnedSnapshotCommitSeqTracksCurrentAndRetiredGenerations(t *testing.T) {
-	idx1 := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx1.id = 1
-	idx1.refs.Store(1)
-	idx2 := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx2.id = 2
-	idx2.refs.Store(1)
+	indexes := newSnapshotFixtureIndexes(t, 1, 2)
+	idx1, idx2 := indexes[0], indexes[1]
 
 	state1 := &DBState{CommitSeq: 101, RootPageID: 11}
 	state2 := &DBState{CommitSeq: 202, RootPageID: 22}
@@ -300,9 +292,7 @@ func TestPruneSomeProtectsInFlightSnapshotAcquire(t *testing.T) {
 }
 
 func TestMinPinnedSnapshotCommitSeqRescansAcquireCompletedDuringScan(t *testing.T) {
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.id = 1
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 	state := &DBState{CommitSeq: 313, RootPageID: 11}
 	db := &DB{snapPool: NewSnapshotPool()}
 	db.idx.Store(idx)
@@ -369,8 +359,8 @@ func TestMinPinnedSnapshotCommitSeqToleratesShortSnapshotAcquireChurn(t *testing
 }
 
 func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
-	idx := &indexGen{}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
+	idx.registry = nil
 
 	seg := &valuelog.File{}
 	seg.RefCount.Store(1)
@@ -401,8 +391,7 @@ func TestAcquireSnapshot_ReleasesPinnedValueLogSetOnRegistryNil(t *testing.T) {
 }
 
 func TestAcquireSnapshot_ReturnsNilWhenDBIsClosing(t *testing.T) {
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 	state := &DBState{CommitSeq: 7, RootPageID: 1}
 
 	db := &DB{snapPool: NewSnapshotPool()}
@@ -421,8 +410,7 @@ func TestAcquireSnapshot_ReturnsNilWhenDBIsClosing(t *testing.T) {
 }
 
 func TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale(t *testing.T) {
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 	db := &DB{snapPool: NewSnapshotPool()}
 	db.leafGenerationManifest = &leafGenerationManifest{
 		CurrentGenerationID: 2,
@@ -499,8 +487,7 @@ func TestAcquireSnapshot_CurrentLeafGenerationViewOnlyPinsWhenItTurnsStale(t *te
 }
 
 func TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins(t *testing.T) {
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 
 	db := &DB{snapPool: NewSnapshotPool()}
 	db.leafGenerationManifest = &leafGenerationManifest{
@@ -592,8 +579,7 @@ func TestAcquireSnapshot_SharedLeafGenerationPinSetAmortizesPins(t *testing.T) {
 }
 
 func TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish(t *testing.T) {
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 
 	db := &DB{snapPool: NewSnapshotPool()}
 	db.leafGenerationManifest = &leafGenerationManifest{
@@ -649,8 +635,7 @@ func TestAcquireSnapshot_SharedLeafGenerationPinSet_RemainsPinnedAcrossPublish(t
 }
 
 func TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot(t *testing.T) {
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 	state := &DBState{
 		CommitSeq:  1,
 		RootPageID: 1,
@@ -701,8 +686,8 @@ func TestAcquireSnapshot_ManualLeafGenerationViewFallbackStillPinsPerSnapshot(t 
 }
 
 func TestAcquireSnapshot_DoesNotLeakLeafGenerationPinsOnRegistryNil(t *testing.T) {
-	idx := &indexGen{}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
+	idx.registry = nil
 	state := &DBState{
 		CommitSeq:  1,
 		RootPageID: 1,

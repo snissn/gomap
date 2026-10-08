@@ -103,8 +103,16 @@ func newRevisionStore5066(t *testing.T) (*leafGenerationManifestStore, *rootpubl
 		old.Release()
 		t.Fatal(err)
 	}
-	t.Cleanup(old.Release)
-	t.Cleanup(current.Release)
+	t.Cleanup(func() {
+		if err := old.Release(); err != nil {
+			t.Error(err)
+		}
+	})
+	t.Cleanup(func() {
+		if err := current.Release(); err != nil {
+			t.Error(err)
+		}
+	})
 	return s, old, current
 }
 

@@ -336,6 +336,9 @@ func (authority *leafGenerationPackPromotionAuthority) takeStablePreparedClosure
 		}
 		return nil, validationErr
 	}
+	if err := authority.resources.RequireMetadataExport(); err != nil {
+		return fail(err)
+	}
 	if authority.resources == nil || authority.released {
 		return fail(rootpublication.ErrResourceOwnership)
 	}

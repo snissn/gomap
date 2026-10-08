@@ -8,8 +8,10 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
+	"github.com/snissn/gomap/TreeDB/internal/residentcredit"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -35,6 +37,9 @@ const verifiedChunkPages = 1 << 16 // 65536 pages per chunk (8KiB bitset)
 const verifiedChunkWords = verifiedChunkPages / 64
 
 type OpenOptions struct {
+	// ResidentOwner is constructor-only intrinsic authority; it never certifies
+	// the incomplete platform/control closure or retrofits existing backing.
+	ResidentOwner *residentcredit.Owner
 	// MmapPopulate enables MAP_POPULATE on Linux to pre-fault page tables for
 	// mmapped index chunks (best-effort; ignored on non-Linux).
 	MmapPopulate bool
@@ -49,6 +54,8 @@ type prefetchBitset struct {
 
 // Pager manages the index.db file using chunked mmap.
 type Pager struct {
+	lifetime     pagerLifetime
+	stamp        constructorStamp
 	file         *os.File
 	chunks       [][]byte
 	atomicChunks atomic.Pointer[chunkList] // Lock-free view for Get
@@ -91,6 +98,13 @@ func (p *Pager) WithStableResourceFile(fn func(*os.File) error) error {
 	if p == nil || fn == nil {
 		return errors.New("pager: stable resource file unavailable")
 	}
+	if !p.MarkRawExport() {
+		return ErrRawExport
+	}
+	if err := p.beginOperation(); err != nil {
+		return err
+	}
+	defer p.endOperation()
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	if p.file == nil || p.memoryOnly {
@@ -153,86 +167,7 @@ func (p *Pager) localPageCount(logicalCount uint64) uint64 {
 // OpenWithOptions opens the pager at the given path with optional mmap behavior
 // controls (Linux-only flags may be ignored on other platforms).
 func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, error) {
-	if chunkSize%page.PageSize != 0 {
-		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
-	}
-	if chunkSize%int64(os.Getpagesize()) != 0 {
-		return nil, fmt.Errorf("chunk size must be a multiple of OS page size (%d)", os.Getpagesize())
-	}
-	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
-		return nil, fmt.Errorf("chunk size must be a multiple of mmap allocation granularity (%d)", gran)
-	}
-
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0600)
-	if err != nil {
-		return nil, err
-	}
-	if err := mmapAvailable(); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-
-	info, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-
-	size := info.Size()
-	durableSize := size
-
-	p := &Pager{
-		file:           f,
-		chunkSize:      chunkSize,
-		path:           path,
-		dirtyChunks:    make(map[int]struct{}),
-		mmapPopulate:   opts.MmapPopulate,
-		prefetchOnRead: opts.PrefetchOnRead,
-	}
-	p.syncConcurrency.Store(1)
-	p.durableFileSize.Store(durableSize)
-
-	if size > 0 {
-		// Align size to chunk size if needed
-		if size%chunkSize != 0 {
-			newSize := ((size / chunkSize) + 1) * chunkSize
-			if err := f.Truncate(newSize); err != nil {
-				_ = f.Close()
-				return nil, err
-			}
-			size = newSize
-		}
-
-		numChunks := size / chunkSize
-		p.chunks = make([][]byte, numChunks)
-		p.ensurePrefetchCapacityLocked(int(numChunks))
-
-		for i := int64(0); i < numChunks; i++ {
-			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize), opts.MmapPopulate)
-			if err != nil {
-				p.Close()
-				return nil, err
-			}
-			madviseChunk(data)
-			p.chunks[i] = data
-		}
-
-		p.atomicChunks.Store(&chunkList{data: p.chunks})
-
-		// Initial guess for numPages (will be corrected by DB recovery)
-		p.numPages.Store(uint64(size / page.PageSize))
-
-		// Initialize verified bitset
-		p.ensureVerifiedCapacityLocked(p.numPages.Load())
-	} else {
-		// Initialize verified bitset (empty)
-		p.ensurePrefetchCapacityLocked(0)
-		p.ensureVerifiedCapacityLocked(0)
-		p.atomicChunks.Store(&chunkList{data: nil})
-	}
-
-	p.startGrower()
-	return p, nil
+	return openConstructorPager(path, chunkSize, opts, false)
 }
 
 // OpenReadOnly opens an existing pager at path without modifying the underlying file.
@@ -243,91 +178,24 @@ func OpenReadOnly(path string, chunkSize int64) (*Pager, error) {
 }
 
 func OpenReadOnlyWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, error) {
-	if chunkSize%page.PageSize != 0 {
-		return nil, fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize)
-	}
-	if chunkSize%int64(os.Getpagesize()) != 0 {
-		return nil, fmt.Errorf("chunk size must be a multiple of OS page size (%d)", os.Getpagesize())
-	}
-	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
-		return nil, fmt.Errorf("chunk size must be a multiple of mmap allocation granularity (%d)", gran)
-	}
-
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := mmapAvailable(); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-
-	info, err := f.Stat()
-	if err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-
-	size := info.Size()
-	if size%int64(page.PageSize) != 0 {
-		_ = f.Close()
-		return nil, ErrFileSize
-	}
-
-	p := &Pager{
-		file:           f,
-		chunkSize:      chunkSize,
-		path:           path,
-		readOnly:       true,
-		mmapPopulate:   opts.MmapPopulate,
-		prefetchOnRead: opts.PrefetchOnRead,
-	}
-
-	if size > 0 {
-		numChunks := int64((size + chunkSize - 1) / chunkSize)
-		p.chunks = make([][]byte, numChunks)
-		p.ensurePrefetchCapacityLocked(int(numChunks))
-
-		for i := int64(0); i < numChunks; i++ {
-			offset := i * chunkSize
-			length := int(chunkSize)
-			remaining := size - offset
-			if remaining < int64(length) {
-				length = int(remaining)
-			}
-			data, err := mmapFileReadOnly(f.Fd(), offset, length, opts.MmapPopulate)
-			if err != nil {
-				p.Close()
-				return nil, err
-			}
-			madviseChunk(data)
-			p.chunks[i] = data
-		}
-
-		p.atomicChunks.Store(&chunkList{data: p.chunks})
-		p.numPages.Store(uint64(size / int64(page.PageSize)))
-		p.ensureVerifiedCapacityLocked(p.numPages.Load())
-	} else {
-		p.ensurePrefetchCapacityLocked(0)
-		p.ensureVerifiedCapacityLocked(0)
-		p.atomicChunks.Store(&chunkList{data: nil})
-	}
-
-	return p, nil
+	return openConstructorPager(path, chunkSize, opts, true)
 }
 
-func (p *Pager) ensureVerifiedCapacityLocked(numPages uint64) {
+func (p *Pager) ensureVerifiedCapacityLocked(numPages uint64) error {
 	needChunks := int((numPages + verifiedChunkPages - 1) / verifiedChunkPages)
 	if needChunks <= 0 {
 		if p.verified.Load() == nil {
+			if err := p.reserveKnown(uint64(unsafe.Sizeof(verifiedBitset{})), true); err != nil {
+				return err
+			}
 			p.verified.Store(&verifiedBitset{chunks: nil})
 		}
-		return
+		return nil
 	}
 
 	cur := p.verified.Load()
 	if cur != nil && len(cur.chunks) >= needChunks {
-		return
+		return nil
 	}
 
 	var oldChunks [][]uint64
@@ -335,25 +203,46 @@ func (p *Pager) ensureVerifiedCapacityLocked(numPages uint64) {
 		oldChunks = cur.chunks
 	}
 
+	if err := p.reserveKnown(uint64(needChunks)*uint64(unsafe.Sizeof([]uint64{})), true); err != nil {
+		return err
+	}
+	if err := p.reserveKnown(uint64(unsafe.Sizeof(verifiedBitset{})), true); err != nil {
+		return err
+	}
+	for i := len(oldChunks); i < needChunks; i++ {
+		if err := p.reserveKnown(uint64(verifiedChunkWords)*8, false); err != nil {
+			return err
+		}
+	}
 	newChunks := make([][]uint64, needChunks)
 	copy(newChunks, oldChunks)
 	for i := len(oldChunks); i < needChunks; i++ {
 		newChunks[i] = make([]uint64, verifiedChunkWords)
 	}
 	p.verified.Store(&verifiedBitset{chunks: newChunks})
+	return nil
 }
 
-func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) {
+func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) error {
 	if numChunks <= 0 {
 		if p.prefetched.Load() == nil {
+			if err := p.reserveKnown(uint64(unsafe.Sizeof(prefetchBitset{})), true); err != nil {
+				return err
+			}
 			p.prefetched.Store(&prefetchBitset{words: nil})
 		}
-		return
+		return nil
 	}
 	needWords := (numChunks + 63) / 64
 	cur := p.prefetched.Load()
 	if cur != nil && len(cur.words) >= needWords {
-		return
+		return nil
+	}
+	if err := p.reserveKnown(uint64(needWords)*8, false); err != nil {
+		return err
+	}
+	if err := p.reserveKnown(uint64(unsafe.Sizeof(prefetchBitset{})), true); err != nil {
+		return err
 	}
 	next := make([]uint64, needWords)
 	if cur != nil {
@@ -368,6 +257,7 @@ func (p *Pager) ensurePrefetchCapacityLocked(numChunks int) {
 		}
 	}
 	p.prefetched.Store(&prefetchBitset{words: next})
+	return nil
 }
 
 // IsVerified returns true if the page has passed CRC verification.
@@ -406,6 +296,10 @@ func (p *Pager) SetVerifyOnRead(always bool) {
 
 // MarkVerified marks a page as verified.
 func (p *Pager) MarkVerified(pageID uint64) {
+	if err := p.beginOperation(); err != nil {
+		return
+	}
+	defer p.endOperation()
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -418,15 +312,21 @@ func (p *Pager) MarkVerified(pageID uint64) {
 		vb := p.verified.Load()
 		if vb == nil {
 			p.mu.Lock()
-			p.ensureVerifiedCapacityLocked(pageID + 1)
+			err := p.ensureVerifiedCapacityLocked(pageID + 1)
 			p.mu.Unlock()
+			if err != nil {
+				return
+			}
 			continue
 		}
 		chunkIdx := int(pageID / verifiedChunkPages)
 		if chunkIdx < 0 || chunkIdx >= len(vb.chunks) {
 			p.mu.Lock()
-			p.ensureVerifiedCapacityLocked(pageID + 1)
+			err := p.ensureVerifiedCapacityLocked(pageID + 1)
 			p.mu.Unlock()
+			if err != nil {
+				return
+			}
 			continue
 		}
 
@@ -447,6 +347,10 @@ func (p *Pager) MarkVerified(pageID uint64) {
 
 // MarkUnverified marks a page as unverified (dirty/reused).
 func (p *Pager) MarkUnverified(pageID uint64) {
+	if err := p.beginOperation(); err != nil {
+		return
+	}
+	defer p.endOperation()
 	localID, local := p.localPageID(pageID)
 	if !local {
 		return
@@ -457,7 +361,9 @@ func (p *Pager) MarkUnverified(pageID uint64) {
 }
 
 func (p *Pager) markUnverifiedLocked(pageID uint64) {
-	p.ensureVerifiedCapacityLocked(pageID + 1)
+	if err := p.ensureVerifiedCapacityLocked(pageID + 1); err != nil {
+		return
+	}
 	vb := p.verified.Load()
 	if vb == nil {
 		return
@@ -483,13 +389,19 @@ func (p *Pager) markUnverifiedLocked(pageID uint64) {
 // SetPageCount updates the logical page count.
 // Should be called by the DB layer after recovery.
 func (p *Pager) SetPageCount(count uint64) {
+	if err := p.beginOperation(); err != nil {
+		return
+	}
+	defer p.endOperation()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if count < p.pageIDBase {
 		count = p.pageIDBase
 	}
+	if err := p.ensureVerifiedCapacityLocked(p.localPageCount(count)); err != nil {
+		return
+	}
 	p.numPages.Store(count)
-	p.ensureVerifiedCapacityLocked(p.localPageCount(count))
 }
 
 // PageCount returns the current logical number of pages.
@@ -498,25 +410,70 @@ func (p *Pager) PageCount() uint64 {
 }
 
 // Close closes the pager and unmaps memory.
+// Close is retryable after a partial unmap/file-close failure. It joins only
+// admitted operations, outside all locks those operations require. Retained
+// Snapshot/token creators survive independently through their last edge.
 func (p *Pager) Close() error {
-	p.stopGrower()
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	if !p.memoryOnly {
-		for _, chunk := range p.chunks {
-			if err := munmapFile(chunk); err != nil {
-				return err
-			}
-		}
-	}
-	p.chunks = nil
-	p.atomicChunks.Store(nil)
-	if p.memoryOnly {
+	if p == nil {
 		return nil
 	}
-	return p.file.Close()
+	p.lifetime.closeMu.Lock()
+	defer p.lifetime.closeMu.Unlock()
+	p.lifetime.mu.Lock()
+	if p.lifetime.closed {
+		p.lifetime.mu.Unlock()
+		return nil
+	}
+	p.lifetime.closing = true
+	p.lifetime.mu.Unlock()
+	p.stopGrower()
+	p.lifetime.calls.Wait()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var errs []error
+	if !p.memoryOnly {
+		for i, chunk := range p.chunks {
+			if len(chunk) == 0 {
+				continue
+			}
+			if err := unmapOwnedChunk(chunk); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			p.chunks[i] = nil // retries never unmap a successful slot twice
+		}
+	}
+	// Never publish a partial mapping as readable after Close admission closes.
+	p.atomicChunks.Store(nil)
+	if len(errs) != 0 {
+		return errors.Join(errs...)
+	}
+	p.chunks = nil
+	p.verified.Store(nil)
+	p.prefetched.Store(nil)
+	clear(p.dirtyChunks)
+	p.dirtyChunks = nil
+	if p.file != nil {
+		if err := closeOwnedFile(p.file); err != nil {
+			// os.File.Close may consume its descriptor even while reporting IO error.
+			// Keep the actual holder only if its descriptor remains open; the next
+			// checked Close completes metadata, without closing an unrelated/reused FD.
+			if _, statErr := p.file.Stat(); errors.Is(statErr, os.ErrClosed) {
+				p.file = nil
+			}
+			return err
+		}
+		p.file = nil
+	}
+	p.lifetime.mu.Lock()
+	p.lifetime.closed = true
+	creator := p.stamp.creator
+	p.stamp.creator = nil
+	p.lifetime.mu.Unlock()
+	if creator != nil {
+		creator.ReleaseStableMetadata()
+	}
+	return nil
 }
 
 // Truncate resizes the file to the specified number of pages.
@@ -537,6 +494,10 @@ func (p *Pager) Truncate(targetPages uint64) error {
 
 // GrowTo ensures the pager contains at least targetPages pages.
 func (p *Pager) GrowTo(targetPages uint64) error {
+	if err := p.beginOperation(); err != nil {
+		return err
+	}
+	defer p.endOperation()
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -558,6 +519,10 @@ func (p *Pager) GrowTo(targetPages uint64) error {
 // Alloc allocates `count` new pages and returns the ID of the first one.
 // It grows the file if necessary.
 func (p *Pager) Alloc(count int) (uint64, error) {
+	if err := p.beginOperation(); err != nil {
+		return 0, err
+	}
+	defer p.endOperation()
 	if p.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -584,8 +549,11 @@ func (p *Pager) allocLocked(count int) (uint64, error) {
 	}
 
 	p.mu.Lock()
+	if err := p.ensureVerifiedCapacityLocked(localTotal); err != nil {
+		p.mu.Unlock()
+		return 0, err
+	}
 	p.numPages.Store(newTotal)
-	p.ensureVerifiedCapacityLocked(localTotal)
 	p.mu.Unlock()
 	p.maybeSchedulePreGrow(requiredBytes)
 	return startID, nil
@@ -593,6 +561,13 @@ func (p *Pager) allocLocked(count int) (uint64, error) {
 
 // GetForWrite returns the byte slice for the given page ID and marks the chunk dirty.
 func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
+	if !p.MarkRawExport() {
+		return nil, ErrRawExport
+	}
+	if err := p.beginOperation(); err != nil {
+		return nil, err
+	}
+	defer p.endOperation()
 	if p.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -624,6 +599,13 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 // CAUTION: The returned slice points directly to mmapped memory.
 // Do not hold references to it after closing the pager.
 func (p *Pager) Get(pageID uint64) ([]byte, error) {
+	if !p.MarkRawExport() {
+		return nil, ErrRawExport
+	}
+	if err := p.beginOperation(); err != nil {
+		return nil, err
+	}
+	defer p.endOperation()
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -668,12 +650,19 @@ func (p *Pager) Get(pageID uint64) ([]byte, error) {
 	}
 
 	chunk := chunks[chunkIdx]
+	if len(chunk) == 0 {
+		return nil, ErrClosing
+	}
 	return chunk[offsetInChunk : offsetInChunk+page.PageSize], nil
 }
 
 // PrefetchPage issues a best-effort prefetch hint for the chunk containing
 // pageID. It is safe for concurrent use.
 func (p *Pager) PrefetchPage(pageID uint64) {
+	if err := p.beginOperation(); err != nil {
+		return
+	}
+	defer p.endOperation()
 	localID, local := p.localPageID(pageID)
 	if !local {
 		if p.fallback != nil {
@@ -743,6 +732,10 @@ func (p *Pager) SetSyncConcurrency(n int) {
 // ReadPage returns a copy of the page data.
 // Safe for concurrent use including checksum verification.
 func (p *Pager) ReadPage(pageID uint64) ([]byte, error) {
+	if err := p.beginOperation(); err != nil {
+		return nil, err
+	}
+	defer p.endOperation()
 	src, err := p.Get(pageID)
 	if err != nil {
 		return nil, err
@@ -755,6 +748,10 @@ func (p *Pager) ReadPage(pageID uint64) ([]byte, error) {
 // Write copies data into the page.
 // The data slice must be exactly PageSize bytes (or less, but we usually write full pages).
 func (p *Pager) Write(pageID uint64, data []byte) error {
+	if err := p.beginOperation(); err != nil {
+		return err
+	}
+	defer p.endOperation()
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -798,7 +795,7 @@ func (p *Pager) FlushDirtyChunksFrom(firstChunk int) error {
 // Sync makes mapped writes durable through the backing file, with explicit
 // mapped-range flushes where required by the platform.
 func (p *Pager) Sync() error {
-	return p.syncDirtyChunksWithFile(true, 0, p.file)
+	return p.syncDirtyChunksWithFile(true, 0, nil)
 }
 
 // SyncIndexData is the production index-publication data barrier. It performs
@@ -806,7 +803,7 @@ func (p *Pager) Sync() error {
 // boundary used by the power-loss oracle. Meta-page syncs continue to use Sync
 // and therefore are not mislabeled as pre-publication index-data barriers.
 func (p *Pager) SyncIndexData() error {
-	return p.SyncIndexDataWithStableFile(p.file)
+	return p.syncIndexDataWithStableFile(nil)
 }
 
 // SyncIndexDataWithStableFile is the index-publication data barrier bound to
@@ -819,6 +816,9 @@ func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
 	if file == nil {
 		return errors.New("pager: stable index file unavailable")
 	}
+	return p.syncIndexDataWithStableFile(file)
+}
+func (p *Pager) syncIndexDataWithStableFile(file *os.File) error {
 	if !p.readOnly && !p.memoryOnly {
 		if err := durabilitycut.EmitPath(durabilitycut.BeforeIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
 			return err
@@ -827,8 +827,10 @@ func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
 	if err := p.syncDirtyChunksWithFile(true, 0, file); err != nil {
 		return err
 	}
-	if info, err := file.Stat(); err == nil {
-		p.durableFileSize.Store(info.Size())
+	if file != nil {
+		if info, err := file.Stat(); err == nil {
+			p.durableFileSize.Store(info.Size())
+		}
 	}
 	if !p.readOnly && !p.memoryOnly {
 		if err := durabilitycut.EmitPath(durabilitycut.AfterIndexDataSync, durabilitycut.ResourceIndex, filepath.Dir(p.path), p.path); err != nil {
@@ -839,10 +841,23 @@ func (p *Pager) SyncIndexDataWithStableFile(file *os.File) error {
 }
 
 func (p *Pager) syncDirtyChunks(syncFile bool, firstChunk int) error {
-	return p.syncDirtyChunksWithFile(syncFile, firstChunk, p.file)
+	return p.syncDirtyChunksWithFile(syncFile, firstChunk, nil)
 }
 
 func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarget *os.File) error {
+	if err := p.beginOperation(); err != nil {
+		// A captured independent exact FD remains useful after mapped Close. It
+		// owns its identity separately; this branch never touches closed mappings.
+		p.lifetime.mu.Lock()
+		closed := p.lifetime.closed
+		p.lifetime.mu.Unlock()
+		if !closed || syncTarget == nil {
+			return err
+		}
+		return syncPageFile(syncTarget)
+	}
+	defer p.endOperation()
+
 	if p.readOnly {
 		return ErrReadOnly
 	}
@@ -850,6 +865,13 @@ func (p *Pager) syncDirtyChunksWithFile(syncFile bool, firstChunk int, syncTarge
 		return nil
 	}
 	p.mu.Lock()
+	if syncTarget == nil {
+		syncTarget = p.file
+	}
+	if syncTarget == nil {
+		p.mu.Unlock()
+		return ErrClosing
+	}
 	// Move the selected dirty chunks into this sync attempt. Lower chunks can be
 	// intentionally retained for a later durability-boundary Sync.
 	toSync := make([]int, 0, len(p.dirtyChunks))
@@ -1015,7 +1037,10 @@ func planSyncPageRanges(pageIDs []uint64, pageIDBase, pageCount uint64, chunkSiz
 // and deliberately leaves dirtyChunks unchanged so ordinary commit bookkeeping
 // remains exact.
 func (p *Pager) SyncPages(pageIDs []uint64) error {
-	return p.SyncPagesWithStableFile(p.file, pageIDs)
+	p.mu.RLock()
+	file := p.file
+	p.mu.RUnlock()
+	return p.SyncPagesWithStableFile(file, pageIDs)
 }
 
 // SyncPagesWithStableFile durably synchronizes the named mapped pages through
@@ -1024,6 +1049,10 @@ func (p *Pager) SyncPages(pageIDs []uint64) error {
 // is the scoped primitive used for the durability-critical meta-page cut: it
 // never reopens the diagnostic path and it fails closed on a rebound handle.
 func (p *Pager) SyncPagesWithStableFile(file *os.File, pageIDs []uint64) error {
+	if err := p.beginOperation(); err != nil {
+		return err
+	}
+	defer p.endOperation()
 	if p.readOnly {
 		return ErrReadOnly
 	}

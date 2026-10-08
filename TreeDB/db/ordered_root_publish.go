@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"sort"
 	"sync"
 	"time"
@@ -113,6 +114,7 @@ type orderedRootPublishStats struct {
 }
 
 type orderedRootPublishOptions struct {
+	preserveOwnedManifest bool
 	maxWarmDeltaOps       int
 	leafPrefixCompression bool
 	leafColumnar          bool
@@ -1902,6 +1904,12 @@ func (db *DB) publishOrderedRootIterator(baseRoot uint64, iter iterator.UnsafeIt
 	if iter == nil {
 		err = errors.New("nil ordered root iterator")
 		return
+	}
+	if opts.preserveOwnedManifest {
+		iter, err = db.ownedManifestPreservingSystemIterator(iter)
+		if err != nil {
+			return
+		}
 	}
 	if db.testOrderedRootPublishHook != nil {
 		db.testOrderedRootPublishHook(baseRoot)
@@ -3984,6 +3992,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithSystemDeltaBuilderSerialized(
 }
 
 func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDeltaBuilderSerialized(ordered []OrderedRootDeltaBatchPublishInput, preflight OrderedRootGroupPreflight, commandWALIntent *CommandWALIntent, buildContextDeltas OrderedRootDeltaBatchGroupCommandWALDeltaBuilder, buildSystemDeltaIter OrderedRootGroupCommandWALSystemBuilder, opts orderedRootCommandWALPublishOptions) (newSystemRoot uint64, rootIDs []uint64, err error) {
+	if opts.preparedLimits != nil && opts.preparedLimits.FreelistCOW.AllocationCredit != nil {
+		return 0, nil, freelist.ErrAllocationCertificateIncompleteV1
+	}
 	if buildSystemDeltaIter == nil {
 		return 0, nil, ErrOrderedRootDeltaBatchGroupCommandWALContextNilSystemBuilder
 	}
@@ -4097,6 +4108,27 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		}
 	}
 
+	if limits := opts.preparedLimits; limits != nil && db.ownedLeafManifests {
+		base := db.PreparedRootPublicationBaseProfile()
+		outputPages := base.OwnedManifestOutputPageAllowance
+		for _, profile := range limits.RootPointProfiles {
+			outputPages = preparedProfileAdd(outputPages, profile.OutputPages)
+		}
+		outputPages = preparedProfileAdd(outputPages, limits.SystemPointProfile.OutputPages)
+		if outputPages > limits.MaxTotalOutputPages {
+			return 0, nil, ErrPreparedRootPointProfileLimit
+		}
+		// Check the prospective owned-system-root output against the existing
+		// allocator budget before command append. This reserves no pages and
+		// enlarges no caller cap; materialization still checks its actual work.
+		cow := base.FreelistCOW
+		cow.HighWater = preparedProfileAdd(cow.HighWater, base.OwnedManifestOutputPageAllowance)
+		cow.AllocatedPages = preparedProfileAdd(cow.AllocatedPages, base.OwnedManifestOutputPageAllowance)
+		if err := CheckPreparedFreelistCOWProfile(cow, limits.FreelistCOW); err != nil {
+			return 0, nil, err
+		}
+	}
+
 	db.commitMu.Lock()
 	commitLocked := true
 	commandAppended := false
@@ -4108,6 +4140,62 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.commitMu.Unlock()
 		}
 	}()
+	var preAppendPlan OrderedRootPreAppendPlan
+	var tentativeLSN uint64
+	if opts.preAppendContext != nil {
+		if !opts.rawPublishLocked || buildContextDeltas == nil {
+			return 0, nil, ErrOrderedRootPreAppendMismatch
+		}
+		tentativeLSN, err = db.tentativePublicCommandWALIdentityLocked(commandWALIntent)
+		if err != nil {
+			return 0, nil, err
+		}
+		preAppendPlan, err = opts.preAppendContext(OrderedRootPreAppendContext{AppliedCommandLSN: tentativeLSN})
+		if err != nil {
+			return 0, nil, err
+		}
+		if preAppendPlan.SystemDelta == nil || preAppendPlan.SystemDelta.HasDeleteRanges() {
+			return 0, nil, ErrOrderedRootPreAppendMismatch
+		}
+		for _, input := range preAppendPlan.ContextDeltas {
+			if input.Delta == nil || input.Delta.HasDeleteRanges() {
+				return 0, nil, ErrOrderedRootPreAppendMismatch
+			}
+		}
+		// Use the very same read-only pass for every actual initial/context/system
+		// batch before WAL. The selected owned C13 binding replaces this pass only
+		// once its full constructor/lifetime admission certificate is attached.
+		if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, ordered, idxGen.allocator, &phaseStats, true); err != nil {
+			return 0, nil, err
+		}
+		if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, preAppendPlan.ContextDeltas, idxGen.allocator, &phaseStats, true); err != nil {
+			return 0, nil, err
+		}
+		systemPrepare := [1]OrderedRootDeltaBatchPublishInput{{BaseRoot: baseSystemRoot, Delta: preAppendPlan.SystemDelta}}
+		if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, systemPrepare[:], idxGen.allocator, &phaseStats, true); err != nil {
+			return 0, nil, err
+		}
+	}
+	var terminalLoan *rootPublicationTerminalLoanV1
+	if preAppendPlan.TerminalRequest != nil || preAppendPlan.TerminalCreator != nil || preAppendPlan.TerminalResident != nil {
+		opts.preparedLimits, terminalLoan, err = db.admitRootPublicationTerminalWithBindingsV1(opts.preparedLimits, preAppendPlan.TerminalRequest, preAppendPlan.TerminalCreator, preAppendPlan.TerminalResident, preAppendPlan.TerminalDeleteBindings, true)
+		// No request/creator adapter is kept in the operation plan after admission.
+		preAppendPlan.TerminalRequest = nil
+		preAppendPlan.TerminalCreator = nil
+		preAppendPlan.TerminalResident = nil
+		preAppendPlan.TerminalDeleteBindings = nil
+		if err != nil {
+			return 0, nil, err
+		}
+		terminalRuntime := db.rootPublication
+		defer func() {
+			terminalRuntime.mu.Lock()
+			defer terminalRuntime.mu.Unlock()
+			if !terminalLoan.adopted {
+				terminalLoan.closeLocked()
+			}
+		}()
+	}
 	appendStart := time.Now()
 	lsn, err := db.appendPublicCommandWALIntent(commandWALIntent, syncCommandWAL)
 	if timing != nil {
@@ -4117,6 +4205,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, err
 	}
 	commandAppended = true
+	if opts.preAppendContext != nil && lsn != tentativeLSN {
+		return 0, nil, ErrOrderedRootPreAppendMismatch
+	}
 	if lsn == 0 {
 		err = errCommandWALContextZeroLSN
 		return 0, nil, err
@@ -4190,6 +4281,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 	if buildContextDeltas == nil {
 		revokeVisibleSelector()
 	}
+	if opts.preAppendContext != nil {
+		if err = checkPreAppendContextBatches(preAppendPlan.ContextDeltas, contextOrdered); err != nil {
+			return 0, nil, err
+		}
+	}
 	if opts.preparedLimits != nil {
 		profiles := opts.preparedLimits.RootPointProfiles
 		if len(profiles) != len(allOrdered) {
@@ -4204,6 +4300,9 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 
 	rootIDs = make([]uint64, len(allOrdered))
 	systemOpts := systemRootOrderedPublishOptions(db).withSpanNativeRoute(OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group system delta apply")
+	if opts.preAppendContext != nil {
+		systemOpts.serialApply = true
+	}
 	if opts.preparedLimits != nil {
 		systemOpts.serialApply = true
 		systemOpts.rejectDictionaryReads = true
@@ -4228,15 +4327,17 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 			db.releasePendingValueLogAppendPtrCollector(collector)
 		}
 	}()
-	if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats, opts.preparedLimits != nil); err != nil {
-		return 0, nil, err
+	if opts.preAppendContext == nil {
+		if err = db.prepareOrderedRootDeltaBatchGroupReadOnly(idxGen, allOrdered, idxGen.allocator, &phaseStats, opts.preparedLimits != nil); err != nil {
+			return 0, nil, err
+		}
 	}
 	phaseStart := time.Now()
 	var rootProfiles []PreparedRootPointProfile
 	if opts.preparedLimits != nil {
 		rootProfiles = opts.preparedLimits.RootPointProfiles
 	}
-	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply", true, opts.preparedLimits != nil, rootProfiles)
+	rootApplyResults, parallelRootApply := db.applyOrderedRootDeltaBatchGroupRoots(idxGen, allOrdered, idxGen.allocator, idxGen.allocator, OrderedRootSpanNativeRouteCommandWALPublish, "command-WAL ordered-root context group root apply", true, opts.preparedLimits != nil || opts.preAppendContext != nil, rootProfiles)
 	phaseStats.rootApplyNs += orderedRootDeltaGroupPhaseDurationNs(phaseStart)
 	if timing != nil {
 		timing.RootApply += time.Since(phaseStart)
@@ -4312,6 +4413,11 @@ func (db *DB) publishOrderedRootDeltaBatchGroupWithCommandWALContextAndSystemDel
 		return 0, nil, fmt.Errorf("treedb: ordered root command WAL system delta base=%d: %w", baseSystemRoot, convertErr)
 	}
 	defer systemDelta.Close()
+	if opts.preAppendContext != nil {
+		if err = checkPreAppendBatch(preAppendPlan.SystemDelta, systemDelta, false); err != nil {
+			return 0, nil, err
+		}
+	}
 	if opts.preparedLimits != nil {
 		if err := checkPreparedRootPointBatch(OrderedRootDeltaBatchPublishInput{
 			BaseRoot: baseSystemRoot, Delta: systemDelta,
@@ -4459,6 +4565,7 @@ func errOrderedRootCommandWALContextConcurrentModification(wantUserRoot, gotUser
 type orderedRootCommandWALPublishOptions struct {
 	rawPublishLocked bool
 	preparedLimits   *PreparedRootPublicationLimits
+	preAppendContext OrderedRootPreAppendBuilder // synchronous call-stack phase only
 	// teardownPinned accompanies rawPublishLocked for staged public callers.
 	// Internal root publishers leave both false and acquire their own leases.
 	teardownPinned              bool

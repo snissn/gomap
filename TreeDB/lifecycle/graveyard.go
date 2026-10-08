@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"sync"
+	"unsafe"
 )
 
 // RetiredBatch represents a set of pages retired at a specific commit sequence.
@@ -28,9 +29,19 @@ type GraveyardStats struct {
 	MaxSeq  uint64
 }
 
+// Both the actual constructor and its prebirth census use this capacity.
+const initialGraveyardBatchCapacity = 64
+
+// GraveyardInitialBatchBackingBytes returns the raw bytes of the separately
+// allocated initial batch backing, without constructing or exporting it.
+// Callers must round this scanned allocation separately from the control.
+func GraveyardInitialBatchBackingBytes() uint64 {
+	return uint64(initialGraveyardBatchCapacity) * uint64(unsafe.Sizeof(batch{}))
+}
+
 func NewGraveyard() *Graveyard {
 	return &Graveyard{
-		retiredPages: make([]batch, 0, 64),
+		retiredPages: make([]batch, 0, initialGraveyardBatchCapacity),
 	}
 }
 

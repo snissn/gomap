@@ -7,10 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"unsafe"
 
 	"github.com/cespare/xxhash/v2"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
@@ -647,6 +649,38 @@ func newColumnPhysicalScanProjection(cfg ColumnStoreConfig, projected []string) 
 	}, nil
 }
 
+// The selector is transient immutable package key storage; it is never part
+// of a returned owner. Ordinary and owned reads use this exact shared grammar.
+var columnManifestIdentityProjectionKey = []byte(columnManifestIdentityRecordKey)
+
+func columnManifestInlineRecordSelection(includeIdentity bool) iterator.InlineRecordSelection {
+	selection := iterator.InlineRecordSelection{
+		Start:    columnManifestHeaderRecordKeyBytes,
+		Exact:    [2][]byte{columnManifestHeaderRecordKeyBytes, nil},
+		Prefixes: [8][]byte{columnManifestPartRecordPrefixBytes, columnManifestAggregateMetadataRecordPrefixBytes, columnManifestDictionaryCodesRecordPrefixBytes, columnManifestInt64ValuesRecordPrefixBytes, columnManifestVectorGraphRecordPrefixBytes, columnVectorIndexStateRecordPrefixBytes, columnManifestSegmentOwnershipRecordPrefixBytes, nil},
+	}
+	if includeIdentity {
+		selection.RequiredExact = columnManifestIdentityProjectionKey
+	}
+	return selection
+}
+func validateColumnManifestIdentityFromOwnedRecords(records []iterator.OwnedInlineRecord, identity ColumnManifestIdentity) error {
+	if len(records) == 0 || !bytes.Equal(records[0].Key, columnManifestIdentityProjectionKey) {
+		return ErrColumnManifestIdentityMissing
+	}
+	record, err := decodeColumnManifestIdentityRecord(records[0].Value)
+	if err != nil {
+		return err
+	}
+	if err := validateColumnManifestIdentityFor("active", identity); err != nil {
+		return err
+	}
+	if record.Generation != identity.Generation || record.Version != identity.Version || record.Checksum != identity.Checksum {
+		return ErrColumnManifestIdentityMalformed
+	}
+	return nil
+}
+
 func validateColumnManifestIdentityAtRoot(snap *backenddb.Snapshot, rootID uint64, identity ColumnManifestIdentity) error {
 	entry, err := snap.GetEntryAtRoot(rootID, newColumnManifestIdentityRecordKey())
 	if errors.Is(err, tree.ErrKeyNotFound) {
@@ -720,34 +754,63 @@ func validateColumnManifestScanBudget(ctx context.Context, snap *backenddb.Snaps
 	return errors.Join(it.Error(), ctx.Err())
 }
 
-func loadColumnManifestRecordsFromRoot(snap *backenddb.Snapshot, rootID uint64) ([]columnManifestRecord, error) {
+func loadColumnManifestRecordsFromRoot(snap *backenddb.Snapshot, rootID uint64) (records []columnManifestRecord, err error) {
 	iter, err := snap.IteratorAtRoot(rootID, columnManifestHeaderRecordKeyBytes, nil)
 	if err != nil {
 		return nil, fmt.Errorf("collections: column manifest root %d unreadable: %w", rootID, err)
 	}
-	defer func() { _ = iter.Close() }()
-	records := make([]columnManifestRecord, 0, 8)
-	for iter.Valid() {
-		key := iter.UnsafeKey()
-		if !columnManifestRecordKeyKnownForScan(key) {
-			break
-		}
-		if iter.IsDeleted() {
-			iter.Next()
-			continue
-		}
-		value, _, flags := iter.UnsafeEntry()
-		if flags&node.FlagPointer != 0 {
-			return nil, fmt.Errorf("collections: column manifest record %q must be inline", key)
-		}
-		records = append(records, columnManifestRecord{key: bytes.Clone(key), value: bytes.Clone(value)})
-		iter.Next()
+	defer func() { err = errors.Join(err, iter.Close()) }()
+	return loadColumnManifestRecordsFromIterator(iter, nil)
+}
+
+// Both ordinary and selected owned paths use one copier. The additional
+// private collection wrapper has an independently prepaid exact capacity;
+// byte copies are transferred once without another key/value clone.
+// Only results from the concrete owned copier may use this payload scrub.
+// Borrowed record views and installed manifest aliases keep their existing
+// ownership and must never pass through this abandonment path.
+func clearColumnManifestOwnedRecords(records []columnManifestRecord) {
+	for i := range records {
+		clear(records[i].key)
+		clear(records[i].value)
+		records[i] = columnManifestRecord{}
 	}
-	if err := iter.Error(); err != nil {
+}
+
+func columnManifestRecordsFromOwnedCopies(copies []iterator.OwnedInlineRecord, account rootpublication.StableMetadataAccount) ([]columnManifestRecord, error) {
+	if err := reserveColumnManifestArray(account, len(copies), uint64(unsafe.Sizeof(columnManifestRecord{}))); err != nil {
+		iterator.ClearOwnedInlineRecords(copies)
 		return nil, err
+	}
+	records := make([]columnManifestRecord, len(copies))
+	for i := range copies {
+		records[i] = columnManifestRecord{key: copies[i].Key, value: copies[i].Value}
+		copies[i] = iterator.OwnedInlineRecord{}
 	}
 	return records, nil
 }
+func loadColumnManifestRecordsFromIterator(iter iterator.UnsafeIterator, account rootpublication.StableMetadataAccount) ([]columnManifestRecord, error) {
+	if iter == nil {
+		return nil, errColumnNativeContextIncomplete
+	}
+	copies, err := iterator.CopyOwnedInlineRecords(iter, columnManifestInlineRecordSelection(false), account)
+	if err != nil {
+		if errors.Is(err, iterator.ErrInlineRecordRequired) {
+			if account == nil {
+				return nil, fmt.Errorf("collections: column manifest record %q must be inline", iter.UnsafeKey())
+			}
+			return nil, errColumnManifestInlineRequired
+		}
+		if errors.Is(err, iterator.ErrInlineRecordLimit) {
+			return nil, ErrPreparedInsertResourceLimit
+		}
+		return nil, err
+	}
+	return columnManifestRecordsFromOwnedCopies(copies, account)
+}
+
+var errColumnManifestInlineRequired = iterator.ErrInlineRecordRequired
+var errColumnManifestReadChanged = iterator.ErrInlineRecordChanged
 
 func loadColumnManifestSnapshotViewForScanFromRoot(snap *backenddb.Snapshot, rootID uint64, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) (columnManifestSnapshot, []columnManifestAssetRefForScan, []ColumnAssetRef, int, int, error) {
 	manifest, refs, _, graphRefs, mutationParts, manifestRecords, err := loadColumnManifestSnapshotViewForScanFromRootWithSidecars(snap, rootID, cfg, identity, collection, columnManifestScanAllSidecars(), activeVectorIndexesKnown, activeVectorIndexes)
@@ -1040,6 +1103,9 @@ func decodeColumnManifestSnapshotViewForScanFromIterator(iter iterator.UnsafeIte
 }
 
 func validateColumnManifestSnapshot(snapshot columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string, context string) error {
+	return validateColumnManifestSnapshotWithMetadataAccount(snapshot, records, cfg, identity, collection, context, nil)
+}
+func validateColumnManifestSnapshotWithMetadataAccount(snapshot columnManifestSnapshot, records []columnManifestRecord, cfg ColumnStoreConfig, identity ColumnManifestIdentity, collection string, context string, account rootpublication.StableMetadataAccount) error {
 	if snapshot.Collection != collection {
 		return fmt.Errorf("collections: %s manifest collection=%q want %q", context, snapshot.Collection, collection)
 	}
@@ -1052,7 +1118,7 @@ func validateColumnManifestSnapshot(snapshot columnManifestSnapshot, records []c
 	if snapshot.AppliedCommandLSN != cfg.RecoveryAuthoritativeAppliedCommandLSN {
 		return fmt.Errorf("collections: %s manifest AppliedCommandLSN=%d want recovery %d", context, snapshot.AppliedCommandLSN, cfg.RecoveryAuthoritativeAppliedCommandLSN)
 	}
-	activeRecords, err := activeColumnManifestRecordsForScan(records, snapshot.Generation)
+	activeRecords, err := activeColumnManifestRecordsForScanWithMetadataAccount(records, snapshot.Generation, account)
 	if err != nil {
 		return err
 	}
@@ -1341,6 +1407,12 @@ func validateColumnManifestHeaderRecordForScan(header columnManifestHeaderRecord
 }
 
 func activeColumnManifestRecordsForScan(records []columnManifestRecord, generation uint64) ([]columnManifestRecord, error) {
+	return activeColumnManifestRecordsForScanWithMetadataAccount(records, generation, nil)
+}
+func activeColumnManifestRecordsForScanWithMetadataAccount(records []columnManifestRecord, generation uint64, account rootpublication.StableMetadataAccount) ([]columnManifestRecord, error) {
+	if err := reserveColumnManifestArray(account, len(records), uint64(unsafe.Sizeof(columnManifestRecord{}))); err != nil {
+		return nil, err
+	}
 	active := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
 		switch {
@@ -1351,7 +1423,7 @@ func activeColumnManifestRecordsForScan(records []columnManifestRecord, generati
 		case bytes.HasPrefix(record.key, columnVectorIndexStateRecordPrefixBytes):
 			active = append(active, record)
 		case bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes):
-			if _, err := decodeColumnManifestSegmentOwnership(record.key, record.value); err != nil {
+			if _, err := decodeColumnManifestSegmentOwnershipWithMetadataAccount(record.key, record.value, account); err != nil {
 				return nil, err
 			}
 			active = append(active, record)
@@ -2049,15 +2121,15 @@ func validateColumnManifestPartSortKeyForScan(kind ColumnAssetKind, sortKey []Co
 	if kind == ColumnAssetKindTCS1TypedColumnPart && len(sortKey) > typedColumnPartSortKeyMaxColumns {
 		return fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", len(sortKey), typedColumnPartSortKeyMaxColumns)
 	}
-	seen := make(map[string]struct{}, len(sortKey))
-	for _, sortKeyColumn := range sortKey {
+	for i, sortKeyColumn := range sortKey {
 		if sortKeyColumn.Column == "" {
 			return errors.New("collections: column manifest sort key column is required")
 		}
-		if _, exists := seen[sortKeyColumn.Column]; exists {
-			return fmt.Errorf("collections: column manifest duplicate sort key column %q", sortKeyColumn.Column)
+		for _, previous := range sortKey[:i] {
+			if previous.Column == sortKeyColumn.Column {
+				return fmt.Errorf("collections: column manifest duplicate sort key column %q", sortKeyColumn.Column)
+			}
 		}
-		seen[sortKeyColumn.Column] = struct{}{}
 		if sortKeyColumn.Direction != ColumnSortAscending {
 			return fmt.Errorf("collections: unsupported column manifest sort direction %q", sortKeyColumn.Direction)
 		}

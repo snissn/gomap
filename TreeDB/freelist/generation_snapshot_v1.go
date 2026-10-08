@@ -40,7 +40,26 @@ func (a *Allocator) PublishedSnapshotGenerationV1(expected GenerationRefV1) (*Fr
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.cow == nil || a.cow.generation == nil || a.cow.generation.ref != expected || a.cow.prepared != nil || len(a.cow.activated) != 0 || a.cow.waitErr != nil {
+	if a.closed {
+		return nil, ErrCandidateConsumed
+	}
+	g, err := a.publishedSnapshotGenerationLockedV1(expected)
+	if err != nil {
+		return nil, err
+	}
+	if g.hasFiniteBackingV1() {
+		return nil, ErrFiniteAllocationExportV1
+	}
+	g.markOrdinaryEscapeV1()
+	a.cow.rawGenerationEscaped = true
+	return g, nil
+}
+
+func (a *Allocator) publishedSnapshotGenerationLockedV1(expected GenerationRefV1) (*FreelistGenerationV1, error) {
+	if a.closed {
+		return nil, ErrCandidateConsumed
+	}
+	if a.cow == nil || a.cow.generation == nil || a.cow.generation.ref != expected || a.cow.packet != nil || a.cow.prepared != nil || len(a.cow.activated) != 0 || a.cow.waitErr != nil {
 		return nil, ErrCOWCandidatePrepared
 	}
 	if txn := a.cow.txn; txn != nil && (len(txn.allocated) != 0 || len(txn.abandonedAppends) != 0) {

@@ -29,27 +29,32 @@ type rootPublicationRuntimeV1 struct {
 
 	mu sync.Mutex
 
-	coordinator      *rootpublication.Coordinator
-	visibleResources *rootpublication.StableResourceSet
-	visibleMembers   map[uint64]*rootPublicationVisibleMemberV1
-	debt             []*freelist.PreparedCOWCandidateV1
-	seals            []*rootPublicationSealV1
-	activeSeal       *rootPublicationSealV1
-	poison           error
+	coordinator       *rootpublication.Coordinator
+	visibleResources  *rootpublication.StableResourceSet
+	visibleMembers    map[uint64]*rootPublicationVisibleMemberV1
+	debt              []*freelist.PreparedCOWCandidateV1
+	seals             []*rootPublicationSealV1
+	activeSeal        *rootPublicationSealV1
+	poison            error
+	terminalArena     *rootPublicationTerminalArenaV1
+	terminalReporting bool
 }
 
 // rootPublicationVisibleMemberV1 contains only precomputed, non-fallible
 // activation state. It is installed by the transaction Activate callback
 // before the coordinator advances its visible frontier.
 type rootPublicationVisibleMemberV1 struct {
-	sequence         uint64
-	next             page.MetaPageBody
-	prepared         *freelist.PreparedCOWCandidateV1
-	resources        *rootpublication.StableResourceSet
-	install          *rootPublicationVisibleInstallV1
-	preparedLimits   *PreparedRootPublicationLimits
-	activated        bool
-	resourcesAdopted bool
+	sequence          uint64
+	next              page.MetaPageBody
+	prepared          *freelist.PreparedCOWCandidateV1
+	resources         *rootpublication.StableResourceSet
+	install           *rootPublicationVisibleInstallV1
+	preparedLimits    *PreparedRootPublicationLimits
+	activated         bool
+	resourcesAdopted  bool
+	previousResources *rootpublication.StableResourceSet
+	consumed          bool
+	terminalLoan      *rootPublicationTerminalLoanV1
 }
 
 // rootPublicationVisibleInstallV1 owns all state that could otherwise make
@@ -95,21 +100,24 @@ type rootPublicationSealBaseV1 struct {
 // the retry, Prepare creates a successor seal and retains this seal as ordered
 // allocator debt until the successor publishes.
 type rootPublicationSealV1 struct {
-	latestSequence uint64
-	groupLength    int
-	idx            *indexGen
-	base           rootPublicationSealBaseV1
-	next           page.MetaPageBody
-	resources      *rootpublication.StableResourceSet
-	manifest       *rootpublication.DependencyManifestV1
-	prepared       *freelist.PreparedCOWCandidateV1
-	prefix         []*freelist.PreparedCOWCandidateV1
-	token          *rootpublication.StableResourceToken
-	record         rootpublication.DurableRootRecordV1
-	meta           page.DurableMetaV1
-	target         uint64
-	materialized   bool
-	released       bool
+	latestSequence       uint64
+	groupLength          int
+	idx                  *indexGen
+	base                 rootPublicationSealBaseV1
+	next                 page.MetaPageBody
+	resources            *rootpublication.StableResourceSet
+	manifest             *rootpublication.DependencyManifestV1
+	prepared             *freelist.PreparedCOWCandidateV1
+	prefix               []*freelist.PreparedCOWCandidateV1
+	token                *rootpublication.StableResourceToken
+	record               rootpublication.DurableRootRecordV1
+	meta                 page.DurableMetaV1
+	target               uint64
+	materialized         bool
+	storageComplete      bool
+	committed            bool
+	overwrittenResources *rootpublication.StableResourceSet
+	released             bool
 }
 
 // publicRootPublicationErrorV1 preserves coordinator diagnostics while making
@@ -220,17 +228,33 @@ func (runtime *rootPublicationRuntimeV1) cloneVisibleResourcesWithWorkMax(maxRes
 	return resources, work, nil
 }
 
-func (seal *rootPublicationSealV1) release() {
+func (seal *rootPublicationSealV1) release() error {
 	if seal == nil || seal.released {
-		return
+		return nil
 	}
-	seal.released = true
-	seal.resources.Release()
+	if err := seal.resources.Release(); err != nil {
+		return err
+	}
 	seal.resources = nil
-	if seal.token != nil {
-		seal.token.Release()
-		seal.token = nil
+	if err := seal.overwrittenResources.Release(); err != nil {
+		return err
 	}
+	seal.overwrittenResources = nil
+	if err := seal.token.Release(); err != nil {
+		return err
+	}
+	seal.token = nil
+	seal.released = true
+	seal.clearTerminalBacking()
+	return nil
+}
+
+// Called only after exact publication/retirement work no longer uses the seal.
+// Ambiguous seals remain in the existing recovery owner and are not scrubbed.
+func (seal *rootPublicationSealV1) clearTerminalBacking() {
+	seal.idx, seal.manifest, seal.prepared, seal.prefix = nil, nil, nil, nil
+	seal.base.ambiguous = nil
+	seal.base.slotResources = [2]*rootpublication.StableResourceSet{}
 }
 
 func rootPublicationLineageIDV1(db *DB, idx *indexGen, durable durableRootRuntimeV1) rootpublication.DurableRootLineageID {
@@ -375,18 +399,21 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 		}
 	}()
 
+	if db.ownedLeafManifests {
+		install.post.clearLeafGenerationPendingFileIDs = append(install.post.clearLeafGenerationPendingFileIDs[:0], leafManifestRawFileIDs...)
+	}
 	manifestBasis := db.leafGenerationManifest
 	if leafManifest != nil {
 		manifestBasis = leafManifest
 		install.leafManifest = leafManifest
 		install.installLeafManifest = true
 		install.post.persistLeafGenerationManifest = !opts.leafManifestAlreadyPersistent
-		install.post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent
+		install.post.persistLeafGenerationIndexesOnly = opts.leafManifestAlreadyPersistent && !db.ownedLeafManifests
 		install.post.persistLeafGenerationManifestView = leafManifest
 		install.post.persistLeafGenerationRawFileIDs = append(install.post.persistLeafGenerationRawFileIDs[:0], leafManifestRawFileIDs...)
 		install.leafGenerationView = db.leafGenerationViewForManifest(leafManifest)
 	}
-	if db.leafPageLog != nil {
+	if db.leafPageLog != nil && !db.ownedLeafManifests {
 		staged, err := db.stagedLeafGenerationManifestWithPendingResultAndLimit(manifestBasis, 0, next.CommitSeq, opts.preparedLimits)
 		if err != nil {
 			return nil, err
@@ -403,7 +430,7 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	if install.leafGenerationView == nil {
 		install.leafGenerationView = db.currentLeafGenerationView()
 	}
-	if db.leafPageLog != nil && len(install.post.clearLeafGenerationPendingFileIDs) == 0 {
+	if db.leafPageLog != nil && !db.ownedLeafManifests && len(install.post.clearLeafGenerationPendingFileIDs) == 0 {
 		install.post.drainLeafGenerationPending = true
 	}
 	install.post.commitSeq = next.CommitSeq
@@ -412,16 +439,23 @@ func (db *DB) prepareRootPublicationVisibleInstallV1(
 	return install, nil
 }
 
-func (install *rootPublicationVisibleInstallV1) abort() {
+func (install *rootPublicationVisibleInstallV1) abort() error {
 	if install == nil || install.activated {
-		return
+		return nil
 	}
 	install.vlogRefCounts = nil
-	if install.valueLogSet == nil || install.db == nil || install.db.valueLogManager == nil {
-		return
+	if install.valueLogSet == nil {
+		return nil
 	}
-	_ = install.db.valueLogManager.Release(install.valueLogSet)
+	if install.db == nil || install.db.valueLogManager == nil {
+		return rootpublication.ErrStableTerminalConsumerRequired
+	}
+	// Ordinary Manager.Release consumes the Set reference even when later
+	// zombie deletion fails. The Manager retains that actual failed zombie;
+	// retaining this already-consumed Set would debit it again on Abort retry.
+	err := install.db.valueLogManager.Release(install.valueLogSet)
 	install.valueLogSet = nil
+	return err
 }
 
 func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func() error) error {
@@ -460,6 +494,10 @@ func (install *rootPublicationVisibleInstallV1) activate(activateAllocator func(
 	install.post.oldState = db.state.Load()
 	if install.installLeafManifest {
 		db.leafGenerationManifest = install.leafManifest
+	}
+	if db.ownedLeafManifests {
+		db.clearLeafGenerationPendingFileIDs(install.post.clearLeafGenerationPendingFileIDs)
+		install.post.clearLeafGenerationPendingFileIDs = nil
 	}
 	newState := &DBState{
 		CommitSeq:         install.next.CommitSeq,
@@ -545,6 +583,12 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if runtime == nil || runtime.db == nil || runtime.idx == nil || install == nil {
 		return nil, errors.New("missing visible root candidate input")
 	}
+	runtime.mu.Lock()
+	envelopeErr := runtime.checkTerminalEnvelopeLocked(resources, true, false)
+	runtime.mu.Unlock()
+	if envelopeErr != nil {
+		return nil, envelopeErr
+	}
 	visibleCloneStart := time.Now()
 	visibleResources, visibleWork, err := rootpublication.CloneStableResourceSetForLogicalObligationsWithWork(
 		resources, rootpublication.StableLogicalObligationRequirements{},
@@ -567,8 +611,8 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if err != nil {
 		return nil, err
 	}
-	liveGeneration := runtime.idx.allocator.COWGenerationV1()
-	if liveGeneration == nil || liveGeneration.GenerationID() == ^uint64(0) {
+	liveGeneration, generationErr := runtime.idx.allocator.COWGenerationInfoV1()
+	if generationErr != nil || liveGeneration.GenerationID() == ^uint64(0) {
 		return nil, errors.New("missing live COW generation for visible root")
 	}
 	generationID := liveGeneration.GenerationID() + 1
@@ -583,7 +627,7 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if limits != nil {
 		cowLimits = &limits.FreelistCOW
 	}
-	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+	prepared, err := runtime.idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(
 		generationID,
 		next.CommitSeq,
 		rootPublicationLogicalCandidateIDV1(runtime.lineage, generationID, next),
@@ -609,18 +653,20 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 					cause = errors.Join(cause, fmt.Errorf("fail visible root COW candidate: %w", failErr))
 				}
 				err = cause
+			} else if clearErr := prepared.ClearTerminalBackingV1(); clearErr != nil {
+				err = errors.Join(err, fmt.Errorf("clear aborted visible root COW candidate: %w", clearErr))
 			}
 		}
 	}()
 	if runtime.db.testFailDurableRootAfterCOWPrepare.Load() {
 		return nil, errTestDurableRootAfterCOWPrepareFailpoint
 	}
-	generation := prepared.Candidate().Generation()
-	if generation == nil {
+	generation, generationErr := prepared.InfoV1()
+	if generationErr != nil {
 		return nil, errors.New("visible root COW candidate has no generation")
 	}
 	if indexBytes == 0 {
-		pageCount := uint64(prepared.Candidate().PageCount())
+		pageCount := uint64(generation.PageCount)
 		if pageCount > ^uint64(0)/page.PageSize {
 			indexBytes = ^uint64(0)
 		} else {
@@ -642,6 +688,12 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			if input.PreparedCOW != member.prepared || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
+			runtime.mu.Lock()
+			envelopeErr := runtime.checkTerminalEnvelopeLocked(member.resources, true, false)
+			runtime.mu.Unlock()
+			if envelopeErr != nil {
+				return envelopeErr
+			}
 			if limits != nil {
 				runtime.mu.Lock()
 				over := len(runtime.visibleMembers) >= limits.MaxVisibleMembers || len(runtime.debt) >= limits.MaxAllocatorDebt
@@ -656,22 +708,26 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 				return err
 			}
 			runtime.mu.Lock()
-			previousResources := runtime.visibleResources
+			member.previousResources = runtime.visibleResources
 			runtime.visibleResources = member.resources
 			member.resourcesAdopted = true
 			runtime.visibleMembers[member.sequence] = member
 			runtime.debt = append(runtime.debt, member.prepared)
 			member.activated = true
 			runtime.mu.Unlock()
-			previousResources.Release()
 			return nil
 		},
 		Consume: func(input rootpublication.DurableRootCallbackInput) error {
 			if input.PreparedCOW != member.prepared || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
+			if err := member.prepared.ClearTerminalBackingV1(); err != nil {
+				return err
+			}
 			runtime.mu.Lock()
-			delete(runtime.visibleMembers, member.sequence)
+			member.consumed = true
+			// Keep actual previous-visible cleanup attached until checked terminal
+			// completion. Transaction logical consumption never retries that IO.
 			runtime.mu.Unlock()
 			return nil
 		},
@@ -679,12 +735,27 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 			if input.PreparedCOW != member.prepared || input.Sequence != member.sequence {
 				return rootpublication.ErrDurableRootOwnership
 			}
-			member.install.abort()
+			if err := member.install.abort(); err != nil {
+				return err
+			}
 			if !member.resourcesAdopted {
-				member.resources.Release()
+				if err := member.resources.Release(); err != nil {
+					return err
+				}
 				member.resources = nil
 			}
-			return runtime.idx.allocator.AbortCOWCandidateV1(member.prepared)
+			if err := runtime.idx.allocator.AbortCOWCandidateV1(member.prepared); err != nil {
+				return err
+			}
+			if err := member.prepared.ClearTerminalBackingV1(); err != nil {
+				return err
+			}
+			runtime.mu.Lock()
+			member.terminalLoan.closeLocked()
+			member.terminalLoan = nil
+			runtime.mu.Unlock()
+			member.prepared, member.install, member.resources, member.preparedLimits = nil, nil, nil, nil
+			return nil
 		},
 		Fail: func(input rootpublication.DurableRootCallbackInput, cause error) error {
 			if input.PreparedCOW != member.prepared || input.Sequence != member.sequence {
@@ -710,6 +781,11 @@ func (runtime *rootPublicationRuntimeV1) prepareVisibleCandidate(
 	if err != nil {
 		_ = transaction.Abort()
 		return nil, err
+	}
+	if limits != nil && limits.terminalLoan != nil {
+		member.terminalLoan = limits.terminalLoan
+		member.terminalLoan.adopted = true
+		limits.terminalLoan = nil
 	}
 	return candidate, nil
 }
@@ -1008,6 +1084,9 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			return errors.New("prepared root-publication seal exceeds admission limits")
 		}
 	}
+	if err := runtime.checkTerminalEnvelopeLocked(member.resources, false, true); err != nil {
+		return err
+	}
 	// Seals from retryable attempts may be interleaved in allocator debt, but
 	// every logical member captured by the coordinator must appear exactly once
 	// and in group order. This prevents a malformed coalesced group from using a
@@ -1035,6 +1114,13 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	}
 
 	base := db.durableRoot
+	if arena := runtime.terminalArena; arena != nil {
+		for _, set := range base.slotResources {
+			if set != nil && set.Len() > arena.resources {
+				return rootpublication.ErrStableMetadataShapeUnsupported
+			}
+		}
+	}
 	if base.pending != nil || len(base.ambiguous) != 0 || base.record.CommitSeq >= member.next.CommitSeq {
 		return fmt.Errorf("%w: durable=%d visible=%d", errDurableRootCandidateStale, base.record.CommitSeq, member.next.CommitSeq)
 	}
@@ -1092,18 +1178,36 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if base.slot == MetaPage0ID {
 		target = MetaPage1ID
 	}
+
+	recordHorizon, err := durableRootOverwrittenRecordHorizonV1(base, target)
+	if err != nil {
+		return err
+	}
 	overwrittenPages, err := durableRootSlotAuxiliaryPagesV1(base.slotMeta[target], base.slotRecord[target])
 	if err != nil {
 		return err
 	}
-	retirements := make([]freelist.COWRetirementV1, 0, 2)
-	if len(overwrittenPages) != 0 {
-		retirements = append(retirements, freelist.COWRetirementV1{
-			PageIDs: overwrittenPages, LastReachableCommitSeq: base.slotCommit[target],
-		})
+	manifestPages, recordPages := durableRootPartitionAuxiliaryPagesV1(overwrittenPages)
+	var retirementStorage [3]freelist.COWRetirementV1
+	retirements := retirementStorage[:0]
+	if len(manifestPages) != 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{PageIDs: manifestPages, LastReachableCommitSeq: base.slotCommit[target]})
 	}
+	if len(recordPages) != 0 {
+		retirements = append(retirements, freelist.COWRetirementV1{PageIDs: recordPages, LastReachableCommitSeq: recordHorizon})
+	}
+	// Prior-seal overlap is retired last at the current maximum horizon.
+
 	if previous := runtime.activeSeal; previous != nil {
-		if auxiliary := previous.prepared.AuxiliaryPageIDs(); len(auxiliary) != 0 {
+		info, infoErr := previous.prepared.InfoV1()
+		if infoErr != nil {
+			return infoErr
+		}
+		if info.AuxiliaryCount != 0 {
+			auxiliary := make([]uint64, info.AuxiliaryCount)
+			if _, copyErr := previous.prepared.CopyAuxiliaryPageIDsV1(auxiliary); copyErr != nil {
+				return copyErr
+			}
 			retirements = append(retirements, freelist.COWRetirementV1{
 				PageIDs: auxiliary, LastReachableCommitSeq: base.record.CommitSeq,
 			})
@@ -1113,8 +1217,8 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if err != nil {
 		return err
 	}
-	liveGeneration := runtime.idx.allocator.COWGenerationV1()
-	if liveGeneration == nil || liveGeneration.GenerationID() == ^uint64(0) {
+	liveGeneration, generationErr := runtime.idx.allocator.COWGenerationInfoV1()
+	if generationErr != nil || liveGeneration.GenerationID() == ^uint64(0) {
 		return errors.New("missing live COW generation for root-publication seal")
 	}
 	generationID := liveGeneration.GenerationID() + 1
@@ -1126,7 +1230,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	if limits != nil {
 		cowLimits = &limits.FreelistCOW
 	}
-	prepared, err := runtime.idx.allocator.PrepareCOWCandidateRetiringWithLimitsV1(
+	prepared, err := runtime.idx.allocator.PrepareOwnedCOWCandidateRetiringWithLimitsV1(
 		generationID,
 		member.next.CommitSeq,
 		rootPublicationSealCandidateIDV1(base, member.next, generationID),
@@ -1150,12 +1254,13 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 			runtime.poison = cause
 			_ = runtime.idx.allocator.FailCOWCandidateV1(prepared, cause)
 			err = cause
+		} else if clearErr := prepared.ClearTerminalBackingV1(); clearErr != nil {
+			err = errors.Join(err, fmt.Errorf("clear aborted root-publication seal: %w", clearErr))
 		}
 	}()
 
-	generation := prepared.Candidate().Generation()
-	auxiliary := prepared.AuxiliaryPageIDs()
-	if generation == nil || len(auxiliary) != auxiliaryCount {
+	generation, generationErr := prepared.InfoV1()
+	if generationErr != nil || generation.AuxiliaryCount != auxiliaryCount {
 		return errors.New("incomplete root-publication seal generation")
 	}
 	next := member.next
@@ -1163,12 +1268,12 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 	next.FreelistHeadID = 0
 	var manifestRef rootpublication.DependencyManifestRefV1
 	if manifest != nil {
-		manifestRef, err = manifest.Reference(auxiliary[0])
+		manifestRef, err = manifest.Reference(mustAuxiliaryPageIDV1(prepared, 0))
 		if err != nil {
 			return err
 		}
 	}
-	recordPageID := auxiliary[len(auxiliary)-1]
+	recordPageID := mustAuxiliaryPageIDV1(prepared, generation.AuxiliaryCount-1)
 	if base.record.DurableSeq == ^uint64(0) {
 		return errors.New("durable root publication sequence overflow")
 	}
@@ -1177,7 +1282,8 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		return errors.New("durable root publication sequence exceeds commit frontier")
 	}
 	record := rootpublication.DurableRootRecordV1{
-		CommitSeq: next.CommitSeq, DurableSeq: durableSeq,
+		OwnedLeafManifest: db.ownedLeafManifests,
+		CommitSeq:         next.CommitSeq, DurableSeq: durableSeq,
 		UserRootPageID: next.UserRootPageID, SystemRootPageID: next.SystemRootPageID,
 		TotalPages: next.TotalPages, MaxEntryRevision: next.MaxEntryRevision,
 		AppliedCommandLSN: next.AppliedCommandLSN, LastCommitHeight: next.LastCommitHeight,
@@ -1189,7 +1295,7 @@ func (runtime *rootPublicationRuntimeV1) Prepare(ctx context.Context, candidate 
 		ParentRecordDigest:   base.meta.RootRecordDigest,
 		MetaProjectionDigest: page.DurableMetaProjectionDigestV1(next.CommitSeq, durableSeq, recordPageID),
 	}
-	_, recordDigest, err := record.EncodePage(recordPageID)
+	recordDigest, err := record.DigestPage(recordPageID)
 	if err != nil {
 		return err
 	}
@@ -1227,8 +1333,8 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 	if seal.materialized {
 		return nil
 	}
-	generation := seal.prepared.Candidate().Generation()
-	if generation == nil {
+	generation, generationErr := seal.prepared.InfoV1()
+	if generationErr != nil {
 		return errors.New("missing root-publication seal generation")
 	}
 	if err := seal.idx.pager.GrowTo(generation.HighWater()); err != nil {
@@ -1238,27 +1344,26 @@ func (runtime *rootPublicationRuntimeV1) materializeSeal(seal *rootPublicationSe
 		return fmt.Errorf("validate root-publication physical tail: %w", err)
 	}
 	for _, prepared := range seal.prefix {
-		if prepared == nil || prepared.Candidate() == nil {
+		if prepared == nil {
 			return errors.New("root-publication prefix contains no COW candidate")
 		}
-		if err := prepared.Candidate().WritePagesToV1(durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+		if err := prepared.WritePagesToPagerV1(seal.idx.pager); err != nil {
 			return fmt.Errorf("write root-publication COW pages: %w", err)
 		}
 	}
-	auxiliary := seal.prepared.AuxiliaryPageIDs()
 	expectedAuxiliary := 1
 	if seal.manifest != nil {
 		expectedAuxiliary += int(seal.manifest.PageCount())
 	}
-	if len(auxiliary) != expectedAuxiliary {
+	if generation.AuxiliaryCount != expectedAuxiliary {
 		return errors.New("root-publication seal auxiliary inventory changed")
 	}
 	if seal.manifest != nil {
-		if _, err := seal.manifest.Materialize(auxiliary[0], durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
+		if _, err := seal.manifest.Materialize(mustAuxiliaryPageIDV1(seal.prepared, 0), durablePagerSinkV1{pager: seal.idx.pager}); err != nil {
 			return err
 		}
 	}
-	recordPageID := auxiliary[len(auxiliary)-1]
+	recordPageID := mustAuxiliaryPageIDV1(seal.prepared, generation.AuxiliaryCount-1)
 	recordImage, recordDigest, err := seal.record.EncodePage(recordPageID)
 	if err != nil {
 		return err
@@ -1343,9 +1448,15 @@ func (runtime *rootPublicationRuntimeV1) Publish(ctx context.Context, candidate 
 		}
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishRetryableFailure, Err: err}
 	}
-	oldest, err := runtime.commitPublishedSeal(seal)
+	// Storage is complete, but allocator/logical ownership remains untouched
+	// until the reporter reserves the COMPLETE coordinator+DB terminal group.
+	runtime.mu.Lock()
+	seal.storageComplete = true
+	runtime.mu.Unlock()
+	commits := seal.base.slotCommit
+	commits[seal.target] = seal.latestSequence
+	oldest, err := oldestRecoverableSlotCommitV1(commits)
 	if err != nil {
-		runtime.failAmbiguousSeal(seal, err)
 		return rootpublication.PublishResult{Outcome: rootpublication.PublishAmbiguous, Err: err}
 	}
 	return rootpublication.PublishResult{
@@ -1359,7 +1470,7 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	db.durablePublishMu.Lock()
 	db.rootReuseMu.Lock()
 	runtime.mu.Lock()
-	if runtime.activeSeal != seal || runtime.poison != nil {
+	if runtime.activeSeal != seal || runtime.poison != nil || !seal.storageComplete || seal.committed {
 		runtime.mu.Unlock()
 		db.rootReuseMu.Unlock()
 		db.durablePublishMu.Unlock()
@@ -1414,20 +1525,35 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	}
 	db.durableRoot = current
 	db.metaPageID = seal.target
-	seal.resources = nil
-	if seal.token != nil {
-		seal.token.Release()
-		seal.token = nil
+	seal.resources = nil // ownership transferred to the exact durable target
+	seal.overwrittenResources = previousResources
+	seal.committed = true
+	n := copy(runtime.debt, runtime.debt[len(seal.prefix):])
+	clear(runtime.debt[n:])
+	runtime.debt = runtime.debt[:n]
+	// Retired seals and visible cleanup stay attached until prepared releases
+	// succeed outside every engine lock.
+	runtime.mu.Unlock()
+	db.rootReuseMu.Unlock()
+	db.durablePublishMu.Unlock()
+	return oldest, nil
+}
+
+func (runtime *rootPublicationRuntimeV1) completePublishedSealTerminal(seal *rootPublicationSealV1) error {
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if seal == nil || !seal.committed || runtime.activeSeal != seal {
+		return rootpublication.ErrResourceOwnership
 	}
-	seal.released = true
-	clear(runtime.debt[:len(seal.prefix)])
-	runtime.debt = append([]*freelist.PreparedCOWCandidateV1(nil), runtime.debt[len(seal.prefix):]...)
-	var retiredSeals []*rootPublicationSealV1
 	keptSeals := runtime.seals[:0]
 	for _, candidateSeal := range runtime.seals {
 		if candidateSeal == seal || candidateSeal.latestSequence <= seal.latestSequence {
 			if candidateSeal != seal {
-				retiredSeals = append(retiredSeals, candidateSeal)
+				candidateSeal.resources = nil
+				candidateSeal.overwrittenResources = nil
+				candidateSeal.token = nil
+				candidateSeal.released = true
+				candidateSeal.clearTerminalBacking()
 			}
 			continue
 		}
@@ -1436,15 +1562,20 @@ func (runtime *rootPublicationRuntimeV1) commitPublishedSeal(seal *rootPublicati
 	clear(runtime.seals[len(keptSeals):])
 	runtime.seals = keptSeals
 	runtime.activeSeal = nil
-	runtime.mu.Unlock()
-	db.rootReuseMu.Unlock()
-	db.durablePublishMu.Unlock()
-
-	previousResources.Release()
-	for _, retired := range retiredSeals {
-		retired.release()
+	seal.overwrittenResources = nil
+	seal.token = nil
+	seal.released = true
+	seal.clearTerminalBacking()
+	for seq, member := range runtime.visibleMembers {
+		if seq <= seal.latestSequence && member.consumed {
+			member.previousResources = nil
+			member.terminalLoan.closeLocked()
+			member.terminalLoan = nil
+			member.prepared, member.install, member.resources, member.preparedLimits = nil, nil, nil, nil
+			delete(runtime.visibleMembers, seq)
+		}
 	}
-	return oldest, nil
+	return nil
 }
 
 func (runtime *rootPublicationRuntimeV1) failAmbiguousSeal(seal *rootPublicationSealV1, cause error) {
@@ -1458,22 +1589,42 @@ func (runtime *rootPublicationRuntimeV1) failAmbiguousSeal(seal *rootPublication
 	poison := runtime.poison
 	runtime.mu.Unlock()
 	runtime.db.publicationPoisoned.Store(true)
-	_ = seal.idx.allocator.FailCOWCandidateV1(seal.prepared, poison)
+	if !seal.committed {
+		_ = seal.idx.allocator.FailCOWCandidateV1(seal.prepared, poison)
+	}
 }
 
-func (runtime *rootPublicationRuntimeV1) release() {
+func (runtime *rootPublicationRuntimeV1) release() error {
 	if runtime == nil {
-		return
+		return nil
+	}
+	// Standalone ordinary teardown remains checked. Callers must already have
+	// stopped publication; failed fields remain attached for the terminal owner.
+	if err := runtime.visibleResources.Release(); err != nil {
+		return err
 	}
 	runtime.mu.Lock()
-	visibleResources := runtime.visibleResources
 	runtime.visibleResources = nil
-	seals := append([]*rootPublicationSealV1(nil), runtime.seals...)
+	seals := runtime.seals
+	runtime.mu.Unlock()
+	for _, seal := range seals {
+		if err := seal.release(); err != nil {
+			return err
+		}
+	}
+	runtime.mu.Lock()
 	runtime.seals = nil
 	runtime.activeSeal = nil
+	arenaErr := runtime.closeTerminalArenaLocked()
 	runtime.mu.Unlock()
-	visibleResources.Release()
-	for _, seal := range seals {
-		seal.release()
+	return arenaErr
+}
+
+// Preparation verifies this exact inventory before exposing the immutable seal.
+func mustAuxiliaryPageIDV1(prepared *freelist.PreparedCOWCandidateV1, index int) uint64 {
+	id, err := prepared.AuxiliaryPageIDV1(index)
+	if err != nil {
+		panic("treedb: prepared auxiliary inventory changed")
 	}
+	return id
 }

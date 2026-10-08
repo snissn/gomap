@@ -10,6 +10,9 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 
 	"github.com/buger/jsonparser"
 	"github.com/snissn/gomap/TreeDB/internal/commitlog"
@@ -930,6 +933,18 @@ func encodeColumnPhysicalAsset(input columnPhysicalAssetEncodeInput) ([]byte, co
 }
 
 func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, rows columnDeclaredRowSource) ([]byte, columnPhysicalAssetSummary, error) {
+	return encodeColumnPhysicalAssetFromSourceWithMetadataAccount(input, rows, nil)
+}
+
+// The account admits this encoder's actual output-buffer/control births only.
+// The complete caller must separately own/census immutable input rows, schema,
+// image arrays and every other plan/producer family before finite admission.
+func encodeColumnPhysicalAssetFromSourceWithMetadataAccount(input columnPhysicalAssetEncodeInput, rows columnDeclaredRowSource, account rootpublication.StableMetadataAccount) ([]byte, columnPhysicalAssetSummary, error) {
+	if account != nil {
+		if err := requireCreditedColumnPhysicalScalarRows(input, rows); err != nil {
+			return nil, columnPhysicalAssetSummary{}, err
+		}
+	}
 	if input.Collection == "" || input.Namespace == "" || input.Generation == 0 || input.PartID == 0 {
 		return nil, columnPhysicalAssetSummary{}, errors.New("collections: column physical asset missing collection, namespace, generation, or part_id")
 	}
@@ -1015,7 +1030,6 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 			return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: unsupported column physical asset operation %q", input.Operation)
 		}
 	}
-	var b bytes.Buffer
 	denseIDBase, useDenseIDRows, err := columnPhysicalAssetDenseBigEndianUint64RangeBaseFromSource(input, rows)
 	if err != nil {
 		return nil, columnPhysicalAssetSummary{}, err
@@ -1039,70 +1053,115 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 	} else if useFixedIDRows {
 		version = columnPhysicalAssetVersionV7
 	}
-	writeManifestUint32(&b, columnPhysicalAssetMagic)
-	writeManifestUint16(&b, version)
-	writeManifestString(&b, input.Collection)
-	writeManifestString(&b, input.Namespace)
-	writeManifestUint64(&b, input.Generation)
-	writeManifestUint64(&b, input.PartID)
-	writeManifestUint64(&b, input.AppliedCommandLSN)
-	writeManifestString(&b, string(input.Operation))
-	writeManifestUint64(&b, input.SchemaHash)
-	writeManifestUint64(&b, uint64(len(input.Columns)))
-	writeManifestUint64(&b, uint64(rowCount))
+	var b bytes.Buffer
+	if account != nil {
+		// A concrete immutable source is required for the two identical passes.
+		// Arbitrary Row callbacks may mutate input or allocate between count/write.
+		if _, ok := rows.(columnDeclaredRowsSource); !ok {
+			return nil, columnPhysicalAssetSummary{}, ErrPreparedInsertResourceLimit
+		}
+		// Conservatively admit the three concrete call-local controls before they can
+		// escape through compiler decisions; output backing is debited separately.
+		var control uint64
+		for _, raw := range [...]uint64{uint64(unsafe.Sizeof(bytes.Buffer{})), uint64(unsafe.Sizeof(columnPhysicalAssetEncodingSink{})), uint64(unsafe.Sizeof(columnPhysicalAssetEncodingSink{}))} {
+			class, err := rootpublication.StableBackingClassBytes(raw, true)
+			if err != nil || class > ^uint64(0)-control {
+				return nil, columnPhysicalAssetSummary{}, ErrPreparedInsertResourceLimit
+			}
+			control += class
+		}
+		if err := account.ReserveStableMetadata(control); err != nil {
+			return nil, columnPhysicalAssetSummary{}, err
+		}
+		count := columnPhysicalAssetEncodingSink{}
+		if err := writeColumnPhysicalAssetBody(input, rows, rowCount, version, metadataOnly, sparseOnly, denseIDBase, useDenseIDRows, fixedIDWidth, useFixedIDRows, &count); err != nil {
+			return nil, columnPhysicalAssetSummary{}, err
+		}
+		if count.overflow || count.written > uint64(maxCollectionInt) {
+			return nil, columnPhysicalAssetSummary{}, ErrPreparedInsertResourceLimit
+		}
+		class, err := rootpublication.StableBackingClassBytes(count.written, false)
+		if err != nil {
+			return nil, columnPhysicalAssetSummary{}, err
+		}
+		if err := account.ReserveStableMetadata(class); err != nil {
+			return nil, columnPhysicalAssetSummary{}, err
+		}
+		b = *bytes.NewBuffer(make([]byte, 0, int(count.written)))
+		sink := columnPhysicalAssetEncodingSink{buffer: &b, limit: count.written}
+		if err := writeColumnPhysicalAssetBody(input, rows, rowCount, version, metadataOnly, sparseOnly, denseIDBase, useDenseIDRows, fixedIDWidth, useFixedIDRows, &sink); err != nil {
+			return nil, columnPhysicalAssetSummary{}, err
+		}
+		if sink.overflow || sink.written != count.written || uint64(b.Len()) != count.written {
+			return nil, columnPhysicalAssetSummary{}, ErrPreparedInsertResourceLimit
+		}
+	} else {
+		sink := columnPhysicalAssetEncodingSink{buffer: &b}
+		if err := writeColumnPhysicalAssetBody(input, rows, rowCount, version, metadataOnly, sparseOnly, denseIDBase, useDenseIDRows, fixedIDWidth, useFixedIDRows, &sink); err != nil {
+			return nil, columnPhysicalAssetSummary{}, err
+		}
+	}
+	payload := b.Bytes()
+	return payload, columnPhysicalAssetSummary{RowCount: rowCount, ColumnCount: len(input.Columns), PayloadBytes: int64(len(payload))}, nil
+}
+
+// Both counting and writing use this one existing binary grammar. Counting
+// performs no byte copy or buffer growth; the installed bytes keep the format.
+func writeColumnPhysicalAssetBody(input columnPhysicalAssetEncodeInput, rows columnDeclaredRowSource, rowCount int, version uint16, metadataOnly, sparseOnly bool, denseIDBase uint64, useDenseIDRows bool, fixedIDWidth int, useFixedIDRows bool, out *columnPhysicalAssetEncodingSink) error {
+	out.writeUint32(columnPhysicalAssetMagic)
+	out.writeUint16(version)
+	out.writeString(input.Collection)
+	out.writeString(input.Namespace)
+	out.writeUint64(input.Generation)
+	out.writeUint64(input.PartID)
+	out.writeUint64(input.AppliedCommandLSN)
+	out.writeString(string(input.Operation))
+	out.writeUint64(input.SchemaHash)
+	out.writeUint64(uint64(len(input.Columns)))
+	out.writeUint64(uint64(rowCount))
 	for _, col := range input.Columns {
-		writeManifestString(&b, col.Name)
-		writeManifestString(&b, col.Path)
-		writeManifestString(&b, string(col.ValueType))
-		writeManifestBool(&b, col.Nullable)
-		writeManifestBool(&b, col.Dictionary)
-		writeManifestUint64(&b, uint64(col.VectorDims))
+		out.writeString(col.Name)
+		out.writeString(col.Path)
+		out.writeString(string(col.ValueType))
+		out.writeBool(col.Nullable)
+		out.writeBool(col.Dictionary)
+		out.writeUint64(uint64(col.VectorDims))
 		if version >= columnPhysicalAssetVersionV6 {
-			writeManifestUint64(&b, uint64(col.ElementsPerRow))
+			out.writeUint64(uint64(col.ElementsPerRow))
 		}
 		if version >= columnPhysicalAssetVersionV5 {
-			writeManifestString(&b, string(col.FixedWidthEncoding))
+			out.writeString(string(col.FixedWidthEncoding))
 		}
 	}
 	if useDenseIDRows {
-		writeManifestString(&b, columnPhysicalAssetRowEncodingDenseIDRange)
-		writeManifestUint64(&b, denseIDBase)
-		payload := b.Bytes()
-		return payload, columnPhysicalAssetSummary{
-			RowCount:     rowCount,
-			ColumnCount:  len(input.Columns),
-			PayloadBytes: int64(len(payload)),
-		}, nil
+		out.writeString(columnPhysicalAssetRowEncodingDenseIDRange)
+		out.writeUint64(denseIDBase)
+		return nil
 	}
 	if useFixedIDRows {
-		writeManifestString(&b, columnPhysicalAssetRowEncodingFixedID)
-		writeManifestUint64(&b, uint64(fixedIDWidth))
+		out.writeString(columnPhysicalAssetRowEncodingFixedID)
+		out.writeUint64(uint64(fixedIDWidth))
 		for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
 			row, err := rows.Row(rowIdx)
 			if err != nil {
-				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
+				return fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
 			}
-			_, _ = b.Write(row.ID)
+			out.writeRawBytes(row.ID)
 		}
-		payload := b.Bytes()
-		return payload, columnPhysicalAssetSummary{
-			RowCount:     rowCount,
-			ColumnCount:  len(input.Columns),
-			PayloadBytes: int64(len(payload)),
-		}, nil
+		return nil
 	}
 	for rowIdx := 0; rowIdx < rowCount; rowIdx++ {
 		row, err := rows.Row(rowIdx)
 		if err != nil {
-			return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
+			return fmt.Errorf("collections: column physical asset row[%d]: %w", rowIdx, err)
 		}
-		writeManifestBytes(&b, row.ID)
-		writeManifestBool(&b, row.Deleted)
+		out.writeBytes(row.ID)
+		out.writeBool(row.Deleted)
 		if sparseOnly {
-			writeColumnSparseStoredColumns(&b, row.Stored)
+			out.writeSparseStoredColumns(row.Stored)
 		}
 		if metadataOnly {
-			writeColumnPreservedRow(&b, *row.Preserved)
+			out.writePreservedRow(*row.Preserved)
 		}
 		if row.Deleted {
 			continue
@@ -1115,9 +1174,9 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 			if metadataOnly && !columnMetadataStoredColumn(col) {
 				continue
 			}
-			writeManifestString(&b, string(value.Type))
-			writeManifestBool(&b, value.Null)
-			writeManifestBool(&b, columnDeclaredValuePresentForEncode(value))
+			out.writeString(string(value.Type))
+			out.writeBool(value.Null)
+			out.writeBool(columnDeclaredValuePresentForEncode(value))
 			if !columnDeclaredValuePresentForEncode(value) {
 				continue
 			}
@@ -1126,58 +1185,53 @@ func encodeColumnPhysicalAssetFromSource(input columnPhysicalAssetEncodeInput, r
 			}
 			switch value.Type {
 			case ColumnStoreValueBool:
-				writeManifestBool(&b, value.Bool)
+				out.writeBool(value.Bool)
 			case ColumnStoreValueInt64:
-				writeManifestUint64(&b, uint64(value.Int64))
+				out.writeUint64(uint64(value.Int64))
 			case ColumnStoreValueFloat32:
-				writeManifestUint32(&b, math.Float32bits(value.Float32))
+				out.writeUint32(math.Float32bits(value.Float32))
 			case ColumnStoreValueDouble:
-				writeManifestUint64(&b, math.Float64bits(value.Double))
+				out.writeUint64(math.Float64bits(value.Double))
 			case ColumnStoreValueString:
-				writeManifestString(&b, value.String)
+				out.writeString(value.String)
 			case ColumnStoreValueInt8:
-				writeManifestUint8(&b, uint8(value.Int8))
+				out.writeUint8(uint8(value.Int8))
 			case ColumnStoreValueUint8:
-				writeManifestUint8(&b, value.Uint8)
+				out.writeUint8(value.Uint8)
 			case ColumnStoreValueInt16:
-				writeManifestUint16(&b, uint16(value.Int16))
+				out.writeUint16(uint16(value.Int16))
 			case ColumnStoreValueUint16:
-				writeManifestUint16(&b, value.Uint16)
+				out.writeUint16(value.Uint16)
 			case ColumnStoreValueInt32:
-				writeManifestUint32(&b, uint32(value.Int32))
+				out.writeUint32(uint32(value.Int32))
 			case ColumnStoreValueUint32:
-				writeManifestUint32(&b, value.Uint32)
+				out.writeUint32(value.Uint32)
 			case ColumnStoreValueUint64:
-				writeManifestUint64(&b, value.Uint64)
+				out.writeUint64(value.Uint64)
 			case ColumnStoreValueFloat16:
-				writeManifestUint16(&b, value.Float16)
+				out.writeUint16(value.Float16)
 			case ColumnStoreValueBFloat16:
-				writeManifestUint16(&b, value.BFloat16)
+				out.writeUint16(value.BFloat16)
 			case ColumnStoreValueFloat32Vector:
-				if err := writeManifestFloat32SliceWithEncoding(&b, value.Float32Vector, col.FixedWidthEncoding); err != nil {
-					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] float32_vector: %w", colIdx, err)
+				if err := out.writeFloat32SliceWithEncoding(value.Float32Vector, col.FixedWidthEncoding); err != nil {
+					return fmt.Errorf("collections: column physical asset row value column[%d] float32_vector: %w", colIdx, err)
 				}
 			case ColumnStoreValueUint8Vector, ColumnStoreValueInt8Vector, ColumnStoreValueUint16Vector, ColumnStoreValueInt16Vector, ColumnStoreValueUint32Vector, ColumnStoreValueInt32Vector, ColumnStoreValueUint64Vector, ColumnStoreValueInt64Vector, ColumnStoreValueFloat16Vector, ColumnStoreValueBFloat16Vector, ColumnStoreValueFloat64Vector:
-				writeManifestBytes(&b, value.DenseNumericVector)
+				out.writeBytes(value.DenseNumericVector)
 			case ColumnStoreValueUint32List:
-				if err := writeManifestUint32SliceWithEncoding(&b, value.Uint32List, col.FixedWidthEncoding); err != nil {
-					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] uint32_list: %w", colIdx, err)
+				if err := out.writeUint32SliceWithEncoding(value.Uint32List, col.FixedWidthEncoding); err != nil {
+					return fmt.Errorf("collections: column physical asset row value column[%d] uint32_list: %w", colIdx, err)
 				}
 			case ColumnStoreValueAdjacencyList:
-				if err := writeManifestUint32SliceWithEncoding(&b, value.AdjacencyList, col.FixedWidthEncoding); err != nil {
-					return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: column physical asset row value column[%d] adjacency_list: %w", colIdx, err)
+				if err := out.writeUint32SliceWithEncoding(value.AdjacencyList, col.FixedWidthEncoding); err != nil {
+					return fmt.Errorf("collections: column physical asset row value column[%d] adjacency_list: %w", colIdx, err)
 				}
 			default:
-				return nil, columnPhysicalAssetSummary{}, fmt.Errorf("collections: unsupported column physical value type %q", value.Type)
+				return fmt.Errorf("collections: unsupported column physical value type %q", value.Type)
 			}
 		}
 	}
-	payload := b.Bytes()
-	return payload, columnPhysicalAssetSummary{
-		RowCount:     rowCount,
-		ColumnCount:  len(input.Columns),
-		PayloadBytes: int64(len(payload)),
-	}, nil
+	return nil
 }
 
 func decodeColumnPhysicalAsset(raw []byte) (columnPhysicalAsset, error) {

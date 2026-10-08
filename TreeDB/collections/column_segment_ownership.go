@@ -8,6 +8,7 @@ import (
 	"fmt"
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"math"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 )
@@ -33,38 +34,63 @@ func columnManifestSegmentOwnershipRecordKey(fileID uint32) []byte {
 }
 
 func encodeColumnManifestSegmentOwnership(record columnManifestSegmentOwnership) ([]byte, error) {
+	return encodeColumnManifestSegmentOwnershipWithMetadataAccount(record, nil)
+}
+func encodeColumnManifestSegmentOwnershipWithMetadataAccount(record columnManifestSegmentOwnership, account rootpublication.StableMetadataAccount) ([]byte, error) {
 	if err := validateColumnAssetRefForPlan(record.Ref); err != nil || columnAssetSegmentFileIDIsDirectView(record.Ref.FileID) || record.Frontier == 0 ||
 		record.Ref.Offset < 0 || record.Ref.Length <= 0 || record.Ref.Offset > math.MaxInt64-record.Ref.Length || uint64(record.Ref.Offset+record.Ref.Length) != record.Frontier {
 		return nil, errors.New("collections: invalid column segment ownership record")
 	}
-	if _, err := record.selector(); err != nil {
+	if err := validateColumnManifestSegmentOwnershipClass(record); err != nil {
 		return nil, err
 	}
-	var b bytes.Buffer
-	writeManifestUint32(&b, columnManifestSegmentOwnershipMagic)
-	writeManifestUint16(&b, 1)
-	writeManifestString(&b, string(record.Ref.Kind))
-	writeManifestString(&b, record.Ref.Namespace)
-	writeManifestUint64(&b, record.Ref.Generation)
-	writeManifestUint64(&b, record.Ref.PartID)
-	writeManifestUint32(&b, record.Ref.FileID)
-	writeManifestUint64(&b, uint64(record.Ref.Offset))
-	writeManifestUint64(&b, uint64(record.Ref.Length))
-	writeManifestUint32(&b, record.Ref.Checksum)
-	writeManifestUint64(&b, record.Frontier)
+	count := columnManifestEncodingSink{}
+	writeColumnManifestSegmentOwnership(&count, record)
+	raw, err := count.allocate(account)
+	if err != nil {
+		return nil, err
+	}
+	sink := columnManifestEncodingSink{raw: raw}
+	writeColumnManifestSegmentOwnership(&sink, record)
+	return sink.result()
+}
+func writeColumnManifestSegmentOwnership(s *columnManifestEncodingSink, record columnManifestSegmentOwnership) {
+	s.u32(columnManifestSegmentOwnershipMagic)
+	s.u16(1)
+	s.text(string(record.Ref.Kind))
+	s.text(record.Ref.Namespace)
+	s.u64(record.Ref.Generation)
+	s.u64(record.Ref.PartID)
+	s.u32(record.Ref.FileID)
+	s.u64(uint64(record.Ref.Offset))
+	s.u64(uint64(record.Ref.Length))
+	s.u32(record.Ref.Checksum)
+	s.u64(record.Frontier)
 	graph := uint16(0)
 	if record.Graph {
 		graph = 1
 	}
-	writeManifestUint16(&b, graph)
-	return b.Bytes(), nil
+	s.u16(graph)
+}
+func validateColumnManifestSegmentOwnershipClass(marker columnManifestSegmentOwnership) error {
+	_, _, classification, err := stableColumnAssetResourceClassification(marker.Ref.Kind)
+	if err != nil {
+		return err
+	}
+	if classification != "authoritative" {
+		return rootpublication.ErrResourceExcluded
+	}
+	return nil
 }
 
 func decodeColumnManifestSegmentOwnership(key, value []byte) (columnManifestSegmentOwnership, error) {
+	return decodeColumnManifestSegmentOwnershipWithMetadataAccount(key, value, nil)
+}
+func decodeColumnManifestSegmentOwnershipWithMetadataAccount(key, value []byte, account rootpublication.StableMetadataAccount) (columnManifestSegmentOwnership, error) {
 	if len(key) != len(columnManifestSegmentOwnershipRecordPrefix)+4 || !bytes.HasPrefix(key, columnManifestSegmentOwnershipRecordPrefixBytes) {
 		return columnManifestSegmentOwnership{}, errors.New("collections: invalid column segment ownership key")
 	}
-	cur := manifestCursor{raw: value}
+	cur := manifestCursor{raw: value, account: account}
 	if magic := cur.u32(); magic != columnManifestSegmentOwnershipMagic {
 		return columnManifestSegmentOwnership{}, errors.New("collections: invalid column segment ownership magic")
 	}
@@ -98,27 +124,37 @@ func decodeColumnManifestSegmentOwnership(key, value []byte) (columnManifestSegm
 }
 
 func normalizeColumnManifestSegmentOwnership(records []columnManifestRecord, producerOwned map[uint32]struct{}, generation uint64, namespace string) ([]columnManifestRecord, error) {
-	eligible := make(map[uint32]struct{})
+	return normalizeColumnManifestSegmentOwnershipWithMetadataAccount(records, producerOwned, generation, namespace, nil)
+}
+func columnManifestFileIDLess(a, b uint32) bool { return a < b }
+func normalizeColumnManifestSegmentOwnershipWithMetadataAccount(records []columnManifestRecord, producerOwned map[uint32]struct{}, generation uint64, namespace string, account rootpublication.StableMetadataAccount) ([]columnManifestRecord, error) {
+	// One exact eligible/frontier table replaces the two Swiss maps. Its nodes
+	// are the existing registry AVL allocation family, prepaid before insertion.
+	table := rootpublication.NewStableMetadataTable[uint32, columnManifestSegmentOwnership](columnManifestFileIDLess)
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes) {
 			continue
 		}
-		marker, err := decodeColumnManifestSegmentOwnershipForScan(record.key, record.value, namespace, generation)
+		marker, err := decodeColumnManifestSegmentOwnershipForScanWithMetadataAccount(record.key, record.value, namespace, generation, account)
 		if err != nil {
 			return nil, err
 		}
 		if marker.Ref.Namespace != namespace {
 			return nil, errors.New("collections: column segment ownership namespace mismatch")
 		}
-		eligible[marker.Ref.FileID] = struct{}{}
+		if err = table.Set(marker.Ref.FileID, columnManifestSegmentOwnership{}, account); err != nil {
+			return nil, err
+		}
 	}
 	for fileID := range producerOwned {
 		if fileID == 0 || columnAssetSegmentFileIDIsDirectView(fileID) {
 			return nil, errors.New("collections: invalid producer-owned column segment")
 		}
-		eligible[fileID] = struct{}{}
+		if err := table.Set(fileID, columnManifestSegmentOwnership{}, account); err != nil {
+			return nil, err
+		}
 	}
-	if len(eligible) == 0 {
+	if table.Len() == 0 {
 		return records, nil
 	}
 	filtered := records[:0]
@@ -127,34 +163,74 @@ func normalizeColumnManifestSegmentOwnership(records []columnManifestRecord, pro
 			filtered = append(filtered, record)
 		}
 	}
-	frontiers := make(map[uint32]columnManifestSegmentOwnership, len(eligible))
-	err := visitColumnManifestPhysicalRefsForOwnership(filtered, generation, namespace, func(ref ColumnAssetRef, graph bool) error {
-		if _, ok := eligible[ref.FileID]; !ok {
+	err := visitColumnManifestPhysicalRefsForOwnershipWithMetadataAccount(filtered, generation, namespace, account, func(ref ColumnAssetRef, graph bool) error {
+		old, ok := table.Lookup(ref.FileID)
+		if !ok {
 			return nil
 		}
 		if ref.Offset < 0 || ref.Length <= 0 || ref.Offset > math.MaxInt64-ref.Length {
 			return errors.New("collections: invalid ownership logical frontier")
 		}
 		end := uint64(ref.Offset + ref.Length)
-		if end > frontiers[ref.FileID].Frontier {
-			frontiers[ref.FileID] = columnManifestSegmentOwnership{Ref: ref, Frontier: end, Graph: graph}
+		if end > old.Frontier {
+			return table.Set(ref.FileID, columnManifestSegmentOwnership{Ref: ref, Frontier: end, Graph: graph}, account)
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	for fileID, marker := range frontiers {
-		value, err := encodeColumnManifestSegmentOwnership(marker)
-		if err != nil {
+	count := 0
+	table.Visit(func(_ uint32, m columnManifestSegmentOwnership) bool {
+		if m.Frontier != 0 {
+			count++
+		}
+		return true
+	})
+	if count > math.MaxInt-len(filtered) {
+		return nil, ErrPreparedInsertResourceLimit
+	}
+	capacity := len(filtered) + count
+	if capacity > cap(filtered) {
+		if err := reserveColumnManifestArray(account, capacity, uint64(unsafe.Sizeof(columnManifestRecord{}))); err != nil {
 			return nil, err
 		}
+		replacement := make([]columnManifestRecord, len(filtered), capacity)
+		copy(replacement, filtered)
+		filtered = replacement
+	}
+	table.Visit(func(fileID uint32, marker columnManifestSegmentOwnership) bool {
+		if marker.Frontier == 0 {
+			return true
+		}
+		if err = reserveColumnManifestBacking(account, uint64(len(columnManifestSegmentOwnershipRecordPrefix)+4), false); err != nil {
+			return false
+		}
+		var value []byte
+		value, err = encodeColumnManifestSegmentOwnershipWithMetadataAccount(marker, account)
+		if err != nil {
+			return false
+		}
 		filtered = append(filtered, columnManifestRecord{key: columnManifestSegmentOwnershipRecordKey(fileID), value: value})
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 	return filtered, nil
 }
 
 func visitColumnManifestPhysicalRefsForOwnership(records []columnManifestRecord, generation uint64, namespace string, visit func(ColumnAssetRef, bool) error) error {
+	return visitColumnManifestPhysicalRefsForOwnershipWithMetadataAccount(records, generation, namespace, nil, visit)
+}
+func visitColumnManifestPhysicalRefsForOwnershipWithMetadataAccount(records []columnManifestRecord, generation uint64, namespace string, account rootpublication.StableMetadataAccount, visit func(ColumnAssetRef, bool) error) error {
+	if account != nil {
+		for _, r := range records {
+			if bytes.HasPrefix(r.key, columnManifestVectorGraphRecordPrefixBytes) || bytes.HasPrefix(r.key, columnVectorIndexStateRecordPrefixBytes) {
+				return ErrPreparedInsertResourceLimit
+			}
+		}
+	}
 	appendRef := func(ref ColumnAssetRef, graph bool) error {
 		if ref.Namespace != namespace || ref.Generation == 0 || ref.Generation > generation {
 			return fmt.Errorf("collections: ownership ref namespace/generation %+v outside candidate manifest", ref)
@@ -167,7 +243,7 @@ func visitColumnManifestPhysicalRefsForOwnership(records []columnManifestRecord,
 	for _, record := range records {
 		switch {
 		case bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes):
-			part, err := decodeColumnManifestPartRecord(record.value)
+			part, err := decodeColumnManifestPartRecordWithMetadataAccount(record.value, account)
 			if err != nil {
 				return err
 			}
@@ -175,7 +251,7 @@ func visitColumnManifestPhysicalRefsForOwnership(records []columnManifestRecord,
 				return err
 			}
 		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
-			asset, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
+			asset, err := decodeColumnManifestAggregateMetadataRecordWithMetadataAccount(record.key, record.value, account)
 			if err != nil {
 				return err
 			}
@@ -183,7 +259,7 @@ func visitColumnManifestPhysicalRefsForOwnership(records []columnManifestRecord,
 				return err
 			}
 		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
-			asset, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value)
+			asset, err := decodeColumnManifestDictionaryCodesRecordWithMetadataAccount(record.key, record.value, account)
 			if err != nil {
 				return err
 			}
@@ -191,7 +267,7 @@ func visitColumnManifestPhysicalRefsForOwnership(records []columnManifestRecord,
 				return err
 			}
 		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
-			asset, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value)
+			asset, err := decodeColumnManifestInt64ValuesRecordWithMetadataAccount(record.key, record.value, account)
 			if err != nil {
 				return err
 			}
@@ -246,14 +322,17 @@ func (marker columnManifestSegmentOwnership) selector() (rootpublication.StableR
 }
 
 func decodeColumnManifestSegmentOwnershipForScan(key, value []byte, namespace string, generation uint64) (columnManifestSegmentOwnership, error) {
-	marker, err := decodeColumnManifestSegmentOwnership(key, value)
+	return decodeColumnManifestSegmentOwnershipForScanWithMetadataAccount(key, value, namespace, generation, nil)
+}
+func decodeColumnManifestSegmentOwnershipForScanWithMetadataAccount(key, value []byte, namespace string, generation uint64, account rootpublication.StableMetadataAccount) (columnManifestSegmentOwnership, error) {
+	marker, err := decodeColumnManifestSegmentOwnershipWithMetadataAccount(key, value, account)
 	if err != nil {
 		return columnManifestSegmentOwnership{}, err
 	}
 	if (namespace != "" && marker.Ref.Namespace != namespace) || marker.Ref.Generation > generation {
 		return columnManifestSegmentOwnership{}, errors.New("collections: segment ownership outside manifest namespace/generation")
 	}
-	if _, err := marker.selector(); err != nil {
+	if err := validateColumnManifestSegmentOwnershipClass(marker); err != nil {
 		return columnManifestSegmentOwnership{}, err
 	}
 	return marker, nil

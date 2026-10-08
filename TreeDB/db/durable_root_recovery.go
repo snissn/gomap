@@ -35,11 +35,12 @@ func durableSlotReasonV1(err error) string {
 }
 
 type durableRootSelectionV1 struct {
-	Slot     uint64
-	Meta     page.DurableMetaV1
-	Record   rootpublication.DurableRootRecordV1
-	Freelist *freelist.FreelistGenerationV1
-	Manifest *rootpublication.DependencyManifestV1
+	Slot          uint64
+	Meta          page.DurableMetaV1
+	Record        rootpublication.DurableRootRecordV1
+	Freelist      *freelist.FreelistGenerationV1
+	OwnedFreelist *freelist.OwnedGenerationHandleV1
+	Manifest      *rootpublication.DependencyManifestV1
 	// SlotCommits contains only independently complete recovery generations.
 	SlotCommits [2]uint64
 	// SlotResources retains the exact external-resource closure for every
@@ -65,6 +66,19 @@ type durableMetaCandidateV1 struct {
 // selectDurableRootV1 performs bounded recovery selection. It deliberately
 // does not recurse through the B-tree or scan value-log contents: checksummed
 // COW pages and the deterministic manifest are the recovery inventory.
+func (selection *durableRootSelectionV1) enableFreelistV1(allocator *freelist.Allocator, ledger *freelist.ReservationLedger) error {
+	if selection.OwnedFreelist != nil {
+		return allocator.EnableOwnedGenerationHandleV1(selection.OwnedFreelist, ledger)
+	}
+	return allocator.EnableCOWV1(selection.Freelist, ledger)
+}
+func (selection *durableRootSelectionV1) closeOwnedFreelistV1() {
+	if selection != nil && selection.OwnedFreelist != nil {
+		selection.OwnedFreelist.Close()
+		selection.OwnedFreelist = nil
+	}
+}
+
 func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, validateManifest durableManifestValidatorV1, directoryValidators ...durableDirectoryValidatorV2) (durableRootSelectionV1, error) {
 	if source == nil {
 		return durableRootSelectionV1{}, &NoRecoverableMetaError{SlotReasons: [2]error{errors.New("meta page source unavailable"), errors.New("meta page source unavailable")}}
@@ -107,6 +121,7 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 		if err == nil {
 			if priorSlot, duplicate := seenGenerations[selected.Meta.CommitSeq]; duplicate {
 				selected.resources.Release()
+				selected.closeOwnedFreelistV1()
 				reasons[candidate.slot] = fmt.Errorf("duplicate recovery generation: commit %d already selected from slot %d", selected.Meta.CommitSeq, priorSlot)
 				continue
 			}
@@ -118,6 +133,8 @@ func selectDurableRootV1(source freelist.PageSource, physicalPageCount uint64, v
 			if chosen == nil {
 				copy := selected
 				chosen = &copy
+			} else {
+				selected.closeOwnedFreelistV1()
 			}
 			if chosen != nil {
 				chosen.SlotCommits[candidate.slot] = selected.Meta.CommitSeq
@@ -190,9 +207,19 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 	if err := validateDurableRootLineageV1(source, record); err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("root record lineage: %w", err)
 	}
-	generation, err := freelist.LoadGenerationV1(source, record.Freelist)
+	generationHandle, err := freelist.LoadOwnedGenerationHandleV1(source, record.Freelist)
 	if err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("COW freelist: %w", err)
+	}
+	keepGeneration := false
+	defer func() {
+		if !keepGeneration {
+			generationHandle.Close()
+		}
+	}()
+	generation, err := generationHandle.InfoV1()
+	if err != nil {
+		return durableRootSelectionV1{}, err
 	}
 	if generation.FreeCount() != record.FreelistFreeCount || generation.RetiredCount() != record.FreelistRetiredCount {
 		return durableRootSelectionV1{}, errors.New("COW freelist: count mismatch")
@@ -226,8 +253,19 @@ func validateDurableMetaCandidateV1(source freelist.PageSource, physicalPageCoun
 	if err := validateDurableRootPageV1(source, record.SystemRootPageID, record.TotalPages); err != nil {
 		return durableRootSelectionV1{}, fmt.Errorf("system root page: %w", err)
 	}
+	if record.OwnedLeafManifest {
+		for _, descriptor := range resources.PhysicalDescriptors() {
+			if descriptor.Kind == rootpublication.ResourceOuterLeafManifest {
+				return durableRootSelectionV1{}, errors.New("owned root contains standalone manifest dependency")
+			}
+		}
+		if _, err := loadOwnedLeafManifest(source, record.SystemRootPageID, record.TotalPages); err != nil {
+			return durableRootSelectionV1{}, fmt.Errorf("owned leaf manifest: %w", err)
+		}
+	}
 	accepted = true
-	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, Freelist: generation, Manifest: manifest, resources: resources}, nil
+	keepGeneration = true
+	return durableRootSelectionV1{Slot: candidate.slot, Meta: meta, Record: record, OwnedFreelist: generationHandle, Manifest: manifest, resources: resources}, nil
 }
 
 // validateDurableRootLineageV1 performs the fixed-depth lineage check promised
@@ -248,6 +286,9 @@ func validateDurableRootLineageV1(source freelist.PageSource, record rootpublica
 	parent, err := rootpublication.DecodeDurableRootRecordV1(parentImage, record.ParentRecordPageID, record.ParentRecordDigest)
 	if err != nil {
 		return fmt.Errorf("parent record: %w", err)
+	}
+	if parent.OwnedLeafManifest != record.OwnedLeafManifest {
+		return errors.New("mixed owned/standalone manifest lineage")
 	}
 	if parent.CommitSeq != record.ParentCommitSeq {
 		return fmt.Errorf("parent commit sequence mismatch: record=%d parent=%d", record.ParentCommitSeq, parent.CommitSeq)

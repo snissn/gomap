@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"errors"
+	"github.com/snissn/gomap/TreeDB/internal/allocclass"
 	"testing"
 	"unsafe"
 
@@ -164,5 +165,51 @@ func TestOwnedBuilderScratchProducerEntryCreditAndReset(t *testing.T) {
 	var reserved bool
 	if _, err := NewOwnedBuilderWithEntryLimit(make([]byte, page.PageSize), page.PageTypeLeaf, BuilderOptions{}, 20, -1, func(uint64) error { reserved = true; return nil }); !errors.Is(err, ErrOwnedBuilderScratch) || reserved {
 		t.Fatalf("negative credit admitted: %v", err)
+	}
+}
+
+func TestOwnedBuilderDistinctBirthClassesBeforeConstruction(t *testing.T) {
+	data := bytes.Repeat([]byte{0x5a}, page.PageSize)
+	var charges []uint64
+	b, err := NewOwnedBuilderWithEntryLimit(data, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true}, 7, 1,
+		func(n uint64) error { charges = append(charges, n); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.CloseOwnedScratch()
+	s := b.ownedScratch
+	raws := []struct {
+		bytes uint64
+		scan  bool
+	}{
+		{uint64(unsafe.Sizeof(*b)), true}, {uint64(unsafe.Sizeof(*s)), true},
+		{uint64(cap(s.internalEntries)) * uint64(unsafe.Sizeof(internalBaseDeltaEntry{})), true},
+		{uint64(cap(s.keyArena)), false}, {uint64(cap(s.low)), false}, {uint64(cap(s.high)), false},
+	}
+	if len(charges) != len(raws) {
+		t.Fatalf("birth count%d want%d", len(charges), len(raws))
+	}
+	for i, raw := range raws {
+		want, err := allocclass.ClassBytes(raw.bytes, raw.scan)
+		if err != nil || charges[i] != want {
+			t.Fatalf("birth%d charge%d want%d err%v", i, charges[i], want, err)
+		}
+	}
+	denial := errors.New("individual birth refused")
+	for fail := 1; fail <= len(charges); fail++ {
+		src := bytes.Repeat([]byte{0x5a}, page.PageSize)
+		before := bytes.Clone(src)
+		calls := 0
+		candidate, err := NewOwnedBuilderWithEntryLimit(src, page.PageTypeInternal, BuilderOptions{InternalBaseDelta: true}, 7, 1,
+			func(uint64) error {
+				calls++
+				if calls == fail {
+					return denial
+				}
+				return nil
+			})
+		if candidate != nil || !errors.Is(err, denial) || calls != fail || !bytes.Equal(src, before) {
+			t.Fatalf("birth%d denial happened after construction: calls%d err%v", fail, calls, err)
+		}
 	}
 }

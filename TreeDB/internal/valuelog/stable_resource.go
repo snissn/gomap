@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -34,6 +36,178 @@ var bindRetainedValueLogStableNamespaceCreationProof = func(proof *rootpublicati
 }
 var openStableValueLogParent = rootpublication.OpenStableParent
 
+// ErrFiniteStableMetadataHooksUnavailable refuses the staged finite route before
+// file/stat/pin/proof/builder allocation. Rootpublication allocation hooks and
+// registry retained-backing provenance have not been installed yet.
+var ErrFiniteStableMetadataHooksUnavailable = errors.New("valuelog: finite stable metadata hooks unavailable")
+
+// FiniteStableMetadata is allocation credit for the existing stable writer
+// consumer, not a registry, namespace certificate or replacement token engine.
+// One instance is shared by every capture/rotation in a canonical request.
+type FiniteStableMetadata struct {
+	mu                         sync.Mutex
+	retained                   uint64
+	reserve                    func(uint64) error
+	maxTokens, maxRotations    uint64
+	tokens, rotations, backing uint64
+	closed                     bool
+}
+
+func NewFiniteStableMetadata(maxTokens, maxRotations uint64, reserve func(uint64) error) (*FiniteStableMetadata, error) {
+	if reserve == nil || maxTokens == 0 || maxRotations == 0 {
+		return nil, ErrFiniteWriterLoan
+	}
+	n, classErr := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(FiniteStableMetadata{})), true)
+	if classErr != nil {
+		return nil, classErr
+	}
+	if err := reserve(n); err != nil {
+		return nil, err
+	}
+	return &FiniteStableMetadata{reserve: reserve, maxTokens: maxTokens, maxRotations: maxRotations, backing: n}, nil
+}
+
+// RequireRootPublicationHooks cannot be enabled by a caller-supplied boolean.
+// The missing internal allocation hooks must be implemented and reviewed before
+// this refusal can be replaced by actual provenance/credit checks.
+func (m *FiniteStableMetadata) RequireRootPublicationHooks() error {
+	if m == nil {
+		return ErrFiniteWriterLoan
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m == nil || m.closed || m.reserve == nil {
+		return ErrFiniteWriterLoan
+	}
+	return ErrFiniteStableMetadataHooksUnavailable
+}
+
+func (m *FiniteStableMetadata) charge(n uint64) error {
+	if m == nil {
+		return ErrFiniteWriterLoan
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m == nil || m.closed || n > math.MaxUint64-m.backing {
+		return ErrFiniteWriterLoan
+	}
+	if n == 0 {
+		return nil
+	}
+	if err := m.reserve(n); err != nil {
+		return err
+	}
+	m.backing += n
+	return nil
+}
+
+// AdmitCapturedToken debits the global token-birth count. It does not validate
+// or transfer a token, and cannot enable the unavailable construction hooks.
+func (m *FiniteStableMetadata) AdmitCapturedToken() error {
+	if m == nil {
+		return ErrFiniteWriterLoan
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m == nil || m.closed || m.tokens >= m.maxTokens {
+		return ErrFiniteWriterLoan
+	}
+	m.tokens++
+	return nil
+}
+
+// AdmitRotationAttempt consumes R before each actual successor Open. Failed
+// attempts are cumulative; retrying an existing exact pending file is not birth.
+func (m *FiniteStableMetadata) AdmitRotationAttempt() error {
+	if m == nil {
+		return ErrFiniteWriterLoan
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.rotations >= m.maxRotations {
+		return ErrFiniteWriterLoan
+	}
+	m.rotations++
+	return nil
+}
+
+func (m *FiniteStableMetadata) preflight(registrations ...StableResourceRegistration) error {
+	if m == nil || m.closed {
+		return ErrFiniteWriterLoan
+	}
+	for _, registration := range registrations {
+		if registration.Reachability != rootpublication.ReachabilityOuterLeafRawPointer ||
+			len(registration.ExternalRIDs) != 0 || registration.PinRegistry == nil {
+			return ErrFiniteWriterLoan
+		}
+	}
+	return m.RequireRootPublicationHooks()
+}
+
+// Reserve/Retain/Release implement the existing constructors' accounting hook.
+// Retention belongs to the actual token/proof, including pending successors.
+func (m *FiniteStableMetadata) ReserveStableMetadata(n uint64) error { return m.charge(n) }
+func (m *FiniteStableMetadata) RetainStableMetadata() error {
+	if m == nil {
+		return ErrFiniteWriterLoan
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.retained == math.MaxUint64 {
+		return ErrFiniteWriterLoan
+	}
+	m.retained++
+	return nil
+}
+func (m *FiniteStableMetadata) ReleaseStableMetadata() {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.retained == 0 {
+		panic("valuelog: finite metadata retention imbalance")
+	}
+	m.retained--
+}
+func (m *FiniteStableMetadata) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.retained != 0 {
+		return ErrFiniteWriterLoan
+	}
+	m.closed = true
+	m.reserve = nil
+	return nil
+}
+
+// These explicit finite methods share the ordinary serializer/rotation methods.
+// While metadata hooks are absent they return before any Flush, Stat, duplicate,
+// proof, registry mutation, successor construction or writer state change.
+func (w *Writer) CertifyStableCreationNamespaceWithFiniteMetadata(metadata *FiniteStableMetadata) error {
+	if err := metadata.RequireRootPublicationHooks(); err != nil {
+		return err
+	}
+	return w.certifyStableCreationNamespace(metadata)
+}
+
+func (w *Writer) StableResourceTokenWithFiniteMetadata(registration StableResourceRegistration, metadata *FiniteStableMetadata) (*rootpublication.StableResourceToken, error) {
+	if err := metadata.preflight(registration); err != nil {
+		return nil, err
+	}
+	return w.stableResourceTokenWithMetadata(registration, metadata)
+}
+
+func (w *Writer) RotateToWithStableResourcesWithFiniteMetadata(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration, metadata *FiniteStableMetadata) (*StableResourceRotation, error) {
+	if err := metadata.preflight(closed, active); err != nil {
+		return nil, err
+	}
+	return w.rotateToWithStableResourcesWithMetadata(path, fileID, syncCurrent, closed, active, metadata)
+}
+
 type pendingValueLogSuccessor struct {
 	parent          *os.File
 	file            *os.File
@@ -45,16 +219,36 @@ type pendingValueLogSuccessor struct {
 	observerEmitted bool
 	creationProof   *rootpublication.StableNamespaceCreationProof
 	failStop        bool
+	// Retain prospective metadata debit with the existing pending successor on
+	// error. A request cannot substitute a different owner on an exact retry.
+	finiteMetadata *FiniteStableMetadata
+	finiteRetained bool
+}
+
+func (p *pendingValueLogSuccessor) releaseFiniteMetadata() {
+	if p != nil && p.finiteRetained {
+		p.finiteRetained = false
+		p.finiteMetadata.ReleaseStableMetadata()
+	}
 }
 
 func (w *Writer) newStableCreationProof(parent, child *os.File, path string) (*rootpublication.StableNamespaceCreationProof, error) {
+	return w.newStableCreationProofWithMetadata(parent, child, path, nil)
+}
+func (w *Writer) newStableCreationProofWithMetadata(parent, child *os.File, path string, metadata *FiniteStableMetadata) (*rootpublication.StableNamespaceCreationProof, error) {
 	resource := segmentNamespaceResource(path)
 	dir := filepath.Dir(path)
 	if err := durabilitycut.EmitPath(durabilitycut.BeforeNewFileDirectorySync, resource, "", dir); err != nil {
 		return nil, err
 	}
 	started := time.Now()
-	proof, err := newValueLogStableNamespaceCreationProof(parent, child, filepath.Base(path))
+	var proof *rootpublication.StableNamespaceCreationProof
+	var err error
+	if metadata != nil {
+		proof, err = rootpublication.NewStableNamespaceCreationProofWithMetadataAccount(parent, child, filepath.Base(path), metadata)
+	} else {
+		proof, err = newValueLogStableNamespaceCreationProof(parent, child, filepath.Base(path))
+	}
 	w.directorySyncCalls.Add(1)
 	if ns := time.Since(started).Nanoseconds(); ns > 0 {
 		w.directorySyncNs.Add(uint64(ns))
@@ -1623,6 +1817,9 @@ func (w *Writer) StableNamespaceParentGeneration() (uint64, error) {
 // The writer and its retained parent remain unchanged on failure, so a caller
 // can retry without publishing an unreachable record.
 func (w *Writer) CertifyStableCreationNamespace() error {
+	return w.certifyStableCreationNamespace(nil)
+}
+func (w *Writer) certifyStableCreationNamespace(metadata *FiniteStableMetadata) error {
 	if w == nil || w.f == nil {
 		return errors.New("valuelog: stable resource requires file-backed writer")
 	}
@@ -1638,7 +1835,7 @@ func (w *Writer) CertifyStableCreationNamespace() error {
 	if w.creationProof != nil || w.creationUnsupported {
 		return fmt.Errorf("%w: inconsistent uncertified value-log creation state", rootpublication.ErrResourceConflict)
 	}
-	proof, err := w.newStableCreationProof(w.stableParent, w.f, w.f.Name())
+	proof, err := w.newStableCreationProofWithMetadata(w.stableParent, w.f, w.f.Name(), metadata)
 	if proof != nil {
 		// The parent sync may have completed before an injected after-sync cut.
 		// Retain that exact proof so retry does not repeat structural durability.
@@ -1652,6 +1849,15 @@ func (w *Writer) CertifyStableCreationNamespace() error {
 // current file descriptor. It does not fsync the file; publication owns the
 // later FlushThrough/SyncThrough boundary on the token.
 func (w *Writer) StableResourceToken(registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
+	return w.stableResourceTokenWithMetadata(registration, nil)
+}
+
+func (w *Writer) stableResourceTokenWithMetadata(registration StableResourceRegistration, metadata *FiniteStableMetadata) (*rootpublication.StableResourceToken, error) {
+	if metadata != nil {
+		if err := metadata.preflight(registration); err != nil {
+			return nil, err
+		}
+	}
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
@@ -1661,7 +1867,7 @@ func (w *Writer) StableResourceToken(registration StableResourceRegistration) (*
 	if err := w.Flush(); err != nil {
 		return nil, err
 	}
-	return w.stableResourceTokenAfterFlush(registration)
+	return w.stableResourceTokenAfterFlushWithContentStateMetadata(registration, false, metadata)
 }
 
 func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegistration) (*rootpublication.StableResourceToken, error) {
@@ -1669,6 +1875,9 @@ func (w *Writer) stableResourceTokenAfterFlush(registration StableResourceRegist
 }
 
 func (w *Writer) stableResourceTokenAfterFlushWithContentState(registration StableResourceRegistration, contentSynced bool) (*rootpublication.StableResourceToken, error) {
+	return w.stableResourceTokenAfterFlushWithContentStateMetadata(registration, contentSynced, nil)
+}
+func (w *Writer) stableResourceTokenAfterFlushWithContentStateMetadata(registration StableResourceRegistration, contentSynced bool, metadata *FiniteStableMetadata) (*rootpublication.StableResourceToken, error) {
 	if w == nil || w.f == nil {
 		return nil, errors.New("valuelog: stable resource requires file-backed writer")
 	}
@@ -1682,6 +1891,22 @@ func (w *Writer) stableResourceTokenAfterFlushWithContentState(registration Stab
 	if registration.NamespaceOperation == rootpublication.NamespaceCreate && w.creationUnsupported {
 		return nil, fmt.Errorf("%w: current value-log segment creation cannot be certified on this platform", rootpublication.ErrNamespacePersistenceUnsupported)
 	}
+	if registration.Reachability == rootpublication.ReachabilityOuterLeafRawPointer {
+		_, kind, _, policyErr := stableValueLogProducerPolicy(registration.Reachability)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		if registration.Kind != "" && registration.Kind != kind {
+			return nil, rootpublication.ErrResourceConflict
+		}
+		registration.Kind = kind
+	}
+	if registration.NamespaceOperation != rootpublication.NamespaceNone && registration.NewName == "" {
+		registration.NewName = filepath.Base(w.f.Name())
+	}
+	if w.stableSegmentOwner != nil && w.stableSegmentFileID == w.fileID && sameStableResourceRegistration(w.stableSegmentRegistration, registration) {
+		return w.captureStableSegment(registration, contentSynced, metadata)
+	}
 	var namespace *rootpublication.StableNamespaceToken
 	var err error
 	if registration.NamespaceOperation == rootpublication.NamespaceCreate {
@@ -1692,7 +1917,7 @@ func (w *Writer) stableResourceTokenAfterFlushWithContentState(registration Stab
 				}
 				return nil, fmt.Errorf("%w: existing value-log segment has no creation namespace proof", rootpublication.ErrUnresolvedResource)
 			}
-			namespace, err = stableValueLogNamespaceToken(w.f, registration)
+			namespace, err = stableValueLogNamespaceTokenWithMetadata(w.f, registration, metadata)
 		} else {
 			parent := registration.NamespaceParent
 			if parent == nil {
@@ -1702,24 +1927,62 @@ func (w *Writer) stableResourceTokenAfterFlushWithContentState(registration Stab
 			if name == "" {
 				name = filepath.Base(w.f.Name())
 			}
-			namespace, err = bindRetainedValueLogStableNamespaceCreationProof(w.creationProof, parent, registration.ParentGeneration, name, filepath.Dir(registration.DiagnosticPath))
+			if metadata != nil {
+				namespace, err = w.creationProof.BindWithMetadataAccount(parent, registration.ParentGeneration, name, filepath.Dir(registration.DiagnosticPath), metadata)
+			} else {
+				namespace, err = bindRetainedValueLogStableNamespaceCreationProof(w.creationProof, parent, registration.ParentGeneration, name, filepath.Dir(registration.DiagnosticPath))
+			}
 		}
 	} else {
-		namespace, err = stableValueLogNamespaceToken(w.f, registration)
+		namespace, err = stableValueLogNamespaceTokenWithMetadata(w.f, registration, metadata)
 	}
 	if err != nil {
 		return nil, err
 	}
 	defer namespace.Release()
-	return stableValueLogResourceToken(w.f, w.fileID, registration, namespace, contentSynced)
+	token, err := stableValueLogResourceTokenWithMetadata(w.f, w.fileID, registration, namespace, contentSynced, metadata)
+	if err != nil {
+		return nil, err
+	}
+	if metadata == nil && registration.Reachability == rootpublication.ReachabilityOuterLeafRawPointer && len(registration.ExternalRIDs) == 0 {
+		return w.cacheStableSegmentToken(token, registration, contentSynced)
+	}
+	return token, nil
 }
 
 func stableValueLogResourceToken(file *os.File, fileID uint32, registration StableResourceRegistration, namespace *rootpublication.StableNamespaceToken, contentSynced bool) (*rootpublication.StableResourceToken, error) {
+	return stableValueLogResourceTokenWithMetadata(file, fileID, registration, namespace, contentSynced, nil)
+}
+func stableValueLogResourceTokenWithMetadata(file *os.File, fileID uint32, registration StableResourceRegistration, namespace *rootpublication.StableNamespaceToken, contentSynced bool, metadata *FiniteStableMetadata) (*rootpublication.StableResourceToken, error) {
+	if metadata != nil {
+		if len(registration.ExternalRIDs) != 0 {
+			return nil, ErrFiniteWriterLoan
+		}
+		// The following Stat owns the Go1.26.3 Linux fileStat exposure (200 bytes).
+		// ResourceID FormatUint retains at most 10 decimal bytes for uint32.
+		statBytes, classErr := rootpublication.StableBackingClassBytes(200, true)
+		if classErr != nil {
+			return nil, classErr
+		}
+		idBytes, classErr := rootpublication.StableBackingClassBytes(10, false)
+		if classErr != nil {
+			return nil, classErr
+		}
+		if err := metadata.charge(statBytes + idBytes); err != nil {
+			return nil, err
+		}
+		if err := metadata.AdmitCapturedToken(); err != nil {
+			return nil, err
+		}
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return nil, err
 	}
-	frontier := rootpublication.NewRIDFrontier(registration.ExternalRIDs)
+	frontier := rootpublication.DurableFrontier{}
+	if metadata == nil {
+		frontier = rootpublication.NewRIDFrontier(registration.ExternalRIDs)
+	}
 	frontier.Bytes = uint64(info.Size())
 	domain, kind, _, err := stableValueLogProducerPolicy(registration.Reachability)
 	if err != nil {
@@ -1733,7 +1996,10 @@ func stableValueLogResourceToken(file *os.File, fileID uint32, registration Stab
 		ResourceID: strconv.FormatUint(uint64(fileID), 10), Generation: registration.Generation,
 		DiagnosticPath: registration.DiagnosticPath, File: file, Frontier: frontier,
 		Digest: registration.Digest, Reachability: registration.Reachability, Namespace: namespace,
-		ContentSynced: contentSynced, PinRegistry: registration.PinRegistry,
+		ContentSynced: contentSynced, PinRegistry: registration.PinRegistry, MetadataAccount: metadata,
+	}
+	if metadata == nil {
+		spec.MetadataAccount = nil
 	}
 	switch domain {
 	case rootpublication.StableProducerValueLog:
@@ -1763,6 +2029,9 @@ func stableValueLogProducerPolicy(field rootpublication.ReachabilityField) (root
 }
 
 func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegistration) (*rootpublication.StableNamespaceToken, error) {
+	return stableValueLogNamespaceTokenWithMetadata(file, registration, nil)
+}
+func stableValueLogNamespaceTokenWithMetadata(file *os.File, registration StableResourceRegistration, metadata *FiniteStableMetadata) (*rootpublication.StableNamespaceToken, error) {
 	if registration.NamespaceOperation == rootpublication.NamespaceNone {
 		return nil, nil
 	}
@@ -1779,11 +2048,18 @@ func stableValueLogNamespaceToken(file *os.File, registration StableResourceRegi
 	if filepath.Base(newName) != newName {
 		return nil, fmt.Errorf("%w: valuelog namespace name must be a base name", rootpublication.ErrUnresolvedResource)
 	}
-	namespace, err := newValueLogStableNamespaceToken(rootpublication.StableNamespaceSpec{
+	spec := rootpublication.StableNamespaceSpec{
 		Parent: registration.NamespaceParent, LinkedResource: file, ParentGeneration: registration.ParentGeneration,
 		Operation: registration.NamespaceOperation, OldName: registration.OldName,
 		NewName: newName, DiagnosticPath: filepath.Dir(registration.DiagnosticPath),
-	})
+	}
+	var namespace *rootpublication.StableNamespaceToken
+	var err error
+	if metadata != nil {
+		namespace, err = rootpublication.NewStableNamespaceTokenWithMetadataAccount(spec, metadata)
+	} else {
+		namespace, err = newValueLogStableNamespaceToken(spec)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1807,6 +2083,15 @@ func pendingValueLogFailure(parent, file *os.File, path string, err error) error
 // second directory sync. It then pins the newly-created active segment after
 // that segment's namespace operation has been made persistent.
 func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration) (*StableResourceRotation, error) {
+	return w.rotateToWithStableResourcesWithMetadata(path, fileID, syncCurrent, closed, active, nil)
+}
+
+func (w *Writer) rotateToWithStableResourcesWithMetadata(path string, fileID uint32, syncCurrent bool, closed, active StableResourceRegistration, metadata *FiniteStableMetadata) (*StableResourceRotation, error) {
+	if metadata != nil {
+		if err := metadata.preflight(closed, active); err != nil {
+			return nil, err
+		}
+	}
 	if w != nil && w.pendingStableSuccessor != nil && w.pendingStableSuccessor.failStop {
 		return nil, fmt.Errorf("%w: value-log stable rotation stopped after old-writer close failure", rootpublication.ErrResourceOwnership)
 	}
@@ -1852,9 +2137,21 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	}
 	if pending := w.pendingStableSuccessor; pending != nil {
 		if pending.parent != w.stableParent || pending.path != path || pending.fileID != fileID ||
-			!sameStableResourceRegistration(pending.active, normalizedActive) {
+			pending.finiteMetadata != metadata || !sameStableResourceRegistration(pending.active, normalizedActive) {
 			return nil, errors.Join(rootpublication.ErrResourceOwnership,
 				fmt.Errorf("%w: stable value-log retry does not match the pending exact successor", rootpublication.ErrResourceConflict))
+		}
+	}
+	if metadata != nil {
+		// Exact pending identity has now been validated. A retry is not a new
+		// successor birth; every new returned rotation wrapper is still debited.
+
+		n, classErr := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(StableResourceRotation{})), true)
+		if classErr != nil {
+			return nil, classErr
+		}
+		if err := metadata.charge(n); err != nil {
+			return nil, err
 		}
 	}
 	if err := w.Flush(); err != nil {
@@ -1865,14 +2162,44 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 			return nil, err
 		}
 	}
-	closedToken, err := w.stableResourceTokenAfterFlushWithContentState(closed, syncCurrent)
+	closedToken, err := w.stableResourceTokenAfterFlushWithContentStateMetadata(closed, syncCurrent, metadata)
 	if err != nil {
 		return nil, err
 	}
 	pending := w.pendingStableSuccessor
 	if pending == nil {
+		if metadata != nil {
+			// Debit before opening/observing the successor as well as before
+			// allocating its pending wrapper. Internal rootpublication hooks
+			// still refuse this branch before any side effect.
+			n, classErr := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(pendingValueLogSuccessor{})), true)
+			if classErr != nil {
+				closedToken.Release()
+				return nil, classErr
+			}
+			if err := metadata.charge(n); err != nil {
+				closedToken.Release()
+				return nil, err
+			}
+		}
+		if metadata != nil {
+			if err := metadata.RetainStableMetadata(); err != nil {
+				closedToken.Release()
+				return nil, err
+			}
+		}
+		if metadata != nil {
+			if err := metadata.AdmitRotationAttempt(); err != nil {
+				metadata.ReleaseStableMetadata()
+				closedToken.Release()
+				return nil, err
+			}
+		}
 		prepared, openErr := openStableValueLogFile(w.stableParent, path)
 		if openErr != nil {
+			if metadata != nil {
+				metadata.ReleaseStableMetadata()
+			}
 			closedToken.Release()
 			return nil, openErr
 		}
@@ -1885,11 +2212,14 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 				removeErr = rootpublication.RemoveStableChildFile(w.stableParent, filepath.Base(path))
 				syncErr = w.stableParent.Sync()
 			}
+			if metadata != nil {
+				metadata.ReleaseStableMetadata()
+			}
 			closedToken.Release()
 			return nil, errors.Join(observeErr, validateErr, closeErr, removeErr, syncErr)
 		}
 		pending = &pendingValueLogSuccessor{
-			parent: w.stableParent, file: prepared, path: path, fileID: fileID,
+			parent: w.stableParent, file: prepared, path: path, fileID: fileID, finiteMetadata: metadata, finiteRetained: metadata != nil,
 			active: normalizedActive, stableIdentity: preparedIdentity,
 			stableObserved: w.stableResourcePins != nil,
 		}
@@ -1904,7 +2234,7 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		}
 	}
 	if pending.creationProof == nil {
-		proof, proofErr := w.newStableCreationProof(w.stableParent, prepared, path)
+		proof, proofErr := w.newStableCreationProofWithMetadata(w.stableParent, prepared, path, metadata)
 		pending.creationProof = proof
 		if proofErr != nil {
 			closedToken.Release()
@@ -1916,13 +2246,18 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		closedToken.Release()
 		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
 	}
-	namespace, err := bindValueLogStableNamespaceCreationProof(pending.creationProof, normalizedActive.NamespaceParent, normalizedActive.ParentGeneration,
-		normalizedActive.NewName, filepath.Dir(normalizedActive.DiagnosticPath))
+	var namespace *rootpublication.StableNamespaceToken
+	if metadata != nil {
+		namespace, err = pending.creationProof.BindWithMetadataAccount(normalizedActive.NamespaceParent, normalizedActive.ParentGeneration, normalizedActive.NewName, filepath.Dir(normalizedActive.DiagnosticPath), metadata)
+	} else {
+		namespace, err = bindValueLogStableNamespaceCreationProof(pending.creationProof, normalizedActive.NamespaceParent, normalizedActive.ParentGeneration,
+			normalizedActive.NewName, filepath.Dir(normalizedActive.DiagnosticPath))
+	}
 	if err != nil {
 		closedToken.Release()
 		return nil, pendingValueLogFailure(w.stableParent, prepared, path, err)
 	}
-	activeToken, err := stableValueLogResourceToken(prepared, fileID, normalizedActive, namespace, false)
+	activeToken, err := stableValueLogResourceTokenWithMetadata(prepared, fileID, normalizedActive, namespace, false, metadata)
 	namespace.Release()
 	if err != nil {
 		closedToken.Release()
@@ -1936,11 +2271,13 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 		activeToken.Release()
 		closedToken.Release()
 		pending.failStop = true
+		w.releaseStableSegmentOwner()
 		w.f = nil
 		w.bw = nil
 		return nil, fmt.Errorf("valuelog: retire old writer during stable rotation: %w", err)
 	}
 	pending.file = nil
+	w.releaseStableSegmentOwner()
 	w.f = prepared
 	w.creationProof = pending.creationProof
 	w.creationUnsupported = false
@@ -1950,7 +2287,7 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	w.size = preparedInfo.Size()
 	w.fileID = fileID
 	w.appendMax = defaultBufferSize
-	w.appendBuf = w.appendBuf[:0]
+	w.setWriterByteBacking(0, &w.appendBuf, w.appendBuf[:0])
 	w.trimTransientScratchBuffers()
 	if pending.stableObserved {
 		w.stableResourceIdentity = pending.stableIdentity
@@ -1960,6 +2297,89 @@ func (w *Writer) RotateToWithStableResources(path string, fileID uint32, syncCur
 	if oldCreationProof != nil {
 		oldCreationProof.Release()
 	}
+	pending.releaseFiniteMetadata()
 	w.pendingStableSuccessor = nil
+	if metadata == nil && normalizedActive.Reachability == rootpublication.ReachabilityOuterLeafRawPointer && len(normalizedActive.ExternalRIDs) == 0 {
+		captured, cacheErr := w.cacheStableSegmentToken(activeToken, normalizedActive, false)
+		if cacheErr != nil {
+			closedToken.Release()
+			return nil, cacheErr
+		}
+		activeToken = captured
+	}
 	return &StableResourceRotation{Closed: closedToken, Active: activeToken}, nil
+}
+
+// releaseStableSegmentOwner drops only the writer reference. Existing captured
+// tokens retain the exact previous segment through rotations and Writer.Close.
+func (w *Writer) releaseStableSegmentOwner() {
+	if w == nil {
+		return
+	}
+	if w.stableSegmentOwner != nil {
+		w.stableSegmentOwner.Release()
+		w.stableSegmentOwner = nil
+	}
+	w.stableSegmentRegistration = StableResourceRegistration{}
+	w.stableSegmentFileID = 0
+}
+func (w *Writer) captureStableSegment(registration StableResourceRegistration, synced bool, metadata *FiniteStableMetadata) (*rootpublication.StableResourceToken, error) {
+	if metadata != nil {
+		if err := metadata.AdmitCapturedToken(); err != nil {
+			return nil, err
+		}
+		statBytes, e := rootpublication.StableBackingClassBytes(200, true)
+		if e != nil {
+			return nil, e
+		}
+		idBytes, e := rootpublication.StableBackingClassBytes(10, false)
+		if e != nil {
+			return nil, e
+		}
+		if e = metadata.charge(statBytes + idBytes); e != nil {
+			return nil, e
+		}
+	}
+	info, err := w.f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	var account rootpublication.StableMetadataAccount
+	if metadata != nil {
+		account = metadata
+	}
+	return w.stableSegmentOwner.Capture(registration.LogicalLane, strconv.FormatUint(uint64(w.fileID), 10), registration.DiagnosticPath,
+		rootpublication.DurableFrontier{Bytes: uint64(info.Size())}, registration.Reachability, synced, account)
+}
+func (w *Writer) cacheStableSegmentToken(token *rootpublication.StableResourceToken, registration StableResourceRegistration, synced bool) (*rootpublication.StableResourceToken, error) {
+	owner, err := rootpublication.NewStableSegmentOwner(token)
+	if err != nil {
+		// Unsupported ordinary products retain their existing exact-token behavior.
+		if errors.Is(err, rootpublication.ErrStableMetadataShapeUnsupported) {
+			return token, nil
+		}
+		token.Release()
+		return nil, err
+	}
+	w.releaseStableSegmentOwner()
+	w.stableSegmentOwner = owner
+	w.stableSegmentFileID = w.fileID
+	// The cached key aliases immutable backing already owned by the cached token,
+	// rather than retaining caller-supplied strings. Namespace names below are
+	// copied because legacy namespace getters may return caller-owned aliases.
+	registration.Kind = token.Kind()
+	registration.LogicalLane = token.LogicalLane()
+	registration.DiagnosticPath = token.DiagnosticPath()
+	registration.Reachability = token.Reachability()
+	if namespace := token.Namespace(); namespace != nil {
+		registration.OldName = namespace.StableOwnedOldName()
+		registration.NewName = namespace.StableOwnedNewName()
+	}
+	w.stableSegmentRegistration = registration
+	captured, err := w.captureStableSegment(registration, synced, nil)
+	if err != nil {
+		w.releaseStableSegmentOwner()
+		return nil, err
+	}
+	return captured, nil
 }

@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/allocclass"
 
 	"github.com/snissn/gomap/TreeDB/page"
 )
@@ -94,6 +97,7 @@ type batchPoolKind uint8
 const (
 	batchPoolKindDefault batchPoolKind = iota
 	batchPoolKindLargeEntries
+	batchPoolKindOwnedPoints
 )
 
 const (
@@ -147,6 +151,46 @@ func NewBoundedRetainingLargeEntries(reader ValueReader, threshold, entries int)
 		sorted:          true,
 		compacted:       true,
 	}
+}
+
+// NewOwnedPointBatch copies only the entry headers of a complete sorted unique
+// point-operation plan. The caller owns the immutable key/value backing until
+// publication returns and closes this batch. This constructor neither borrows
+// pooled backing nor retains reserve. Both actual scan classes are admitted
+// before either allocation. It is not a certificate for later mutation through
+// the ordinary Batch methods; trusted consumers use this plan read-only.
+func NewOwnedPointBatch(entries []Entry, reserve func(uint64) error) (*Batch, error) {
+	for i, entry := range entries {
+		if len(entry.Key) == 0 || (entry.Type != OpPut && entry.Type != OpDelete) || entry.IsPtr ||
+			i > 0 && bytes.Compare(entries[i-1].Key, entry.Key) >= 0 {
+			return nil, errors.New("batch: owned point plan must be sorted unique inline operations")
+		}
+	}
+	size := uint64(unsafe.Sizeof(Entry{}))
+	if uint64(len(entries)) > ^uint64(0)/size {
+		return nil, errors.New("batch: owned point capacity overflows")
+	}
+	for _, raw := range [...]uint64{uint64(unsafe.Sizeof(Batch{})), uint64(len(entries)) * size} {
+		charge, err := allocclass.ClassBytes(raw, true)
+		if err != nil {
+			return nil, err
+		}
+		if reserve != nil && charge != 0 {
+			if err := reserve(charge); err != nil {
+				return nil, err
+			}
+		}
+	}
+	owned := make([]Entry, len(entries))
+	copy(owned, entries)
+	b := &Batch{entries: owned, inlineThreshold: int(^uint(0) >> 1), poolKind: batchPoolKindOwnedPoints, sorted: true, compacted: true}
+	for _, e := range owned {
+		b.byteSize += len(e.Key) + len(e.Value)
+	}
+	if len(owned) != 0 {
+		b.lastKey = owned[len(owned)-1].Key
+	}
+	return b, nil
 }
 
 // Acquire returns a reusable Batch from the pool.
@@ -303,6 +347,12 @@ func (b *Batch) Close() error {
 // Release resets and returns the batch to the pool.
 func Release(b *Batch) {
 	if b == nil {
+		return
+	}
+	if b.poolKind == batchPoolKindOwnedPoints {
+		// A copied closed pointer cannot be reborrowed by another plan. Drop every
+		// owned/borrowed edge; no process-global pool acquires this backing.
+		*b = Batch{poolKind: batchPoolKindOwnedPoints, closed: true}
 		return
 	}
 	b.resetForPool()

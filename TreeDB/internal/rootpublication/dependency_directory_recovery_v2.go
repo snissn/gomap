@@ -37,6 +37,9 @@ func RecoverDependencyDirectoryV2(directory *DependencyDirectoryV2, admit func(D
 			defer admitted.Release()
 			admitted.mu.Lock()
 			defer admitted.mu.Unlock()
+			if err := requireOrdinaryStableResourceInputs(nil, nil, admitted); err != nil {
+				return err
+			}
 			if admitted.physicalOnly || admitted.Owner() == ResourceOwnerReleased || admitted.Owner() == ResourceOwnerTransferred {
 				return ErrResourceOwnership
 			}

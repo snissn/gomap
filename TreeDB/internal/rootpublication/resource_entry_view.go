@@ -2,8 +2,10 @@ package rootpublication
 
 import (
 	"encoding/binary"
+	"errors"
 	"hash/fnv"
 	"sort"
+	"sync"
 	"sync/atomic"
 )
 
@@ -11,9 +13,13 @@ import (
 // chunks. A set owns one reference to each kind root; concatenation consumes
 // two owned roots without copying their retained entries or physical handles.
 type stableResourceEntryNode struct {
-	refs        atomic.Int64
-	left, right *stableResourceEntryNode
-	entries     []stableResourceEntry
+	refs                        atomic.Int64
+	cleanupMu                   sync.Mutex
+	cleanupRunning, cleanupDone bool
+	cleanupLeft, cleanupRight   bool
+	cleanupEntry                int
+	left, right                 *stableResourceEntryNode
+	entries                     []stableResourceEntry
 }
 
 func newStableResourceEntryLeaf(entries []stableResourceEntry) *stableResourceEntryNode {
@@ -49,33 +55,103 @@ func (node *stableResourceEntryNode) retain() bool {
 	return false
 }
 
-func (node *stableResourceEntryNode) release() {
-	stack := []*stableResourceEntryNode{node}
-	for len(stack) != 0 {
-		last := len(stack) - 1
-		current := stack[last]
-		stack = stack[:last]
-		if current == nil {
-			continue
-		}
-		lastReference := false
-		for refs := current.refs.Load(); refs > 0; refs = current.refs.Load() {
-			if current.refs.CompareAndSwap(refs, refs-1) {
-				lastReference = refs == 1
+func (node *stableResourceEntryNode) release() { _, _ = node.releaseCheckedV1(false) }
+
+// resumed is holder-local: a failed last release never decrements refs twice.
+func (node *stableResourceEntryNode) releaseCheckedV1(resumed bool) (done bool, result error) {
+	if node == nil {
+		return true, nil
+	}
+	if !resumed {
+		last := false
+		for refs := node.refs.Load(); refs > 0; refs = node.refs.Load() {
+			if node.refs.CompareAndSwap(refs, refs-1) {
+				last = refs == 1
 				break
 			}
 		}
-		if !lastReference {
-			continue
-		}
-		if current.left != nil || current.right != nil {
-			stack = append(stack, current.left, current.right)
-			continue
-		}
-		for i := range current.entries {
-			current.entries[i].token.releaseFrom(ResourceOwnerShared)
+		if !last {
+			return true, nil
 		}
 	}
+	node.cleanupMu.Lock()
+	if node.cleanupDone {
+		node.cleanupMu.Unlock()
+		return true, nil
+	}
+	if node.cleanupRunning {
+		node.cleanupMu.Unlock()
+		return false, ErrStableResourceOperationBusy
+	}
+	node.cleanupRunning = true
+	node.cleanupMu.Unlock()
+	defer func() {
+		node.cleanupMu.Lock()
+		node.cleanupRunning = false
+		if done {
+			node.cleanupDone = true
+		}
+		node.cleanupMu.Unlock()
+	}()
+	if node.left != nil || node.right != nil {
+		if !node.cleanupLeft {
+			node.cleanupLeft = true
+			var childDone bool
+			var childErr error
+			childDone, childErr = node.left.releaseCheckedV1(false)
+			result = errors.Join(result, childErr)
+			if !childDone {
+				return false, result
+			}
+		}
+		if node.left != nil && !node.left.cleanupCompleteV1() {
+			var childDone bool
+			var childErr error
+			childDone, childErr = node.left.releaseCheckedV1(true)
+			result = errors.Join(result, childErr)
+			if !childDone {
+				return false, result
+			}
+		}
+		if !node.cleanupRight {
+			node.cleanupRight = true
+			var childDone bool
+			var childErr error
+			childDone, childErr = node.right.releaseCheckedV1(false)
+			result = errors.Join(result, childErr)
+			if !childDone {
+				return false, result
+			}
+		}
+		if node.right != nil && !node.right.cleanupCompleteV1() {
+			var childDone bool
+			var childErr error
+			childDone, childErr = node.right.releaseCheckedV1(true)
+			result = errors.Join(result, childErr)
+			if !childDone {
+				return false, result
+			}
+		}
+		return true, result
+	}
+	for node.cleanupEntry < len(node.entries) {
+		token := node.entries[node.cleanupEntry].token
+		err := token.releaseFrom(ResourceOwnerShared)
+		result = errors.Join(result, err)
+		if !token.CleanupCompleteV1() {
+			return false, result
+		}
+		node.cleanupEntry++
+	}
+	return true, result
+}
+func (node *stableResourceEntryNode) cleanupCompleteV1() bool {
+	if node == nil {
+		return true
+	}
+	node.cleanupMu.Lock()
+	defer node.cleanupMu.Unlock()
+	return node.cleanupDone || node.refs.Load() > 0
 }
 
 func (node *stableResourceEntryNode) rangeEntries(visit func(*stableResourceEntry) bool) bool {
@@ -120,7 +196,7 @@ type stableResourceKindView struct {
 	physical               *stableResourcePhysicalIndexNode
 	logicalMembership      *stableLogicalObligationIndexNode
 	directory              *DependencyDirectoryV2
-	reachability           map[ReachabilityField]struct{}
+	reachability           stableReachabilitySet
 	logicalCommitments     map[ReachabilityField]stableLogicalObligationCommitment
 	logicalObligationCount int
 	logicalMembershipCount int
@@ -420,11 +496,11 @@ func replaceStableResourcePhysical(root *stableResourcePhysicalIndexNode, old, r
 	return &next
 }
 
-func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKind]stableResourceKindView, error) {
+func buildStableResourceKindViews(entries []stableResourceEntry) (stableKindViews, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
-	views := make(map[ResourceKind]stableResourceKindView)
+	views := newStableKindViews(0)
 	directories := make(map[ResourceKind]*DependencyDirectoryV2)
 	for i := range entries {
 		entry := &entries[i]
@@ -454,7 +530,7 @@ func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKi
 		chunk := entries[start:end:end]
 		view := stableResourceKindView{
 			root: newStableResourceEntryLeaf(chunk), count: len(chunk),
-			reachability: make(map[ReachabilityField]struct{}),
+			reachability: newStableReachabilitySet(0),
 		}
 		for i := range chunk {
 			entry := &chunk[i]
@@ -477,22 +553,25 @@ func buildStableResourceKindViews(entries []stableResourceEntry) (map[ResourceKi
 			}
 			view.logicalCommitments = addStableLogicalObligationCommitments(view.logicalCommitments, entry.logicalObligations.commitments)
 			view.logicalObligationCount += entry.logicalObligations.count
-			for field := range entry.reachability {
-				view.reachability[field] = struct{}{}
+			for _, stableBinding1 := range entry.reachability.records() {
+				field := stableBinding1.key
+				view.reachability.set(field, struct{}{})
 			}
 		}
-		views[kind] = view
+		views.set(kind, view)
 		start = end
 	}
 	return views, nil
 }
 
-func cloneStableResourceKindViews(source map[ResourceKind]stableResourceKindView, excluded map[ResourceKind]struct{}) (map[ResourceKind]stableResourceKindView, bool) {
-	if len(source) == 0 {
+func cloneStableResourceKindViews(source stableKindViews, excluded map[ResourceKind]struct{}) (stableKindViews, bool) {
+	if source.len() == 0 {
 		return nil, true
 	}
-	clone := make(map[ResourceKind]stableResourceKindView, len(source))
-	for kind, view := range source {
+	clone := newStableKindViews(source.len())
+	for _, stableBinding1 := range source.records() {
+		kind := stableBinding1.key
+		view := stableBinding1.value
 		if _, skip := excluded[kind]; skip {
 			continue
 		}
@@ -500,28 +579,44 @@ func cloneStableResourceKindViews(source map[ResourceKind]stableResourceKindView
 			releaseStableResourceKindViews(clone)
 			return nil, false
 		}
-		clone[kind] = view
+		clone.set(kind, view)
 	}
 	return clone, true
 }
 
-func releaseStableResourceKindViews(views map[ResourceKind]stableResourceKindView) {
-	for _, view := range views {
-		view.root.release()
+func releaseStableResourceKindViews(views stableKindViews) {
+	var cursor int
+	var started bool
+	_ = releaseStableResourceKindViewsCursorV1(views, &cursor, &started)
+}
+func releaseStableResourceKindViewsCursorV1(views stableKindViews, cursor *int, started *bool) (result error) {
+	records := views.records()
+	for *cursor < len(records) {
+		view := records[*cursor].value
+		done, err := view.root.releaseCheckedV1(*started)
+		*started = true
+		result = errors.Join(result, err)
+		if !done {
+			return errors.Join(result, ErrStableResourceOperationBusy)
+		}
+		*cursor++
+		*started = false
 	}
+	return
 }
 
-func stableResourceKindViewCount(views map[ResourceKind]stableResourceKindView) int {
+func stableResourceKindViewCount(views stableKindViews) int {
 	count := 0
-	for _, view := range views {
+	for _, stableBinding1 := range views.records() {
+		view := stableBinding1.value
 		count += view.count
 	}
 	return count
 }
 
-func rangeStableResourceKindViews(views map[ResourceKind]stableResourceKindView, visit func(*stableResourceEntry) bool) bool {
+func rangeStableResourceKindViews(views stableKindViews, visit func(*stableResourceEntry) bool) bool {
 	for _, kind := range stableResourceKindsSorted(views) {
-		if !rangeStableResourceLogicalIndex(views[kind].logical, visit) {
+		if !rangeStableResourceLogicalIndex(views.get(kind).logical, visit) {
 			return false
 		}
 	}
@@ -549,9 +644,10 @@ func rangeStableResourceLogicalIndex(root *stableResourceLogicalIndexNode, visit
 	return true
 }
 
-func stableResourceKindsSorted(views map[ResourceKind]stableResourceKindView) []ResourceKind {
-	kinds := make([]ResourceKind, 0, len(views))
-	for kind := range views {
+func stableResourceKindsSorted(views stableKindViews) []ResourceKind {
+	kinds := make([]ResourceKind, 0, views.len())
+	for _, stableBinding1 := range views.records() {
+		kind := stableBinding1.key
 		kinds = append(kinds, kind)
 	}
 	for i := 1; i < len(kinds); i++ {
@@ -562,12 +658,13 @@ func stableResourceKindsSorted(views map[ResourceKind]stableResourceKindView) []
 	return kinds
 }
 
-func stableResourceViewsConflict(target map[ResourceKind]stableResourceKindView, incoming *stableResourceEntry) bool {
-	if view, ok := target[incoming.token.kind]; ok && findStableResourceLogical(view.logical, incoming.token.logicalKey()) != nil {
+func stableResourceViewsConflict(target stableKindViews, incoming *stableResourceEntry) bool {
+	if view, ok := target.lookup(incoming.token.kind); ok && findStableResourceLogical(view.logical, incoming.token.logicalKey()) != nil {
 		return true
 	}
 	physicalKey := incoming.token.physicalIdentityKey()
-	for _, view := range target {
+	for _, stableBinding1 := range target.records() {
+		view := stableBinding1.value
 		if len(findStableResourcePhysical(view.physical, physicalKey)) != 0 {
 			return true
 		}
@@ -583,7 +680,7 @@ func stableResourceViewLogicalMembershipComplete(view stableResourceKindView) bo
 // obligation already owned by another resource. A same-physical predecessor
 // may repeat its own obligations; every kind is still probed so overlap cannot
 // hide behind a different resource kind.
-func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableResourceKindView, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool, error) {
+func stableResourceViewsAdmitLogicalObligations(views stableKindViews, entry, predecessor *stableResourceEntry, excluded map[ResourceKind]struct{}, work *StableResourceClosureWork) (bool, bool, error) {
 	kinds := stableResourceKindsSorted(views)
 	var predecessorKind ResourceKind
 	if predecessor != nil {
@@ -591,7 +688,9 @@ func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableRes
 			predecessorKind = token.kind
 		}
 	}
-	for kind, view := range views {
+	for _, stableBinding1 := range views.records() {
+		kind := stableBinding1.key
+		view := stableBinding1.value
 		if _, skip := excluded[kind]; !skip && !stableResourceViewLogicalMembershipComplete(view) {
 			return false, false, nil
 		}
@@ -603,7 +702,7 @@ func stableResourceViewsAdmitLogicalObligations(views map[ResourceKind]stableRes
 			if _, skip := excluded[kind]; skip {
 				continue
 			}
-			existing, found, err := lookupStableLogicalMembershipV2(views[kind].logicalMembership, views[kind].directory, views[kind].logical, kind, obligation, work)
+			existing, found, err := lookupStableLogicalMembershipV2(views.get(kind).logicalMembership, views.get(kind).directory, views.get(kind).logical, kind, obligation, work)
 			if err != nil {
 				lookupErr = err
 				return false
@@ -699,16 +798,18 @@ func stableLogicalMembershipEvidenceAdmits(evidence map[ResourceKind]stableLogic
 // mergeDistinctStableResourceKindViews consumes both input root references on
 // success. It declines before ownership mutation when any logical or physical
 // identity needs the existing exact coalescing path.
-func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stableResourceKindView, work *StableResourceClosureWork) (map[ResourceKind]stableResourceKindView, bool) {
-	if len(target) == 0 {
+func mergeDistinctStableResourceKindViews(target, incoming stableKindViews, work *StableResourceClosureWork) (stableKindViews, bool) {
+	if target.len() == 0 {
 		return incoming, true
 	}
-	if len(incoming) == 0 {
+	if incoming.len() == 0 {
 		return target, true
 	}
 	compatible := true
-	for kind, child := range incoming {
-		if current, ok := target[kind]; ok && current.directory != nil && child.directory != nil && current.directory != child.directory {
+	for _, stableBinding1 := range incoming.records() {
+		kind := stableBinding1.key
+		child := stableBinding1.value
+		if current, ok := target.lookup(kind); ok && current.directory != nil && child.directory != nil && current.directory != child.directory {
 			return nil, false
 		}
 	}
@@ -719,14 +820,18 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 	if !compatible {
 		return nil, false
 	}
-	next := make(map[ResourceKind]stableResourceKindView, len(target)+len(incoming))
-	for kind, view := range target {
-		next[kind] = view
+	next := newStableKindViews(target.len() + incoming.len())
+	for _, stableBinding2 := range target.records() {
+		kind := stableBinding2.key
+		view := stableBinding2.value
+		next.set(kind, view)
 	}
-	for kind, child := range incoming {
-		current, ok := next[kind]
+	for _, stableBinding3 := range incoming.records() {
+		kind := stableBinding3.key
+		child := stableBinding3.value
+		current, ok := next.lookup(kind)
 		if !ok {
-			next[kind] = child
+			next.set(kind, child)
 			continue
 		}
 		logical, physical := current.logical, current.physical
@@ -753,14 +858,16 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 			})
 			return true
 		})
-		reachability := make(map[ReachabilityField]struct{}, len(current.reachability)+len(child.reachability))
-		for field := range current.reachability {
-			reachability[field] = struct{}{}
+		reachability := newStableReachabilitySet(current.reachability.len() + child.reachability.len())
+		for _, stableBinding4 := range current.reachability.records() {
+			field := stableBinding4.key
+			reachability.set(field, struct{}{})
 		}
-		for field := range child.reachability {
-			reachability[field] = struct{}{}
+		for _, stableBinding5 := range child.reachability.records() {
+			field := stableBinding5.key
+			reachability.set(field, struct{}{})
 		}
-		next[kind] = stableResourceKindView{
+		next.set(kind, stableResourceKindView{
 			root:                   concatOwnedStableResourceEntryNodes(current.root, child.root),
 			logical:                logical,
 			physical:               physical,
@@ -771,7 +878,7 @@ func mergeDistinctStableResourceKindViews(target, incoming map[ResourceKind]stab
 			logicalObligationCount: current.logicalObligationCount + child.logicalObligationCount,
 			logicalMembershipCount: logicalMembershipCount,
 			count:                  current.count + child.count,
-		}
+		})
 	}
 	return next, true
 }

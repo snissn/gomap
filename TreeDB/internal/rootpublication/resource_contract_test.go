@@ -412,7 +412,7 @@ func testStableResourceTokenSyncUsesPinnedIdentityAfterRenameRecreate(t *testing
 	if err != nil {
 		t.Fatalf("register token: %v", err)
 	}
-	t.Cleanup(token.Release)
+	t.Cleanup(func() { _ = token.Release() })
 	if err := os.Rename(path, filepath.Join(dir, "rotated.vlog")); err != nil {
 		t.Fatalf("rename original: %v", err)
 	}
@@ -3406,7 +3406,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(set.Release)
+		t.Cleanup(func() { _ = set.Release() })
 		return set
 	}
 	published := makeSet(baseSpec)
@@ -3517,7 +3517,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		})
 	}
 	// Alias and logical coverage is directional, independently of byte coverage.
-	prior := &stableResourceEntry{token: &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}, frontier: DurableFrontier{Bytes: 16}, reachability: map[ReachabilityField]struct{}{ReachabilityColumnManifest: {}}}
+	prior := &stableResourceEntry{token: &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}, frontier: DurableFrontier{Bytes: 16}, reachability: newStableReachabilitySet(1, ReachabilityColumnManifest)}
 	candidate := *prior
 	candidate.token = &StableResourceToken{kind: ResourceColumnAsset, generation: 1, stability: ResourceMutableAppend}
 	candidate.token.namespace = &StableNamespaceToken{operation: NamespaceCreate, newName: "new", hasLinkedResource: true}
@@ -3545,7 +3545,7 @@ func TestStableResourcePublicationDebtCoverage(t *testing.T) {
 		}
 	}
 	candidate.token.namespace = nil
-	candidate.reachability = map[ReachabilityField]struct{}{ReachabilityTypedColumnValue: {}}
+	candidate.reachability = newStableReachabilitySet(1, ReachabilityTypedColumnValue)
 	if stableResourceEntryCoversPublication(prior, &candidate) {
 		t.Fatal("new reachability credited")
 	}
@@ -3629,7 +3629,7 @@ func TestStableResourcePublicationDebtRetainsIndexedOwnership(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(set.Release)
+		t.Cleanup(func() { _ = set.Release() })
 		return set
 	}
 	ridPublished := makeRIDSet(t, rids)
@@ -3711,10 +3711,10 @@ func originalStableResourceUnionForTest(mode stableResourceViewMode, sets ...*St
 		var mergeErr error
 		set.rangeEntriesLocked(func(entry *stableResourceEntry) bool {
 			var err error
-			if lookup.logical == nil && len(view.entries) < stableResourceEntryLinearLookupLimit {
+			if lookup.logical.less == nil && len(view.entries) < stableResourceEntryLinearLookupLimit {
 				err = mergeViewEntryLinear(&view.entries, *entry, mode, nil)
 			} else {
-				if lookup.logical == nil {
+				if lookup.logical.less == nil {
 					lookup = newStableResourceEntryLookup(view.entries)
 				}
 				err = mergeViewEntry(&view.entries, &lookup, *entry, mode, nil)
@@ -3765,7 +3765,7 @@ func assertSingleStableResourceUnionParity(t *testing.T, source *StableResourceS
 
 func assertStableResourceViewParity(t *testing.T, got, want *StableResourceSet) {
 	t.Helper()
-	if got.Owner() != ResourceOwnerView || got.kindViews != nil || !reflect.DeepEqual(got.entries, want.entries) || !reflect.DeepEqual(got.pinHighWater, want.pinHighWater) || !reflect.DeepEqual(got.logicalMembershipEvidenceLocked(), want.logicalMembershipEvidenceLocked()) {
+	if got.Owner() != ResourceOwnerView || got.kindViews != nil || !stableResourceEntriesEqualForTest(got.entries, want.entries) || !reflect.DeepEqual(got.pinHighWater, want.pinHighWater) || !reflect.DeepEqual(got.logicalMembershipEvidenceLocked(), want.logicalMembershipEvidenceLocked()) {
 		t.Fatal("single union changed flat entry, pin or evidence representation")
 	}
 	for i := range got.entries {
@@ -3872,7 +3872,7 @@ func TestSingleStableResourceUnionSnapshotParity(t *testing.T) {
 	fallback.owner.Store(uint32(ResourceOwnerBuilder))
 	got, err := UnionStableResourceSets(fallback)
 	want, wantErr := originalStableResourceUnionForTest(stableResourceViewPinned, fallback)
-	if err != nil || wantErr != nil || got.Len() != 1 || !reflect.DeepEqual(got.entries, want.entries) {
+	if err != nil || wantErr != nil || got.Len() != 1 || !stableResourceEntriesEqualForTest(got.entries, want.entries) {
 		t.Fatalf("flat fallback: %v/%v", err, wantErr)
 	}
 	assertSingleStableResourceUnionParity(t, nil)
@@ -3907,4 +3907,33 @@ func TestStableResourceSetExtrasReleasedEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertStableResourceViewParity(t, got, view)
+}
+
+// Compare semantic entries while retaining the oracle's token/pin/evidence
+// checks. Shared tables deliberately have different allocation-instance stamps
+// and comparator functions when the original reconciliation copies field keys.
+func stableResourceEntriesEqualForTest(left, right []stableResourceEntry) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		a, b := left[i], right[i]
+		if !reflect.DeepEqual(a.reachability.records(), b.reachability.records()) {
+			return false
+		}
+		a.reachability, b.reachability = nil, nil
+		if (a.pinIndex == nil) != (b.pinIndex == nil) {
+			return false
+		}
+		if a.pinIndex != nil {
+			if a.pinIndex.count != b.pinIndex.count || !a.pinIndex.visit(func(k *StableResourceToken, _ struct{}) bool { _, ok := b.pinIndex.lookup(k); return ok }) {
+				return false
+			}
+		}
+		a.pinIndex, b.pinIndex = nil, nil
+		if !reflect.DeepEqual(a, b) {
+			return false
+		}
+	}
+	return true
 }

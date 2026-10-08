@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"sort"
 	"sync"
 
@@ -57,9 +58,14 @@ type Batch interface {
 
 // Store provides access to template storage backed by a TreeDB public DB.
 type Store struct {
-	kv  KV
-	cfg Config
-	mu  sync.Mutex
+	kv               KV
+	captureRunning   bool
+	pendingSnapshot  StablePhysicalSnapshot
+	pendingBuilder   *rootpublication.StableResourceSetBuilder
+	pendingToken     *rootpublication.StableResourceToken
+	pendingResources *rootpublication.StableResourceSet
+	cfg              Config
+	mu               sync.Mutex
 }
 
 // New wraps an existing public DB handle.
@@ -74,6 +80,9 @@ func New(kv KV, cfg Config) *Store {
 func (s *Store) Close() error {
 	if s == nil || s.kv == nil {
 		return nil
+	}
+	if err := s.drainCaptureCustodyV1(); err != nil {
+		return err
 	}
 	if c, ok := s.kv.(interface{ Close() error }); ok {
 		return c.Close()
@@ -475,4 +484,73 @@ func uvarintLen(v uint64) int {
 	default:
 		return 10
 	}
+}
+
+// One actual failed capture occupies these preborn Store fields. Admission
+// refuses another capture until exact cleanup resolves; nothing is scheduled.
+func (s *Store) drainCaptureCustodyV1() (result error) {
+	s.mu.Lock()
+	if s.captureRunning {
+		s.mu.Unlock()
+		return rootpublication.ErrStableResourceOperationBusy
+	}
+	s.captureRunning = true
+	snapshot, builder, token, resources := s.pendingSnapshot, s.pendingBuilder, s.pendingToken, s.pendingResources
+	s.mu.Unlock()
+	defer func() {
+		snapshot = nil
+		builder = nil
+		token = nil
+		resources = nil
+		s.mu.Lock()
+		s.captureRunning = false
+		s.mu.Unlock()
+	}()
+	// The builder may already own this exact candidate alias after Add failed.
+	// Drain its claimed roles before attempting a token-only release; unfinished
+	// builder cleanup retains both actual fields without another consumption.
+	if builder != nil {
+		err := builder.AbandonCheckedV1()
+		result = errors.Join(result, err)
+		if err != nil {
+			return result
+		}
+		s.mu.Lock()
+		s.pendingBuilder = nil
+		s.mu.Unlock()
+	}
+	if token != nil {
+		err := token.Release()
+		result = errors.Join(result, err)
+		if !token.CleanupCompleteV1() {
+			return errors.Join(result, rootpublication.ErrStableResourceOperationBusy)
+		}
+		s.mu.Lock()
+		s.pendingToken = nil
+		s.mu.Unlock()
+	}
+	if resources != nil {
+		err := resources.Release()
+		result = errors.Join(result, err)
+		if resources.Owner() != rootpublication.ResourceOwnerReleased {
+			return errors.Join(result, rootpublication.ErrStableResourceOperationBusy)
+		}
+		s.mu.Lock()
+		s.pendingResources = nil
+		s.mu.Unlock()
+	}
+	if snapshot != nil {
+		err := snapshot.Close()
+		result = errors.Join(result, err)
+		if checked, ok := snapshot.(interface{ CleanupCompleteV1() bool }); ok && !checked.CleanupCompleteV1() {
+			return errors.Join(result, rootpublication.ErrStableResourceOperationBusy)
+		}
+		if err != nil {
+			return result
+		}
+		s.mu.Lock()
+		s.pendingSnapshot = nil
+		s.mu.Unlock()
+	}
+	return
 }

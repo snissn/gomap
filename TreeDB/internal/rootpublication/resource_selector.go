@@ -14,6 +14,9 @@ type StableResourceSelector struct {
 // resource set for an exact logical obligation. Indexed frozen sets use their
 // per-kind logical-resource index; flat sets retain their bounded linear form.
 func CloneStableResourceForSelector(source *StableResourceSet, selector StableResourceSelector) (*StableResourceSet, error) {
+	if err := source.RequireMetadataExport(); err != nil {
+		return nil, err
+	}
 	if source != nil && source.physicalOnly {
 		return nil, ErrResourceOwnership
 	}
@@ -33,7 +36,7 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	}
 	var entry *stableResourceEntry
 	if source.kindViews != nil {
-		view, ok := source.kindViews[selector.Kind]
+		view, ok := source.kindViews.lookup(selector.Kind)
 		if ok {
 			entry = findStableResourceLogical(view.logical, key)
 		}
@@ -64,7 +67,7 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 	}
 	selected := *entry
 	selected.logicalObligations = newStableLogicalObligationView([]StableLogicalObligation{selector.Obligation})
-	selected.reachability = map[ReachabilityField]struct{}{selector.Obligation.Reachability: {}}
+	selected.reachability = newStableReachabilitySet(1, selector.Obligation.Reachability)
 	selected.dependencyManifestV1 = nil
 
 	builder := NewStableResourceSetBuilder()
@@ -88,6 +91,9 @@ func CloneStableResourceForSelector(source *StableResourceSet, selector StableRe
 // never opens diagnostic paths or creates producer authority from metadata.
 // Missing identities, physical-only views, and released sources fail closed.
 func CloneStableResourceSetSelectingPhysicalKind(source *StableResourceSet, kind ResourceKind, selected []StableIdentity, excluded ...ResourceKind) (*StableResourceSet, error) {
+	if err := source.RequireMetadataExport(); err != nil {
+		return nil, err
+	}
 	if kind == "" || source == nil || source.physicalOnly {
 		return nil, ErrResourceOwnership
 	}

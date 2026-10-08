@@ -21,9 +21,7 @@ func TestDependencyDirectoryV2SealRecoveryBothSlotsAndCorruptFallback(t *testing
 	publish := func(first bool) {
 		t.Helper()
 		database.durablePublishMu.Lock()
-		defer database.durablePublishMu.Unlock()
 		database.rootReuseMu.Lock()
-		defer database.rootReuseMu.Unlock()
 		next := database.meta
 		next.CommitSeq = database.durableRoot.record.CommitSeq + 1
 		var resources *rootpublication.StableResourceSet
@@ -39,6 +37,9 @@ func TestDependencyDirectoryV2SealRecoveryBothSlotsAndCorruptFallback(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
+		database.durableRoot.pending = candidate
+		database.rootReuseMu.Unlock()
+		database.durablePublishMu.Unlock()
 		published, err := database.executeDurableRootCandidateV1(candidate)
 		if err != nil {
 			t.Fatal(err)

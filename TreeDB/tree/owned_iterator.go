@@ -15,6 +15,7 @@ var ErrOwnedIteratorLeafReader = errors.New("tree: bounded external-leaf reader 
 // Root depth and reconstructed keys are checked before exceeding these arrays.
 type ownedProjectionStorage struct {
 	iterator    Iterator
+	boundTree   Tree
 	stack       [maxTraversalDepth]CursorItem
 	nodeKey     [page.PageSize]byte
 	combinedKey [page.PageSize]byte
@@ -35,6 +36,21 @@ func OwnedPointerProjectionAllocationSize() uint64 {
 // leaf then fails before invoking an allocating reader.
 func (t *Tree) OwnedPointerProjectionIterator(start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) iterator.UnsafeIterator {
 	storage := new(ownedProjectionStorage)
+	return t.initOwnedPointerProjection(storage, start, end, readLeaf)
+}
+
+// OwnedPointerProjectionIteratorAtRoot binds a root in the same prepaid storage.
+// Its Tree contains only the exact pager/root extent; generic value/leaf readers
+// and root caches are not inherited. The caller retains the captured pager.
+func (t *Tree) OwnedPointerProjectionIteratorAtRoot(root uint64, start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) iterator.UnsafeIterator {
+	storage := new(ownedProjectionStorage)
+	storage.boundTree = Tree{pager: t.pager, rootPageID: root, pageLimit: t.pageLimit}
+	it := storage.boundTree.initOwnedPointerProjection(storage, start, end, readLeaf)
+	storage.iterator.ownedRoot = true
+	return it
+}
+
+func (t *Tree) initOwnedPointerProjection(storage *ownedProjectionStorage, start, end []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) iterator.UnsafeIterator {
 	it := &storage.iterator
 	*it = Iterator{
 		tree: t, start: start, end: end, owned: true,

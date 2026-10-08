@@ -80,8 +80,7 @@ func TestSnapshotAllocationAdmissionFixedCohortPressure(t *testing.T) {
 }
 
 func TestSnapshotAllocationAdmissionRequiresSharedLeafPinSet(t *testing.T) {
-	idx := &indexGen{registry: lifecycle.NewReaderRegistry()}
-	idx.refs.Store(1)
+	idx := newSnapshotFixtureIndexes(t, 1)[0]
 	state := &DBState{CommitSeq: 1, RootPageID: 1, LeafGenerations: &leafGenerationView{GenerationOrder: []uint64{1}}}
 	d := &DB{snapPool: NewSnapshotPool()}
 	d.publishSnapshotView(idx, state, nil)

@@ -179,3 +179,63 @@ debt; it is never converted into successful compaction.
   convergence.
 - PR #3706 stable-resource tests remain the namespace identity, unlink, and
   directory-durability regression suite.
+
+## Intrinsic pager-owned leaf manifests
+
+In the [pager-owned format](../design/owned-leaf-manifest-v1.md), the system root
+itself owns the canonical inventory. Its retention follows the existing exact
+index generation, both selectable durable slots, visible/queued roots, recovery
+handoff and held-view pins. Intrinsic metadata is not an external
+`ResourceOuterLeafManifest` file token; real leaf/value-log dependencies retain
+their existing resource closure and stable-deletion authority.
+
+A whole owned-mode leaf GC validates each distinct intrinsic object against one
+pinned recoverable-root basis. Publication, relocation or epoch changes
+invalidate that basis. Every destructive allocator step freshly fences the
+root/index identity, publication, snapshot admission, held FD identity and
+opaque page-reuse capability. A scheduling cursor, old digest or counter cannot
+replace those checks. Stale captures defer or return the existing stale error;
+failures retain existing recovery-required and quarantine semantics.
+
+The format relies on TreeDB's exclusive index writer and immutable COW pages.
+Visited content receives integrity validation; unsupported external writes to
+unvisited unrelated index pages have no immediate whole-inventory detection
+guarantee. The standalone layout retains its whole-inventory corruption,
+namespace/rebind, exact child-handle, pin and directory-sync safeguards.
+
+### Transaction-private allocator preparation (#5105)
+
+A prepared allocator transaction detaches unmaterialized aliases reachable
+before a durable boundary from its rollback transaction before private edits.
+A durable node can retain empty, zero-ID descendants because emission skips
+empty summaries while the in-memory trie keeps their pointers. Every durable
+node's first private copy therefore isolates each zero-ID immediate-child
+subtree recursively through the next durable boundary, including a zero-ID
+chunk at a durable leaf. Later durable-child first copies repeat that rule.
+Only these isolation boundaries permit in-place editing; zero identity alone
+is insufficient. Materialized objects remain immutable. No owner token/table enters an immutable generation or retained page view.
+Creating a persistent transaction clone first revokes the original's private
+permission; the private clone re-enables it only after its own detachment.
+
+The existing allocator profile admission remains before isolation/allocation.
+A valid high-water H bounds at most ceil(H/256) state chunks and fifteen trie
+nodes per chunk, plus an empty root. Conservative Go allocation-class capacities
+are 192 bytes per state node and 2304 per 256-entry chunk. Thus one complete
+state representation is bounded by 5184*ceil(H/256)+192 bytes; rollback/private
+overlap is at most twice that bound, excluding separately admitted maps/slices,
+reservation/metadata output, and already retained immutable generations. No
+ownership table grows with pages. The private flag occupies existing bool
+padding; four attribution uint64s add 32 bytes to the transaction's allocation
+class on the selected amd64 toolchain (structural/compiler checks remain
+required). The tree bound includes retained empty trie paths, and all boundary
+copies and nonnil node isolation visits are charged. Existing input/output
+count caps and defaults remain. Full caller byte preflight is unproved: this
+tree-overlap bound being smaller than a COW tranche does not account for all
+simultaneous trees, maps, slices, plans and retained candidates, and cannot
+establish complete reservation sufficiency.
+
+Materialization consumes the transaction and clears private permission before
+sink callbacks on success or partial-write failure; validation-error returns
+also revoke permission. Abort restores the original transaction and conservative
+reservation burns. Both visible and durable-seal generations, exact page IDs/
+CRC, slot overwrite retirements, and opaque root/pin/recovery horizons remain.

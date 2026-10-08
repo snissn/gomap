@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/snissn/gomap/TreeDB/freelist"
 	"os"
 	"path/filepath"
 
@@ -26,15 +27,19 @@ type LeafGenerationGCOptions struct {
 }
 
 type LeafGenerationGCStats struct {
-	GenerationsTotal    int
-	GenerationsWritable int
-	GenerationsLive     int
-	GenerationsRetiring int
-	GenerationsEligible int
-	GenerationsDeleted  int
-	FilesDeleted        int
-	BytesEligible       int64
-	BytesDeleted        int64
+	// Owned format counts index pages, not standalone manifest files.
+	OwnedManifestIntrinsicWork                                                              OwnedManifestIntrinsicWork
+	OwnedManifestPruneWork                                                                  freelist.BoundedPruneStats
+	OwnedManifestPagesRetired, OwnedManifestPagesPromoted, OwnedManifestIndexHighWaterPages uint64
+	GenerationsTotal                                                                        int
+	GenerationsWritable                                                                     int
+	GenerationsLive                                                                         int
+	GenerationsRetiring                                                                     int
+	GenerationsEligible                                                                     int
+	GenerationsDeleted                                                                      int
+	FilesDeleted                                                                            int
+	BytesEligible                                                                           int64
+	BytesDeleted                                                                            int64
 
 	// Immutable manifest revisions are accounted separately from leaf segments.
 	ManifestRevisionGCUnsupported bool

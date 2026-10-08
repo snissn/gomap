@@ -63,7 +63,9 @@ func (db *DB) releaseIndex(gen *indexGen) {
 	if db.ghostManager != nil {
 		db.ghostManager.add(gen)
 	} else {
-		_ = gen.close()
+		if err := gen.close(); err != nil {
+			db.trackIndex(gen)
+		}
 	}
 }
 
@@ -101,25 +103,54 @@ func (db *DB) maybeReleaseRetiredIndex(gen *indexGen) {
 	if db.ghostManager != nil {
 		db.ghostManager.add(gen)
 	} else {
-		_ = gen.close()
+		if err := gen.close(); err != nil {
+			db.trackIndex(gen)
+		}
 	}
 }
 
-func (db *DB) closeAllIndexes() error {
+func (db *DB) closeAllIndexes() ([]*indexGen, error) {
 	db.idxMu.Lock()
 	var gens []*indexGen
 	for _, g := range db.idxAll {
 		gens = append(gens, g)
 	}
-	db.idxAll = nil
+	// Keep actual failed generations on idxAll through retry. Admission is
+	// closed by DB; this table is still the real terminal owner.
 	db.idx.Store(nil)
 	db.idxMu.Unlock()
 
 	var errs []error
 	for _, g := range gens {
-		if err := g.close(); err != nil {
+		if err := g.closeForShutdownV1(); err != nil {
 			errs = append(errs, err)
+			continue
 		}
+		// Retain the real generation until the caller completes allocator/runtime
+		// terminal, including retry after otherwise successful physical Close.
 	}
-	return errors.Join(errs...)
+	return gens, errors.Join(errs...)
+}
+
+// releaseClosedRetiredIndexMetadataV1 is the selected no-IO terminal seam.
+// The exact handle-close proof precedes reader discharge; this only removes
+// an already-closed, unreferenced generation from the existing DB table.
+func (db *DB) releaseClosedRetiredIndexMetadataV1(gen *indexGen) {
+	if gen == nil || !gen.handlesClosed.Load() {
+		return
+	}
+	gen.closeMu.Lock()
+	defer gen.closeMu.Unlock()
+	if gen.creator != nil {
+		return
+	} // actual allocator terminal still owns this entry
+	db.idxMu.Lock()
+	defer db.idxMu.Unlock()
+	if db.idx.Load() == gen || gen.refs.Load() != 0 || !gen.handlesClosed.Load() {
+		return
+	}
+	if gen.registry != nil && gen.registry.MinPinnedSeq() != math.MaxUint64 {
+		return
+	}
+	delete(db.idxAll, gen.id)
 }

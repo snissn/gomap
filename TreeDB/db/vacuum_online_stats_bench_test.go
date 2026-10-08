@@ -37,7 +37,11 @@ func BenchmarkVacuumDurableResourceSummary(b *testing.B) {
 		}
 		b.Run(fmt.Sprintf("resources=%d/rids=%d/kinds=%d", benchmark.resources, benchmark.rids, kinds), func(b *testing.B) {
 			set := benchmarkVacuumDurableResourceSet(b, benchmark.resources, benchmark.rids, benchmark.mixed)
-			b.Cleanup(set.Release)
+			b.Cleanup(func() {
+				if err := set.Release(); err != nil {
+					b.Error(err)
+				}
+			})
 			b.ReportAllocs()
 			b.ResetTimer()
 			for range b.N {

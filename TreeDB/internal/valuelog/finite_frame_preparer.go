@@ -6,6 +6,7 @@ import (
 
 	"github.com/golang/snappy"
 	"github.com/pierrec/lz4/v4"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
 )
 
@@ -25,7 +26,10 @@ func NewFiniteFramePreparer(maxRecords, maxRaw int, reserve func(uint64) error) 
 	if reserve == nil || maxRecords < 1 || maxRecords > MaxFrameK || maxRaw < 0 || maxRaw > maxRecords*page.PageSize {
 		return nil, ErrFiniteWriterLoan
 	}
-	n := uint64(unsafe.Sizeof(FiniteFramePreparer{}))
+	n, err := rootpublication.StableBackingClassBytes(uint64(unsafe.Sizeof(FiniteFramePreparer{})), true)
+	if err != nil {
+		return nil, err
+	}
 	if err := reserve(n); err != nil {
 		return nil, err
 	}
@@ -46,6 +50,13 @@ func (f *FiniteFramePreparer) charge(n uint64) error {
 	f.backing += n
 	return nil
 }
+func (f *FiniteFramePreparer) chargeAllocation(n uint64, scan bool) error {
+	class, err := rootpublication.StableBackingClassBytes(n, scan)
+	if err != nil {
+		return err
+	}
+	return f.charge(class)
+}
 func (f *FiniteFramePreparer) grow(dst *[]byte, n int) error {
 	if n < 0 {
 		return ErrFiniteWriterLoan
@@ -53,7 +64,7 @@ func (f *FiniteFramePreparer) grow(dst *[]byte, n int) error {
 	if cap(*dst) >= n {
 		return nil
 	}
-	if err := f.charge(uint64(n)); err != nil {
+	if err := f.chargeAllocation(uint64(n), false); err != nil {
 		return err
 	}
 	next := make([]byte, len(*dst), n)
@@ -97,7 +108,7 @@ func (f *FiniteFramePreparer) Prepare(records []Record, codec BlockCodec, ioNs, 
 		return nil, FrameStats{}, err
 	}
 	if codec == BlockCodecLZ4 && f.preparer.blockCodecScratch.lz4Compressor == nil {
-		if err := f.charge(uint64(unsafe.Sizeof(lz4.Compressor{}))); err != nil {
+		if err := f.chargeAllocation(uint64(unsafe.Sizeof(lz4.Compressor{})), false); err != nil {
 			return nil, FrameStats{}, err
 		}
 		f.preparer.blockCodecScratch.lz4Compressor = &lz4.Compressor{}

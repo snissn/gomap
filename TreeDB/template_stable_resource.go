@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
@@ -22,6 +23,10 @@ func acquireStableTemplateSnapshot(backend *db.DB) *templateStableSnapshot {
 	}
 	snapshot := backend.AcquireStableSnapshot()
 	if snapshot == nil {
+		return nil
+	}
+	if err := snapshot.ReserveOriginalConstructorV1(uint64(unsafe.Sizeof(templateStableSnapshot{}))); err != nil {
+		_ = snapshot.Close()
 		return nil
 	}
 	return &templateStableSnapshot{snapshot: snapshot, dir: backend.Dir()}
@@ -104,8 +109,11 @@ func (snapshot *templateStableSnapshot) ReleaseCaptureLease() {
 		return
 	}
 	snapshot.captureLeaseOnce.Do(func() {
-		if snapshot.captureLeaseRelease != nil {
-			snapshot.captureLeaseRelease()
+		release := snapshot.captureLeaseRelease
+		snapshot.captureLeaseRelease = nil
+		if release != nil {
+			release()
+			release = nil
 		}
 	})
 }
@@ -118,6 +126,13 @@ func (snapshot *templateStableSnapshot) Close() error {
 		return nil
 	}
 	err := snapshot.snapshot.Close()
-	snapshot.ReleaseCaptureLease()
+	if snapshot.snapshot.CleanupCompleteV1() {
+		snapshot.ReleaseCaptureLease()
+		snapshot.snapshot = nil
+	}
 	return err
+}
+
+func (snapshot *templateStableSnapshot) CleanupCompleteV1() bool {
+	return snapshot == nil || snapshot.snapshot == nil || snapshot.snapshot.CleanupCompleteV1()
 }

@@ -6,7 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -171,7 +175,17 @@ func encodeColumnManifestForWrite(input ColumnPublishManifestEncodeInput) (Colum
 // Maintenance can replace physical assets at an already captured logical
 // generation. Ordinary writes enforce advancement before reaching this codec.
 func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, generation uint64) (ColumnPublishManifestEncodeResult, error) {
-	records := make([]columnManifestRecord, 0, 1+len(input.CurrentManifestRecords)+len(input.Prepared.Assets))
+	if len(input.CurrentManifestRecords) > math.MaxInt-1-len(input.Prepared.Assets) {
+		return ColumnPublishManifestEncodeResult{}, ErrPreparedInsertResourceLimit
+	}
+	capacity := 1 + len(input.CurrentManifestRecords) + len(input.Prepared.Assets)
+	if err := reserveColumnManifestArray(input.metadataAccount, capacity, uint64(unsafe.Sizeof(columnManifestRecord{}))); err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
+	if err := reserveColumnManifestBacking(input.metadataAccount, uint64(len(columnManifestHeaderRecordKey)), false); err != nil {
+		return ColumnPublishManifestEncodeResult{}, err
+	}
+	records := make([]columnManifestRecord, 0, capacity)
 	header, err := encodeColumnManifestHeaderRecord(input, generation)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
@@ -180,13 +194,25 @@ func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, ge
 		key:   []byte(columnManifestHeaderRecordKey),
 		value: header,
 	})
-	retained, err := retainedColumnManifestRecordsForWrite(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes)
+	retained, err := retainedColumnManifestRecordsForWriteWithMetadataAccount(input.CurrentManifestRecords, generation, input.ActiveVectorIndexesKnown, input.ActiveVectorIndexes, input.metadataAccount)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
 	}
 	records = append(records, retained...)
 	for _, asset := range input.Prepared.Assets {
-		partValue, err := encodeColumnManifestPartRecord(asset)
+		keyBytes := len(columnManifestPartRecordPrefix) + 16
+		switch asset.Ref.Kind {
+		case ColumnAssetKindTCS1AggregateMetadata:
+			keyBytes = len(columnManifestAggregateMetadataRecordPrefix) + 16 + len(asset.Reason)
+		case ColumnAssetKindTCS1DictionaryCodes:
+			keyBytes = len(columnManifestDictionaryCodesRecordPrefix) + 16 + len(asset.Reason)
+		case ColumnAssetKindTCS1Int64Values:
+			keyBytes = len(columnManifestInt64ValuesRecordPrefix) + 16 + len(asset.Reason)
+		}
+		if err := reserveColumnManifestBacking(input.metadataAccount, uint64(keyBytes), false); err != nil {
+			return ColumnPublishManifestEncodeResult{}, err
+		}
+		partValue, err := encodeColumnManifestPartRecordWithMetadataAccount(asset, input.metadataAccount)
 		if err != nil {
 			return ColumnPublishManifestEncodeResult{}, err
 		}
@@ -228,7 +254,7 @@ func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, ge
 	if input.ColumnStore.AssetManager != nil {
 		assetNamespace = input.ColumnStore.AssetManager.Namespace
 	}
-	records, err = normalizeColumnManifestSegmentOwnership(records, input.Prepared.ownedSegmentFileIDs, generation, assetNamespace)
+	records, err = normalizeColumnManifestSegmentOwnershipWithMetadataAccount(records, input.Prepared.ownedSegmentFileIDs, generation, assetNamespace, input.metadataAccount)
 	if err != nil {
 		return ColumnPublishManifestEncodeResult{}, err
 	}
@@ -251,44 +277,107 @@ func encodeColumnManifestAtGeneration(input ColumnPublishManifestEncodeInput, ge
 // that transforms current into next. Both inputs must be strictly sorted by
 // unique key; this is also the ordering required by ordered-root publication.
 func buildColumnManifestMutationDelta(current, next []columnManifestRecord) ([]columnManifestMutation, error) {
+	return buildColumnManifestMutationDeltaWithMetadataAccount(current, next, nil)
+}
+
+// The two passes use the same merge cursor. They determine each actual clone
+// and the exact output capacity before any allocation; neither pass copies
+// keys or constructs a table. Ordinary and accounted plans share this codec.
+func buildColumnManifestMutationDeltaWithMetadataAccount(current, next []columnManifestRecord, account rootpublication.StableMetadataAccount) ([]columnManifestMutation, error) {
 	if err := validateSortedUniqueColumnManifestRecords(current, "current"); err != nil {
 		return nil, err
 	}
 	if err := validateSortedUniqueColumnManifestRecords(next, "next"); err != nil {
 		return nil, err
 	}
-	mutationCapacity := len(current) + len(next)
-	if mutationCapacity > 8 {
-		mutationCapacity = 8
-	}
-	mutations := make([]columnManifestMutation, 0, mutationCapacity)
-	for currentIndex, nextIndex := 0, 0; currentIndex < len(current) || nextIndex < len(next); {
-		if currentIndex == len(current) {
-			mutations = append(mutations, cloneColumnManifestMutation(next[nextIndex], false))
-			nextIndex++
-			continue
+	cursor := columnManifestMutationCursor{current: current, next: next}
+	count := uint64(0)
+	charge := uint64(0)
+	for {
+		record, deleted, ok := cursor.take()
+		if !ok {
+			break
 		}
-		if nextIndex == len(next) {
-			mutations = append(mutations, cloneColumnManifestMutation(current[currentIndex], true))
-			currentIndex++
-			continue
+		if count == math.MaxUint64 {
+			return nil, ErrPreparedInsertResourceLimit
 		}
-		switch comparison := bytes.Compare(current[currentIndex].key, next[nextIndex].key); {
-		case comparison < 0:
-			mutations = append(mutations, cloneColumnManifestMutation(current[currentIndex], true))
-			currentIndex++
-		case comparison > 0:
-			mutations = append(mutations, cloneColumnManifestMutation(next[nextIndex], false))
-			nextIndex++
-		default:
-			if !bytes.Equal(current[currentIndex].value, next[nextIndex].value) {
-				mutations = append(mutations, cloneColumnManifestMutation(next[nextIndex], false))
+		count++
+		if account != nil {
+			keyClass, err := rootpublication.StableBackingClassBytes(uint64(len(record.key)), false)
+			if err != nil || keyClass > math.MaxUint64-charge {
+				return nil, ErrPreparedInsertResourceLimit
 			}
-			currentIndex++
-			nextIndex++
+			charge += keyClass
+			if !deleted {
+				valueClass, err := rootpublication.StableBackingClassBytes(uint64(len(record.value)), false)
+				if err != nil || valueClass > math.MaxUint64-charge {
+					return nil, ErrPreparedInsertResourceLimit
+				}
+				charge += valueClass
+			}
 		}
+	}
+	element := uint64(unsafe.Sizeof(columnManifestMutation{}))
+	if count > uint64(math.MaxInt) || count > math.MaxUint64/element {
+		return nil, ErrPreparedInsertResourceLimit
+	}
+	if account != nil {
+		arrayClass, err := rootpublication.StableBackingClassBytes(count*element, true)
+		if err != nil || arrayClass > math.MaxUint64-charge {
+			return nil, ErrPreparedInsertResourceLimit
+		}
+		if err := account.ReserveStableMetadata(charge + arrayClass); err != nil {
+			return nil, err
+		}
+	}
+	mutations := make([]columnManifestMutation, 0, int(count))
+	cursor = columnManifestMutationCursor{current: current, next: next}
+	for {
+		record, deleted, ok := cursor.take()
+		if !ok {
+			break
+		}
+		mutations = append(mutations, cloneColumnManifestMutation(record, deleted))
 	}
 	return mutations, nil
+}
+
+type columnManifestMutationCursor struct {
+	current, next           []columnManifestRecord
+	currentIndex, nextIndex int
+}
+
+// take preserves the original sorted merge and delete/put ordering. Values
+// are borrowed only on this synchronous construction stack.
+func (c *columnManifestMutationCursor) take() (columnManifestRecord, bool, bool) {
+	for c.currentIndex < len(c.current) || c.nextIndex < len(c.next) {
+		if c.currentIndex == len(c.current) {
+			record := c.next[c.nextIndex]
+			c.nextIndex++
+			return record, false, true
+		}
+		if c.nextIndex == len(c.next) {
+			record := c.current[c.currentIndex]
+			c.currentIndex++
+			return record, true, true
+		}
+		a, b := c.current[c.currentIndex], c.next[c.nextIndex]
+		comparison := bytes.Compare(a.key, b.key)
+		if comparison < 0 {
+			c.currentIndex++
+			return a, true, true
+		}
+		if comparison > 0 {
+			c.nextIndex++
+			return b, false, true
+		}
+		c.currentIndex++
+		c.nextIndex++
+		if !bytes.Equal(a.value, b.value) {
+			return b, false, true
+		}
+	}
+	return columnManifestRecord{}, false, false
 }
 
 func validateSortedUniqueColumnManifestRecords(records []columnManifestRecord, name string) error {
@@ -312,6 +401,32 @@ func cloneColumnManifestMutation(record columnManifestRecord, deleted bool) colu
 		mutation.record.value = bytes.Clone(record.value)
 	}
 	return mutation
+}
+
+var errColumnManifestMutationPostState = errors.New("manifest mutation delta does not produce logical post-state")
+
+// validateColumnManifestMutationDelta uses the same canonical merge cursor as
+// construction. Validation never builds a second mutation array or clones the
+// complete old/new key/value closure merely to compare it.
+func validateColumnManifestMutationDelta(current, next []columnManifestRecord, mutations []columnManifestMutation) error {
+	if err := validateSortedUniqueColumnManifestRecords(current, "current"); err != nil {
+		return err
+	}
+	if err := validateSortedUniqueColumnManifestRecords(next, "next"); err != nil {
+		return err
+	}
+	cursor := columnManifestMutationCursor{current: current, next: next}
+	for _, m := range mutations {
+		r, deleted, ok := cursor.take()
+		if !ok || deleted != m.deleted || !bytes.Equal(r.key, m.record.key) ||
+			deleted && len(m.record.value) != 0 || !deleted && !bytes.Equal(r.value, m.record.value) {
+			return errColumnManifestMutationPostState
+		}
+	}
+	if _, _, ok := cursor.take(); ok {
+		return errColumnManifestMutationPostState
+	}
+	return nil
 }
 
 func columnManifestMutationsEqual(left, right []columnManifestMutation) bool {
@@ -348,14 +463,29 @@ func columnManifestRootMutationBytes(mutations []columnManifestMutation) int64 {
 }
 
 func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition) ([]columnManifestRecord, error) {
+	return retainedColumnManifestRecordsForWriteWithMetadataAccount(records, generation, activeVectorIndexesKnown, activeVectorIndexes, nil)
+}
+func retainedColumnManifestRecordsForWriteWithMetadataAccount(records []columnManifestRecord, generation uint64, activeVectorIndexesKnown bool, activeVectorIndexes []VectorIndexDefinition, account rootpublication.StableMetadataAccount) ([]columnManifestRecord, error) {
+	if account != nil && (!activeVectorIndexesKnown || len(activeVectorIndexes) != 0) {
+		return nil, ErrPreparedInsertResourceLimit
+	}
 	if len(records) == 0 {
 		return nil, nil
+	}
+	if err := reserveColumnManifestArray(account, len(records), uint64(unsafe.Sizeof(columnManifestRecord{}))); err != nil {
+		return nil, err
 	}
 	retained := make([]columnManifestRecord, 0, len(records))
 	for _, record := range records {
 		if bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes) {
-			_, err := decodeColumnManifestSegmentOwnership(record.key, record.value)
+			_, err := decodeColumnManifestSegmentOwnershipWithMetadataAccount(record.key, record.value, account)
 			if err != nil {
+				return nil, err
+			}
+			if err := reserveColumnManifestBacking(account, uint64(len(record.key)), false); err != nil {
+				return nil, err
+			}
+			if err := reserveColumnManifestBacking(account, uint64(len(record.value)), false); err != nil {
 				return nil, err
 			}
 			retained = append(retained, columnManifestRecord{key: bytes.Clone(record.key), value: bytes.Clone(record.value)})
@@ -371,6 +501,12 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 			}
 			if !retain {
 				continue
+			}
+			if err := reserveColumnManifestBacking(account, uint64(len(record.key)), false); err != nil {
+				return nil, err
+			}
+			if err := reserveColumnManifestBacking(account, uint64(len(record.value)), false); err != nil {
+				return nil, err
 			}
 			retained = append(retained, columnManifestRecord{
 				key:   bytes.Clone(record.key),
@@ -389,6 +525,12 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 			if !retain {
 				continue
 			}
+			if err := reserveColumnManifestBacking(account, uint64(len(record.key)), false); err != nil {
+				return nil, err
+			}
+			if err := reserveColumnManifestBacking(account, uint64(len(record.value)), false); err != nil {
+				return nil, err
+			}
 			retained = append(retained, columnManifestRecord{
 				key:   bytes.Clone(record.key),
 				value: bytes.Clone(record.value),
@@ -401,12 +543,18 @@ func retainedColumnManifestRecordsForWrite(records []columnManifestRecord, gener
 			!bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes) {
 			continue
 		}
-		part, err := decodeColumnManifestPartRecord(record.value)
+		part, err := decodeColumnManifestPartRecordWithMetadataAccount(record.value, account)
 		if err != nil {
 			return nil, err
 		}
 		if part.AssetRef.Generation >= generation {
 			continue
+		}
+		if err := reserveColumnManifestBacking(account, uint64(len(record.key)), false); err != nil {
+			return nil, err
+		}
+		if err := reserveColumnManifestBacking(account, uint64(len(record.value)), false); err != nil {
+			return nil, err
 		}
 		retained = append(retained, columnManifestRecord{
 			key:   bytes.Clone(record.key),
@@ -469,20 +617,30 @@ func columnManifestBytesEqualString(left []byte, right string) bool {
 }
 
 func encodeColumnManifestHeaderRecord(input ColumnPublishManifestEncodeInput, generation uint64) ([]byte, error) {
-	var b bytes.Buffer
-	writeManifestUint32(&b, columnManifestHeaderMagic)
-	writeManifestUint16(&b, columnManifestRecordVersion)
-	writeManifestString(&b, input.Collection)
-	writeManifestString(&b, string(input.Operation))
-	writeManifestUint64(&b, generation)
-	writeManifestUint64(&b, input.AppliedCommandLSN)
-	writeManifestUint64(&b, input.ColumnStore.SchemaHash)
-	writeManifestUint64(&b, uint64(input.Prepared.RowCount))
-	writeManifestUint64(&b, uint64(input.Prepared.CommandBytes))
-	writeManifestUint64(&b, uint64(input.Prepared.RowRemainderBytes))
-	writeManifestUint64(&b, uint64(input.Prepared.ColumnPayloadBytes))
-	writeManifestUint64(&b, uint64(columnManifestPreparedPartCount(input.Prepared.Assets)))
-	return b.Bytes(), nil
+	count := columnManifestEncodingSink{}
+	writeColumnManifestHeaderRecord(&count, input, generation)
+	raw, err := count.allocate(input.metadataAccount)
+	if err != nil {
+		return nil, err
+	}
+	sink := columnManifestEncodingSink{raw: raw}
+	writeColumnManifestHeaderRecord(&sink, input, generation)
+	return sink.result()
+}
+
+func writeColumnManifestHeaderRecord(s *columnManifestEncodingSink, input ColumnPublishManifestEncodeInput, generation uint64) {
+	s.u32(columnManifestHeaderMagic)
+	s.u16(columnManifestRecordVersion)
+	s.text(input.Collection)
+	s.text(string(input.Operation))
+	s.u64(generation)
+	s.u64(input.AppliedCommandLSN)
+	s.u64(input.ColumnStore.SchemaHash)
+	s.u64(uint64(input.Prepared.RowCount))
+	s.u64(uint64(input.Prepared.CommandBytes))
+	s.u64(uint64(input.Prepared.RowRemainderBytes))
+	s.u64(uint64(input.Prepared.ColumnPayloadBytes))
+	s.u64(uint64(columnManifestPreparedPartCount(input.Prepared.Assets)))
 }
 
 func columnManifestPreparedPartCount(assets []ColumnPreparedAsset) int {
@@ -496,54 +654,113 @@ func columnManifestPreparedPartCount(assets []ColumnPreparedAsset) int {
 }
 
 func encodeColumnManifestPartRecord(asset ColumnPreparedAsset) ([]byte, error) {
+	return encodeColumnManifestPartRecordWithMetadataAccount(asset, nil)
+}
+
+func encodeColumnManifestPartRecordWithMetadataAccount(asset ColumnPreparedAsset, account rootpublication.StableMetadataAccount) ([]byte, error) {
 	if asset.PartRole == "" {
 		asset.PartRole = inferColumnManifestPartRole(asset.Ref.Kind, asset.Reason)
 	}
-	if err := validateColumnPreparedAssetForPlan(asset); err != nil {
+	if err := validateColumnPreparedAssetForPlanWithMetadataAccount(asset, account); err != nil {
 		return nil, err
 	}
-	var b bytes.Buffer
-	writeManifestUint32(&b, columnManifestPartMagic)
-	writeManifestUint16(&b, columnManifestRecordVersion)
-	writeManifestString(&b, string(asset.Ref.Kind))
-	writeManifestString(&b, asset.Ref.Namespace)
-	writeManifestUint64(&b, asset.Ref.Generation)
-	writeManifestUint64(&b, asset.Ref.PartID)
-	writeManifestUint64(&b, uint64(asset.Ref.FileID))
-	writeManifestUint64(&b, uint64(asset.Ref.Offset))
-	writeManifestUint64(&b, uint64(asset.Ref.Length))
-	writeManifestUint64(&b, uint64(asset.Ref.Checksum))
-	writeManifestUint64(&b, uint64(asset.Rows))
-	writeManifestUint64(&b, uint64(asset.Bytes))
-	writeManifestUint64(&b, asset.PublishID)
-	writeManifestUint64(&b, asset.GenerationID)
-	writeManifestString(&b, asset.Reason)
-	writeManifestString(&b, string(asset.PartRole))
-	sortKey, err := columnSortKeysFromMatchString(asset.SortKey)
+	sortColumns, err := columnManifestSortKeyCount(asset.SortKey)
 	if err != nil {
 		return nil, err
 	}
-	if uint64(len(sortKey)) > columnManifestSortKeyMaxColumns {
-		return nil, fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", len(sortKey), columnManifestSortKeyMaxColumns)
+	if sortColumns > columnManifestSortKeyMaxColumns {
+		return nil, fmt.Errorf("collections: column manifest sort key columns=%d exceeds cap %d", sortColumns, columnManifestSortKeyMaxColumns)
 	}
-	writeColumnManifestSortKey(&b, sortKey)
-	return b.Bytes(), nil
+	count := columnManifestEncodingSink{}
+	writeColumnManifestPartRecord(&count, asset, sortColumns)
+	raw, err := count.allocate(account)
+	if err != nil {
+		return nil, err
+	}
+	sink := columnManifestEncodingSink{raw: raw}
+	writeColumnManifestPartRecord(&sink, asset, sortColumns)
+	return sink.result()
 }
 
+func writeColumnManifestPartRecord(s *columnManifestEncodingSink, asset ColumnPreparedAsset, sortColumns uint64) {
+	s.u32(columnManifestPartMagic)
+	s.u16(columnManifestRecordVersion)
+	s.text(string(asset.Ref.Kind))
+	s.text(asset.Ref.Namespace)
+	s.u64(asset.Ref.Generation)
+	s.u64(asset.Ref.PartID)
+	s.u64(uint64(asset.Ref.FileID))
+	s.u64(uint64(asset.Ref.Offset))
+	s.u64(uint64(asset.Ref.Length))
+	s.u64(uint64(asset.Ref.Checksum))
+	s.u64(uint64(asset.Rows))
+	s.u64(uint64(asset.Bytes))
+	s.u64(asset.PublishID)
+	s.u64(asset.GenerationID)
+	s.text(asset.Reason)
+	s.text(string(asset.PartRole))
+	s.u64(sortColumns)
+	// Validation already established alternating column/direction fields and a
+	// trailing terminator. Emit the existing grammar without Split or a retained
+	// sort-key array; strings are borrowed only during this synchronous codec.
+	for pos := 0; pos < len(asset.SortKey); {
+		end := pos
+		for end < len(asset.SortKey) && asset.SortKey[end] != 0 {
+			end++
+		}
+		s.text(asset.SortKey[pos:end])
+		pos = end + 1
+	}
+}
+
+func columnManifestSortKeyCount(raw string) (uint64, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	fields := uint64(0)
+	for pos := 0; pos < len(raw); {
+		end := pos
+		for end < len(raw) && raw[end] != 0 {
+			end++
+		}
+		if end == len(raw) {
+			return 0, fmt.Errorf("collections: malformed column sort key metadata")
+		}
+		fields++
+		pos = end + 1
+	}
+	if fields < 2 || fields%2 != 0 {
+		return 0, fmt.Errorf("collections: malformed column sort key metadata")
+	}
+	return fields / 2, nil
+}
+
+type columnManifestLivePart struct {
+	namespace string
+	rows      int
+}
+
+func columnManifestPartIdentityLess(a, b [2]uint64) bool {
+	return a[0] < b[0] || a[0] == b[0] && a[1] < b[1]
+}
 func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifestSnapshot, error) {
+	return decodeColumnManifestRecordsWithMetadataAccount(records, nil)
+}
+func decodeColumnManifestRecordsWithMetadataAccount(records []columnManifestRecord, account rootpublication.StableMetadataAccount) (columnManifestSnapshot, error) {
 	var snapshot columnManifestSnapshot
 	sawHeader := false
 	partRecords := 0
 	metadataRecords := 0
 	dictionaryRecords := 0
 	int64ValueRecords := 0
+	ownershipRecords := 0
 	for _, record := range records {
 		switch {
 		case bytes.Equal(record.key, columnManifestHeaderRecordKeyBytes):
 			if sawHeader {
 				return columnManifestSnapshot{}, errors.New("collections: duplicate column manifest binary header record")
 			}
-			header, err := decodeColumnManifestHeaderRecord(record.value)
+			header, err := decodeColumnManifestHeaderRecordWithMetadataAccount(record.value, account)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
@@ -557,6 +774,8 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			dictionaryRecords++
 		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
 			int64ValueRecords++
+		case bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes):
+			ownershipRecords++
 		}
 	}
 	if !sawHeader {
@@ -564,23 +783,38 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 	}
 
 	partCap := partRecords
-	if snapshot.ExpectedParts < uint64(partCap) {
-		partCap = int(snapshot.ExpectedParts)
-	}
 	if partCap > 0 {
+		if err := reserveColumnManifestArray(account, partCap, uint64(unsafe.Sizeof(columnManifestPartSnapshot{}))); err != nil {
+			return columnManifestSnapshot{}, err
+		}
 		snapshot.Parts = make([]columnManifestPartSnapshot, 0, partCap)
 	}
 	if metadataRecords > 0 {
+		if err := reserveColumnManifestArray(account, metadataRecords, uint64(unsafe.Sizeof(columnManifestAggregateMetadataSnapshot{}))); err != nil {
+			return columnManifestSnapshot{}, err
+		}
 		snapshot.AggregateMetadata = make([]columnManifestAggregateMetadataSnapshot, 0, metadataRecords)
 	}
 	if dictionaryRecords > 0 {
+		if err := reserveColumnManifestArray(account, dictionaryRecords, uint64(unsafe.Sizeof(columnManifestDictionaryCodesSnapshot{}))); err != nil {
+			return columnManifestSnapshot{}, err
+		}
 		snapshot.DictionaryCodes = make([]columnManifestDictionaryCodesSnapshot, 0, dictionaryRecords)
 	}
 	if int64ValueRecords > 0 {
+		if err := reserveColumnManifestArray(account, int64ValueRecords, uint64(unsafe.Sizeof(columnManifestInt64ValuesSnapshot{}))); err != nil {
+			return columnManifestSnapshot{}, err
+		}
 		snapshot.Int64Values = make([]columnManifestInt64ValuesSnapshot, 0, int64ValueRecords)
 	}
-	livePartNamespaces := make(map[[2]uint64]string, partRecords)
-	livePartRows := make(map[[2]uint64]int, partRecords)
+	if err := reserveColumnManifestArray(account, ownershipRecords, uint64(unsafe.Sizeof(columnManifestSegmentOwnership{}))); err != nil {
+		return columnManifestSnapshot{}, err
+	}
+	if ownershipRecords > 0 {
+		snapshot.SegmentOwnership = make([]columnManifestSegmentOwnership, 0, ownershipRecords)
+	}
+	liveParts := rootpublication.NewStableMetadataTable[[2]uint64, columnManifestLivePart](columnManifestPartIdentityLess)
+	needsLiveParts := metadataRecords != 0 || dictionaryRecords != 0 || int64ValueRecords != 0
 	for _, record := range records {
 		if !bytes.HasPrefix(record.key, columnManifestPartRecordPrefixBytes) {
 			continue
@@ -589,7 +823,7 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 		if err != nil {
 			return columnManifestSnapshot{}, err
 		}
-		part, err := decodeColumnManifestPartRecord(record.value)
+		part, err := decodeColumnManifestPartRecordWithMetadataAccount(record.value, account)
 		if err != nil {
 			return columnManifestSnapshot{}, err
 		}
@@ -599,9 +833,10 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 		if part.AssetRef.Generation > snapshot.Generation {
 			return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest part generation=%d is newer than header generation=%d", part.AssetRef.Generation, snapshot.Generation)
 		}
-		if part.AssetRef.Generation <= snapshot.Generation {
-			livePartNamespaces[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.AssetRef.Namespace
-			livePartRows[[2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}] = part.Rows
+		if needsLiveParts && part.AssetRef.Generation <= snapshot.Generation {
+			if err := liveParts.Set([2]uint64{part.AssetRef.Generation, part.AssetRef.PartID}, columnManifestLivePart{namespace: part.AssetRef.Namespace, rows: part.Rows}, account); err != nil {
+				return columnManifestSnapshot{}, err
+			}
 		}
 		if part.AssetRef.Generation == snapshot.Generation {
 			snapshot.Parts = append(snapshot.Parts, part)
@@ -610,14 +845,15 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 	for _, record := range records {
 		switch {
 		case bytes.HasPrefix(record.key, columnManifestAggregateMetadataRecordPrefixBytes):
-			aggregate, err := decodeColumnManifestAggregateMetadataRecord(record.key, record.value)
+			aggregate, err := decodeColumnManifestAggregateMetadataRecordWithMetadataAccount(record.key, record.value, account)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
 			if aggregate.AssetRef.Generation > snapshot.Generation {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d is newer than header generation=%d", aggregate.AssetRef.Generation, snapshot.Generation)
 			}
-			partNamespace, ok := livePartNamespaces[[2]uint64{aggregate.AssetRef.Generation, aggregate.AssetRef.PartID}]
+			part, ok := liveParts.Lookup([2]uint64{aggregate.AssetRef.Generation, aggregate.AssetRef.PartID})
+			partNamespace := part.namespace
 			if !ok {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest aggregate metadata generation=%d part_id=%d has no matching live part record", aggregate.AssetRef.Generation, aggregate.AssetRef.PartID)
 			}
@@ -626,14 +862,15 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			}
 			snapshot.AggregateMetadata = append(snapshot.AggregateMetadata, aggregate)
 		case bytes.HasPrefix(record.key, columnManifestDictionaryCodesRecordPrefixBytes):
-			dictionary, err := decodeColumnManifestDictionaryCodesRecord(record.key, record.value)
+			dictionary, err := decodeColumnManifestDictionaryCodesRecordWithMetadataAccount(record.key, record.value, account)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
 			if dictionary.AssetRef.Generation > snapshot.Generation {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d is newer than header generation=%d", dictionary.AssetRef.Generation, snapshot.Generation)
 			}
-			partNamespace, ok := livePartNamespaces[[2]uint64{dictionary.AssetRef.Generation, dictionary.AssetRef.PartID}]
+			part, ok := liveParts.Lookup([2]uint64{dictionary.AssetRef.Generation, dictionary.AssetRef.PartID})
+			partNamespace := part.namespace
 			if !ok {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest dictionary codes generation=%d part_id=%d has no matching live part record", dictionary.AssetRef.Generation, dictionary.AssetRef.PartID)
 			}
@@ -642,7 +879,7 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 			}
 			snapshot.DictionaryCodes = append(snapshot.DictionaryCodes, dictionary)
 		case bytes.HasPrefix(record.key, columnManifestInt64ValuesRecordPrefixBytes):
-			values, err := decodeColumnManifestInt64ValuesRecord(record.key, record.value)
+			values, err := decodeColumnManifestInt64ValuesRecordWithMetadataAccount(record.key, record.value, account)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
@@ -650,20 +887,21 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d is newer than header generation=%d", values.AssetRef.Generation, snapshot.Generation)
 			}
 			partKey := [2]uint64{values.AssetRef.Generation, values.AssetRef.PartID}
-			partNamespace, ok := livePartNamespaces[partKey]
+			part, ok := liveParts.Lookup(partKey)
+			partNamespace := part.namespace
 			if !ok {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values generation=%d part_id=%d has no matching live part record", values.AssetRef.Generation, values.AssetRef.PartID)
 			}
 			if values.AssetRef.Namespace != partNamespace {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values namespace=%q does not match part namespace=%q", values.AssetRef.Namespace, partNamespace)
 			}
-			partRows := livePartRows[partKey]
+			partRows := part.rows
 			if values.Rows != partRows {
 				return columnManifestSnapshot{}, fmt.Errorf("collections: column manifest int64 values rows=%d does not match part rows=%d", values.Rows, partRows)
 			}
 			snapshot.Int64Values = append(snapshot.Int64Values, values)
 		case bytes.HasPrefix(record.key, columnManifestSegmentOwnershipRecordPrefixBytes):
-			marker, err := decodeColumnManifestSegmentOwnershipForScan(record.key, record.value, "", snapshot.Generation)
+			marker, err := decodeColumnManifestSegmentOwnershipForScanWithMetadataAccount(record.key, record.value, "", snapshot.Generation, account)
 			if err != nil {
 				return columnManifestSnapshot{}, err
 			}
@@ -677,11 +915,14 @@ func decodeColumnManifestRecords(records []columnManifestRecord) (columnManifest
 }
 
 func decodeColumnManifestDictionaryCodesRecord(key, raw []byte) (columnManifestDictionaryCodesSnapshot, error) {
+	return decodeColumnManifestDictionaryCodesRecordWithMetadataAccount(key, raw, nil)
+}
+func decodeColumnManifestDictionaryCodesRecordWithMetadataAccount(key, raw []byte, account rootpublication.StableMetadataAccount) (columnManifestDictionaryCodesSnapshot, error) {
 	generation, partID, columnName, err := columnManifestDictionaryCodesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestDictionaryCodesSnapshot{}, err
 	}
-	part, err := decodeColumnManifestPartRecord(raw)
+	part, err := decodeColumnManifestPartRecordWithMetadataAccount(raw, account)
 	if err != nil {
 		return columnManifestDictionaryCodesSnapshot{}, err
 	}
@@ -704,11 +945,14 @@ func decodeColumnManifestDictionaryCodesRecord(key, raw []byte) (columnManifestD
 }
 
 func decodeColumnManifestInt64ValuesRecord(key, raw []byte) (columnManifestInt64ValuesSnapshot, error) {
+	return decodeColumnManifestInt64ValuesRecordWithMetadataAccount(key, raw, nil)
+}
+func decodeColumnManifestInt64ValuesRecordWithMetadataAccount(key, raw []byte, account rootpublication.StableMetadataAccount) (columnManifestInt64ValuesSnapshot, error) {
 	generation, partID, columnName, err := columnManifestInt64ValuesKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestInt64ValuesSnapshot{}, err
 	}
-	part, err := decodeColumnManifestPartRecord(raw)
+	part, err := decodeColumnManifestPartRecordWithMetadataAccount(raw, account)
 	if err != nil {
 		return columnManifestInt64ValuesSnapshot{}, err
 	}
@@ -732,11 +976,14 @@ func decodeColumnManifestInt64ValuesRecord(key, raw []byte) (columnManifestInt64
 }
 
 func decodeColumnManifestAggregateMetadataRecord(key, raw []byte) (columnManifestAggregateMetadataSnapshot, error) {
+	return decodeColumnManifestAggregateMetadataRecordWithMetadataAccount(key, raw, nil)
+}
+func decodeColumnManifestAggregateMetadataRecordWithMetadataAccount(key, raw []byte, account rootpublication.StableMetadataAccount) (columnManifestAggregateMetadataSnapshot, error) {
 	generation, partID, name, err := columnManifestAggregateMetadataKeyPartsFromRecordKey(key)
 	if err != nil {
 		return columnManifestAggregateMetadataSnapshot{}, err
 	}
-	part, err := decodeColumnManifestPartRecord(raw)
+	part, err := decodeColumnManifestPartRecordWithMetadataAccount(raw, account)
 	if err != nil {
 		return columnManifestAggregateMetadataSnapshot{}, err
 	}
@@ -759,7 +1006,10 @@ func decodeColumnManifestAggregateMetadataRecord(key, raw []byte) (columnManifes
 }
 
 func decodeColumnManifestHeaderRecord(raw []byte) (columnManifestSnapshot, error) {
-	cur := manifestCursor{raw: raw}
+	return decodeColumnManifestHeaderRecordWithMetadataAccount(raw, nil)
+}
+func decodeColumnManifestHeaderRecordWithMetadataAccount(raw []byte, account rootpublication.StableMetadataAccount) (columnManifestSnapshot, error) {
+	cur := manifestCursor{raw: raw, account: account}
 	if magic := cur.u32(); magic != columnManifestHeaderMagic {
 		return columnManifestSnapshot{}, fmt.Errorf("collections: bad column manifest header magic=0x%08x", magic)
 	}
@@ -803,7 +1053,10 @@ func decodeColumnManifestHeaderRecord(raw []byte) (columnManifestSnapshot, error
 }
 
 func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, error) {
-	cur := manifestCursor{raw: raw}
+	return decodeColumnManifestPartRecordWithMetadataAccount(raw, nil)
+}
+func decodeColumnManifestPartRecordWithMetadataAccount(raw []byte, account rootpublication.StableMetadataAccount) (columnManifestPartSnapshot, error) {
+	cur := manifestCursor{raw: raw, account: account}
 	if magic := cur.u32(); magic != columnManifestPartMagic {
 		return columnManifestPartSnapshot{}, fmt.Errorf("collections: bad column manifest part magic=0x%08x", magic)
 	}
@@ -872,8 +1125,12 @@ func decodeColumnManifestPartRecord(raw []byte) (columnManifestPartSnapshot, err
 		Length:     int64(length64),
 		Checksum:   uint32(checksum64),
 	}
-	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason, PartRole: role, SortKey: columnSortKeyMatchString(sortKey)}
-	if err := validateColumnPreparedAssetForPlan(asset); err != nil {
+	sortMatch, err := columnSortKeyMatchStringWithMetadataAccount(sortKey, account)
+	if err != nil {
+		return columnManifestPartSnapshot{}, err
+	}
+	asset := ColumnPreparedAsset{Ref: ref, Rows: int(rows64), Bytes: int64(bytes64), PublishID: publishID, GenerationID: generationID, Reason: reason, PartRole: role, SortKey: sortMatch}
+	if err := validateColumnPreparedAssetForPlanWithMetadataAccount(asset, account); err != nil {
 		return columnManifestPartSnapshot{}, err
 	}
 	return columnManifestPartSnapshot{
@@ -1174,9 +1431,7 @@ func cloneColumnManifestRecords(records []columnManifestRecord) []columnManifest
 }
 
 func sortColumnManifestRecords(records []columnManifestRecord) {
-	sort.Slice(records, func(i, j int) bool {
-		return bytes.Compare(records[i].key, records[j].key) < 0
-	})
+	slices.SortFunc(records, func(a, b columnManifestRecord) int { return bytes.Compare(a.key, b.key) })
 }
 
 func columnManifestRecordsBytes(records []columnManifestRecord) int64 {
@@ -1255,6 +1510,10 @@ func readColumnManifestSortKey(cur *manifestCursor) []ColumnSortKey {
 	if count == 0 {
 		return nil
 	}
+	if err := reserveColumnManifestArray(cur.account, int(count), uint64(unsafe.Sizeof(ColumnSortKey{}))); err != nil {
+		cur.err = err
+		return nil
+	}
 	out := make([]ColumnSortKey, 0, count)
 	for i := uint64(0); i < count; i++ {
 		column := cur.string()
@@ -1280,9 +1539,10 @@ func skipColumnManifestSortKey(cur *manifestCursor) {
 }
 
 type manifestCursor struct {
-	raw []byte
-	pos int
-	err error
+	account rootpublication.StableMetadataAccount
+	raw     []byte
+	pos     int
+	err     error
 }
 
 func (c *manifestCursor) u16() uint16 {
@@ -1327,6 +1587,10 @@ func (c *manifestCursor) u64() uint64 {
 func (c *manifestCursor) string() string {
 	value := c.stringBytes()
 	if value == nil {
+		return ""
+	}
+	if err := reserveColumnManifestBacking(c.account, uint64(len(value)), false); err != nil {
+		c.err = err
 		return ""
 	}
 	return string(value)

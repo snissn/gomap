@@ -889,7 +889,11 @@ func TestRootPublicationDependencyBytesExcludesSelectedDurableClosure(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(set.Release)
+		t.Cleanup(func() {
+			if err := set.Release(); err != nil {
+				t.Error(err)
+			}
+		})
 		return set
 	}
 	published, resources := makeSet(false), makeSet(true)

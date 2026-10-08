@@ -212,10 +212,10 @@ func TestEnsureStableChildDirectoryUsesCapturedParentAfterPathReplacement(t *tes
 	}
 	registry.mu.Lock()
 	var retained stableDirectoryLinkAuthority
-	for _, authority := range registry.stableDirectoryLinks {
+	registry.stableDirectoryLinks.visit(func(_ stableNamespaceLink, authority stableDirectoryLinkAuthority) bool {
 		retained = authority
-		break
-	}
+		return false
+	})
 	registry.mu.Unlock()
 	if retained.parent == nil || retained.child == nil {
 		t.Fatal("stable directory proof did not retain parent and child authority")

@@ -859,3 +859,21 @@ current-segment reporting, pending-pointer protection, root resource closures,
 and segment retirement still use their existing owners. Standalone rewrite
 writers retain their complete created-file history for publication and cleanup.
 This bookkeeping bound does not establish a whole-database physical-space bound.
+
+## Pager-owned leaf inventory and persistent pointers
+
+The optional [pager-owned leaf manifest layout](../design/owned-leaf-manifest-v1.md)
+moves canonical inventory bytes into the existing immutable system-root tree.
+It changes no value-log pointer lifetime: segments remain persistent and may
+be removed only under their existing exact reachability/resource authority.
+Both durable slots, queued candidates and held roots retain the intrinsic
+inventory together with its actual external leaf/value-log dependencies.
+
+Owned-mode manifest retirement reports internal page retirement, promotion,
+reuse and high-water. Its manifest-file deleted-byte counters stay zero.
+Internal reuse is not physical segment deletion or index-file shrink; vacuum
+remains the separate shrink operation. Genuine producer rollover changes the
+inventory in the same dependency-flushed acknowledgment, while logical equality
+allows reuse. Forced inventory checkpoints still create and charge revisions.
+This mode requires a new database/rebuild and its required-feature/physical-root
+markers; mixed layout and old-reader fallback are refused.

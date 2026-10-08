@@ -361,6 +361,7 @@ func (s *combinedLeafKeyState) rebuildAt(index uint16) (key []byte, flags byte, 
 
 type Iterator struct {
 	owned             bool
+	ownedRoot         bool // the inline pager/root Tree must be scrubbed with this projection
 	nodeKeyScratch    []byte
 	ownedStack        []CursorItem
 	boundedLeafReader func(page.LeafLogPtr, []byte) ([]byte, error)
@@ -1050,6 +1051,9 @@ func (it *Iterator) Close() error {
 		return nil
 	}
 	if it.owned {
+		if it.ownedRoot {
+			*it.tree = Tree{}
+		}
 		*it = Iterator{}
 		return nil
 	}

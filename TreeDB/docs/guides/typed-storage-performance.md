@@ -888,3 +888,32 @@ near-linear capability is unsupported on the diagnostic host; full corruption
 validation remains charged. Main-value GC and native collection leaf retention
 are distinct domains, and a reduced rollover target does not qualify default
 segment economics. Product gates remain with #5095, #5098 and #5099.
+
+## Operating pager-owned leaf manifests
+
+`Options.OwnedLeafManifests=true` opts a fresh pre-alpha database into the
+[pager-owned inventory format](../design/owned-leaf-manifest-v1.md), together
+with `IndexOuterLeavesInValueLog`. Its default is false. Rebuild instead of
+enabling an existing standalone directory. Both physical root slots and the
+required-feature marker enforce refusal; do not remove markers, request mixed
+layouts or use an old binary as a fallback reader.
+
+Use normal durable writes for foreground work: unchanged inventories reuse the
+exact object. Explicit `CheckpointOwnedLeafManifest` forces an inventory
+revision and charges canonical, COW allocator and durability work.
+`LeafGenerationGC` uses the existing bounded allocator steps with fresh
+authority; cancellation/stale errors do not grant permission to reclaim more.
+Held readers retain old roots and external values until release.
+
+Read internal retired/free/promoted pages, root reuse and high-water alongside
+physical segment bytes. Zero manifest files unlinked is correct in owned mode;
+internal free pages do not shrink the index file. Vacuum is the separate shrink
+operation. A held-root ladder and drained equal-work groups are distinct
+fixtures, and reduced rollover thresholds do not qualify default economics.
+
+Performance decisions require complete publication/setup and ordinary ACK
+costs, allocation/retained backing, whole GC and concurrent write tails, exact
+source/binary/toolchain evidence and the fixed matched noise rules. GC-only
+speedups cannot excuse unexplained publication allocation. Current qualification
+and rollout ownership remains #5090/#5095; the historical standalone results
+in this guide do not promote the new layout.

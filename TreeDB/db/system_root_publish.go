@@ -37,6 +37,9 @@ func (db *DB) systemRootWarmMaxDeltaOps() int {
 }
 
 func systemRootOrderedPublishOptions(db *DB) orderedRootPublishOptions {
+	if db.ownedLeafManifests {
+		return orderedRootPublishOptions{preserveOwnedManifest: true, maxWarmDeltaOps: db.systemRootWarmMaxDeltaOps(), leafPrefixCompression: db.leafPrefixCompression, leafColumnar: db.indexColumnarLeaves, packedValuePtr: db.indexPackedValuePtr, internalBaseDelta: db.indexInternalBaseDelta}
+	}
 	return orderedRootPublishOptions{
 		maxWarmDeltaOps:       db.systemRootWarmMaxDeltaOps(),
 		leafPrefixCompression: db.leafPrefixCompression,

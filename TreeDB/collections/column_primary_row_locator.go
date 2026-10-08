@@ -1,9 +1,15 @@
 package collections
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"slices"
+	"unsafe"
+
+	"github.com/snissn/gomap/TreeDB/batch"
+	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/memtable"
@@ -32,7 +38,7 @@ func (p columnRowCoordinates) ref(id []byte) DocumentRowRef {
 
 func encodeColumnMetadataRowLocator(latest DocumentRowRef, preserved columnRowCoordinates) []byte {
 	b := make([]byte, columnPrimaryRowLocatorValueSize+32)
-	copy(b, encodeColumnPrimaryRowLocator(latest))
+	writeColumnPrimaryRowLocator(b, latest)
 	b[3] = '2'
 	binary.BigEndian.PutUint64(b[36:], preserved.Generation)
 	binary.BigEndian.PutUint64(b[44:], preserved.PartID)
@@ -75,12 +81,19 @@ func decodeColumnRowCoordinates(id, value []byte) (DocumentRowRef, error) {
 // without its matching locator.
 func encodeColumnPrimaryRowLocator(ref DocumentRowRef) []byte {
 	b := make([]byte, columnPrimaryRowLocatorValueSize)
-	copy(b, columnPrimaryRowLocatorMagic[:])
-	binary.BigEndian.PutUint64(b[4:], ref.Generation)
-	binary.BigEndian.PutUint64(b[12:], ref.PartID)
-	binary.BigEndian.PutUint64(b[20:], uint64(ref.RowIndex))
-	binary.BigEndian.PutUint64(b[28:], ref.AppliedCommandLSN)
+	writeColumnPrimaryRowLocator(b, ref)
 	return b
+}
+
+func writeColumnPrimaryRowLocator(b []byte, ref DocumentRowRef) {
+	copy(b, columnPrimaryRowLocatorMagic[:])
+	writeColumnRowCoordinates(b[4:], columnCoordinates(ref))
+}
+func writeColumnRowCoordinates(b []byte, ref columnRowCoordinates) {
+	binary.BigEndian.PutUint64(b, ref.Generation)
+	binary.BigEndian.PutUint64(b[8:], ref.PartID)
+	binary.BigEndian.PutUint64(b[16:], uint64(ref.RowIndex))
+	binary.BigEndian.PutUint64(b[24:], ref.AppliedCommandLSN)
 }
 
 func decodeColumnPrimaryRowLocator(id, value []byte) (DocumentRowRef, error) {
@@ -149,19 +162,32 @@ func buildColumnPrimaryRowLocatorDeltaBatch(plan ColumnPublishPlan, documents []
 }
 
 func buildColumnPrimaryRowLocatorTable(plan ColumnPublishPlan, documents []columnWriteDocument) (memtable.Table, error) {
-	if len(documents) != plan.Rows {
-		return nil, fmt.Errorf("collections: row locator documents=%d rows=%d", len(documents), plan.Rows)
+	return buildColumnPrimaryRowLocatorTableForOperation(columnRowLocatorOperation{plan.Rows, plan.Operation, plan.UpdatedActiveManifest.Generation, plan.AppliedCommandLSN}, documents)
+}
+
+// Coordinates are operation facts. They confer no installed resource/manifest
+// authority and never require a fabricated public ColumnPublishPlan.
+type columnRowLocatorOperation struct {
+	rows       int
+	operation  ColumnPublishOperation
+	generation uint64
+	commandLSN uint64
+}
+
+func buildColumnPrimaryRowLocatorTableForOperation(plan columnRowLocatorOperation, documents []columnWriteDocument) (memtable.Table, error) {
+	if len(documents) != plan.rows {
+		return nil, fmt.Errorf("collections: row locator documents=%d rows=%d", len(documents), plan.rows)
 	}
 	table := newCollectionRunTable(len(documents))
 	for row, document := range documents {
 		if len(document.ID) == 0 {
 			return nil, fmt.Errorf("collections: row locator row %d missing document id", row)
 		}
-		if plan.Operation == ColumnPublishOperationDelete {
+		if plan.operation == ColumnPublishOperationDelete {
 			table.DeleteSteal(append([]byte(nil), document.ID...))
 			continue
 		}
-		ref := DocumentRowRef{DocumentID: document.ID, Generation: plan.UpdatedActiveManifest.Generation, PartID: columnPhysicalRowAssetPartID, RowIndex: row, AppliedCommandLSN: plan.AppliedCommandLSN}
+		ref := DocumentRowRef{DocumentID: document.ID, Generation: plan.generation, PartID: columnPhysicalRowAssetPartID, RowIndex: row, AppliedCommandLSN: plan.commandLSN}
 		encoded := encodeColumnPrimaryRowLocator(ref)
 		if document.fieldSources != nil {
 			var err error
@@ -224,7 +250,9 @@ func encodeColumnFieldRowLocator(latest DocumentRowRef, fields []columnRowCoordi
 		if c == (columnRowCoordinates{}) {
 			c = current
 		}
-		if _, err := decodeColumnRowCoordinates(latest.DocumentID, encodeColumnPrimaryRowLocator(c.ref(nil))[4:]); err != nil {
+		var raw [32]byte
+		writeColumnRowCoordinates(raw[:], c)
+		if _, err := decodeColumnRowCoordinates(latest.DocumentID, raw[:]); err != nil {
 			return nil, err
 		}
 		if c != current && (c.Generation >= current.Generation || c.AppliedCommandLSN >= current.AppliedCommandLSN) {
@@ -235,12 +263,12 @@ func encodeColumnFieldRowLocator(latest DocumentRowRef, fields []columnRowCoordi
 	slices.SortFunc(groups, compareColumnCoordinates)
 	groups = slices.Compact(groups)
 	b := make([]byte, 44+32*len(groups)+4*len(fields))
-	copy(b, encodeColumnPrimaryRowLocator(latest))
+	writeColumnPrimaryRowLocator(b, latest)
 	b[3] = '3'
 	binary.BigEndian.PutUint32(b[36:], uint32(len(fields)))
 	binary.BigEndian.PutUint32(b[40:], uint32(len(groups)))
 	for i, c := range groups {
-		copy(b[44+i*32:], encodeColumnPrimaryRowLocator(c.ref(nil))[4:])
+		writeColumnRowCoordinates(b[44+i*32:], c)
 	}
 	for i, c := range fields {
 		if c == (columnRowCoordinates{}) {
@@ -334,4 +362,215 @@ func decodeColumnFieldLocator(id, raw []byte, expectedSchema int) (DocumentRowRe
 		fields[i] = columnCoordinates(ref)
 	}
 	return latest, fields, nil
+}
+
+// columnLocatorOperationShape uses only existing scalar coordinates. Its
+// quadratic duplicate count is bounded by the admitted schema; it does not
+// materialize a speculative locator, source table or temporary encoded row.
+func columnLocatorOperationShape(op columnRowLocatorOperation, documents []columnWriteDocument, row int) (uint64, error) {
+	d := documents[row]
+	if len(d.ID) == 0 {
+		return 0, ErrTypedStringPatchInvalid
+	}
+	if op.operation == ColumnPublishOperationDelete {
+		return 0, nil
+	}
+	current := columnRowCoordinates{op.generation, columnPhysicalRowAssetPartID, row, op.commandLSN}
+	var raw [32]byte
+	writeColumnRowCoordinates(raw[:], current)
+	if _, err := decodeColumnRowCoordinates(d.ID, raw[:]); err != nil {
+		return 0, err
+	}
+	if d.fieldSources == nil {
+		if d.preserved != nil {
+			return columnPrimaryRowLocatorValueSize + 32, nil
+		}
+		return columnPrimaryRowLocatorValueSize, nil
+	}
+	if len(d.fieldSources) == 0 || uint64(len(d.fieldSources)) > math.MaxUint32 {
+		return 0, ErrTypedStringPatchInvalid
+	}
+	groups := uint64(0)
+	for i, c := range d.fieldSources {
+		if c == (columnRowCoordinates{}) {
+			c = current
+		}
+		writeColumnRowCoordinates(raw[:], c)
+		if _, err := decodeColumnRowCoordinates(d.ID, raw[:]); err != nil {
+			return 0, err
+		}
+		if c != current && (c.Generation >= current.Generation || c.AppliedCommandLSN >= current.AppliedCommandLSN) {
+			return 0, ErrTypedStringPatchInvalid
+		}
+		unique := true
+		for _, previous := range d.fieldSources[:i] {
+			if previous == (columnRowCoordinates{}) {
+				previous = current
+			}
+			if c == previous {
+				unique = false
+				break
+			}
+		}
+		if unique {
+			groups++
+		}
+	}
+	return 44 + 32*groups + 4*uint64(len(d.fieldSources)), nil
+}
+
+// buildColumnPrimaryRowLocatorOwnedBatch is the same CRL1/2/3 encoder over a
+// complete sorted operation. All actual birth classes (including temporary
+// group coordinates and both entry arrays) are debited before the first copy.
+// The returned batch borrows only this call's owned key/value backing, never an
+// arena/table pool. Its caller keeps it through synchronous publication terminal.
+func buildColumnPrimaryRowLocatorOwnedBatch(op columnRowLocatorOperation, documents []columnWriteDocument, baseRoot uint64, policy backenddb.OrderedRootStoragePolicy, account rootpublication.StableMetadataAccount) (backenddb.OrderedRootDeltaBatchPublishInput, error) {
+	if len(documents) != op.rows || op.rows < 0 {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, ErrTypedStringPatchInvalid
+	}
+	if err := validateColumnPublishOperation(op.operation); err != nil {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+	}
+	var total uint64
+	add := func(raw uint64, scan bool) error {
+		class, err := rootpublication.StableBackingClassBytes(raw, scan)
+		if err != nil || class > math.MaxUint64-total {
+			return ErrPreparedInsertResourceLimit
+		}
+		total += class
+		return nil
+	}
+	if uint64(len(documents)) > math.MaxUint64/uint64(unsafe.Sizeof(batch.Entry{})) {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, ErrPreparedInsertResourceLimit
+	}
+	// Scratch entries and the exact Batch entries are separate actual arrays.
+	for range 2 {
+		if err := add(uint64(len(documents))*uint64(unsafe.Sizeof(batch.Entry{})), true); err != nil {
+			return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+		}
+	}
+	if err := add(uint64(unsafe.Sizeof(batch.Batch{})), true); err != nil {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+	}
+	for row, d := range documents {
+		if row > 0 && bytes.Compare(documents[row-1].ID, d.ID) >= 0 {
+			return backenddb.OrderedRootDeltaBatchPublishInput{}, ErrTypedStringPatchInvalid
+		}
+		width, err := columnLocatorOperationShape(op, documents, row)
+		if err != nil {
+			return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+		}
+		if err = add(uint64(len(d.ID)), false); err != nil {
+			return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+		}
+		if err = add(width, false); err != nil {
+			return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+		}
+		if d.fieldSources != nil && op.operation != ColumnPublishOperationDelete {
+			if uint64(len(d.fieldSources)) > math.MaxUint64/uint64(unsafe.Sizeof(columnRowCoordinates{})) {
+				return backenddb.OrderedRootDeltaBatchPublishInput{}, ErrPreparedInsertResourceLimit
+			}
+			if err = add(uint64(len(d.fieldSources))*uint64(unsafe.Sizeof(columnRowCoordinates{})), false); err != nil {
+				return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+			}
+		}
+	}
+	if account != nil {
+		if err := account.ReserveStableMetadata(total); err != nil {
+			return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+		}
+	}
+	entries := make([]batch.Entry, len(documents))
+	for row, d := range documents {
+		entry := &entries[row]
+		entry.Key = bytes.Clone(d.ID)
+		if op.operation == ColumnPublishOperationDelete {
+			entry.Type = batch.OpDelete
+			continue
+		}
+		ref := DocumentRowRef{DocumentID: d.ID, Generation: op.generation, PartID: columnPhysicalRowAssetPartID, RowIndex: row, AppliedCommandLSN: op.commandLSN}
+		var err error
+		if d.fieldSources != nil {
+			entry.Value, err = encodeColumnFieldRowLocator(ref, d.fieldSources)
+		} else if d.preserved != nil {
+			entry.Value = encodeColumnMetadataRowLocator(ref, *d.preserved)
+		} else {
+			entry.Value = encodeColumnPrimaryRowLocator(ref)
+		}
+		if err != nil {
+			return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+		}
+	}
+	delta, err := batch.NewOwnedPointBatch(entries, nil) // both birth classes prepaid above
+	if err != nil {
+		return backenddb.OrderedRootDeltaBatchPublishInput{}, err
+	}
+	return backenddb.OrderedRootDeltaBatchPublishInput{BaseRoot: baseRoot, Delta: delta, StoragePolicy: policy}, nil
+}
+
+// validateColumnPrimaryRowLocatorOwnedBatch checks the same CRL1/2/3 grammar
+// against actual operation facts without copying, sorting or making group arrays.
+// This does not grant a resource pin or replace the installed durability closure.
+func validateColumnPrimaryRowLocatorOwnedBatch(op columnRowLocatorOperation, documents []columnWriteDocument, owned *batch.Batch) error {
+	if owned == nil || op.rows != len(documents) || op.rows < 0 {
+		return errColumnNativeContextIncomplete
+	}
+	entries := owned.SortedEntries()
+	if len(entries) != len(documents) {
+		return errColumnNativeContextIncomplete
+	}
+	for row, d := range documents {
+		e := entries[row]
+		width, err := columnLocatorOperationShape(op, documents, row)
+		if err != nil {
+			return err
+		}
+		if e.IsPtr || !bytes.Equal(e.Key, d.ID) || uint64(len(e.Value)) != width {
+			return errColumnNativeContextIncomplete
+		}
+		if op.operation == ColumnPublishOperationDelete {
+			if e.Type != batch.OpDelete {
+				return errColumnNativeContextIncomplete
+			}
+			continue
+		}
+		if e.Type != batch.OpPut {
+			return errColumnNativeContextIncomplete
+		}
+		var latest [columnPrimaryRowLocatorValueSize]byte
+		writeColumnPrimaryRowLocator(latest[:], DocumentRowRef{DocumentID: d.ID, Generation: op.generation, PartID: columnPhysicalRowAssetPartID, RowIndex: row, AppliedCommandLSN: op.commandLSN})
+		if d.fieldSources != nil {
+			latest[3] = '3'
+		} else if d.preserved != nil {
+			latest[3] = '2'
+		}
+		if !bytes.Equal(latest[:], e.Value[:columnPrimaryRowLocatorValueSize]) {
+			return errColumnNativeContextIncomplete
+		}
+		if d.fieldSources != nil {
+			if _, err := validateColumnFieldLocator(d.ID, e.Value, len(d.fieldSources)); err != nil {
+				return err
+			}
+			groups := int(binary.BigEndian.Uint32(e.Value[40:]))
+			current := columnRowCoordinates{op.generation, columnPhysicalRowAssetPartID, row, op.commandLSN}
+			for ordinal, source := range d.fieldSources {
+				if source == (columnRowCoordinates{}) {
+					source = current
+				}
+				index := int(binary.BigEndian.Uint32(e.Value[44+32*groups+4*ordinal:]))
+				var encoded [32]byte
+				writeColumnRowCoordinates(encoded[:], source)
+				if !bytes.Equal(encoded[:], e.Value[44+32*index:44+32*(index+1)]) {
+					return errColumnNativeContextIncomplete
+				}
+			}
+		} else if d.preserved != nil {
+			var encoded [32]byte
+			writeColumnRowCoordinates(encoded[:], *d.preserved)
+			if !bytes.Equal(encoded[:], e.Value[36:]) {
+				return errColumnNativeContextIncomplete
+			}
+		}
+	}
+	return nil
 }

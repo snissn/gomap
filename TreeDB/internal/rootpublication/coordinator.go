@@ -94,6 +94,7 @@ type Coordinator struct {
 	activeAttempt          PublishAttempt
 	retryAttempt           PublishAttempt
 	reportingAttempt       bool
+	finishingAttempt       bool
 
 	resourceCoalesces    uint64
 	resourceConflicts    uint64
@@ -123,8 +124,20 @@ func (snapshot *ReachabilitySnapshot) Release() {
 	if snapshot == nil {
 		return
 	}
-	snapshot.Resources.Release()
-	snapshot.Resources = nil
+	_ = snapshot.ReleaseCheckedV1()
+}
+
+// ReleaseCheckedV1 retains the actual cloned closure on pending cleanup.
+// A complete-with-error role is consumed and never re-decremented.
+func (snapshot *ReachabilitySnapshot) ReleaseCheckedV1() error {
+	if snapshot == nil || snapshot.Resources == nil {
+		return nil
+	}
+	err := snapshot.Resources.Release()
+	if snapshot.Resources.Owner() == ResourceOwnerReleased {
+		snapshot.Resources = nil
+	}
+	return err
 }
 
 // PublishAttempt is an opaque identity for exactly one captured callback.
@@ -547,16 +560,81 @@ func (c *Coordinator) removeWaiterLocked(target *durabilityWaiter) {
 // only after Publish returns. Tests may use this method to prove stale and
 // duplicate reports are rejected, but cannot manufacture state transitions.
 func (c *Coordinator) ReportPublishResult(attempt PublishAttempt, result PublishResult) error {
+	return c.ReportPublishResultWithTerminal(attempt, result, nil)
+}
+
+// ReportPublishResultWithTerminal keeps the exact reporting reservation while
+// synchronous cleanup runs without Coordinator.mu. The consumer is stack-only;
+// End completes before waiters/ACK can observe the finished report.
+func (c *Coordinator) ReportPublishResultWithTerminal(attempt PublishAttempt, result PublishResult, consumer StableSegmentTerminalConsumer) error {
+	return c.ReportPublishResultWithTerminalTransition(attempt, result, consumer, nil)
+}
+
+func (c *Coordinator) ReportPublishResultWithTerminalTransition(attempt PublishAttempt, result PublishResult, consumer StableSegmentTerminalConsumer, transition StableTerminalTransition) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.reportingAttempt || attempt.id == 0 || attempt.id != c.activeAttempt.id ||
-		attempt.candidate != c.activeAttempt.candidate || attempt.groupSize != c.activeAttempt.groupSize {
+	if !c.reportingAttempt || c.finishingAttempt || attempt.id == 0 || attempt.id != c.activeAttempt.id || attempt.candidate != c.activeAttempt.candidate || attempt.groupSize != c.activeAttempt.groupSize {
+		c.mu.Unlock()
 		return fmt.Errorf("%w: stale or mismatched attempt", ErrPublisherProtocol)
 	}
+	if result.Outcome != PublishSucceeded || !c.validSuccessfulReportLocked(attempt.candidate, result) {
+		c.reportingAttempt = false
+		c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started), false)
+		c.activeAttempt = PublishAttempt{}
+		c.mu.Unlock()
+		return nil
+	}
+	remove := int(attempt.groupSize)
+	if remove > len(c.pending) {
+		c.mu.Unlock()
+		return ErrPublisherProtocol
+	}
+	// publishing remains true: Enqueue can append, but cannot replace the reserved
+	// prefix and Stop cannot hand it to recovery while this report is finishing.
+	c.finishingAttempt = true
+	entries := c.pending[:remove]
+	c.mu.Unlock()
+	terminalErr := finishStablePendingTerminalTransition(entries, attempt.candidate, consumer, transition)
+	c.mu.Lock()
+	c.finishingAttempt = false
 	c.reportingAttempt = false
-	c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started))
+	if terminalErr != nil {
+		c.publishing = false
+		c.poison = errors.Join(ErrRecoveryRequired, terminalErr)
+		c.retryAttempt = PublishAttempt{}
+		c.failWaitersLocked(c.poison)
+		c.clearPublishRequestLocked()
+		// Released subsets are omitted; unfinished holders and their source credits
+		// remain pending until an explicit recovery handoff retries cleanup alone.
+		c.rebuildResourceActivePinsLocked()
+		c.notifyLocked()
+		c.signal()
+	} else {
+		c.finishPublishLocked(attempt.candidate, attempt.groupSize, result, c.clock.Now().Sub(attempt.started), true)
+	}
 	c.activeAttempt = PublishAttempt{}
-	return nil
+	c.mu.Unlock()
+	return terminalErr
+}
+
+func (c *Coordinator) validSuccessfulReportLocked(candidate *PreparedRootCandidate, result PublishResult) bool {
+	seq := result.DurableCommitSeq
+	if seq == 0 {
+		seq = candidate.frontier.commitSeq
+	}
+	oldest := result.OldestRecoverableCommitSeq
+	if oldest == 0 {
+		oldest = c.oldestRecoverable
+	}
+	return result.Err == nil && seq == candidate.frontier.commitSeq && oldest >= c.oldestRecoverable && oldest <= seq
+}
+
+func (c *Coordinator) rebuildResourceActivePinsLocked() {
+	clear(c.resourceActivePins)
+	for _, entry := range c.pending {
+		if set := entry.candidate.resourceSet(); set != nil && set.Owner() != ResourceOwnerReleased {
+			set.adjustActivePinsByKind(c.resourceActivePins, true)
+		}
+	}
 }
 
 func (c *Coordinator) Drain(ctx context.Context) error {
@@ -758,7 +836,11 @@ func (c *Coordinator) run() {
 			c.mu.Lock()
 			c.reportingAttempt = true
 			c.mu.Unlock()
-			_ = c.ReportPublishResult(attempt, result)
+			if reporter, ok := c.publisher.(PublisherTerminalReporter); ok {
+				_ = reporter.ReportRootPublishTerminal(c, attempt, result)
+			} else {
+				_ = c.ReportPublishResult(attempt, result)
+			}
 			continue
 		}
 		c.mu.Unlock()
@@ -774,9 +856,9 @@ func (c *Coordinator) run() {
 	}
 }
 
-func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, groupSize uint64, result PublishResult, service time.Duration) {
+func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, groupSize uint64, result PublishResult, service time.Duration, terminalDone bool) {
 	c.publishing = false
-	if c.stopping {
+	if c.stopping && !terminalDone {
 		return
 	}
 	switch result.Outcome {
@@ -803,7 +885,7 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 			return
 		}
 		group := candidate.durableRootGroup()
-		if err := consumeDurableRootGroup(group); err != nil {
+		if err := consumeDurableRootGroupUnlessFinished(group, terminalDone); err != nil {
 			cause := errors.Join(ErrPublisherProtocol, fmt.Errorf("consume durable-root lineage: %w", err))
 			if failErr := failDurableRootGroup(group, cause); failErr != nil {
 				cause = errors.Join(cause, failErr)
@@ -823,12 +905,19 @@ func (c *Coordinator) finishPublishLocked(candidate *PreparedRootCandidate, grou
 		var removedBytes uint64
 		for _, entry := range c.pending[:remove] {
 			removedBytes = saturatingAdd(removedBytes, entry.bytes)
-			if set := entry.candidate.resourceSet(); set != nil {
-				set.adjustActivePinsByKind(c.resourceActivePins, false)
-				set.releaseFrom(ResourceOwnerCoordinator)
+			if !terminalDone {
+				if set := entry.candidate.resourceSet(); set != nil {
+					set.adjustActivePinsByKind(c.resourceActivePins, false)
+					_ = set.releaseFrom(ResourceOwnerCoordinator)
+				}
 			}
 		}
-		c.pending = append([]pendingEntry(nil), c.pending[remove:]...)
+		copy(c.pending, c.pending[remove:])
+		clear(c.pending[len(c.pending)-remove:])
+		c.pending = c.pending[:len(c.pending)-remove]
+		if terminalDone {
+			c.rebuildResourceActivePinsLocked()
+		}
 		if removedBytes <= c.pendingBytes {
 			c.pendingBytes -= removedBytes
 		} else {
@@ -1180,6 +1269,9 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 		if set == nil {
 			continue
 		}
+		if set.Owner() == ResourceOwnerReleased {
+			continue
+		}
 		if _, ok := seen[set]; !ok {
 			c.recoverySets = append(c.recoverySets, set)
 			seen[set] = struct{}{}
@@ -1224,13 +1316,16 @@ func (c *Coordinator) captureRecoveryResourcesLocked() {
 type RecoveryResourceHandoff struct {
 	sets         []*StableResourceSet
 	durableRoots []*DurableRootTransaction
-	once         sync.Once
+	mu           sync.Mutex
+	releasing    bool
 }
 
 func (handoff *RecoveryResourceHandoff) Len() int {
 	if handoff == nil {
 		return 0
 	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
 	return len(handoff.sets)
 }
 
@@ -1238,13 +1333,47 @@ func (handoff *RecoveryResourceHandoff) Sets() []*StableResourceSet {
 	if handoff == nil {
 		return nil
 	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
 	return append([]*StableResourceSet(nil), handoff.sets...)
+}
+
+// AppendTerminalOwnedRoles copies the actual recovery owners into caller-owned
+// prepaid storage. It validates the complete destination capacity before
+// copying and exports no new ownership or live handoff view.
+func (handoff *RecoveryResourceHandoff) AppendTerminalOwnedRoles(dst []StableTerminalOwnedSet) ([]StableTerminalOwnedSet, error) {
+	if handoff == nil {
+		return dst, nil
+	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
+	if handoff.releasing {
+		return dst, ErrResourceOwnership
+	}
+	if len(handoff.sets) > cap(dst)-len(dst) {
+		return dst, ErrStableMetadataShapeUnsupported
+	}
+	for _, set := range handoff.sets {
+		duplicate := false
+		for _, role := range dst {
+			if role.Set == set {
+				duplicate = true
+				break
+			}
+		}
+		if set != nil && !duplicate {
+			dst = append(dst, StableTerminalOwnedSet{Set: set, Owner: ResourceOwnerRecovery})
+		}
+	}
+	return dst, nil
 }
 
 func (handoff *RecoveryResourceHandoff) DurableRootLen() int {
 	if handoff == nil {
 		return 0
 	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
 	return len(handoff.durableRoots)
 }
 
@@ -1254,23 +1383,75 @@ func (handoff *RecoveryResourceHandoff) DurableRoots() []*DurableRootTransaction
 	if handoff == nil {
 		return nil
 	}
+	handoff.mu.Lock()
+	defer handoff.mu.Unlock()
 	return append([]*DurableRootTransaction(nil), handoff.durableRoots...)
 }
 
-func (handoff *RecoveryResourceHandoff) Release() {
+func (handoff *RecoveryResourceHandoff) Release() error { return handoff.ReleaseWithTerminal(nil) }
+
+// Failure retains the actual unfinished closure. A later call retries cleanup
+// only; consumed COW authority is never reconstructed or applied again.
+func (handoff *RecoveryResourceHandoff) ReleaseWithTerminal(consumer StableSegmentTerminalConsumer) error {
+	return handoff.releaseWithTerminalPrepared(consumer, false)
+}
+
+func (handoff *RecoveryResourceHandoff) ReleasePreparedWithTerminal(consumer StableSegmentTerminalConsumer) error {
+	return handoff.releaseWithTerminalPrepared(consumer, true)
+}
+func (handoff *RecoveryResourceHandoff) releaseWithTerminalPrepared(consumer StableSegmentTerminalConsumer, prepared bool) error {
 	if handoff == nil {
-		return
+		return nil
 	}
-	handoff.once.Do(func() {
-		for _, set := range handoff.sets {
-			set.releaseFrom(ResourceOwnerRecovery)
+	handoff.mu.Lock()
+	if handoff.releasing {
+		handoff.mu.Unlock()
+		return ErrResourceOwnership
+	}
+	handoff.releasing = true
+	sets := handoff.sets
+	handoff.mu.Unlock()
+	var err error
+	if prepared {
+		for _, set := range sets {
+			if err = set.releaseFromWithTerminal(ResourceOwnerRecovery, consumer); err != nil {
+				break
+			}
 		}
+	} else {
+		err = handoff.releaseTerminalSets(sets, consumer)
+	}
+	handoff.mu.Lock()
+	handoff.releasing = false
+	if err == nil {
 		for _, transaction := range handoff.durableRoots {
 			transaction.releaseFromRecovery()
 		}
 		handoff.sets = nil
 		handoff.durableRoots = nil
-	})
+	}
+	handoff.mu.Unlock()
+	return err
+}
+func (handoff *RecoveryResourceHandoff) releaseTerminalSets(sets []*StableResourceSet, consumer StableSegmentTerminalConsumer) error {
+	joined := false
+	if consumer != nil {
+		var err error
+		joined, err = consumer.BeginTerminalRelease()
+		if err != nil {
+			return err
+		}
+		defer consumer.EndTerminalRelease(joined)
+	}
+	if err := prepareStableTerminalSetGroup(nil, sets, consumer); err != nil {
+		return err
+	}
+	for _, set := range sets {
+		if err := set.releaseFromWithTerminal(ResourceOwnerRecovery, consumer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // TakeRecoveryHandoff transfers all retained coordinator pins exactly once.
@@ -1282,7 +1463,7 @@ func (c *Coordinator) TakeRecoveryHandoff() (*RecoveryResourceHandoff, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if !c.stopped && c.poison == nil {
+	if c.finishingAttempt || c.publishing || (!c.stopped && c.poison == nil) {
 		return nil, ErrRecoveryHandoffUnavailable
 	}
 	c.captureRecoveryResourcesLocked()

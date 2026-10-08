@@ -228,14 +228,36 @@ func (c *PreparedRootCandidate) Resources() *StableResourceSet { return c.resour
 // Abandon releases a prepared candidate that failed before Enqueue. The exact
 // COW transaction is aborted before resource pins are released. It is
 // idempotent and cannot release coordinator-owned ownership.
-func (c *PreparedRootCandidate) Abandon() error {
+func (c *PreparedRootCandidate) Abandon() error { return c.AbandonWithTerminal(nil) }
+
+// AbandonWithTerminal validates and reserves the entire resource group before
+// aborting COW lineage. The transient consumer never enters candidate backing.
+func (c *PreparedRootCandidate) AbandonWithTerminal(consumer StableSegmentTerminalConsumer) error {
+	set := c.resourceSet()
+	if set != nil && set.finiteMetadata && set.Owner() != ResourceOwnerCandidate && set.Owner() != ResourceOwnerReleased {
+		return ErrResourceOwnership
+	}
+	joined := false
+	if consumer != nil {
+		var err error
+		joined, err = consumer.BeginTerminalRelease()
+		if err != nil {
+			return err
+		}
+		defer consumer.EndTerminalRelease(joined)
+	}
+	if set != nil {
+		if err := set.prepareTerminalRelease(consumer); err != nil {
+			return err
+		}
+	}
 	for _, transaction := range c.durableRootGroup().members {
 		if err := transaction.abortFrom(ResourceOwnerCandidate); err != nil {
 			return err
 		}
 	}
-	if set := c.resourceSet(); set != nil {
-		set.releaseFrom(ResourceOwnerCandidate)
+	if set != nil {
+		return set.releaseFromWithTerminal(ResourceOwnerCandidate, consumer)
 	}
 	return nil
 }

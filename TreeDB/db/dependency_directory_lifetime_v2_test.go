@@ -42,9 +42,7 @@ func TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation(t *testi
 	publish := func(resources *rootpublication.StableResourceSet, first bool) {
 		t.Helper()
 		database.durablePublishMu.Lock()
-		defer database.durablePublishMu.Unlock()
 		database.rootReuseMu.Lock()
-		defer database.rootReuseMu.Unlock()
 		next := database.meta
 		next.CommitSeq++
 		if first {
@@ -59,6 +57,9 @@ func TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
+		database.durableRoot.pending = candidate
+		database.rootReuseMu.Unlock()
+		database.durablePublishMu.Unlock()
 		published, err := database.executeDurableRootCandidateV1(candidate)
 		if err != nil {
 			t.Fatal(err)

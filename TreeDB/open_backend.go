@@ -1,6 +1,7 @@
 package treedb
 
 import (
+	"errors"
 	"github.com/snissn/gomap/TreeDB/db"
 )
 
@@ -47,23 +48,44 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 	opts.Dir = layout.mainDir
 	backend, err := db.Open(opts)
 	if err != nil {
+		if backend != nil {
+			// Preserve actual main-before-side-store cleanup, including retry. No side
+			// owner is detached while the pending backend may still need its bytes.
+			cleanup := func() error {
+				if e := backend.Close(); e != nil {
+					return e
+				}
+				var e error
+				for i := len(closers) - 1; i >= 0; i-- {
+					e = errors.Join(e, closers[i]())
+				}
+				return e
+			}
+			return backend, cleanup, err
+		}
+		var e error
 		for i := len(closers) - 1; i >= 0; i-- {
-			_ = closers[i]()
+			e = errors.Join(e, closers[i]())
+		}
+		if e != nil {
+			return nil, sideCleanup, errors.Join(err, e)
 		}
 		return nil, nil, err
 	}
+
 	// Lookup bytes and their durable authority must share the maintenance lifetime.
 	backend.SetStableDictionaryResourceProvider(dictionaryResources)
 	closers = append(closers, backend.Close)
 
 	cleanup := func() error {
-		var first error
 		for i := len(closers) - 1; i >= 0; i-- {
-			if err := closers[i](); err != nil && first == nil {
-				first = err
+			// Later child owners remain installed while an earlier physical owner
+			// has unresolved cleanup. Retry the same actual closure.
+			if err := closers[i](); err != nil {
+				return err
 			}
 		}
-		return first
+		return nil
 	}
 
 	return backend, cleanup, nil
@@ -76,10 +98,15 @@ func OpenBackend(opts Options) (*db.DB, func() error, error) {
 func OpenBackendWithCachedLeafLog(opts Options) (*db.DB, func() error, error) {
 	database, err := Open(opts)
 	if err != nil {
+		if database != nil {
+			return database.backend, database.Close, err
+		}
 		return nil, nil, err
 	}
 	if database.backend == nil {
-		_ = database.Close()
+		if e := database.Close(); e != nil {
+			return nil, database.Close, errors.Join(db.ErrClosed, e)
+		}
 		return nil, nil, db.ErrClosed
 	}
 	return database.backend, database.Close, nil
@@ -100,10 +127,15 @@ func OpenBackendWithCachedLeafLogStats(opts Options) (*db.DB, func() error, func
 func OpenBackendWithCachedLeafLogStatsAndDeferredVectorBuildMaintenance(opts Options) (*db.DB, func() error, func() map[string]string, *DeferredVectorBuildMaintenance, error) {
 	database, err := Open(opts)
 	if err != nil {
+		if database != nil {
+			return database.backend, database.Close, nil, nil, err
+		}
 		return nil, nil, nil, nil, err
 	}
 	if database.backend == nil {
-		_ = database.Close()
+		if e := database.Close(); e != nil {
+			return nil, database.Close, nil, nil, errors.Join(db.ErrClosed, e)
+		}
 		return nil, nil, nil, nil, db.ErrClosed
 	}
 	return database.backend, database.Close, database.Stats, &DeferredVectorBuildMaintenance{db: database}, nil

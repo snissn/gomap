@@ -3,6 +3,7 @@ package templatedb
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
@@ -61,7 +62,7 @@ type StablePhysicalCapturer interface {
 // CaptureTemplateResources returns the exact durable resources required to
 // decode templateID. The returned set owns the stable snapshot and deletion
 // pins until Release.
-func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64) (*rootpublication.StableResourceSet, error) {
+func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64) (result *rootpublication.StableResourceSet, retErr error) {
 	if s == nil || s.kv == nil {
 		return nil, errStoreUnavailable
 	}
@@ -76,24 +77,53 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		return nil, fmt.Errorf("%w: templatedb has no stable physical capturer", rootpublication.ErrUnresolvedResource)
 	}
 
-	// Serialize the stable read with Store-owned publication. Definitions are
-	// immutable after publication, but this also prevents capture from observing
-	// a partially completed id/routing update through a custom KV adapter.
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.captureRunning || s.pendingSnapshot != nil || s.pendingBuilder != nil || s.pendingToken != nil || s.pendingResources != nil {
+		s.mu.Unlock()
+		return nil, rootpublication.ErrStableResourceOperationBusy
+	}
+	s.captureRunning = true
+	s.mu.Unlock()
+	var builder *rootpublication.StableResourceSetBuilder
+	var unownedToken *rootpublication.StableResourceToken
+	var failedResources *rootpublication.StableResourceSet
+	var snapshotOwned bool
 
 	snapshot, err := provider.AcquireStableTemplateSnapshot()
 	if err != nil {
+		s.mu.Lock()
+		s.captureRunning = false
+		s.pendingSnapshot = snapshot
+		s.mu.Unlock()
 		return nil, fmt.Errorf("templatedb: establish stable template snapshot: %w", err)
 	}
 	if snapshot == nil {
+		s.mu.Lock()
+		s.captureRunning = false
+		s.mu.Unlock()
 		return nil, fmt.Errorf("%w: templatedb stable snapshot unavailable", rootpublication.ErrUnresolvedResource)
 	}
 	defer snapshot.ReleaseCaptureLease()
-	snapshotOwned := false
 	defer func() {
+		s.mu.Lock()
 		if !snapshotOwned {
-			_ = snapshot.Close()
+			s.pendingSnapshot = snapshot
+		}
+		if result == nil {
+			s.pendingBuilder = builder
+			if unownedToken != nil {
+				s.pendingToken = unownedToken
+			}
+			s.pendingResources = failedResources
+		}
+		s.captureRunning = false
+		s.mu.Unlock()
+		snapshot = nil
+		builder = nil
+		unownedToken = nil
+		failedResources = nil
+		if result == nil || !snapshotOwned {
+			retErr = errors.Join(retErr, s.drainCaptureCustodyV1())
 		}
 	}()
 
@@ -123,8 +153,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		Reachability: rootpublication.ReachabilityTemplateGeneration,
 		Digest:       definitionDigest,
 	}
-	builder := rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTemplateGeneration)
-	defer builder.Abandon()
+	builder = rootpublication.NewStableResourceSetBuilder(rootpublication.ReachabilityTemplateGeneration)
 
 	indexToken, err := snapshot.NewStableIndexResourceToken(rootpublication.StableResourceSpec{
 		Kind:         rootpublication.ResourceTemplate,
@@ -137,6 +166,7 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 		},
 		ContentSynced: true,
 	})
+	unownedToken = indexToken
 	if err != nil {
 		return nil, fmt.Errorf("templatedb: capture template %d index: %w", templateID, err)
 	}
@@ -144,10 +174,10 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 	// later builder/value-log operation fails.
 	snapshotOwned = true
 	if err := addTemplateStableResourceToken(builder, indexToken, templateStableIndexRole); err != nil {
-		indexToken.Release()
 		return nil, fmt.Errorf("templatedb: add template %d index: %w", templateID, err)
 	}
 
+	unownedToken = nil
 	if entry.Pointer {
 		if entry.RecordLength == 0 || entry.Offset > math.MaxUint64-entry.RecordLength {
 			return nil, fmt.Errorf("%w: templatedb template %d has invalid value-log frontier", rootpublication.ErrResourceConflict, templateID)
@@ -175,27 +205,31 @@ func (s *Store) CaptureTemplateResources(ctx context.Context, templateID uint64)
 			},
 			ContentSynced: true,
 		})
+		unownedToken = valueLogToken
 		if err != nil {
 			return nil, fmt.Errorf("templatedb: capture template %d value-log: %w", templateID, err)
 		}
 		if err := addTemplateStableResourceToken(builder, valueLogToken, templateStableValueLogRole); err != nil {
-			valueLogToken.Release()
 			return nil, fmt.Errorf("templatedb: add template %d value-log: %w", templateID, err)
 		}
 	}
+	unownedToken = nil
 
 	resources, err := builder.Freeze()
 	if err != nil {
 		return nil, fmt.Errorf("templatedb: freeze template %d resources: %w", templateID, err)
 	}
+	failedResources = resources
 	if err := validateCapturedTemplatePhysicalClosure(resources, entry.Pointer); err != nil {
-		resources.Release()
 		return nil, fmt.Errorf("templatedb: validate template %d physical closure: %w", templateID, err)
 	}
 	return resources, nil
 }
 
 func validateCapturedTemplatePhysicalClosure(resources *rootpublication.StableResourceSet, pointer bool) error {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return err
+	}
 	if resources == nil {
 		return fmt.Errorf("%w: template capture returned no physical closure", rootpublication.ErrUnresolvedResource)
 	}

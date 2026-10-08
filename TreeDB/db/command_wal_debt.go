@@ -56,6 +56,14 @@ type commandWALDependencyDebtEntry struct {
 }
 
 func (debt *CommandWALDependencyDebt) add(lsn uint64, rotationFiles []*rootpublication.StableResourceToken, resources ...*rootpublication.StableResourceSet) error {
+	if err := requireStableResourceMetadataExportV1(resources...); err != nil {
+		return err
+	}
+	for _, token := range rotationFiles {
+		if err := token.RequireMetadataExport(); err != nil {
+			return err
+		}
+	}
 	if debt == nil || lsn == 0 {
 		return fmt.Errorf("treedb: command WAL dependency debt requires a non-zero LSN")
 	}
@@ -92,6 +100,22 @@ func (debt *CommandWALDependencyDebt) add(lsn uint64, rotationFiles []*rootpubli
 }
 
 func (debt *CommandWALDependencyDebt) resourceViewThrough(lsn uint64, extra ...*rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
+	if err := requireStableResourceMetadataExportV1(extra...); err != nil {
+		return nil, err
+	}
+	if debt != nil {
+		debt.mu.Lock()
+		for _, entry := range debt.entries {
+			if entry.firstLSN > lsn {
+				break
+			}
+			if err := requireStableResourceMetadataExportV1(entry.resources...); err != nil {
+				debt.mu.Unlock()
+				return nil, err
+			}
+		}
+		debt.mu.Unlock()
+	}
 	sets := append([]*rootpublication.StableResourceSet(nil), extra...)
 	if debt != nil {
 		debt.mu.Lock()
@@ -138,6 +162,17 @@ func (debt *CommandWALDependencyDebt) rotationFileViewThrough(lsn uint64) ([]*ro
 		return nil, nil
 	}
 	debt.mu.Lock()
+	for _, entry := range debt.entries {
+		if entry.firstLSN > lsn {
+			break
+		}
+		for _, token := range entry.rotationFiles {
+			if err := token.RequireMetadataExport(); err != nil {
+				debt.mu.Unlock()
+				return nil, err
+			}
+		}
+	}
 	var tokens []*rootpublication.StableResourceToken
 	for _, entry := range debt.entries {
 		if entry.firstLSN > lsn {
@@ -424,6 +459,9 @@ func (debt *CommandWALDependencyDebt) stats(now time.Time) commandWALDependencyD
 }
 
 func stabilizeCommandWALResourceNamespaces(resources *rootpublication.StableResourceSet) error {
+	if err := resources.RequireMetadataExport(); err != nil {
+		return err
+	}
 	if resources == nil {
 		return nil
 	}

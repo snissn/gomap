@@ -1605,6 +1605,13 @@ func (z *Zipper) newApplyBuilder(data []byte, typ page.PageType, ops []batch.Ent
 		}
 		return z.newBuilderForType(data, typ, ops), nil
 	}
+	// Pager pages can be views into a larger mapped chunk. The allocator
+	// retains and accounts for that whole backing; bound only this synchronous
+	// writable page view before handing it to the owned builder.
+	if len(data) != page.PageSize {
+		return nil, ErrPreparedOwnedWorkspace
+	}
+	data = data[:page.PageSize:page.PageSize]
 	opts := node.BuilderOptions{InternalBaseDelta: z.indexInternalBaseDelta}
 	if typ == page.PageTypeLeaf {
 		rev := batchHasEntryRevisions(ops)
@@ -1884,6 +1891,9 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 		}
 	}
 	if len(ops) == 0 && len(ranges) == 0 {
+		if z.preparedOwned != nil && z.preparedOwned.pagerStaging {
+			z.preparedOwned.pagerStageReady = true
+		}
 		return rootID, nil, metrics, nil
 	}
 	metrics.ZipperApplyOps = len(ops) + len(ranges)
@@ -1983,7 +1993,7 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 					if err != nil {
 						return 0, nil, metrics, err
 					}
-					data, err := z.pager.GetForWrite(pid)
+					data, err := z.getApplyPageForWrite(pid)
 					if err != nil {
 						return 0, nil, metrics, err
 					}
@@ -2035,7 +2045,7 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 					if err != nil {
 						return 0, nil, metrics, err
 					}
-					data, err := z.pager.GetForWrite(pid)
+					data, err := z.getApplyPageForWrite(pid)
 					if err != nil {
 						return 0, nil, metrics, err
 					}
@@ -2084,6 +2094,9 @@ func (z *Zipper) applyWithConfig(rootID uint64, b *batch.Batch, cfg applyRunConf
 	if err != nil {
 		return 0, nil, metrics, err
 	}
+	if z.preparedOwned != nil && z.preparedOwned.pagerStaging {
+		z.preparedOwned.pagerStageReady = true
+	}
 	return finalRootID, retired, metrics, nil
 }
 
@@ -2092,6 +2105,9 @@ func (z *Zipper) loadNode(id uint64, scratchCtx *mergeScratch) (node.Node, bool,
 }
 
 func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.Node, bool, []byte, bool, zipperNodeLoadSource, error) {
+	if z != nil && z.preparedOwned != nil && z.preparedOwned.hasPruneHeader(ref) {
+		return node.Node{}, false, nil, false, zipperNodeLoadPager, ErrPreparedOwnedWorkspace
+	}
 	if z == nil || z.pager == nil {
 		return node.Node{}, false, nil, false, zipperNodeLoadPager, errors.New("zipper: missing pager")
 	}
@@ -2182,7 +2198,7 @@ func (z *Zipper) loadNodeRef(ref page.ChildRef, scratchCtx *mergeScratch) (node.
 		}
 		return n, false, nil, false, zipperNodeLoadLeafLogView, nil
 	}
-	data, err := z.pager.Get(ref.Page)
+	data, err := z.getApplyPage(ref.Page)
 	if err != nil {
 		return node.Node{}, false, nil, false, zipperNodeLoadPager, fmt.Errorf("zipper: load page=%d page_count=%d: %w", ref.Page, z.pager.PageCount(), err)
 	}
@@ -2545,7 +2561,7 @@ func (z *Zipper) ensureRootPage(key []byte, ref page.ChildRef, metrics *adaptive
 	if err != nil {
 		return 0, err
 	}
-	data, err := z.pager.GetForWrite(rootID)
+	data, err := z.getApplyPageForWrite(rootID)
 	if err != nil {
 		return 0, err
 	}
@@ -2646,7 +2662,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
-		newData, err := z.pager.GetForWrite(newPageID)
+		newData, err := z.getApplyPageForWrite(newPageID)
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
@@ -2667,7 +2683,7 @@ func (z *Zipper) writeRecursive(ref page.ChildRef, ops []batch.Entry, ranges []b
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
-		newData, err := z.pager.GetForWrite(newPageID)
+		newData, err := z.getApplyPageForWrite(newPageID)
 		if err != nil {
 			return page.ChildRef{}, nil, err
 		}
@@ -3030,7 +3046,7 @@ func (z *Zipper) mergeLeaf(oldNode *node.Node, builder *node.Builder, ops []batc
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
-				sdata, err = z.pager.GetForWrite(sid)
+				sdata, err = z.getApplyPageForWrite(sid)
 				if err != nil {
 					return page.ChildRef{}, nil, err
 				}
@@ -3257,7 +3273,7 @@ func (z *Zipper) mergeInternal(oldNode *node.Node, builder *node.Builder, ops []
 	target := builder
 	appendInternalMaybeCopied := func(sourceIndex uint16, key []byte, childRef page.ChildRef, first bool, copySourceLeafLog bool) error {
 		pageCount := z.pager.PageCount()
-		if childRef.Kind == page.ChildRefPage && childRef.Page >= pageCount {
+		if childRef.Kind == page.ChildRefPage && !z.applyPageExists(childRef.Page) {
 			return fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", childRef.Page, pageCount)
 		}
 		if first && key == nil {
@@ -3907,11 +3923,25 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			out = append(out, e)
 			continue
 		}
-		n, fromPager, ok, leafScratch, leafScratchRef, err := loadLeaf(e.child)
-		if err != nil {
-			return nil, nil, err
+		var fromPager, prune bool
+		var leafScratch []byte
+		var leafScratchRef bool
+		if z.preparedOwned != nil && z.preparedOwned.hasPruneHeader(e.child) {
+			typ, count, pagerRef, err := z.preparedOwned.ProbePruneHeader(e.child)
+			if err != nil {
+				return nil, nil, err
+			}
+			fromPager, prune = pagerRef, typ == page.PageTypeLeaf && count == 0
+			// A scalar probe reads no node bytes and calls no pager or leaf reader.
+			// Full-node load metrics therefore remain unchanged.
+		} else {
+			n, pagerRef, ok, buf, borrowed, err := loadLeaf(e.child)
+			if err != nil {
+				return nil, nil, err
+			}
+			fromPager, prune, leafScratch, leafScratchRef = pagerRef, ok && n.Count() == 0, buf, borrowed
 		}
-		if ok && n.Count() == 0 {
+		if prune {
 			if leafScratchRef {
 				releaseLeafPageScratch(scratch, leafScratch)
 			}
@@ -3993,7 +4023,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			if err != nil {
 				return page.ChildRef{}, false, err
 			}
-			data, err = z.pager.GetForWrite(pid)
+			data, err = z.getApplyPageForWrite(pid)
 			if err != nil {
 				return page.ChildRef{}, false, err
 			}
@@ -4080,7 +4110,7 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			if err != nil {
 				return page.ChildRef{}, err
 			}
-			data, err = z.pager.GetForWrite(pid)
+			data, err = z.getApplyPageForWrite(pid)
 			if err != nil {
 				return page.ChildRef{}, err
 			}
@@ -4155,11 +4185,11 @@ func (z *Zipper) coalesceLeafChildren(entries []internalEntry, budget *maintenan
 			}
 		}
 		if !z.outerLeavesInValueLog {
-			ldata, err = z.pager.GetForWrite(lid)
+			ldata, err = z.getApplyPageForWrite(lid)
 			if err != nil {
 				return page.ChildRef{}, page.ChildRef{}, nil, false, err
 			}
-			rdata, err = z.pager.GetForWrite(rid)
+			rdata, err = z.getApplyPageForWrite(rid)
 			if err != nil {
 				retired = append(retired, lid, rid)
 				return page.ChildRef{}, page.ChildRef{}, nil, false, err
@@ -4460,7 +4490,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 		if id >= pageCount {
 			return nil, false, fmt.Errorf("zipper: detected OOB child ID %d (page_count=%d)", id, pageCount)
 		}
-		data, err := z.pager.Get(id)
+		data, err := z.getApplyPage(id)
 		if err != nil {
 			return nil, false, err
 		}
@@ -4514,7 +4544,7 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 		if err != nil {
 			return page.ChildRef{}, false, err
 		}
-		data, err := z.pager.GetForWrite(pid)
+		data, err := z.getApplyPageForWrite(pid)
 		if err != nil {
 			return page.ChildRef{}, false, err
 		}
@@ -4596,11 +4626,11 @@ func (z *Zipper) coalesceInternalChildren(entries []internalEntry, budget *maint
 				return 0, 0, nil, false, err
 			}
 		}
-		ldata, err := z.pager.GetForWrite(lid)
+		ldata, err := z.getApplyPageForWrite(lid)
 		if err != nil {
 			return 0, 0, nil, false, err
 		}
-		rdata, err := z.pager.GetForWrite(rid)
+		rdata, err := z.getApplyPageForWrite(rid)
 		if err != nil {
 			retired = append(retired, lid, rid)
 			return 0, 0, nil, false, err
@@ -4818,7 +4848,7 @@ func (z *Zipper) createNewSplitInternal(currentTarget, rootBuilder *node.Builder
 		return nil, err
 	}
 
-	sdata, err := z.pager.GetForWrite(sid)
+	sdata, err := z.getApplyPageForWrite(sid)
 	if err != nil {
 		return nil, err
 	}

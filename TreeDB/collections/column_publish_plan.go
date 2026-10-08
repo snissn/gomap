@@ -7,6 +7,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	"unsafe"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
@@ -110,6 +111,8 @@ type ColumnPreparedAsset struct {
 // ColumnPublishPlanInput contains the normalized collection state and stage
 // hooks required to build an atomic column manifest publish plan.
 type ColumnPublishPlanInput struct {
+	preAppendOperation       *columnPreAppendOperationFacts        // transient trusted input; never copied into a plan
+	metadataAccount          rootpublication.StableMetadataAccount // actual source facet, private synchronous stage only
 	sourceDirectoryV2        *columnSourceDirectoryAppendV2
 	Collection               string
 	ColumnStore              *ColumnStoreConfig
@@ -169,6 +172,7 @@ type ColumnPublishPreparedAssets struct {
 
 // ColumnPublishManifestEncodeInput is passed to the manifest encoding stage.
 type ColumnPublishManifestEncodeInput struct {
+	metadataAccount          rootpublication.StableMetadataAccount // private constructor source, never hook authority
 	Collection               string
 	ColumnStore              ColumnStoreConfig
 	ActiveVectorIndexes      []VectorIndexDefinition
@@ -238,6 +242,7 @@ type ColumnManifestPublishSystemDeltaInput struct {
 // ColumnPublishPlan is the complete, validated plan for publishing a column
 // manifest generation and making it recovery-authoritative.
 type ColumnPublishPlan struct {
+	preAppendAccount                       rootpublication.StableMetadataAccount // borrowed byte creator; actual lease retains it
 	Enabled                                bool
 	Collection                             string
 	Operation                              ColumnPublishOperation
@@ -404,6 +409,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, 
 		return ColumnPublishPlan{}, err
 	}
 
+	if input.preAppendOperation != nil && (input.metadataAccount != input.preAppendOperation.account || input.Hooks.ExtractDocuments != nil || input.Hooks.EncodeDeclaredColumns != nil || input.Hooks.ValidateClosure != nil || input.Hooks.BuildRootDelta != nil || input.Hooks.BuildSystemDelta != nil || input.sourceDirectoryV2 != nil) {
+		return ColumnPublishPlan{}, errColumnNativeContextIncomplete
+	}
 	var metrics ColumnPublishStageMetrics
 	if input.Hooks.ExtractDocuments != nil {
 		start := time.Now()
@@ -488,7 +496,7 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, 
 		return ColumnPublishPlan{}, fmt.Errorf("collections: column publish root-delta construction failed: %w", err)
 	}
 	metrics.RootDeltaConstruction = time.Since(start)
-	if err := validateColumnManifestRootDeltaForPlan(rootDelta, input.CurrentManifestRecords, input.BaseManifestRootID, *cfg, manifest.Identity); err != nil {
+	if err := validateColumnManifestRootDeltaForPlanWithMetadataAccount(rootDelta, input.CurrentManifestRecords, input.BaseManifestRootID, *cfg, manifest.Identity, input.metadataAccount); err != nil {
 		return ColumnPublishPlan{}, fmt.Errorf("collections: invalid column publish root delta: %w", err)
 	}
 	durableResourceRequirements, durableResourceMutation, durableResourceRequirementsFallback, durableResourceRequirementWork, err := stableColumnManifestDurablePublication(
@@ -503,6 +511,16 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, 
 		return ColumnPublishPlan{}, err
 	}
 
+	if input.preAppendOperation != nil {
+		raw := uint64(len(manifestPrepared.Assets)) * uint64(unsafe.Sizeof(ColumnPreparedAsset{}))
+		class, err := rootpublication.StableBackingClassBytes(raw, true)
+		if err != nil {
+			return ColumnPublishPlan{}, err
+		}
+		if err = input.metadataAccount.ReserveStableMetadata(class); err != nil {
+			return ColumnPublishPlan{}, err
+		}
+	}
 	plan := ColumnPublishPlan{
 		Enabled:                                true,
 		Collection:                             input.Collection,
@@ -541,6 +559,9 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, 
 		stablePreparedAssets:                prepared.stableResourcesRequired || stableResources != nil,
 	}
 
+	if input.preAppendOperation != nil {
+		plan.preAppendAccount = input.metadataAccount
+	}
 	if input.Hooks.BuildSystemDelta != nil {
 		start = time.Now()
 		if err := input.Hooks.BuildSystemDelta(ColumnPublishSystemDeltaInput{Plan: cloneColumnPublishPlanForHook(plan)}); err != nil {
@@ -552,24 +573,30 @@ func BuildColumnPublishPlan(input ColumnPublishPlanInput) (_ ColumnPublishPlan, 
 	return plan, nil
 }
 
+// validatedStoragePolicy is the complete scalar preflight shared by every
+// root-delta representation. It constructs neither an iterator nor a batch.
+func (delta ColumnManifestRootDelta) validatedStoragePolicy() (backenddb.OrderedRootStoragePolicy, error) {
+	if delta.RootName == "" {
+		return 0, errors.New("collections: column manifest root delta missing root name")
+	}
+	identity := delta.Identity
+	normalizeColumnManifestIdentityDefaults(&identity)
+	if err := validateColumnManifestIdentity(identity); err != nil {
+		return 0, err
+	}
+	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
+		return 0, errors.New("collections: column manifest root delta identity record does not match identity")
+	}
+	return backendRootStoragePolicy(delta.StoragePolicy)
+}
+
 // OrderedRootPublishInput converts the root delta into a backend ordered-root
 // publish input while preserving the already-validated identity record bytes.
 func (delta ColumnManifestRootDelta) OrderedRootPublishInput() (backenddb.OrderedRootPublishInput, error) {
 	if delta.sourceDirectoryV2 != nil {
 		return backenddb.OrderedRootPublishInput{}, errors.New("collections: incremental source directory requires root delta publication")
 	}
-	if delta.RootName == "" {
-		return backenddb.OrderedRootPublishInput{}, errors.New("collections: column manifest root delta missing root name")
-	}
-	identity := delta.Identity
-	normalizeColumnManifestIdentityDefaults(&identity)
-	if err := validateColumnManifestIdentity(identity); err != nil {
-		return backenddb.OrderedRootPublishInput{}, err
-	}
-	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
-		return backenddb.OrderedRootPublishInput{}, errors.New("collections: column manifest root delta identity record does not match identity")
-	}
-	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
+	policy, err := delta.validatedStoragePolicy()
 	if err != nil {
 		return backenddb.OrderedRootPublishInput{}, err
 	}
@@ -595,18 +622,7 @@ func columnManifestRootPublishedBytes(delta ColumnManifestRootDelta) int64 {
 }
 
 func (delta ColumnManifestRootDelta) OrderedRootDeltaPublishInput() (backenddb.OrderedRootDeltaPublishInput, error) {
-	if delta.RootName == "" {
-		return backenddb.OrderedRootDeltaPublishInput{}, errors.New("collections: column manifest root delta missing root name")
-	}
-	identity := delta.Identity
-	normalizeColumnManifestIdentityDefaults(&identity)
-	if err := validateColumnManifestIdentity(identity); err != nil {
-		return backenddb.OrderedRootDeltaPublishInput{}, err
-	}
-	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
-		return backenddb.OrderedRootDeltaPublishInput{}, errors.New("collections: column manifest root delta identity record does not match identity")
-	}
-	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
+	policy, err := delta.validatedStoragePolicy()
 	if err != nil {
 		return backenddb.OrderedRootDeltaPublishInput{}, err
 	}
@@ -624,18 +640,7 @@ func (delta ColumnManifestRootDelta) OrderedRootDeltaPublishInput() (backenddb.O
 }
 
 func (delta ColumnManifestRootDelta) OrderedRootDeltaBatchPublishInput() (backenddb.OrderedRootDeltaBatchPublishInput, func(), error) {
-	if delta.RootName == "" {
-		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, errors.New("collections: column manifest root delta missing root name")
-	}
-	identity := delta.Identity
-	normalizeColumnManifestIdentityDefaults(&identity)
-	if err := validateColumnManifestIdentity(identity); err != nil {
-		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
-	}
-	if delta.IdentityRecord != encodeColumnManifestIdentityRecordArray(identity) {
-		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, errors.New("collections: column manifest root delta identity record does not match identity")
-	}
-	policy, err := backendRootStoragePolicy(delta.StoragePolicy)
+	policy, err := delta.validatedStoragePolicy()
 	if err != nil {
 		return backenddb.OrderedRootDeltaBatchPublishInput{}, func() {}, err
 	}
@@ -822,6 +827,11 @@ func prepareColumnPublishAssets(input ColumnPublishPlanInput, cfg ColumnStoreCon
 	if input.Hooks.PrepareAssets == nil {
 		return ColumnPublishPreparedAssets{}, nil
 	}
+	if input.preAppendOperation != nil {
+		// Only the private installed producer uses this transient immutable view;
+		// generic user hooks keep their defensive config/identity copies below.
+		return input.Hooks.PrepareAssets(ColumnPublishAssetPrepareInput{Collection: input.Collection, ColumnStore: cfg, Operation: input.Operation, AppliedCommandLSN: input.AppliedCommandLSN, CurrentManifest: input.CurrentManifest})
+	}
 	return input.Hooks.PrepareAssets(ColumnPublishAssetPrepareInput{
 		Collection:        input.Collection,
 		ColumnStore:       columnPublishHookConfig(cfg),
@@ -832,6 +842,9 @@ func prepareColumnPublishAssets(input ColumnPublishPlanInput, cfg ColumnStoreCon
 }
 
 func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreConfig, prepared ColumnPublishPreparedAssets) (ColumnPublishManifestEncodeResult, error) {
+	if input.preAppendOperation != nil {
+		return input.preAppendOperation.installedManifest(input, cfg, prepared)
+	}
 	if input.sourceDirectoryV2 != nil {
 		return encodeColumnSourceDirectoryManifestV2(input, cfg, prepared)
 	}
@@ -839,6 +852,7 @@ func encodeColumnPublishManifest(input ColumnPublishPlanInput, cfg ColumnStoreCo
 		return ColumnPublishManifestEncodeResult{}, errors.New("collections: column publish manifest encode hook is required")
 	}
 	return input.Hooks.EncodeManifest(ColumnPublishManifestEncodeInput{
+		metadataAccount:          input.metadataAccount,
 		Collection:               input.Collection,
 		ColumnStore:              columnPublishHookConfig(cfg),
 		ActiveVectorIndexes:      append([]VectorIndexDefinition(nil), input.ActiveVectorIndexes...),
@@ -876,6 +890,12 @@ func validateColumnPublishClosure(input ColumnPublishPlanInput, cfg ColumnStoreC
 }
 
 func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreConfig, manifest ColumnPublishManifestEncodeResult, closure ColumnPublishDurabilityClosure) (ColumnManifestRootDelta, error) {
+	if input.preAppendOperation != nil {
+		if manifest.Identity != input.preAppendOperation.manifestDelta.Identity || !sameColumnManifestRecordsBytes(manifest.Records, input.preAppendOperation.manifestDelta.Records) {
+			return ColumnManifestRootDelta{}, errColumnNativeContextIncomplete
+		}
+		return input.preAppendOperation.manifestDelta, nil
+	}
 	if input.Hooks.BuildRootDelta != nil {
 		return input.Hooks.BuildRootDelta(ColumnPublishRootDeltaInput{
 			Collection:         input.Collection,
@@ -888,7 +908,7 @@ func buildColumnPublishRootDelta(input ColumnPublishPlanInput, cfg ColumnStoreCo
 	if cfg.ManifestRoot == nil {
 		return ColumnManifestRootDelta{}, errors.New("missing column manifest root descriptor")
 	}
-	mutations, err := buildColumnManifestMutationDelta(input.CurrentManifestRecords, manifest.Records)
+	mutations, err := buildColumnManifestMutationDeltaWithMetadataAccount(input.CurrentManifestRecords, manifest.Records, input.metadataAccount)
 	if err != nil {
 		return ColumnManifestRootDelta{}, err
 	}
@@ -937,6 +957,9 @@ func validateColumnPublishPlanConfig(collection string, cfg *ColumnStoreConfig) 
 }
 
 func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, currentRecords []columnManifestRecord, baseRootID uint64, cfg ColumnStoreConfig, identity ColumnManifestIdentity) error {
+	return validateColumnManifestRootDeltaForPlanWithMetadataAccount(delta, currentRecords, baseRootID, cfg, identity, nil)
+}
+func validateColumnManifestRootDeltaForPlanWithMetadataAccount(delta ColumnManifestRootDelta, currentRecords []columnManifestRecord, baseRootID uint64, cfg ColumnStoreConfig, identity ColumnManifestIdentity, account rootpublication.StableMetadataAccount) error {
 	if cfg.ManifestRoot == nil {
 		return errors.New("missing column manifest root descriptor")
 	}
@@ -970,7 +993,7 @@ func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, curre
 	if len(delta.Records) == 0 {
 		return errors.New("manifest records omitted")
 	}
-	snapshot, err := decodeColumnManifestRecords(delta.Records)
+	snapshot, err := decodeColumnManifestRecordsWithMetadataAccount(delta.Records, account)
 	if err != nil {
 		return err
 	}
@@ -997,12 +1020,11 @@ func validateColumnManifestRootDeltaForPlan(delta ColumnManifestRootDelta, curre
 				return fmt.Errorf("manifest mutations are not strictly sorted at index %d", i)
 			}
 		}
-		expectedMutations, err := buildColumnManifestMutationDelta(currentRecords, delta.Records)
-		if err != nil {
+		if err := validateColumnManifestMutationDelta(currentRecords, delta.Records, delta.Mutations); err != nil {
+			if errors.Is(err, errColumnManifestMutationPostState) {
+				return err
+			}
 			return fmt.Errorf("derive expected manifest mutation delta: %w", err)
-		}
-		if !columnManifestMutationsEqual(expectedMutations, delta.Mutations) {
-			return errors.New("manifest mutation delta does not produce logical post-state")
 		}
 	}
 	return nil
@@ -1114,25 +1136,58 @@ func columnPreparedAssetMatchKeyOf(asset ColumnPreparedAsset) columnPreparedAsse
 }
 
 func columnSortKeyMatchString(sortKeys []ColumnSortKey) string {
-	if len(sortKeys) == 0 {
-		return ""
+	result, err := columnSortKeyMatchStringWithMetadataAccount(sortKeys, nil)
+	if err != nil {
+		panic(err)
 	}
-	var out string
-	for _, sortKey := range sortKeys {
-		out += sortKey.Column + "\x00" + string(sortKey.Direction) + "\x00"
-	}
-	return out
+	return result
 }
-
+func columnSortKeyMatchStringWithMetadataAccount(sortKeys []ColumnSortKey, account rootpublication.StableMetadataAccount) (string, error) {
+	if len(sortKeys) == 0 {
+		return "", nil
+	}
+	total := 0
+	for _, k := range sortKeys {
+		if len(k.Column) > math.MaxInt-total-2 || len(k.Direction) > math.MaxInt-total-2-len(k.Column) {
+			return "", ErrPreparedInsertResourceLimit
+		}
+		total += len(k.Column) + len(k.Direction) + 2
+	}
+	if err := reserveColumnManifestBacking(account, uint64(total), false); err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	out.Grow(total)
+	for _, k := range sortKeys {
+		out.WriteString(k.Column)
+		out.WriteByte(0)
+		out.WriteString(string(k.Direction))
+		out.WriteByte(0)
+	}
+	return out.String(), nil
+}
 func columnSortKeysFromMatchString(raw string) ([]ColumnSortKey, error) {
+	return columnSortKeysFromMatchStringWithMetadataAccount(raw, nil)
+}
+func columnSortKeysFromMatchStringWithMetadataAccount(raw string, account rootpublication.StableMetadataAccount) ([]ColumnSortKey, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	parts := strings.Split(raw, "\x00")
-	if len(parts) < 3 || parts[len(parts)-1] != "" || (len(parts)-1)%2 != 0 {
-		return nil, fmt.Errorf("collections: malformed column sort key metadata")
+	count, err := columnManifestSortKeyCount(raw)
+	if err != nil {
+		return nil, err
 	}
-	out := make([]ColumnSortKey, 0, (len(parts)-1)/2)
+	if count > uint64(math.MaxInt-1)/2 {
+		return nil, ErrPreparedInsertResourceLimit
+	}
+	if err = reserveColumnManifestArray(account, int(count)*2+1, uint64(unsafe.Sizeof(string("")))); err != nil {
+		return nil, err
+	}
+	if err = reserveColumnManifestArray(account, int(count), uint64(unsafe.Sizeof(ColumnSortKey{}))); err != nil {
+		return nil, err
+	}
+	parts := strings.Split(raw, "\x00")
+	out := make([]ColumnSortKey, 0, count)
 	for i := 0; i < len(parts)-1; i += 2 {
 		out = append(out, ColumnSortKey{Column: parts[i], Direction: ColumnSortDirection(parts[i+1])})
 	}
@@ -1140,6 +1195,9 @@ func columnSortKeysFromMatchString(raw string) ([]ColumnSortKey, error) {
 }
 
 func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
+	return validateColumnPreparedAssetForPlanWithMetadataAccount(asset, nil)
+}
+func validateColumnPreparedAssetForPlanWithMetadataAccount(asset ColumnPreparedAsset, account rootpublication.StableMetadataAccount) error {
 	if err := validateColumnAssetRefForPlan(asset.Ref); err != nil {
 		return err
 	}
@@ -1162,7 +1220,7 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if asset.SortKey != "" && asset.Ref.Kind != ColumnAssetKindTCS1TypedColumnPart {
 		return fmt.Errorf("collections: column prepared asset sort key is only valid for %s refs, got %s", ColumnAssetKindTCS1TypedColumnPart, asset.Ref.Kind)
 	}
-	sortKeys, err := columnSortKeysFromMatchString(asset.SortKey)
+	sortKeys, err := columnSortKeysFromMatchStringWithMetadataAccount(asset.SortKey, account)
 	if err != nil {
 		return err
 	}
@@ -1172,15 +1230,15 @@ func validateColumnPreparedAssetForPlan(asset ColumnPreparedAsset) error {
 	if asset.Ref.Kind == ColumnAssetKindTCS1TypedColumnPart && len(sortKeys) > typedColumnPartSortKeyMaxColumns {
 		return fmt.Errorf("collections: column prepared asset sort key columns=%d exceeds cap %d", len(sortKeys), typedColumnPartSortKeyMaxColumns)
 	}
-	seenSortKeyColumns := make(map[string]struct{}, len(sortKeys))
-	for _, sortKey := range sortKeys {
+	for i, sortKey := range sortKeys {
 		if sortKey.Column == "" {
 			return errors.New("collections: column prepared asset sort key column is required")
 		}
-		if _, exists := seenSortKeyColumns[sortKey.Column]; exists {
-			return fmt.Errorf("collections: column prepared asset duplicate sort key column %q", sortKey.Column)
+		for _, previous := range sortKeys[:i] {
+			if previous.Column == sortKey.Column {
+				return fmt.Errorf("collections: column prepared asset duplicate sort key column %q", sortKey.Column)
+			}
 		}
-		seenSortKeyColumns[sortKey.Column] = struct{}{}
 		if sortKey.Direction != ColumnSortAscending {
 			return fmt.Errorf("collections: column prepared asset sort key column %q direction %q is unsupported", sortKey.Column, sortKey.Direction)
 		}
@@ -1303,6 +1361,7 @@ func cloneColumnPublishDurabilityClosure(closure ColumnPublishDurabilityClosure)
 
 func cloneColumnPublishPlanForHook(plan ColumnPublishPlan) ColumnPublishPlan {
 	plan.stableResources = nil
+	plan.preAppendAccount = nil // hook result has no independent creator authority
 	plan.PreparedAssets = cloneColumnPreparedAssets(plan.PreparedAssets)
 	return plan
 }

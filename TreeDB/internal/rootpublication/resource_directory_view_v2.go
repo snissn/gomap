@@ -17,6 +17,9 @@ func (set *StableResourceSet) DependencyDirectoryV2() (*DependencyDirectoryV2, e
 	}
 	set.mu.Lock()
 	defer set.mu.Unlock()
+	if err := requireOrdinaryStableResourceInputs(nil, nil, set); err != nil {
+		return nil, err
+	}
 	if set.physicalOnly {
 		return nil, ErrResourceOwnership
 	}
@@ -56,6 +59,9 @@ func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyD
 	}
 	source.mu.Lock()
 	defer source.mu.Unlock()
+	if err := requireOrdinaryStableResourceInputs(nil, nil, source); err != nil {
+		return nil, err
+	}
 	owner := ResourceOwnerState(source.owner.Load())
 	if owner == ResourceOwnerReleased || owner == ResourceOwnerTransferred {
 		return nil, ErrResourceOwnership
@@ -127,6 +133,9 @@ func BindDependencyDirectoryV2(source *StableResourceSet, directory *DependencyD
 }
 
 func cloneStableResourceEntryDirectoryV2(entry *stableResourceEntry, directory *DependencyDirectoryV2) (stableResourceEntry, error) {
+	if stableResourceEntryHasMetadataAccount(entry) {
+		return stableResourceEntry{}, ErrStableMetadataShapeUnsupported
+	}
 	token := activeEntryToken(*entry)
 	if token == nil || token.released.Load() {
 		return stableResourceEntry{}, ErrResourceOwnership
@@ -134,8 +143,9 @@ func cloneStableResourceEntryDirectoryV2(entry *stableResourceEntry, directory *
 	if err := token.namespace.validateStable(); err != nil {
 		return stableResourceEntry{}, err
 	}
-	fields := make([]ReachabilityField, 0, len(entry.reachability))
-	for field := range entry.reachability {
+	fields := make([]ReachabilityField, 0, entry.reachability.len())
+	for _, stableBinding1 := range entry.reachability.records() {
+		field := stableBinding1.key
 		fields = append(fields, field)
 	}
 	if len(fields) == 0 {
@@ -329,6 +339,9 @@ func (set *StableResourceSet) DependencyDirectoryBaseV2() (*DependencyDirectoryV
 	}
 	set.mu.Lock()
 	defer set.mu.Unlock()
+	if err := requireOrdinaryStableResourceInputs(nil, nil, set); err != nil {
+		return nil, err
+	}
 	if set.physicalOnly || set.Owner() == ResourceOwnerReleased || set.Owner() == ResourceOwnerTransferred {
 		return nil, ErrResourceOwnership
 	}
