@@ -105,6 +105,13 @@ descriptive, with no retained-tail or native qualification claim. Successful
 collection and analysis remain separate from current-head review, race tests,
 actual runtime evidence and coordinator acceptance.
 
+Matched timing/allocation comparisons require identical `public_calls/op`,
+`close_ok` and observed `overlapping_readers` across all twelve measured runs
+of each leaf. Unequal actual reader-overlap counts refuse analysis; they are
+neither normalized nor removed as noisy samples. The count is recomputed from
+raw public-call intervals and bound to the Go benchmark summary. Equal counts
+do not establish identical contention schedules or causal attribution.
+
 The analyzer binds ordinary ACKs to observed command-WAL counters in write-only
 windows. Seed and growth each append one command per 16-key group; each joined
 epoch adds two such group series and one ordinary command. Durable mode requires

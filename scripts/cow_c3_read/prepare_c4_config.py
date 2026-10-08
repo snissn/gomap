@@ -2,7 +2,7 @@
 import argparse
 import itertools
 from pathlib import Path
-from c4_protocol import SCHEMA,PROFILES,MODES,LAYOUTS,SIZES,TIMED_SCOPE,case_names,metric_rules,workload,write
+from c4_protocol import SCHEMA,PROFILES,MODES,LAYOUTS,SIZES,TIMED_SCOPE,COMPARABLE_METRICS,case_names,metric_rules,workload,write
 from prepare_config import draft as c3_draft
 from protocol import C4_PACKAGE, HARNESS_FILES
 
@@ -20,7 +20,7 @@ def draft():
         case={"profile":profile,"mode":mode,"layout":layout,"keys":keys}
         case_id,benchmark=case_names(case)
         case.update(id=case_id,benchmark=benchmark,package=C4_PACKAGE,iterations=1,warmup_iterations=1,
-                    workload_contract=workload(keys,1),comparable_metrics=["public_calls/op","close_ok"],comparison_metrics={"ns/op":"lower","B/op":"lower","allocs/op":"lower"},
+                    workload_contract=workload(keys,1),comparable_metrics=list(COMPARABLE_METRICS),comparison_metrics={"ns/op":"lower","B/op":"lower","allocs/op":"lower"},
                     timed_scope=TIMED_SCOPE,ack_contract="CommitRelaxed; resolved profile ordinary ACK",rules=metric_rules(),latency_groups=[])
         base["cases"].append(case)
     return base

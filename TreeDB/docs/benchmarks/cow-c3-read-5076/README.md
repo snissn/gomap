@@ -37,7 +37,7 @@ Collect one leaf per fresh process using identical fixture bytes and separate
 baseline/candidate binaries, source/module/toolchain receipts and `GOMAXPROCS=4`:
 
 ```sh
-GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc -run '^$' \
+GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
   -bench '^BenchmarkC3PublicReadAdmission/command_wal_relaxed/cow_btree/inline/point$' \
   -benchtime=1024x -count=1 -benchmem
 ```

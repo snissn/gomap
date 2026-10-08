@@ -50,7 +50,7 @@ def analyze(packet,emit=True):
         for case in c["cases"]:
             group=[r for r in rows if r["case"]==case["id"] and r["phase"]=="measured"]
             need(len(group)==12,"missing ABBA measured runs")
-            for metric in case["comparable_metrics"]:need(len({r["metrics"][metric] for r in group})==1,"unmatched work summary")
+            for metric in case["comparable_metrics"]:need(len({r["metrics"][metric] for r in group})==1,"unmatched work summary " + metric)
             item={"case":case["id"],"metrics":{}}
             for metric,direction in case["comparison_metrics"].items():
                 a=[r["metrics"][metric] for r in group if r["variant"]=="baseline"];b=[r["metrics"][metric] for r in group if r["variant"]=="candidate"]

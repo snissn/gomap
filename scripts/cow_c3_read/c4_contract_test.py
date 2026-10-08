@@ -114,6 +114,55 @@ class AffinityContractTest(unittest.TestCase):
         bad=copy.deepcopy(c);del bad["host"]["cpu_affinity"]
         with self.assertRaisesRegex(ValueError,"missing/unknown host fields"):
             c4_protocol.validate_config(bad)
+        bad=copy.deepcopy(c)
+        bad["cases"][0]["comparable_metrics"].remove("overlapping_readers")
+        with self.assertRaisesRegex(ValueError,"unfrozen comparison scope"):
+            c4_protocol.validate_config(bad)
+
+
+class MatchedOverlapContractTest(unittest.TestCase):
+    def analyze_rows(self, changes=None):
+        # Isolate the matched comparison gate; these synthetic rows are test
+        # inputs only. Provenance/raw validation remain separately exercised.
+        from unittest.mock import patch
+        import c4_analyze
+        from prepare_c4_config import draft
+        c = draft()
+        c["result_class"] = "matched-supported-evidence"
+        c["cases"] = [c["cases"][0]]
+        c["noise_policy"].update(max_spread_fraction=.3,
+                                 material_regression_fraction=.05,
+                                 minimum_effect_fraction=.1)
+        rows = []
+        for cycle in range(1, 4):
+            for slot, variant in enumerate(c["order"], 1):
+                rows.append(dict(case=c["cases"][0]["id"], phase="measured",
+                                 cycle=cycle, slot=slot, variant=variant,
+                                 metadata={"synthetic": True}, metrics={
+                                     "ns/op": 10, "B/op": 2, "allocs/op": 1,
+                                     "public_calls/op": 100, "close_ok": 1,
+                                     "overlapping_readers": 2}))
+        if changes:
+            changes(rows)
+        with patch.object(c4_analyze, "validate_packet", return_value=(c, rows, [], {})), \
+             patch.object(c4_analyze, "load", return_value={"effective_module_identity": "test"}), \
+             patch.object(c4_analyze, "sha", return_value="test"):
+            return c4_analyze.analyze("/synthetic-comparison-packet", emit=False)
+
+    def test_equal_observed_counts_permit_the_descriptive_comparison(self):
+        self.assertEqual(self.analyze_rows()["result_class"], "matched-supported-evidence")
+
+    def test_cross_product_overlap_mismatch_refuses_comparison(self):
+        def change(rows):
+            for row in rows:
+                if row["variant"] == "candidate":
+                    row["metrics"]["overlapping_readers"] = 1
+        with self.assertRaisesRegex(ValueError, "unmatched work summary overlapping_readers"):
+            self.analyze_rows(change)
+
+    def test_within_product_schedule_variation_also_refuses(self):
+        with self.assertRaisesRegex(ValueError, "unmatched work summary overlapping_readers"):
+            self.analyze_rows(lambda rows: rows[0]["metrics"].update(overlapping_readers=3))
 
 
 class OwnerContractTest(unittest.TestCase):

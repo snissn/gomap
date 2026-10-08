@@ -29,6 +29,7 @@ ACK_ROUTE = {
 LAYOUT_PHASES = ("seed_layout", "checkpoint_layout", "reopen_layout")
 LAYOUT_OWNER_KEYS = ("treedb.cache.cow.views", "treedb.cache.cow.active_cuts", "treedb.cache.cow.external_leases")
 TIMED_SCOPE = "epochs include startup/oracle/recorder/boundary overhead; seed, representation diagnostics and cleanup excluded; raw complete call durations retained"
+COMPARABLE_METRICS = ("public_calls/op", "close_ok", "overlapping_readers")
 # Resolve ACK literals against Profile.OrdinaryAckClass before freeze; this is
 # a source contract, not permission to accept the requested profile string.
 
@@ -162,7 +163,7 @@ def validate_config(c):
         for k in ("iterations","warmup_iterations"):finite(x[k],k,True,True);need(x[k]<=8,"finite epoch bound")
         need(digest(x["workload_contract"])==digest(workload(x["keys"],x["iterations"])),"schedule/work contract mismatch")
         need(x["ack_contract"]=="CommitRelaxed; resolved profile ordinary ACK" and x["timed_scope"]==TIMED_SCOPE,"ACK/timing scope")
-        need(x["comparable_metrics"]==["public_calls/op","close_ok"] and x["comparison_metrics"]=={"ns/op":"lower","B/op":"lower","allocs/op":"lower"},"unfrozen comparison scope")
+        need(x["comparable_metrics"]==list(COMPARABLE_METRICS) and x["comparison_metrics"]=={"ns/op":"lower","B/op":"lower","allocs/op":"lower"},"unfrozen comparison scope")
         need(x["latency_groups"]==[],"raw call distributions required")
         need(digest(x["rules"])==digest(metric_rules()),"metric rules mismatch")
     need(len(cells)==36 and len(set(cells))==36 and set(cells)==expected,"missing/duplicate/extra sustained matrix")
