@@ -345,7 +345,11 @@ readiness waiting cannot prove host exclusivity or guarantee a successful run.
 clock, with no Go or child execution. It covers load-only waiting, non-load and
 foreign/malformed refusals, source/binary changes during waiting, a shared finite
 budget, cancellation, retained failed traces, admission ordering, raw/probe/wait
-tampering and unchanged post-leaf refusal. These are infrastructure controls.
+tampering, cancellation during final admission persistence, delay between a
+persisted wait and the next probe, and unchanged post-leaf refusal. A cancelled
+final admission can remain unused in a failed ledger; it launches no child and
+its blocked interval ends at its recorded admission completion. These are
+infrastructure controls.
 
 `host_isolation_test.py` uses synthetic censuses and owned Python children only.
 It covers foreign tooling/tests, zombies, PID custody/reuse, malformed census,

@@ -209,6 +209,9 @@ class LoadReadiness:
         budget = self.value["policy"]["total_wait_seconds"] * 1_000_000_000
         refresh = False
         while True:
+            # Ledger IO/scheduler delay is still blocked time until admission.
+            # Refresh before allocating another probe, never use a stale total.
+            self.account(time.monotonic_ns())
             self.within_budget()
             index = len(self.value["probes"])
             prefix = name + "-readiness-" + format(index, "06d")
@@ -237,6 +240,11 @@ class LoadReadiness:
                 probe["completed_monotonic_ns"] = time.monotonic_ns()
                 self.account(probe["completed_monotonic_ns"])
                 self.within_budget()
+                if probe["decision"] == "admitted":
+                    # Admission ends this interval at the recorded completion.
+                    # A cancellation in persistence leaves an unused admission,
+                    # never extends it through finish() or starts a child.
+                    self.block = None
             except BaseException as error:
                 probe.update(decision="refused", wait_reason=None,
                              error={"type": type(error).__name__, "error": str(error)})
@@ -250,7 +258,6 @@ class LoadReadiness:
                 refresh = True
                 continue
             if probe["decision"] == "admitted":
-                self.block = None
                 for suffix in ("host.json", "meminfo.txt", "cpuinfo.txt", "mounts.txt", "processes.txt"):
                     shutil.copyfile(self.out / (prefix + "-" + suffix), self.out / (name + "-before-" + suffix))
                 return captured, index, digest(probe)
@@ -268,6 +275,7 @@ class LoadReadiness:
             finally:
                 wait["completed_monotonic_ns"] = time.monotonic_ns()
                 self.account(wait["completed_monotonic_ns"]); self.save()
+            self.account(time.monotonic_ns())
             self.within_budget()
 
 def source_preflight(state, config, name):

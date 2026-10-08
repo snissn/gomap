@@ -169,6 +169,42 @@ class ReadinessTests(unittest.TestCase):
                 self.finish(caught.exception);self.check()
                 self.assertEqual(self.receipts,[])
 
+    def test_cancel_during_final_admission_persistence_retains_unused_admission(self):
+        self.loads=[[6.,1.,0.],[1.,1.,0.],[1.,1.,0.]]
+        real=self.ledger.save;fired=False
+        def interrupted():
+            nonlocal fired
+            if not fired and self.ledger.value['probes'][-1]['decision']=='admitted':
+                fired=True
+                raise KeyboardInterrupt('synthetic final admission ledger cancellation')
+            real()
+        with patch.object(self.ledger,'save',side_effect=interrupted),self.assertRaises(KeyboardInterrupt) as caught:
+            self.admit()
+        self.finish(caught.exception);self.check()
+        self.assertTrue(fired)
+        self.assertEqual(self.receipts,[])
+        p=self.ledger.value['probes'][-1]
+        self.assertEqual(p['decision'],'admitted')
+        self.assertEqual(self.ledger.value['blocked_intervals'][0]['completed_monotonic_ns'],p['completed_monotonic_ns'])
+
+    def test_persisted_wait_delay_exhausts_budget_before_any_new_probe(self):
+        self.loads=[[6.,1.,0.],[1.,1.,0.],[1.,1.,0.]]
+        real=self.ledger.save;fired=False
+        def delayed():
+            nonlocal fired
+            if not fired and self.ledger.value['waits'] and self.ledger.value['waits'][-1]['completed_monotonic_ns'] is not None:
+                fired=True
+                self.clock+=601_000_000_000
+            real()
+        with patch.object(self.ledger,'save',side_effect=delayed),self.assertRaisesRegex(ValueError,'budget exhausted') as caught:
+            self.admit()
+        self.finish(caught.exception);self.check()
+        self.assertTrue(fired)
+        self.assertEqual(len(self.ledger.value['probes']),1)
+        self.assertEqual(len(self.ledger.value['waits']),1)
+        self.assertGreaterEqual(self.ledger.value['total_wait_ns'],600_000_000_000)
+        self.assertEqual(self.receipts,[])
+
     def test_retry_probe_work_consumes_total_budget_without_extra_sleep(self):
         self.loads=[[6.,1.,0.],[6.,1.,0.]]
         original=self.snapshot
