@@ -13,6 +13,7 @@ import time
 from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, cpu_affinity, validate_cpu_affinity
 from build import verify_git_receipt, objects
 from protocol import HOST_ISOLATION, validate_host_isolation, process_census, validate_census_file, validate_run_processes, benchmark_comms, linux_comm
+from protocol import host_gate, host_nonload_gate, load_wait_reason, validate_load_readiness
 
 CANCEL_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT)
 
@@ -173,14 +174,119 @@ def host_snapshot(out, name, storage, source, env):
     write(out / (name + "-host.json"), data)
     return data
 
-def host_gate(snapshot, policy):
-    need(snapshot["uname"]["system"] == policy["system"] and snapshot["cpu_count"] == policy["cpu_count"], "host identity changed")
-    need(validate_cpu_affinity(snapshot.get("cpu_affinity")) == validate_cpu_affinity(policy.get("cpu_affinity")), "CPU affinity changed")
-    for key in ("node", "machine", "release"):
-        need(snapshot["uname"][key] == policy[key], "host " + key + " mismatch")
-    need(snapshot["load"][0] <= policy["max_load1"] and snapshot["load"][1] <= policy["max_load5"], "host contention exceeds predeclared bound")
-    need(snapshot["free_bytes"] >= policy["min_free_bytes"], "storage admission refused")
-    need(snapshot["storage_path"] == policy["tmpdir"] and snapshot["storage_device"] == policy["tmpdir_device"], "temporary database filesystem changed")
+class LoadReadiness:
+    """One campaign ledger; only pre-spawn load exceedance permits waiting."""
+    def __init__(self, out, policy):
+        validate_load_readiness(policy)
+        self.out, self.block = out, None
+        self.value = {"policy": dict(policy), "probes": [], "waits": [], "blocked_intervals": [],
+                      "total_wait_ns": 0, "status": "active", "failure": None}
+        self.save()
+
+    def save(self):
+        pending = self.out / ".readiness.pending.json"
+        write(pending, self.value)
+        os.replace(pending, self.out / "readiness.json")
+
+    def account(self, at):
+        if self.block is not None:
+            self.block["completed_monotonic_ns"] = at
+            self.value["total_wait_ns"] = sum(b["completed_monotonic_ns"] - b["started_monotonic_ns"]
+                                               for b in self.value["blocked_intervals"])
+
+    def within_budget(self):
+        need(self.value["total_wait_ns"] < self.value["policy"]["total_wait_seconds"] * 1_000_000_000,
+             "total load-readiness wait budget exhausted")
+
+    def finish(self, error=None):
+        if error is not None:
+            self.account(time.monotonic_ns())
+        self.value.update(status="complete" if error is None else "failed",
+                          failure=None if error is None else {"type": type(error).__name__, "error": str(error)})
+        self.save()
+
+    def admit(self, name, storage, source, env, host, benchmark_names, preflight):
+        budget = self.value["policy"]["total_wait_seconds"] * 1_000_000_000
+        refresh = False
+        while True:
+            # Ledger IO/scheduler delay is still blocked time until admission.
+            # Refresh before allocating another probe, never use a stale total.
+            self.account(time.monotonic_ns())
+            self.within_budget()
+            index = len(self.value["probes"])
+            prefix = name + "-readiness-" + format(index, "06d")
+            probe = {"index": index, "label": name, "prefix": prefix,
+                     "started_monotonic_ns": time.monotonic_ns(), "completed_monotonic_ns": None,
+                     "host_sha256": None, "preflight": None, "decision": "pending", "wait_reason": None, "error": None}
+            self.value["probes"].append(probe)
+            try:
+                self.save()
+                # High-load retries use host/census only. A ready observation
+                # requires the ordinary BOTH-product preflight and a fresh final
+                # admission; drift during waiting can never reach a child.
+                if refresh:
+                    probe["preflight"] = preflight()
+                captured = host_snapshot(self.out, prefix, storage, source, env)
+                probe["host_sha256"] = sha(self.out / (prefix + "-host.json"))
+                host_nonload_gate(captured, host)
+                validate_census_file(self.out / (prefix + "-processes.txt"), captured["processes_sha256"], benchmark_names=benchmark_names)
+                probe["wait_reason"] = load_wait_reason(captured, host, self.value["policy"])
+                probe["decision"] = "wait" if probe["wait_reason"] else ("admitted" if refresh else "refresh")
+                if probe["decision"] == "wait" and self.block is None:
+                    self.block = {"label": name, "first_probe_index": index,
+                                  "started_monotonic_ns": probe["started_monotonic_ns"],
+                                  "completed_monotonic_ns": probe["started_monotonic_ns"]}
+                    self.value["blocked_intervals"].append(self.block)
+                probe["completed_monotonic_ns"] = time.monotonic_ns()
+                self.account(probe["completed_monotonic_ns"])
+                self.within_budget()
+                if probe["decision"] == "admitted":
+                    # Admission ends this interval at the recorded completion.
+                    # A cancellation in persistence leaves an unused admission,
+                    # never extends it through finish() or starts a child.
+                    self.block = None
+            except BaseException as error:
+                probe.update(decision="refused", wait_reason=None,
+                             error={"type": type(error).__name__, "error": str(error)})
+                raise
+            finally:
+                if probe["completed_monotonic_ns"] is None:
+                    probe["completed_monotonic_ns"] = time.monotonic_ns()
+                    self.account(probe["completed_monotonic_ns"])
+                self.save()
+            if probe["decision"] == "refresh":
+                refresh = True
+                continue
+            if probe["decision"] == "admitted":
+                for suffix in ("host.json", "meminfo.txt", "cpuinfo.txt", "mounts.txt", "processes.txt"):
+                    shutil.copyfile(self.out / (prefix + "-" + suffix), self.out / (name + "-before-" + suffix))
+                return captured, index, digest(probe)
+            refresh = False
+            # Count ALL blocked elapsed time, including ledger IO, probes and
+            # refreshed hashes; polling sleeps alone are not the campaign bound.
+            started = time.monotonic_ns(); self.account(started); self.within_budget()
+            wait = {"after_probe_index": index,
+                    "requested_ns": min(budget - self.value["total_wait_ns"], self.value["policy"]["poll_seconds"] * 1_000_000_000),
+                    "started_monotonic_ns": started, "completed_monotonic_ns": None}
+            self.value["waits"].append(wait)
+            try:
+                self.save()
+                time.sleep(wait["requested_ns"] / 1_000_000_000)
+            finally:
+                wait["completed_monotonic_ns"] = time.monotonic_ns()
+                self.account(wait["completed_monotonic_ns"]); self.save()
+            self.account(time.monotonic_ns())
+            self.within_budget()
+
+def source_preflight(state, config, name):
+    result = {}
+    for variant, other in state.items():
+        changes = drift(other["source"], other["identity"])
+        need(not changes, "source drift before " + name)
+        binary = sha(other["binary"])
+        need(binary == config["variants"][variant]["binary_sha256"], "binary drift before " + name)
+        result[variant] = {"source_tree_sha256": other["identity"]["tree_sha256"], "binary_sha256": binary, "drift": changes}
+    return result
 
 def main():
     for signum in CANCEL_SIGNALS:
@@ -202,6 +308,7 @@ def main():
         scripts[name] = sha(out / name)
     write(out / "script-identity.json", scripts)
     state, receipts = {}, []
+    readiness = LoadReadiness(out, c["load_readiness"])
     env = process_environment(c["environment"])
     write(out / "environment.json", {"effective_controls": c["environment"], "effective_process_environment": env})
     try:
@@ -275,15 +382,12 @@ def main():
         for item in schedule(c):
             name = label(item)
             s, case = state[item["variant"]], cases[item["case"]]
-            for variant, other in state.items():
-                need(not drift(other["source"], other["identity"]), "source drift before " + name)
-                need(sha(other["binary"]) == c["variants"][variant]["binary_sha256"], "binary drift before " + name)
-            before = host_snapshot(out, name + "-before", storage, s["source"], env)
-            host_gate(before, c["host"])
-            validate_census_file(out / (name + "-before-processes.txt"), before["processes_sha256"], benchmark_names=configured_comms)
+            before, readiness_index, readiness_digest = readiness.admit(name, storage, s["source"], env, c["host"], configured_comms,
+                lambda: source_preflight(state, c, name))
             argv = command(s["binary"], case, item, c["timeout_seconds"])
             stdout, stderr = out / (name + ".stdout"), out / (name + ".stderr")
             started, start = now(), time.monotonic()
+            spawn_ns = time.monotonic_ns()
             with stdout.open("wb") as output, stderr.open("wb") as errors:
                 child, monitor, result = run_child(argv, s["source"], env, output, errors,
                                                   c["timeout_seconds"], out, name, configured_comms)
@@ -302,7 +406,8 @@ def main():
                      child_user_seconds=usage.ru_utime, child_system_seconds=usage.ru_stime,
                      stdout_sha256=sha(stdout), stderr_sha256=sha(stderr), source_drift_after=changes,
                      binary_sha256=sha(s["binary"]), before=before, after=after,
-                     work_contract_sha256=digest(case["workload_contract"]), timed_out=timed_out, validation_error=None)
+                     work_contract_sha256=digest(case["workload_contract"]), timed_out=timed_out, validation_error=None,
+                     readiness_probe_index=readiness_index, readiness_probe_sha256=readiness_digest, spawn_monotonic_ns=spawn_ns)
             receipts.append(r)
             write(out / "receipts.json", receipts)
             try:
@@ -320,12 +425,14 @@ def main():
             write(out / "receipts.json", receipts)
             print(json.dumps({"label": name, "exit_code": r["exit_code"], "elapsed_seconds": r["elapsed_seconds"]}), flush=True)
         need(toolchain_inventory(c["environment"]["GOROOT"]) == live_toolchain, "Go toolchain drift during collection")
-        write(out / "completion.json", {"schema": SCHEMA, "at": now(), "runs": len(receipts),
+        readiness.finish()
+        write(out / "completion.json", {"schema": SCHEMA, "at": now(), "runs": len(receipts), "readiness_sha256": sha(out / "readiness.json"),
               "config_sha256": sha(out / "config.json"), "receipts_sha256": sha(out / "receipts.json"),
               "script_identity_sha256": sha(out / "script-identity.json"),
               "claim": "C3-read matched evidence only; coordinator acceptance pending; no C4/M7/parent qualification"})
     except BaseException as error:
-        write(out / "failure.json", {"at": now(), "type": type(error).__name__, "error": str(error), "retained_runs": len(receipts)})
+        readiness.finish(error)
+        write(out / "failure.json", {"at": now(), "type": type(error).__name__, "error": str(error), "retained_runs": len(receipts), "readiness_sha256": sha(out / "readiness.json")})
         raise
 
 if __name__ == "__main__":

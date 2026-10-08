@@ -6,7 +6,7 @@ import statistics
 from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, retained_tooling
 from collect import host_gate
 from build import verify_git_receipt, objects
-from protocol import validate_run_processes, benchmark_comms
+from protocol import validate_run_processes, benchmark_comms, validate_readiness
 
 def summary(values):
     low, high = min(values), max(values)
@@ -75,6 +75,7 @@ def main():
     receipts = json.loads((packet / "receipts.json").read_text())
     planned = list(schedule(c))
     need(len(receipts) == len(planned) == completion["runs"], "missing/extra runs")
+    readiness = validate_readiness(packet, c, receipts, completion)
     cases = {x["id"]: x for x in c["cases"]}
     rows = []
     for r, expected in zip(receipts, planned):
@@ -132,6 +133,7 @@ def main():
     write(packet / "analysis-validation.json", {"runs": len(rows), "measured_runs": len(c["cases"]) * 12,
           "warmup_runs": len(c["cases"]) * 2, "cases": len(c["cases"]), "raw_rows_and_hashes_verified": True,
           "sampled_host_isolation_verified": True, "universal_host_exclusivity_claimed": False,
+          "load_readiness": readiness,
           "scope": "C3-read only; descriptive six samples/variant and three cycle ratios; no statistical significance or automatic acceptance",
           "claim": "Every flagged regression/inconclusive case requires coordinator disposition; no C4/M7/parent qualification"})
     print(json.dumps({"runs": len(rows), "cases": len(results)}))
