@@ -3,6 +3,7 @@ import argparse
 import itertools
 from pathlib import Path
 from protocol import SCHEMA, HOST_ISOLATION, write, workload_contract, workload_metrics, metric_contract, ACK_CONTRACT, TIMED_SCOPE, C3_PACKAGE, C3_HARNESS_FILES, C3_ITERATIONS, C3_WARMUP_ITERATIONS
+from protocol import LOAD_READINESS
 
 def draft():
     cases = []
@@ -26,7 +27,7 @@ def draft():
     variants = {v: {"production_commit": None, "production_git_tree": None, "source": None, "manifest": None, "manifest_sha256": None,
         "source_tree_sha256": None, "binary": None, "binary_sha256": None,
         "build_receipt": None, "build_receipt_sha256": None} for v in ("baseline", "candidate")}
-    return {"schema": SCHEMA, "host_isolation": dict(HOST_ISOLATION), "status": "draft-unfrozen", "coordinator_acceptance": None,
+    return {"schema": SCHEMA, "host_isolation": dict(HOST_ISOLATION), "load_readiness": dict(LOAD_READINESS), "status": "draft-unfrozen", "coordinator_acceptance": None,
         "scope": "C3-read milestone only; no M7/C4/parent qualification", "cycles": 3,
         "order": ["baseline", "candidate", "candidate", "baseline"], "timeout_seconds": 300,
         "go_binary": None, "go_binary_sha256": None, "go_version": None, "toolchain_identity": None, "external_input_identity": None,

@@ -6,7 +6,7 @@ import statistics
 from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, retained_tooling
 from collect import host_gate, selected_protocol, invocation_command, invocation_work_contract
 from build import verify_git_receipt, objects
-from protocol import validate_run_processes, benchmark_comms
+from protocol import validate_run_processes, benchmark_comms, validate_readiness
 
 def summary(values):
     low, high = min(values), max(values)
@@ -14,7 +14,7 @@ def summary(values):
     return {"values": values, "median": median, "min": low, "max": high,
             "spread_fraction": (high - low) / median if median else (0 if high == 0 else None)}
 
-def validate_packet(packet, suite="c3-read"):
+def _validate_packet(packet, suite="c3-read"):
     """Shared retained build/source/process/host validation; no live execution."""
     packet = Path(packet).resolve()
     selected, selected_scripts = selected_protocol(suite)
@@ -78,6 +78,7 @@ def validate_packet(packet, suite="c3-read"):
     receipts = json.loads((packet / "receipts.json").read_text())
     planned = list(selected.schedule(c))
     need(len(receipts) == len(planned) == completion["runs"], "missing/extra runs")
+    readiness = validate_readiness(packet, c, receipts, completion) if suite == "c3-read" else None
     cases = {x["id"]: x for x in c["cases"]}
     rows = []
     for r, expected in zip(receipts, planned):
@@ -106,7 +107,12 @@ def validate_packet(packet, suite="c3-read"):
             for source in ("meminfo", "cpuinfo", "mounts", "processes"):
                 need(sha(packet / (name_prefix + "-" + source + ".txt")) == captured[source + "_sha256"], "host snapshot drift")
         rows.append(dict(expected, **parsed, rss_kib=r["child_max_rss_kib"]))
-    return c, rows, receipts, completion
+    return c, rows, receipts, completion, readiness
+
+
+def validate_packet(packet, suite="c3-read"):
+    """Retain the four-value shared analyzer API for the C4 consumer."""
+    return _validate_packet(packet, suite)[:4]
 
 
 def main():
@@ -114,7 +120,7 @@ def main():
     p.add_argument("packet", type=Path)
     args = p.parse_args()
     packet = args.packet.resolve()
-    c, rows, receipts, completion = validate_packet(packet)
+    c, rows, receipts, completion, readiness = _validate_packet(packet)
     results = []
     need(len({digest(r["metadata"]) for r in rows}) == 1, "benchmark host/package metadata differs")
     for case in c["cases"]:
@@ -146,6 +152,8 @@ def main():
     write(packet / "matched-summary.json", results)
     write(packet / "analysis-validation.json", {"runs": len(rows), "measured_runs": len(c["cases"]) * 12,
           "warmup_runs": len(c["cases"]) * 2, "cases": len(c["cases"]), "raw_rows_and_hashes_verified": True,
+          "sampled_host_isolation_verified": True, "universal_host_exclusivity_claimed": False,
+          "load_readiness": readiness,
           "scope": "C3-read only; descriptive six samples/variant and three cycle ratios; no statistical significance or automatic acceptance",
           "claim": "Every flagged regression/inconclusive case requires coordinator disposition; no C4/M7/parent qualification"})
     print(json.dumps({"runs": len(rows), "cases": len(results)}))

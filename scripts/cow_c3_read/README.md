@@ -43,6 +43,7 @@ python3 -B scripts/cow_c3_read/config_storage_smoke.py --out /tmp/cow-c3-config-
 python3 -B scripts/cow_c3_read/git_source_smoke.py --out /tmp/cow-c3-git-source-smoke
 python3 -B scripts/cow_c3_read/watchdog_smoke.py --out /tmp/cow-c3-watchdog-smoke
 python3 -B scripts/cow_c3_read/host_isolation_test.py
+python3 -B scripts/cow_c3_read/load_readiness_test.py
 python3 -B scripts/cow_c3_read/analyzer_refusal_smoke.py --out /tmp/cow-c3-analyzer-refusal
 python3 -B scripts/cow_c3_read/build_module_smoke.py \
   --compiled-packages <real-compiled-dependencies.stdout> --out /tmp/cow-c3-module-smoke
@@ -244,7 +245,7 @@ bounded grace; Go's benchmark timeout alone is insufficient. Child elapsed,
 CPU and maximum RSS exclude collector postchecks and hashing. RSS is Linux
 wait4 ru_maxrss in KiB and covers setup/Close, separately from Go timed B/op.
 
-The `gomap-c3-read-matched-v2` configuration requires the exact fixed
+The `gomap-c3-read-matched-v3` configuration requires the exact fixed
 `host_isolation` contract emitted by `prepare_config.py`. Load bounds alone
 cannot admit performance collection. Endpoint process censuses and a census
 inside the existing owned-child wait4 loop reject any non-zombie `go`, Go tool
@@ -298,6 +299,63 @@ noisy metrics remain retained after the independent audit found foreign Go work.
 No exclusions, thresholds or benchmark shapes are changed. A fresh namespace
 and explicit coordinator grant are required after host-isolation repair; this
 tooling never authorizes a rerun or accepts performance automatically.
+
+V3 also requires the fixed `load_readiness` policy: five-second polling, a
+600-second **total campaign** waiting budget and a conservative 4.5 ceiling for
+both one-minute and five-minute load before spawning. The original host outcome
+bounds remain unchanged (5.0 in the retained campaign); a snapshot can pass the
+original 5.0 gate and still wait for the stricter readiness ceiling. Probes
+distinguish `predeclared-host-load-bound` from `readiness-headroom` waits. This
+margin is an admission policy, not proven four-thread headroom or a success
+guarantee. High-load probes capture host snapshots and censuses without
+repeating expensive source hashes. Once an observation is ready, the collector
+refreshes the original full source/binary preflight for **both** products, then
+captures a fresh final host/census admission. If load has risen again, it returns
+to the same bounded wait. Source or binary drift during waiting refuses before
+spawn; no pre-wait integrity result authorizes a child. Host identity, affinity, disk/free-space,
+malformed evidence and foreign-Go failures remain immediate, even when load is
+also high. Every rejected probe launches no child and produces no benchmark row.
+The same rule applies to every product, warmup and measured leaf. Admission
+still requires the original load limits; waiting never subtracts owned load,
+normalizes by CPU count or exempts non-Go/kernel/storage work. After each child,
+the original load/census and source checks remain immediate fatal gates.
+
+The collector incrementally retains `readiness.json` and uniquely numbered
+raw host/census probes, including rejected probes. It records each probe's
+monotonic interval, source/binary preflight, decision and snapshot hash, plus
+each actual sleep interval and the complete blocked intervals. Five seconds avoids polling faster than Linux's
+coarse load updates and limits observer activity; ten minutes caps added waiting
+for the whole campaign, without promising that any load spike will clear.
+All monotonic elapsed time from the first rejected load probe through final
+admission consumes the global budget, including retry probes, refreshed hashes,
+ledger IO and scheduling delay. Polling sleeps alone are not the budget. Ordinary
+ready observations and child timing are outside blocked intervals. Budget exhaustion or cancellation preserves the incomplete ledger
+and failure without spawning a new child. It never renews the budget per cell,
+automatically resumes a packet or changes the 54-cell/756-process ABBA matrix.
+Runtime window planning must allow this extra 600 seconds and preparation/closure.
+
+Each run binds its final admission index/digest and monotonic spawn time;
+completion or failure binds the final ledger hash. The ordinary analyzer audits
+all probes, raw bytes, decisions, ordering, source/binary bindings, actual waits,
+global budget and final admission before parsing the complete result. It still
+refuses `failure.json`. `protocol.validate_readiness` can separately audit a
+failed ledger's exhausted/cancelled pre-spawn evidence; doing so grants no
+performance acceptance. Missing, extra, changed or reordered raw probes/waits
+refuse. Historical v2 packets retain their original analyzer and cannot establish
+v3 readiness admission. The failed 113-leaf packet remains unaccepted; a new
+complete campaign needs fresh coordinated host custody and an explicit grant.
+Observed independent runner activity must be reconciled with the host owner;
+readiness waiting cannot prove host exclusivity or guarantee a successful run.
+
+`load_readiness_test.py` uses synthetic host/census evidence and a fake monotonic
+clock, with no Go or child execution. It covers load-only waiting, non-load and
+foreign/malformed refusals, source/binary changes during waiting, a shared finite
+budget, cancellation, retained failed traces, admission ordering, raw/probe/wait
+tampering, cancellation during final admission persistence, delay between a
+persisted wait and the next probe, and unchanged post-leaf refusal. A cancelled
+final admission can remain unused in a failed ledger; it launches no child and
+its blocked interval ends at its recorded admission completion. These are
+infrastructure controls.
 
 `host_isolation_test.py` uses synthetic censuses and owned Python children only.
 It covers foreign tooling/tests, zombies, PID custody/reuse, malformed census,

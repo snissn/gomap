@@ -9,6 +9,8 @@ from protocol import C4_PACKAGE, HARNESS_FILES
 
 def draft():
     base=c3_draft()  # Includes unresolved cpu_affinity; freeze actual sched_getaffinity(0).
+    # C4 retains immediate host admission and its own strict configuration.
+    base.pop("load_readiness")
     base.update(schema=SCHEMA,suite="c4-sustained",result_class="construction",
                 qualification="pending_native_observations",
                 native_requirements={"eligibility":{"status":"PENDING"},"whole_public_maintenance_charge":{"status":"PENDING","cap_records":32,"cap_bytes":1<<20}},
