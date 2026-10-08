@@ -130,6 +130,18 @@ required resource bytes and namespace entries are synced before recoverable
 meta publication. Successful `*Sync`, `Checkpoint`, and clean `Close` retain
 their durability guarantees.
 
+The full candidate fallback first projects primary-root value pointers before
+decoding pointer-backed system descriptors. After discovering and deduplicating
+the complete root set, it registers raw outer-leaf dependencies, projects that
+full set, registers its exact value-log identities, and rebinds the private
+snapshot to the manager's current registered set. That successful full
+projection also supplies the candidate's reference-count evidence; it is not
+projected a third time, and primary counts are not added to it. Evidence keeps
+the captured index, commit sequence, user root, and system root coordinates.
+Failure at discovery, registration, or rebind publishes no count evidence.
+Stable resource capture and independently recoverable meta ownership continue
+through the existing publication engine.
+
 ### 0.1 Normative publication state machine
 
 | State | Stable authority | Permitted next action | Failure rule |

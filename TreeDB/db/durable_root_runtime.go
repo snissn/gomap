@@ -561,22 +561,25 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 		}
 		return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits)
 	}
-	registerValuePointers := func(rootIDs []uint64) error {
+	registerValuePointers := func(rootIDs []uint64) (maintenanceReachabilityResult, error) {
 		result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
 			Collectors:      maintenanceReachabilityValueLogRefCounts,
 			ExplicitRootIDs: rootIDs,
 		})
 		db.recordCandidateReachabilityWorkV1(result)
 		if err != nil {
-			return err
+			return maintenanceReachabilityResult{}, err
 		}
 		for fileID := range result.valueLogReferencedSegments {
 			references[fileID] = struct{}{}
 		}
 		if err := db.requireDurableValueLogReferencesRegisteredV1(references); err != nil {
-			return err
+			return maintenanceReachabilityResult{}, err
 		}
-		return db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits)
+		if err := db.rebindCandidateValueLogSetWithLimitsV1(snapshot, limits); err != nil {
+			return maintenanceReachabilityResult{}, err
+		}
+		return result, nil
 	}
 	// Raw outer-leaf pointers can be discovered without dereferencing their
 	// segments. Register those exact canonical files first so an unreported but
@@ -589,7 +592,7 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 	// without reading their records. This must precede descriptor decoding: a
 	// collection root descriptor can itself be pointer-backed by a canonical
 	// segment that an external producer has not registered with the manager.
-	if err := registerValuePointers(primaryRootIDs); err != nil {
+	if _, err := registerValuePointers(primaryRootIDs); err != nil {
 		return nil, err
 	}
 	roots, _, err := maintenanceReachabilityRoots(context.Background(), snapshot, nil, nil, false, false)
@@ -603,18 +606,12 @@ func (db *DB) scanCandidateExternalReferencesWithCountsAndLimitsV1(snapshot *Sna
 	if err := registerOuterLeaves(rootIDs); err != nil {
 		return nil, err
 	}
-	if err := registerValuePointers(rootIDs); err != nil {
-		return nil, err
-	}
-	result, err := db.maintenanceReachabilityScan(context.Background(), snapshot, maintenanceReachabilityScanOptions{
-		Collectors: maintenanceReachabilityValueLogRefCounts,
-	})
-	db.recordCandidateReachabilityWorkV1(result)
+	// These deduplicated roots describe the complete captured candidate. Reuse
+	// that projection only after exact registration and fresh set rebind succeed;
+	// primary counts overlap this closure and must never be added to it.
+	result, err := registerValuePointers(rootIDs)
 	if err != nil {
 		return nil, err
-	}
-	for fileID := range result.valueLogReferencedSegments {
-		references[fileID] = struct{}{}
 	}
 	if scanned != nil {
 		*scanned = candidateValueLogRefCountsV1{

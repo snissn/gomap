@@ -965,6 +965,11 @@ Coverage:
   - `TestDurableRootCandidateScanDoesNotApplyDeltaTwice`
   - Covers exact empty/nonempty counts, candidate identity, activation ordering,
     reopen, and avoiding repeated fallback scans on subsequent ordinary writes.
+- `TreeDB/db/durable_root_candidate_projection_reuse_test.go`:
+  - Checks the actual candidate page-visit counter against primary plus one full
+    projection, exact dependency membership and count multiplicity for aliased
+    pager/value-log collection roots and pointer-backed descriptors, captured
+    candidate coordinates, present empty counts, and unstamped failed discovery.
 
 ## 4. Value-Log Rewrite Correctness
 
