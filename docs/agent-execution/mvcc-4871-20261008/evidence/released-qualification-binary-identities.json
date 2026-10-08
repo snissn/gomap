@@ -1,0 +1,27 @@
+[
+  {
+    "path": "/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-db.test",
+    "bytes": 55494211,
+    "sha256": "3239853dcba11be07c4921fa0bef9670b741f0b1d32466bdce6596ee28fd6425"
+  },
+  {
+    "path": "/workspace/scratch/1ecfdb811b25/qualification-binaries/candidate-db.test",
+    "bytes": 58620123,
+    "sha256": "e083e5d281148cd0bcc77adf3a96b72bcf04c814ca1477727c126b7701ecaacf"
+  },
+  {
+    "path": "/workspace/scratch/1ecfdb811b25/qualification-binaries/candidate-unified-bench",
+    "bytes": 91247072,
+    "sha256": "272111088f4aa6d2df68e12c719a7ff45acd02815d4499368919f88129ff8fc9"
+  },
+  {
+    "path": "/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-unified-bench",
+    "bytes": 88571800,
+    "sha256": "33b60c6a1ad5df63e529df13e5742300d9d67ff3c5b99bd2682b117546c76947"
+  },
+  {
+    "path": "/workspace/scratch/1ecfdb811b25/qualification-binaries/baseline-repaired-unified-bench",
+    "bytes": 88707960,
+    "sha256": "5b51f53d999bfd8778e310094ab20d276c22267b2e4dfa16bef3371cd328ccb3"
+  }
+]

@@ -1,0 +1,652 @@
+{
+  "sole_deletion_owner": "/root/released_outputs_cleanup",
+  "started_utc": "2026-10-08T23:21:49Z",
+  "release": "Root commands joined; ordinary_5111 acknowledged no consumers of these5paths",
+  "durable_sources": {
+    "harness-5118": "published72f5692/tree14d104f; verifiedmerged3f87d74",
+    "qualification-baseline": "published463f293ed480599c8187b2980aa981c29135e38f",
+    "qualification-candidate": "publishedPR5127head1bc652e80aabf73353c696270f04d4b5d2d4257a",
+    "execution-artifact-staging": "all145GitSHAverifiedcommit a4d89e1eea15cbf12e4c2f5ded0c99e9f367be1c plus successors"
+  },
+  "durability_verification": "Coordinator explicitly verified pushed source/tree bindings and all145 staging Git blobs; retained diagnostic/provenance/hash evidence outside targets. No exact binary byte retention contract.",
+  "commands": [
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/gomap-execution",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "exit_code": 0,
+      "stdout": "worktree /workspace/scratch/1ecfdb811b25/gomap-execution\nHEAD 3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3\nbranch refs/heads/main\n\nworktree /workspace/scratch/1ecfdb811b25/harness-5118\nHEAD 4ac766586a710c0f9bcc8fc07e88e81dd4a75152\ndetached\n\nworktree /workspace/scratch/1ecfdb811b25/ordinary-5111\nHEAD ae0389d4ee76605afad547c515ddf01b62dd2e47\nbranch refs/heads/codex/5111-ordinary-data-primary-publication\n\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/harness-5118",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "4ac766586a710c0f9bcc8fc07e88e81dd4a75152\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/harness-5118",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/harness-5118",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard"
+      ],
+      "exit_code": 0,
+      "stdout": ".github/scripts/__pycache__/ci_impact.cpython-312.pyc\nbin/unified-bench\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/gomap-execution",
+        "worktree",
+        "remove",
+        "/workspace/scratch/1ecfdb811b25/harness-5118"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-baseline",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "463f293ed480599c8187b2980aa981c29135e38f\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-baseline",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-baseline",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-baseline",
+        "rev-parse",
+        "--git-common-dir"
+      ],
+      "exit_code": 0,
+      "stdout": ".git\n",
+      "stderr": ""
+    },
+    {
+      "operation": "shutil.rmtree",
+      "exact_path": "/workspace/scratch/1ecfdb811b25/qualification-baseline",
+      "status": "completed"
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-candidate",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "1bc652e80aabf73353c696270f04d4b5d2d4257a\n",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-candidate",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-candidate",
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard"
+      ],
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/qualification-candidate",
+        "rev-parse",
+        "--git-common-dir"
+      ],
+      "exit_code": 0,
+      "stdout": ".git\n",
+      "stderr": ""
+    },
+    {
+      "operation": "shutil.rmtree",
+      "exact_path": "/workspace/scratch/1ecfdb811b25/qualification-candidate",
+      "status": "completed"
+    },
+    {
+      "operation": "shutil.rmtree",
+      "exact_path": "/workspace/scratch/1ecfdb811b25/qualification-binaries",
+      "status": "completed"
+    },
+    {
+      "operation": "shutil.rmtree",
+      "exact_path": "/workspace/scratch/1ecfdb811b25/execution-artifact-staging",
+      "status": "completed"
+    },
+    {
+      "argv": [
+        "git",
+        "-C",
+        "/workspace/scratch/1ecfdb811b25/gomap-execution",
+        "worktree",
+        "list",
+        "--porcelain"
+      ],
+      "exit_code": 0,
+      "stdout": "worktree /workspace/scratch/1ecfdb811b25/gomap-execution\nHEAD 3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3\nbranch refs/heads/main\n\nworktree /workspace/scratch/1ecfdb811b25/ordinary-5111\nHEAD ae0389d4ee76605afad547c515ddf01b62dd2e47\nbranch refs/heads/codex/5111-ordinary-data-primary-publication\n\n",
+      "stderr": ""
+    }
+  ],
+  "targets": [
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/harness-5118",
+      "estimated_logical_bytes": 997677733,
+      "released_entries": 10888,
+      "head": "4ac766586a710c0f9bcc8fc07e88e81dd4a75152",
+      "estimated_allocated_bytes": 1019822080,
+      "release_inventory_exact_match": true,
+      "removed_generated_files": [
+        "/workspace/scratch/1ecfdb811b25/harness-5118/bin/unified-bench",
+        "/workspace/scratch/1ecfdb811b25/harness-5118/.github/scripts/__pycache__/ci_impact.cpython-312.pyc"
+      ],
+      "status": "removed",
+      "absent": true,
+      "final_absent": true,
+      "final_registered": false,
+      "process_check": {
+        "visible_count": 16,
+        "unavailable_count": 13,
+        "observed_consumers": [],
+        "foreign_pid1_5": [
+          {
+            "pid": "1",
+            "cmd": "/usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisord.conf ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/1/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/1/exe'"
+          },
+          {
+            "pid": "5",
+            "cmd": "/bin/bash /usr/local/scripts/sync_share.sh ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/5/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/5/exe'"
+          }
+        ]
+      }
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/qualification-baseline",
+      "estimated_logical_bytes": 910501177,
+      "released_entries": 10920,
+      "head": "463f293ed480599c8187b2980aa981c29135e38f",
+      "estimated_allocated_bytes": 932737024,
+      "release_inventory_exact_match": true,
+      "status": "removed",
+      "absent": true,
+      "final_absent": true,
+      "final_registered": false,
+      "process_check": {
+        "visible_count": 16,
+        "unavailable_count": 13,
+        "observed_consumers": [],
+        "foreign_pid1_5": [
+          {
+            "pid": "1",
+            "cmd": "/usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisord.conf ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/1/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/1/exe'"
+          },
+          {
+            "pid": "5",
+            "cmd": "/bin/bash /usr/local/scripts/sync_share.sh ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/5/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/5/exe'"
+          }
+        ]
+      }
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/qualification-candidate",
+      "estimated_logical_bytes": 911811880,
+      "released_entries": 11047,
+      "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+      "estimated_allocated_bytes": 934264832,
+      "release_inventory_exact_match": true,
+      "status": "removed",
+      "absent": true,
+      "final_absent": true,
+      "final_registered": false,
+      "process_check": {
+        "visible_count": 16,
+        "unavailable_count": 13,
+        "observed_consumers": [],
+        "foreign_pid1_5": [
+          {
+            "pid": "1",
+            "cmd": "/usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisord.conf ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/1/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/1/exe'"
+          },
+          {
+            "pid": "5",
+            "cmd": "/bin/bash /usr/local/scripts/sync_share.sh ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/5/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/5/exe'"
+          }
+        ]
+      }
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/qualification-binaries",
+      "estimated_logical_bytes": 382645262,
+      "released_entries": 6,
+      "estimated_allocated_bytes": 382656512,
+      "release_inventory_exact_match": true,
+      "status": "removed",
+      "absent": true,
+      "final_absent": true,
+      "final_registered": false,
+      "process_check": {
+        "visible_count": 16,
+        "unavailable_count": 13,
+        "observed_consumers": [],
+        "foreign_pid1_5": [
+          {
+            "pid": "1",
+            "cmd": "/usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisord.conf ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/1/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/1/exe'"
+          },
+          {
+            "pid": "5",
+            "cmd": "/bin/bash /usr/local/scripts/sync_share.sh ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/5/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/5/exe'"
+          }
+        ]
+      }
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/execution-artifact-staging",
+      "estimated_logical_bytes": 874741,
+      "released_entries": 148,
+      "estimated_allocated_bytes": 1335296,
+      "release_inventory_exact_match": true,
+      "status": "removed",
+      "absent": true,
+      "final_absent": true,
+      "final_registered": false,
+      "process_check": {
+        "visible_count": 16,
+        "unavailable_count": 13,
+        "observed_consumers": [],
+        "foreign_pid1_5": [
+          {
+            "pid": "1",
+            "cmd": "/usr/bin/python3 /usr/bin/supervisord -n -c /etc/supervisord.conf ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/1/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/1/exe'"
+          },
+          {
+            "pid": "5",
+            "cmd": "/bin/bash /usr/local/scripts/sync_share.sh ",
+            "cwd_unavailable": "[Errno 13] Permission denied: '/proc/5/cwd'",
+            "exe_unavailable": "[Errno 13] Permission denied: '/proc/5/exe'"
+          }
+        ]
+      }
+    }
+  ],
+  "process_visibility_limitation": "/proc visibility incomplete; root joined task commands and ordinary_5111 acknowledgement establish task-owned release only; no ambient quiet claim or foreign process manipulation.",
+  "protected_before": {
+    "/workspace/scratch/1ecfdb811b25/gomap-execution": true,
+    "/workspace/scratch/1ecfdb811b25/ordinary-5111": true,
+    "/workspace/scratch/1ecfdb811b25/toolchain": true,
+    "/workspace/scratch/1ecfdb811b25/go-mod-cache": true,
+    "/workspace/scratch/1ecfdb811b25/evidence": true,
+    "/workspace/scratch/1ecfdb811b25/buildcache": false
+  },
+  "free_bytes_before": 10640519168,
+  "final_worktree_paths": [
+    "/workspace/scratch/1ecfdb811b25/gomap-execution",
+    "/workspace/scratch/1ecfdb811b25/ordinary-5111"
+  ],
+  "protected_after": {
+    "/workspace/scratch/1ecfdb811b25/gomap-execution": true,
+    "/workspace/scratch/1ecfdb811b25/ordinary-5111": true,
+    "/workspace/scratch/1ecfdb811b25/toolchain": true,
+    "/workspace/scratch/1ecfdb811b25/go-mod-cache": true,
+    "/workspace/scratch/1ecfdb811b25/evidence": true,
+    "/workspace/scratch/1ecfdb811b25/buildcache": false
+  },
+  "free_bytes_after": 13912879104,
+  "observed_free_space_delta_bytes": 3272359936,
+  "release_snapshot_free_bytes": 10648059904,
+  "finished_utc": "2026-10-08T23:21:50Z",
+  "all_task_cleanup_commands_joined": true,
+  "root_verification_failed": true,
+  "post_cleanup_reappearance": {
+    "checked_utc": "2026-10-08T23:22:52Z",
+    "cwd": "/workspace/scratch/1ecfdb811b25",
+    "targets": [
+      {
+        "path": "/workspace/scratch/1ecfdb811b25/harness-5118",
+        "exists": true,
+        "dev": 27,
+        "ino": 525574,
+        "mode": 16877,
+        "size": 4096,
+        "mtime_ns": 1791491598610354367,
+        "top_count": 43,
+        "top_names": [
+          ".gitignore",
+          "examples",
+          "docs",
+          "Makefile",
+          "review-prompts",
+          "robots.txt",
+          "internal",
+          "go.sum",
+          "bin",
+          "AGENTS.md",
+          "cpu_read.out",
+          "artifacts",
+          "cpu_iter_seek.out",
+          ".gitattributes",
+          ".git",
+          "profile.sh",
+          "HashDB",
+          "TENTATIVE_DELETIONS.md",
+          ".orca",
+          ".githooks",
+          ".github",
+          "LICENSE",
+          "cpu_iter_init.out",
+          "testdata",
+          "lefthook.yml",
+          "clients",
+          ".pr",
+          "TODO.md",
+          "TreeDB",
+          "CHANGELOG.md",
+          "treedb_concurrency.patch",
+          "kvstore",
+          "benchmarks",
+          "worklog",
+          "third_party",
+          "REDIS_SERVER_SPEC.md",
+          "go.mod",
+          "experiments",
+          "CONTRIBUTING.md",
+          "TREEDB_OPTIMIZATION_CHECKLIST.md",
+          "README.md",
+          "scripts",
+          "cmd"
+        ],
+        "root_identity_matches_release": false
+      },
+      {
+        "path": "/workspace/scratch/1ecfdb811b25/qualification-baseline",
+        "exists": true,
+        "dev": 27,
+        "ino": 530518,
+        "mode": 16877,
+        "size": 4096,
+        "mtime_ns": 1791493248675754484,
+        "top_count": 41,
+        "top_names": [
+          ".gitignore",
+          "examples",
+          "docs",
+          "Makefile",
+          "review-prompts",
+          "robots.txt",
+          "internal",
+          "go.sum",
+          "AGENTS.md",
+          "cpu_read.out",
+          "artifacts",
+          "cpu_iter_seek.out",
+          ".gitattributes",
+          "profile.sh",
+          "HashDB",
+          "TENTATIVE_DELETIONS.md",
+          ".orca",
+          ".githooks",
+          ".github",
+          "LICENSE",
+          "cpu_iter_init.out",
+          "testdata",
+          "lefthook.yml",
+          "clients",
+          ".pr",
+          "TODO.md",
+          "TreeDB",
+          "CHANGELOG.md",
+          "treedb_concurrency.patch",
+          "kvstore",
+          "benchmarks",
+          "worklog",
+          "third_party",
+          "REDIS_SERVER_SPEC.md",
+          "go.mod",
+          "experiments",
+          "CONTRIBUTING.md",
+          "TREEDB_OPTIMIZATION_CHECKLIST.md",
+          "README.md",
+          "scripts",
+          "cmd"
+        ],
+        "root_identity_matches_release": false
+      },
+      {
+        "path": "/workspace/scratch/1ecfdb811b25/qualification-candidate",
+        "exists": true,
+        "dev": 27,
+        "ino": 532259,
+        "mode": 16877,
+        "size": 4096,
+        "mtime_ns": 1791497749908381298,
+        "top_count": 20,
+        "top_names": [
+          "examples",
+          "docs",
+          "review-prompts",
+          "internal",
+          "artifacts",
+          "HashDB",
+          ".orca",
+          ".githooks",
+          ".github",
+          "testdata",
+          "clients",
+          ".pr",
+          "TreeDB",
+          "kvstore",
+          "benchmarks",
+          "worklog",
+          "third_party",
+          "experiments",
+          "scripts",
+          "cmd"
+        ],
+        "root_identity_matches_release": false
+      },
+      {
+        "path": "/workspace/scratch/1ecfdb811b25/qualification-binaries",
+        "exists": true,
+        "dev": 27,
+        "ino": 532257,
+        "mode": 16877,
+        "size": 4096,
+        "mtime_ns": 1791497800320515966,
+        "top_count": 1,
+        "top_names": [
+          "baseline-db.test"
+        ],
+        "root_identity_matches_release": false
+      },
+      {
+        "path": "/workspace/scratch/1ecfdb811b25/execution-artifact-staging",
+        "exists": true,
+        "dev": 27,
+        "ino": 524567,
+        "mode": 16877,
+        "size": 4096,
+        "mtime_ns": 1791498882447776723,
+        "top_count": 49,
+        "top_names": [
+          "harness-fixture-red.log",
+          "harness-fixture-final.log",
+          "harness-ci-headroom.log",
+          "harness-hidden-report-full.log",
+          "harness-ci-contract.log",
+          "harness-hidden-report-race.log",
+          "harness-ci-impact.log",
+          "harness-final-wording-docs.log",
+          "baseline-repaired-build-info.txt",
+          "baseline-build-info.txt",
+          "harness-hidden-report-valid-red.log",
+          "harness-suite-full-normal.log",
+          "harness-suite-preflight-race.log",
+          "harness-docs-red.log",
+          "candidate-build-info.txt",
+          "harness-docs-final.log",
+          "harness-current-base-full.log",
+          "baseline-db-binary.sha256",
+          "harness-hidden-report-scoped-normal.log",
+          "harness-full-final.log",
+          "harness-hidden-report-scoped-race.log",
+          "harness-selector-race.log",
+          "ordinary-cheap-diagnostics",
+          "ordinary-worker",
+          "harness-fixture-green.log",
+          "harness-vcs-repro.log",
+          "index.json",
+          "execution-checkpoint.md",
+          "harness-focused.log",
+          "harness-build-repro.log",
+          "harness-full-green.log",
+          "harness-hidden-report-normal.log",
+          "candidate-db-build-info.txt",
+          "harness-ci-refresh.log",
+          "harness-suite-preflight-normal.log",
+          "ordinary-core-red.log",
+          "cohort-fixture-advice-source.go",
+          "harness-codex-review-input.json",
+          "baseline-binary.sha256",
+          "harness-hidden-report-red.log",
+          "ordinary-cdf-source-freeze.json",
+          "baseline-db-build-info.txt",
+          "harness-docs-green.log",
+          "harness-codex-review-disposition.json",
+          "harness-suite-preflight-red.log",
+          "candidate-binaries.sha256",
+          "ordinary-ubuntu3-failures.json",
+          "premeasurement-host-state.json",
+          "baseline-repaired-binary.sha256"
+        ],
+        "root_identity_matches_release": false
+      }
+    ],
+    "namespaces": {
+      "mnt": "mnt:[4026532275]",
+      "pid": "pid:[4026532277]",
+      "user": "user:[4026532206]"
+    },
+    "root_observation": "Coordinator reports all five paths reappeared after initial removal. New contents are outside old release; no repeat deletion authorized.",
+    "identity": {
+      "/workspace/scratch/1ecfdb811b25": {
+        "dev": 27,
+        "ino": 524955
+      },
+      "/proc/self": {
+        "dev": 30,
+        "ino": 625683
+      },
+      "/proc/1": {
+        "dev": 30,
+        "ino": 5132
+      }
+    },
+    "worktree_list": {
+      "exit_code": 0,
+      "stdout": "worktree /workspace/scratch/1ecfdb811b25/gomap-execution\nHEAD 3c33dd77d2457a8e477ec0e7cd50bb8fde80fcc3\nbranch refs/heads/main\n\nworktree /workspace/scratch/1ecfdb811b25/ordinary-5111\nHEAD ae0389d4ee76605afad547c515ddf01b62dd2e47\nbranch refs/heads/codex/5111-ordinary-data-primary-publication\n\n",
+      "stderr": ""
+    }
+  },
+  "completion_qualification": "Initial cleaner absence/unregistration observations were true at their recorded instant; coordinator cross-check reports reappearance. Current absence is not established; new/recreated targets require fresh ownership/release snapshot before any deletion."
+}

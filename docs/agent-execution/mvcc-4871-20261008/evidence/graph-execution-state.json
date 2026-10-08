@@ -112,12 +112,22 @@
       "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
       "next_action": "One coherent actual consumer/ownership/format correction including strict historical archive and current V5/V6 evidence; review, fresh full CI and landed-harness matched performance before maturity.",
       "decisions": [
-        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999"
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070993290"
       ],
       "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
       "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
       "component_review": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070860571",
-      "component_acceptance": "Versioned stale-build witness and four private one-shot lifetime callers only; not whole PR or performance"
+      "component_acceptance": "Versioned stale-build witness and four private one-shot lifetime callers only; not whole PR or performance",
+      "blockers": [
+        {
+          "scope": "Windows offline V6 pair replacement",
+          "owner": "root coordinator reconciles existing namespace/R1 owner",
+          "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
+          "next_action": "Accepted supported exact-parent closed-file rename/remove/persistence producer with identity/rebind/crash evidence; no path fallback or typed-error suppression"
+        }
+      ]
     },
     {
       "issue": "snissn/gomap#5118",
@@ -139,5 +149,26 @@
     "5022 discussion hold",
     "foreign C3/R1 ownership"
   ],
-  "evidence_branch": "codex/mvcc-4871-execution-20261008"
+  "evidence_branch": "codex/mvcc-4871-execution-20261008",
+  "cleanup": {
+    "owner": "/root",
+    "state": "blocked-root-verification-failed",
+    "initial_worker_receipt": "evidence/cleanup-released-output-receipt.json",
+    "initial_deletion_joined": true,
+    "root_current_absence": false,
+    "cause": "Five directories reappeared with different inodes after verified deletion; exact writer unproven. Workspace sync script observed; foreign process untouched.",
+    "next_action": "Environment-owned replication must support propagation of exact task-owned deletions; re-inventory/release recreated contents before any further cleanup. No global sync or foreign process mutation authorized.",
+    "released_paths": [
+      "harness-5118",
+      "qualification-baseline",
+      "qualification-candidate",
+      "qualification-binaries",
+      "execution-artifact-staging"
+    ],
+    "registered_worktrees": [
+      "gomap-execution",
+      "ordinary-5111"
+    ],
+    "protected_paths_retained": true
+  }
 }
