@@ -114,7 +114,8 @@
       "decisions": [
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
-        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070993290"
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070993290",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071312164"
       ],
       "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
       "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
@@ -132,7 +133,8 @@
       "consumer_tree": "5ebe6154e6d31d9bb8f2eb9833f1420592d49efc",
       "consumer_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071082310",
       "landed_harness_source_freeze": "f2ff79bd4b06118f4006d4ca48bcdab4adce0e9d",
-      "landed_harness_tree": "27325b1bc8abe3e7924d7d6bb19db6b65def067f"
+      "landed_harness_tree": "27325b1bc8abe3e7924d7d6bb19db6b65def067f",
+      "offline_component_status": "Shared normal packet preserved RED: rebuilt slot/proof closure readable, post-reopen allocator exposed CommitSeq-only stale derived value-log reference counts; predecision cache invalidation repair and closure-error propagation underway. No component qualification yet."
     },
     {
       "issue": "snissn/gomap#5118",
