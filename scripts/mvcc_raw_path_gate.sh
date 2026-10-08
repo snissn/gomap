@@ -235,5 +235,76 @@ then
   ) || echo "Iterator diagnostics incomplete; original gate status preserved" >&2
 fi
 
+# Retain exact Seek executables and compare the existing public iterator only
+# after a changed-binary snapshot timing failure. Diagnostic samples never feed
+# the checker or replace the original gate status.
+if ((gate_status != 0)) && python3 - "$SUMMARY_JSON" <<'PY_CHECK'
+import json, sys
+with open(sys.argv[1]) as source:
+    rows = json.load(source)["results"]
+sys.exit(0 if any(row["benchmark"] ==
+                  "BenchmarkSnapshotIteratorSeekNext/keys=1024/snapshot_seek"
+                  and not row["timing_pass"] and not row["binary_equivalent"]
+                  for row in rows) else 1)
+PY_CHECK
+then
+  (
+    diagnostics="$OUT_DIR/snapshot-seek-diagnostics"
+    mkdir -p "$diagnostics" || exit 1
+    for revision in baseline candidate; do
+      cp "$TMP_ROOT/$revision-treedb.test" "$diagnostics/$revision-treedb.test" || exit 1
+    done
+    (cd "$diagnostics" && sha256sum baseline-treedb.test candidate-treedb.test) \
+      >"$diagnostics/binary-sha256.txt" || exit 1
+    # Bind both copied executables before disassembly or diagnostic execution.
+    if python3 - "$SUMMARY_JSON" "$diagnostics" >"$diagnostics/binary-verification.txt" 2>&1 <<'PY_HASH'
+import hashlib, json, pathlib, sys
+with open(sys.argv[1]) as source:
+    expected = json.load(source)["binary_digests"]["treedb"]
+for revision in ("baseline", "candidate"):
+    binary = pathlib.Path(sys.argv[2]) / (revision + "-treedb.test")
+    actual = hashlib.sha256(binary.read_bytes()).hexdigest()
+    if actual != expected[revision]:
+        raise SystemExit("retained binary mismatch: " + revision)
+    print(revision + " sha256=" + actual + " verified")
+PY_HASH
+    then
+      :
+    else
+      exit 1
+    fi
+    public_regex='^BenchmarkSnapshotIteratorSeekNext/keys=1024/public_seek_baseline$'
+    hot_symbols='github.com/snissn/gomap/TreeDB\.BenchmarkSnapshotIteratorSeekNext|github.com/snissn/gomap/TreeDB/(db|caching|tree|node|pager)\.\(\*[^)]*\)\.(begin|endOperation|Seek|seek|Valid|Key|UnsafeKey|resetStack|resetPointerPrefetch|loadCurrent|getLeafKeyFlags|loadNodeRef|loadChildRefView|loadChildRefViewInto|loadNodeViewWithLoadKind|loadNodeViewWithLoadKindInto|Get|IsVerified|MarkVerified|Type|Count|InternalFenceBounds|SearchInternal|GetInternalChildRef|SearchLeaf|GetLeafKeyFlagsView)$|github.com/snissn/gomap/TreeDB/(tree|node)\.(compareTreeKey|InitFreshNodeView)'
+    for revision in baseline candidate; do
+      diagnostic_status=0
+      timeout --kill-after=5s 30s env GOWORK="$SCRIPT_GOWORK" \
+        go tool objdump -s "$hot_symbols" "$diagnostics/$revision-treedb.test" \
+        >"$diagnostics/$revision-hot-objdump.txt" 2>&1 || diagnostic_status=$?
+      empty_output=false
+      [[ -s "$diagnostics/$revision-hot-objdump.txt" ]] || empty_output=true
+      printf 'exit=%s\nempty_output=%s\n' "$diagnostic_status" "$empty_output" \
+        >"$diagnostics/$revision-objdump-status.txt"
+    done
+    for ((sample = 1; sample <= RUNS; sample++)); do
+      if ((sample % 2 == 1)); then revisions='baseline candidate'; else revisions='candidate baseline'; fi
+      for revision in $revisions; do
+        {
+          printf 'revision=%s sample=%s group=public_seek_baseline\n' "$revision" "$sample"
+          date -Iseconds
+          ps -eo pid,ppid,etime,%cpu,cmd --sort=-%cpu | head -20 || true
+        } >>"$diagnostics/processes.txt"
+        diagnostic_status=0
+        taskset -c "$CPUSET" timeout --kill-after=5s 30s env GOMAXPROCS=1 \
+          "$diagnostics/$revision-treedb.test" -test.run '^$' \
+          -test.bench "$public_regex" -test.benchmem \
+          -test.benchtime="$BENCHTIME" -test.count=1 \
+          >"$diagnostics/$revision-$sample-public-seek.txt" 2>&1 || diagnostic_status=$?
+        printf 'exit=%s\n' "$diagnostic_status" \
+          >"$diagnostics/$revision-$sample-public-seek-status.txt"
+      done
+    done
+  ) || echo "Snapshot Seek diagnostics incomplete; original gate status preserved" >&2
+fi
+
 echo "mvcc raw-path gate artifacts: $OUT_DIR"
 exit "$gate_status"
