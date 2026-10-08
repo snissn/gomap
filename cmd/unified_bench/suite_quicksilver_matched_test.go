@@ -15,6 +15,7 @@ func TestQuicksilverFixedWorkQuotas(t *testing.T) {
 	for _, reads := range []int{101, 2} {
 		t.Run(string(rune('a'+reads%26)), func(t *testing.T) {
 			c := quicksilverSmokeConfig()
+			c.ReadBatch = 1 // The in-memory fixture has no snapshot interface.
 			c.ConcurrentMode, c.Reads = "fixed-work", reads
 			db := newBatchDeleteRangeMemoryDB("memory")
 			if err := quicksilverWrite(db, c, 0, c.Keys, quicksilverUpdateStride(c.Keys), false); err != nil {
@@ -53,6 +54,7 @@ func TestQuicksilverFixedWorkQuotas(t *testing.T) {
 func TestQuicksilverFixedWorkWriterTailCut(t *testing.T) {
 	c := quicksilverSmokeConfig()
 	c.ConcurrentMode = "fixed-work"
+	c.ReadBatch = 1 // The in-memory fixture has no snapshot interface.
 	c.Workers = 1
 	c.Reads = 1
 	db := newBatchDeleteRangeMemoryDB("memory")
