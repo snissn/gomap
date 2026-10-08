@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import hashlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -224,6 +226,100 @@ class RawPathEquivalenceTests(unittest.TestCase):
         self.assertEqual(batch_write["attribution"], "CANDIDATE")
         self.assertEqual(batch_write["acceptance_verdict"], "FAIL")
         self.assertEqual(CHECKER.acceptance_verdict(rows), "FAIL")
+
+    def retention_tail(self, status: int, damage: str = "") -> subprocess.CompletedProcess[str]:
+        temporary = self.root / "executables"
+        output = self.root / "output"
+        commands = self.root / "commands"
+        for directory in (temporary, output, commands):
+            directory.mkdir()
+        digests = {}
+        for package in CHECKER.BINARY_PACKAGES:
+            digests[package] = {}
+            for revision in ("baseline", "candidate"):
+                path = temporary / f"{revision}-{package}.test"
+                path.write_bytes(f"actual timed {revision} {package}".encode())
+                path.chmod(0o755)
+                digests[package][revision] = hashlib.sha256(path.read_bytes()).hexdigest()
+        (output / "environment.txt").write_text("go version fixture: no Go invoked\n")
+        (output / "binary-sha256.txt").write_text("".join(
+            f"{digest}  {revision}-{package}.test\n"
+            for package, revisions in digests.items() for revision, digest in revisions.items()))
+        if status != 2:
+            (output / "summary.json").write_text(json.dumps({
+                "binary_digests": digests,
+                "results": [{"benchmark": "durable_sync", "timing_pass": status == 0,
+                             "binary_equivalent": False}]}))
+        target = temporary / "candidate-treedb.test"
+        if damage == "changed":
+            target.write_bytes(b"not the timed executable")
+        elif damage == "missing":
+            target.unlink()
+        elif damage == "symlink":
+            target.unlink()
+            target.symlink_to(temporary / "baseline-treedb.test")
+        elif damage == "checker":
+            summary = json.loads((output / "summary.json").read_text())
+            summary["binary_digests"]["treedb"]["candidate"] = "0" * 64
+            (output / "summary.json").write_text(json.dumps(summary))
+        (commands / "git").write_text("#!/bin/sh\nprintf '%s\\n' " + "c" * 40 + "\n")
+        (commands / "go").write_text("#!/bin/sh\necho unexpected-go >&2\nexit 99\n")
+        for path in commands.iterdir():
+            path.chmod(0o755)
+        source = (ROOT / "scripts" / "mvcc_raw_path_gate.sh").read_text()
+        tail = source[source.index("# Retain the exact measured executables"):]
+        environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
+                           TMP_ROOT=str(temporary), OUT_DIR=str(output),
+                           BASELINE_SHA="a" * 40, CANDIDATE_SHA="b" * 40,
+                           SCRIPT_GOWORK="off", SUMMARY_JSON=str(output / "summary.json"),
+                           gate_status=str(status))
+        return subprocess.run(["bash", "-euo", "pipefail", "-c", tail],
+                              env=environment, text=True, capture_output=True, check=False)
+
+    def test_retention_keeps_actual_six_bytes_and_original_failed_verdict(self) -> None:
+        completed = self.retention_tail(1)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertNotIn("unexpected-go", completed.stderr)
+        manifest = json.loads((self.root / "output" / "measured-binaries.json").read_text())
+        self.assertEqual(len(manifest["files"]), 6)
+        for record in manifest["files"]:
+            retained = self.root / "output" / record["path"]
+            timed = self.root / "executables" / retained.name
+            self.assertEqual(retained.read_bytes(), timed.read_bytes())
+            self.assertEqual(hashlib.sha256(retained.read_bytes()).hexdigest(), record["sha256"])
+            self.assertEqual(record["mode"], 0o755)
+            self.assertEqual(record["build_argv"][1:5], ["test", "-c", "-trimpath", "-buildvcs=false"])
+            self.assertEqual(record["build_environment"], {"GOWORK": "off"})
+
+    def test_retention_keeps_pass_and_checker_error_status(self) -> None:
+        for status in (0, 2):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as directory:
+                original = self.root
+                self.root = Path(directory)
+                try:
+                    completed = self.retention_tail(status)
+                    self.assertEqual(completed.returncode, status, completed.stderr)
+                    manifest = json.loads((self.root / "output" / "measured-binaries.json").read_text())
+                    self.assertEqual(manifest["checker_summary_sha256"] is None, status == 2)
+                finally:
+                    self.root = original
+
+    def test_retention_refuses_drift_missing_and_symlink_without_replacing_gate(self) -> None:
+        for status in (0, 1, 2):
+            for damage in ("changed", "missing", "symlink", "checker"):
+                if status == 2 and damage == "checker":
+                    continue
+                with self.subTest(status=status, damage=damage), tempfile.TemporaryDirectory() as directory:
+                    original = self.root
+                    self.root = Path(directory)
+                    try:
+                        completed = self.retention_tail(status, damage)
+                        self.assertEqual(completed.returncode, status, completed.stderr)
+                        self.assertIn("retention incomplete", completed.stderr)
+                        self.assertFalse((self.root / "output" / "measured-binaries.json").exists())
+                        self.assertNotIn("unexpected-go", completed.stderr)
+                    finally:
+                        self.root = original
 
     def test_mixed_rows_cannot_hide_failed_changed_binary_row(self) -> None:
         parsed = CHECKER.compute_binary_digests(

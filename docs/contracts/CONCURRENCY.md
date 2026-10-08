@@ -67,7 +67,14 @@ Snapshot/iterator owners preserve exact old reads while the DB remains open.
 DB Close refuses new reads and drains admitted reads before teardown. Finite
 capacity can refuse writes while old cuts remain pinned; it cannot revoke them.
 `GetManyView` callbacks run outside read/writer locks and can reenter supported
-operations. COW mode itself does not authorize narrowing MVCC Store fences. See
+operations. The resolved public atomic MVCC read-cut capability allows Store
+groups to share floor admission through Write/WriteSync ACK and cleanup. Reads
+validate the floor and pin one physical cut under that admission, then seek,
+construct iterators and decode after releasing it. Floor advancement excludes
+active commits but need not wait for materialization on already-pinned cuts.
+Legacy successors retain their publication/prune fences. COW pruning refuses
+before floor/WAL effects; bounded maintenance and final C3 qualification remain
+separate requirements. See
 [COW cached publication](../../TreeDB/docs/spec/cow-cache-publication.md).
 
 ### Typed graph reads

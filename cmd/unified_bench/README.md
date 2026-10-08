@@ -69,13 +69,15 @@ Foreground records use `archive_bytes` for the native snapshot size.
 `false`) for `Options.IndexPrimaryDirectory`. A supporting build receives the
 actual boolean option. An older build without that option rejects `true` before
 opening a TreeDB database or executing its workload; `false` keeps the baseline
-path. `-profile fast` alone selects `no_wal_fast` and may attach a PRIMARY arena,
-but does not enable the separate PRIMARY directory.
+path. The benchmark compatibility alias `-profile fast` alone selects
+`no_wal_fast` and may attach a PRIMARY arena, but does not enable the separate
+PRIMARY directory.
 
 For example, build from a clean checkout with the supporting product change and
 this harness, then run in a fresh, task-owned database/output directory:
 
 ```sh
+# Benchmark compatibility alias: fast selects the no_wal_fast production profile.
 ./bin/unified-bench -dbs treedb -profile fast -test write_seq,batch_write \
   -keys 10000 -treedb-index-primary-directory=true -profile-dir /path/to/fresh-output
 ```
@@ -91,8 +93,8 @@ Freeze exact product and harness source identities before retained collection.
 Use matched disabled-directory controls for existing public write, batch,
 checkpoint, and vacuum regression checks. Older main has no identical enabled
 directory baseline: enabled results establish incremental/scaling costs, not
-before/after improvement. No-WAL `fast` results do not establish command-WAL
-DURABLE or RELAXED contracts; use the appropriate command-WAL adapter/profile
+before/after improvement. Results from the `no_wal_fast` production profile do
+not establish command-WAL DURABLE or RELAXED contracts; use the appropriate command-WAL adapter/profile
 and its contract checks for those claims. Expensive retained collection waits
 for independent exact-candidate harness review and landing.
 
@@ -1620,6 +1622,9 @@ GOWORK=off GOMAXPROCS=4 go test ./TreeDB/mvcc/cowbench -run '^$' \
   -bench '^BenchmarkC3PublicReadAdmission/command_wal_relaxed/cow_btree/inline/point$' \
   -benchtime=1024x -count=1 -benchmem
 ```
+
+The C3-read capability and allocation audit are documented in
+[the production source guide](../../TreeDB/docs/benchmarks/cow-c3-read-5076/README.md).
 
 The dedicated test package imports the ordinary MVCC product. Frozen fixtures
 bind every selected harness file and helper, including TestMain and file modes;

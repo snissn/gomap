@@ -173,6 +173,12 @@ func peerSecurityReadinessSparseV1(t *testing.T, ownsData bool) {
 	}
 	// Readiness is local-group scoped: a healthy consumer must not inherit a
 	// different data group's outage while the catalog still has quorum.
+	// The stopped data voter can also be the catalog leader. Join its genuine
+	// failover/quorum fence before checking the surviving consumer's readiness.
+	fixedPeerWaitV1(t, ctx, func() bool {
+		report, err := observer.ReadinessV1(ctx, configs[3].NodeID)
+		return err == nil && report.Ready && report.CatalogEpoch == 1
+	})
 	if report, err := observer.ReadinessV1(ctx, configs[3].NodeID); err != nil || !report.Ready {
 		t.Fatalf("healthy sparse consumer: %+v %v", report, err)
 	}

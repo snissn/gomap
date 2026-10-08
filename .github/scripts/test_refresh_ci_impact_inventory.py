@@ -33,6 +33,11 @@ class RefreshSnapshotContract(unittest.TestCase):
         self.write('old.py', '# old source\n')
         self.write('go.mod', 'module fixture\n')
         self.write('go.sum', '')
+        # Preserve declared harness inputs outside .github in this Git fixture.
+        # Refresh validates their presence before replacing source bindings.
+        for path in json.loads((ROOT / ci_impact.POLICY).read_text())['harness_inputs']:
+            if not (self.repo / path).exists():
+                self.write(path, (ROOT / path).read_text())
         self.git('init', '-q')
         self.git('config', 'user.email', 'fixture@example.invalid')
         self.git('config', 'user.name', 'Fixture')
