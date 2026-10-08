@@ -221,6 +221,38 @@ func lookupChunk(n *stateNode, chunkNo uint64) *stateChunk {
 	return n.chunk
 }
 
+// clearPrivateFreeBit is restricted to Allocate's selected free bit. The caller
+// must own the complete path; pageID == 0 alone does not establish ownership.
+// Validate the whole path before changing anything, then retain the same empty
+// leaf and summary behavior as mutateChunk.
+func clearPrivateFreeBit(root *stateNode, chunkNo, offset uint64) bool {
+	var path [chunkTrieDepth + 1]*stateNode
+	n := root
+	for depth := 0; depth <= chunkTrieDepth; depth++ {
+		if n == nil || n.pageID != 0 {
+			return false
+		}
+		path[depth] = n
+		if depth < chunkTrieDepth {
+			n = n.child[chunkNibble(chunkNo, depth)]
+		}
+	}
+	c := n.chunk
+	if offset >= freelistChunkSize || c == nil || c.pageID != 0 || !c.isFree(offset) {
+		return false
+	}
+	c.setFree(offset, false)
+	if c.freeCount() == 0 {
+		if retired, _ := c.retiredSummary(); retired == 0 {
+			n.chunk = nil
+		}
+	}
+	for depth := chunkTrieDepth; depth >= 0; depth-- {
+		recomputeStateNode(path[depth], depth)
+	}
+	return true
+}
+
 func rightmostFree(n *stateNode, depth int, visits *uint64) *stateChunk {
 	if n == nil || n.freeCount == 0 {
 		return nil

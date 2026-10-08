@@ -183,9 +183,13 @@ type allocatedPage struct {
 }
 
 type FreelistTxn struct {
-	base             *FreelistGenerationV1
-	ledger           *ReservationLedger
-	root             *stateNode
+	base   *FreelistGenerationV1
+	ledger *ReservationLedger
+	root   *stateNode
+	// Only this complete, freshly copied path is private. Dirty siblings can
+	// still belong to a base or a staged/rollback transaction.
+	privateRoot      *stateNode
+	privateChunk     uint64
 	highWater        uint64
 	allocated        []allocatedPage
 	abandonedAppends []ReservationExtentV1
@@ -196,13 +200,15 @@ type FreelistTxn struct {
 }
 
 // cloneForAllocatorPrepare creates an isolated staging transaction. Tree nodes
-// are persistent copy-on-write values, so sharing the root is safe; every
+// are persistent copy-on-write values, so sharing the root is safe after
+// revoking private-path authority in both branches; every
 // mutable slice and map must be copied because candidate materialization
 // consumes and annotates the staged transaction.
 func (t *FreelistTxn) cloneForAllocatorPrepare() (*FreelistTxn, error) {
 	if err := t.valid(); err != nil {
 		return nil, err
 	}
+	t.privateRoot = nil
 	clone := *t
 	clone.allocated = append([]allocatedPage(nil), t.allocated...)
 	clone.abandonedAppends = append([]ReservationExtentV1(nil), t.abandonedAppends...)
@@ -277,6 +283,11 @@ func (t *FreelistTxn) markReplacedPath(chunkNo uint64) {
 func (t *FreelistTxn) mutateMany(chunkNo, items uint64, f func(*stateChunk)) {
 	t.markReplacedPath(chunkNo)
 	t.root = mutateChunk(t.root, chunkNo, 0, f)
+	t.privateRoot, t.privateChunk = t.root, chunkNo
+	t.recordMutation(chunkNo, items)
+}
+
+func (t *FreelistTxn) recordMutation(chunkNo, items uint64) {
 	t.changedChunks[chunkNo] = struct{}{}
 	t.stats.StateMutationPaths++
 	t.stats.StateMutationItems += items
@@ -292,7 +303,14 @@ func (t *FreelistTxn) Allocate(regionHint uint64) (uint64, error) {
 	}
 	if id, ok := chooseUnreservedFreePage(t.root, regionHint, t.ledger, &t.stats.PageVisits); ok {
 		offset := id & (freelistChunkSize - 1)
-		t.mutate(id>>freelistChunkShift, func(c *stateChunk) { c.setFree(offset, false) })
+		chunkNo := id >> freelistChunkShift
+		if t.privateRoot == t.root && t.privateChunk == chunkNo && clearPrivateFreeBit(t.root, chunkNo, offset) {
+			// The private path has no durable page IDs to replace. Preserve the
+			// same logical mutation accounting as the persistent fallback.
+			t.recordMutation(chunkNo, 1)
+		} else {
+			t.mutate(chunkNo, func(c *stateChunk) { c.setFree(offset, false) })
+		}
 		t.allocated = append(t.allocated, allocatedPage{id, ReservationReusedData})
 		t.stats.ReuseAllocations++
 		return id, nil
@@ -721,11 +739,15 @@ func (t *FreelistTxn) MaterializeCandidate(generationID, commitSeq uint64, candi
 	if t.base.ref.HeaderPageID != 0 && generationID <= t.base.generationID {
 		return nil, ErrGenerationParent
 	}
+	// Metadata selection must copy its path even when allocations just made
+	// that path private: emission may have to preserve a retained dirty root.
+	t.privateRoot = nil
 	metadataStart, reservedMetadataCount, extents, reusedMetadata := t.tryReusedMetadata(candidateID)
 	// Page IDs are assigned while writing. Once materialization starts, success
 	// or failure consumes this transaction; retry must begin from the immutable
 	// base so a partial sink failure cannot retain unwritten page identities.
 	t.consumed = true
+	t.privateRoot = nil
 	if reusedMetadata {
 		// tryReusedMetadata just copied this complete, nonempty path. Isolate
 		// only its dirty siblings before emission assigns page identities.
