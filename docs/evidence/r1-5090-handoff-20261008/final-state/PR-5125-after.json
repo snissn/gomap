@@ -1,0 +1,6 @@
+{
+  "body": "Continue from the [parent #5090 handoff guide and evidence packet](https://github.com/snissn/gomap/blob/8994a4b22c465da5d1231f2ce0c937d5441c3c8a/docs/evidence/r1-5090-handoff-20261008/README.md).\n\nMake the existing pushed #5099 candidate discoverable from #5090 at the user's handoff boundary. Current source head is `c9f85aebbf6a80d833913848ccef4d90acc0d1a8`.\n\nHistorical scoped component normal/race controls at 4K and 16K passed; whole C/P qualification remains open. The inclusive 16K measurement is 11,972,744 bytes including 601,920 closure bytes, with 13 legacy rows UNKNOWN. External #5037/#5054 work has not been adopted and its final merged ABI is unfrozen. Resolve real merged predecessor identity and ownership before claiming reuse, whole allocation improvement or the 25% avoidable-materialization gate.\n\nThis draft preserves source; no new tests, benchmarks or merge were performed. Follow the parent graph handoff for overlap handling, original source bindings and restart order.\n",
+  "headRefOid": "c9f85aebbf6a80d833913848ccef4d90acc0d1a8",
+  "isDraft": true,
+  "url": "https://github.com/snissn/gomap/pull/5125"
+}

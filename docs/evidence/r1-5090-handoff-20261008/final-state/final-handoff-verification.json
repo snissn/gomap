@@ -1,0 +1,135 @@
+{
+  "at": "2026-10-08T18:45:37.364302+00:00",
+  "mode": "handoff",
+  "workers_settled": true,
+  "R1_runtime_reservation": "released",
+  "new_Go_execution": false,
+  "merged": false,
+  "original_source_preserved": true,
+  "remote_heads_verified": {
+    "codex/r1-5090-handoff-20261008": "8994a4b22c465da5d1231f2ce0c937d5441c3c8a",
+    "codex/r1-5092-captured-row-executor": "113e5b2d3623c5ed5211d2f2dbe407ea46a110e5",
+    "codex/r1-5093-5113-composed-handoff-20261008": "169a34dc320d713ee08acbd3096b03178cf77d00",
+    "codex/r1-5098-common-rollover-observer": "8844d70630b38266722264e0922a5c6e0ee67440",
+    "codex/r1-5098-default-harness-handoff-20261008": "28da479a02b629a906d0bf3fc38c1e639fb68e0d",
+    "codex/r1-5099-captured-closure-reuse": "c9f85aebbf6a80d833913848ccef4d90acc0d1a8",
+    "codex/r1-5108-allocator-handoff-20261008": "46e5c249e5714be644a406c52addcae312ad372f"
+  },
+  "open_tickets_updated": [
+    {
+      "issue": 5090,
+      "url": "https://github.com/snissn/gomap/issues/5090",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:03Z",
+      "body_sha256": "d4d34ef240e956164fbe362e1831f3fa6cc0ee7ffae318aed5aadd1d8f81bc6c",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5092,
+      "url": "https://github.com/snissn/gomap/issues/5092",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:07Z",
+      "body_sha256": "7bbc3941a5ba6f5135cfa3c6fd71f092e56a859b9b4ef71b7f51e4338b90d687",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5093,
+      "url": "https://github.com/snissn/gomap/issues/5093",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:10Z",
+      "body_sha256": "f6a87bb8f245a743905ae6bf5a06652fd77e0068c2935f0d3a36898c85e4f66f",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5094,
+      "url": "https://github.com/snissn/gomap/issues/5094",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:14Z",
+      "body_sha256": "fe1920c2004b331ad0dd11eb8f58d02ddddd8f0d3573db3cb20aae4d885635fa",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5095,
+      "url": "https://github.com/snissn/gomap/issues/5095",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:17Z",
+      "body_sha256": "b4adf9c5fec60d3df594aaafb30fd7bf66e69bc9a029215c58d5b096192fad58",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5096,
+      "url": "https://github.com/snissn/gomap/issues/5096",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:20Z",
+      "body_sha256": "ea5c06cb0df080e115d1a7b4a73059fbe01c2741e891fd48c7a448835ddf4e33",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5097,
+      "url": "https://github.com/snissn/gomap/issues/5097",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:23Z",
+      "body_sha256": "782929c5ab6fd5cc101716ccd27f78aeac4df3733afa98ed2adc218d1cc9ac8b",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5098,
+      "url": "https://github.com/snissn/gomap/issues/5098",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:25Z",
+      "body_sha256": "0d3306c73d3896955cc1df0484681635c74523cf5dfa3d102b7fd386c3ba3e80",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5099,
+      "url": "https://github.com/snissn/gomap/issues/5099",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:28Z",
+      "body_sha256": "515722b4ca5ebeed17f161e04ab300b7d0e1950ea1312efac846df6aded1225b",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5103,
+      "url": "https://github.com/snissn/gomap/issues/5103",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:31Z",
+      "body_sha256": "0dd1c63a728788bea23992c2257b88f129fd8ea6499f648a4b536e49861c42d7",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5105,
+      "url": "https://github.com/snissn/gomap/issues/5105",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:34Z",
+      "body_sha256": "bae3fdb25844c05434ca9715d91f9001f0c7ec58c79bf12c3d7b999e1fbe28aa",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5108,
+      "url": "https://github.com/snissn/gomap/issues/5108",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:37Z",
+      "body_sha256": "28ed0a67ad860aaf18df031f942e9f4770f89319981cdb4be46705b06511a998",
+      "old_body_preserved": true
+    },
+    {
+      "issue": 5113,
+      "url": "https://github.com/snissn/gomap/issues/5113",
+      "state": "OPEN",
+      "updatedAt": "2026-10-08T18:43:40Z",
+      "body_sha256": "85ba7557f20ce0ca692f38b793a28c1d2e0f2c054f5d90a791e74bfba7e2e2bc",
+      "old_body_preserved": true
+    }
+  ],
+  "draft_PRs": [
+    5104,
+    5112,
+    5122,
+    5123,
+    5124,
+    5125
+  ],
+  "resume_from": "https://github.com/snissn/gomap/issues/5090",
+  "guide": "https://github.com/snissn/gomap/blob/8994a4b22c465da5d1231f2ce0c937d5441c3c8a/docs/evidence/r1-5090-handoff-20261008/README.md",
+  "acceptance": "Unmet product, finite admission, full fit, performance and merge gates remain open"
+}
