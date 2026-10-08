@@ -47,6 +47,11 @@ type LeafGenerationGCStats struct {
 }
 
 func (db *DB) LeafGenerationGC(ctx context.Context, opts LeafGenerationGCOptions) (LeafGenerationGCStats, error) {
+	if !opts.DryRun {
+		if err := db.advanceLeafPageLogGenerationForMaintenance(ctx, opts.MaintenanceLimits); err != nil {
+			return LeafGenerationGCStats{}, err
+		}
+	}
 	return db.leafGenerationGC(ctx, opts, true)
 }
 
@@ -341,12 +346,24 @@ func (db *DB) leafGenerationGCDryRunFromScan(basis leafGenerationGCScanBasis, li
 
 func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGenerations, recoverableGenerations map[uint64]struct{}, recoverableRoots *RecoverableRootSet) (LeafGenerationGCStats, error) {
 	var stats LeafGenerationGCStats
+	var retired []LeafPageLogSegment
+	var retirementObserver LeafPageLogRetiredSegmentObserver
 
+	// The scan attempt released its teardown lease before entering this phase.
+	// Acquire a new lease before the builder gate and keep it until the exact
+	// installed producer has consumed physical-removal receipts after unlock.
+	db.teardownMu.RLock()
+	defer db.teardownMu.RUnlock()
 	db.writeMu.Lock()
 	runLeafGenerationGCExclusivePhaseHook(true)
 	defer func() {
 		runLeafGenerationGCExclusivePhaseHook(false)
 		db.writeMu.Unlock()
+		// This phase still owns teardown, but callbacks never inherit the
+		// backend builder gate or the short producer/raw publication cut.
+		if retirementObserver != nil && len(retired) > 0 {
+			retirementObserver.LeafPageLogSegmentsRetired(retired)
+		}
 	}()
 	if db.closing.Load() {
 		return stats, nil
@@ -397,7 +414,10 @@ func (db *DB) leafGenerationGCApplyScan(basis leafGenerationGCScanBasis, liveGen
 	}
 
 	prePrune := manifest.clone()
-	manifest, pruned, filesDeleted, err := db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
+	var pruned bool
+	var filesDeleted int
+	manifest, pruned, filesDeleted, retired, err = db.pruneDeletedLeafGenerationRecords(manifest, filePaths)
+	retirementObserver, _ = leafPageLogInstalledProducer(db.leafPageLog).(LeafPageLogRetiredSegmentObserver)
 	if err != nil {
 		return stats, fmt.Errorf("leaf generation gc: prune deleted generation records: %w", err)
 	}
@@ -746,9 +766,9 @@ func leafGenerationRecordBytesTotal(gen leafGenerationRecord, filePaths map[uint
 	return total
 }
 
-func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePaths map[uint32]string) (*leafGenerationManifest, bool, int, error) {
+func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest, filePaths map[uint32]string) (*leafGenerationManifest, bool, int, []LeafPageLogSegment, error) {
 	if manifest == nil {
-		return nil, false, 0, nil
+		return nil, false, 0, nil, nil
 	}
 	pruned := false
 	filesDeleted := 0
@@ -762,11 +782,18 @@ func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest
 		prunedFileIDs = append(prunedFileIDs, gen.FileIDs...)
 	}
 	if !pruned {
-		return manifest, false, 0, nil
+		return manifest, false, 0, nil, nil
 	}
+	retired := make([]LeafPageLogSegment, 0, len(prunedFileIDs))
+	for _, id := range prunedFileIDs {
+		retired = append(retired, LeafPageLogSegment{Path: filePaths[id], FileID: id})
+	}
+	// Physical absence is already established. A later sidecar or manifest
+	// failure cannot revoke that receipt or resurrect the retired cache owner.
 	if err := db.removeLeafGenerationRecordLengthIndexes(prunedFileIDs); err != nil {
-		return manifest, false, 0, err
+		return manifest, false, 0, retired, err
 	}
+
 	// The input may already back a published view. Pruning must not mutate it.
 	next := manifest.clone()
 	kept := next.Generations[:0]
@@ -777,7 +804,7 @@ func (db *DB) pruneDeletedLeafGenerationRecords(manifest *leafGenerationManifest
 		kept = append(kept, gen)
 	}
 	next.Generations = kept
-	return next, true, filesDeleted, nil
+	return next, true, filesDeleted, retired, nil
 }
 
 func (db *DB) removeLeafGenerationRecordLengthIndexes(fileIDs []uint32) error {

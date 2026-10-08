@@ -1,6 +1,7 @@
 package caching
 
 import (
+	"context"
 	"errors"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
@@ -29,6 +30,8 @@ var _ backenddb.LeafPageLogSegmentRegistrationObserver = (*cachingLeafPageLogGro
 var _ backenddb.LeafPageLogLaneProvider = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogCompactStorageHandoff = (*cachingLeafPageLogGroup)(nil)
 var _ backenddb.LeafPageLogSequenceReserver = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPageLogGenerationHandoffProvider = (*cachingLeafPageLogGroup)(nil)
+var _ backenddb.LeafPageLogRetiredSegmentObserver = (*cachingLeafPageLogGroup)(nil)
 
 func (g *cachingLeafPageLogGroup) laneForWorkerIndex(workerIndex int) (*lane, bool) {
 	if g == nil || g.db == nil || !g.db.indexOuterLeavesInValueLog {
@@ -271,6 +274,13 @@ func (g *cachingLeafPageLogGroup) AdvanceCompactStorageLeafPageLogSeqAtLeast(seq
 	return g.db.advanceCompactStorageLeafPageLogSeqAtLeast(seq)
 }
 
+func (g *cachingLeafPageLogGroup) BeginLeafPageLogGenerationHandoff(ctx context.Context) (backenddb.LeafPageLogGenerationHandoff, error) {
+	if g == nil || g.db == nil {
+		return nil, backenddb.ErrClosed
+	}
+	return g.db.beginLeafPageLogGenerationHandoff(ctx)
+}
+
 func (g *cachingLeafPageLogGroup) ReserveLeafPageLogSequence(floor uint32) (uint32, error) {
 	if g == nil || g.db == nil {
 		return 0, errors.New("cachingdb: leaf page log sequence reservation unavailable")
@@ -296,4 +306,24 @@ func (g *cachingLeafPageLogGroup) forEachLane(fn func(*cachingLeafPageLog) error
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// LeafPageLogSegmentsRetired consumes only physically absent GC receipts. The
+// existing exact lane accounting helper is idempotent and owns vlogMu itself;
+// no cached foreground lock, file deletion or reader refresh is needed here.
+func (g *cachingLeafPageLogGroup) LeafPageLogSegmentsRetired(segments []backenddb.LeafPageLogSegment) {
+	if g == nil || g.db == nil {
+		return
+	}
+	for _, seg := range segments {
+		if seg.Path == "" || seg.FileID == 0 {
+			continue
+		}
+		for _, l := range g.db.leafLogAppendLanesSnapshot() {
+			if g.db.untrackValueLogSegmentFromLane(l, seg.Path) {
+				break
+			}
+		}
+		g.db.forgetValueLogRetain(seg.Path)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	backenddb "github.com/snissn/gomap/TreeDB/db"
+	"github.com/snissn/gomap/TreeDB/internal/valuelog"
 )
 
 func addCacheDurationNs(dst interface{ Add(uint64) uint64 }, d time.Duration) {
@@ -573,9 +574,12 @@ func (db *DB) appendCacheLeafLogLaneStats(stats map[string]string) {
 		idleRotations := l.vlogRotateIdleTotal.Load()
 		activeSegments := 0
 		closedSegments := 0
+		currentSeq, currentFileID := 0, uint32(0)
 		l.vlogMu.Lock()
 		if l.vlogPath != "" && l.vlogSeq > 0 {
 			activeSegments = 1
+			currentSeq = l.vlogSeq
+			currentFileID, _ = valuelog.EncodeFileID(uint32(l.id), uint32(currentSeq))
 		}
 		closedSegments = len(l.vlogClosedSizes)
 		l.vlogMu.Unlock()
@@ -602,6 +606,10 @@ func (db *DB) appendCacheLeafLogLaneStats(stats map[string]string) {
 		stats[prefix+".append_errors_total"] = fmt.Sprintf("%d", errors)
 		stats[prefix+".segment_rotations_total"] = fmt.Sprintf("%d", rotations)
 		stats[prefix+".segment_rotations_idle_total"] = fmt.Sprintf("%d", idleRotations)
+		stats[prefix+".threshold_rotations_total"] = fmt.Sprintf("%d", l.vlogRotateThresholdTotal.Load())
+		stats[prefix+".maintenance_handoffs_total"] = fmt.Sprintf("%d", l.vlogHandoffTotal.Load())
+		stats[prefix+".current_sequence"] = fmt.Sprintf("%d", currentSeq)
+		stats[prefix+".current_file_id"] = fmt.Sprintf("%d", currentFileID)
 		stats[prefix+".segments_active"] = fmt.Sprintf("%d", activeSegments)
 		stats[prefix+".segments_closed"] = fmt.Sprintf("%d", closedSegments)
 	}

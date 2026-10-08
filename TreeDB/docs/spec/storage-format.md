@@ -1967,6 +1967,16 @@ the prior compatibility view only when the view still names the abandoned
 revision. A later view wins. Any ambiguous restore or cleanup poisons the live
 handle rather than guessing.
 
+Public leaf maintenance can seal the installed cached append-only native
+producer before selecting generations. All physical writers cross the shared
+sequence floor, and created/current identities are registered before the cut
+ends. These are ordinary segments using the existing file IDs, record format,
+manifest version, and durability rules. Sealing does not authorize deletion:
+held/recoverable roots, current writers, and exact resource pins retain their
+normal protection. Producer accounting is forgotten only after GC confirms
+physical absence. The publication and lock contract is specified in
+[cached native leaf producer handoff](cached-native-leaf-producer-handoff-5098.md).
+
 Committed immutable revisions are reclaimed by `LeafGenerationGC` separately
 from leaf-log segments. After any GC manifest replacements, GC captures fresh
 current and both recoverable-root resource closures. The existing identity
