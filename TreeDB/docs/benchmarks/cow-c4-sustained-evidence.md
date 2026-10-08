@@ -173,3 +173,29 @@ requires exactly that mask, independently of system `cpu_count`. Missing
 observation, narrowed masks and mismatches refuse, including consistently
 rehashed copied packets. The construction draft leaves the mask unresolved;
 this adds no CPU quota policy or qualification claim.
+
+
+## Finite hosted construction
+
+`C4 finite construction` uses a dedicated Ubuntu runner and official Go1.26.8.
+It can be dispatched at a selected source ref. During the current tooling review,
+coordinator branch `codex/cow-c4-sustained-tools` source changes trigger it directly;
+rerun attempts are refused. This route is candidate-only one-epoch construction,
+not matched performance, native qualification or full COW retention acceptance.
+
+The bootstrap rejects PID/proc mismatches and Git metadata above the detached
+export before Go, runs current normal/race fixtures, and freezes full Git source,
+toolchain bytes/modes, controls, actual affinity and host/storage identity.
+The finite wrapper runs the canonical12-artifact build,36candidate cells, analysis,
+original12 plus25budget copied-packet refusals, and63serialized checks with3actual
+controls. It retains raw outcomes even on failure, forbids hidden retries and
+preserves the20GiB disk/census/load gates. Separate owned process groups require
+actual joins; killing an owner never proves its descendants released custody.
+
+An inner success claim is provisional. Acceptance requires actual bootstrap exit0,
+clean hosted-finish and outer-finish, both actual outer joins, no cancellation,
+and independent archive SHA/manifest/raw-packet verification. Mandatory closure
+runs on released failures; unproven custody remains HELD and refuses export.
+Artifacts retain producer capture paths for relocation validation; they never
+turn an incomplete or failed packet into accepted evidence. Download the retained
+construction archive plus provision/outer receipts before its30day hosted expiry.

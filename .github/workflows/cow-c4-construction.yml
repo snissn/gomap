@@ -1,0 +1,75 @@
+name: C4 finite construction
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/cow-c4-construction.yml'
+      - 'scripts/cow_c3_read/**'
+      - 'TreeDB/mvcc/cowsustained/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cow-c4-finite-construction
+  cancel-in-progress: false
+
+jobs:
+  construct:
+    # Automatic execution is limited to the coordinator's construction branch.
+    # A manually dispatched run uses its explicitly selected source ref.
+    if: github.run_attempt == 1 && (github.event_name == 'workflow_dispatch' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'codex/cow-c4-sustained-tools'))
+    runs-on: ubuntu-latest
+    # Five600s provisioning commands +16320s finite driver + bounded joins
+    # fit within333min; four5min setup/retention steps keep total below6h.
+    timeout-minutes: 360
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+      C4_OUTPUT: ${{ runner.temp }}/cow-c4-${{ github.run_id }}-${{ github.run_attempt }}
+      C4_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        timeout-minutes: 5
+        with:
+          ref: ${{ env.C4_HEAD }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        timeout-minutes: 5
+        with:
+          go-version: '1.26.8'
+          cache: false
+      - name: Fresh functional checks and finite construction
+        id: construction
+        timeout-minutes: 333
+        run: python3 -B scripts/cow_c3_read/hosted_c4.py "$GITHUB_WORKSPACE" "$C4_HEAD" "$C4_OUTPUT"
+      - name: Retain raw outcomes and actual outer joins
+        if: always()
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: c4-finite-${{ env.C4_HEAD }}-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            ${{ env.C4_OUTPUT }}/construction.tar.gz
+            ${{ env.C4_OUTPUT }}/binding.json.gz
+            ${{ env.C4_OUTPUT }}/provision/**
+            ${{ env.C4_OUTPUT }}/*.json
+            ${{ env.C4_OUTPUT }}/*.stdout
+            ${{ env.C4_OUTPUT }}/*.stderr
+            ${{ env.C4_OUTPUT }}/admission/*.json
+            ${{ env.C4_OUTPUT }}/admission/*.stdout
+            ${{ env.C4_OUTPUT }}/admission/*.stderr
+      - name: Retain unsealed forensic files on failure
+        if: always() && steps.construction.outcome != 'success'
+        timeout-minutes: 5
+        uses: actions/upload-artifact@v4
+        with:
+          name: c4-unsealed-forensics-${{ env.C4_HEAD }}-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            ${{ env.C4_OUTPUT }}/admission/**
+            ${{ env.C4_OUTPUT }}/build/**
