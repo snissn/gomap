@@ -10,7 +10,7 @@
     "MVCC and sparse/owner paired benchmarks execute explicit head/base contexts; ordinary PR correctness uses merge candidate.",
     "C3 hosted qualification is manual, capacity-only by default and requires a separate actual same-VM construction acceptance; forecasts grant no execution or performance qualification."
   ],
-  "discovery_source_sha256": "a23a8d7b4a9b0358328dcf6dc44f802cf6d34c5cbe5c85d09a3f5006678363e9",
+  "discovery_source_sha256": "05aab2b6df76e9f325472f6fd9a925ad895f82bbd35e793b718159e35dc3da86",
   "dynamic_consumers": [
     {
       "behavior": "AST/WalkDir discovery and go test subprocess producer witnesses; all TreeDB test/race members retained",
@@ -129,7 +129,7 @@
       "mode": "100644"
     },
     ".github/scripts/test_ci_impact.py": {
-      "git_blob": "fc7cde6c604a0472266ae04ee8df309ef880dbd5",
+      "git_blob": "f9ebdd8d9975c1dc92735fe2e877e1f6bec1d4e5",
       "mode": "100644"
     },
     ".github/scripts/test_treedb_ci_contract.py": {
@@ -149,7 +149,7 @@
       "mode": "100644"
     },
     "scripts/cow_c3_read/collect.py": {
-      "git_blob": "f371e1c10049992f808df5e9f96d153c49f7aeb0",
+      "git_blob": "2e1dedfc1ae43f47e3f4a5f3b3dd85e25ac92a23",
       "mode": "100644"
     },
     "scripts/cow_c3_read/host_isolation_test.py": {
@@ -206,6 +206,19 @@
         "tags": "entry command defaults/flags retained"
       },
       "workflow": "cow-c3-hosted-qualification.yml"
+    },
+    {
+      "id": "cow-c4-construction/construct/single",
+      "job": "construct",
+      "owner": "TreeDB sustained public MVCC evidence tooling (#5081/#5044)",
+      "variant": {
+        "cgo": "setup-go platform default; explicit command overrides retained",
+        "matrix": {},
+        "race": false,
+        "runs_on": "ubuntu-latest",
+        "tags": "entry command defaults/flags retained"
+      },
+      "workflow": "cow-c4-construction.yml"
     },
     {
       "id": "format/gofmt/single",
@@ -1496,6 +1509,53 @@
         }
       },
       "sha256": "da6b04d75bee522e4dac3a8cc0fc38d1486d2f350b1aadfdef385306aa4cf161"
+    },
+    "cow-c4-construction.yml": {
+      "coverage": "existing execution only; triggers/path filters are unchanged",
+      "events": {
+        "pull_request": {
+          "paths": [
+            ".github/workflows/cow-c4-construction.yml",
+            "scripts/cow_c3_read/**",
+            "TreeDB/mvcc/cowsustained/**"
+          ],
+          "types": [
+            "opened",
+            "synchronize",
+            "reopened"
+          ]
+        },
+        "workflow_dispatch": null
+      },
+      "git_blob": "fe2bfa0fc0fbe28eba4a0407440ec85e890f400e",
+      "jobs": {
+        "construct": {
+          "checkout": [
+            {
+              "fetch-depth": 0,
+              "ref": "${{ env.C4_HEAD }}"
+            }
+          ],
+          "commands": [
+            {
+              "command_sha256": "e2b4cb04e4eb2d45593abc0dd85fc9b27db8ccd54d49400fa77e5c0cdccb7808",
+              "entrypoint": ".github/workflows/cow-c4-construction.yml:46",
+              "invocation": "python3 -B scripts/cow_c3_read/hosted_c4.py \"$GITHUB_WORKSPACE\" \"$C4_HEAD\" \"$C4_OUTPUT\"",
+              "name": "Fresh functional checks and finite construction"
+            }
+          ],
+          "environment": {
+            "C4_HEAD": "${{ github.event.pull_request.head.sha || github.sha }}",
+            "C4_OUTPUT": "/tmp/cow-c4-${{ github.run_id }}-${{ github.run_attempt }}",
+            "PYTHONDONTWRITEBYTECODE": "1"
+          },
+          "matrix": null,
+          "module": "root go.mod (GOWORK per entry command; no nested module qualification)",
+          "race": false,
+          "runs_on": "ubuntu-latest"
+        }
+      },
+      "sha256": "37b220a59e580bfa2040c1fad6f76a1104e66ddadd7319b24fd232e918205492"
     },
     "format.yml": {
       "coverage": "existing execution only; triggers/path filters are unchanged",

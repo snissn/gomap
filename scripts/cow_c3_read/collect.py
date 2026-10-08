@@ -13,15 +13,34 @@ import time
 from protocol import SCHEMA, command, config, digest, drift, identity, label, need, now, process_environment, row, schedule, sha, write, validate_go_environment, variant_paths, fixture_manifest, toolchain_inventory, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, cpu_affinity, validate_cpu_affinity
 from build import verify_git_receipt, objects
 from protocol import HOST_ISOLATION, validate_host_isolation, process_census, validate_census_file, validate_run_processes, benchmark_comms, linux_comm
-from protocol import host_gate, host_nonload_gate, load_wait_reason, validate_load_readiness
+import protocol as c3_protocol
+from protocol import validate_load_readiness, host_nonload_gate, host_gate as protocol_host_gate, load_wait_reason
 
 CANCEL_SIGNALS = (signal.SIGTERM, signal.SIGINT, signal.SIGQUIT)
+
+def selected_protocol(suite):
+    if suite == "c3-read":
+        return c3_protocol, ("protocol.py", "collect.py", "analyze.py", "build.py")
+    if suite == "c4-sustained":
+        import c4_protocol
+        return c4_protocol, c4_protocol.SCRIPTS
+    raise ValueError("unsupported suite")
+
+def invocation_command(selected, binary, case, item, timeout, raw_directory=None):
+    if selected.SCHEMA == c3_protocol.SCHEMA:
+        return selected.command(binary, case, item, timeout)
+    return selected.command(binary, case, item, timeout, raw_directory)
+
+def invocation_work_contract(selected, case, item):
+    return selected.work_contract(case, item["phase"])
 
 def cancel_collector(signum, frame):
     raise KeyboardInterrupt("collector cancelled by signal " + str(signum))
 
+
 def census_bytes(env):
     return subprocess.check_output(["ps", "-eo", HOST_ISOLATION["ps_fields"], "--no-headers"], env=env, timeout=HOST_ISOLATION["max_observation_gap_seconds"])
+
 
 class ChildMonitor:
     """Small synchronous observer driven by the existing wait4 loop."""
@@ -62,6 +81,7 @@ class ChildMonitor:
         self.value.update(waited_pid=pid, wait_status=status, reaped_monotonic_ns=time.monotonic_ns())
         self.save()
 
+
 def stop_and_reap(child, monitor=None):
     """Caller keeps cancellation handlers sticky until owned custody is joined."""
     if child.returncode is not None:
@@ -76,6 +96,34 @@ def stop_and_reap(child, monitor=None):
         monitor.value["failure"] = monitor.value["failure"] or "collector cancelled; owned child stopped/reaped"
         monitor.reaped(pid, status)
     return pid, status
+
+
+def run_child(argv, cwd, env, output, errors, timeout, out, name, benchmark_names=()):
+    """Establish signal custody before spawn; restore only after wait4 joins."""
+    child, monitor, cancelled = None, None, []
+    def remember(signum, frame):
+        cancelled.append(signum)
+    previous = {s: signal.signal(s, remember) for s in CANCEL_SIGNALS}
+    try:
+        started_ns = time.monotonic_ns()
+        child = subprocess.Popen(argv, cwd=cwd, env=env, stdout=output, stderr=errors, start_new_session=True)
+        monitor = ChildMonitor(out, name, child, env, started_ns, benchmark_names)
+        result = wait_child(child, timeout, monitor=monitor, cancelled=cancelled)
+        if cancelled:
+            raise KeyboardInterrupt("collector cancelled by signal " + str(cancelled[0]))
+        return child, monitor, result
+    except BaseException:
+        if child is not None:
+            joined = stop_and_reap(child, monitor)
+            if monitor is None and joined is not None:
+                write(out / (name + "-initialization-failure-join.json"),
+                      {"child_pid": child.pid, "waited_pid": joined[0],
+                       "wait_status": joined[1], "exit_code": child.returncode})
+        raise
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+
 
 def wait_child(child, timeout, grace=3.0, monitor=None, cancelled=None):
     deadline, timed_out, quit_sent, killed = time.monotonic() + timeout, False, False, False
@@ -130,32 +178,6 @@ def wait_child(child, timeout, grace=3.0, monitor=None, cancelled=None):
         for signum, handler in previous.items():
             signal.signal(signum, handler)
 
-def run_child(argv, cwd, env, output, errors, timeout, out, name, benchmark_names=()):
-    """Establish signal custody before spawn; restore only after wait4 joins."""
-    child, monitor, cancelled = None, None, []
-    def remember(signum, frame):
-        cancelled.append(signum)
-    previous = {s: signal.signal(s, remember) for s in CANCEL_SIGNALS}
-    try:
-        started_ns = time.monotonic_ns()
-        child = subprocess.Popen(argv, cwd=cwd, env=env, stdout=output, stderr=errors, start_new_session=True)
-        monitor = ChildMonitor(out, name, child, env, started_ns, benchmark_names)
-        result = wait_child(child, timeout, monitor=monitor, cancelled=cancelled)
-        if cancelled:
-            raise KeyboardInterrupt("collector cancelled by signal " + str(cancelled[0]))
-        return child, monitor, result
-    except BaseException:
-        if child is not None:
-            joined = stop_and_reap(child, monitor)
-            if monitor is None and joined is not None:
-                write(out / (name + "-initialization-failure-join.json"),
-                      {"child_pid": child.pid, "waited_pid": joined[0],
-                       "wait_status": joined[1], "exit_code": child.returncode})
-        raise
-    finally:
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
-
 def host_snapshot(out, name, storage, source, env):
     data = {"at": now(), "uname": platform.uname()._asdict(), "cpu_count": os.cpu_count(), "cpu_affinity": cpu_affinity(),
             "load": list(os.getloadavg()), "storage_path": str(storage),
@@ -173,6 +195,9 @@ def host_snapshot(out, name, storage, source, env):
     data["processes_sha256"] = sha(processes)
     write(out / (name + "-host.json"), data)
     return data
+
+def host_gate(snapshot, policy):
+    protocol_host_gate(snapshot, policy)
 
 class LoadReadiness:
     """One campaign ledger; only pre-spawn load exceedance permits waiting."""
@@ -292,10 +317,12 @@ def main():
     for signum in CANCEL_SIGNALS:
         signal.signal(signum, cancel_collector)
     p = argparse.ArgumentParser()
+    p.add_argument("--suite", choices=("c3-read", "c4-sustained"), default="c3-read")
     p.add_argument("--config", type=Path, required=True)
     p.add_argument("--out", type=Path, required=True)
     args = p.parse_args()
-    c = config(args.config)
+    selected, selected_scripts = selected_protocol(args.suite)
+    c = selected.config(args.config)
     validate_host_isolation(c.get("host_isolation"))
     configured_comms = benchmark_comms(c)
     out = args.out.resolve()
@@ -303,12 +330,12 @@ def main():
     write(out / "config.json", c)
     script_dir = Path(__file__).resolve().parent
     scripts = {}
-    for name in ("protocol.py", "collect.py", "analyze.py", "build.py"):
+    for name in selected_scripts:
         shutil.copyfile(script_dir / name, out / name)
         scripts[name] = sha(out / name)
     write(out / "script-identity.json", scripts)
     state, receipts = {}, []
-    readiness = LoadReadiness(out, c["load_readiness"])
+    readiness = LoadReadiness(out, c["load_readiness"]) if args.suite == "c3-read" else None
     env = process_environment(c["environment"])
     write(out / "environment.json", {"effective_controls": c["environment"], "effective_process_environment": env})
     try:
@@ -341,7 +368,8 @@ def main():
             need(build.get("effective_process_environment") == env, "build process environment mismatch")
             # Root must retain actual build command/exit and go env/list module /
             # compiled dependency/buildinfo outputs, not just asserted labels.
-            validate_build_command(build, c["go_binary"], v["binary"])
+            validate_build_command(build, c["go_binary"], v["binary"],
+                                   "c4" if args.suite == "c4-sustained" else "c3")
             required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
             need(set(build["artifacts"]) == required, "missing/extra build provenance artifacts")
             frozen_artifacts = {}
@@ -379,12 +407,22 @@ def main():
         write(out / "live-toolchain.json", {"go_version": version, "inventory": live_toolchain})
         need(version == c["go_version"], "live toolchain version mismatch")
         cases = {x["id"]: x for x in c["cases"]}
-        for item in schedule(c):
+        for item in selected.schedule(c):
             name = label(item)
             s, case = state[item["variant"]], cases[item["case"]]
-            before, readiness_index, readiness_digest = readiness.admit(name, storage, s["source"], env, c["host"], configured_comms,
-                lambda: source_preflight(state, c, name))
-            argv = command(s["binary"], case, item, c["timeout_seconds"])
+            if readiness is not None:
+                before, readiness_index, readiness_digest = readiness.admit(name, storage, s["source"], env, c["host"], configured_comms,
+                    lambda: source_preflight(state, c, name))
+            else:
+                source_preflight(state, c, name)
+                before = host_snapshot(out, name + "-before", storage, s["source"], env)
+                host_gate(before, c["host"])
+                validate_census_file(out / (name + "-before-processes.txt"), before["processes_sha256"], benchmark_names=configured_comms)
+            raw_directory = None
+            if args.suite == "c4-sustained":
+                raw_directory = out / (name + "-lifecycle")
+                raw_directory.mkdir()
+            argv = invocation_command(selected, s["binary"], case, item, c["timeout_seconds"], raw_directory)
             stdout, stderr = out / (name + ".stdout"), out / (name + ".stderr")
             started, start = now(), time.monotonic()
             spawn_ns = time.monotonic_ns()
@@ -406,8 +444,9 @@ def main():
                      child_user_seconds=usage.ru_utime, child_system_seconds=usage.ru_stime,
                      stdout_sha256=sha(stdout), stderr_sha256=sha(stderr), source_drift_after=changes,
                      binary_sha256=sha(s["binary"]), before=before, after=after,
-                     work_contract_sha256=digest(case["workload_contract"]), timed_out=timed_out, validation_error=None,
-                     readiness_probe_index=readiness_index, readiness_probe_sha256=readiness_digest, spawn_monotonic_ns=spawn_ns)
+                     work_contract_sha256=digest(invocation_work_contract(selected, case, item)), timed_out=timed_out, validation_error=None)
+            if readiness is not None:
+                r.update(readiness_probe_index=readiness_index, readiness_probe_sha256=readiness_digest, spawn_monotonic_ns=spawn_ns)
             receipts.append(r)
             write(out / "receipts.json", receipts)
             try:
@@ -417,7 +456,14 @@ def main():
                 need(not any(changes.values()), "source drift after run")
                 need(r["binary_sha256"] == c["variants"][item["variant"]]["binary_sha256"], "binary drift after run")
                 host_gate(after, c["host"])
-                r["row"] = row(stdout, stderr, case, item["variant"], item["phase"])
+                r["row"] = selected.row(stdout, stderr, case, item["variant"], item["phase"])
+                if args.suite == "c4-sustained":
+                    epochs = case["warmup_iterations"] if item["phase"] == "warmup" else case["iterations"]
+                    r["raw_directory"] = str(raw_directory)
+                    r["raw_lifecycles"] = selected.raw_receipts(raw_directory, case, epochs)
+                    final = r["raw_lifecycles"][-1]["validation"]
+                    need(abs(r["row"]["metrics"]["public_calls/op"] - final["calls"] / epochs) <= .51, "raw-summary work mismatch")
+                    need(r["row"]["metrics"]["overlapping_readers"] == final["overlapping_readers"], "raw-summary overlap mismatch")
             except Exception as error:
                 r["validation_error"] = str(error)
                 write(out / "receipts.json", receipts)
@@ -425,14 +471,24 @@ def main():
             write(out / "receipts.json", receipts)
             print(json.dumps({"label": name, "exit_code": r["exit_code"], "elapsed_seconds": r["elapsed_seconds"]}), flush=True)
         need(toolchain_inventory(c["environment"]["GOROOT"]) == live_toolchain, "Go toolchain drift during collection")
-        readiness.finish()
-        write(out / "completion.json", {"schema": SCHEMA, "at": now(), "runs": len(receipts), "readiness_sha256": sha(out / "readiness.json"),
+        if readiness is not None:
+            readiness.finish()
+        completion = {"schema": selected.SCHEMA, "at": now(), "runs": len(receipts),
               "config_sha256": sha(out / "config.json"), "receipts_sha256": sha(out / "receipts.json"),
               "script_identity_sha256": sha(out / "script-identity.json"),
-              "claim": "C3-read matched evidence only; coordinator acceptance pending; no C4/M7/parent qualification"})
+              "claim": "C3-read matched evidence only; coordinator acceptance pending; no C4/M7/parent qualification" if args.suite == "c3-read" else selected.COMPLETION_CLAIM}
+        if readiness is not None:
+            completion["readiness_sha256"] = sha(out / "readiness.json")
+        if args.suite == "c4-sustained":
+            completion["capture_root"] = str(out)
+            selected.validate_completion(completion)
+        write(out / "completion.json", completion)
     except BaseException as error:
-        readiness.finish(error)
-        write(out / "failure.json", {"at": now(), "type": type(error).__name__, "error": str(error), "retained_runs": len(receipts), "readiness_sha256": sha(out / "readiness.json")})
+        failure = {"at": now(), "type": type(error).__name__, "error": str(error), "retained_runs": len(receipts)}
+        if readiness is not None:
+            readiness.finish(error)
+            failure["readiness_sha256"] = sha(out / "readiness.json")
+        write(out / "failure.json", failure)
         raise
 
 if __name__ == "__main__":

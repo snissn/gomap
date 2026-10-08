@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import statistics
 from protocol import command, config, digest, identity, label, need, process_environment, row, schedule, sha, write, validate_go_environment, fixture_manifest, build_toolchain, validate_no_cgo, build_inputs, validate_build_command, retained_tooling
-from collect import host_gate
+from collect import host_gate, selected_protocol, invocation_command, invocation_work_contract
 from build import verify_git_receipt, objects
 from protocol import validate_run_processes, benchmark_comms, validate_readiness
 
@@ -14,22 +14,24 @@ def summary(values):
     return {"values": values, "median": median, "min": low, "max": high,
             "spread_fraction": (high - low) / median if median else (0 if high == 0 else None)}
 
-def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("packet", type=Path)
-    args = p.parse_args()
-    packet = args.packet.resolve()
+def _validate_packet(packet, suite="c3-read"):
+    """Shared retained build/source/process/host validation; no live execution."""
+    packet = Path(packet).resolve()
+    selected, selected_scripts = selected_protocol(suite)
     need(not (packet / "failure.json").exists(), "failed capture retained; no graceful analysis fallback")
-    c = config(packet / "config.json")
+    c = selected.config(packet / "config.json")
     configured_comms = benchmark_comms(c)
     env = process_environment(c["environment"])
     need(json.loads((packet / "environment.json").read_text()) ==
          {"effective_controls": c["environment"], "effective_process_environment": env}, "captured process environment mismatch")
     completion = json.loads((packet / "completion.json").read_text())
+    if suite == "c4-sustained":
+        completion = selected.load(packet / "completion.json")
+        selected.validate_completion(completion)
     for key, file in (("config_sha256", "config.json"), ("receipts_sha256", "receipts.json"), ("script_identity_sha256", "script-identity.json")):
         need(sha(packet / file) == completion[key], "packet identity mismatch " + file)
     script_hashes = json.loads((packet / "script-identity.json").read_text())
-    need(set(script_hashes) == {"protocol.py", "collect.py", "analyze.py", "build.py"}, "missing/extra retained tooling scripts")
+    need(set(script_hashes) == set(selected_scripts), "missing/extra retained tooling scripts")
     for name, value in script_hashes.items():
         need(sha(packet / name) == value, "collector/analyzer script drift")
     live_toolchain = json.loads((packet / "live-toolchain.json").read_text())
@@ -43,7 +45,8 @@ def main():
         need(build["binary_sha256"] == declaration["binary_sha256"] and build["source_tree_sha256"] == declaration["source_tree_sha256"], "unbound build receipt")
         need(build["environment"] == c["environment"] and build["race"] is False and build["build_tags"] == [], "build controls drift")
         need(build.get("effective_process_environment") == env, "build process environment mismatch")
-        validate_build_command(build, c["go_binary"], declaration["binary"])
+        validate_build_command(build, c["go_binary"], declaration["binary"],
+                               "c4" if suite == "c4-sustained" else "c3")
         artifacts = json.loads((packet / (variant + "-build-artifacts.json")).read_text())
         required = {"go_env", "module_graph", "effective_module_graph", "compiled_dependencies", "binary_buildinfo", "build_stdout", "build_stderr", "compiled_input_closure", "compiled_inputs_before", "generated_nonpersistent_inputs", "git_source", "toolchain"}
         need(set(artifacts) == set(build["artifacts"]) == required, "missing/extra build provenance map")
@@ -73,9 +76,9 @@ def main():
         need(not json.loads((packet / (variant + "-build-source-after.json")).read_text())["drift"], "build source-after drift")
     need(module_identities["baseline"] == module_identities["candidate"], "effective module graph differs")
     receipts = json.loads((packet / "receipts.json").read_text())
-    planned = list(schedule(c))
+    planned = list(selected.schedule(c))
     need(len(receipts) == len(planned) == completion["runs"], "missing/extra runs")
-    readiness = validate_readiness(packet, c, receipts, completion)
+    readiness = validate_readiness(packet, c, receipts, completion) if suite == "c3-read" else None
     cases = {x["id"]: x for x in c["cases"]}
     rows = []
     for r, expected in zip(receipts, planned):
@@ -87,10 +90,13 @@ def main():
         for suffix, key in ((".stdout", "stdout_sha256"), (".stderr", "stderr_sha256")):
             need(sha(packet / (name + suffix)) == r[key], "raw stream drift")
         case = cases[r["case"]]
-        need(r["command"] == command(c["variants"][r["variant"]]["binary"], case, expected, c["timeout_seconds"]), "invocation mismatch")
+        raw_directory = r.get("raw_directory") if suite == "c4-sustained" else None
+        if suite == "c4-sustained":
+            selected.lifecycle_directory(packet, completion, r)
+        need(r["command"] == invocation_command(selected, c["variants"][r["variant"]]["binary"], case, expected, c["timeout_seconds"], raw_directory), "invocation mismatch")
         need(r["elapsed_seconds"] > 0 and r["child_max_rss_kib"] > 0 and r["child_user_seconds"] >= 0 and r["child_system_seconds"] >= 0, "invalid process measurements")
-        need(r["work_contract_sha256"] == digest(case["workload_contract"]), "workload contract mismatch")
-        parsed = row(packet / (name + ".stdout"), packet / (name + ".stderr"), case, r["variant"], r["phase"])
+        need(r["work_contract_sha256"] == digest(invocation_work_contract(selected, case, expected)), "workload contract mismatch")
+        parsed = selected.row(packet / (name + ".stdout"), packet / (name + ".stderr"), case, r["variant"], r["phase"])
         need(parsed == r["row"], "cached row differs from raw stream")
         for direction in ("before", "after"):
             name_prefix = name + "-" + direction
@@ -101,6 +107,20 @@ def main():
             for source in ("meminfo", "cpuinfo", "mounts", "processes"):
                 need(sha(packet / (name_prefix + "-" + source + ".txt")) == captured[source + "_sha256"], "host snapshot drift")
         rows.append(dict(expected, **parsed, rss_kib=r["child_max_rss_kib"]))
+    return c, rows, receipts, completion, readiness
+
+
+def validate_packet(packet, suite="c3-read"):
+    """Retain the four-value shared analyzer API for the C4 consumer."""
+    return _validate_packet(packet, suite)[:4]
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("packet", type=Path)
+    args = p.parse_args()
+    packet = args.packet.resolve()
+    c, rows, receipts, completion, readiness = _validate_packet(packet)
     results = []
     need(len({digest(r["metadata"]) for r in rows}) == 1, "benchmark host/package metadata differs")
     for case in c["cases"]:

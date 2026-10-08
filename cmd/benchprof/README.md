@@ -840,3 +840,16 @@ The dedicated test package imports the ordinary MVCC product. Frozen fixtures
 bind every selected harness file and helper, including TestMain and file modes;
 product regression tests are outside that harness closure. Canonical matched
 counts remain 128 warmup and 1024 measured iterations per fresh process.
+
+### Standalone sustained public MVCC lifecycle
+
+`BenchmarkCOWSustainedPublicMVCC` in `./TreeDB/mvcc/cowsustained` is a bounded
+Go package fixture with explicit
+raw JSON lifecycle receipts and fixed 1..8 epoch counts. Its 36 leaves retain
+grouped growth/replacement, tombstones, old pins, joined overlap, checkpoint,
+Close and reopen oracles. Reproduction, allocation scope and qualification
+limits are in [the C4 fixture contract](../../TreeDB/docs/benchmarks/cow-c4-sustained-evidence.md).
+The standalone collector/analyzer shares C3 provenance machinery; these
+artifacts are not benchprof profile-dir inputs. Native eligibility and whole
+public maintenance charge remain PENDING, and qualification remains
+`pending_native_observations`.

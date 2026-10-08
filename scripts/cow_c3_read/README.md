@@ -131,6 +131,12 @@ Freeze its canonical `toolchain_identity` digest alongside
 `go_version` and `go_binary_sha256`; both build receipts, live collection and
 offline analysis require the same identity. Collection checks the actual
 inventory before and after capture. Offline analysis needs only retained bytes.
+C4 uses the same nonempty frozen Go-version contract as C3. The version is
+selected and pinned by the evidence policy, rather than a second hardcoded
+patch version in the C4 schema. Both builds and the retained live-toolchain
+record must match that exact frozen version, launcher hash and inventory
+identity. A newly approved official toolchain requires fresh binaries and
+receipts; older packets keep their original toolchain identities.
 Build receipts must report integer exit zero and exactly
 `<GOROOT>/bin/go test -c -trimpath -o <declared-binary> ./TreeDB/mvcc/cowbench`, plus the exact
 `go list -compiled -deps -test -json ./TreeDB/mvcc/cowbench` provenance command. Custom
@@ -376,6 +382,131 @@ bind `harness_input_identity`. C4 freezes its complete `TreeDB/mvcc/cowsustained
 and shared `TreeDB/internal/cowbench/` inventories through its own protocol. The C3 phase work contract is unchanged between warmup and
 measurement; iteration counts remain separately fixed at 128 and 1024.
 
+## C4 sustained public lifecycle
+
+The closed `--suite c4-sustained` dispatch shares the C3 builder, immutable Git
+source authority, compiled module validation, fixed child environment, host and
+TMPDIR admission, and process-group watchdog. C3 remains the default suite.
+The builder's closed `--suite c4` selection compiles `./TreeDB/mvcc/cowsustained`, while
+its default C3 selection compiles the isolated public C3 harness package.
+The full maintained fixture contract and allocation
+scope are in [cow-c4-sustained-evidence.md](../../TreeDB/docs/benchmarks/cow-c4-sustained-evidence.md).
+
+`prepare_c4_config.py` creates a non-runnable draft covering all 36 leaves.
+Freeze source/binary/fixture identities, the same explicit environment and host
+controls as C3, finite epochs (1..8), noise policy and coordinator acceptance.
+Set `result_class` to `construction` for one fresh candidate process per leaf,
+or `matched-supported-evidence` for separate baseline/candidate warmups and
+three ABBA cycles (504 processes). Both classes require both frozen build
+closures, the 15-key CGO-disabled environment, all 12 build artifacts and the
+retained live Go version and executable inventory. Construction may reuse one
+product for both labels; matched evidence requires distinct products and
+independent non-nested variant paths. Native requirements are typed `PENDING`, with whole public maintenance
+caps of 32 records and 1 MiB. Every packet retains the literal
+`pending_native_observations`; no successful packet promotes a product/native
+qualification.
+
+```sh
+python3 -B scripts/cow_c3_read/prepare_c4_config.py --out <draft.json>
+python3 -B scripts/cow_c3_read/collect.py --suite c4-sustained \
+  --config <frozen-approved.json> --out <new-packet>
+python3 -B <new-packet>/c4_analyze.py <new-packet>
+python3 -B scripts/cow_c3_read/c4_packet_smoke.py \
+  --positive <actual-successful-packet> --out <new-refusal-smoke>
+```
+
+C4 v3 records the collector's resolved output root in `completion.capture_root`.
+Every receipt and benchmark output-directory argument must name exactly
+`<capture_root>/<label>-lifecycle`. Offline analysis maps that verified leaf into
+the packet being read, so copying the complete packet preserves its original
+producer paths without requiring those paths to exist on the reader's host.
+An unrelated absolute path with the same basename, a missing or changed capture
+root, and an inconsistent command refuse. Historical v2 packets retain their
+original reader and identities; they do not gain v3 capture provenance through
+resealing. The v3 contract requires a fresh collector packet.
+
+The collector creates one explicit raw directory per child and passes it via
+`-cow-c4-public-output-dir`. Each actual invocation emits an immutable JSON
+receipt, including Go's initial 1x calibration and the requested finite count.
+The raw schema binds exact leaf, b.N, options, resolved profile/ACK, call input
+and output counts, call boundaries, all required engine counters, overlap,
+per-epoch public checkpoint/Close/reopen and complete oracle receipts. COW
+requires unchanged backend sequence within each epoch and advancement at its
+checkpoint; legacy snapshot-driven progress is observed with nonregression.
+Both retain the original seed pins across all checkpoints. Failed or partial
+lifecycles, extra files, missing/duplicate work, nonfinite values, counter
+regression and changed native claims refuse. File hashes and recomputed raw
+validation are bound to the ordinary benchmark row and full process receipt.
+Each process receipt hashes the work contract for its actual phase: a 1-epoch
+warmup describes its 1-epoch history and layout cardinality even when measured
+processes execute 8 epochs. The command, row and raw lifecycle count must agree.
+At released, preclose and reopened boundaries, COW owner counters must match the
+single published database cut, including generations, roots and external leases.
+Every retained COW boundary and each representation diagnostic's before/after
+owner census also enforces the applicable finite budget. Live views, generations
+and frozen sources use the shared budget limits; charged bytes retain their
+total, retirement and in-flight bounds. Aggregate history uses the observed
+generation count times the per-generation byte limit. External leases are
+charged owners, not generation-local `MaxResources` slots; active cuts retain
+external leases. Published current/frozen roots must fit the shard/source and
+generation census. Cumulative `*_total` counters retain unsigned-domain and
+nonregression checks rather than live-owner caps.
+
+`c4_analyze.py` calls the shared provenance validator using an explicit closed
+protocol and dependency selection. Its raw summary retains foreground call
+quantiles and the complete calibration/requested receipt list. Raw duration
+sums may overlap and are not elapsed wall time. Matched ns/op, B/op and allocs/op
+comparisons retain all ABBA samples and frozen noise/effect flags. They do not
+establish a retained-history plateau or tail acceptance. Construction packets
+have no matched performance conclusion.
+
+`c4_packet_smoke.py` requires an actual complete successful packet, validates it,
+then copies and deliberately damages separate packets. It never synthesizes a
+successful producer packet. Mutations replace copied inodes, preserving the
+original even when copies use hard links. Copied stream, raw lifecycle,
+configuration, process, source/object/mode, module, binary, tooling and host
+corruption must all refuse. This refusal smoke and actual Linux normal/race
+fixture execution remain distinct gates. Standalone JSON/Go logs are not
+benchprof profile-dir inputs and introduce no benchprof filename changes.
+The completion record has exactly the declared fields and the literal pending
+native/product/C4 claim; copied packets cannot promote that claim. Use `--case`
+to select named refusal checks when only an affected validator needs rechecking.
+`python3 -B scripts/cow_c3_read/c4_contract_test.py` checks the phase contract.
+
+The finite C4 construction disables generational maintenance and all
+three background checkpoint triggers plus background index vacuum using actual
+requested options. Every real Stats boundary must resolve to that policy with
+zero background work. Manual checkpoint deltas are exact, including zero during
+pin release and one at preclose. The separate untimed
+`TestCOWSustainedPublicMVCCManualMaintenancePins` holds real persistent-pointer
+seed owners for 3.2 seconds, checks every observed tick and reopens the payloads;
+`TestCOWSustainedPublicMVCCMaintenanceAdmissionRefusal` rejects each changed
+requested control and an actual Open with generational HotWarmCold. Retain
+`-cow-c4-maintenance-output-dir` receipts separately from benchmark lifecycles.
+A controller must reparse every normal, race and maximum-epoch lifecycle before
+reporting PASS. No retained worker window or extra checkpoint is tolerated.
+
+Ordinary unit construction accepts a typed zero-overlap refusal only after the
+entire finite lifecycle completes, including old-owner release, both Close
+calls and the reopen oracle. Its emitted lifecycle is `refused`, never evidence
+of overlap. Benchmark collection still fails on that refusal, and packet
+validation still requires successful actual overlapping public-call intervals.
+No schedule retry, artificial call extension or packet exclusion is used.
+
+Canonical C4 workload, metric rules and pending native declarations use typed
+JSON identity. Copied and rehashed packet mutations must reject boolean or
+float substitutions for their literal integer fields. Raw COW limits also require
+exact fields and integer values. Every required boundary counter, layout-owner
+observation and persistent single-value byte counter must fit the producer's
+uint64 domain; raw call times must fit nonnegative int64. The serialized receipt
+check below uses retained actual raw lifecycles and tests the upper-bound values
+as well as copied overflow and float substitutions:
+
+```sh
+python3 -B scripts/cow_c3_read/c4_integer_domain_smoke.py \
+  --positive /retained/positive-c4-packet --out /new/integer-domain-check
+```
+
 The frozen Linux host includes `cpu_count` and `cpu_affinity`. The latter is the
 sorted actual `os.sched_getaffinity(0)` mask: at least four distinct nonnegative
 integer CPU IDs. Missing/unsupported affinity observation refuses admission.
@@ -385,6 +516,15 @@ when copied host records and receipts are rehashed consistently. A large system
 CPU count does not substitute for available CPUs. No CPU quota policy is inferred.
 
 ### Optional standard GitHub-hosted route (#5114)
+
+**Provisional C4 applicability:** this branch preserves its C4 collector and
+analyzer, whose canonical bytes differ from the pinned C3 products below.
+Capacity-only remains available. Full mode from this mixed C4 caller refuses
+during source preparation, before Go, because the canonical product/caller
+identity guard remains enforced. The instructions below describe the separately
+qualified C3 route and its original evidence. An executable C4 hosted route
+requires a separately reviewed source/tooling binding and fresh construction;
+this integration does not qualify a mixed caller or relabel earlier C3 packets.
 
 The manual `cow-c3-hosted-qualification.yml` workflow defaults to **capacity-only**.
 It records the first job step's aware UTC and monotonic observation before
