@@ -10,7 +10,46 @@ import re
 import stat
 from pathlib import Path
 
-SCHEMA = "gomap-c3-read-matched-v2"
+SCHEMA = "gomap-c3-read-matched-v3"
+LOAD_READINESS = {"schema": "gomap-c3-load-readiness-v1", "poll_seconds": 5,
+                  "total_wait_seconds": 600, "max_load1": 4.5, "max_load5": 4.5}
+
+def validate_load_readiness(value):
+    need(type(value) is dict and set(value) == set(LOAD_READINESS)
+         and value["schema"] == LOAD_READINESS["schema"], "missing/invalid load-readiness policy")
+    # Integer seconds avoid float/NaN and type-coercion ambiguity. Budget is
+    # global, never renewed by a new cell or product. No disabled/unbounded mode.
+    need(type(value["poll_seconds"]) is int and value["poll_seconds"] == 5
+         and type(value["total_wait_seconds"]) is int and value["total_wait_seconds"] == 600,
+         "finite load-readiness poll/global budget required")
+    need(all(type(value[k]) is float and value[k] == 4.5 for k in ("max_load1", "max_load5")),
+         "fixed conservative load-readiness ceiling required")
+
+def host_nonload_gate(snapshot, policy):
+    need(snapshot["uname"]["system"] == policy["system"] and type(snapshot["cpu_count"]) is int
+         and snapshot["cpu_count"] == policy["cpu_count"], "host identity changed")
+    need(validate_cpu_affinity(snapshot.get("cpu_affinity")) == validate_cpu_affinity(policy.get("cpu_affinity")), "CPU affinity changed")
+    for key in ("node", "machine", "release"):
+        need(snapshot["uname"][key] == policy[key], "host " + key + " mismatch")
+    need(type(snapshot["free_bytes"]) is int and snapshot["free_bytes"] >= policy["min_free_bytes"], "storage admission refused")
+    need(snapshot["storage_path"] == policy["tmpdir"] and type(snapshot["storage_device"]) is int
+         and snapshot["storage_device"] == policy["tmpdir_device"], "temporary database filesystem changed")
+    need(type(snapshot["load"]) is list and len(snapshot["load"]) == 3
+         and all(finite_number(x) and x >= 0 for x in snapshot["load"]), "malformed host load")
+
+def host_load_ready(snapshot, policy):
+    return snapshot["load"][0] <= policy["max_load1"] and snapshot["load"][1] <= policy["max_load5"]
+
+def host_gate(snapshot, policy):
+    host_nonload_gate(snapshot, policy)
+    need(host_load_ready(snapshot, policy), "host contention exceeds predeclared bound")
+
+def load_wait_reason(snapshot, host, readiness):
+    if not host_load_ready(snapshot, host):
+        return "predeclared-host-load-bound"
+    if not host_load_ready(snapshot, readiness):
+        return "readiness-headroom"
+    return None
 # Fixed observation protocol, not tunable benchmark controls. Shorter foreign
 # processes can escape sampling; no receipt asserts universal host exclusivity.
 HOST_ISOLATION = {"schema": "gomap-go-process-census-v1",
@@ -120,6 +159,141 @@ def validate_run_processes(packet, name, receipt, benchmark_names=()):
     for direction in ("before", "after"):
         validate_census_file(Path(packet) / (name + "-" + direction + "-processes.txt"),
                              receipt[direction]["processes_sha256"], benchmark_names=benchmark_names)
+
+def validate_readiness(packet, c, receipts, terminal):
+    """Audit complete or failed admission evidence; never accept failed timings."""
+    packet = Path(packet)
+    path = packet / "readiness.json"
+    need(path.is_file() and not path.is_symlink() and sha(path) == terminal.get("readiness_sha256"), "missing/tampered readiness ledger")
+    v = json.loads(path.read_text())
+    need(type(v) is dict and set(v) == {"policy", "probes", "waits", "blocked_intervals", "total_wait_ns", "status", "failure"}, "invalid readiness fields")
+    validate_load_readiness(v["policy"])
+    need(v["policy"] == c["load_readiness"], "unbound readiness policy")
+    failed = v["status"] == "failed"
+    need(v["status"] in ("complete", "failed"), "unfinished readiness ledger")
+    if failed:
+        need(v["failure"] == {"type": terminal.get("type"), "error": terminal.get("error")}
+             and type(terminal.get("retained_runs")) is int and terminal["retained_runs"] == len(receipts), "unbound readiness failure")
+    else:
+        need(v["failure"] is None and type(terminal.get("runs")) is int and terminal["runs"] == len(receipts), "unbound readiness completion")
+    need(all(type(v[k]) is list for k in ("probes", "waits", "blocked_intervals")), "invalid readiness inventory")
+    budget = v["policy"]["total_wait_seconds"] * 1_000_000_000
+    blocks, total, previous_end = {}, 0, 0
+    for b in v["blocked_intervals"]:
+        need(type(b) is dict and set(b) == {"label", "first_probe_index", "started_monotonic_ns", "completed_monotonic_ns"}, "invalid readiness blocked interval")
+        a, z = b["started_monotonic_ns"], b["completed_monotonic_ns"]
+        need(type(b["label"]) is str and b["label"] not in blocks and type(b["first_probe_index"]) is int
+             and type(a) is int and type(z) is int and 0 < a <= z and previous_end <= a, "invalid/reordered readiness blocked interval")
+        blocks[b["label"]] = dict(b, prior_total=total)
+        total += z - a; previous_end = z
+    need(type(v["total_wait_ns"]) is int and v["total_wait_ns"] == total, "unbound total readiness wait")
+    def spent(at):
+        return sum(max(0, min(at, b["completed_monotonic_ns"]) - b["started_monotonic_ns"])
+                   for b in blocks.values() if b["started_monotonic_ns"] <= at)
+    plan = list(schedule(c)); labels = [label(item) for item in plan]
+    variants = {label(item): item["variant"] for item in plan}
+    expected_preflight = {name: {"source_tree_sha256": product["source_tree_sha256"], "binary_sha256": product["binary_sha256"], "drift": []} for name, product in c["variants"].items()}
+    admitted, expected_files, seen_blocks, previous, wait_index, refresh = [], set(), set(), 0, 0, False
+    for index, p in enumerate(v["probes"]):
+        need(type(p) is dict and set(p) == {"index", "label", "prefix", "started_monotonic_ns", "completed_monotonic_ns", "host_sha256", "preflight", "decision", "wait_reason", "error"}, "invalid readiness probe")
+        need(type(p["index"]) is int and p["index"] == index and len(admitted) < len(labels)
+             and p["label"] == labels[len(admitted)], "missing/reordered readiness probe/leaf")
+        prefix = p["label"] + "-readiness-" + format(index, "06d")
+        need(p["prefix"] == prefix, "unbound readiness probe path")
+        a, z = p["started_monotonic_ns"], p["completed_monotonic_ns"]
+        need(type(a) is int and type(z) is int and 0 < a <= z and previous <= a, "invalid readiness monotonic interval")
+        need(spent(a) < budget, "probe after exhausted readiness budget")
+        previous = z
+        refused = p["decision"] == "refused"
+        need(p["decision"] in ("wait", "refresh", "admitted", "refused"), "unfinished readiness probe")
+        if refused:
+            need(failed and index == len(v["probes"]) - 1 and p["error"] == v["failure"], "unbound readiness refusal")
+            need(p["wait_reason"] is None, "load wait hides readiness refusal")
+        else:
+            need(p["error"] is None, "readiness error ignored")
+        need(p["preflight"] in (None, expected_preflight), "readiness source/binary preflight drift")
+        if not refused:
+            need((p["preflight"] is not None) == refresh, "missing/stale readiness preflight")
+        elif p["preflight"] is not None:
+            need(refresh, "unexpected readiness preflight")
+        h = None
+        if p["host_sha256"] is not None:
+            host_path = packet / (prefix + "-host.json")
+            need(host_path.is_file() and not host_path.is_symlink() and sha(host_path) == p["host_sha256"], "readiness host snapshot drift")
+            h = json.loads(host_path.read_text())
+            need(h["source_path"] == c["variants"][variants[p["label"]]]["source"], "readiness source path mismatch")
+            expected_files.add(host_path.name)
+            for raw in ("meminfo", "cpuinfo", "mounts", "processes"):
+                f = packet / (prefix + "-" + raw + ".txt")
+                need(f.is_file() and not f.is_symlink() and sha(f) == h[raw + "_sha256"], "readiness raw snapshot drift")
+                expected_files.add(f.name)
+            error = None
+            try:
+                host_nonload_gate(h, c["host"])
+                validate_census_file(packet / (prefix + "-processes.txt"), h["processes_sha256"], benchmark_names=benchmark_comms(c))
+            except (ValueError, KeyError, TypeError) as e:
+                error = {"type": type(e).__name__, "error": str(e)}
+            exhausted = p["error"] == {"type": "ValueError", "error": "total load-readiness wait budget exhausted"} and spent(z) >= budget
+            if refused:
+                need(error == p["error"] or p["error"]["type"] == "KeyboardInterrupt" or (error is None and exhausted), "readiness refusal not reproduced")
+            else:
+                reason = load_wait_reason(h, c["host"], v["policy"])
+                decision = "wait" if reason else ("admitted" if refresh else "refresh")
+                need(error is None and p["decision"] == decision and p["wait_reason"] == reason, "readiness decision bypasses original gates")
+                need(spent(z) < budget, "admission/probe after exhausted readiness budget")
+        else:
+            need(refused, "missing readiness host evidence")
+            # An incomplete capture/preflight can prove failure, never admission.
+            expected_files.update(f.name for f in packet.glob(prefix + "-*") if f.is_file() and not f.is_symlink())
+        block = blocks.get(p["label"])
+        if p["decision"] == "wait" or (block and block["first_probe_index"] == index):
+            need(block is not None, "missing readiness blocked interval")
+            if p["label"] not in seen_blocks:
+                need(block["first_probe_index"] == index and block["started_monotonic_ns"] == a
+                     and (p["decision"] == "wait" or (refused and h is not None
+                          and load_wait_reason(h, c["host"], v["policy"]) is not None)), "unbound readiness blocked start")
+                seen_blocks.add(p["label"])
+        if block and p["label"] in seen_blocks:
+            need(z <= block["completed_monotonic_ns"], "unaccounted readiness probe time")
+        if p["decision"] == "wait" and wait_index < len(v["waits"]) and v["waits"][wait_index].get("after_probe_index") == index:
+            w = v["waits"][wait_index]
+            need(type(w) is dict and set(w) == {"after_probe_index", "requested_ns", "started_monotonic_ns", "completed_monotonic_ns"}, "invalid readiness wait")
+            a, z = w["started_monotonic_ns"], w["completed_monotonic_ns"]
+            need(type(w["after_probe_index"]) is int and type(a) is int and type(z) is int and previous <= a <= z
+                 and z <= block["completed_monotonic_ns"], "invalid readiness wait interval")
+            need(type(w["requested_ns"]) is int and w["requested_ns"] == min(budget - spent(a), v["policy"]["poll_seconds"] * 1_000_000_000)
+                 and w["requested_ns"] > 0, "changed readiness polling/budget")
+            cancelled = failed and v["failure"]["type"] == "KeyboardInterrupt" and index == len(v["probes"]) - 1
+            need(z - a >= w["requested_ns"] or cancelled, "shortened readiness wait")
+            previous = z; wait_index += 1
+        elif p["decision"] == "wait":
+            need(failed and index == len(v["probes"]) - 1
+                 and (v["failure"]["type"] == "KeyboardInterrupt" or spent(block["completed_monotonic_ns"]) >= budget), "missing readiness wait")
+        if p["decision"] == "admitted":
+            need(h is not None and p["preflight"] == expected_preflight, "missing final admission preflight")
+            if block:
+                need(block["completed_monotonic_ns"] == p["completed_monotonic_ns"], "unbound readiness blocked end")
+            admitted.append(p)
+            if len(admitted) <= len(receipts):
+                r = receipts[len(admitted) - 1]
+                need(r["label"] == p["label"] and type(r.get("readiness_probe_index")) is int
+                     and r["readiness_probe_index"] == index and r.get("readiness_probe_sha256") == digest(p)
+                     and r["before"] == h, "unbound final readiness admission")
+                need(type(r.get("spawn_monotonic_ns")) is int and p["completed_monotonic_ns"] <= r["spawn_monotonic_ns"], "child started before readiness admission")
+                monitor = json.loads((packet / (r["label"] + "-monitor.json")).read_text())
+                need(r["spawn_monotonic_ns"] <= monitor["started_monotonic_ns"], "unbound readiness/spawn interval")
+                previous = monitor["reaped_monotonic_ns"]
+        refresh = p["decision"] == "refresh"
+    need(seen_blocks == set(blocks) and wait_index == len(v["waits"]), "missing/extra readiness blocked intervals/waits")
+    need({p.name for p in packet.glob("*-readiness-*")} == expected_files, "missing/extra readiness raw evidence")
+    need(len(receipts) <= len(admitted) <= len(receipts) + int(failed), "missing/extra readiness admissions")
+    if not failed:
+        need(len(admitted) == len(labels) and total < budget, "incomplete/exhausted readiness campaign")
+    elif total >= budget:
+        need(v["failure"] == {"type": "ValueError", "error": "total load-readiness wait budget exhausted"}
+             or v["failure"]["type"] == "KeyboardInterrupt", "ignored readiness budget exhaustion")
+    return {"probes": len(v["probes"]), "waits": len(v["waits"]), "blocked_intervals": len(blocks), "total_wait_ns": total, "status": v["status"]}
+
 PROFILES = {"no_wal_fast", "command_wal_relaxed", "command_wal_durable"}
 MODES = {"append_only", "btree", "cow_btree"}
 LAYOUTS = {"inline", "pointer"}
@@ -647,6 +821,7 @@ def config(path):
     c = json.loads(Path(path).read_text())
     need(c["schema"] == SCHEMA and c["status"] == "frozen-approved", "unfrozen configuration")
     validate_host_isolation(c.get("host_isolation"))
+    validate_load_readiness(c.get("load_readiness"))
     need(isinstance(c["coordinator_acceptance"], str) and c["coordinator_acceptance"], "missing coordinator freeze acceptance")
     need(type(c["cycles"]) is int and c["cycles"] == 3 and c["order"] == ["baseline", "candidate", "candidate", "baseline"], "requires three ABBA cycles")
     need(type(c["timeout_seconds"]) is int and c["timeout_seconds"] > 0, "positive integer timeout required")
