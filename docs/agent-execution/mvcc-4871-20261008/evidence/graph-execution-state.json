@@ -122,7 +122,8 @@
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071833626",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071970325",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6072246242",
-        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072281520"
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072281520",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072478660"
       ],
       "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
       "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
@@ -203,7 +204,14 @@
       },
       "owned_pair_constructor_source_freeze": "387c09b23c8f472df59ddaab1c6685127a512dc1",
       "owned_pair_constructor_tree": "df2ae2e741d7f764478006a209021bb287e85b39",
-      "owned_pair_constructor_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072046085"
+      "owned_pair_constructor_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072046085",
+      "owned_retirement_source_audit": {
+        "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+        "scope": "Independent immutable SOURCE-ONLY original quarantine protocol census; no edits/build/tests/qualification",
+        "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072478660",
+        "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/owned-retirement-protocol-source-audit.json",
+        "finding": "Original protocol+close visibility+crosparent helpers+finite census guards sourcebound; selected implementation sufficiency unproven."
+      }
     },
     {
       "issue": "snissn/gomap#5118",
@@ -262,5 +270,5 @@
       "prior_five_paths": "Previous release/reappearance blocker remains unchanged; no repeated deletion."
     }
   },
-  "updated_at": "2026-10-09T01:37:07.751Z"
+  "updated_at": "2026-10-09T01:47:40.147Z"
 }

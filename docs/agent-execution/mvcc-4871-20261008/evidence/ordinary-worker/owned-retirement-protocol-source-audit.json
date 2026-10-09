@@ -1,0 +1,111 @@
+{
+  "source": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "bindings": [
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "git_blob": "567f2501ba5e2fbad5be4467d827d327c6a68870",
+      "sha256": "164253ca324a7f00fc62e037f6dda2082dca290cf4c7c919a21e1bd148fa0087",
+      "bytes": 87764
+    },
+    {
+      "path": "TreeDB/internal/valuelog/retirement_namespace_unix.go",
+      "git_blob": "b8659cf6f4de5a6752c5c9a91001c3d01c97f456",
+      "sha256": "0a065e6e3ae3b426efdf2ea86cff15f5638b3b2cb25ff48400a221b9fb85d083",
+      "bytes": 1078
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_identity_unix.go",
+      "git_blob": "088376794a7c9077cf9c937d963a5f41a361bd38",
+      "sha256": "955a855992f05cf2b54b056fb02039f22eb99296acb6a544e3993ab7eaccf60a",
+      "bytes": 4165
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "git_blob": "94f771f1e87f52f194383322b0a82cc2f3fc012e",
+      "sha256": "5c8dc51b0ace4886793b825f035cdce08fb5f356ff608224b27bafb396315655",
+      "bytes": 90368
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "git_blob": "3d19e408c6fec6d64d1314d4d9c2ad43bb9109ee",
+      "sha256": "521d71b69f7edcafbe45c08a8d33675dd1382145472aed57d45346241447f367",
+      "bytes": 97920
+    },
+    {
+      "path": "TreeDB/db/index_gen.go",
+      "git_blob": "42a12bab42cfe3d8b6ec23c4a30ef8eb5340a4ed",
+      "sha256": "6a82e4d0c990a4c2f324d1877331245175d98e7474a7f8aeb20f211504f1d284",
+      "bytes": 4581
+    }
+  ],
+  "toolchain_source": [
+    {
+      "path": "VERSION",
+      "sha256": "b57ea79961cd48ad84ac75b5d78557f1e8961f54f55bc5f35af854695469e10d"
+    },
+    {
+      "path": "src/os/root_openat.go",
+      "sha256": "2af77f5532ccf3a77d76e5782f168b5c235bde9ada6e8dedb37121b01a25aecb"
+    },
+    {
+      "path": "src/os/root.go",
+      "sha256": "82ef36f959dcc5355af34f28c8e9e383bbc78f227f3357ef34552d5c39d0468e"
+    },
+    {
+      "path": "src/os/file_unix.go",
+      "sha256": "877dd004355c475e8805b5700061604558422da057037556e0cf6edeb36ab7ec"
+    },
+    {
+      "path": "src/internal/poll/fd_unix.go",
+      "sha256": "689fb78bb32b8e810fa1dd2ded475a79574f24a8f40260af2d4a3273392bc2cc"
+    },
+    {
+      "path": "src/internal/poll/fd_mutex.go",
+      "sha256": "ad10a59470d3848a745f9549afcee67aae9553e385ec41988d7e5266c2bc3902"
+    }
+  ],
+  "published_source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "scope": "Independent immutable SOURCE-ONLY original quarantine protocol census; no edits/build/tests/qualification",
+  "owner": "/root/cow_pending_route_adviser",
+  "acceptance_owner": "/root",
+  "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072478660",
+  "contracts": [
+    {
+      "source": "stable_resource.go1125-1168",
+      "requirement": "Configured alias capture and original expected-parent identity comparison stay; retained parent supports read-only absence proof, never fallback deletion."
+    },
+    {
+      "source": "1433-1476",
+      "requirement": "Canonical identity before intent. Genuine firstmkdir EEXIST enters recovery; genuine secondmkdir preserves race outcome. Open-or-create cannot stand in for mkdir-only."
+    },
+    {
+      "source": "1264-1311",
+      "requirement": "Quarantine symlink/non-directory refusal, opened directory sameidentity, removal identityrecheck; no atomic check-remove claim."
+    },
+    {
+      "source": "1482-1519",
+      "requirement": "Original cross-parent retirementRenameChild into quarantine; canonical Unlinkcut BEFORE privateunlink. Namespacecutfailure completed=true+error preserves privateinode."
+    },
+    {
+      "source": "1318-1330",
+      "requirement": "Original cross-parent no-replace retirementLinkChild restore, EEXIST conflict, privateunlink thenCreatecut; same-parent publichelpers are not substitutes."
+    },
+    {
+      "source": "1333-1390",
+      "requirement": "Preserve emptyintent, partialrestore sameinode twoNames, matchingoldinode besidenewsuccessor, unexpected restoration, ambiguityrefusal."
+    },
+    {
+      "source": "991-1000/1033-1038",
+      "requirement": "Deletioncompleted vs cleanup/error independent; leaseCommit on deleted, Abort incomplete; deleteCompleted prevents reusedidentity redelete."
+    }
+  ],
+  "guardrails": [
+    "Every hidden selected open/close must use original admitted physical/error custody and real exclusive/quiescent File.Close outcome; Root.Close silently hides syscallfailure in exacttoolchain.",
+    "Bound ReadDir foreignentry census to0/1/>1/error; exact finite original slot/name/stat/buffer/cause capacity still implementationproof, no arbitraryentry vector or fakezero cost.",
+    "Neverreuse unresolvedClose slot; refuse before furtheropens/mutations when availableoriginalcapacity absent.",
+    "Generic R1 ownership/legacy protocol unchanged; no copiedalgorithm/Root authority/registry/unsafeFD/pathfallback/Windows suppression.",
+    "Selected File-parent namespace capture must borrow exact original registeredparent and compare originalparentID+childlink, not reopen diagnostic parent or accept hardlink-to-samechild fromnewparent.",
+    "Strict sourcecleanup outcome is bounded by actualexclusiveofflineLOCK, released snapshots/root/resource/value cuts and joinedsourceproducers/retryworkers beforeDBClose; arbitraryborrowed concurrentFile callers are not certified."
+  ],
+  "acceptance": "Source-only inquiry/checklist complete. Writer implementation/local fresh qualification/failureinjection/full19/fullPR gates remain open."
+}
