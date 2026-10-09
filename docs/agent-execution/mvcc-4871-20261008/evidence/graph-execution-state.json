@@ -256,7 +256,13 @@
         "contract": "Prepare original operands before Close; synchronous same original DB Close gap activates only preadmitted records under registry mutex with zero-pin/conflict/closing guards preserved. No FS mutation/new authority. SourceClose+COMMIT success before same-quarantine disposal; owned rollback/failure custody only. Legitimate source Close internal pins preserved.",
         "status": "SOURCE_INQUIRY_ACCEPTED_IMPLEMENTATION_QUALIFICATION_OWED",
         "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072978436",
-        "linux_census_simplification": "Accepted caller-owned Linux syscall.ReadDirent/Getdents plus std ParseDirent with preadmitted8192buffer, fixed2-name backing, consumed/filled offsets, preborn Stat_t/eager original File probe and observed Close. Removes private dirInfo/pool/unixDirent and literal patch-version dependency. Implementation/public wiring/fresh source packet owed; no total-flow bound or Darwin wrapper equivalence."
+        "linux_census_simplification": "Accepted caller-owned Linux syscall.ReadDirent/Getdents plus std ParseDirent with preadmitted8192buffer, fixed2-name backing, consumed/filled offsets, preborn Stat_t/eager original File probe and observed Close. Removes private dirInfo/pool/unixDirent and literal patch-version dependency. Implementation/public wiring/fresh source packet owed; no total-flow bound or Darwin wrapper equivalence.",
+        "close_hook_outcome": {
+          "status": "ACTUAL_WIP_CONTRACT_RED_CORRECTION_ACCEPTED_VALIDATION_OWED",
+          "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6073868697",
+          "owner": "/root/ordinary_5111",
+          "contract": "Same preborn scope stores actual original hook error and normal completion under closeHooksMu before WG.Done; gap after Wait requires observed-complete/nil/error-free teardown. Refuse prior unrecorded hook history before effects; generic local Close/reentrant/repeat/panic ABI preserved. Panic nil retErr is not observed completion."
+        }
       },
       "namespace_scope_control_lifetime": {
         "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
@@ -359,5 +365,5 @@
       "prior_five_paths": "Previous release/reappearance blocker remains unchanged; no repeated deletion."
     }
   },
-  "updated_at": "2026-10-09T03:26:21.169Z"
+  "updated_at": "2026-10-09T03:48:21.114Z"
 }
