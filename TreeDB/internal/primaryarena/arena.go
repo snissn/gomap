@@ -155,30 +155,42 @@ func open(path string, readOnly bool, capsule bool) (*Arena, error) {
 	if err != nil {
 		return nil, err
 	}
+	a := newFileArena(p, capsule)
+	if err := initializeFileArena(a, readOnly); err != nil {
+		_ = p.Close() // Preserve the path entry point's original failure ABI.
+		return nil, err
+	}
+	return a, nil
+}
+
+func newFileArena(p *pager.Pager, capsule bool) *Arena {
 	firstBank := uint64(2)
-	version := uint16(1)
-	magic := "TDPRBANK"
 	if capsule {
 		firstBank = 8
-		version = 6
-		magic = "TDPRCAPB"
 	}
 	a := &Arena{pager: p, next: firstBank, firstBank: firstBank, epoch: 1, capsuleFormat: capsule}
 	a.metadata.Initialize(retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Arena{})))+p.PrimaryMetadataBaselineV6(), retainedalloc.AllocationCharge(uint64(unsafe.Sizeof(Arena{})))+p.PrimaryMetadataFixedV6())
 	p.SetPrimaryMetadataOwnerV6(&a.metadata)
 	a.ordinaryRelease.owner = a
+	return a
+}
+
+func initializeFileArena(a *Arena, readOnly bool) error {
+	var err error
+	p := a.pager
+	firstBank, magic, version := a.firstBank, "TDPRBANK", uint16(1)
+	if a.capsuleFormat {
+		magic, version = "TDPRCAPB", 6
+	}
 	if p.PageCount() == 0 {
 		if readOnly {
-			p.Close()
-			return nil, ErrFormat
+			return ErrFormat
 		}
 		if _, err = rand.Read(a.uuid[:]); err != nil {
-			p.Close()
-			return nil, err
+			return err
 		}
 		if err = p.GrowTo(firstBank); err != nil {
-			p.Close()
-			return nil, err
+			return err
 		}
 		image := make([]byte, page.PageSize)
 		copy(image[16:24], []byte(magic))
@@ -186,27 +198,25 @@ func open(path string, readOnly bool, capsule bool) (*Arena, error) {
 		copy(image[32:48], a.uuid[:])
 		page.UpdateChecksum(image)
 		if err = p.Write(0, image); err != nil {
-			p.Close()
-			return nil, err
+			return err
 		}
 		p.SetPageCount(firstBank)
 		a.recovered = true
 	} else {
 		image, e := p.Get(0)
 		if e != nil || !page.VerifyChecksumNonMutating(image) || string(image[16:24]) != magic || binary.LittleEndian.Uint16(image[24:26]) != version || p.PageCount() < firstBank {
-			p.Close()
-			return nil, ErrFormat
+			return ErrFormat
 		}
 		copy(a.uuid[:], image[32:48])
 		if a.uuid == ([16]byte{}) {
-			p.Close()
-			return nil, ErrFormat
+			return ErrFormat
 		}
 		// Allocation remains disabled until Recover closes the exact durable roots.
 		a.next = p.PageCount()
 	}
-	return a, nil
+	return nil
 }
+
 func (a *Arena) UUID() [16]byte      { return a.uuid }
 func (a *Arena) Pager() *pager.Pager { return a.pager }
 func (a *Arena) Counters() Counters  { a.mu.Lock(); defer a.mu.Unlock(); return a.counters }

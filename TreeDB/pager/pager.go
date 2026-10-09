@@ -171,28 +171,69 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 	if err != nil {
 		return nil, err
 	}
-	if err := mmapAvailable(); err != nil {
-		_ = f.Close()
+	p := newFilePager(f, path, chunkSize, opts)
+	if err := initializeFilePager(p, opts); err != nil {
+		_ = p.Close()
 		return nil, err
+	}
+	return p, nil
+}
+
+// OpenOwnedFileWithOptions consumes file immediately. diagnosticPath is used
+// only for observations. If cleanup fails, the returned pager owns the exact
+// remaining file/mappings and is disabled until Close completes.
+func OpenOwnedFileWithOptions(file *os.File, diagnosticPath string, chunkSize int64, opts OpenOptions) (*Pager, error) {
+	if file == nil {
+		return nil, fmt.Errorf("nil owned pager file")
+	}
+	p := newFilePager(file, diagnosticPath, chunkSize, opts)
+	fail := func(err error) (*Pager, error) {
+		if closeErr := p.Close(); closeErr != nil {
+			return p, errors.Join(err, closeErr)
+		}
+		return nil, err
+	}
+	if chunkSize <= 0 {
+		return fail(fmt.Errorf("chunk size must be positive"))
+	}
+	if chunkSize%page.PageSize != 0 {
+		return fail(fmt.Errorf("chunk size must be a multiple of page size (%d)", page.PageSize))
+	}
+	if chunkSize%int64(os.Getpagesize()) != 0 {
+		return fail(fmt.Errorf("chunk size must be a multiple of OS page size (%d)", os.Getpagesize()))
+	}
+	if gran := mmapOffsetGranularity(); gran > 0 && chunkSize%gran != 0 {
+		return fail(fmt.Errorf("chunk size must be a multiple of mmap allocation granularity (%d)", gran))
+	}
+
+	if err := initializeFilePager(p, opts); err != nil {
+		return fail(err)
+	}
+	return p, nil
+}
+
+func newFilePager(file *os.File, path string, chunkSize int64, opts OpenOptions) *Pager {
+	p := &Pager{file: file, path: path, chunkSize: chunkSize, mmapPopulate: opts.MmapPopulate, prefetchOnRead: opts.PrefetchOnRead}
+	p.syncConcurrency.Store(1)
+	return p
+}
+
+// Both entry points use the same mapping/growth initialization. The caller
+// determines the legacy or transferred-file failure ownership contract.
+func initializeFilePager(p *Pager, opts OpenOptions) error {
+	f, chunkSize := p.file, p.chunkSize
+	if err := mmapAvailable(); err != nil {
+		return err
 	}
 
 	info, err := f.Stat()
 	if err != nil {
-		_ = f.Close()
-		return nil, err
+		return err
 	}
 
 	size := info.Size()
 	durableSize := size
 
-	p := &Pager{
-		file:           f,
-		chunkSize:      chunkSize,
-		path:           path,
-		mmapPopulate:   opts.MmapPopulate,
-		prefetchOnRead: opts.PrefetchOnRead,
-	}
-	p.syncConcurrency.Store(1)
 	p.durableFileSize.Store(durableSize)
 
 	if size > 0 {
@@ -200,8 +241,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 		if size%chunkSize != 0 {
 			newSize := ((size / chunkSize) + 1) * chunkSize
 			if err := f.Truncate(newSize); err != nil {
-				_ = f.Close()
-				return nil, err
+				return err
 			}
 			size = newSize
 		}
@@ -214,8 +254,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 		for i := int64(0); i < numChunks; i++ {
 			data, err := mmapFile(f.Fd(), i*chunkSize, int(chunkSize), opts.MmapPopulate)
 			if err != nil {
-				p.Close()
-				return nil, err
+				return err
 			}
 			madviseChunk(data)
 			p.chunks[i] = data
@@ -236,7 +275,7 @@ func OpenWithOptions(path string, chunkSize int64, opts OpenOptions) (*Pager, er
 	}
 
 	p.startGrower()
-	return p, nil
+	return nil
 }
 
 // OpenReadOnly opens an existing pager at path without modifying the underlying file.
@@ -554,7 +593,8 @@ func (p *Pager) Close() error {
 	defer p.growMu.Unlock()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.closing = true // Includes a partial-unmap failure; no pending install may pass.
+	p.closing = true          // Includes a partial-unmap failure; no pending install may pass.
+	p.atomicChunks.Store(nil) // Do not publish partially unmapped storage on failure.
 	if !p.memoryOnly {
 		for i, chunk := range p.chunks {
 			if chunk == nil {
@@ -569,6 +609,9 @@ func (p *Pager) Close() error {
 	p.chunks = nil
 	p.atomicChunks.Store(nil)
 	if p.memoryOnly {
+		return nil
+	}
+	if p.file == nil {
 		return nil
 	}
 	return p.file.Close()
@@ -665,6 +708,9 @@ func (p *Pager) GetForWrite(pageID uint64) ([]byte, error) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closing {
+		return nil, os.ErrClosed
+	}
 
 	localID, local := p.localPageID(pageID)
 	if !local || pageID >= p.numPages.Load() {

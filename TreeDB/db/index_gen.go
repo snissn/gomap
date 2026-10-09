@@ -42,6 +42,10 @@ type indexGen struct {
 	unpublishedSelection *durableRootSelectionV1
 	unpublishedPrimary   *primaryDurableRuntimeV5
 
+	offlineNamespaceScope       bool
+	offlineScopeRetained        bool
+	offlineScopeControlCharge   uint64
+	offlineScopePhysicalOwner   *primaryArenaOwnerV5
 	stableNamespaceMu           sync.Mutex
 	stableNamespaceParent       *os.File
 	stableNamespaceProof        *rootpublication.StableNamespaceCreationProof
@@ -90,40 +94,46 @@ func (g *indexGen) close() error {
 		if g.pager != nil {
 			g.closeErr = g.pager.Close()
 		}
-		g.stableNamespaceMu.Lock()
-		if g.stableNamespaceProof != nil {
-			if g.stableNamespaceMetadata == nil {
-				g.stableNamespaceProof.Release()
-				g.stableNamespaceProof = nil
-			} else {
-				if err := g.stableNamespaceProof.ReleaseWithError(); err == nil {
+		if !g.offlineNamespaceScope {
+			g.stableNamespaceMu.Lock()
+			if g.stableNamespaceProof != nil {
+				if g.stableNamespaceMetadata == nil {
+					g.stableNamespaceProof.Release()
 					g.stableNamespaceProof = nil
 				} else {
-					g.stableNamespaceFailure.causes[0] = err
+					if err := g.stableNamespaceProof.ReleaseWithError(); err == nil {
+						g.stableNamespaceProof = nil
+					} else {
+						g.stableNamespaceFailure.causes[0] = err
+					}
 				}
 			}
-		}
-		if g.stableNamespaceParent != nil {
-			err := g.stableNamespaceParent.Close()
-			if g.stableNamespaceMetadata == nil {
-				g.closeErr = errors.Join(g.closeErr, err)
-				g.stableNamespaceParent = nil
-			} else if err == nil || errors.Is(err, os.ErrClosed) {
-				g.stableNamespaceParent = nil
-				g.stableNamespaceMetadata.RemovePending(g.stableNamespaceParentCharge)
-				g.stableNamespaceParentCharge = 0
-			} else {
-				g.stableNamespaceFailure.causes[1] = err
+			if g.stableNamespaceParent != nil {
+				err := g.stableNamespaceParent.Close()
+				if g.stableNamespaceMetadata == nil {
+					g.closeErr = errors.Join(g.closeErr, err)
+					g.stableNamespaceParent = nil
+				} else if err == nil || errors.Is(err, os.ErrClosed) {
+					g.stableNamespaceParent = nil
+					g.stableNamespaceMetadata.RemovePending(g.stableNamespaceParentCharge)
+					g.stableNamespaceParentCharge = 0
+				} else {
+					g.stableNamespaceFailure.causes[1] = err
+				}
 			}
+			if g.stableNamespaceFailure.causes[0] != nil || g.stableNamespaceFailure.causes[1] != nil {
+				g.stableNamespaceMetadata.CleanupFailed()
+				g.closeFailure.causes[0] = g.closeErr
+				g.closeFailure.causes[1] = &g.stableNamespaceFailure
+				g.closeErr = &g.closeFailure
+			}
+			g.stableNamespaceMu.Unlock()
 		}
-		if g.stableNamespaceFailure.causes[0] != nil || g.stableNamespaceFailure.causes[1] != nil {
-			g.stableNamespaceMetadata.CleanupFailed()
-			g.closeFailure.causes[0] = g.closeErr
-			g.closeFailure.causes[1] = &g.stableNamespaceFailure
-			g.closeErr = &g.closeFailure
-		}
-		g.stableNamespaceMu.Unlock()
 		if g.primary != nil {
+			if g.primaryOwner == nil {
+				g.closeErr = errors.Join(g.closeErr, g.primary.Close())
+				return
+			}
 			if g.closeErr != nil {
 				// Preserve this generation's EXISTING owner edge. The same
 				// physical owner retains exact failed DATA/proof/parent custody;

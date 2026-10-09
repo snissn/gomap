@@ -914,6 +914,31 @@ embedded parents bind one actual replacement DATA generation, preserving
 revisions, command-WAL frontiers and exact persistent dependencies. DATA,
 PRIMARY banks, external resources and staging names are fenced before COMMIT.
 
+Exclusive V6 offline physical maintenance preserves each eligible slot's
+logical commit sequence, ACK frontier, revisions, height and exact one-hop
+parent. It rewrites both slots and their distinct proofs into the same genuine
+new DATA generation and sealed PRIMARY pair. This does not invent a logical
+transaction; the legacy non-V6 offline sequence increment remains separate.
+Value-log maintenance must rewrite every such root's pointers before deleting
+old segments. Its derived refcount cache is invalidated before COMMIT because
+that cache is keyed only by the unchanged logical sequence.
+
+The offline pair constructor captures the canonical source parent before
+staging, validates both original file links, and creates exclusive children
+relative to that same parent. Transferred-file Pager and capsule constructors
+share initialization with the path constructors; their diagnostic names are
+never reopen or cleanup authority. A failed owned constructor returns its
+original disabled owning object when physical cleanup is incomplete. PRIMARY
+is adopted into the ordinary index generation before DATA construction.
+Predecision stage cleanup validates original identity through the retained
+parent and never deletes a substituted child. The preadmitted operation-parent
+scope survives private physical Close until the explicit final namespace
+release. Failed parent cleanup retains the exact handle and charge; completed
+parent cleanup cannot refund failed physical-generation control storage. This pair mechanism alone does
+not certify the value/leaf writer's path-based initial creation, registration or
+old-segment deletion; those consumers require their own exact-handle closure.
+Windows relative replacement remains unsupported by the existing authority.
+
 The immutable joint COMMIT occupies `index.db.new.ready`: magic `TDJCOM06`
 (8 bytes), little-endian payload length (4), payload SHA-256 (32), then UTF-8
 JSON (at most 4096 bytes; total at most 4140). Version 6 binds the retained

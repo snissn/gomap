@@ -11,7 +11,6 @@ import (
 
 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/snissn/gomap/TreeDB/pager"
 	"github.com/snissn/gomap/TreeDB/tree"
 )
 
@@ -188,20 +187,20 @@ func TestPrimaryOfflinePairV6SourceCloseFailurePreventsCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := pager.Open(filepath.Join(dir, indexNewFileName), defaultChunkSize)
+	scope, err := d.captureOfflinePrimaryScopeV6()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = p.Alloc(2); err != nil {
-		t.Fatal(err)
-	}
-	pair, err := d.newOfflinePrimaryPairV6(p)
+	defer scope.releaseOfflineNamespaceScopeV6()
+	parent := scope.stableNamespaceParent
+	pair, err := d.newOfflinePrimaryPairV6(scope, defaultChunkSize)
 	if err != nil {
 		t.Fatal(err)
 	}
+	p := pair.pager
 	injected := errors.New("actual source Close hook failure")
 	d.RegisterCloseHook(func() error { return injected })
-	err = d.finishOfflinePrimaryPairV6(pair, roots, func(root RecoverableRoot) (rebuiltDurableRootV1, error) {
+	err = d.finishOfflinePrimaryPairV6(parent, pair, roots, func(root RecoverableRoot) (rebuiltDurableRootV1, error) {
 		value, _, e := d.rebuildRecoverableRootWithPublicationLockV1(context.Background(), roots, root, p, pair.allocator, false)
 		return value, e
 	}, false, nil)
@@ -437,5 +436,272 @@ func TestPrimaryOfflinePairV6RetainsUncertainDecision(t *testing.T) {
 			}
 			assertPrimaryJointRecoveredV6(t, dir, prior)
 		})
+	}
+}
+
+func TestPrimaryOfflinePairV6ConstructionUsesRetainedParent(t *testing.T) {
+	for _, phase := range []string{"before-offline-primary-create", "before-offline-data-create"} {
+		t.Run(phase, func(t *testing.T) {
+			base := t.TempDir()
+			dir := filepath.Join(base, "db")
+			held := filepath.Join(base, "held-original")
+			if err := os.Mkdir(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			preparePrimaryJointCrashV6(t, dir)
+			d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer d.Close()
+			scope, err := d.captureOfflinePrimaryScopeV6()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer scope.releaseOfflineNamespaceScopeV6()
+			parent := scope.stableNamespaceParent
+			testHookPrimaryJointSwapV6 = func(actual string) error {
+				if actual != phase {
+					return nil
+				}
+				if err := os.Rename(dir, held); err != nil {
+					return err
+				}
+				if err := os.Mkdir(dir, 0700); err != nil {
+					return err
+				}
+				for _, name := range []string{indexNewFileName, primaryNewFileName, indexReadyFileName} {
+					if err := os.WriteFile(filepath.Join(dir, name), []byte("foreign "+name), 0600); err != nil {
+						return err
+					}
+				}
+				return nil
+			}
+			defer func() { testHookPrimaryJointSwapV6 = nil }()
+			pair, err := d.newOfflinePrimaryPairV6(scope, defaultChunkSize)
+			testHookPrimaryJointSwapV6 = nil
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := primaryJointDecisionForV6(parent, pair, durableRootSelectionV1{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := pair.close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := cleanupOfflinePrimaryStageV6(dir, parent, indexNewFileName, decision.Data); err != nil {
+				t.Fatal(err)
+			}
+			if err := cleanupOfflinePrimaryStageV6(dir, parent, primaryNewFileName, decision.Primary); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{indexNewFileName, primaryNewFileName, indexReadyFileName} {
+				b, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil || string(b) != "foreign "+name {
+					t.Fatalf("foreign child changed: %s %q %v", name, b, err)
+				}
+			}
+			for _, name := range []string{indexNewFileName, primaryNewFileName, indexReadyFileName} {
+				if _, err := os.Stat(filepath.Join(held, name)); !os.IsNotExist(err) {
+					t.Fatalf("original staging/COMMIT not drained: %s %v", name, err)
+				}
+			}
+		})
+	}
+}
+
+func TestPrimaryOfflinePairV6ConstructionFailureCleansOnlyOwnedStage(t *testing.T) {
+	dir := t.TempDir()
+	preparePrimaryJointCrashV6(t, dir)
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	scope, err := d.captureOfflinePrimaryScopeV6()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scope.releaseOfflineNamespaceScopeV6()
+	if err := os.WriteFile(filepath.Join(dir, indexNewFileName), []byte("foreign"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	pair, err := d.newOfflinePrimaryPairV6(scope, defaultChunkSize)
+	if err == nil || pair == nil {
+		t.Fatalf("exclusive collision accepted: %p %v", pair, err)
+	}
+	if pair.close() != nil {
+		t.Fatal("successful partial cleanup was lost")
+	}
+	b, err := os.ReadFile(filepath.Join(dir, indexNewFileName))
+	if err != nil || string(b) != "foreign" {
+		t.Fatalf("collision child changed: %q %v", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, primaryNewFileName)); !os.IsNotExist(err) {
+		t.Fatalf("own PRIMARY stage retained without debt: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, indexReadyFileName)); !os.IsNotExist(err) {
+		t.Fatalf("failure published COMMIT: %v", err)
+	}
+}
+
+func TestPrimaryOfflineScopeV6ParentOutlivesPhysicalPair(t *testing.T) {
+	dir := t.TempDir()
+	preparePrimaryJointCrashV6(t, dir)
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	metadata := d.idx.Load().primary.MetadataOwner()
+	scope, err := d.captureOfflinePrimaryScopeV6()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := scope.stableNamespaceParent
+	pair, err := d.newOfflinePrimaryPairV6(scope, defaultChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staged, err := primaryJointDecisionForV6(parent, pair, durableRootSelectionV1{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pair.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parent.Stat(); err != nil {
+		t.Fatalf("physical Close consumed operation parent: %v", err)
+	}
+	if scope.stableNamespaceParentCharge == 0 || scope.offlineScopeControlCharge == 0 {
+		t.Fatal("live operation scope was refunded")
+	}
+	if err := cleanupOfflinePrimaryStageV6(dir, parent, indexNewFileName, staged.Data); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupOfflinePrimaryStageV6(dir, parent, primaryNewFileName, staged.Primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !metadata.PhysicalClosed() || metadata.Bytes() == 0 {
+		t.Fatal("original metadata scope was not retained after source physical Close")
+	}
+	if err := scope.releaseOfflineNamespaceScopeV6(); err != nil {
+		t.Fatal(err)
+	}
+	if metadata.Bytes() != 0 {
+		t.Fatalf("completed scope left original metadata: %d", metadata.Bytes())
+	}
+	if _, err := parent.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("original parent not closed: %v", err)
+	}
+	if err := scope.releaseOfflineNamespaceScopeV6(); err != nil {
+		t.Fatalf("completed phase not idempotent: %v", err)
+	}
+}
+
+func TestPrimaryOfflineScopeV6PhysicalFailureRetainsControls(t *testing.T) {
+	dir := t.TempDir()
+	preparePrimaryJointCrashV6(t, dir)
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	scope, err := d.captureOfflinePrimaryScopeV6()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := d.newOfflinePrimaryPairV6(scope, defaultChunkSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := scope.stableNamespaceMetadata
+	before := metadata.Bytes()
+	fileCharge := scope.stableNamespaceParentCharge - scope.offlineScopeControlCharge
+	originalPager, originalArena, originalOwner := pair.pager, pair.primary, pair.primaryOwner
+	t.Cleanup(func() {
+		// Join the same real retained PRIMARY cleanup after all custody assertions.
+		// The generation's cached DATA error and its retained control charge remain.
+		if err := originalArena.Close(); err != nil {
+			t.Errorf("retained PRIMARY teardown: %v", err)
+		}
+	})
+	// The original exact file is closed externally to make the producer's
+	// physical Close report a genuine error; it must not claim completion.
+	if err := pair.pager.WithStableResourceFile(func(f *os.File) error { return f.Close() }); err != nil {
+		t.Fatal(err)
+	}
+	err = scope.releaseOfflineNamespaceScopeV6()
+	if !errors.Is(err, os.ErrClosed) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("lost physical uncertainty: %v", err)
+	}
+	if scope.pager != originalPager || scope.primary != originalArena || scope.primaryOwner != originalOwner {
+		t.Fatal("failed physical operands cleared")
+	}
+	if scope.stableNamespaceParent != nil {
+		t.Fatal("successfully closed parent retained")
+	}
+	if scope.offlineScopeControlCharge == 0 || metadata.Bytes() != before-fileCharge {
+		t.Fatalf("wrong scope refund: before=%d after=%d file=%d controls=%d", before, metadata.Bytes(), fileCharge, scope.offlineScopeControlCharge)
+	}
+	originalOwner.mu.Lock()
+	retained := originalOwner.failedDataGenerations == scope
+	originalOwner.mu.Unlock()
+	if !retained {
+		t.Fatal("original physical owner lost failed generation")
+	}
+	if err := scope.releaseOfflineNamespaceScopeV6(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("cached physical debt disappeared: %v", err)
+	}
+	if metadata.Bytes() != before-fileCharge {
+		t.Fatal("repeated phase refunded failed controls")
+	}
+}
+
+func TestPrimaryOfflineScopeV6ParentFailureRetainsExactCustody(t *testing.T) {
+	dir := t.TempDir()
+	preparePrimaryJointCrashV6(t, dir)
+	d, err := Open(Options{Dir: dir, ResolvedProfile: ProfileNoWALFast, Durability: DurabilityWALOffRelaxed, DisableBackgroundPrune: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	scope, err := d.captureOfflinePrimaryScopeV6()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, metadata, owner := scope.stableNamespaceParent, scope.stableNamespaceMetadata, scope.offlineScopePhysicalOwner
+	charge, before := scope.stableNamespaceParentCharge, metadata.Bytes()
+	if err := parent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err = scope.releaseOfflineNamespaceScopeV6()
+	if !errors.Is(err, os.ErrClosed) || !errors.Is(err, ErrRecoveryRequired) {
+		t.Fatalf("lost parent uncertainty: %v", err)
+	}
+	if scope.stableNamespaceParent != parent || scope.stableNamespaceParentCharge != charge || metadata.Bytes() != before {
+		t.Fatal("failed parent/refund custody lost")
+	}
+	owner.mu.Lock()
+	retained := owner.failedDataGenerations == scope && scope.failedNext == nil
+	owner.mu.Unlock()
+	if !retained {
+		t.Fatal("original producer lost exact namespace scope")
+	}
+	if err := scope.releaseOfflineNamespaceScopeV6(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("cached parent debt disappeared: %v", err)
+	}
+	owner.mu.Lock()
+	duplicate := scope.failedNext == scope
+	owner.mu.Unlock()
+	if duplicate {
+		t.Fatal("repeated failure duplicated the intrusive custody link")
+	}
+	if _, err := os.Stat(filepath.Join(dir, indexReadyFileName)); !os.IsNotExist(err) {
+		t.Fatalf("parent failure published COMMIT: %v", err)
 	}
 }

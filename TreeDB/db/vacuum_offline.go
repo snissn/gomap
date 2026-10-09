@@ -71,6 +71,17 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 		return err
 	}
 
+	var offlineScope *indexGen
+	var offlineParent *os.File
+	if gen := d.idx.Load(); gen != nil && gen.primary != nil && gen.primary.CapsuleFormatV6() {
+		offlineScope, err = d.captureOfflinePrimaryScopeV6()
+		if err != nil {
+			return errors.Join(err, d.Close())
+		}
+		offlineParent = offlineScope.stableNamespaceParent
+		defer func() { retErr = errors.Join(retErr, offlineScope.releaseOfflineNamespaceScopeV6()) }()
+	}
+
 	var maintenanceLeafLog LeafPageLogCloser
 	if opts.IndexOuterLeavesInValueLog {
 		maintenanceLeafLog, err = NewStandaloneLeafPageLog(opts.Dir, StandaloneLeafPageLogOptions{
@@ -94,29 +105,16 @@ func vacuumIndexOffline(opts Options, fail vacuumFailpoint) (retErr error) {
 			return errors.Join(e, d.Close())
 		}
 		defer roots.Release()
-		newPath := filepath.Join(opts.Dir, indexNewFileName)
-		if e = removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); e != nil {
-			return errors.Join(e, d.Close())
-		}
-		newPager, e := pager.Open(newPath, opts.ChunkSize)
+		pair, e := d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
 		if e != nil {
 			return errors.Join(e, d.Close())
 		}
-		if e = observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, true); e != nil {
-			return errors.Join(e, newPager.Close(), d.Close())
-		}
-		if _, e = newPager.Alloc(2); e != nil {
-			return errors.Join(e, newPager.Close(), d.Close())
-		}
-		pair, e := d.newOfflinePrimaryPairV6(newPager)
-		if e != nil {
-			return errors.Join(e, d.Close())
-		}
+		newPager := pair.pager
 		produce := func(root RecoverableRoot) (rebuiltDurableRootV1, error) {
 			rebuilt, _, e := d.rebuildRecoverableRootWithPublicationLockV1(context.Background(), roots, root, newPager, pair.allocator, false)
 			return rebuilt, e
 		}
-		e = d.finishOfflinePrimaryPairV6(pair, roots, produce, false, func() error {
+		e = d.finishOfflinePrimaryPairV6(offlineParent, pair, roots, produce, false, func() error {
 			if maintenanceLeafLog != nil {
 				return maintenanceLeafLog.Close()
 			}

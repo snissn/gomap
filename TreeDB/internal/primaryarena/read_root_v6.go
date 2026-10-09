@@ -3,6 +3,7 @@ package primaryarena
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
@@ -16,6 +17,27 @@ import (
 // any reusable component/dependency allocation. No legacy format is relabeled.
 func OpenCapsule(path string) (*Arena, error)         { return open(path, false, true) }
 func OpenReadOnlyCapsule(path string) (*Arena, error) { return open(path, true, true) }
+
+// OpenCapsuleOwnedFile consumes file immediately, including on failure. A
+// returned Arena with an error owns incomplete cleanup through its genuine
+// initialized metadata owner; diagnosticPath is never reopened for authority.
+func OpenCapsuleOwnedFile(file *os.File, diagnosticPath string) (*Arena, error) {
+	p, err := pager.OpenOwnedFileWithOptions(file, diagnosticPath, chunkBanks*page.PageSize, pager.OpenOptions{})
+	if p == nil {
+		return nil, err
+	}
+	a := newFileArena(p, true)
+	if err == nil {
+		err = initializeFileArena(a, false)
+	}
+	if err != nil {
+		if closeErr := a.Close(); closeErr != nil {
+			return a, errors.Join(err, closeErr)
+		}
+		return nil, err
+	}
+	return a, nil
+}
 
 // OpenExisting admits the actual header format and never creates or relabels
 // a file. The full header checksum/version/UUID is checked by the shared Open.

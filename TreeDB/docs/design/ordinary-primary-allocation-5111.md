@@ -57,6 +57,44 @@ publication, retirement, physical identity or deletion registry.
 | 18. Rope/exact RID/history/proofs | `resource_rope_allocation.go`, `resource_logical_allocation.go`, `resource_rid_allocation.go`, obligation/proof helpers | Persistent canonical logical/physical index is selected truth. Same-identity append updates canonical frontier while sharing the immutable old physical rope. The old rope frontier remains unchanged; last aliases release original token and backing edges once. |
 | 19. Release buffers/outcomes/diagnostics | `primaryarena/release_queue.go`, `resource_original_cleanup.go`, `resource_diagnostics_allocation.go`, scoped views | Admitted existing nodes supply release worklists. Consumed references, deferred work, completed callbacks and cleanup debt retain their original distinct outcomes. Scoped selected diagnostics retain real backing; generic diagnostics retain their original post-release behavior. |
 
+The offline owned-file constructor reconciliation uses the same Pager and
+Arena initialization, wrappers and actual metadata baseline. It adds no failure
+wrapper or replacement physical owner. A partially initialized capsule exposes
+its genuine initialized metadata owner; the normal PRIMARY-first index
+construction retains partial DATA/PRIMARY objects. `indexGen.closeOnce` records
+actual completion or debt and does not retry cleanup. The transferred Pager
+itself retains an unfinished unmap operand for a later Close attempt, withdraws
+mapped read publication before cleanup and refuses locked writes/growth after
+terminal cleanup starts. A failed physical release retains the original owning
+generation on the existing physical owner's intrusive failure custody.
+
+The operation-parent scope is preborn in the ordinary private `indexGen`.
+Its containing control allocation and actual parent-file wrapper/backing are
+admitted on the original source metadata owner before Open. Private physical
+Close leaves that namespace operand alive through COMMIT and rollforward.
+Final namespace release closes the same parent, clears aliases and refunds
+only completed storage. If physical cleanup fails but parent closure completes,
+only the parent-file charge refunds; the generation's exact fields and control
+capacity remain charged on original failure custody. Parent failure retains its
+exact handle, full charge and same preborn scope, without duplicating the
+single intrusive failure link. Ordinary index generation Close behavior remains
+separate. Extra scope fields increase containing generation storage and belong
+to complete-operation allocation measurements; they are not zero cost.
+
+Retained parent handles, exclusive child handles, diagnostic name storage,
+constructor callbacks and operation containing storage have real allocation
+costs. The owned entry points do not claim zero cost or a new budget allowance;
+existing DATA producer storage and the selected metadata ownership boundary
+remain distinct. The added PRIMARY and DATA `OpenStableChildFile`
+handles have separately allocated `os.File` backing and child diagnostic-name
+storage (`parent.Name()+name`), distinct from the Pager diagnostic path. Their
+actual containing/file/name preadmission, transfer and disposal remains an
+explicit open 19-group item; the path-only Pager baseline cannot represent
+that new backing by itself. Arbitrary parent Close uncertainty and complete
+writer/manager physical-cleanup closure remain unqualified by these component
+characterizations. Pair component tests do not establish the pending complete
+value/leaf creation, registration and retirement allocation/lifetime closure.
+
 Paths in the table are relative to `TreeDB`, or to
 `TreeDB/internal/rootpublication` for resource/transaction helpers. Group 3's
 Growth constructor is charged already; claiming it was unadmitted would confuse

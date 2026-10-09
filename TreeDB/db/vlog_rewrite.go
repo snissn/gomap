@@ -3116,8 +3116,7 @@ func rewriteSwapsKeySorted(swaps []rewriteSwap) bool {
 // ValueLogRewriteOffline rewrites value-log pointers into new segments and
 // swaps index.db to reference the new log. This is an offline operation
 // (requires exclusive lock and a clean commitlog).
-func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
-	var stats ValueLogRewriteStats
+func ValueLogRewriteOffline(opts Options) (stats ValueLogRewriteStats, retErr error) {
 	if opts.Dir == "" {
 		return stats, errors.New("db dir required")
 	}
@@ -3169,6 +3168,18 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	d, err := openReadOnlyNoLock(opts)
 	if err != nil {
 		return stats, err
+	}
+
+	capsuleRewrite := d.idx.Load() != nil && d.idx.Load().primary != nil && d.idx.Load().primary.CapsuleFormatV6()
+	var offlineScope *indexGen
+	var offlineParent *os.File
+	if capsuleRewrite {
+		offlineScope, err = d.captureOfflinePrimaryScopeV6()
+		if err != nil {
+			return stats, errors.Join(err, d.Close())
+		}
+		offlineParent = offlineScope.stableNamespaceParent
+		defer func() { retErr = errors.Join(retErr, offlineScope.releaseOfflineNamespaceScopeV6()) }()
 	}
 
 	state := d.State()
@@ -3265,45 +3276,77 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	bakPath := filepath.Join(opts.Dir, indexBakFileName)
 	readyPath := filepath.Join(opts.Dir, indexReadyFileName)
 
-	if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
-		_ = d.Close()
-		return stats, err
-	}
-	if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
-		_ = d.Close()
-		return stats, err
+	var pair *indexGen
+	var newPager *pager.Pager
+	if capsuleRewrite {
+		pair, err = d.newOfflinePrimaryPairV6(offlineScope, opts.ChunkSize)
+		if err != nil {
+			return stats, errors.Join(err, d.Close())
+		}
+		newPager = pair.pager
+	} else {
+		if err := removePersistentFileBestEffort(opts.Dir, newPath, durabilitycut.ResourceIndex); err != nil {
+			_ = d.Close()
+			return stats, err
+		}
+		if err := removePersistentFileBestEffort(opts.Dir, readyPath, durabilitycut.ResourceIndex); err != nil {
+			_ = d.Close()
+			return stats, err
+		}
+
+		_, newStatErr := os.Stat(newPath)
+		newCreated := os.IsNotExist(newStatErr)
+		newPager, err = pager.Open(newPath, opts.ChunkSize)
+		if err != nil {
+			_ = d.Close()
+			return stats, err
+		}
+		if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return stats, err
+		}
+		if _, err := newPager.Alloc(2); err != nil {
+			_ = newPager.Close()
+			_ = d.Close()
+			return stats, err
+		}
+
 	}
 
-	_, newStatErr := os.Stat(newPath)
-	newCreated := os.IsNotExist(newStatErr)
-	newPager, err := pager.Open(newPath, opts.ChunkSize)
-	if err != nil {
-		_ = d.Close()
-		return stats, err
+	closeReplacement := func() error {
+		if pair != nil {
+			return pair.close()
+		}
+		return newPager.Close()
 	}
-	if err := observeCreatedPersistentFile(opts.Dir, newPath, durabilitycut.ResourceIndex, newCreated); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return stats, err
-	}
-	if _, err := newPager.Alloc(2); err != nil {
-		_ = newPager.Close()
-		_ = d.Close()
-		return stats, err
+	offlineFinishOwnsCleanup := false
+	if pair != nil {
+		staging, identityErr := primaryJointDecisionForV6(offlineParent, pair, durableRootSelectionV1{})
+		if identityErr != nil {
+			return stats, errors.Join(identityErr, pair.close(), d.Close())
+		}
+		defer func() {
+			closeErr := pair.close()
+			retErr = errors.Join(retErr, closeErr)
+			if !offlineFinishOwnsCleanup && closeErr == nil {
+				retErr = errors.Join(retErr, cleanupOfflinePrimaryStageV6(opts.Dir, offlineParent, indexNewFileName, staging.Data), cleanupOfflinePrimaryStageV6(opts.Dir, offlineParent, primaryNewFileName, staging.Primary))
+			}
+		}()
 	}
 
 	alloc := &pagerAllocator{p: newPager}
 	ptrMap := make(map[recordKey]recordLoc)
 	preferredDictGlobal, err := scanValueLogSetPreferredDictID(state.ValueLogSet)
 	if err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
 	if writer.blockCompression && rewriteUsesLeafLog {
 		leafDictID, leafDictBytes, leafDictUseRawPages, err := prepareRewriteLeafDict(d, state, opts.ValueLog.DictCurrentForClass, opts.ValueLog.DictLeafPayloadMode, opts.ValueLog.DictLookup, opts.ValueLog.DictPut, opts.ValueLog.DictSetCurrentForClass, opts.ValueLog.DictSetLeafPayloadMode, opts.ValueLog.DictTrain)
 		if err != nil {
-			_ = newPager.Close()
+			_ = closeReplacement()
 			_ = d.Close()
 			return stats, err
 		}
@@ -3312,7 +3355,6 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 		}
 	}
 
-	capsuleRewrite := d.idx.Load() != nil && d.idx.Load().primary != nil && d.idx.Load().primary.CapsuleFormatV6()
 	buildTreeFromIterator := func(iter iteratorWithEntry, useLeafLog bool) (uint64, error) {
 		rewriter := &rewriteIterator{
 			inner:               iter,
@@ -3396,17 +3438,12 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	if source := d.idx.Load(); source != nil && source.primary != nil && source.primary.CapsuleFormatV6() {
 		roots, captureErr := d.CaptureRecoverableRootSetForInspection(context.Background())
 		if captureErr != nil {
-			_ = newPager.Close()
+			_ = closeReplacement()
 			_ = d.Close()
 			return stats, captureErr
 		}
 		defer roots.Release()
-		pair, pairErr := d.newOfflinePrimaryPairV6(newPager)
-		if pairErr != nil {
-			_ = d.Close()
-			return stats, pairErr
-		}
-		defer pair.close()
+
 		produce := func(root RecoverableRoot) (rebuilt rebuiltDurableRootV1, err error) {
 			snapshot := roots.AcquireSnapshotForRoot(root)
 			if snapshot == nil {
@@ -3452,7 +3489,8 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 			resources, e := d.captureRebuiltIndexDurableResourcesFromV1(newPager, meta, sourceResources)
 			return rebuiltDurableRootV1{meta: meta, resources: resources}, e
 		}
-		err = d.finishOfflinePrimaryPairV6(pair, roots, produce, true, func() error {
+		offlineFinishOwnsCleanup = true
+		err = d.finishOfflinePrimaryPairV6(offlineParent, pair, roots, produce, true, func() error {
 			closeErr := writer.Close()
 			if acquiredValueLogSet != nil {
 				closeErr = errors.Join(closeErr, acquiredValueLogManager.Release(acquiredValueLogSet))
@@ -3478,7 +3516,7 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 
 	collectionRootReplacements, err := valueLogRewriteCollectionRootsFromDescriptors(collectionRootDescriptors, buildCollectionTree)
 	if err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
@@ -3493,14 +3531,14 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	}
 	sysRoot, err := buildTreeFromIterator(sysIter, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
 
 	userRoot, err := buildTree(state.RootPageID, opts.IndexOuterLeavesInValueLog)
 	if err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
@@ -3513,30 +3551,30 @@ func ValueLogRewriteOffline(opts Options) (ValueLogRewriteStats, error) {
 	meta.TotalPages = newPager.PageCount()
 
 	if err := writer.Sync(); err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
 	durableResources, err := captureOfflineRewriteDurableResourcesV1(d, writer)
 	if err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
 	defer durableResources.Release()
 	if err := writeRebuiltDurableRootV1(opts.Dir, newPath, newPager, meta, durableResources); err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
 	if err := writePersistentFile(opts.Dir, readyPath, []byte("ready\n"), 0o644, durabilitycut.ResourceIndex); err != nil {
-		_ = newPager.Close()
+		_ = closeReplacement()
 		_ = d.Close()
 		return stats, err
 	}
 	if runtime.GOOS != "windows" {
 		if err := syncNewFileNamespaceDirectory(opts.Dir, durabilitycut.ResourceIndex); err != nil {
-			_ = newPager.Close()
+			_ = closeReplacement()
 			_ = d.Close()
 			return stats, err
 		}

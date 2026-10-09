@@ -4,6 +4,7 @@ import (
 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/page"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 )
@@ -56,6 +57,9 @@ func (p *Pager) writeViewWithWork(pageID uint64, data []byte, publication bool, 
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closing {
+		return nil, false, os.ErrClosed
+	}
 	if ok, err := pagerReserve(work, 5, 2*uint64(min(len(data), page.PageSize))+1024); !ok || err != nil {
 		return nil, false, err
 	}
@@ -163,6 +167,9 @@ func (p *Pager) writeOwnedSpanWithWork(first uint64, images [][]byte, durable, p
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closing {
+		return nil, false, os.ErrClosed
+	}
 	records, bytes := uint64(5), uint64(2*len(images)*page.PageSize+1024)
 	if durable && !p.memoryOnly {
 		// The stable handle/file barrier and its actual post-fence extent are two

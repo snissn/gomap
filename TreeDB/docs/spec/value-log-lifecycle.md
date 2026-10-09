@@ -665,7 +665,7 @@ Offline rewrite rewrites live pointer records into fresh segments and swaps inde
 - clean commit log (no pending `commit-*.log`),
 - readable existing value-log segments.
 
-#### Procedure
+#### Legacy DATA-only procedure
 
 1. Open DB read-only under exclusive lock.
 2. Build new value-log segments by iterating current trees and copying referenced records.
@@ -674,6 +674,27 @@ Offline rewrite rewrites live pointer records into fresh segments and swaps inde
 5. Atomically swap `index.db.new` into `index.db`.
 6. Remove obsolete value-log segments.
 7. Report before/after size and segment counts.
+
+#### Selected V6 pair procedure
+
+Both eligible slots and their distinct embedded one-hop proofs are rebuilt
+into the same new DATA/PRIMARY pair. Every pointer closure uses the rewrite
+producer; capsule materialization cannot fall back to an unrevised old pointer
+root. The pair preserves logical commit sequences and ACK frontiers while
+replacing physical identities and sealing a genuine new DATA generation.
+Producer Snapshots, iterators, writers, resource sets and original/private pair
+owners must complete cleanup before publishing joint COMMIT. An uncertain
+COMMIT retains staging and requires recovery; old segments remain protected.
+The optional refcount cache is removed before the staging namespace barrier,
+so either predecision old-pair reopen or committed new-pair recovery rescans
+actual pointers even though logical sequence is unchanged.
+
+Owned-file pair construction and identity-checked relative stage cleanup do
+not establish whole-operation namespace safety by themselves. Initial value
+and leaf writer creation, path-only manager registration, and old-segment
+retirement remain distinct consumers requiring exact captured authority and
+truthful cleanup outcomes. The pair's component tests do not qualify those
+pending consumers or Windows offline replacement.
 
 #### Safety properties
 
