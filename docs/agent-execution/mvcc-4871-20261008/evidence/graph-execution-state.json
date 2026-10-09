@@ -271,6 +271,15 @@
         "owner": "/root/ordinary_5111",
         "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6073431265",
         "contract": "One-shot owned-constructor input transfers already admitted initial File charge from same indexGen aggregate to same Writer/MetadataOwner at immediate consumption. No second admission. Actual original close/rotation success refunds once; failed cleanup retains. Clear retained/cloned/successor registration input, reject other entry points, account containing costs and aggregate underflow. Nil File does not consume."
+      },
+      "darwin_xsys_reader_inquiry": {
+        "status": "SOURCE_INQUIRY_COMPLETED_NEGATIVE_PLATFORM_BLOCKER_UNCHANGED",
+        "source": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+        "dependency": "golang.org/x/sys v0.41.0",
+        "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6073478491",
+        "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/darwin-xsys-reader-source-audit.json",
+        "finding": "Using this existing dependency does not eliminate the hidden DIR allocation/admission/cleanup-outcome gap. The original Darwin blocker remains; Linux direct Getdents caller-buffer implementation must not be generalized to Darwin by changing import only.",
+        "next_action": "Provide a supported original same-algorithm bounded/custodied Darwin reader with actual close outcomes and native validation. No raw unsupported syscall or path-based fallback was accepted."
       }
     },
     {
@@ -330,5 +339,5 @@
       "prior_five_paths": "Previous release/reappearance blocker remains unchanged; no repeated deletion."
     }
   },
-  "updated_at": "2026-10-09T03:07:57.652Z"
+  "updated_at": "2026-10-09T03:11:52.103Z"
 }

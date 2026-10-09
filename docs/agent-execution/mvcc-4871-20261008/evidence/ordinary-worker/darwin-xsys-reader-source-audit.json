@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "issue": "snissn/gomap#5111",
+  "inquiry": "Does the existing golang.org/x/sys dependency provide a caller-owned Darwin directory reader without hidden DIR allocation or ignored close outcomes?",
+  "scope": "SOURCE_ONLY_NO_RUNTIME_OR_PLATFORM_QUALIFICATION",
+  "product_source": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "product_go_mod_blob": "9c50190970e42029aebab51af84002c17341053e",
+  "dependency": "golang.org/x/sys v0.41.0",
+  "dependency_zip_hash": "h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=",
+  "sources": [
+    {
+      "path": "unix/syscall_darwin.go",
+      "sha256": "dc69b2117a3acb94c92d5bfddcd1d77b4812a8e67e1028def5b8c84ec5365756",
+      "bytes": 25237
+    },
+    {
+      "path": "unix/readdirent_getdirentries.go",
+      "sha256": "db3a5b0e169d6f2431e3a145d2a3cc4374330e29d40378cb3fb26ede4fcd813d",
+      "bytes": 705
+    }
+  ],
+  "finding": "NO_EXISTING_SUPPORTED_SUBSTITUTE_IN_THIS_DEPENDENCY",
+  "trace": [
+    "ReadDirent calls Getdirentries.",
+    "Darwin Getdirentries emulates through Openat(fd,\".\"), fdopendir, readdir_r, and deferred closedir.",
+    "fdopendir failure calls Close(fd2) without propagating its result; deferred closedir(d) ignores its result.",
+    "The wrapper explicitly disclaims directories edited underfoot and retains entry-count seek emulation."
+  ],
+  "conclusion": "Using this existing dependency does not eliminate the hidden DIR allocation/admission/cleanup-outcome gap. The original Darwin blocker remains; Linux direct Getdents caller-buffer implementation must not be generalized to Darwin by changing import only.",
+  "next_action": "Provide a supported original same-algorithm bounded/custodied Darwin reader with actual close outcomes and native validation. No raw unsupported syscall or path-based fallback was accepted."
+}
