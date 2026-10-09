@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "kind": "original namespace scope control lifetime and caller-owned Linux census decision",
+  "source": {
+    "local_commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+    "published_commit": "54893f48cb2a7a195b1b89198a39c87a9a1919c4"
+  },
+  "source_blobs": {
+    "TreeDB/db/primary_arena_owner_v5.go": "9b31ae90215f79b5b0f1679e8d39e5544245c320",
+    "TreeDB/db/index_gen.go": "42a12bab42cfe3d8b6ec23c4a30ef8eb5340a4ed"
+  },
+  "toolchain_sha256": {
+    "src/syscall/dirent.go": "e46154ad02f16b9b50cf7aa7fe8625a39e4fb1b30213902ff6c07cf8f37e0dcf",
+    "src/syscall/syscall_linux.go": "e5fa95a3d18df64cf660e47d832c0fcf32fcc4681606aebcad6269ce522ef632",
+    "src/syscall/syscall_darwin.go": "2666ee554bc7523f0547d5d4d22afd95d22699ec1cb22bbdab46e582c3c199b4",
+    "src/syscall/syscall_bsd.go": "b772fe50da97a5a4c76e480bf4240d3fdc85a6ee87513eb8f8a785812159d263"
+  },
+  "findings": [
+    "Original successful primaryArenaOwner.releaseWithOutcome closes arena and namespace, clears owner.arena and refunds original wrapper metadata charge.",
+    "The preborn indexGen namespace scope still retains offlineScopePhysicalOwner after physical Close and can link actual late failed generation/parent/probe cleanup through that original wrapper. Refunding its charge before this phase ends misstates original live control custody.",
+    "Physical bank references and namespace control references are independent actual edges; retaining control need not keep arena or banks mapped.",
+    "On Linux syscall.ReadDirent delegates directly to Getdents with caller-owned buffer. std ParseDirent bounds records/names by that buffer and matches Linux zero-inode semantics; caller-provided bounded name backing avoids a result vector.",
+    "Darwin syscall.Getdirentries emulates via openat/fdopendir/readdir_r and ignored deferred closedir, so syscall.ReadDirent is not equivalent caller-buffer/no-hidden-handle authority there."
+  ],
+  "accepted_scope_control_contract": [
+    "Fixed scope-control reference on SAME original primaryArenaOwner acquired at normal preborn namespace scope setup, covered by already-admitted original wrapper charge; no duplicate control charge/new owner.",
+    "Keep physical refs/read-root/bank lifecycle unchanged. Actual last physical edge closes arena/namespace normally and clears arena only on real successful completion.",
+    "Retain original metadata Owner pointer independently of arena after physical pointer clears; no newly born metadata owner.",
+    "Refund original wrapper charge exactly once only after genuine physical completion, last control-scope release and no actual failure custody/debt. Early scope release cannot refund an in-flight arena.Close.",
+    "Synchronize physical-completion/in-flight and control release under existing owner.mu; refs==0 or arena==nil alone is not completion.",
+    "Late failure retains SAME wrapper, actual failed generation/probe/parent/outcome and control charge on original intrusive custody. Reject terminal/unverifiable/already-refunded scope acquisition; no resurrection or bank retain.",
+    "Generic no-scope behavior remains; actual containing new fields/full-operation costs count."
+  ],
+  "accepted_linux_census_contract": [
+    "Same original quarantine 0/1/>1/error semantics, one preadmitted8192-byte buffer in existing scratch, fixed2-name backing and consumed/filled offsets.",
+    "Use existing Linux syscall.ReadDirent/Getdents and std ParseDirent rather than copied parser or os private dirInfo/pool/unixDirent state.",
+    "Eager identity/type/error checks use actual exclusive admitted File probe and preborn syscall.Stat_t. FD use remains quiescent and original File lifetime/KeepAlive respected.",
+    "True EOF and skipped/short entry handling, real File Close outcome, aliases scrubbed before reuse/refund; parsed names are bounded per buffer but skipped-entry allocation/IO FLOW can remain unbounded and is measured honestly.",
+    "This removes the temporary literal Go1.26.4 production gate/private-reader assumptions for Linux; historical version-gated development logs remain.",
+    "Darwin and Windows admission/namespace/closure remain open; no all-platform or whole-PR credit."
+  ],
+  "required_checks": [
+    "Control alive after genuine arena.Close",
+    "Early control release before physical completion",
+    "Successful last scope once-refund",
+    "Late actual cleanup failure retains original operand/control",
+    "Physical-close/control-release concurrency",
+    "Owned directory genuine EOF/ENOENT/cardinality/type/errors",
+    "Reserved admission/refusal and actual close outcome",
+    "Public caller normal/race/vet/docs/policy and all nineteen-group closure"
+  ],
+  "acceptance_owner": "/root",
+  "status": "SOURCE_DECISION_ACCEPTED_IMPLEMENTATION_AND_FROZEN_QUALIFICATION_OWED",
+  "product_acceptance": false
+}
