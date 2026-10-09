@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "kind": "source-only original deletion lease admission boundary",
+  "acceptance_owner": "/root",
+  "source": {
+    "local_commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+    "published_commit": "54893f48cb2a7a195b1b89198a39c87a9a1919c4"
+  },
+  "question": "Can original owned old-segment deletion begin after source DB and original identity registry Close without fresh authority or admission?",
+  "method": "Independent source-only immutable Git inspection by Sol6.1/high adviser and coordinator; no runtime probe.",
+  "source_blobs": {
+    "TreeDB/internal/rootpublication/pin_registry.go": "e6b2fc69c396d98a094abfd0fdf43a286f1ec53b",
+    "TreeDB/internal/rootpublication/registry_capacity.go": "1687ae8d13f4cd921899439130ff1a702e7437bf",
+    "TreeDB/internal/rootpublication/resource_original_cleanup.go": "0145445a1a595152fc73711020d96bf88a36ce6b",
+    "TreeDB/db/db.go": "d023a0a8749078bf58c7848ce0e5b7b277a6e8fd",
+    "TreeDB/db/durable_root_runtime.go": "066d7620ddec7a8cd898c54a9fe2da47c4b890e2",
+    "TreeDB/db/root_publication_activation.go": "9ba10bdfc07ed0cff76be608bb70faa14f945a27",
+    "TreeDB/db/primary_offline_pair_v6.go": "1a0d8c36f3ead48e4bdd8d07dd525cec0e722a28",
+    "TreeDB/internal/valuelog/stable_resource.go": "567f2501ba5e2fbad5be4467d827d327c6a68870"
+  },
+  "findings": [
+    "BeginDelete/At is the only activation route at this source; stateLocked rejects closing even for an existing identity.",
+    "Already active IdentityDeleteLease survives registry Close because deleting state/namespace retain backing. CommitDeleted and Abort operate under original mutex without stateLocked and consume once.",
+    "Before source Close, old segments can remain pinned by actual durable/current/slot/proof/runtime/handoff resources, so early ordinary BeginDelete may refuse.",
+    "Source Close last-release gap: releaseDurableRootResourcesV1, closeAllIndexes, vm.Close, rootRuntime.release, rootHandoff.Release, then valueLogIdentityPins.Close. Existing internal/capture teardown hooks run earlier.",
+    "No inactive preborn lease activation/reservation API exists. Ordinary beginDelete allocates uncharged lease record, may allocate state, namespace key and complete replacement table. Last Unobserve/Unpin can remove state; tombstones can force rehash.",
+    "Current removeOldValueLogSegments uses generic best-effort cleanup; it supplies no selected identity lease authority.",
+    "OriginalCleanupCustody is failure custody, not deletion exclusion, reserved table cells or fresh post-close admission."
+  ],
+  "accepted_contract": {
+    "implementation": "Prepare/preadmit same original lease records, actual identity observation/state, exact name/key/table backing and original scope/callback storage before Close. Add one operation-specific synchronous activation point in original DB.Close after last runtime/handoff releases and before original registry.Close. Activate only preadmitted original operands under its mutex, without allocation, rehash or filesystem mutation. Actual zero-pin/retired/deleting/name conflict/closing checks remain. Already active original leases survive terminal registry Close; same quarantine consumes them only after successful Close and COMMIT.",
+    "preserve": [
+      "Legitimate source internal pin acquisition during normal source Close; do not prematurely mark old identity deleting just to reserve storage.",
+      "True original PRIMARY physical closure and original identity registry terminal closure.",
+      "Reservation distinct from live physical debt or fake pins.",
+      "Prepared/conflicted cleanup never clears another ordinary lease's identity or namespace ownership.",
+      "Any source Close, admission, pin-drain or cleanup uncertainty prevents COMMIT and retains exact failed original operands; only owned prepared/activated operands abort once.",
+      "Default BeginDelete/At and closed guard unchanged; no postterminal BeginDelete, new owner/registry/lifecycle, generic path fallback or copied quarantine algorithm."
+    ],
+    "checks": [
+      "Source pin survives to late gap then drains",
+      "Foreign pin refuses COMMIT",
+      "Partial activation rollback",
+      "Earlier teardown error after admission",
+      "Active original lease completes/aborts once after Registry.Close",
+      "Fresh postterminal admission refuses",
+      "Namespace conflicts and original alias/child rebound",
+      "Canonical successor identity retained",
+      "Admission refusal leaves authority/capacity unchanged",
+      "Full nineteen-group and whole-operation measurement"
+    ]
+  },
+  "additional_selected_writer_decision": "At first metadata-selected rotation, same existing legacy-created Writer opts into strict actual cleanup outcome before added effects, rejecting already legacy-closed/unverifiable state. Added custody/control/operands admitted on original selected owner; existing original DATA constructor contract remains. Carry actual successor File charge to real disposal, retain same old/successor/proof/observation failures. Generic metadata=nil route unchanged.",
+  "platform_status": {
+    "linux": "Source-derived Go1.26.4 census component checks reported PASS before public wiring; no final qualification.",
+    "darwin": "Go1.26.4 directory reader has opaque DIR from OpenDir; dirInfo.close ignores returned closedir error and clears pointer. Linux reservation representation does not establish opaque allocation or actual DIR closure. Supported all-platform admission/outcome remains open; no zero cost or cross-platform acceptance.",
+    "windows": "Retained-parent relative rename/remove/persistence authority remains unavailable; no fallback or error suppression."
+  },
+  "status": "INQUIRY_ACCEPTED_CONTRACT_READY_IMPLEMENTATION_AND_QUALIFICATION_OWED",
+  "product_acceptance": false,
+  "next_action": "Sole writer finishes public original-scope/lease admission wiring, freezes coherent value/leaf source with fresh normal/race/vet/docs/policy/source receipts; COW private-constructor repair follows.",
+  "toolchain_sha256": {
+    "src/os/dir_darwin.go": "bc7c50b0d6452d6b5fd1ed0b06e8b8341a476e5d11af56747717f4233cd58c67"
+  }
+}
