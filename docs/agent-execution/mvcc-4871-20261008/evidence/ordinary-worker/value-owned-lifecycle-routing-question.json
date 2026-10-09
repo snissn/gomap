@@ -1,0 +1,85 @@
+{
+  "head": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
+  "timestamp": "2026-10-09T01:01:23.759023+00:00",
+  "scope": "Read-only source routing question, no implementation or acceptance",
+  "bindings": [
+    {
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "gitBlob": "bd939cf756ba3b7cd07f1629ddec84655031cb68",
+      "sha256": "d2bab5102be79c3041423b055464f25ce986fdd9d8a5254d5fa60bbaf508bb67",
+      "bytes": 79610
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "gitBlob": "3d19e408c6fec6d64d1314d4d9c2ad43bb9109ee",
+      "sha256": "521d71b69f7edcafbe45c08a8d33675dd1382145472aed57d45346241447f367",
+      "bytes": 97920
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "gitBlob": "567f2501ba5e2fbad5be4467d827d327c6a68870",
+      "sha256": "164253ca324a7f00fc62e037f6dda2082dca290cf4c7c919a21e1bd148fa0087",
+      "bytes": 87764
+    },
+    {
+      "path": "TreeDB/internal/valuelog/mmap_owned_v6.go",
+      "gitBlob": "f2a24a57164ca51b5d3a9e2db8b885b38b8b9903",
+      "sha256": "bd7905c6050c8fcdc67fffd69a87f4986d587c73417ee9930494d77d46f6c242",
+      "bytes": 1560
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "gitBlob": "00d03afef2a16a00374d774aae6db48c65fabcce",
+      "sha256": "4dfa9b88f9aa5ecfc42c684a0d85e809a2035ad0d5bf95acd70de1b4eeae66b8",
+      "bytes": 185100
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "gitBlob": "d023a0a8749078bf58c7848ce0e5b7b277a6e8fd",
+      "sha256": "74c37710c36d4412887fc30b21ac5cc68a42c998608e225052628379d676496a",
+      "bytes": 197735
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "gitBlob": "1a0d8c36f3ead48e4bdd8d07dd525cec0e722a28",
+      "sha256": "b68ee09e7dd888f2398b5c491eafd9d3dff263b774c1e266e763c0cbb5b01203",
+      "bytes": 14232
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/file_metadata.go",
+      "gitBlob": "26191eea4412f8ed87b9e92301739883c4baf1b6",
+      "sha256": "7a77bb458400ea00767b781ed5c7904ddeb367dd4d9b23b2cd86e3102a7e4354",
+      "bytes": 904
+    }
+  ],
+  "gaps": [
+    {
+      "caller": "ValueLogRewriteOffline -> source DB.closeAfterHooks -> valueLogManager.Close",
+      "actual": "Source File.Close ignores current/dead mapping cleanup errors, detaches exact mapping owners, early CAS makes later calls nil. Manager.Close clears files even on physical failure.",
+      "necessary": "Shared strict outcome on SAME original Manager/File opted in before source Close; retain same failed operands, join in-flight cleanup, cached real completion/debt. No generic successful legacy ABI change."
+    },
+    {
+      "caller": "ValueLogRewriteOffline -> rewriteWriter.Close -> value/leaf Writer.Close",
+      "actual": "rewriteWriter clears child pointers before observing close outcome. Writer.Close clears actual f/stableParent even on error; pending metadata disposes with cached failure custody but pending pointer gets nil.",
+      "necessary": "New owned Writer uses same object strict terminal outcome; wrapper preserves failed children on same producer; original-source Manager closure equally required."
+    },
+    {
+      "caller": "captureOfflineRewriteDurableResourcesV1 -> RegisterSegment(segment.path,segment.fileID)",
+      "actual": "Path-only registration; old rotated writer File already closed, createdSegmentsSnapshot records only path/id.",
+      "necessary": "Exact-file Manager registration while actual selected writer File is still open, at initial/active noteCreatedSegment, using synchronous borrowed Writer.WithStableResourceFile bridge; manager owns normal duplicated File, not extra cohort handles."
+    },
+    {
+      "caller": "newOfflinePrimaryPairV6 -> OpenStableChildFile PRIMARY/DATA",
+      "actual": "Added genuine os.File public/private backing + child.Name allocation before constructor, separate filepath.Join diagnostic path allocation. Target baseline counts path capacity only after construction.",
+      "necessary": "Source-governed preborn indexGen scope pending charge for genuine child file/private/name before Open; preserve charge+same operands on physical failure, release after original file disposal. Keep separate diagnostic path allocation truthfully counted."
+    },
+    {
+      "caller": "offline obsolete vlog/leaf retirement",
+      "actual": "Current removeOldValueLogSegments uses path best effort; removeStableSegmentFileOnce already supplies exact-identity quarantine and pre-captured parent validation.",
+      "necessary": "Narrow wrapper delegates existing protocol with pre-captured old identity/parent; no copied deletion/path fallback/Windows suppression."
+    }
+  ],
+  "proposedOutcomeRoute": "Choose strict-config opt-in on SAME Manager prior source teardown, shared Close helper preserving failed File/mapping/retirement-parent operands. New owned/admitted entrypoints use same strict outcome. No source modifications until exact route disposition.",
+  "commands": "Only bounded source reads; no builds/tests/benchmarks/GitHub writes after diagnostic freeze."
+}

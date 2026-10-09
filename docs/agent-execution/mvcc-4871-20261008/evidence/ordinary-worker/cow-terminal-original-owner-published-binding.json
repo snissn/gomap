@@ -1,0 +1,46 @@
+{
+  "scope": "Diagnostic-only COW terminal original-owner attribution; unchanged zero-drain test remains RED",
+  "local_head": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "published_head": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
+  "published_parent": "387c09b23c8f472df59ddaab1c6685127a512dc1",
+  "source": [
+    {
+      "path": ".github/ci/ci_impact.json",
+      "sha": "1c7961f8697797c13ef99b5e3a9babf0ad2c4fbc",
+      "sha256": "cf57b91007284dfa4829082a6c9e644a8ecfd1c94920bcb5afcb7deab7aa1c3f",
+      "bytes": 108513,
+      "mode": "100644"
+    },
+    {
+      "path": "TreeDB/cow_public_retention_test.go",
+      "sha": "c8036d8ac257ecb0e1db72b23aaccfaacf1d7ace",
+      "sha256": "a36420adf2f2d980dfe3d397611a7c6c46c2b491a5ed6a3c2d5896f4b5555ac4",
+      "bytes": 8983,
+      "mode": "100644"
+    }
+  ],
+  "evidence": [
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/cow-terminal-original-owner-diagnostic-checkpoint.json",
+      "sha": "6fccf8279ebe20beca16fb254436a5422ceaa9eb",
+      "sha256": "9b1eac24ad46ff4663a458cd6e8916d01fb3eb4790376341a9516d7a0a4d0eb6",
+      "bytes": 3154
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/cow-terminal-original-owner-diagnostic.log",
+      "sha": "65324bb95edb18021ad0fec30fde8ebc6a5076ac",
+      "sha256": "b81346a102558690631cb7b1907267141f27dd8bcde4c5e3e71b4b761db45914",
+      "bytes": 791
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/value-owned-lifecycle-routing-question.json",
+      "sha": "5762d4e61675e6f523e69b68d3001ab134fa6cb9",
+      "sha256": "582888747c07b0d63d4f28b2e7e4cc0cb959daac24c3f777c50fef0969bcb6e5",
+      "bytes": 5090
+    }
+  ],
+  "finding": "Same original PRIMARY is physically closed with49344 retained bytes; same original registry is closed and fully drained. Pending storage vs outstanding enrollment not yet discriminated. No production cleanup change, no whole-PR or performance acceptance.",
+  "owner": "/root",
+  "next_action": "Complete original value/leaf cleanup and exact-handle producer route; inspect original PRIMARY pending/enrollment lifetime before any accounting repair."
+}

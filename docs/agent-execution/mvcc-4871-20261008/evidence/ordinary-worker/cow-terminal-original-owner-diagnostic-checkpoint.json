@@ -1,0 +1,81 @@
+{
+  "scope": "Diagnostic-only original COW terminal owner discriminator; unchanged zero-drain oracle remains RED",
+  "head": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
+  "parent": "7e50e4b8f6744fd1251477155ec9c2697ff7f0c9",
+  "timestamp": "2026-10-09T00:58:16.763116+00:00",
+  "source": [
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/cow_public_retention_test.go",
+      "sha256": "a36420adf2f2d980dfe3d397611a7c6c46c2b491a5ed6a3c2d5896f4b5555ac4",
+      "bytes": 8983,
+      "gitBlob": "c8036d8ac257ecb0e1db72b23aaccfaacf1d7ace"
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/ordinary-5111/.github/ci/ci_impact.json",
+      "sha256": "cf57b91007284dfa4829082a6c9e644a8ecfd1c94920bcb5afcb7deab7aa1c3f",
+      "bytes": 108513,
+      "gitBlob": "1c7961f8697797c13ef99b5e3a9babf0ad2c4fbc"
+    }
+  ],
+  "execution": {
+    "cwd": "/workspace/scratch/1ecfdb811b25/ordinary-5111",
+    "argv": [
+      "/workspace/scratch/1ecfdb811b25/toolchain/go/bin/go",
+      "test",
+      "./TreeDB",
+      "-run",
+      "^TestCOWPublicRetentionRefusalDrainAndResume$/^no_wal_fast$",
+      "-count=1",
+      "-timeout=120s",
+      "-v"
+    ],
+    "explicitCommandPrefixEnv": {
+      "GOROOT": "/workspace/scratch/1ecfdb811b25/toolchain/go",
+      "GOMAXPROCS": "2",
+      "GOWORK": "off",
+      "GOTOOLCHAIN": "local",
+      "GOFLAGS": "-buildvcs=false",
+      "GOMODCACHE": "/workspace/scratch/1ecfdb811b25/go-mod-cache"
+    },
+    "inheritedEnv": "not captured",
+    "exitCode": 1,
+    "rawLog": {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/ordinary-worker/cow-terminal-original-owner-diagnostic.log",
+      "sha256": "b81346a102558690631cb7b1907267141f27dd8bcde4c5e3e71b4b761db45914",
+      "bytes": 791
+    },
+    "reportedDurationSeconds": 1.363,
+    "count": 1
+  },
+  "observation": {
+    "cow": {
+      "TotalBytes": 49632,
+      "ReservedBytes": 49376,
+      "ControlBytes": 256,
+      "ExternalBytes": 49376,
+      "ExternalLeases": 1,
+      "Views": 0,
+      "Generations": 0,
+      "Sources": 0
+    },
+    "originalPrimary": {
+      "Bytes": 49344,
+      "PhysicalClosed": true
+    },
+    "originalRegistry": {
+      "Bytes": 0,
+      "PhysicalClosed": true,
+      "ActivePins": 0,
+      "ActiveIdentities": 0,
+      "ActiveStableNamespaceLinks": 0,
+      "CachedStableDirectoryLinks": 0,
+      "CleanupError": null
+    }
+  },
+  "capture": "Admission callback returns exact private sentinel with nil Snapshot. First original pair captured after first retained-cut Checkpoint, same pointers rechecked immediately before public Close. No snapshot allocation/enrollment performed by capture. Existing work/limits/zero-drain assertion unchanged.",
+  "inference": "Actual remaining PRIMARY allocation/borrow operand not yet attributed. Owner.Close preserves fixed baseline/control while pending or refs remain; no scalar magnitude inference accepted. Registry is drained. No production edits.",
+  "policy": "Fingerprint-only refresh; unchanged15 workflows/57 original members; staged check and diff --check PASS",
+  "activeCommands": 0,
+  "repoStatus": ""
+}

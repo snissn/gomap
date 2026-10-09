@@ -110,7 +110,7 @@
       "owner": "/root/ordinary_5111",
       "acceptance_owner": "/root",
       "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
-      "next_action": "Freeze and qualify exact-parent owned DATA/PRIMARY constructors and operation-parent custody, then finish exact-handle value/leaf producer registration and strict source cleanup before COMMIT. Format-consumer, fault, terminal lease, physical reclaim, Windows and performance gates remain open.",
+      "next_action": "Complete exact-handle value/leaf producers and strict original-source cleanup, then resolve original PRIMARY pending/enrollment custody. Format consumers, actual V6 fault fences, physical reclaim, Windows and performance gates remain open.",
       "decisions": [
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
@@ -139,16 +139,21 @@
       "consumer_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071082310",
       "landed_harness_source_freeze": "f2ff79bd4b06118f4006d4ca48bcdab4adce0e9d",
       "landed_harness_tree": "27325b1bc8abe3e7924d7d6bb19db6b65def067f",
-      "offline_component_status": "Immutable Linux mechanism normal packet passes; exact-parent owned constructor reconciliation underway. Component-only: no race/vet/docs/policy/PR/performance acceptance.",
+      "offline_component_status": "Owned DATA/PRIMARY constructor+operation-parent focused normal/race/vet/docs/policy packet recorded; component-only, not full nineteen-obligation/whole-PR/performance acceptance.",
       "offline_mechanism_source_freeze": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
       "offline_mechanism_tree": "b391836d4b9313321222b8e53c5cb69094b0dced",
       "offline_mechanism_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071421037",
-      "value_log_producer_reconciliation": "Proposed complete contract accepted; actual constructor/registration/rotation/retirement and governing strict Close outcomes must be implemented and tested. Source-bound API question retained in 2ad620843b79442798243f474df53148cf26bf64.",
+      "value_log_producer_reconciliation": "Root accepts strict opt-in on SAME original Manager before DB.Close, same cached completion/debt and failed operand custody, owned Writer strict outcome, synchronous exact Writer file borrow bridge for normal Manager registration before rotation, source-governed preborn child file/name charge. Sole writer implementing coherent packet; no acceptance yet.",
       "cow_terminal_custody_inquiry": {
-        "source": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
-        "finding": "Static owner attribution inconclusive; one fixed original NoWAL public-test discriminator accepted. No implementation or terminal-drain acceptance.",
-        "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071970325"
-      }
+        "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+        "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
+        "finding": "Same original PRIMARY is physically closed with49344 retained bytes; same original registry is closed and fully drained. Pending storage vs outstanding enrollment not yet discriminated. No production cleanup change, no whole-PR or performance acceptance.",
+        "raw_packet": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/cow-terminal-original-owner-diagnostic-checkpoint.json",
+        "acceptance": "Diagnostic inquiry narrowed actual owner only; terminal-drain gate RED"
+      },
+      "owned_pair_constructor_source_freeze": "387c09b23c8f472df59ddaab1c6685127a512dc1",
+      "owned_pair_constructor_tree": "df2ae2e741d7f764478006a209021bb287e85b39",
+      "owned_pair_constructor_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072046085"
     },
     {
       "issue": "snissn/gomap#5118",
@@ -192,5 +197,5 @@
     ],
     "protected_paths_retained": true
   },
-  "updated_at": "2026-10-09T00:36:02.668Z"
+  "updated_at": "2026-10-09T01:05:48.689Z"
 }

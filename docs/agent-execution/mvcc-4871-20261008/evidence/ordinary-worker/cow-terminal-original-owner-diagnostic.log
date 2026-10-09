@@ -1,0 +1,8 @@
+=== RUN   TestCOWPublicRetentionRefusalDrainAndResume
+=== RUN   TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast
+    cow_public_retention_test.go:196: closed integration retained charges: {TotalBytes:49632 HistoryBytes:0 ReservedBytes:49376 RetiredBytes:0 PeakBytes:2088160 ControlBytes:256 DeferredBytes:0 ExternalBytes:49376 Views:0 Generations:0 Sources:0 ExternalLeases:1}; original primary Bytes=49344 PhysicalClosed=true; original registry Bytes=0 PhysicalClosed=true Stats={ActivePins:0 ActiveIdentities:0 ActiveStableNamespaceLinks:0} CachedStableDirectoryLinks=0 CleanupError=<nil>
+--- FAIL: TestCOWPublicRetentionRefusalDrainAndResume (1.36s)
+    --- FAIL: TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast (1.36s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	1.363s
+FAIL
