@@ -172,6 +172,33 @@
           "family": "constructed transaction lifecycle",
           "exact_orphan_operand": "UNPROVEN",
           "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014"
+        },
+        "exact_operand_inquiry": {
+          "original_source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+          "exact_ids": [
+            {
+              "transaction": "0x14588b5fc400",
+              "root_page_id_decimal": "5764607523034234882",
+              "root_incarnation_decimal": "1",
+              "owner": "0x14588b7c20d0"
+            },
+            {
+              "transaction": "0x14588b5fcc00",
+              "root_page_id_decimal": "5764607523034234885",
+              "root_incarnation_decimal": "1",
+              "owner": "0x14588b7c20d0"
+            },
+            {
+              "transaction": "0x14588c2dda00",
+              "root_page_id_decimal": "5764607523034234888",
+              "root_incarnation_decimal": "1",
+              "owner": "0x14588b7c20d0"
+            }
+          ],
+          "finding": "Original intermediate nonfinal flush chunk constructors remain unbound and undisposed when SAME build group replaces private currentRoot. Four final sync chunk constructors bind/detach/finish. Group abandonment only frees DATA tracker allocations. Original private constructed PRIMARY roots require original transaction Abort, with component/proof custody and final-transfer boundary preserved.",
+          "repair_contract": "Abort superseded original group-owned private constructor after genuine successor ownership succeeds; cover post-Apply error and unfinished group cleanup; protect borrowed base/publicreaders and original final candidate/coordinator transfer. Retain exact original operand/debt on failed Abort before clearing/refunding/freeing dependencies. No global reader/bank Abort, new registry/lifecycle or size-based inference.",
+          "status": "CAUSAL_INQUIRY_COMPLETE_REPAIR_AND_QUALIFICATION_OWED",
+          "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014"
         }
       },
       "owned_pair_constructor_source_freeze": "387c09b23c8f472df59ddaab1c6685127a512dc1",
@@ -220,5 +247,5 @@
     ],
     "protected_paths_retained": true
   },
-  "updated_at": "2026-10-09T01:24:00.224Z"
+  "updated_at": "2026-10-09T01:31:15.756Z"
 }

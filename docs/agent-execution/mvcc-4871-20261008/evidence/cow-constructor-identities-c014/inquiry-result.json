@@ -1,0 +1,371 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "outcome": "Exact original intermediate chunk transaction/root identities and missing original group disposal route identified; no repair applied or qualified",
+  "original_primary_pointer": "0x14588b7c20d0",
+  "terminal_pending": 7680,
+  "unreleased_intermediate_originals": [
+    {
+      "transaction": "0x14588b5fc400",
+      "root_page_id": 5764607523034234882,
+      "root_incarnation": 1,
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "initial_phase": 6,
+      "constructor_metadata_charge": 2560,
+      "events_seen": [
+        "constructor-success"
+      ],
+      "bank_events_seen": [],
+      "caller_frames": [
+        {
+          "raw_line": 35,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 36,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 37,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 38,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 39,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 40,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 41,
+          "depth": 7,
+          "pc": 9462004,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 285,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).Write"
+        },
+        {
+          "raw_line": 42,
+          "depth": 8,
+          "pc": 13640056,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 988,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 43,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 44,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 45,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 46,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ]
+    },
+    {
+      "transaction": "0x14588b5fcc00",
+      "root_page_id": 5764607523034234885,
+      "root_incarnation": 1,
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "initial_phase": 6,
+      "constructor_metadata_charge": 2560,
+      "events_seen": [
+        "constructor-success"
+      ],
+      "bank_events_seen": [],
+      "caller_frames": [
+        {
+          "raw_line": 175,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 176,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 177,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 178,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 179,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 180,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 181,
+          "depth": 7,
+          "pc": 9462004,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 285,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).Write"
+        },
+        {
+          "raw_line": 182,
+          "depth": 8,
+          "pc": 13640056,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 988,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 183,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 184,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 185,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 186,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ]
+    },
+    {
+      "transaction": "0x14588c2dda00",
+      "root_page_id": 5764607523034234888,
+      "root_incarnation": 1,
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "initial_phase": 6,
+      "constructor_metadata_charge": 2560,
+      "events_seen": [
+        "constructor-success"
+      ],
+      "bank_events_seen": [],
+      "caller_frames": [
+        {
+          "raw_line": 303,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 304,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 305,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 306,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 307,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 308,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 309,
+          "depth": 7,
+          "pc": 9462004,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 285,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).Write"
+        },
+        {
+          "raw_line": 310,
+          "depth": 8,
+          "pc": 13640056,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 988,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 311,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 312,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 313,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 314,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ]
+    }
+  ],
+  "final_transaction_count": 4,
+  "actual_path": [
+    "checkpointCOWContext -> flushCOWFrozen(cut frozen sources oldest-to-newest in SAME build group)",
+    "writeCanonicalFlushRunOpsChunk last=false -> Batch.Write -> group.writeBatch -> group.applyBatchLocked -> ApplyWithOptions -> applyPrimaryDirectory -> successful constructor",
+    "Each unmatched actual constructor has this intermediate Write caller chain and no later Bind/Detach/Abort/Finish/Recovery/Drop event.",
+    "Last source/chunk uses WriteSync; four final transaction identities each have exact Bind/Detach and Finish before/after events."
+  ],
+  "ownership_source_proof": {
+    "initial_root": "beginRootPublicationBuildGroup sets baseRoot=db.meta.UserRootPageID and currentRoot=baseRoot while reader-registry/captured Snapshot protect borrowed published basis. No constructor transfer is made for this initial borrowed root.",
+    "intermediate_output": "Each successful applyBatchLocked obtains newRoot from actual Apply output. Source writeBatch returns immediately when !rootPublicationBuildGroupFinal; no visible candidate or reader publication occurs for that output.",
+    "replacement": "Next apply uses rootID=group.currentRoot, builds complete independent output, then assigns group.currentRoot=newRoot. The existing code never calls the previous private constructor Abort before/after this overwrite. Actual probe records the intermediate constructor/root identities and their absent disposal events.",
+    "surviving_components": "writePrimaryArenaDirectory BorrowComponent -> Arena.NewGroup independently increments each surviving immutable component reference; sealDirectoryConstructedV6 increments group refs and installs groups on new bank. SealPrimaryConstructionV6 drops each original private construction component claim after the sealed root owns groups. Thus successful successor output owns genuine component custody before disposal of superseded directory constructor.",
+    "original_abort": "DurableRootTransaction.abortFrom takes transaction.mu and enforces Builder/constructing phase; abortConstructionLockedV6 consumes remaining component claims and SAME original root, scrubs constructor/callback aliases, then refunds its exact pending metadataCharge.",
+    "final_transfer": "prepareVisibleCandidate takes SAME final bank.construction transaction, Bind acquires independent state edge and Detach clears constructor discovery, attaches resources/member/install metadata. Candidate/coordinator thereafter own original transaction completion; original group must not abort accepted/transferred final transaction.",
+    "existing_abandon_gap": "cleanupLocked(abandon) currently calls tracker.FreeAll for DATA allocations; allocTracker only records Alloc calls to freelist allocator. RAM PRIMARY read roots and admitted transaction descriptors are created by arena/constructor rather than tracker.Alloc. No original pending constructor disposal occurs in group cleanup."
+  },
+  "narrow_repair_contract": {
+    "authority": "Use existing group.currentRoot/baseRoot, group.idx.primary, successful Apply output and actual bank constructor identity as the existing private custody. Root ID inequality is only a provenance guard, never independent Abort authority. Do not create a pending-root registry, second lifecycle or governor.",
+    "successful_replacement": "Keep previous group-owned constructor custody until successor complete root has its genuine component/group edges and required fallible value-log/resource ownership work has succeeded. Dispose superseded SAME private construction through original transaction Abort, not plain bank Drop; replace/clear owned discovery only after release outcome is known. Never abort group.baseRoot or captured/public reader edges.",
+    "errors_after_apply": "A successful newly constructed root is local original custody until group.currentRoot assumes it. If later preparation fails before that handoff, original new constructor must be aborted on that error path, while previous group private custody remains identifiable. Zipper apply errors already run original constructor Abort; avoid a second disposal of such a failed output.",
+    "group_abandon": "Unfinished/failed group must dispose its exact current privately owned unbound constructor as well as DATA tracker allocations, including errors before final publication. Preserve final candidate/coordinator original cleanup authority after Bind/Detach.",
+    "final_transfer": "Transfer of SAME final transaction happens at actual candidate Bind/Detach, earlier than durable success. Successful/accepted group cleanup must not dispose it. Error cleanup after that transfer belongs to existing candidate Abandon/recovery, not group root Abort.",
+    "failure_debt": "Propagate Abort errors. Do not clear exact original custody, claim a pending refund or free dependent DATA backing when original PRIMARY disposal has not completed. Preserve existing physical-owner error/debt custody and synchronize actual group state under group.mu; no failure-time registry/allocation or release-all. Exact failure disposition must be reviewed in implementation because the granted workload exercised successful original Abort absence, not injected cleanup errors."
+  },
+  "limitations": [
+    "Diagnostic logging adds observer work/timing; modified source evidence only.",
+    "No retained pointer was dereferenced outside its owning synchronization.",
+    "The probe does not exercise injected Abort/cleanup failures or qualify a repair.",
+    "No global bank-drop/reader finalizer behavior should change."
+  ]
+}
