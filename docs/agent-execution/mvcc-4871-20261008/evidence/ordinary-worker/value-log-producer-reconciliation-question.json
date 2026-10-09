@@ -1,0 +1,20 @@
+{
+  "source": "eb91c243e32b61e31fe36bb585efd9302eb91689",
+  "source_blobs": {
+    "TreeDB/internal/valuelog/writer.go": "bd939cf756ba3b7cd07f1629ddec84655031cb68",
+    "TreeDB/internal/valuelog/stable_resource.go": "567f2501ba5e2fbad5be4467d827d327c6a68870",
+    "TreeDB/internal/valuelog/manager.go": "3d19e408c6fec6d64d1314d4d9c2ad43bb9109ee",
+    "TreeDB/db/vlog_rewrite.go": "0847b7396dd8fbda2f24405a79df1dabdcd311b1"
+  },
+  "question": "Complete original-parent value/leaf production, registration and retirement using existing authority; pair constructors alone insufficient.",
+  "verified_boundaries": [
+    "newFileWriter opens diagnostic path then captures stable parent",
+    "RotateToWithStableResources uses OpenStableChildFile with retained w.stableParent but requires a file-backed initial writer",
+    "Manager.RegisterSegment opens diagnostic path; exact-file/parent registration entrypoint is absent",
+    "removeStableSegmentFileOnce(path,identity,capturedParent...) reuses existing identity/quarantine authority; openStableDeleteRoot compares the expected retained parent and fails closed if rebound",
+    "Writer.Close currently clears f/stableParent and pendingStableSuccessor, so new constructor failure-custody claims must be reconciled with actual close/proof completion rather than assumed"
+  ],
+  "root_authority": "Necessary narrow shared initialization/registration/retirement entrypoints within #5111; no foreign issue/PR adoption or generic namespace/lifecycle redesign. Actual signatures/error-transfer/metadata context remain to be accepted.",
+  "status": "source-bound architectural question; not implementation or independent acceptance",
+  "adviser_limitation": "Follow-up tools were inadvertently prohibited; advice is proposed contract only. Root supplied verified API source boundaries."
+}
