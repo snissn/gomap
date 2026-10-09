@@ -1,0 +1,190 @@
+{
+  "schema_version": "mvcc-4871-execution-overlay/v1",
+  "parent": "https://github.com/snissn/gomap/issues/4871",
+  "historical_graph_sha256": "997017bda8467f3ba9dabfd8604263bcbdf8db185aa8710a98eb0ac3ac1be428",
+  "historical_graph_source": "f3f87717ce50791772543300dc8995e706817b49/docs/agent-handoffs/mvcc-4871-20261008",
+  "acceptance_owner": "/root",
+  "routing": "GPT-6.1 Sol/high independent workers; max2 active; one writer per node; sole root merge",
+  "parent_complete": false,
+  "qualification": "No performance/native or parent acceptance. Historical states retain their original source-bound acceptance; this overlay does not requalify earlier evidence.",
+  "nodes": [
+    {
+      "issue": "snissn/gomap#4872",
+      "state": "merged",
+      "pr": "https://github.com/snissn/gomap/pull/4881",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#4873",
+      "state": "merged",
+      "pr": "https://github.com/snissn/gomap/pull/4882",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4874",
+      "state": "merged",
+      "pr": "https://github.com/snissn/gomap/pull/4884",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/dgraph#40",
+      "state": "merged",
+      "status": "MERGED_ACCEPTED_NATIVE_CI_AND_LANDED_INPUT_APPLICABILITY",
+      "pr": "https://github.com/snissn/dgraph/pull/41",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/dgraph#36",
+      "state": "fix-needed",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#4875",
+      "state": "pending",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4876",
+      "state": "pending",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4877",
+      "state": "pending",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4878",
+      "state": "blocked",
+      "status": "ORIGINAL_NATIVE_SOURCE_FIXTURE_CUSTODY_MISSING",
+      "owner": "/root",
+      "blockers": [
+        "ordinary#5111 immature",
+        "original terminal source/protected fixture bytes unavailable"
+      ],
+      "next_action": "Artifact holder mikers exports original .111 terminal source, both protected fixtures, final manifests to accessible location; root verifies frozen identities before activation.",
+      "evidence": "https://github.com/snissn/gomap/issues/4871#issuecomment-6070352664"
+    },
+    {
+      "issue": "snissn/dgraph#37",
+      "state": "blocked",
+      "owner": null
+    },
+    {
+      "issue": "snissn/gomap#4879",
+      "state": "blocked",
+      "owner": null
+    },
+    {
+      "issue": "snissn/dgraph#38",
+      "state": "merged",
+      "pr": "https://github.com/snissn/dgraph/pull/39",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5011",
+      "state": "merged",
+      "status": "merged",
+      "pr": 5014,
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5019",
+      "state": "merged",
+      "status": "MERGED_ACTUAL_LANDED_SOURCE_AND_POLICY_PROVEN",
+      "pr": "https://github.com/snissn/gomap/pull/5020",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5036",
+      "state": "merged",
+      "status": "MERGED_TOOLING_ONLY_LANDED_SOURCE_IDENTITIES_VERIFIED",
+      "pr": "https://github.com/snissn/gomap/pull/5043",
+      "owner": "/root"
+    },
+    {
+      "issue": "snissn/gomap#5111",
+      "state": "fix-needed",
+      "status": "ACTUAL_CORRECTNESS_AND_RAW_PATH_GATES_RED",
+      "pr": "https://github.com/snissn/gomap/pull/5127",
+      "owner": "/root/ordinary_5111",
+      "acceptance_owner": "/root",
+      "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+      "next_action": "Freeze and qualify exact-parent owned DATA/PRIMARY constructors and operation-parent custody, then finish exact-handle value/leaf producer registration and strict source cleanup before COMMIT. Format-consumer, fault, terminal lease, physical reclaim, Windows and performance gates remain open.",
+      "decisions": [
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6070993290",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071312164",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071379420",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071399552",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071608514",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071833626"
+      ],
+      "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
+      "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
+      "component_review": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070860571",
+      "component_acceptance": "Versioned stale-build witness and four private one-shot lifetime callers only; not whole PR or performance",
+      "blockers": [
+        {
+          "scope": "Windows offline V6 pair replacement",
+          "owner": "root coordinator reconciles existing namespace/R1 owner",
+          "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
+          "next_action": "Accepted supported exact-parent closed-file rename/remove/persistence producer with identity/rebind/crash evidence; no path fallback or typed-error suppression"
+        }
+      ],
+      "consumer_source_freeze": "8d0b7a1a0882e3ec0ddc4d6b961167c682244519",
+      "consumer_tree": "5ebe6154e6d31d9bb8f2eb9833f1420592d49efc",
+      "consumer_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071082310",
+      "landed_harness_source_freeze": "f2ff79bd4b06118f4006d4ca48bcdab4adce0e9d",
+      "landed_harness_tree": "27325b1bc8abe3e7924d7d6bb19db6b65def067f",
+      "offline_component_status": "Immutable Linux mechanism normal packet passes; exact-parent owned constructor reconciliation underway. Component-only: no race/vet/docs/policy/PR/performance acceptance.",
+      "offline_mechanism_source_freeze": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
+      "offline_mechanism_tree": "b391836d4b9313321222b8e53c5cb69094b0dced",
+      "offline_mechanism_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071421037",
+      "value_log_producer_reconciliation": "Proposed complete contract accepted; actual constructor/registration/rotation/retirement and governing strict Close outcomes must be implemented and tested. Source-bound API question retained in 2ad620843b79442798243f474df53148cf26bf64."
+    },
+    {
+      "issue": "snissn/gomap#5118",
+      "state": "merged",
+      "status": "MERGED_EXACT_HEAD_REVIEW_AND_ALL49_REQUIRED_CI_GREEN",
+      "pr": "https://github.com/snissn/gomap/pull/5126",
+      "owner": "/root",
+      "head": "72f5692a5c93d6355589b846ebfcf64ab254cc9a",
+      "next_action": "Ordinary writer integrates actual landed harness at coherent candidate boundary; rebuild/freeze before source-bound public qualification.",
+      "evidence": "https://github.com/snissn/gomap/pull/5126#issuecomment-6070928381",
+      "merge": "3f87d74b98e8b1e809d151611be03785f85e2283"
+    }
+  ],
+  "preserved_holds": [
+    "M3 performance HOLDs",
+    "M4/M6 conditional inactive",
+    "M5 waits native and causal GO",
+    "M8 blocked by native",
+    "5022 discussion hold",
+    "foreign C3/R1 ownership"
+  ],
+  "evidence_branch": "codex/mvcc-4871-execution-20261008",
+  "cleanup": {
+    "owner": "/root",
+    "state": "blocked-root-verification-failed",
+    "initial_worker_receipt": "evidence/cleanup-released-output-receipt.json",
+    "initial_deletion_joined": true,
+    "root_current_absence": false,
+    "cause": "Five directories reappeared with different inodes after verified deletion; exact writer unproven. Workspace sync script observed; foreign process untouched.",
+    "next_action": "Environment-owned replication must support propagation of exact task-owned deletions; re-inventory/release recreated contents before any further cleanup. No global sync or foreign process mutation authorized.",
+    "released_paths": [
+      "harness-5118",
+      "qualification-baseline",
+      "qualification-candidate",
+      "qualification-binaries",
+      "execution-artifact-staging"
+    ],
+    "registered_worktrees": [
+      "gomap-execution",
+      "ordinary-5111"
+    ],
+    "protected_paths_retained": true
+  },
+  "updated_at": "2026-10-09T00:36:02.668Z"
+}
