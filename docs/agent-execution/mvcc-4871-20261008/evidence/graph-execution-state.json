@@ -123,7 +123,8 @@
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071970325",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6072246242",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6072281520",
-        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072478660"
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072478660",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072615707"
       ],
       "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
       "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
@@ -146,7 +147,7 @@
       "offline_mechanism_source_freeze": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
       "offline_mechanism_tree": "b391836d4b9313321222b8e53c5cb69094b0dced",
       "offline_mechanism_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071421037",
-      "value_log_producer_reconciliation": "Root accepts strict opt-in on SAME original Manager before DB.Close, same cached completion/debt and failed operand custody, owned Writer strict outcome, synchronous exact Writer file borrow bridge for normal Manager registration before rotation, source-governed preborn child file/name charge. Sole writer implementing coherent packet; no acceptance yet.",
+      "value_log_producer_reconciliation": "Sole writer current dirty packet: strict original Manager/File/Writer cleanup at real offline quiescent caller; exact borrowed original-parent namespace capture; admitted shared validation; SAME quarantine via exclusive File-relative operations with observed Close and bounded0/1/>1/error census. SourceOwner closes beforeCOMMIT, so SAME preborn namespace scope must reserve finite later-operation capacity BEFOREsourceClose; no growth of closedOwner/newregistry/produceralive/fakefiledebt. Full fresh source/19obligation validation not yet frozen.",
       "cow_terminal_custody_inquiry": {
         "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
         "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
@@ -211,6 +212,20 @@
         "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072478660",
         "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/owned-retirement-protocol-source-audit.json",
         "finding": "Original protocol+close visibility+crosparent helpers+finite census guards sourcebound; selected implementation sufficiency unproven."
+      },
+      "post_source_close_operation_capacity": {
+        "status": "ACCEPTED_CONTRACT_IMPLEMENTATION_AND_FINITE_CENSUS_PROOF_OWED",
+        "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072615707",
+        "owner": "/root/ordinary_5111",
+        "scope": "SAME existing offline indexGen namespace phase",
+        "constraints": [
+          "ClosedOwner/AddPending rules unchanged",
+          "Actual reserved capacity distinct from live files and real failed operands",
+          "Original known parent/ID/deterministic names establish finite slot/name/callback/buffer bounds beforeClose",
+          "Post-close operations only consume preadmitted original plan; unavailablecapacity failsbeforeeffects",
+          "Real quiescentClose before slotreuse; full finalscopecompletion before once-refund",
+          "Originalpartialdebt retained on same scope, no newowner/registry/lifecycle/IOabi/Windowsfallback/nativeactivation"
+        ]
       }
     },
     {
@@ -270,5 +285,5 @@
       "prior_five_paths": "Previous release/reappearance blocker remains unchanged; no repeated deletion."
     }
   },
-  "updated_at": "2026-10-09T01:47:40.147Z"
+  "updated_at": "2026-10-09T01:52:32.202Z"
 }
