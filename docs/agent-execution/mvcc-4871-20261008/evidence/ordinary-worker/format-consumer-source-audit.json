@@ -1,0 +1,162 @@
+{
+  "source": "eb91c243e32b61e31fe36bb585efd9302eb91689",
+  "source_blobs": {
+    "TreeDB/maintenance_leaf_vlog_test.go": "de7d6ae34d2797efe2b467382bbb080817304dbd",
+    "TreeDB/leaf_generation_gc_test.go": "a80b3726343cc09d02ed306e03261bb1b8c3cdb3",
+    "TreeDB/leaf_generation_plan_pack_test.go": "d5def731427bd4539cc938464ecd35038d5a4111",
+    "TreeDB/db/primary_capsule_recovery_v6.go": "2b5e12dc4ebe376696f3708fdba392e19f759f97",
+    "TreeDB/internal/rootpublication/primary_capsule_v6.go": "a4fac0131dc3d5a13c4ea78f26e95daacd0ae833",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "d530adfb6213f902628c34ddeb6afc19f3cc8970",
+    "TreeDB/node/primary_directory_v1.go": "7a83badc4e581a84df425daf927dbf7b1bbd951a",
+    "TreeDB/db/recoverable_root_set.go": "5a91d14361ec6c9f32d13ffaa99a318e36fcac02"
+  },
+  "status": "root source-only consumer audit; no implementation or qualification",
+  "preserved_failure": "owned-pair-public-consumers.log: inline leaf rewrite fails in readMainMeta before offline operation; DB cases pass, collections no tests is not coverage",
+  "callers": [
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 145,
+      "function": "TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites",
+      "call": "metaBefore := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 146,
+      "function": "TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites",
+      "call": "requireMainRootLeafLogChildren(t, dir, metaBefore.UserRootPageID)"
+    },
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 166,
+      "function": "TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites",
+      "call": "metaAfter := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 167,
+      "function": "TestVacuumIndexOnline_LeafPagesInValueLog_PreservesLeafRefWrites",
+      "call": "requireMainRootLeafLogChildren(t, dir, metaAfter.UserRootPageID)"
+    },
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 462,
+      "function": "TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline",
+      "call": "metaBefore := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 463,
+      "function": "TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline",
+      "call": "requireMainRootLeafLogChildren(t, dir, metaBefore.UserRootPageID)"
+    },
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 473,
+      "function": "TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline",
+      "call": "metaAfter := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/maintenance_leaf_vlog_test.go",
+      "line": 474,
+      "function": "TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline",
+      "call": "requireMainRootLeafLogChildren(t, dir, metaAfter.UserRootPageID)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_gc_test.go",
+      "line": 32,
+      "function": "TestLeafGenerationGC_CachedModeCheckpointsBeforeDryRun",
+      "call": "metaBeforeWrites := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_gc_test.go",
+      "line": 40,
+      "function": "TestLeafGenerationGC_CachedModeCheckpointsBeforeDryRun",
+      "call": "metaBeforeGC := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_gc_test.go",
+      "line": 55,
+      "function": "TestLeafGenerationGC_CachedModeCheckpointsBeforeDryRun",
+      "call": "metaAfterGC := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 32,
+      "function": "TestLeafGenerationPlan_CachedModeCheckpointsBeforePlan",
+      "call": "metaBeforeWrites := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 40,
+      "function": "TestLeafGenerationPlan_CachedModeCheckpointsBeforePlan",
+      "call": "metaBeforePlan := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 55,
+      "function": "TestLeafGenerationPlan_CachedModeCheckpointsBeforePlan",
+      "call": "metaAfterPlan := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 79,
+      "function": "TestLeafGenerationPack_CachedModeCheckpointsBeforeNoOpPack",
+      "call": "metaBeforeWrites := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 87,
+      "function": "TestLeafGenerationPack_CachedModeCheckpointsBeforeNoOpPack",
+      "call": "metaBeforePack := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 102,
+      "function": "TestLeafGenerationPack_CachedModeCheckpointsBeforeNoOpPack",
+      "call": "metaAfterPack := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 126,
+      "function": "TestLeafGenerationPackFromPlan_CachedModeCheckpointsBeforeSelectionError",
+      "call": "metaBeforeWrites := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 134,
+      "function": "TestLeafGenerationPackFromPlan_CachedModeCheckpointsBeforeSelectionError",
+      "call": "metaBefore := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 146,
+      "function": "TestLeafGenerationPackFromPlan_CachedModeCheckpointsBeforeSelectionError",
+      "call": "metaAfter := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 170,
+      "function": "TestLeafGenerationPackRunOnce_CachedModeCheckpointsBeforeSkip",
+      "call": "metaBeforeWrites := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 178,
+      "function": "TestLeafGenerationPackRunOnce_CachedModeCheckpointsBeforeSkip",
+      "call": "metaBefore := readMainMeta(t, dir)"
+    },
+    {
+      "path": "TreeDB/leaf_generation_plan_pack_test.go",
+      "line": 196,
+      "function": "TestLeafGenerationPackRunOnce_CachedModeCheckpointsBeforeSkip",
+      "call": "metaAfter := readMainMeta(t, dir)"
+    }
+  ],
+  "contracts": [
+    "Legacy DATA META checksum/record-digest oracle stays valid for its original fixture; V6 requires genuine fixed complete capsule authority and its actual DATA/PRIMARY operands. DATA META and embedded parents cannot become V6 selector candidates.",
+    "Validate complete V6 physical closure and agree with actual public ReadOnly selection; keep corruption/fallback/refusal negative cases and close all original read-only owners.",
+    "The V6 stored UserRootPageID and copied read-root identity are not DATA page offsets. Resolve physical base and components through the selected directory. Do not relabel root IDs or call Get alone to replace physical assertions.",
+    "Before/after leaf-log child and actual pointer closure assertions remain, including leaf-only inline values. Preserve RecordsCopied/BytesAfter assertions and strengthen reopened values from length to complete bytes.",
+    "Cached Plan/GC/Pack helper callers compare durable CommitSeq before/after maintenance; public read-only inspection must not flush cached writes or mutate source files."
+  ]
+}
