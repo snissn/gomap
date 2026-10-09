@@ -1,0 +1,16 @@
+{
+  "source-archive.tar": "867cb39547aa48ee52d7e501ce2c48a333187199636947aa2c8768875f5e0ab0",
+  "overlay.json": "a56d04037ab7ac1278487f7c52135cec0511e767c064e41493a327102751802f",
+  "run-start.json": "407aa218df34d79940ed0122514878cfb3dc93c27d2f2bf315eb01377c4a8fe3",
+  "owner.overlay.go": "4db045a04162b0b270b422d3f015b162772593a9c6811dbb16a175dadee477ac",
+  "source-route-blob-bindings.json": "1f43fce473eed7b76d3ef76101ad0d61813c97e7eddfa92da3a406c67b2fd46b",
+  "run-exit.json": "ff4705a98568d8ddced6a079ff678461d58abe9502bb3b0ba3c17af652c376fb",
+  "go-env.json": "196906363893541d2d8fb5507876bf2ddbc8411ec0b6c43d1196d2f8ca31221e",
+  "TreeDB_AGENTS.md.immutable": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+  "preparation.json": "4aa0aed474b4501292cb85393a14d12284f0eee0a8f5bf6ab92c9de0ee63086c",
+  "stdout.log": "1635c4f8cc610379e8555778f37b72f49744f844cbac38aea042fafe6a48391c",
+  "inquiry-result.json": "6e4d8eebf8262ba2f171b4a8e835ed3b2f9e4b23b6e724a0a5128eac49aa0ba4",
+  "AGENTS.md.immutable": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+  "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "cow_public_retention_test.overlay.go": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40"
+}

@@ -1,0 +1,19 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "source_archive_sha256": "867cb39547aa48ee52d7e501ce2c48a333187199636947aa2c8768875f5e0ab0",
+  "original_blob_bindings": {
+    "TreeDB/internal/retainedalloc/owner.go": "4fdfaba0624c259f19e0da3a65db6903a8943dc0",
+    "TreeDB/cow_public_retention_test.go": "c8036d8ac257ecb0e1db72b23aaccfaacf1d7ace",
+    "AGENTS.md": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+    "TreeDB/AGENTS.md": "13811b724a980dddad76b3e4c12b6403214b8069"
+  },
+  "overlay_scope": "read-only owner-mutex snapshot and original-owner before/after publicClose logs; modified diagnostic source only; unchanged limits/workload/assertions",
+  "files_sha256": {
+    "source-archive.tar": "867cb39547aa48ee52d7e501ce2c48a333187199636947aa2c8768875f5e0ab0",
+    "overlay.json": "a56d04037ab7ac1278487f7c52135cec0511e767c064e41493a327102751802f",
+    "owner.overlay.go": "4db045a04162b0b270b422d3f015b162772593a9c6811dbb16a175dadee477ac",
+    "TreeDB_AGENTS.md.immutable": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "AGENTS.md.immutable": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "cow_public_retention_test.overlay.go": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40"
+  }
+}

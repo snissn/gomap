@@ -1,0 +1,28 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "paths": {
+    "TreeDB/caching/cow_cut.go": "7a6db3ce470d7bca55e110d09e350817156fff4a",
+    "TreeDB/caching/cow_flush.go": "1a6ca8bf6ff81395f7a69133dafce599fb40f49b",
+    "TreeDB/caching/cow_resources.go": "3977e70ecc8ffc6330b4a9c38fee7a7fd62f5650",
+    "TreeDB/db/snapshot_primary_retention.go": "c46086fe111430a900e772bd703cfc655d2d1e26",
+    "TreeDB/db/db.go": "d023a0a8749078bf58c7848ce0e5b7b277a6e8fd",
+    "TreeDB/db/primary_arena_owner_v5.go": "9b31ae90215f79b5b0f1679e8d39e5544245c320",
+    "TreeDB/db/primary_bank_construction_v5.go": "a2ee5c1c87190ce75015ffcd2316689669af5004",
+    "TreeDB/db/primary_dependency_v5.go": "51762b545ae9be6a8f1bbde443ddacb39447d778",
+    "TreeDB/db/primary_runtime_metadata.go": "a8b4df55c2e8470ca2ba48e8ea71e9224a2cbfe3",
+    "TreeDB/db/root_publication_activation.go": "9ba10bdfc07ed0cff76be608bb70faa14f945a27",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "fbfa3f0cdf236dbf8fbb857ab6296d68a2add2e8",
+    "TreeDB/db/durable_primary_runtime_v5.go": "d514f63e0faf65d8dacc4fc07ed2a2c48774c83e",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "b92cbc22d37c54814c1d1ac148d4c164aea4038e",
+    "TreeDB/internal/rootpublication/resource_allocation.go": "8454f148086423f4622c8b296b4edda199f04d8d",
+    "TreeDB/internal/rootpublication/resource_import_allocation.go": "8f90ac67660a1bfb5b0ff20bb1d2796614e0730b",
+    "TreeDB/internal/primaryarena/arena.go": "40dfa2e4b3dc4ecc6998a9556ccb8e0cf6b76c4b",
+    "TreeDB/db/stable_pager_owned_operations.go": "c80c4b62b9511aa744fba857e5fad6a255aa5254",
+    "TreeDB/internal/rootpublication/resource_original_cleanup.go": "0145445a1a595152fc73711020d96bf88a36ce6b",
+    "TreeDB/internal/rootpublication/resource_import_directory.go": "e68d18124e3a06cff79800f184634ddf2b4f4a11",
+    "TreeDB/db/index_gen.go": "42a12bab42cfe3d8b6ec23c4a30ef8eb5340a4ed",
+    "TreeDB/db/durable_root_runtime.go": "066d7620ddec7a8cd898c54a9fe2da47c4b890e2",
+    "TreeDB/internal/rootpublication/resource_manifest_allocation.go": "3814b260ff891cfb5086510b6be8be447431dd65",
+    "TreeDB/db/primary_offline_pair_v6.go": "1a0d8c36f3ead48e4bdd8d07dd525cec0e722a28"
+  }
+}

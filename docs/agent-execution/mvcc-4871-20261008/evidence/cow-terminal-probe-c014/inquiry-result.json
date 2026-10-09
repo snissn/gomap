@@ -1,0 +1,150 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "outcome": "diagnostic inquiry complete; original terminal integration assertion remains RED",
+  "qualification": "one count1 original no_wal_fast workload with two source overlays for read-only owner-mutex diagnostics; not unmodified production source qualification",
+  "original_primary_before": {
+    "Bytes": 297280,
+    "Baseline": 41600,
+    "Controls": 96,
+    "Pending": 11392,
+    "Closed": false,
+    "Retired": false,
+    "CleanupFailed": false,
+    "BindingCount": 1,
+    "BindingRefs": 1,
+    "ProducerBindings": 1
+  },
+  "original_primary_after": {
+    "Bytes": 49344,
+    "Baseline": 41600,
+    "Controls": 64,
+    "Pending": 7680,
+    "Closed": true,
+    "Retired": false,
+    "CleanupFailed": false,
+    "BindingCount": 1,
+    "BindingRefs": 0,
+    "ProducerBindings": 0
+  },
+  "original_registry_after": {
+    "Bytes": 0,
+    "Baseline": 0,
+    "Controls": 0,
+    "Pending": 0,
+    "Closed": true,
+    "Retired": false,
+    "CleanupFailed": false,
+    "BindingCount": 0,
+    "BindingRefs": 0,
+    "ProducerBindings": 0
+  },
+  "proven": [
+    "The SAME captured original PRIMARY has terminal pending capacity 7680.",
+    "No original PRIMARY binding enrollment refs or producer flag remain at the synchronized after-Close snapshot.",
+    "Its scalar equality is Bytes = Baseline + Controls + Pending = 41600 + 64 + 7680.",
+    "Owner.Close explicitly retains baseline/controls/pending and skips closed-binding cleanup while pending is nonzero; this explains the remaining lease category.",
+    "The SAME original registry is fully zero at its synchronized after-Close snapshot."
+  ],
+  "unproven": [
+    "No allocation object or missing RemovePending call has been identified by this scalar probe.",
+    "No capacity magnitude identifies runtime/seal/resource-node/closure backing ownership.",
+    "This diagnostic modified-source run is not an unmodified production acceptance gate."
+  ],
+  "source_routes": [
+    {
+      "route": "COW startup/handoff admission -> EnrollPair -> Snapshot.AdoptPrimaryMetadataEnrollment -> ActivatePrimaryMetadataProducer -> finalizer.CloseAfterCleanup",
+      "sources": [
+        "TreeDB/caching/cow_cut.go:125-236,585-600",
+        "TreeDB/caching/cow_flush.go:25-105",
+        "TreeDB/db/snapshot_primary_retention.go",
+        "TreeDB/db/db.go:2140-2230"
+      ],
+      "status": "exact shared binding owner route; terminal refs/producer now proven zero"
+    },
+    {
+      "route": "Dictionary/side-resource borrowing -> admitCOWSnapshotRetention -> closure metadata.Close + external lease.Close",
+      "sources": [
+        "TreeDB/caching/cow_resources.go:120-128"
+      ],
+      "status": "source route; no terminal handle demonstrated"
+    },
+    {
+      "route": "primaryArenaOwnerV5 constructor and namespace parent AddPending -> last owner.releaseWithOutcome -> arena.Close then clearNamespace -> RemovePending",
+      "sources": [
+        "TreeDB/db/primary_arena_owner_v5.go:43,102,126"
+      ],
+      "status": "source matching release exists; no missing release demonstrated"
+    },
+    {
+      "route": "Runtime AddPending descriptor + grown arrays -> runtime.release after physical index close -> RemovePending(metadataCharge)",
+      "sources": [
+        "TreeDB/db/root_publication_activation.go:327-341,1778-1805",
+        "TreeDB/db/primary_runtime_metadata.go:41-52",
+        "TreeDB/db/db.go:3250-3358"
+      ],
+      "status": "source matching release exists; pending ownership not attributed"
+    },
+    {
+      "route": "Construction transaction AddPending + visibility/install metadata + promotion -> Finish/Abort/Recovery RemovePending(c.metadataCharge); transferred promotion image becomes bank metadata via TransferPending",
+      "sources": [
+        "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go:41-47,134,171,205-211,298,373",
+        "TreeDB/db/root_publication_activation.go:408,481,783-810,904"
+      ],
+      "status": "source matching terminal routes exist; no missing call proven"
+    },
+    {
+      "route": "Primary seal AddPending -> successful commitPrimarySealV5 retires exact seal -> seal.release -> RemovePending(seal.metadataCharge); construction refs and scratch buffers refund through release/defer",
+      "sources": [
+        "TreeDB/db/primary_capsule_runtime_v6.go:197-203",
+        "TreeDB/db/durable_primary_runtime_v5.go:730-737,755-783",
+        "TreeDB/db/root_publication_activation.go:240-265",
+        "TreeDB/db/primary_bank_construction_v5.go:33-38,59-68,117"
+      ],
+      "status": "successful selected primary route does refund; no blanket missing-seal release proven"
+    },
+    {
+      "route": "Selected/imported stable resource nodes, headers, pinned backing and namespace/pager callbacks AddPending -> real last-reference cleanup -> resourceAllocation.refund / backing release / callback disposal RemovePending",
+      "sources": [
+        "TreeDB/internal/rootpublication/resource_allocation.go:34,77",
+        "TreeDB/internal/rootpublication/resource_import_allocation.go:44-51",
+        "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+        "TreeDB/db/stable_pager_owned_operations.go:39-50,169"
+      ],
+      "status": "candidate pending lifetime family; no specific retained operand proven"
+    }
+  ],
+  "next_action": "Trace real remaining pending-capacity owners under their own existing synchronization; repair only proven missing original disposal. Do not add release-all, new authority, production telemetry or widen budgets.",
+  "close_lifecycle_surviving_operand_assessment": [
+    {
+      "operand": "original runtime metadataCharge plus seals/debt/visibleMembers backing",
+      "cleanup": "closeAfterHooks retains local rootRuntime; after physical index close rootRuntime.release takes runtime.mu, clears actual pointers, sets metadataCharge0 and calls original primary RemovePending",
+      "survival": "Cannot attribute debt without actual original runtime pointer/metadataCharge at release; source has matching refund"
+    },
+    {
+      "operand": "active/retired primary seal metadataCharge, owned manifest and bank-construction custody",
+      "cleanup": "commitPrimarySealV5 removes exact successful/older seals into retired then calls s.release; runtime.release similarly releases remaining seals; seal.release scrubs primary/prefix/manifest/prepared/base and RemovePending; manifest.ReleaseOwnedMetadataV1 is metadataMu-protected and drops real allocation edge",
+      "survival": "Source matching routes exist; no exact retained seal/manifest shown"
+    },
+    {
+      "operand": "constructed primary transactions including member/install callback/promotion descriptor metadata",
+      "cleanup": "successful ordinary Finish clears constructionV6 and RemovePending(c.metadataCharge); construction abort and released recovery handoff have matching refunds; transferred image is converted to arena bank metadata instead of left pending",
+      "survival": "Requires exact transaction/arena pointer and constructionV6 metadataCharge under transaction.mu; source cannot assert all real transactions reached those routes"
+    },
+    {
+      "operand": "dependency leases and bank claims",
+      "cleanup": "releaseOutcome/release drop bank refs, release original physical owner, scrub aliases, then RemovePending; failure paths retain intrusive custody and call CleanupFailed",
+      "survival": "No exact surviving lease/claim shown; successful physicalClose and CleanupFailedfalse narrow intentional failed-custody cases but do not identify an object"
+    },
+    {
+      "operand": "original primary/index namespace parent and physical owner descriptor",
+      "cleanup": "indexGen.close and primaryArenaOwnerV5.clearNamespaceV5 remove parent charge after successful file close; primaryArenaOwnerV5.releaseWithOutcome calls arena.Close then removes descriptor charge if no failure",
+      "survival": "PhysicalClosedtrue confirms arena.Close reached; actual descriptor/parent fields would discriminate any missed phase; no missing phase proven"
+    },
+    {
+      "operand": "owned stable-resource metadata/backings and imported proof resource aliases",
+      "cleanup": "releaseDurableRootResourcesV1 releases slotResources/proofResources and drops slot/state roots before closeAllIndexes; later rootRuntime and rootHandoff release own aliases; each actual last node/header backing must eventually invoke RemovePending",
+      "survival": "Still a possible pending alias family after higher-level discovery pointers were removed; no specific pointer established"
+    }
+  ],
+  "next_owner_pointer_discriminator_proposal": "If another inquiry is selected, snapshot actual release operands at existing synchronized release boundaries, comparing each MetadataOwner pointer with SAME originalPrimary. First rootRuntime.release under runtime.mu: runtime pointer, runtime.idx.primary.MetadataOwner pointer, metadataCharge, seal pointers and their metadataCharge/released, array lengths/capacities, visibleResources pointer. Then under exact transaction.mu report constructionV6 arena.MetadataOwner pointer and metadataCharge; under exact manifest.metadataMu report selected/released/allocation pointer and allocation owner/charge, and corresponding claim/namespace locks. Report real identities and disposition before/after their existing release; no collection of new authority, no release-all, no magnitude-based attribution. This is a proposal, not authorization or executed evidence."
+}

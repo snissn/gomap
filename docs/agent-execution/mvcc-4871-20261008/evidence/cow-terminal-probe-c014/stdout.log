@@ -1,0 +1,10 @@
+=== RUN   TestCOWPublicRetentionRefusalDrainAndResume
+=== RUN   TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast
+    cow_public_retention_test.go:188: COW_OVERLAY_ORIGINAL_OWNER_DIAGNOSTIC before_publicClose primary=0x776622c20d0 snapshot={Bytes:297280 Baseline:41600 Controls:96 Pending:11392 Closed:false Retired:false CleanupFailed:false BindingCount:1 BindingRefs:1 ProducerBindings:1} registry=0x77662122690 snapshot={Bytes:2656 Baseline:512 Controls:96 Pending:0 Closed:false Retired:false CleanupFailed:false BindingCount:1 BindingRefs:1 ProducerBindings:1}
+    cow_public_retention_test.go:194: COW_OVERLAY_ORIGINAL_OWNER_DIAGNOSTIC after_publicClose primary=0x776622c20d0 snapshot={Bytes:49344 Baseline:41600 Controls:64 Pending:7680 Closed:true Retired:false CleanupFailed:false BindingCount:1 BindingRefs:0 ProducerBindings:0} registry=0x77662122690 snapshot={Bytes:0 Baseline:0 Controls:0 Pending:0 Closed:true Retired:false CleanupFailed:false BindingCount:0 BindingRefs:0 ProducerBindings:0}
+    cow_public_retention_test.go:202: closed integration retained charges: {TotalBytes:49632 HistoryBytes:0 ReservedBytes:49376 RetiredBytes:0 PeakBytes:2088160 ControlBytes:256 DeferredBytes:0 ExternalBytes:49376 Views:0 Generations:0 Sources:0 ExternalLeases:1}; original primary Bytes=49344 PhysicalClosed=true; original registry Bytes=0 PhysicalClosed=true Stats={ActivePins:0 ActiveIdentities:0 ActiveStableNamespaceLinks:0} CachedStableDirectoryLinks=0 CleanupError=<nil>
+--- FAIL: TestCOWPublicRetentionRefusalDrainAndResume (1.43s)
+    --- FAIL: TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast (1.43s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	1.432s
+FAIL

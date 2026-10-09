@@ -149,7 +149,18 @@
         "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
         "finding": "Same original PRIMARY is physically closed with49344 retained bytes; same original registry is closed and fully drained. Pending storage vs outstanding enrollment not yet discriminated. No production cleanup change, no whole-PR or performance acceptance.",
         "raw_packet": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/cow-terminal-original-owner-diagnostic-checkpoint.json",
-        "acceptance": "Diagnostic inquiry narrowed actual owner only; terminal-drain gate RED"
+        "acceptance": "Diagnostic inquiry narrowed actual owner only; terminal-drain gate RED",
+        "pending_category": {
+          "original_source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+          "modified_overlay": true,
+          "exit_code": 1,
+          "pending": 7680,
+          "binding_refs": 0,
+          "producer_bindings": 0,
+          "actual_operand": "UNPROVEN",
+          "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-terminal-probe-c014",
+          "root_acceptance": "Inquiry category discrimination only; terminal zero-drain remains RED"
+        }
       },
       "owned_pair_constructor_source_freeze": "387c09b23c8f472df59ddaab1c6685127a512dc1",
       "owned_pair_constructor_tree": "df2ae2e741d7f764478006a209021bb287e85b39",
@@ -197,5 +208,5 @@
     ],
     "protected_paths_retained": true
   },
-  "updated_at": "2026-10-09T01:05:48.689Z"
+  "updated_at": "2026-10-09T01:13:14.331Z"
 }
