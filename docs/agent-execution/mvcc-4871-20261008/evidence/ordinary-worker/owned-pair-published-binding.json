@@ -9,8 +9,8 @@
     "status": "ALL Git blob SHA/SHA256/byte counts independently match immutable local head and adapter-created source blobs; reconstructed published tree equals local tree"
   },
   "raw_receipt_checks": {
-    "packet_bound_count": 20,
-    "all_raw_files": 26,
+    "packet_bound_count": 19,
+    "all_raw_files": 25,
     "status": "ALL packet-bound raw bytes/SHA256 match receipt, plus six historical extra raw outputs kept without new argv/env/source qualification",
     "extra_raw": [
       "evidence/ordinary-worker/owned-constructor-vet.log",
