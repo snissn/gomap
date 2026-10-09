@@ -1,0 +1,44 @@
+{
+  "source": "eb91c243e32b61e31fe36bb585efd9302eb91689",
+  "source_blobs": {
+    "TreeDB/cow_public_retention_test.go": "c43d71aef19aab467e6546b3ec359e8f5cdf4a2d",
+    "TreeDB/cow_public_contract_test.go": "39eb391885f81c7a912f240af66be426d1b1296a",
+    "TreeDB/caching/cow_cut.go": "7a6db3ce470d7bca55e110d09e350817156fff4a",
+    "TreeDB/caching/cow_flush.go": "1a6ca8bf6ff81395f7a69133dafce599fb40f49b",
+    "TreeDB/caching/cow_checkpoint.go": "dd4fe91e45e608c4a3436fe738dda12849561b3b",
+    "TreeDB/db/db.go": "d023a0a8749078bf58c7848ce0e5b7b277a6e8fd",
+    "TreeDB/db/primary_arena_owner_v5.go": "9b31ae90215f79b5b0f1679e8d39e5544245c320",
+    "TreeDB/db/root_publication_activation.go": "9ba10bdfc07ed0cff76be608bb70faa14f945a27",
+    "TreeDB/db/durable_root_runtime.go": "066d7620ddec7a8cd898c54a9fe2da47c4b890e2",
+    "TreeDB/internal/retainedalloc/owner.go": "4fdfaba0624c259f19e0da3a65db6903a8943dc0",
+    "TreeDB/internal/rootpublication/pin_registry.go": "e6b2fc69c396d98a094abfd0fdf43a286f1ec53b"
+  },
+  "adviser": "/root/cow_terminal_custody_adviser; requested GPT-6.1 Sol/high; source-only; no edits/builds/tests/GitHub writes/spawns",
+  "question": "Attribute actual surviving final-close external lease in existing public NoWAL COW refusal/drain/resume fixture.",
+  "original_failure": {
+    "source": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
+    "job": 113567766584,
+    "test": "TestCOWPublicRetentionRefusalDrainAndResume/no_wal_fast",
+    "TotalBytes": 49632,
+    "ReservedBytes": 49376,
+    "ControlBytes": 256,
+    "ExternalBytes": 49376,
+    "ExternalLeases": 1,
+    "Views": 0,
+    "Generations": 0,
+    "Sources": 0
+  },
+  "conclusion": "Inconclusive static attribution. Neither exact leaked operand nor missing RemovePending verified; scalar bytes do not identify PRIMARY versus registry owner.",
+  "verified_trace": [
+    "Backend allocation admission supplies exact primaryRoot.arena.MetadataOwner and valueLogIdentityPins.MetadataOwner. COW startup/checkpoint handoff EnrollPair adopts both and ActivateProducer pins both budget bindings until actual Owner.Close.",
+    "Last backend Snapshot finalization disposes actual owner/resources before closing paired enrollment. Snapshot release alone cannot close producer bindings.",
+    "PRIMARY physical Close may leave pending or capture backing; registry Close may remain physically open while actual state/observer/namespace/failure custody survives.",
+    "Runtime/seal pending removal exists; original observation cleanup explicitly Unobserve. No omission established from static inspection."
+  ],
+  "accepted_next_discriminator": [
+    "At the next coherent source snapshot, add test-local pointer capture to this unchanged existing public fixture through backend.AcquireSnapshotWithAllocationAdmission; callback copies the two Owner pointers and returns a private sentinel immediately. Verify nil Snapshot and exact sentinel.",
+    "Root verified sentinel return occurs before Snapshot allocation/physical capture at immutable db.go admission branch. Add no Enroll, retained Snapshot, production registry or hot-path instrumentation.",
+    "Repeat before final Close only to verify same owner pair. After actual Close, include each original owner Bytes/PhysicalClosed in existing failure output. If registry survives, include existing Stats/CachedStableDirectoryLinks/CleanupError.",
+    "Run only exact existing no_wal_fast subtest once as a causal normal test with unchanged limits/workload/assertions and exact argv/env/source receipt. Then identify actual pending operand or observer before repairing. No benchmark or correctness/performance acceptance."
+  ]
+}

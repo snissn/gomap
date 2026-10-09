@@ -119,7 +119,8 @@
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071379420",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071399552",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071608514",
-        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071833626"
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071833626",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071970325"
       ],
       "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
       "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
@@ -142,7 +143,12 @@
       "offline_mechanism_source_freeze": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
       "offline_mechanism_tree": "b391836d4b9313321222b8e53c5cb69094b0dced",
       "offline_mechanism_evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071421037",
-      "value_log_producer_reconciliation": "Proposed complete contract accepted; actual constructor/registration/rotation/retirement and governing strict Close outcomes must be implemented and tested. Source-bound API question retained in 2ad620843b79442798243f474df53148cf26bf64."
+      "value_log_producer_reconciliation": "Proposed complete contract accepted; actual constructor/registration/rotation/retirement and governing strict Close outcomes must be implemented and tested. Source-bound API question retained in 2ad620843b79442798243f474df53148cf26bf64.",
+      "cow_terminal_custody_inquiry": {
+        "source": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
+        "finding": "Static owner attribution inconclusive; one fixed original NoWAL public-test discriminator accepted. No implementation or terminal-drain acceptance.",
+        "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6071970325"
+      }
     },
     {
       "issue": "snissn/gomap#5118",
