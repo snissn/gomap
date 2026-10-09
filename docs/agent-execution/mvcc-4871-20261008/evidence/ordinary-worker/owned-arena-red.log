@@ -1,0 +1,6 @@
+# github.com/snissn/gomap/TreeDB/internal/primaryarena [github.com/snissn/gomap/TreeDB/internal/primaryarena.test]
+TreeDB/internal/primaryarena/owned_file_test.go:16:12: undefined: OpenCapsuleOwnedFile
+TreeDB/internal/primaryarena/owned_file_test.go:28:12: undefined: OpenCapsuleOwnedFile
+TreeDB/internal/primaryarena/owned_file_test.go:37:12: undefined: OpenCapsuleOwnedFile
+FAIL	github.com/snissn/gomap/TreeDB/internal/primaryarena [build failed]
+FAIL

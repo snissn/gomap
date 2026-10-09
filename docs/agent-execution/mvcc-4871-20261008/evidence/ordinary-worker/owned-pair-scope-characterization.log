@@ -1,0 +1,10 @@
+PASS
+goleak: Errors on successful test run: found unexpected goroutines:
+[Goroutine 219 in state select, with github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop on top of the stack:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x3521df7ae900)
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/pager/grow.go:55 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 231
+	/workspace/scratch/1ecfdb811b25/ordinary-5111/TreeDB/pager/grow.go:13 +0x116
+]
+FAIL	github.com/snissn/gomap/TreeDB/db	0.597s
+FAIL

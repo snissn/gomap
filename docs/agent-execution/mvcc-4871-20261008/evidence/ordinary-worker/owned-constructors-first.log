@@ -1,0 +1,10 @@
+# github.com/snissn/gomap/TreeDB/internal/primaryarena [github.com/snissn/gomap/TreeDB/internal/primaryarena.test]
+TreeDB/internal/primaryarena/arena.go:188:9: undefined: err
+TreeDB/internal/primaryarena/arena.go:189:11: undefined: err
+TreeDB/internal/primaryarena/arena.go:191:6: undefined: err
+TreeDB/internal/primaryarena/arena.go:192:11: undefined: err
+TreeDB/internal/primaryarena/arena.go:199:6: undefined: err
+TreeDB/internal/primaryarena/arena.go:200:11: undefined: err
+FAIL	github.com/snissn/gomap/TreeDB/internal/primaryarena [build failed]
+ok  	github.com/snissn/gomap/TreeDB/pager	0.003s
+FAIL

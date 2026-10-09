@@ -1,0 +1,6 @@
+# github.com/snissn/gomap/TreeDB/pager [github.com/snissn/gomap/TreeDB/pager.test]
+TreeDB/pager/owned_file_test.go:20:12: undefined: OpenOwnedFileWithOptions
+TreeDB/pager/owned_file_test.go:33:12: undefined: OpenOwnedFileWithOptions
+TreeDB/pager/owned_file_test.go:41:12: undefined: OpenOwnedFileWithOptions
+FAIL	github.com/snissn/gomap/TreeDB/pager [build failed]
+FAIL

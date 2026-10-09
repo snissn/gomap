@@ -1,0 +1,7 @@
+--- FAIL: TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefRoot_WhenValuesInline (0.01s)
+    maintenance_leaf_vlog_test.go:462: no valid durable-root meta pages found in /tmp/TestValueLogRewriteOffline_LeafPagesInValueLog_PreservesLeafRefR590736837/001/maindb/index.db
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.161s
+ok  	github.com/snissn/gomap/TreeDB/db	1.157s
+ok  	github.com/snissn/gomap/TreeDB/collections	0.184s [no tests to run]
+FAIL

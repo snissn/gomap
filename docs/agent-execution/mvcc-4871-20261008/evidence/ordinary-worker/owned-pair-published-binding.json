@@ -1,0 +1,40 @@
+{
+  "local_source": "7e50e4b8f6744fd1251477155ec9c2697ff7f0c9",
+  "published_source": "387c09b23c8f472df59ddaab1c6685127a512dc1",
+  "tree": "df2ae2e741d7f764478006a209021bb287e85b39",
+  "published_parent": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
+  "actual_main_base": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "source_blob_checks": {
+    "count": 15,
+    "status": "ALL Git blob SHA/SHA256/byte counts independently match immutable local head and adapter-created source blobs; reconstructed published tree equals local tree"
+  },
+  "raw_receipt_checks": {
+    "packet_bound_count": 20,
+    "all_raw_files": 26,
+    "status": "ALL packet-bound raw bytes/SHA256 match receipt, plus six historical extra raw outputs kept without new argv/env/source qualification",
+    "extra_raw": [
+      "evidence/ordinary-worker/owned-constructor-vet.log",
+      "evidence/ordinary-worker/owned-constructors-normal.log",
+      "evidence/ordinary-worker/owned-pager-first.log",
+      "evidence/ordinary-worker/owned-pair-first.log",
+      "evidence/ordinary-worker/owned-pair-race.log",
+      "evidence/ordinary-worker/owned-pair-rebind-normal.log"
+    ]
+  },
+  "receipt_original_sha256": "e0f11e731f591c738f91b8f2308fefd1eb0340e5833ce55b35fab4197ecc1d50",
+  "receipt_clarified_sha256": "604bda575fbc7ac338149199bb284aec6b5ca61b148bdbadcae31d115e195f66",
+  "environment_provenance": {
+    "clarificationUTC": "2026-10-09T00:53:24.309480+00:00",
+    "previousReceiptSha256": "e0f11e731f591c738f91b8f2308fefd1eb0340e5833ce55b35fab4197ecc1d50",
+    "recordedRunEnvMeaning": "Explicit settings in each command prefix; original inherited process environment was not captured. No retrospective GOFLAGS injection claim.",
+    "currentVerification": {
+      "shellGOFLAGS": null,
+      "goEnvGOFLAGS": "",
+      "source": "same exec shell whitelist and official go env on clarification date; not evidence of past inherited environment"
+    },
+    "priorCLIFlagApplicability": "Earlier docs-cli-environment-normal explicitly set GOFLAGS=-buildvcs=false for unified CLI subprocess builds after VCS failure; not inferred for these go test/vet commands."
+  },
+  "full_changed_paths": 288,
+  "full_policy_census": "evidence/ordinary-worker/owned-pair-full-policy-census.json",
+  "status": "Immutable mechanism/constructor component checkpoint only. No independent component/whole-PR acceptance, no whole-PR CI or performance acceptance; child file/name and complete value-log/original cleanup gates remain open."
+}
