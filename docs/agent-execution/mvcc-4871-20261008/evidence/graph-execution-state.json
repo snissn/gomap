@@ -292,13 +292,14 @@
         "finding": "SUPPORTED_HANDLE_RELATIVE_VISIBILITY_AND_CALLER_BUFFER_CENSUS_PLAUSIBLE_BUT_DIRECTORY_PERSISTENCE_UNPROVED"
       },
       "readonly_derived_cache_namespace_fix": {
-        "status": "INITIAL_PUBLIC_OPEN_DEFECT_CLAIM_DISPROVED_REAL_SCAN_CLOSE_REACHABILITY_INQUIRY_ACTIVE",
+        "status": "SOURCE_INQUIRY_COMPLETED_NEGATIVE_PROPOSED_PRODUCT_GUARD_TEST_RETIRED",
         "source": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
         "decision": "https://github.com/snissn/gomap/issues/5111#issuecomment-6073567536",
         "owner": "/root/ordinary_5111",
-        "finding": "Public ReadOnly Open uses separate openReadOnly and does not traverse writable init; actual missing/corrupt/stale test correct values with uninitialized clean tracker. Prior initial-open defect claim withdrawn.",
-        "contract": "Check only actual public ReadOnly inspection/scan and selected operation reachability to dirty nonnil tracker then Close persistence. If real demonstrate actual namespace test and guard; otherwise retire proposed defensive guard/test, preserve RED/negative finding.",
-        "correction": "https://github.com/snissn/gomap/issues/5111#issuecomment-6073640329"
+        "finding": "Both public/no-lock ReadOnly constructors omit tracker; only writable Open assigns production tracker. Actual supported readonly scan/Close nil guards prevent cache mutation. Initial-open defect claim disproved.",
+        "contract": "Retire proposed defensive product guard/test; preserve failed actual-public-test expectation and negative source evidence. No forced private initialization, optimization or qualification credit.",
+        "correction": "https://github.com/snissn/gomap/issues/5111#issuecomment-6073640329",
+        "resolution": "https://github.com/snissn/gomap/issues/5111#issuecomment-6073651018"
       }
     },
     {
@@ -358,5 +359,5 @@
       "prior_five_paths": "Previous release/reappearance blocker remains unchanged; no repeated deletion."
     }
   },
-  "updated_at": "2026-10-09T03:25:23.228Z"
+  "updated_at": "2026-10-09T03:26:21.169Z"
 }
