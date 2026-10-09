@@ -1,0 +1,16 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "paths": {
+    "TreeDB/internal/retainedalloc/owner.go": "4fdfaba0624c259f19e0da3a65db6903a8943dc0",
+    "TreeDB/cow_public_retention_test.go": "c8036d8ac257ecb0e1db72b23aaccfaacf1d7ace",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "b92cbc22d37c54814c1d1ac148d4c164aea4038e",
+    "TreeDB/db/root_publication_activation.go": "9ba10bdfc07ed0cff76be608bb70faa14f945a27",
+    "TreeDB/internal/primaryarena/retention.go": "cc4af2c7babe6657d78be3cb649fae4503e235a4",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "760a27405aef9125c65824aea88b571f2f633cce",
+    "TreeDB/internal/primaryarena/arena.go": "40dfa2e4b3dc4ecc6998a9556ccb8e0cf6b76c4b",
+    "TreeDB/zipper/primary_directory.go": "47df125e6778f79d5e2738da85dce49e91f4ed6d",
+    "TreeDB/internal/rootpublication/resource_allocation.go": "8454f148086423f4622c8b296b4edda199f04d8d",
+    "TreeDB/internal/rootpublication/durable_root_transaction.go": "1718ee14c27389a40bda4b3f1e38aefd00287b20",
+    "TreeDB/db/batch.go": "a75ab92e0769621653f969134e4a6afb8069f84e"
+  }
+}

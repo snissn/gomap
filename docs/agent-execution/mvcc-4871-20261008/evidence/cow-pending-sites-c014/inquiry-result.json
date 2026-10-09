@@ -1,0 +1,46 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "original_primary_pointer": "0x186f1dcc20d0",
+  "mutations_observed": 385,
+  "per_owner_pending_chain_verified": true,
+  "start_pending": 0,
+  "terminal_pending": 7680,
+  "constructor_site_count": 7,
+  "ordinary_finish_site_count": 4,
+  "constructor_group": {
+    "constructor_admissions": 17920,
+    "visibility_member_admissions": 2176,
+    "visible_install_admissions": 8192,
+    "promotion_admissions": 69632,
+    "promotion_image_transfers": 65536,
+    "ordinary_finish_refunds": 24704,
+    "construction_failure_abort_recovery_refund_events": 0,
+    "remaining_pending_site_family": 7680
+  },
+  "proven": [
+    "Actual original PRIMARY pending0->7680 has an exact continuous 385-record ledger; no successful pending mutation gap detected.",
+    "The sole nonzero source-linked mutation family is NewPrimaryConstructionTransactionV6 plus its actual Bind visibility/install and promotion storage; transfer records were subtracted as pending-to-bank transfers, never called refunds.",
+    "Seven actual constructor-site admissions occurred; four actual ordinary Finish refunds occurred; no constructor failure, abort or recovery refund sites occurred.",
+    "Generic resourceAllocation admission/refund sites balance 88 events and22112 bytes each; these are not the unmatched site family.",
+    "The zero terminal assertion remains RED, and original PRIMARY binding refs/producers remain zero."
+  ],
+  "unproven": [
+    "No transaction pointer, constructed root identity or exact original caller beyond Owner.AddPending direct constructor site was recorded.",
+    "The three constructor admissions without a corresponding terminal constructor refund are site-level residual admissions, not proof of three specific currently surviving objects.",
+    "No concrete original caller replacement/discard path or safe fix has been established."
+  ],
+  "source_route": [
+    "NewPrimaryConstructionTransactionV6 admits transaction+construction storage and installs SAME transaction into bank.construction via PrepareConstructedReadRootV6.",
+    "writePrimaryArenaDirectory successful returns this constructor-owned bank; its error unwind calls original constructor.Abort.",
+    "BindPrimaryVisibilityV6 acquires state edge and DetachReadRootConstructionV6 clears bank.construction before transferring member/install metadata into SAME transaction.",
+    "abortConstructionLockedV6 explicitly owns exact original component/root drops and pending refund; ordinary Finish and recovery release have separate actual lifetimes.",
+    "Plain Arena.DropToReleaseQueue decrements immutable bank refs; later release clears bank metadata. It does not call the original transaction Abort. This alone does not identify which original test caller discarded an unbound constructor."
+  ],
+  "next_exact_pointer_discriminator_proposal": {
+    "constructor": "At successful NewPrimaryConstructionTransactionV6 return, emit exact transaction pointer, arena and MetadataOwner pointer, constructed root Ref and direct caller; constructor is still exclusive before return.",
+    "transaction_lifecycle": "Under transaction.mu emit exact transaction pointer, construction/root identity, phase/resources owner and metadataCharge at Bind, abortConstructionLockedV6, ordinary Finish, and recovery release; no new stored map/list/authority.",
+    "original_bank_edge": "Under arena.mu, at actual DropToReleaseQueue on a bank whose existing construction interface is nonnil, emit exact construction interface identity, root Ref, old/new bank.refs, arena/MetadataOwner pointer and original caller chain. Also emit the same interface identity in DetachReadRootConstructionV6. Capture caller chain values only; never invoke interface methods while arena.mu is held.",
+    "constraint": "Collect only existing identities/events for original owner scope in one separately authorized diagnostic. Do not auto-Abort reader/root drops: Abort itself owns original root disposal and calling it after a plain Drop can double-consume custody. Preserve accepted native owners and original finalizer authority."
+  },
+  "run_qualification": "modified source diagnostic overlay only; one original NoWAL count1; no product qualification or permanent edits"
+}

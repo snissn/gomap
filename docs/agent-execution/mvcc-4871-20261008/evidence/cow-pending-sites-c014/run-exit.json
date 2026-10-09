@@ -1,0 +1,8 @@
+{
+  "exit_code": 1,
+  "elapsed_seconds": 40.60976918799861,
+  "end_utc": "2026-10-09T01:16:13.817922+00:00",
+  "stdout_sha256": "513f880f310fcbe2efd3feec8c3c05112c6fd84465714bb1a4501b14388e7df2",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "command_joined": true
+}

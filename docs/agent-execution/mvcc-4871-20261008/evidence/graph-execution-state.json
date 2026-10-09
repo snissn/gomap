@@ -120,7 +120,9 @@
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071399552",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071608514",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6071833626",
-        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071970325"
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6071970325",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072246242",
+        "https://github.com/snissn/gomap/issues/5111#issuecomment-6072281520"
       ],
       "evidence": "https://github.com/snissn/gomap/issues/5111#issuecomment-6070584108",
       "component_source_freeze": "16deb2f612cbc399c7147384457bbef3c7663548",
@@ -160,6 +162,16 @@
           "actual_operand": "UNPROVEN",
           "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-terminal-probe-c014",
           "root_acceptance": "Inquiry category discrimination only; terminal zero-drain remains RED"
+        },
+        "pending_site_family": {
+          "modified_overlay": true,
+          "records": 385,
+          "pending": 7680,
+          "constructor_admissions": 7,
+          "finish_refunds": 4,
+          "family": "constructed transaction lifecycle",
+          "exact_orphan_operand": "UNPROVEN",
+          "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014"
         }
       },
       "owned_pair_constructor_source_freeze": "387c09b23c8f472df59ddaab1c6685127a512dc1",
@@ -208,5 +220,5 @@
     ],
     "protected_paths_retained": true
   },
-  "updated_at": "2026-10-09T01:13:14.331Z"
+  "updated_at": "2026-10-09T01:24:00.224Z"
 }

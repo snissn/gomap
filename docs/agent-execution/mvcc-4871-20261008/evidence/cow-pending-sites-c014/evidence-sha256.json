@@ -1,0 +1,16 @@
+{
+  "overlay.json": "debb4577c43b6a736d774ac3785c15a9415965bdcd721e35633a2fbe59ee43ce",
+  "run-start.json": "d62602bf3a879ac5e3d85943db2a4771bcc0d3ce67726eccb1ff81807e2e4c40",
+  "owner.overlay.go": "ad481dfa9f2a4582c3a2d635d74b9a1c25e1ba4ad1300e3dbb527cb9a64bc905",
+  "run-exit.json": "7f630d8621c373267cf37ff358447ad32884782f0affcdd4f89a0e783e3a625c",
+  "go-env.json": "b146cb0610f367efe40966419084fc6e2c2541e466891dd7171a2502fb218cde",
+  "TreeDB_AGENTS.md.immutable": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+  "preparation.json": "faaf8220e981acb59834644bf4bfaacb3657b616883020ec3ff2803788403f83",
+  "stdout.log": "513f880f310fcbe2efd3feec8c3c05112c6fd84465714bb1a4501b14388e7df2",
+  "original-primary-ledger.json": "bb9d78ec03a99b2e6134c703bf368c3b26eb61e999fd3cb2c53626bb0201c2bf",
+  "source-blob-bindings.json": "e6fb75a03be0b33585db39b20e5131693a6cb5ad4bf9dccecaa3230ee3adcc0f",
+  "inquiry-result.json": "23f90210e76739c55cd7c4e16ee94db1e44336e5e87105386e500d53e0eff20b",
+  "AGENTS.md.immutable": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+  "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "cow_public_retention_test.overlay.go": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40"
+}

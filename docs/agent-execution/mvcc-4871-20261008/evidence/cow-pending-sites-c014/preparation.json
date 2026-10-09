@@ -1,0 +1,18 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "original_blob_bindings": {
+    "TreeDB/internal/retainedalloc/owner.go": "4fdfaba0624c259f19e0da3a65db6903a8943dc0",
+    "TreeDB/cow_public_retention_test.go": "c8036d8ac257ecb0e1db72b23aaccfaacf1d7ace",
+    "AGENTS.md": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+    "TreeDB/AGENTS.md": "13811b724a980dddad76b3e4c12b6403214b8069"
+  },
+  "prior_frozen_artifact": "d82aaaa71a807e5653a2c6fe87225a628d6b2893",
+  "overlay_scope": "read-only original-owner mutex snapshots and pending Add/Remove/Transfer mutation records; unchanged real pending operations, admissions, workload, limits and terminal assertion; modified diagnostic source only",
+  "files_sha256": {
+    "overlay.json": "debb4577c43b6a736d774ac3785c15a9415965bdcd721e35633a2fbe59ee43ce",
+    "owner.overlay.go": "ad481dfa9f2a4582c3a2d635d74b9a1c25e1ba4ad1300e3dbb527cb9a64bc905",
+    "TreeDB_AGENTS.md.immutable": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "AGENTS.md.immutable": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "cow_public_retention_test.overlay.go": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40"
+  }
+}

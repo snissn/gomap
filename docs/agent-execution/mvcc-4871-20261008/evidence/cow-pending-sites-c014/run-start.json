@@ -1,0 +1,37 @@
+{
+  "cwd": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014",
+  "count": 1,
+  "qualification": "modified diagnostic source overlay; not unmodified product qualification",
+  "toolchain_sha256": {
+    "/workspace/scratch/1ecfdb811b25/toolchain/go/bin/go": "86b748c64de0175db601f56805251f3b08cd12bffb927ad5c68ef8497c50c7ba",
+    "/workspace/scratch/1ecfdb811b25/toolchain/go/pkg/tool/linux_amd64/compile": "45956fd86865f0452b773310dc780016a639059beb9169ea9dc7a43e3867934c",
+    "/workspace/scratch/1ecfdb811b25/toolchain/go/pkg/tool/linux_amd64/link": "e63de38ecba9b829ff82b13ce8e3abfe797c1bc73079d403c2fc93b99c5ce6e1"
+  },
+  "go_version": "go version go1.26.4 linux/amd64",
+  "argv": [
+    "/workspace/scratch/1ecfdb811b25/toolchain/go/bin/go",
+    "test",
+    "-overlay=/workspace/scratch/1ecfdb811b25/evidence/cow-pending-sites-c014/overlay.json",
+    "./TreeDB",
+    "-run",
+    "^TestCOWPublicRetentionRefusalDrainAndResume$/^no_wal_fast$",
+    "-count=1",
+    "-timeout=120s",
+    "-v"
+  ],
+  "environment": {
+    "HOME": "/root",
+    "PATH": "/root/.codex/tmp/arg0/codex-arg0EcPitx:/opt/codex/codex-path:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/override:/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/node/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/codex/runtimes/codex-primary-runtime/dependencies/bin/fallback",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "TZ": "Pacific/Honolulu",
+    "GOROOT": "/workspace/scratch/1ecfdb811b25/toolchain/go",
+    "GOTOOLCHAIN": "local",
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "GOMODCACHE": "/workspace/scratch/1ecfdb811b25/go-mod-cache",
+    "GOFLAGS": "-buildvcs=false"
+  },
+  "start_utc": "2026-10-09T01:15:33.201369+00:00",
+  "prior_frozen_artifact": "d82aaaa71a807e5653a2c6fe87225a628d6b2893"
+}

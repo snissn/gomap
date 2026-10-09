@@ -1,0 +1,103 @@
+{
+  "scope": "Pending mutation caller-site inquiry only; terminal product oracle remains RED",
+  "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
+  "local_commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "modified_overlay": true,
+  "root_verification": "All manifest hashes and385 exact raw records independently reconstructed; per-original-owner chain0→7680 complete.",
+  "finding": "Constructed transaction admission/member/install/promotion/transfer/Finish source-linked family alone leaves7680pending; seven constructor admissions vs four ordinary Finish refunds; no exact orphan transaction/root/caller established.",
+  "raw_files": [
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/AGENTS.md.immutable",
+      "sha": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+      "sha256": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+      "bytes": 4696
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/TreeDB_AGENTS.md.immutable",
+      "sha": "13811b724a980dddad76b3e4c12b6403214b8069",
+      "sha256": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+      "bytes": 3046
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/cow_public_retention_test.overlay.go",
+      "sha": "bf7281eee22351a7f2248200219f56aa40c2e320",
+      "sha256": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40",
+      "bytes": 9580
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/evidence-sha256.json",
+      "sha": "3bb8181d254d15053efb29287d55ce1be58fd5d6",
+      "sha256": "7041f05f839ef223b9ceaa739c92bff56108d17fe1dd6c163b0a6f4c38d677c9",
+      "bytes": 1294
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/go-env.json",
+      "sha": "be2b300bee3a17ec1295a0c97469fdf8de5fc45f",
+      "sha256": "b146cb0610f367efe40966419084fc6e2c2541e466891dd7171a2502fb218cde",
+      "bytes": 1375
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/inquiry-result.json",
+      "sha": "e04290fa0d7e98a1e5b7c8b6a42debfe019990bf",
+      "sha256": "23f90210e76739c55cd7c4e16ee94db1e44336e5e87105386e500d53e0eff20b",
+      "bytes": 4268
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/original-primary-ledger.json",
+      "sha": "059279100a72c7e45c7b256a24b200275185e1b8",
+      "sha256": "bb9d78ec03a99b2e6134c703bf368c3b26eb61e999fd3cb2c53626bb0201c2bf",
+      "bytes": 104859
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/overlay.json",
+      "sha": "1592765fc64ef83d9cc89893fa9e8a936c8dcb1c",
+      "sha256": "debb4577c43b6a736d774ac3785c15a9415965bdcd721e35633a2fbe59ee43ce",
+      "bytes": 411
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/owner.overlay.go",
+      "sha": "c45999db3a1fc798285db2728fafc0159d0869e9",
+      "sha256": "ad481dfa9f2a4582c3a2d635d74b9a1c25e1ba4ad1300e3dbb527cb9a64bc905",
+      "bytes": 11649
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/preparation.json",
+      "sha": "fac0d3e1407e2df6cce68c83c913f4b321d2211f",
+      "sha256": "faaf8220e981acb59834644bf4bfaacb3657b616883020ec3ff2803788403f83",
+      "bytes": 1216
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/run-exit.json",
+      "sha": "681bc602f69a1feaaba6ff34e7eb66de43141191",
+      "sha256": "7f630d8621c373267cf37ff358447ad32884782f0affcdd4f89a0e783e3a625c",
+      "bytes": 310
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/run-start.json",
+      "sha": "e44de6a23ed757e91930d8f2193a8d30d822706c",
+      "sha256": "d62602bf3a879ac5e3d85943db2a4771bcc0d3ce67726eccb1ff81807e2e4c40",
+      "bytes": 1943
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/source-blob-bindings.json",
+      "sha": "63692a2499fd760319f73dc6859df4ec419bab88",
+      "sha256": "e6fb75a03be0b33585db39b20e5131693a6cb5ad4bf9dccecaa3230ee3adcc0f",
+      "bytes": 1118
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/stderr.log",
+      "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-pending-sites-c014/stdout.log",
+      "sha": "6348b6f3e8230be2b889f50662cf0b5fe0a65133",
+      "sha256": "513f880f310fcbe2efd3feec8c3c05112c6fd84465714bb1a4501b14388e7df2",
+      "bytes": 70169
+    }
+  ],
+  "owner": "/root",
+  "next_action": "Granted one original-workload transaction/root identity probe under original synchronization, never auto-Abort reader drops or infer ownership from size."
+}

@@ -1,0 +1,4142 @@
+{
+  "owner_pointer": "0x186f1dcc20d0",
+  "record_count": 385,
+  "start_pending": 0,
+  "end_pending": 7680,
+  "continuity_verified": true,
+  "records": [
+    {
+      "raw_line": 3,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 0,
+      "after": 256,
+      "file": "TreeDB/db/primary_arena_owner_v5.go",
+      "line": 43
+    },
+    {
+      "raw_line": 4,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 256,
+      "after": 8448,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 5,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 8448,
+      "after": 256,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 6,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 256,
+      "after": 416,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 7,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 416,
+      "after": 480,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 8,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 480,
+      "after": 640,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 9,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 640,
+      "after": 480,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 10,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 288,
+      "before": 480,
+      "after": 768,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 11,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 768,
+      "after": 1024,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 33
+    },
+    {
+      "raw_line": 12,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 1024,
+      "after": 1040,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 59
+    },
+    {
+      "raw_line": 13,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 0,
+      "before": 1040,
+      "after": 1040,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 68
+    },
+    {
+      "raw_line": 14,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16416,
+      "before": 1040,
+      "after": 17456,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 244
+    },
+    {
+      "raw_line": 15,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 57344,
+      "before": 17456,
+      "after": 74800,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 51
+    },
+    {
+      "raw_line": 16,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 57344,
+      "before": 74800,
+      "after": 17456,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 44
+    },
+    {
+      "raw_line": 17,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16416,
+      "before": 17456,
+      "after": 1040,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 254
+    },
+    {
+      "raw_line": 18,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 272,
+      "before": 1040,
+      "after": 1312,
+      "file": "TreeDB/db/stable_resource.go",
+      "line": 337
+    },
+    {
+      "raw_line": 19,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 800,
+      "before": 1312,
+      "after": 2112,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1407
+    },
+    {
+      "raw_line": 20,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 2112,
+      "after": 2928,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 21,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 2928,
+      "after": 2112,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 22,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 272,
+      "before": 2112,
+      "after": 1840,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 117
+    },
+    {
+      "raw_line": 23,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 288,
+      "before": 1840,
+      "after": 1552,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 24,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 1552,
+      "after": 1392,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 25,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 1392,
+      "after": 1328,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 32,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 1328,
+      "after": 1584,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 327
+    },
+    {
+      "raw_line": 33,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2560,
+      "before": 1584,
+      "after": 4144,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41
+    },
+    {
+      "raw_line": 34,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 4144,
+      "after": 12336,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 35,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 12336,
+      "after": 20528,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 36,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 20528,
+      "after": 28720,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 37,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 28720,
+      "after": 20528,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 38,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 20528,
+      "after": 12336,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 39,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 12336,
+      "after": 4144,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 40,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2560,
+      "before": 4144,
+      "after": 6704,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41
+    },
+    {
+      "raw_line": 41,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 6704,
+      "after": 14896,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 42,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 14896,
+      "after": 23088,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 43,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 23088,
+      "after": 31280,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 44,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 31280,
+      "after": 23088,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 45,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 23088,
+      "after": 14896,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 46,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 14896,
+      "after": 6704,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 47,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 6704,
+      "after": 6864,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 48,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 6864,
+      "after": 6928,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 49,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 6928,
+      "after": 7088,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 50,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7088,
+      "after": 6928,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 51,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 6928,
+      "after": 7088,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 52,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 7088,
+      "after": 7152,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 53,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7152,
+      "after": 7312,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 54,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7312,
+      "after": 7152,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 55,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7152,
+      "after": 7312,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 56,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7312,
+      "after": 7472,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 57,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7472,
+      "after": 7312,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 58,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7312,
+      "after": 7472,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 59,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7472,
+      "after": 7312,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 60,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7312,
+      "after": 7472,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 61,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7472,
+      "after": 7632,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 62,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7632,
+      "after": 7472,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 63,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7472,
+      "after": 7312,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 64,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7312,
+      "after": 7472,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 65,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7472,
+      "after": 7312,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 66,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7312,
+      "after": 7152,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 67,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 7152,
+      "after": 7312,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 68,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7312,
+      "after": 7152,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 69,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 7152,
+      "after": 6992,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 70,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 6992,
+      "after": 6928,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 71,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2048,
+      "before": 6928,
+      "after": 8976,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 408
+    },
+    {
+      "raw_line": 72,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 8976,
+      "after": 9136,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 73,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 544,
+      "before": 9136,
+      "after": 9680,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 783
+    },
+    {
+      "raw_line": 74,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 32,
+      "before": 9680,
+      "after": 9712,
+      "file": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 41
+    },
+    {
+      "raw_line": 75,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 0,
+      "before": 9712,
+      "after": 9712,
+      "file": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 52
+    },
+    {
+      "raw_line": 76,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 9712,
+      "after": 9872,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 77,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 288,
+      "before": 9872,
+      "after": 10160,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 78,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 10160,
+      "after": 10416,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 33
+    },
+    {
+      "raw_line": 79,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 10416,
+      "after": 10432,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 59
+    },
+    {
+      "raw_line": 80,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 0,
+      "before": 10432,
+      "after": 10432,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 68
+    },
+    {
+      "raw_line": 81,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16416,
+      "before": 10432,
+      "after": 26848,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 244
+    },
+    {
+      "raw_line": 82,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 57344,
+      "before": 26848,
+      "after": 84192,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 51
+    },
+    {
+      "raw_line": 83,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 57344,
+      "before": 84192,
+      "after": 26848,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 44
+    },
+    {
+      "raw_line": 84,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16416,
+      "before": 26848,
+      "after": 10432,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 254
+    },
+    {
+      "raw_line": 85,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 10432,
+      "after": 10688,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 86,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 10688,
+      "after": 10944,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 87,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 272,
+      "before": 10944,
+      "after": 11216,
+      "file": "TreeDB/db/stable_resource.go",
+      "line": 337
+    },
+    {
+      "raw_line": 88,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 800,
+      "before": 11216,
+      "after": 12016,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1407
+    },
+    {
+      "raw_line": 89,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 12016,
+      "after": 12832,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 90,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 12832,
+      "after": 14096,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 91,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 14096,
+      "after": 14160,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 92,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 14160,
+      "after": 14688,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 93,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 14688,
+      "after": 14944,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 94,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 14944,
+      "after": 15200,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 95,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 15200,
+      "after": 16016,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 96,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 16016,
+      "after": 17280,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 97,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 17280,
+      "after": 17344,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 98,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 17344,
+      "after": 17872,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 99,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 17872,
+      "after": 18032,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 100,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 18032,
+      "after": 18096,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 101,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 18096,
+      "after": 18256,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 102,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 18256,
+      "after": 18096,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 103,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 18096,
+      "after": 18256,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 104,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 17408,
+      "before": 18256,
+      "after": 35664,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 205
+    },
+    {
+      "raw_line": 105,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 32,
+      "before": 35664,
+      "after": 35696,
+      "file": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 41
+    },
+    {
+      "raw_line": 106,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 0,
+      "before": 35696,
+      "after": 35696,
+      "file": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 52
+    },
+    {
+      "raw_line": 107,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2304,
+      "before": 35696,
+      "after": 38000,
+      "file": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "line": 197
+    },
+    {
+      "raw_line": 108,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 38000,
+      "after": 37840,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 109,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 37840,
+      "after": 37856,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 730
+    },
+    {
+      "raw_line": 110,
+      "owner": "0x186f1dcc20d0",
+      "operation": "TransferPending",
+      "amount": 16384,
+      "before": 37856,
+      "after": 21472,
+      "file": "TreeDB/internal/primaryarena/retention.go",
+      "line": 84
+    },
+    {
+      "raw_line": 111,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 272,
+      "before": 21472,
+      "after": 21200,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 117
+    },
+    {
+      "raw_line": 112,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 21200,
+      "after": 20672,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 113,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 20672,
+      "after": 19856,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 114,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 19856,
+      "after": 19792,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 115,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 19792,
+      "after": 19536,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 116,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 19536,
+      "after": 19280,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 117,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 19280,
+      "after": 18016,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 118,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 18016,
+      "after": 17488,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 119,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 17488,
+      "after": 16672,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 120,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 16672,
+      "after": 16608,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 121,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 16608,
+      "after": 16352,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 122,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 16352,
+      "after": 16096,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 123,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 16096,
+      "after": 14832,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 124,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 288,
+      "before": 14832,
+      "after": 14544,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 125,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 2304,
+      "before": 14544,
+      "after": 12240,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 263
+    },
+    {
+      "raw_line": 126,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16,
+      "before": 12240,
+      "after": 12224,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 737
+    },
+    {
+      "raw_line": 127,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 12224,
+      "after": 12064,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 128,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 6176,
+      "before": 12064,
+      "after": 5888,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 298
+    },
+    {
+      "raw_line": 129,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2560,
+      "before": 5888,
+      "after": 8448,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41
+    },
+    {
+      "raw_line": 130,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 8448,
+      "after": 16640,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 131,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 16640,
+      "after": 24832,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 132,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 24832,
+      "after": 33024,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 133,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 33024,
+      "after": 24832,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 134,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 24832,
+      "after": 16640,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 135,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 16640,
+      "after": 8448,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 136,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2560,
+      "before": 8448,
+      "after": 11008,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41
+    },
+    {
+      "raw_line": 137,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 11008,
+      "after": 19200,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 138,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 19200,
+      "after": 27392,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 139,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 27392,
+      "after": 35584,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 140,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 35584,
+      "after": 27392,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 141,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 27392,
+      "after": 19200,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 142,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 19200,
+      "after": 11008,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 143,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11008,
+      "after": 11168,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 144,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11168,
+      "after": 11328,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 145,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11328,
+      "after": 11488,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 146,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 11488,
+      "after": 11552,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 147,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11552,
+      "after": 11712,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 148,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11712,
+      "after": 11552,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 149,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11552,
+      "after": 11712,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 150,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11712,
+      "after": 11872,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 151,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11872,
+      "after": 11712,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 152,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11712,
+      "after": 11872,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 153,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11872,
+      "after": 11712,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 154,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11712,
+      "after": 11872,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 155,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11872,
+      "after": 11712,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 156,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11712,
+      "after": 11552,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 157,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 11552,
+      "after": 11712,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 158,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11712,
+      "after": 11552,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 159,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11552,
+      "after": 11392,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 160,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2048,
+      "before": 11392,
+      "after": 13440,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 408
+    },
+    {
+      "raw_line": 161,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 13440,
+      "after": 13600,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 162,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 13600,
+      "after": 13440,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 163,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 13440,
+      "after": 13600,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 164,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 544,
+      "before": 13600,
+      "after": 14144,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 783
+    },
+    {
+      "raw_line": 165,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14144,
+      "after": 13984,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 166,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 13984,
+      "after": 14144,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 167,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 288,
+      "before": 14144,
+      "after": 14432,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 168,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 14432,
+      "after": 14688,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 33
+    },
+    {
+      "raw_line": 169,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 14688,
+      "after": 14704,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 59
+    },
+    {
+      "raw_line": 170,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 0,
+      "before": 14704,
+      "after": 14704,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 68
+    },
+    {
+      "raw_line": 171,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16416,
+      "before": 14704,
+      "after": 31120,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 244
+    },
+    {
+      "raw_line": 172,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 57344,
+      "before": 31120,
+      "after": 88464,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 51
+    },
+    {
+      "raw_line": 173,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 57344,
+      "before": 88464,
+      "after": 31120,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 44
+    },
+    {
+      "raw_line": 174,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16416,
+      "before": 31120,
+      "after": 14704,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 254
+    },
+    {
+      "raw_line": 175,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 14704,
+      "after": 14960,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 176,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 14960,
+      "after": 15216,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 177,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 15216,
+      "after": 16032,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 178,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 16032,
+      "after": 17296,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 179,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 17296,
+      "after": 17360,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 180,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 17360,
+      "after": 17888,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 181,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 17888,
+      "after": 18144,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 182,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 18144,
+      "after": 18400,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 183,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 18400,
+      "after": 19216,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 184,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 19216,
+      "after": 20480,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 185,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 20480,
+      "after": 20544,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 186,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 20544,
+      "after": 21072,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 187,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 21072,
+      "after": 21232,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 188,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 21232,
+      "after": 21392,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 189,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 17408,
+      "before": 21392,
+      "after": 38800,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 205
+    },
+    {
+      "raw_line": 190,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2304,
+      "before": 38800,
+      "after": 41104,
+      "file": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "line": 197
+    },
+    {
+      "raw_line": 191,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 41104,
+      "after": 40944,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 192,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 40944,
+      "after": 40960,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 730
+    },
+    {
+      "raw_line": 193,
+      "owner": "0x186f1dcc20d0",
+      "operation": "TransferPending",
+      "amount": 16384,
+      "before": 40960,
+      "after": 24576,
+      "file": "TreeDB/internal/primaryarena/retention.go",
+      "line": 84
+    },
+    {
+      "raw_line": 194,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 272,
+      "before": 24576,
+      "after": 24304,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 117
+    },
+    {
+      "raw_line": 195,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 24304,
+      "after": 23776,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 196,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 23776,
+      "after": 22960,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 197,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 22960,
+      "after": 22896,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 198,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 22896,
+      "after": 22640,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 199,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 22640,
+      "after": 22384,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 200,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 22384,
+      "after": 21120,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 201,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 21120,
+      "after": 20592,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 202,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 20592,
+      "after": 19776,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 203,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 19776,
+      "after": 19712,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 204,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 19712,
+      "after": 19456,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 205,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 19456,
+      "after": 19200,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 206,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 19200,
+      "after": 17936,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 207,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 288,
+      "before": 17936,
+      "after": 17648,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 208,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 2304,
+      "before": 17648,
+      "after": 15344,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 263
+    },
+    {
+      "raw_line": 209,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16,
+      "before": 15344,
+      "after": 15328,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 737
+    },
+    {
+      "raw_line": 210,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 15328,
+      "after": 15168,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 211,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 6176,
+      "before": 15168,
+      "after": 8992,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 298
+    },
+    {
+      "raw_line": 212,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 8992,
+      "after": 8832,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 213,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2560,
+      "before": 8832,
+      "after": 11392,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41
+    },
+    {
+      "raw_line": 214,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 11392,
+      "after": 19584,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 215,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 19584,
+      "after": 27776,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 216,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 27776,
+      "after": 35968,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 217,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 35968,
+      "after": 27776,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 218,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 27776,
+      "after": 19584,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 219,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 19584,
+      "after": 11392,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 220,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2560,
+      "before": 11392,
+      "after": 13952,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41
+    },
+    {
+      "raw_line": 221,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 13952,
+      "after": 22144,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 222,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 22144,
+      "after": 30336,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 223,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 30336,
+      "after": 38528,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 224,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 38528,
+      "after": 30336,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 225,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 30336,
+      "after": 22144,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 226,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 22144,
+      "after": 13952,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 227,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 13952,
+      "after": 14112,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 228,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14112,
+      "after": 14272,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 229,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14272,
+      "after": 14432,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 230,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 14432,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 231,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 232,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 233,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 234,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14816,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 235,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14816,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 236,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14816,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 237,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14816,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 238,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14816,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 239,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14816,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 240,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 241,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 242,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 243,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14336,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 244,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2048,
+      "before": 14336,
+      "after": 16384,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 408
+    },
+    {
+      "raw_line": 245,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 16384,
+      "after": 16544,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 246,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 16544,
+      "after": 16384,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 247,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 16384,
+      "after": 16544,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 248,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 544,
+      "before": 16544,
+      "after": 17088,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 783
+    },
+    {
+      "raw_line": 249,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 17088,
+      "after": 16928,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 250,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 16928,
+      "after": 17088,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 251,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 288,
+      "before": 17088,
+      "after": 17376,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 252,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 17376,
+      "after": 17632,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 33
+    },
+    {
+      "raw_line": 253,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 17632,
+      "after": 17648,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 59
+    },
+    {
+      "raw_line": 254,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 0,
+      "before": 17648,
+      "after": 17648,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 68
+    },
+    {
+      "raw_line": 255,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16416,
+      "before": 17648,
+      "after": 34064,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 244
+    },
+    {
+      "raw_line": 256,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 57344,
+      "before": 34064,
+      "after": 91408,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 51
+    },
+    {
+      "raw_line": 257,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 57344,
+      "before": 91408,
+      "after": 34064,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 44
+    },
+    {
+      "raw_line": 258,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16416,
+      "before": 34064,
+      "after": 17648,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 254
+    },
+    {
+      "raw_line": 259,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 17648,
+      "after": 17904,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 260,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 17904,
+      "after": 18160,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 261,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 18160,
+      "after": 18976,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 262,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 18976,
+      "after": 20240,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 263,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 20240,
+      "after": 20304,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 264,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 20304,
+      "after": 20832,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 265,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 20832,
+      "after": 21088,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 266,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 21088,
+      "after": 21344,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 267,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 21344,
+      "after": 22160,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 268,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 22160,
+      "after": 23424,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 269,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 23424,
+      "after": 23488,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 270,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 23488,
+      "after": 24016,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 271,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 24016,
+      "after": 24176,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 272,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 24176,
+      "after": 24336,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 273,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 17408,
+      "before": 24336,
+      "after": 41744,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 205
+    },
+    {
+      "raw_line": 274,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2304,
+      "before": 41744,
+      "after": 44048,
+      "file": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "line": 197
+    },
+    {
+      "raw_line": 275,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 44048,
+      "after": 43888,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 276,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 43888,
+      "after": 43904,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 730
+    },
+    {
+      "raw_line": 277,
+      "owner": "0x186f1dcc20d0",
+      "operation": "TransferPending",
+      "amount": 16384,
+      "before": 43904,
+      "after": 27520,
+      "file": "TreeDB/internal/primaryarena/retention.go",
+      "line": 84
+    },
+    {
+      "raw_line": 278,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 27520,
+      "after": 27360,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 279,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 27360,
+      "after": 27200,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 280,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 27200,
+      "after": 27136,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 281,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 272,
+      "before": 27136,
+      "after": 26864,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 117
+    },
+    {
+      "raw_line": 282,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 26864,
+      "after": 26336,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 283,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 26336,
+      "after": 25520,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 284,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 25520,
+      "after": 25456,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 285,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 25456,
+      "after": 25200,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 286,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 25200,
+      "after": 24944,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 287,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 24944,
+      "after": 23680,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 288,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 23680,
+      "after": 23152,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 289,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 23152,
+      "after": 22336,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 290,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 22336,
+      "after": 22272,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 291,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 22272,
+      "after": 22016,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 292,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 22016,
+      "after": 21760,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 293,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 21760,
+      "after": 20496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 294,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 288,
+      "before": 20496,
+      "after": 20208,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 295,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 2304,
+      "before": 20208,
+      "after": 17904,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 263
+    },
+    {
+      "raw_line": 296,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16,
+      "before": 17904,
+      "after": 17888,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 737
+    },
+    {
+      "raw_line": 297,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 17888,
+      "after": 17728,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 298,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 6176,
+      "before": 17728,
+      "after": 11552,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 298
+    },
+    {
+      "raw_line": 299,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11552,
+      "after": 11392,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 301,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2560,
+      "before": 11392,
+      "after": 13952,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41
+    },
+    {
+      "raw_line": 302,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 13952,
+      "after": 22144,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 303,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 22144,
+      "after": 30336,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 304,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 8192,
+      "before": 30336,
+      "after": 38528,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73
+    },
+    {
+      "raw_line": 305,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 38528,
+      "after": 30336,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 306,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 30336,
+      "after": 22144,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 307,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 8192,
+      "before": 22144,
+      "after": 13952,
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85
+    },
+    {
+      "raw_line": 308,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 13952,
+      "after": 14112,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 309,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14112,
+      "after": 14272,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 310,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14272,
+      "after": 14432,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 311,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 14432,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 312,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 313,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 314,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 315,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14816,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 316,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14816,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 317,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14816,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 318,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14816,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 319,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14816,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 320,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14816,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 321,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 322,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14656,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 323,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14656,
+      "after": 14496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 324,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 14496,
+      "after": 14336,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 325,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2048,
+      "before": 14336,
+      "after": 16384,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 408
+    },
+    {
+      "raw_line": 326,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 16384,
+      "after": 16544,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 327,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 16544,
+      "after": 16384,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 328,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 16384,
+      "after": 16544,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 329,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 544,
+      "before": 16544,
+      "after": 17088,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 783
+    },
+    {
+      "raw_line": 330,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 17088,
+      "after": 16928,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 331,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 16928,
+      "after": 17088,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 332,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 288,
+      "before": 17088,
+      "after": 17376,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 333,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 17376,
+      "after": 17632,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 33
+    },
+    {
+      "raw_line": 334,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 17632,
+      "after": 17648,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 59
+    },
+    {
+      "raw_line": 335,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 0,
+      "before": 17648,
+      "after": 17648,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 68
+    },
+    {
+      "raw_line": 336,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16416,
+      "before": 17648,
+      "after": 34064,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 244
+    },
+    {
+      "raw_line": 337,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 57344,
+      "before": 34064,
+      "after": 91408,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 51
+    },
+    {
+      "raw_line": 338,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 57344,
+      "before": 91408,
+      "after": 34064,
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 44
+    },
+    {
+      "raw_line": 339,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16416,
+      "before": 34064,
+      "after": 17648,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 254
+    },
+    {
+      "raw_line": 340,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 17648,
+      "after": 17904,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 341,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 17904,
+      "after": 18160,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 342,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 18160,
+      "after": 18976,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 343,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 18976,
+      "after": 20240,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 344,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 20240,
+      "after": 20304,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 345,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 20304,
+      "after": 20832,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 346,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 20832,
+      "after": 21088,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39
+    },
+    {
+      "raw_line": 347,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 256,
+      "before": 21088,
+      "after": 21344,
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100
+    },
+    {
+      "raw_line": 348,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 816,
+      "before": 21344,
+      "after": 22160,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500
+    },
+    {
+      "raw_line": 349,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 1264,
+      "before": 22160,
+      "after": 23424,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 350,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 64,
+      "before": 23424,
+      "after": 23488,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 351,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 528,
+      "before": 23488,
+      "after": 24016,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46
+    },
+    {
+      "raw_line": 352,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 24016,
+      "after": 24176,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 353,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 160,
+      "before": 24176,
+      "after": 24336,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34
+    },
+    {
+      "raw_line": 354,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 17408,
+      "before": 24336,
+      "after": 41744,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 205
+    },
+    {
+      "raw_line": 355,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 2304,
+      "before": 41744,
+      "after": 44048,
+      "file": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "line": 197
+    },
+    {
+      "raw_line": 356,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 44048,
+      "after": 43888,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 357,
+      "owner": "0x186f1dcc20d0",
+      "operation": "AddPending",
+      "amount": 16,
+      "before": 43888,
+      "after": 43904,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 730
+    },
+    {
+      "raw_line": 358,
+      "owner": "0x186f1dcc20d0",
+      "operation": "TransferPending",
+      "amount": 16384,
+      "before": 43904,
+      "after": 27520,
+      "file": "TreeDB/internal/primaryarena/retention.go",
+      "line": 84
+    },
+    {
+      "raw_line": 359,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 27520,
+      "after": 27360,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 360,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 27360,
+      "after": 27200,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 361,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 27200,
+      "after": 27136,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 362,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 272,
+      "before": 27136,
+      "after": 26864,
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 117
+    },
+    {
+      "raw_line": 363,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 26864,
+      "after": 26336,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 364,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 26336,
+      "after": 25520,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 365,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 25520,
+      "after": 25456,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 366,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 25456,
+      "after": 25200,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 367,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 25200,
+      "after": 24944,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 368,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 24944,
+      "after": 23680,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 369,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 528,
+      "before": 23680,
+      "after": 23152,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 370,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 816,
+      "before": 23152,
+      "after": 22336,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408
+    },
+    {
+      "raw_line": 371,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 22336,
+      "after": 22272,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 372,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 22272,
+      "after": 22016,
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72
+    },
+    {
+      "raw_line": 373,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 22016,
+      "after": 21760,
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169
+    },
+    {
+      "raw_line": 374,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 1264,
+      "before": 21760,
+      "after": 20496,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 375,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 288,
+      "before": 20496,
+      "after": 20208,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 376,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 2304,
+      "before": 20208,
+      "after": 17904,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 263
+    },
+    {
+      "raw_line": 377,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 16,
+      "before": 17904,
+      "after": 17888,
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 737
+    },
+    {
+      "raw_line": 378,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 17888,
+      "after": 17728,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 379,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 6176,
+      "before": 17728,
+      "after": 11552,
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 298
+    },
+    {
+      "raw_line": 380,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11552,
+      "after": 11392,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 381,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11392,
+      "after": 11232,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 382,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11232,
+      "after": 11072,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 383,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 11072,
+      "after": 11008,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 384,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 11008,
+      "after": 10848,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 385,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 10848,
+      "after": 10688,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 386,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 10688,
+      "after": 10624,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 387,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 800,
+      "before": 10624,
+      "after": 9824,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1584
+    },
+    {
+      "raw_line": 388,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 272,
+      "before": 9824,
+      "after": 9552,
+      "file": "TreeDB/db/index_gen.go",
+      "line": 118
+    },
+    {
+      "raw_line": 389,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 800,
+      "before": 9552,
+      "after": 8752,
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1584
+    },
+    {
+      "raw_line": 390,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 272,
+      "before": 8752,
+      "after": 8480,
+      "file": "TreeDB/db/primary_arena_owner_v5.go",
+      "line": 126
+    },
+    {
+      "raw_line": 391,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 256,
+      "before": 8480,
+      "after": 8224,
+      "file": "TreeDB/db/primary_arena_owner_v5.go",
+      "line": 102
+    },
+    {
+      "raw_line": 392,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 160,
+      "before": 8224,
+      "after": 8064,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 393,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 64,
+      "before": 8064,
+      "after": 8000,
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77
+    },
+    {
+      "raw_line": 394,
+      "owner": "0x186f1dcc20d0",
+      "operation": "RemovePending",
+      "amount": 320,
+      "before": 8000,
+      "after": 7680,
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 1804
+    }
+  ],
+  "sites": [
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 244,
+      "count": 5,
+      "amount": 82080
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 730,
+      "count": 4,
+      "amount": 64
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/primary_arena_owner_v5.go",
+      "line": 43,
+      "count": 1,
+      "amount": 256
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 33,
+      "count": 5,
+      "amount": 1280
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 59,
+      "count": 5,
+      "amount": 80
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "line": 197,
+      "count": 4,
+      "amount": 9216
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 41,
+      "count": 2,
+      "amount": 64
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 327,
+      "count": 1,
+      "amount": 256
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 408,
+      "count": 4,
+      "amount": 8192
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 783,
+      "count": 4,
+      "amount": 2176
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 39,
+      "count": 8,
+      "amount": 2048
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/db/stable_resource.go",
+      "line": 337,
+      "count": 2,
+      "amount": 544
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 51,
+      "count": 5,
+      "amount": 286720
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 41,
+      "count": 7,
+      "amount": 17920
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 205,
+      "count": 4,
+      "amount": 69632
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 34,
+      "count": 88,
+      "amount": 22112
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "line": 100,
+      "count": 8,
+      "amount": 2048
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1407,
+      "count": 2,
+      "amount": 1600
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1500,
+      "count": 9,
+      "amount": 7344
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 46,
+      "count": 8,
+      "amount": 4224
+    },
+    {
+      "operation": "AddPending",
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 73,
+      "count": 22,
+      "amount": 180224
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 254,
+      "count": 5,
+      "amount": 82080
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/durable_primary_runtime_v5.go",
+      "line": 737,
+      "count": 4,
+      "amount": 64
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/index_gen.go",
+      "line": 118,
+      "count": 1,
+      "amount": 272
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/primary_arena_owner_v5.go",
+      "line": 102,
+      "count": 1,
+      "amount": 256
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/primary_arena_owner_v5.go",
+      "line": 126,
+      "count": 1,
+      "amount": 272
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 68,
+      "count": 5,
+      "amount": 0
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/primary_bank_construction_v5.go",
+      "line": 117,
+      "count": 5,
+      "amount": 1360
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/primary_runtime_metadata.go",
+      "line": 52,
+      "count": 2,
+      "amount": 0
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 263,
+      "count": 4,
+      "amount": 9216
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/root_publication_activation.go",
+      "line": 1804,
+      "count": 1,
+      "amount": 320
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/db/stable_pager_owned_operations.go",
+      "line": 169,
+      "count": 8,
+      "amount": 2048
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "line": 44,
+      "count": 5,
+      "amount": 286720
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 298,
+      "count": 4,
+      "amount": 24704
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "line": 77,
+      "count": 88,
+      "amount": 22112
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 1584,
+      "count": 2,
+      "amount": 1600
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/internal/rootpublication/resource_token.go",
+      "line": 2408,
+      "count": 9,
+      "amount": 7344
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "line": 72,
+      "count": 16,
+      "amount": 6272
+    },
+    {
+      "operation": "RemovePending",
+      "file": "TreeDB/zipper/primary_directory.go",
+      "line": 85,
+      "count": 22,
+      "amount": 180224
+    },
+    {
+      "operation": "TransferPending",
+      "file": "TreeDB/internal/primaryarena/retention.go",
+      "line": 84,
+      "count": 4,
+      "amount": 65536
+    }
+  ],
+  "limitations": "site ledger counts admitted/refunded/transferred capacity by actual caller, not object identity; aggregating distinct release sites requires source ownership tracing; raw test binary stderr is combined into go test stdout by Go tool"
+}
