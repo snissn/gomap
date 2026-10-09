@@ -1,0 +1,43 @@
+{
+  "released_targets": [
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014",
+      "dev": 27,
+      "ino": 533058,
+      "mode": 16877,
+      "bytes": 4096,
+      "mtime_ns": 1791508100257684000,
+      "ctime_ns": 1791508109733976000,
+      "nlink": 22
+    },
+    {
+      "path": "/workspace/scratch/1ecfdb811b25/evidence/cow-terminal-probe-c014/source-archive.tar",
+      "dev": 27,
+      "ino": 786436,
+      "mode": 33188,
+      "bytes": 914452480,
+      "mtime_ns": 1791508102663608000,
+      "ctime_ns": 1791508102663608000,
+      "nlink": 1
+    }
+  ],
+  "all10071_source_git_blobs_verified": true,
+  "absent_after": [
+    true,
+    true
+  ],
+  "protected_present": true,
+  "free_before": 5468606464,
+  "free_after": 7301451776,
+  "source_durable": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "evidence_durable": "a468b6be387f03ea5393311196f82af91df4f972",
+  "release_inventory_sha256": "fe8781ee16cc71d4a2788a8790e7c13ec77770d9fbbe808324569b5e756af3d5",
+  "timestamp_utc": "2026-10-09T01:35:05Z",
+  "status": "COMPLETED_ROOT_ABSENCE_VERIFIED",
+  "root_crosscheck_utc": "2026-10-09T01:36:27Z",
+  "root_absent_after": [
+    true,
+    true
+  ],
+  "free_crosscheck": 7288340480
+}

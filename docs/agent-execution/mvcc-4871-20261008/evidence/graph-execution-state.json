@@ -245,7 +245,22 @@
       "gomap-execution",
       "ordinary-5111"
     ],
-    "protected_paths_retained": true
+    "protected_paths_retained": true,
+    "cow_diagnostic_batch": {
+      "status": "COMPLETED_ROOT_ABSENCE_VERIFIED",
+      "paths": [
+        "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014",
+        "/workspace/scratch/1ecfdb811b25/evidence/cow-terminal-probe-c014/source-archive.tar"
+      ],
+      "all_source_blobs": 10071,
+      "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+      "evidence": "a468b6be387f03ea5393311196f82af91df4f972",
+      "release_inventory_gzip_sha256": "3233197bb61693e8b5288d2e6715b1faea1eefb5eae11b75dcb9127a1b7cc43c",
+      "uncompressed_release_sha256": "fe8781ee16cc71d4a2788a8790e7c13ec77770d9fbbe808324569b5e756af3d5",
+      "observed_free_delta": 1832845312,
+      "root_verified_absent_at": "2026-10-09T01:36:27Z",
+      "prior_five_paths": "Previous release/reappearance blocker remains unchanged; no repeated deletion."
+    }
   },
-  "updated_at": "2026-10-09T01:31:15.756Z"
+  "updated_at": "2026-10-09T01:37:07.751Z"
 }
