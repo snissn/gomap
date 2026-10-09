@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "kind": "source-only post-source-close namespace census",
+  "acceptance_owner": "/root",
+  "source": {
+    "local_commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+    "published_commit": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+    "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0"
+  },
+  "question": "Which post-source-Close operations require real namespace operands or allocation capacity, and which alleged bounds remain unproved?",
+  "method": "Read-only immutable git show and pinned Go1.26.4 source inspection; no edits, builds, tests, benchmarks or new ownership authority.",
+  "source_blobs": {
+    "TreeDB/db/primary_offline_pair_v6.go": "1a0d8c36f3ead48e4bdd8d07dd525cec0e722a28",
+    "TreeDB/db/primary_joint_swap_v6.go": "96ad166f2e16d97fbb7a17eeae5aba2eab59d993",
+    "TreeDB/db/vacuum_offline.go": "b6b2e16c53e85ff5d61a0963c94a2ae96d1dad4d",
+    "TreeDB/db/vlog_rewrite.go": "00d03afef2a16a00374d774aae6db48c65fabcce",
+    "TreeDB/db/vlog_health.go": "1980d49fbe530b7857c7bf26902817778400150a",
+    "TreeDB/db/wal_recovery.go": "5a5d3f0716065bc7b9fdb086d137170defe2a781",
+    "TreeDB/db/durable_root_snapshot_rebind.go": "01a669623681d45518525f3e46ae9e862163acfc",
+    "TreeDB/freelist/generation_v1_format.go": "ffdf9da329c635770cffc3b97add86a691dec23b",
+    "TreeDB/internal/durabilitycut/durabilitycut.go": "9aefec64c26e60107cf711c915942327a6a394c5",
+    "TreeDB/internal/rootpublication/file_metadata.go": "26191eea4412f8ed87b9e92301739883c4baf1b6",
+    "TreeDB/internal/retainedalloc/owner.go": "4fdfaba0624c259f19e0da3a65db6903a8943dc0"
+  },
+  "toolchain_sha256": {
+    "src/os/dir_unix.go": "0de1bd5b40affb85fb104b4f04589fcaad093cd4b8165f6b2161427f7935bad0",
+    "src/os/dir.go": "bc8540932fe12e7e5325ec8f0075eaa5014241343ea45f0f9b755f00fc672efc",
+    "src/os/file_unix.go": "877dd004355c475e8805b5700061604558422da057037556e0cf6edeb36ab7ec",
+    "src/os/statat_unix.go": "0595ce8a8868674b6069431cd182c64b4d24c7b39e38b01f1b108db261d27830"
+  },
+  "findings": [
+    "Replacement idx and source DB close before cache invalidation, COMMIT create/write/fsync/barriers, full pair verification, serial DATA/PRIMARY rename/reopen validation, final pair verification and decision removal.",
+    "Original proof/resource construction occurs before these closes. The core post-close chain does not directly construct a new Owner, registry or proof; hidden validation opens still need pre-admission.",
+    "Cache invalidation and failed staging cleanup have two transient child Files besides parent. COMMIT uses one transient child. Pair verification/renames have at most two transient children besides parent and are serial.",
+    "COMMIT encoding permits payload <=4096/image <=4140, but json.Marshal allocates before the length check. Pre-close sizing/preborn scratch is still an implementation obligation.",
+    "Two capsule candidates each with current/embedded-parent frontier do not bound original DATA verification memory: ReadPage page images, reservation metadata, visited map and recursive nodes scale with real generation contents.",
+    "Legacy quarantine recovery nominally peaks at six real handles with synchronous successful closes, plus retained expected parent. The selected File factor must account for its exact genuine overlaps.",
+    "ReadDir(2) is not a complete 0/1/>1 census on a short nil-error return: n decrements before ENOENT entries are skipped. Loop until two returned entries or genuine EOF.",
+    "First directory read creates dirInfo and may allocate an 8192-byte pooled buffer plus slice header. Returned entries allocate names, unixDirent and result-slice backing; eager/unknown-type fstatat allocates fileStat. StableFileMetadataCharge alone excludes these families.",
+    "Root-opened Files eagerly stat every entry; os.NewFile may trust known d_type. Selected factoring must deliberately preserve fail-closed identity/type/error behavior using admitted original operands.",
+    "Directory parser checks each record against current 8192-byte buffer and each name slice against its record. This permits a pinned-runtime conservative per-name byte ceiling, not a filesystem NameMax assertion.",
+    "Go atomic.Pointer[T] includes zero-length [0]*T type field, allowing reflection on type metadata to reach os.dirInfo representation without reading live pointers or constructing directories. Concrete supported layout/provenance checks remain implementation obligations.",
+    "Old-segment health updates/stat rescans contain existing JSON/maps/directory/stat/atomic-writer allocations not bounded by the captured old segment count. They remain full-operation R1/library costs.",
+    "Observer/hooks are synchronous and borrowed; arbitrary callback allocations/reentrancy/error graphs have no demonstrated fixed total bound.",
+    "Owner.resizeLocked refuses growth after Close. Reservation must be pre-admitted before source Close and remain until original namespace phase disposal; reserved capacity is not already-open physical debt."
+  ],
+  "decision": {
+    "accepted_source_only": true,
+    "qualification_credit": false,
+    "implementation": "Same original namespace scope reserves finite slots/name/census capacity before SourceClose. Post-close uses only reserved capacity; unsupported/out-of-bound/unavailable slots fail before open/mutation. Reuse requires actual quiescent successful Close. Uncertainty remains on same scope and failed operands.",
+    "prohibited": [
+      "new owner/registry/lifecycle",
+      "post-Close admission-growth exception",
+      "keeping source physical producer alive for bookkeeping",
+      "Native32R or constant-total-work claims",
+      "zeroing original DATA/R1/library or directory costs",
+      "foreign authority takeover"
+    ],
+    "next_action": "Sole worker completes selected public caller, partial-token/proof custody and finite runtime reservation, freezes coherent source with fresh normal/race/vet/docs/policy receipts, then repairs original COW private group constructors."
+  },
+  "decision_link": "https://github.com/snissn/gomap/issues/5111#issuecomment-6072615707"
+}

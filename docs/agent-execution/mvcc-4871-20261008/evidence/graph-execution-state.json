@@ -110,7 +110,7 @@
       "owner": "/root/ordinary_5111",
       "acceptance_owner": "/root",
       "head": "1bc652e80aabf73353c696270f04d4b5d2d4257a",
-      "next_action": "Complete exact-handle value/leaf producers and strict original-source cleanup, then resolve original PRIMARY pending/enrollment custody. Format consumers, actual V6 fault fences, physical reclaim, Windows and performance gates remain open.",
+      "next_action": "Complete exact-handle value/leaf public producers, strict original-source cleanup and pre-close finite namespace reservation. Freeze coherent source/evidence, then repair proved three superseded private build-group constructors through original Abort custody. Format/fault/physical/Windows/whole-PR/performance gates remain open.",
       "decisions": [
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070598999",
         "https://github.com/snissn/gomap/issues/5111#issuecomment-6070960675",
@@ -151,7 +151,7 @@
       "cow_terminal_custody_inquiry": {
         "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
         "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
-        "finding": "Same original PRIMARY is physically closed with49344 retained bytes; same original registry is closed and fully drained. Pending storage vs outstanding enrollment not yet discriminated. No production cleanup change, no whole-PR or performance acceptance.",
+        "finding": "Same original PRIMARY is physically closed with49344 retained bytes, including7680 pending. Category, successful-site and exact-identity overlays prove three superseded private nonfinal build-group constructors remain undisposed; original registry fully drains. Narrow original-group Abort repair and qualification remain owed.",
         "raw_packet": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/cow-terminal-original-owner-diagnostic-checkpoint.json",
         "acceptance": "Diagnostic inquiry narrowed actual owner only; terminal-drain gate RED",
         "pending_category": {
@@ -225,7 +225,13 @@
           "Post-close operations only consume preadmitted original plan; unavailablecapacity failsbeforeeffects",
           "Real quiescentClose before slotreuse; full finalscopecompletion before once-refund",
           "Originalpartialdebt retained on same scope, no newowner/registry/lifecycle/IOabi/Windowsfallback/nativeactivation"
-        ]
+        ],
+        "census": {
+          "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+          "evidence": "docs/agent-execution/mvcc-4871-20261008/evidence/ordinary-worker/post-source-close-namespace-census.json",
+          "sha256": "ca190525e775c64bbfae7ee46e2e4f808a93937fc6c4a35dac8f74a22582aed6",
+          "acceptance": "Source-only operation/cost census complete; implementation finite sufficiency and full-operation measurement owed. Scalable original DATA/R1/library allocations are not fixed slot allowances."
+        }
       }
     },
     {
@@ -285,5 +291,5 @@
       "prior_five_paths": "Previous release/reappearance blocker remains unchanged; no repeated deletion."
     }
   },
-  "updated_at": "2026-10-09T01:52:32.202Z"
+  "updated_at": "2026-10-09T02:04:11.495Z"
 }
