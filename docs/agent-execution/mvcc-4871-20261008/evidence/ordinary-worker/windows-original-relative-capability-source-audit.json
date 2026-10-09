@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "issue": "snissn/gomap#5111",
+  "scope": "SOURCE_ONLY_CAPABILITY_INQUIRY_NO_IMPLEMENTATION_OR_NATIVE_ACCEPTANCE",
+  "source": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "published_source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "dependency": "golang.org/x/sys v0.41.0",
+  "product_blobs": {
+    "TreeDB/internal/rootpublication/resource_identity_windows.go": "acd67c41bc3feeece3295d156c4147e78243f478",
+    "TreeDB/internal/valuelog/retirement_namespace_windows.go": "604a14fabdf3968e923b1422ebd1a7998a110af2",
+    "TreeDB/internal/rootpublication/resource_identity_windows_test.go": "9fd3d4233dd6cc5ac8f3c032225ec90b7f4a198c",
+    "TreeDB/internal/valuelog/stable_resource_windows_test.go": "7aa4eddce1f24742ece88f8a440a10da76c14f47",
+    ".github/workflows/treedb-tests.yml": "a1151575df76a487df753236ff33dade5aceacbd"
+  },
+  "dependency_sha256": {
+    "windows/syscall_windows.go": "9e10648f79a5fef1ea7871f1740c212177af9797aab7c20f9c51ebba70254290",
+    "windows/types_windows.go": "737f7986da2c4dc6ce39846d93d0f1c9c2357f9bd128908770259a76dbfb8c4e",
+    "windows/zsyscall_windows.go": "818ebcd67ff3a3851f8842f1113792874569c6efcc353bed7d6179f348332893"
+  },
+  "finding": "SUPPORTED_HANDLE_RELATIVE_VISIBILITY_AND_CALLER_BUFFER_CENSUS_PLAUSIBLE_BUT_DIRECTORY_PERSISTENCE_UNPROVED",
+  "operations": {
+    "create": "NtCreateFile original RootDirectory, FILE_CREATE, DIRECTORY/NON_DIRECTORY and OPEN_REPARSE_POINT; checked real returned-handle Close still required.",
+    "rename": "NtSetInformationFile caller-owned destination RootDirectory information. DELETE access/source and destination rights/sharing/same-volume/class constraints; original simple-name authority only.",
+    "restore_link": "Original-handle no-replace link information available. Basic class11 differs from x/sys extended FileLinkInformation72; layouts/flags must match.",
+    "delete": "Disposition APIs available; ordinary success means delete pending, not completed removal with other handles open. POSIX visibility deletion on delete-handle close is distinct from physical streams and persistence.",
+    "census": "GetFileInformationByHandleEx directory/restart classes use caller buffer and same-handle continuation. Validate record offsets/alignment/UTF16/name lengths and genuine exhaustion/error.",
+    "sync": "FlushFileBuffers requires GENERIC_WRITE; original captured parent requests list/read-attributes/synchronize. Consulted documentation does not prove required rename/unlink directory barrier; child-create flush/write-through does not supply broader authority."
+  },
+  "guardrails": [
+    "No raw unsupported NtFlush or path reopen/fallback was accepted.",
+    "Admission must cover UTF16/name buffers, descriptor/File wrappers, private handle storage and directory buffers before effects; fixed260 name storage is a product bound, not a universal guarantee.",
+    "Original exclusive/quiescent Close failure, sharing/ACL/reparse/type/volume conflict, canonical successor and no-replace restore guards remain.",
+    "Existing auxiliary File.Close calls discard errors; these require actual custody/outcomes before the selected protocol can qualify.",
+    "Native Windows vet and eight core shards require actual current-head execution, not cross-compilation. Native original source/fixtures and foreign R1 ownership remain blocked."
+  ],
+  "primary_sources": [
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-flushfilebuffers",
+    "https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_id_both_dir_info",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_link_information",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ntcreatefile",
+    "https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddk/ns-ntddk-_file_disposition_information_ex"
+  ],
+  "coordinator_verification": "Root independently verified all five product blobs, all three dependency SHA-256 values, original helpers/access/ignored-Close source and opened all six primary documentation pages.",
+  "acceptance": "Inquiry completed: useful supported visibility/census route identified. Windows product/platform gate remains OPEN until certified persistence and actual same-owner implementation/native validation."
+}
