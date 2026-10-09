@@ -1,0 +1,58 @@
+{
+  "captured_utc": "2026-10-09T00:56:20.276786+00:00",
+  "issue": 5068,
+  "purpose": "Preserve exact pre-existing source during user-authorized temporary-file cleanup and host migration",
+  "validation": "Source snapshots only. No implementation, tests, performance acceptance, or merge.",
+  "recovery_commit_refs": [
+    {
+      "head": "cc4b305b5c236a52388e8c2c7c6b6eec5f4ca067",
+      "branch": "codex/tmp-cleanup-recovery-c3-ci-20261009",
+      "verified": true
+    },
+    {
+      "head": "6d4db6eaa01cfd7d47d690c4ba13738ed4168693",
+      "branch": "codex/tmp-cleanup-recovery-nativewire-ci-20261009",
+      "verified": true
+    }
+  ],
+  "variants": [
+    {
+      "name": "worktree-draft",
+      "original_head": "3e61b3f3130975dc025c96857405d4ce6c1b33ff",
+      "original_worktree": "/private/tmp/gomap-5068-matched-report-source-fix-root-v2",
+      "files": {
+        "docs/benchmarks/fixed_cluster_sustained_20261005/harness/README.md": {
+          "sha256": "ddc49eb177d93b1949ce423d46e7e416ead7bafbb3c381c281f60dfcd114ad49",
+          "size": 33895
+        },
+        "docs/benchmarks/fixed_cluster_sustained_20261005/harness/matched_workload_checks.py": {
+          "sha256": "a6a605440adee28505c7bf4d7fb51217fb8917cff452d28cde619195f5c6bcfd",
+          "size": 30934
+        },
+        "docs/benchmarks/fixed_cluster_sustained_20261005/harness/source-hashes.json": {
+          "sha256": "52ce0b499873c2cda8ec0a28c8616ba367608ceb6bae59b8645f200d3b1f2083",
+          "size": 5681
+        }
+      }
+    },
+    {
+      "name": "private-clone-draft",
+      "original_head": "3e61b3f3130975dc025c96857405d4ce6c1b33ff",
+      "original_worktree": "/Volumes/FlashDrive/gomap-5068-matched-report-private-clone-root-v3",
+      "files": {
+        "docs/benchmarks/fixed_cluster_sustained_20261005/harness/README.md": {
+          "sha256": "0995c5feca7a6a13c35e165006d7874833302f713676fc23205ed072114070e6",
+          "size": 33922
+        },
+        "docs/benchmarks/fixed_cluster_sustained_20261005/harness/matched_workload_checks.py": {
+          "sha256": "f9695998ae32c54e00d2b27fa30e28975720e46adc6d38d2311bff010e0f23e3",
+          "size": 31154
+        },
+        "docs/benchmarks/fixed_cluster_sustained_20261005/harness/source-hashes.json": {
+          "sha256": "3dd53e87c5f1914aeebe99d7f6b623cb936277bd71d1462b8f3294e9a9dd83ec",
+          "size": 5681
+        }
+      }
+    }
+  ]
+}
