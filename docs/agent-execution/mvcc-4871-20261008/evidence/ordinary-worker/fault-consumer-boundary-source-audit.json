@@ -1,0 +1,25 @@
+{
+  "source": "eb91c243e32b61e31fe36bb585efd9302eb91689",
+  "source_blobs": {
+    "TreeDB/cow_power_loss_test.go": "c0bfd7c6302f013c2b53225d5b675ff5a7e5b11c",
+    "TreeDB/power_loss_oracle_test.go": "a1cc4103e659ed769d0414ff5ac81e2e753d5bcc",
+    "TreeDB/pager/write_work.go": "fa7f2e8b4b462cf5623f55c3b781e83644e8796e",
+    "TreeDB/internal/powerlossoracle/model.go": "10bad40358231e3f21fb9437813ffb1859e6b5c2",
+    "TreeDB/db/root_publication_activation.go": "9ba10bdfc07ed0cff76be608bb70faa14f945a27",
+    "TreeDB/db/primary_capsule_runtime_v6.go": "fbfa3f0cdf236dbf8fbb857ab6296d68a2add2e8"
+  },
+  "status": "root source-only persistence-boundary audit; no test adaptation or acceptance",
+  "verified_boundaries": [
+    "Fresh V6 installAuthority invokes WritePrimaryCapsuleWithFenceV6 on actual PRIMARY slot [2,5) or [5,8); generic META branch is bypassed.",
+    "Shared Pager core emits Before/AfterPublicationSealWrite for the actual immutable publication range and Before/AfterIndexDataSync around its real file fence. Earlier PRIMARY/DATA dependency syncs also use index-data labels.",
+    "Model.Observe syncs the exact observed file after AfterIndexDataSync and AfterMetaSync; Model state and trace mutate without internal synchronization.",
+    "COW stable-image fixture currently clones only at AfterMetaSync. NewMetaMissingClosure fixture captures only AfterMetaWrite and concurrently mutates Observe/Clone/Overlay/UseObservedTrace without a shared observer lock."
+  ],
+  "required_reconciliation": [
+    "Serialize actual Model mutations, clones, captured cut state and observer deactivation/join; do not replace protocol evidence with a mutex-only repair.",
+    "Fresh V6 terminal-fence discriminator must first witness the actual complete three-page PRIMARY capsule seal range for the requested publication, then its actual completed fence on that same original file. First or arbitrary AfterIndexDataSync is insufficient because dependency syncs precede installation.",
+    "Preserve real legacy/SavedV5 META witnesses in their correctly bound format lane; fresh V6 tests must cover its genuine seal/install/fence cuts rather than claiming META events occur.",
+    "Preserve grouped-command all-or-none recovery, DURABLE acknowledgement survival, RELAXED/no-WAL volatile-versus-durable boundaries, and poison/failure classification.",
+    "Selective-writeback V6 counterexamples need actual capsule target bytes plus genuine DATA/PRIMARY-bank/leaf/value/name closure independently varied; embedded predecessor is proof, not an alternative selector candidate or source of missing current closure. Retain corruption/fallback/refusal negative controls and public reopen checks."
+  ]
+}
