@@ -1,0 +1,2021 @@
+{
+  "actual_main": "3f87d74b98e8b1e809d151611be03785f85e2283",
+  "local_checkpoint": "eb91c243e32b61e31fe36bb585efd9302eb91689",
+  "published_checkpoint": "356ea300d9bdac7be7c25ec21c9c7ec0acd80d1e",
+  "tree": "b391836d4b9313321222b8e53c5cb69094b0dced",
+  "whole_pr_path_count": 286,
+  "policy_bindings": {
+    "AGENTS.md": {
+      "blob": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+      "sha256": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99"
+    },
+    "HashDB/AGENTS.md": {
+      "blob": "a32de3972daca5c7c8b08f53485861bbbfeec1d4",
+      "sha256": "408db25830f047ef318151d342bc41f6d76ce2c1b382fe753568908ee2bfad57"
+    },
+    "TreeDB/AGENTS.md": {
+      "blob": "13811b724a980dddad76b3e4c12b6403214b8069",
+      "sha256": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854"
+    }
+  },
+  "mapping": [
+    {
+      "path": ".github/ci/ci_impact.json",
+      "policy_chain": [
+        "AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/batch/batch.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/cow_checkpoint.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/cow_cut.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/cow_dictionary_cleanup_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/cow_flush.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/cow_resources.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/db.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/mvcc_admission.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/stable_dictionary_resource_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/caching/stable_leaf_resource.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/collections/stable_resource.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/command_wal_public_cached.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/cow_public_resource_lifetime_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/batch.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/command_wal_debt.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/command_wal_debt_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/command_wal_publish.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/commit_combiner.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/commit_combiner_mvcc_input_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/compact_index_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/db.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/dependency_directory_rebuild_v2.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/dependency_directory_snapshot_rebind_v2.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/dependency_directory_v2.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_primary_recovery_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_primary_recovery_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_primary_snapshot_rebind_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_root_bench_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_root_pager_lock_contract_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_root_recovery.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/durable_root_snapshot_rebind.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/flush_span_run_plan.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/fragmentation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/fragmentation_trigger_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/fragmentation_validate.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/historical_stale_build_archive_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/index_gen.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/index_swap.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/index_swap_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_manifest_store.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_rewrite.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/leaf_page_log.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/maintenance_reachability.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/mvcc_admission.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/namespace_instrumentation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/namespace_mutation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/open_readonly.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/ordered_root_publish.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/ordered_root_test_hooks_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/owned_finish_callback_scope_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/owned_finish_callback_scope_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/physical_snapshot_cut_v1.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/pools.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/power_loss_certification_stale_build_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/power_loss_witness_external_registry_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/power_loss_witness_registry_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/prepared_root_publication_profile.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/prepared_root_publication_profile_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_arena_owner_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_bank_construction_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_recovery_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_snapshot_rebind_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_capsule_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_dependency_cleanup_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_dependency_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_directory_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_joint_swap_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_joint_vacuum_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_leaf_pack_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_offline_pair_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_owned_promotion_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_publication_scratch_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_runtime_metadata_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_shared_transaction_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/primary_vacuum_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/root_publication_activation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/snapshot_primary_retention.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/snapshot_primary_retention_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/span_run_contract_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/stable_leaf_rewrite.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/stable_pager_owned_operations_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/stable_resource.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/standalone_leaf_page_stable_resource_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/vacuum_collection_roots.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/vacuum_offline.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/vacuum_online.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/architecture.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/contracts.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/cow-cache-publication.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/recovery.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/storage-format.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/value-log-lifecycle.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/verification.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/docs/spec/write-path-and-durability.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/freelist/generation_snapshot_v1.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/adaptive/controller.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/dictdb/read_definition.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/dictdb/resource_capture.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/dictdb/stable_resource_capture_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/durabilitycut/durabilitycut.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/iterator/ordinal.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/leafrefscan/walk.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_budget.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/mvccadmission/admission.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/powerlossoracle/ledger.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/arena_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/bundle.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/bundle_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/claim_retention_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/custody.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/metadata.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/metadata_range.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/metadata_retention_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/ownership.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/physical_capture.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/read_root_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/release_queue.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/release_queue_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/primaryarena/retention.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/raftfsm/raft_snapshot.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/raftfsm/raft_snapshot_primary_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/raftfsm/snapshot_capture_files_v1.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/retainedalloc/owner_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/dependency_directory_metadata_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/dependency_directory_reader_v2.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/dependency_directory_records_v2.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/dependency_directory_remove_v2.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_format_v1.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_format_v1_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_primary_root_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_primary_root_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/file_metadata.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_metadata_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/ordinary_finish_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_bank_metadata_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_candidate_v5.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_capsule_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_capsule_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_data_certificate_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/registry_capacity.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/registry_capacity_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_append_mutation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_builder_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_coalesce_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_coalesce_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_contract_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_directory_records_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_directory_records_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_directory_view_v2.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_directory_view_v2_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_entry_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_entry_outgoing_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_entry_view.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_field_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_identity_unix_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_identity_windows_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_import_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_import_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_import_directory.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_import_set.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_kind_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_kind_merge_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_kind_merge_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_logical_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_logical_borrow.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_logical_borrow_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_load.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_manifest_load_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_mutation_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_namespace_cleanup_unix_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_obligation_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_original_cleanup_unix_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_physical_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_physical_selection_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_registrar.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_requirements_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_requirements_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_rid_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_rope_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_selector.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_set_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_telemetry_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token_allocation_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/types.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/templatedb/resource_capture.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/mmap_owned_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/mmap_unix.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/mmap_windows.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/reader_mmap.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/retirement_parent_accounting_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/retirement_parent_pool.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/retirement_parent_pool_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/retirement_shared_parent_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_pending_successor_supported_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource_supported_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/mvcc/mvcc.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/mvcc/versions.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/node/primary_directory_v1.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/node/primary_directory_v1_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/page/page.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/adjacent_write_work_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/dirty_chunks.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/grow.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/index_data_stable_sync_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/mmap_unix.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/owned_pair_sync_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/pager.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/pager_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/primary_capsule_write_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/primary_read_root_v6.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/pager/write_work.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/power_loss_oracle_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/primary_joint_vacuum_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/primary_owned_promotion_v6_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/primary_profile_v5_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/profile_entrypoint_inventory_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/public.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/side_store_lookups.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/template_adapter.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/template_stable_resource.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/template_stable_resource_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_counterexamples.json",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/README.md",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/binding.json",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/contracts.json",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/ledger.json",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/original-build-info.txt",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/original-replay.log",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_legacy_stale_build_v1/witness.go.txt",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_risk_inventory.json",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/testdata/power_loss_witness_contracts.json",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/tree/iterator.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/tree/owned_iterator.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/tree/pages.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/tree/primary_directory.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/tree/primary_iterator.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/tree/tree.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/zipper/primary_arena_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/zipper/primary_directory.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/zipper/primary_scratch_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/zipper/read_only_prepare.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/zipper/read_only_prepare_test.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/zipper/span_native_apply.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "TreeDB/zipper/zipper.go",
+      "policy_chain": [
+        "AGENTS.md",
+        "TreeDB/AGENTS.md"
+      ]
+    },
+    {
+      "path": "cmd/benchprof/README.md",
+      "policy_chain": [
+        "AGENTS.md"
+      ]
+    },
+    {
+      "path": "cmd/unified_bench/README.md",
+      "policy_chain": [
+        "AGENTS.md"
+      ]
+    },
+    {
+      "path": "docs/API_STABILITY.md",
+      "policy_chain": [
+        "AGENTS.md"
+      ]
+    },
+    {
+      "path": "docs/contracts/CONCURRENCY.md",
+      "policy_chain": [
+        "AGENTS.md"
+      ]
+    }
+  ],
+  "scope": "Historical immutable checkpoint census; full diff required for eventual mature review. No new dirty source, independent review or policy check acceptance."
+}
