@@ -1,0 +1,15 @@
+{
+  "argv": [
+    "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+    "test",
+    "-p",
+    "2",
+    "-mod=readonly",
+    "./TreeDB/db",
+    "-run",
+    "^(TestPrimaryConstructionV6OriginalSiblingFailureCustody|TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt)$",
+    "-count=1"
+  ],
+  "exit": 1,
+  "source": "d09f39ac5ff09082d566b641e4a6665e90947a30748b53d60f158556a95378dc"
+}

@@ -1,0 +1,13 @@
+{
+  "parent": "87ff5f473458e6e6bcddc963e748c2276f126d34",
+  "import": [
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "before": "d09f39ac5ff09082d566b641e4a6665e90947a30748b53d60f158556a95378dc",
+      "after": "559390de09ac704312e9634a752537b0e0fe6a46243c31665d97687c2ca28538",
+      "source": "after.go"
+    }
+  ],
+  "excluded_dirty_construction_prerequisite": "TreeDB/caching/native_mvcc_prune_v6.go",
+  "qualification": "UNQUALIFIED"
+}

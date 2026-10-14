@@ -1,0 +1,37 @@
+[
+  {
+    "name": "normal",
+    "argv": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "-p",
+      "2",
+      "-mod=readonly",
+      "./TreeDB/db",
+      "-run",
+      "^(TestPrimaryConstructionV6OriginalSiblingFailureCustody|TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt)$",
+      "-count=1"
+    ],
+    "exit": 0,
+    "source": "559390de09ac704312e9634a752537b0e0fe6a46243c31665d97687c2ca28538",
+    "raw": "normal.log"
+  },
+  {
+    "name": "race",
+    "argv": [
+      "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+      "test",
+      "-p",
+      "2",
+      "-mod=readonly",
+      "-race",
+      "./TreeDB/db",
+      "-run",
+      "^(TestPrimaryConstructionV6OriginalSiblingFailureCustody|TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt)$",
+      "-count=1"
+    ],
+    "exit": 0,
+    "source": "559390de09ac704312e9634a752537b0e0fe6a46243c31665d97687c2ca28538",
+    "raw": "race.log"
+  }
+]

@@ -71,7 +71,9 @@ func (t *DurableRootTransaction) PrimaryConstructionReferenceV6() primaryarena.R
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.constructionV6 == nil || t.constructionV6.cleanupPhase != 0 {
+	// Reference visibility reports actual retained custody, including a failed
+	// or paused abort. Mutation eligibility remains guarded by cleanupPhase.
+	if t.constructionV6 == nil {
 		return primaryarena.Ref{}
 	}
 	return t.constructionV6.root

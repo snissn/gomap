@@ -1,0 +1,12 @@
+--- FAIL: TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt (0.01s)
+    root_publication_build_group_primary_v6_test.go:230: original failed custody lost
+--- FAIL: TestPrimaryConstructionV6OriginalSiblingFailureCustody (0.00s)
+    --- FAIL: TestPrimaryConstructionV6OriginalSiblingFailureCustody/apply (0.00s)
+        root_publication_primary_cleanup_v6_test.go:61: original construction erased
+    --- FAIL: TestPrimaryConstructionV6OriginalSiblingFailureCustody/copy (0.00s)
+        root_publication_primary_cleanup_v6_test.go:61: original construction erased
+    --- FAIL: TestPrimaryConstructionV6OriginalSiblingFailureCustody/build (0.00s)
+        root_publication_primary_cleanup_v6_test.go:61: original construction erased
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.011s
+FAIL
