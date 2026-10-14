@@ -1,0 +1,112 @@
+--- a/TreeDB/internal/rootpublication/durable_root_transaction.go
++++ b/TreeDB/internal/rootpublication/durable_root_transaction.go
+@@ -309,18 +309,29 @@
+ 	if transaction == nil {
+ 		return nil
+ 	}
+-	transaction.mu.Lock()
+-	defer transaction.mu.Unlock()
+-	if transaction.physicalCleanupError != nil {
+-		return transaction.physicalCleanupError
+-	}
+-	if transaction.phase != durableRootConstructingV6 {
+-		return nil
+-	}
+-	if transaction.constructionV6 == nil || transaction.ownerLockedV6() != ResourceOwnerBuilder {
+-		return ErrDurableRootOwnership
+-	}
+-	return transaction.abortConstructionLockedV6()
++	var terminal primaryConstructionReleaseState
++	err := func() error {
++		transaction.mu.Lock()
++		defer transaction.mu.Unlock()
++		if transaction.physicalCleanupError != nil {
++			return transaction.physicalCleanupError
++		}
++		if transaction.phase != durableRootConstructingV6 {
++			return nil
++		}
++		if transaction.constructionV6 == nil || transaction.ownerLockedV6() != ResourceOwnerBuilder {
++			return ErrDurableRootOwnership
++		}
++		return transaction.abortConstructionLockedV6(&terminal)
++	}()
++	transaction = nil
++	if err != nil {
++		return err
++	}
++	if terminal.owner != nil {
++		terminal.owner.RemovePending(terminal.charge)
++	}
++	return nil
+ }
+ 
+ func (transaction *DurableRootTransaction) transfer(from, to ResourceOwnerState) error {
+@@ -349,32 +360,43 @@
+ 	if transaction == nil {
+ 		return nil
+ 	}
+-	transaction.mu.Lock()
+-	defer transaction.mu.Unlock()
+-	if transaction.physicalCleanupError != nil {
+-		return transaction.physicalCleanupError
+-	}
+-	if transaction.ownerLockedV6() == ResourceOwnerReleased {
+-		return nil
+-	}
+-	if transaction.ownerLockedV6() != owner || (transaction.phase != durableRootPrepared && transaction.phase != durableRootConstructingV6) {
+-		return ErrDurableRootOwnership
+-	}
+-	if transaction.phase == durableRootConstructingV6 {
+-		return transaction.abortConstructionLockedV6()
+-	}
+-	if err := transaction.abort(transaction.input); err != nil {
+-		return transaction.recordPhysicalCleanupFailureLocked(err)
+-	}
+-	if transaction.isConstructedPrimaryV6() {
+-		return transaction.abortConstructionLockedV6()
+-	}
+-	if transaction.abortComplete != nil {
+-		if err := transaction.abortComplete(transaction.input); err != nil {
++	var terminal primaryConstructionReleaseState
++	err := func() error {
++		transaction.mu.Lock()
++		defer transaction.mu.Unlock()
++		if transaction.physicalCleanupError != nil {
++			return transaction.physicalCleanupError
++		}
++		if transaction.ownerLockedV6() == ResourceOwnerReleased {
++			return nil
++		}
++		if transaction.ownerLockedV6() != owner || (transaction.phase != durableRootPrepared && transaction.phase != durableRootConstructingV6) {
++			return ErrDurableRootOwnership
++		}
++		if transaction.phase == durableRootConstructingV6 {
++			return transaction.abortConstructionLockedV6(&terminal)
++		}
++		if err := transaction.abort(transaction.input); err != nil {
+ 			return transaction.recordPhysicalCleanupFailureLocked(err)
+ 		}
+-	}
+-	transaction.releaseOwnerLockedV6()
++		if transaction.isConstructedPrimaryV6() {
++			return transaction.abortConstructionLockedV6(&terminal)
++		}
++		if transaction.abortComplete != nil {
++			if err := transaction.abortComplete(transaction.input); err != nil {
++				return transaction.recordPhysicalCleanupFailureLocked(err)
++			}
++		}
++		transaction.releaseOwnerLockedV6()
++		return nil
++	}()
++	transaction = nil
++	if err != nil {
++		return err
++	}
++	if terminal.owner != nil {
++		terminal.owner.RemovePending(terminal.charge)
++	}
+ 	return nil
+ }
+ 

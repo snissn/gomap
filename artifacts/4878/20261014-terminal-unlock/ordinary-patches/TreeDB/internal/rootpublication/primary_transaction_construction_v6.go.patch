@@ -1,0 +1,146 @@
+--- a/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
++++ b/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+@@ -23,6 +23,11 @@
+ 	members        [1]*DurableRootTransaction
+ 	candidateBound bool
+ 	metadataCharge uint64
++	// This is custody on the SAME transaction, admitted in its containing allocation.
++	nativeWorkOwned bool
++	cleanupPhase    uint8
++	cleanupQueue    primaryarena.ReleaseQueue
++	cleanupReceipt  *PrimaryConstructionReleaseWork
+ }
+ type PrimaryPromotionV6 struct {
+ 	Image        []byte
+@@ -31,6 +36,15 @@
+ }
+ 
+ func NewPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
++	return newPrimaryConstructionTransactionV6(a, w, false)
++}
++
++// Native constructors keep callback and cleanup work with their original caller.
++func NewNativeMVCCPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork) (primaryarena.ReadRootConstructionV6, bool, error) {
++	return newPrimaryConstructionTransactionV6(a, w, true)
++}
++
++func newPrimaryConstructionTransactionV6(a *primaryarena.Arena, w *iterator.OrdinalScanWork, native bool) (primaryarena.ReadRootConstructionV6, bool, error) {
+ 	if a == nil || !a.CapsuleFormatV6() || w == nil {
+ 		return nil, false, ErrDurableRootOwnership
+ 	}
+@@ -41,7 +55,8 @@
+ 	if err := a.MetadataOwner().AddPending(charge); err != nil {
+ 		return nil, false, err
+ 	}
+-	t := &DurableRootTransaction{owner: ResourceOwnerBuilder, phase: durableRootConstructingV6, constructionV6: &primaryTransactionConstructionV6{arena: a, metadataCharge: charge}}
++	t := &DurableRootTransaction{owner: ResourceOwnerBuilder, phase: durableRootConstructingV6, constructionV6: &primaryTransactionConstructionV6{arena: a, metadataCharge: charge, nativeWorkOwned: native}}
++	a.InitializeReleaseQueue(&t.constructionV6.cleanupQueue)
+ 	root, ready, err := a.PrepareConstructedReadRootV6(t, w)
+ 	if !ready || err != nil {
+ 		a.MetadataOwner().RemovePending(charge)
+@@ -56,7 +71,7 @@
+ 	}
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+-	if t.constructionV6 == nil {
++	if t.constructionV6 == nil || t.constructionV6.cleanupPhase != 0 {
+ 		return primaryarena.Ref{}
+ 	}
+ 	return t.constructionV6.root
+@@ -68,7 +83,7 @@
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+ 	c := t.constructionV6
+-	if c == nil || t.phase != durableRootConstructingV6 || c.certificate != nil {
++	if c == nil || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.certificate != nil {
+ 		return false, ErrDurableRootOwnership
+ 	}
+ 	cert, ready, err := c.arena.SealConstructedReadRootV6(c.root, image, groups, t, w)
+@@ -91,7 +106,7 @@
+ 	}
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+-	if t.constructionV6 == nil || t.phase != durableRootConstructingV6 {
++	if t.constructionV6 == nil || t.constructionV6.cleanupPhase != 0 || t.phase != durableRootConstructingV6 {
+ 		return nil
+ 	}
+ 	return t.constructionV6.certificate
+@@ -109,7 +124,12 @@
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+ 	c := t.constructionV6
+-	if c == nil || t.phase != durableRootConstructingV6 || c.certificate == nil || resources == nil || resources.Owner() != ResourceOwnerBuilder ||
++	// Native visibility requires the work-bearing callback contract; the
++	// existing synchronous callback binding cannot claim its continuation.
++	if c != nil && c.nativeWorkOwned {
++		return false, ErrNativeMVCCRootWorkRequiredV6
++	}
++	if c == nil || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.certificate == nil || resources == nil || resources.Owner() != ResourceOwnerBuilder ||
+ 		spec.PreparedPrimary == nil || spec.PreparedPrimary.readCertificate != c.certificate || spec.Lineage == (DurableRootLineageID{}) || spec.Sequence == 0 ||
+ 		spec.Abort == nil || spec.Fail == nil {
+ 		return false, ErrDurableRootOwnership
+@@ -157,43 +177,19 @@
+ 	// The Set remains sole authority for its resource edge; this original owner
+ 	// separately records completion of transaction/descriptor custody.
+ }
+-func (t *DurableRootTransaction) abortConstructionLockedV6() error {
+-	if t.physicalCleanupError != nil {
+-		return t.physicalCleanupError
+-	}
+-	c := t.constructionV6
++func (t *DurableRootTransaction) abortConstructionLockedV6(terminal *primaryConstructionReleaseState) error {
++	if t.constructionV6 != nil && t.constructionV6.nativeWorkOwned {
++		return ErrNativeMVCCRootWorkRequiredV6
++	}
+ 	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
+-	for c.componentCount > 0 {
+-		r := c.components[c.componentCount-1]
+-		ready, err := c.arena.Drop(r, work)
+-		if !ready || err != nil {
+-			return t.recordPhysicalCleanupFailureLocked(errors.Join(err, ErrDurableRootOwnership))
+-		}
+-		c.componentCount--
+-	}
+-	if c.root != (primaryarena.Ref{}) {
+-		ready, err := c.arena.DropReadRootConstructionV6(c.root, t, work)
+-		if !ready || err != nil {
+-			return t.recordPhysicalCleanupFailureLocked(errors.Join(err, ErrDurableRootOwnership))
+-		}
+-		c.root = primaryarena.Ref{}
+-	}
+-	// Root consumption precedes callback payload disposal. Keep every original
+-	// descriptor/charge on a late completion refusal; the first error prevents
+-	// replaying this already consumed root edge.
+-	if t.abortComplete != nil {
+-		if err := t.abortComplete(t.input); err != nil {
+-			return t.recordPhysicalCleanupFailureLocked(err)
+-		}
+-	}
+-	t.constructionV6 = nil
+-	t.input = DurableRootCallbackInput{}
+-	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
+-	c.arena.MetadataOwner().RemovePending(c.metadataCharge)
+-	t.owner = ResourceOwnerReleased
+-	t.phase = durableRootConsumed
+-	return nil
+-}
++	for {
++		ready, err := t.abortNativeMVCCConstructionStepLockedV6(work, terminal, nil)
++		if ready || err != nil {
++			return err
++		}
++	}
++}
++
+ func (t *DurableRootTransaction) PrimaryPromotionV6() *PrimaryPromotionV6 {
+ 	if t == nil {
+ 		return nil
+@@ -277,7 +273,7 @@
+ 	t.mu.Lock()
+ 	defer t.mu.Unlock()
+ 	c := t.constructionV6
+-	if c == nil || t.phase != durableRootConstructingV6 || c.componentCount == len(c.components) || ref == (primaryarena.Ref{}) {
++	if c == nil || c.cleanupPhase != 0 || t.phase != durableRootConstructingV6 || c.componentCount == len(c.components) || ref == (primaryarena.Ref{}) {
+ 		return false, ErrDurableRootOwnership
+ 	}
+ 	c.components[c.componentCount] = ref

@@ -68,9 +68,7 @@ func (state *fileProducerReleaseWork) releaseStep(native bool, w *iterator.Ordin
 		return true, nil
 	}
 	state.phase = 1
-	ready, err := state.removal.ContinueWork(w)
-	if ready {
-		state.phase = 2
-	}
-	return ready, err
+	// Return through both original File unlocks before the external receipt
+	// refunds the containing allocation on its next step.
+	return false, nil
 }

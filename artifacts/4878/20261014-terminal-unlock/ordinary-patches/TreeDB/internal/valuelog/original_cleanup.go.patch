@@ -1,0 +1,92 @@
+--- a/TreeDB/internal/valuelog/original_cleanup.go
++++ b/TreeDB/internal/valuelog/original_cleanup.go
+@@ -2,6 +2,7 @@
+ 
+ import (
+ 	"errors"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"os"
+ )
+ 
+@@ -91,41 +92,13 @@
+ }
+ 
+ func (m *Manager) finishTerminalFile(f *File) error {
+-	f.terminalMu.Lock()
+-	defer f.terminalMu.Unlock()
+-	if f.terminalAttempted {
+-		return f.terminalErr
+-	}
+-	m.mu.Lock()
+-	if m.files[f.ID] != f || f.RefCount.Load() != 0 {
+-		m.mu.Unlock()
+-		return nil
+-	}
+-	f.terminalAttempted = true
+-	unobserveErr := m.unobserveStableFileLocked(f)
+-	m.mu.Unlock()
+-	closeErr := f.Close()
+-	parentErr := f.closeOriginalRetirementParent()
+-	actual := errors.Join(unobserveErr, closeErr, parentErr)
+-	m.mu.Lock()
+-	defer m.mu.Unlock()
+-	if actual != nil {
+-		f.terminalErr = actual
+-		m.retainOriginalFileFailureLocked(f)
+-		return m.closeErr
+-	}
+-	if m.files[f.ID] == f {
+-		delete(m.files, f.ID)
+-		f.producerDetached.Store(true)
+-		if f.IsZombie.Load() {
+-			m.retiredCount--
+-		}
+-		f.refundProducerMetadata()
+-	}
+-	if !m.closeRunning {
+-		m.refundTerminalMetadataLocked()
+-	}
+-	return nil
++	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++	for {
++		ready, err := m.finishNativeMVCCTerminalStep(f, false, &w)
++		if ready || err != nil {
++			return err
++		}
++	}
+ }
+ 
+ func (m *Manager) retainOriginalFileFailureLocked(f *File) {
+@@ -174,7 +147,11 @@
+ 	defer f.deleteMu.Unlock()
+ 	owner, charge := f.producerMetadata, f.producerCharge
+ 	f.producerMetadata, f.producerCharge = nil, 0
++	manager := f.manager
+ 	f.File, f.manager = nil, nil
++	if manager != nil && manager.fileAliases.Add(-1) < 0 {
++		panic("value-log Manager file alias underflow")
++	}
+ 	// Path/identities remain immutable diagnostic locators for already-consumed
+ 	// original operations; they never authorize a replacement physical object.
+ 	f.dictLookup, f.templateLookup, f.templateDefCache = nil, nil, nil
+@@ -184,18 +161,11 @@
+ 	}
+ }
+ func (m *Manager) refundTerminalMetadataLocked() {
+-	if !m.closing || m.closeRunning || len(m.files) != 0 || m.closeErr != nil {
++	if m.wrapperNativeCleanup || !m.closing || m.closeRunning || len(m.files) != 0 || m.closeErr != nil || m.wrapperBorrows.Load() != 0 || m.fileAliases.Load() != 0 {
+ 		return
+ 	}
+ 	owner, charge := m.producerMetadata, m.producerCharge
+-	m.producerMetadata, m.producerCharge = nil, 0
+-	m.files, m.currentWritableByLane, m.multiCurrentWritableLanes = nil, nil, nil
+-	m.retirementParents, m.recoveredStableDeleteDirs = nil, nil
+-	m.dictLookup, m.templateLookup, m.templateDefCache = nil, nil, nil
+-	m.deferredDeletionSync = nil
+-	m.groupedFrameCacheBudget = nil
+-	m.stableResourcePins = nil
+-	m.dir, m.extraScanDirs = "", nil
++	m.clearTerminalAliasesLocked()
+ 	if owner != nil {
+ 		owner.RemovePending(charge)
+ 	}

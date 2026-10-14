@@ -20,12 +20,17 @@ type namespaceProofCloseWork struct {
 // transfers its exact proof alias before any containing-storage refund. The
 // caller clears its own proof alias after Bind and retains this admitted
 // receipt until ContinueWork reports actual completion.
-type NamespaceProofReleaseWork struct {
-	mu           sync.Mutex
+type namespaceProofReleaseState struct {
 	proof        *StableNamespaceCreationProof
-	removal      retainedalloc.RemovalWork
 	phase        uint8
 	removalBound bool
+	owner        *retainedalloc.Owner
+	charge       uint64
+}
+type NamespaceProofReleaseWork struct {
+	mu sync.Mutex
+	namespaceProofReleaseState
+	removal retainedalloc.RemovalWork
 }
 
 func (s *NamespaceProofReleaseWork) Bind(proof *StableNamespaceCreationProof, w *iterator.OrdinalScanWork) (bool, error) {
@@ -61,11 +66,15 @@ func (s *NamespaceProofReleaseWork) continueWork(native bool, w *iterator.Ordina
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.namespaceProofReleaseState.continueWork(native, w, &s.removal)
+}
+func (s *namespaceProofReleaseState) continueWork(native bool, w *iterator.OrdinalScanWork, removal *retainedalloc.RemovalWork) (bool, error) {
+
 	if s.phase == 2 {
 		return true, nil
 	}
 	if s.phase == 1 {
-		ready, err := s.removal.ContinueWork(w)
+		ready, err := removal.ContinueWork(w)
 		if ready {
 			s.phase = 2
 		}
@@ -142,11 +151,15 @@ func (s *NamespaceProofReleaseWork) continueWork(native bool, w *iterator.Ordina
 		return false, proof.cleanupErr
 	}
 	if proof.metadata != nil {
-		ready, err := s.removal.BindPendingWork(proof.metadata, proof.metadataCharge, w)
-		if !ready || err != nil {
-			return false, err
+		if removal != nil {
+			ready, err := removal.BindPendingWork(proof.metadata, proof.metadataCharge, w)
+			if !ready || err != nil {
+				return false, err
+			}
+			s.removalBound = true
+		} else {
+			s.owner, s.charge = proof.metadata, proof.metadataCharge
 		}
-		s.removalBound = true
 	}
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*proof))+64) {
 		return false, nil

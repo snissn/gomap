@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+	"github.com/snissn/gomap/TreeDB/internal/memtable"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
 	"path/filepath"
 	"testing"
+	"unsafe"
 )
 
 func nativeAbsenceConstructor(t *testing.T, a *primaryarena.Arena) *DurableRootTransaction {
@@ -126,16 +128,30 @@ func TestNativeMVCCPrivateConstructorPhysicalAbortV6(t *testing.T) {
 	ref := txn.PrimaryConstructionReferenceV6()
 	before := a.MetadataOwner().Bytes()
 	counts := a.Counters()
-	if ready, err := txn.AbortNativeMVCCConstructionStepV6(&iterator.OrdinalScanWork{}); ready || err != nil || txn.constructionV6.cleanupPhase != 0 || a.Counters() != counts {
+	var receipt PrimaryConstructionReleaseWork
+	if ready, err := receipt.Bind(txn, &iterator.OrdinalScanWork{}); ready || err != nil || txn.constructionV6.cleanupPhase != 0 || a.Counters() != counts {
 		t.Fatalf("before-effect refusal %t %v", ready, err)
 	}
 	if err := txn.Abort(); !errors.Is(err, ErrNativeMVCCRootWorkRequiredV6) || a.Counters() != counts {
 		t.Fatalf("ordinary callback drain %v", err)
 	}
+	budget, err := memtable.NewCOWBudget(memtable.DefaultCOWLimits())
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := budget.AcquireExternal(memtable.COWAllocationCharge(uint64(unsafe.Sizeof(receipt))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { admission.Close(); budget.Close() }()
+	if ready, err := receipt.Bind(txn, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); !ready || err != nil {
+		t.Fatal("external receipt bind", err)
+	}
+	txn = nil
 	// Admit exactly observation and root-drop. The actual physical bank and
 	// containing transaction remain retained when the queue cannot progress.
 	w := &iterator.OrdinalScanWork{RecordLimit: 3, ByteLimit: 1 << 20}
-	if ready, err := txn.AbortNativeMVCCConstructionStepV6(w); ready || err != nil || txn.constructionV6 == nil || txn.constructionV6.root != (primaryarena.Ref{}) {
+	if ready, err := receipt.ContinueWork(w); ready || err != nil || receipt.transaction.constructionV6 == nil || receipt.transaction.constructionV6.root != (primaryarena.Ref{}) {
 		t.Fatalf("paused physical cleanup %t %v", ready, err)
 	}
 	if a.MetadataOwner().Bytes() != before || a.Counters().BanksFreed != counts.BanksFreed {
@@ -147,18 +163,18 @@ func TestNativeMVCCPrivateConstructorPhysicalAbortV6(t *testing.T) {
 	completed := false
 	for turn := 0; turn < 32 && !completed; turn++ {
 		w := &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}
-		completed, err = txn.AbortNativeMVCCConstructionStepV6(w)
+		completed, err = receipt.ContinueWork(w)
 		if err != nil || w.Records > 32 || w.Bytes > 1<<20 {
 			t.Fatalf("owned physical drain %t %v %+v", completed, err, w)
 		}
 	}
-	if !completed || txn.constructionV6 != nil || txn.Owner() != ResourceOwnerReleased || a.MetadataOwner().Bytes() >= before || a.Counters().BanksFreed != counts.BanksFreed+1 {
+	if !completed || receipt.transaction != nil || a.MetadataOwner().Bytes() >= before || a.Counters().BanksFreed != counts.BanksFreed+1 {
 		t.Fatal("native constructor did not complete actual physical closure")
 	}
 	if _, ready, err := a.ReadRootConstructionOwnerV6(ref.PageID, &iterator.OrdinalScanWork{RecordLimit: 32, ByteLimit: 1 << 20}); ready || err == nil {
 		t.Fatal("freed physical constructor remained discoverable")
 	}
-	if ready, err := txn.AbortNativeMVCCConstructionStepV6(&iterator.OrdinalScanWork{}); !ready || err != nil {
+	if ready, err := receipt.ContinueWork(&iterator.OrdinalScanWork{}); !ready || err != nil {
 		t.Fatalf("terminal replay %t %v", ready, err)
 	}
 }

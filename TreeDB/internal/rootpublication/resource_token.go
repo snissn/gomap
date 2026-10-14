@@ -1785,22 +1785,34 @@ func (proof *StableNamespaceCreationProof) ReleaseWithError() error {
 		return nil
 	}
 	proof.closeMu.Lock()
-	defer proof.closeMu.Unlock()
 	proof.mu.Lock()
 	if proof.closeWork.native {
 		proof.mu.Unlock()
+		proof.closeMu.Unlock()
 		return retainedalloc.ErrWorkRequired
 	}
 	proof.mu.Unlock()
-	var state NamespaceProofReleaseWork
+	var state namespaceProofReleaseState
 	state.proof = proof
 	w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
-	for {
-		ready, err := state.continueWork(false, &w)
-		if err != nil || ready {
+	for state.proof != nil {
+		ready, err := state.continueWork(false, &w, nil)
+		if err != nil {
+			proof.closeMu.Unlock()
 			return err
 		}
+		if ready {
+			break
+		}
 	}
+	// The SAME receipt has detached every proof alias. Join the original
+	// active call before refund, and never access the disposed header again.
+	proof.closeMu.Unlock()
+	proof = nil
+	if state.owner != nil {
+		state.owner.RemovePending(state.charge)
+	}
+	return nil
 }
 
 const (

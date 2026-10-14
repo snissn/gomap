@@ -1,0 +1,61 @@
+{
+  "status": "UNQUALIFIED CONSTRUCTION; public ABI and all original rank gates remain open",
+  "owned_paths": [
+    {
+      "path": "TreeDB/internal/valuelog/file_producer_work.go",
+      "sha256": "7353152d5f560ffa831d2f4bd441d8ef56d5f4f10b2cab2ccb1df55443f8674a",
+      "bytes": 2133,
+      "before_blob": "e88e03a8b3d55b926ae1aeb5cf778e191b211d81"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/file_producer_containing_unlock_test.go",
+      "sha256": "6ef80a170f307bf03ffda294df11b229f8988b5ba45ec86a16db7ca8c8f500f7",
+      "bytes": 1970,
+      "before_blob": null
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "sha256": "8307af44109ad33d1add92904dae845fe3d2df29d457912790f032b319ed92e7",
+      "bytes": 100690,
+      "before_blob": "1d926cc51af4314b596a41f8a69b625bee5ba43d"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_proof_close_work.go",
+      "sha256": "5f0682672ad1e00a54070f7c420868b524f271f8aeee8e5e2ff7768aeed5069d",
+      "bytes": 5750,
+      "before_blob": "f7ad5c5cbebac8361af010e42703492bb9261d6a"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/namespace_containing_unlock_test.go",
+      "sha256": "36f2f67ea5854406276c7a3c81427bec7265c89f47ea4f9298fa49b6a5958075",
+      "bytes": 3836,
+      "before_blob": null
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "sha256": "8a3bcfdd98507566c7e602f0d23fc6ee8db62d9a0c28d8f867a750b330e487c0",
+      "bytes": 21786,
+      "before_blob": "cc179a93132ec939e579f8be3e126573aa7f1209"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6.go",
+      "sha256": "a6b5a17bed63beb36c1676eb1a8842f6124e2b4f4ba22d983de88193369ee055",
+      "bytes": 6936,
+      "before_blob": "fcd116fedafe5267f4d44bbb5c293a6b8aafb845"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction_native_mvcc_v6_test.go",
+      "sha256": "aad31c5a44f5c6256c0a5afc64650aea3d87cccc439371a930bc3bb356871955",
+      "bytes": 8192,
+      "before_blob": "cf9e822b89f9f280663f3759f37da3f37ffe14ca"
+    },
+    {
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "d09f39ac5ff09082d566b641e4a6665e90947a30748b53d60f158556a95378dc",
+      "bytes": 17598,
+      "before_blob": "a5e94fd69d561e9b2e888a4e2bc10dd5034b27aa"
+    }
+  ],
+  "module": "v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+  "recipe_note": "Old shared-custody checks.json reconstructed -p2 is invalid. This packet captures exact subprocess argv with -p 2; supersedes that recipe. red.log is setup failure, red-control.log is genuine three original lock controls RED. Earlier composed logs are supplementary; frozen-normal/race bind complete final source census."
+}

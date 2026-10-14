@@ -1,0 +1,11 @@
+--- FAIL: TestFileProducerContainingRefundAfterOriginalCallUnlock (0.00s)
+    file_producer_containing_unlock_test.go:77: actual containing Resize before original caller unlock: done=true observed=true locked=true
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.002s
+--- FAIL: TestNamespaceContainingRefundAfterOriginalCallUnlock (0.00s)
+    namespace_containing_unlock_test.go:81: actual containing Resize before original caller unlock: observed=true locked=true
+--- FAIL: TestPrimaryConstructionContainingRefundAfterOriginalCallUnlock (0.00s)
+    namespace_containing_unlock_test.go:120: actual containing Resize before original caller unlock: observed=true locked=true
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.002s
+FAIL

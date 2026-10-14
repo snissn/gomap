@@ -1,0 +1,4 @@
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	1.105s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	1.105s
+ok  	github.com/snissn/gomap/TreeDB/db	1.631s
+ok  	github.com/snissn/gomap/TreeDB/internal/retainedalloc	1.010s

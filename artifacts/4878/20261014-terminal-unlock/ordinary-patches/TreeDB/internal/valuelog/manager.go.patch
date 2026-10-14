@@ -1,0 +1,293 @@
+--- a/TreeDB/internal/valuelog/manager.go
++++ b/TreeDB/internal/valuelog/manager.go
+@@ -19,6 +19,7 @@
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/crc"
+ 	"github.com/snissn/gomap/TreeDB/internal/durabilitycut"
++	"github.com/snissn/gomap/TreeDB/internal/iterator"
+ 	"github.com/snissn/gomap/TreeDB/internal/limits"
+ 	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
+ 	"github.com/snissn/gomap/TreeDB/internal/rootpublication"
+@@ -46,6 +47,9 @@
+ 
+ // File represents a value-log segment on disk.
+ type File struct {
++	nativeClose        nativeMVCCFileCloseState
++	nativeTerminal     nativeMVCCFileTerminalState
++	nativeCallbacks    atomic.Bool
+ 	ID                 uint32
+ 	Path               string
+ 	File               *os.File
+@@ -601,95 +605,13 @@
+ }
+ 
+ func (f *File) Close() error {
+-	if f == nil {
+-		return nil
+-	}
+-	// The early closed flag excludes new work; the mutex joins all actual
+-	// cleanup before another Close caller can proceed to physical deletion.
+-	f.closeMu.Lock()
+-	defer f.closeMu.Unlock()
+-	var scratch []byte
+-	if f.closeAttempted {
+-		return f.closeErr
+-	}
+-	f.closeAttempted = true
+-	f.closed.Store(true)
+-	f.cacheMu.Lock()
+-	f.cacheK = 0
+-	f.cacheFlags = 0
+-	f.cacheLen = 0
+-	f.setCacheRawLocked(nil, false)
+-	f.cacheStart.Store(0)
+-	f.cacheMu.Unlock()
+-	f.scratchMu.Lock()
+-	scratch = f.decodeScratch
+-	f.decodeScratch = nil
+-	scratchSpare := f.decodeScratchSpare
+-	f.decodeScratchSpare = nil
+-	f.scratchMu.Unlock()
+-	f.groupedMu.Lock()
+-	cache := f.groupedFrameCache.Load()
+-	f.groupedFrameCache.Store(nil)
+-	f.groupedMu.Unlock()
+-	if cache != nil {
+-		cache.clear()
+-	}
+-	if scratch != nil {
+-		putDecodeScratch(scratch)
+-	}
+-	for _, buf := range scratchSpare {
+-		putDecodeScratch(buf)
+-	}
+-
+-	f.remapMu.Lock()
+-	data, _ := f.mmapData.Load().([]byte)
+-	owner := f.detachMmapOwnerV6Locked(data)
+-	ownedView := owner.matchesViewV6(data)
+-	cleanup := errors.Join(f.constructionParentErrors[0], f.constructionParentErrors[1])
+-	if e := owner.closeV6(); e != nil {
+-		// Preserve the original constructor's partially consumed mapping.
+-		// A synthetic legacy read view has no physical pointer authority.
+-		if owner.constructor {
+-			f.currentMappingV6 = owner
+-			cleanup = errors.Join(cleanup, e)
+-		}
+-	}
+-	if owner.constructor && len(data) != 0 && !ownedView {
+-		_ = munmap(data) // legacy injected view; never an owning mapping
+-	}
+-	kept := 0
+-	var remaining uint64
+-	for i := range f.deadMappings {
+-		if e := f.deadMappings[i].closeV6(); e != nil {
+-			cleanup = errors.Join(cleanup, e)
+-			f.deadMappings[kept] = f.deadMappings[i]
+-			remaining += uint64(len(f.deadMappings[kept].data))
+-			kept++
+-		}
+-	}
+-	clear(f.deadMappings[kept:])
+-	f.deadMappings = f.deadMappings[:kept]
+-	if kept == 0 {
+-		f.deadMappings = nil
+-	}
+-	f.deadMappingsCount.Store(uint64(kept))
+-	f.deadMappedBytes.Store(remaining)
+-	f.mmapData.Store([]byte(nil))
+-	f.remapMu.Unlock()
+-	// Consume this original OS close exactly once even if a sibling mapping
+-	// refused. Repeated Close observes the first result and cannot replay it.
+-	if f.File != nil {
+-		cleanup = errors.Join(cleanup, f.File.Close())
+-	}
+-	if cleanup != nil {
+-		f.closeReceipt.file, f.closeReceipt.cause = f, cleanup
+-		f.closeErr = &f.closeReceipt
+-		if f.producerMetadata != nil {
+-			f.producerMetadata.CleanupFailed()
+-		}
+-	}
+-	return f.closeErr
+-
++	work := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++	for {
++		done, err := f.closeOriginalStep(false, &work)
++		if err != nil || done {
++			return err
++		}
++	}
+ }
+ 
+ func (f *File) Read(ptr page.ValuePtr, verifyCRC bool) ([]byte, error) {
+@@ -1347,6 +1269,11 @@
+ 
+ // Set is an immutable snapshot of value-log files for snapshot isolation.
+ type Set struct {
++	// Frozen during the original producer walk. Native file17 captures need no
++	// allocated map iterator or replay; ordinary larger Sets keep their domain.
++	nativeFiles         [17]*File
++	releaseMu           sync.Mutex
++	nativeRelease       nativeMVCCSetReleaseState
+ 	retentionShape      SetRetentionSizes
+ 	retentionKnown      bool
+ 	Files               map[uint32]*File
+@@ -1501,16 +1428,19 @@
+ 	// Retry and synchronous deletion admission share mu and this join with Close.
+ 	// Channels are lazy so
+ 	// ordinary reads and writes acquire no extra allocation or routing cost.
+-	retryStop        chan struct{}
+-	retryWorkers     sync.WaitGroup
+-	closing          bool
+-	closeDone        chan struct{}
+-	closeErr         error
+-	closeRunning     bool
+-	closeReceipt     ManagerCleanupFailure
+-	failedFiles      *File
+-	producerMetadata *retainedalloc.Owner
+-	producerCharge   uint64
++	retryStop            chan struct{}
++	retryWorkers         sync.WaitGroup
++	closing              bool
++	closeDone            chan struct{}
++	closeErr             error
++	closeRunning         bool
++	closeReceipt         ManagerCleanupFailure
++	failedFiles          *File
++	producerMetadata     *retainedalloc.Owner
++	producerCharge       uint64
++	wrapperNativeCleanup bool
++	wrapperBorrows       atomic.Int64 // original Snapshot containing aliases
++	fileAliases          atomic.Int64 // original File.manager containing aliases
+ 	// currentWritableByLane tracks segments that may still grow and therefore are
+ 	// allowed to remap aggressively for zero-copy unsafe views. Most lanes have a
+ 	// single current writer keyed by lane id; lanes listed in
+@@ -2205,6 +2135,7 @@
+ 			}
+ 			return err
+ 		}
++		m.fileAliases.Add(1)
+ 		f.producerMetadata, f.producerCharge, f.manager = metadata, charge, m
+ 		// A partial original callback may return its payload before complete
+ 		// disposal. Consume each still-unattempted constituent once.
+@@ -2237,6 +2168,7 @@
+ 				f.refundProducerMetadata()
+ 			}
+ 			if closeErr != nil {
++				m.fileAliases.Add(1)
+ 				f.manager, f.terminalAttempted, f.terminalErr = m, true, errors.Join(err, closeErr)
+ 				m.retainOriginalFileFailureLocked(f)
+ 				return m.closeErr
+@@ -2244,6 +2176,7 @@
+ 			return err
+ 		}
+ 	}
++	m.fileAliases.Add(1)
+ 	f.manager = m
+ 	f.setGroupedFrameCacheBudget(m.groupedFrameCacheBudget)
+ 	f.setGroupedFrameCacheMaxBytes(m.groupedFrameCacheMaxBytes)
+@@ -2459,14 +2392,18 @@
+ 	defer m.mu.RUnlock()
+ 	files := make(map[uint32]*File, len(ids))
+ 	shape := setRetentionSizes(len(ids))
++	var frontier [17]*File
+ 	for id := range ids {
+ 		if f := m.files[id]; !m.closing && f != nil && !f.IsZombie.Load() && !f.closed.Load() {
+ 			files[id] = f
+ 			shape.addFile(f)
++			if shape.FileCount <= len(frontier) {
++				frontier[shape.FileCount-1] = f
++			}
+ 			f.RefCount.Add(1)
+ 		}
+ 	}
+-	set := &Set{Files: files, disableReadChecksum: m.disableReadChecksum, retentionKnown: true}
++	set := &Set{nativeFiles: frontier, Files: files, disableReadChecksum: m.disableReadChecksum, retentionKnown: true}
+ 	set.retentionShape = shape
+ 	set.RefCount.Store(1)
+ 	return set
+@@ -2492,15 +2429,20 @@
+ func (m *Manager) currentSetLocked() *Set {
+ 	files := make(map[uint32]*File, len(m.files))
+ 	shape := setRetentionSizes(len(m.files))
++	var frontier [17]*File
+ 	for id, f := range m.files {
+ 		if m.closing || f.IsZombie.Load() || f.closed.Load() {
+ 			continue
+ 		}
+ 		files[id] = f
+ 		shape.addFile(f)
++		if shape.FileCount <= len(frontier) {
++			frontier[shape.FileCount-1] = f
++		}
+ 		f.RefCount.Add(1)
+ 	}
+ 	s := &Set{
++		nativeFiles:         frontier,
+ 		Files:               files,
+ 		disableReadChecksum: m.disableReadChecksum,
+ 	}
+@@ -2636,10 +2578,22 @@
+ 	if set == nil {
+ 		return nil
+ 	}
++	// Production Sets within the maintained native cap use exactly the same
++	// embedded continuation as native callers, with the ordinary unlimited policy.
++	if set.retentionKnown && set.retentionShape.FileCount <= len(set.nativeFiles) {
++		w := iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
++		for {
++			ready, err := m.releaseNativeMVCCSetStep(set, false, &w)
++			if ready || err != nil {
++				return err
++			}
++		}
++	}
++	// Original manually constructed/larger Set domain is preserved. The actual
++	// per-File physical cleanup below still runs the SAME staged operations.
+ 	if set.RefCount.Add(-1) > 0 {
+ 		return nil
+ 	}
+-
+ 	var err error
+ 	for _, f := range set.Files {
+ 		err = errors.Join(err, m.releaseOriginalFileBorrow(f))
+@@ -2653,16 +2607,16 @@
+ 	if f == nil {
+ 		return rootpublication.ErrResourceOwnership
+ 	}
++	m.mu.Lock()
+ 	refs := f.RefCount.Add(-1)
++	closing := m.closing
++	m.mu.Unlock()
+ 	if refs < 0 {
+ 		return rootpublication.ErrResourceOwnership
+ 	}
+ 	if refs != 0 {
+ 		return nil
+ 	}
+-	m.mu.RLock()
+-	closing := m.closing
+-	m.mu.RUnlock()
+ 	var err error
+ 	if closing {
+ 		err = m.finishTerminalFile(f)
+@@ -2672,6 +2626,9 @@
+ 	// This method itself checks actual physical completion and live operands;
+ 	// consumption of a reference is not a successful last physical Close.
+ 	f.refundProducerMetadata()
++	m.mu.Lock()
++	m.refundTerminalMetadataLocked()
++	m.mu.Unlock()
+ 	return err
+ }
+ 
+@@ -2681,7 +2638,7 @@
+ 		return
+ 	}
+ 	m.mu.Lock()
+-	if m.closing || m.files[f.ID] != f || f.RefCount.Load() != 0 || !f.IsZombie.Load() || !f.retryDeletePending.CompareAndSwap(false, true) {
++	if m.closing || m.files[f.ID] != f || f.RefCount.Load() != 0 || !f.IsZombie.Load() || f.nativeCallbacks.Load() || !f.retryDeletePending.CompareAndSwap(false, true) {
+ 		m.mu.Unlock()
+ 		return
+ 	}

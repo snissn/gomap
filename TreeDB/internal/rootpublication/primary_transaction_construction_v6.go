@@ -27,6 +27,7 @@ type primaryTransactionConstructionV6 struct {
 	nativeWorkOwned bool
 	cleanupPhase    uint8
 	cleanupQueue    primaryarena.ReleaseQueue
+	cleanupReceipt  *PrimaryConstructionReleaseWork
 }
 type PrimaryPromotionV6 struct {
 	Image        []byte
@@ -176,13 +177,13 @@ func (t *DurableRootTransaction) releaseOwnerLockedV6() {
 	// The Set remains sole authority for its resource edge; this original owner
 	// separately records completion of transaction/descriptor custody.
 }
-func (t *DurableRootTransaction) abortConstructionLockedV6() error {
+func (t *DurableRootTransaction) abortConstructionLockedV6(terminal *primaryConstructionReleaseState) error {
 	if t.constructionV6 != nil && t.constructionV6.nativeWorkOwned {
 		return ErrNativeMVCCRootWorkRequiredV6
 	}
 	work := &iterator.OrdinalScanWork{RecordLimit: ^uint64(0), ByteLimit: ^uint64(0)}
 	for {
-		ready, err := t.abortNativeMVCCConstructionStepLockedV6(work)
+		ready, err := t.abortNativeMVCCConstructionStepLockedV6(work, terminal, nil)
 		if ready || err != nil {
 			return err
 		}

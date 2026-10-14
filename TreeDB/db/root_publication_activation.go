@@ -1130,7 +1130,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	if err != nil {
 		return post, prePublishErr(err)
 	}
-	defer visibleBase.Release()
+	defer func() { retErr = errors.Join(retErr, db.releaseCapturedRootResources(visibleBase)) }()
 
 	var scanned candidateValueLogRefCountsV1
 	defer scanned.counts.close()
@@ -1148,7 +1148,7 @@ func (db *DB) finalizeQueuedRootPublicationV1(
 	resourcesOwned := true
 	defer func() {
 		if resourcesOwned {
-			resources.Release()
+			retErr = errors.Join(retErr, db.releaseCapturedRootResources(resources))
 		}
 	}()
 

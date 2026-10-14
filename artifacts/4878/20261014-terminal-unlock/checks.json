@@ -1,0 +1,52 @@
+{
+  "env": {
+    "GOWORK": "off",
+    "GOMAXPROCS": "2",
+    "CGO_ENABLED": "1",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local"
+  },
+  "checks": {
+    "normal": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-mod=readonly",
+        "-p",
+        "2",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/internal/retainedalloc",
+        "-run",
+        "Test(FileProducer|Namespace|PrimaryConstruction)ContainingRefundAfterOriginalCallUnlock|TestNativeMVCCPrivateConstructorPhysicalAbortV6|TestPrimaryOwner|TestPrimarySnapshot|TestPrimaryOneShot|TestNativeMVCCSnapshotActual|TestLeafPinWork|TestOriginalDATAOnlySnapshot|TestOriginalManager|TestNativeMVCCSet|TestNativeMVCCOriginalSet|TestManagerWrapper|Test.*Namespace|Test.*CreationProof|TestEnrollment|TestOrdinaryMetadata",
+        "-count=1",
+        "-timeout=60s"
+      ],
+      "exit": 0,
+      "raw": "artifacts/4878/20261014-terminal-unlock/frozen-normal.log"
+    },
+    "race": {
+      "argv": [
+        "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go",
+        "test",
+        "-mod=readonly",
+        "-p",
+        "2",
+        "-race",
+        "./TreeDB/internal/valuelog",
+        "./TreeDB/internal/rootpublication",
+        "./TreeDB/db",
+        "./TreeDB/internal/retainedalloc",
+        "-run",
+        "Test(FileProducer|Namespace|PrimaryConstruction)ContainingRefundAfterOriginalCallUnlock|TestNativeMVCCPrivateConstructorPhysicalAbortV6|TestPrimaryOwner|TestPrimarySnapshot|TestPrimaryOneShot|TestNativeMVCCSnapshotActual|TestLeafPinWork|TestOriginalDATAOnlySnapshot|TestOriginalManager|TestNativeMVCCSet|TestNativeMVCCOriginalSet|TestManagerWrapper|Test.*Namespace|Test.*CreationProof|TestEnrollment|TestOrdinaryMetadata",
+        "-count=1",
+        "-timeout=60s"
+      ],
+      "exit": 0,
+      "raw": "artifacts/4878/20261014-terminal-unlock/frozen-race.log"
+    },
+    "source_readback_changed": []
+  }
+}

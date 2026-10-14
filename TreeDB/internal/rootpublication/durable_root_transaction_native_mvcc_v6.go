@@ -4,7 +4,9 @@ import (
 	"errors"
 	"github.com/snissn/gomap/TreeDB/internal/iterator"
 	"github.com/snissn/gomap/TreeDB/internal/primaryarena"
+	"github.com/snissn/gomap/TreeDB/internal/retainedalloc"
 	"github.com/snissn/gomap/TreeDB/node"
+	"sync"
 	"unsafe"
 )
 
@@ -30,29 +32,83 @@ func (t *DurableRootTransaction) SealPrimaryBaseAbsenceV6(current primaryarena.R
 
 var ErrNativeMVCCRootWorkRequiredV6 = errors.New("native MVCC transaction requires its original work-bearing caller")
 
-// AbortNativeMVCCConstructionStepV6 consumes this original transaction's
-// private constructor and physical release queue. Its allocation remains owed
-// until actual physical closure and callback payload cleanup have completed.
-// No coordinator or ordinary writer may drive a native-owned transaction.
-func (t *DurableRootTransaction) AbortNativeMVCCConstructionStepV6(w *iterator.OrdinalScanWork) (bool, error) {
-	if t == nil || w == nil {
+// PrimaryConstructionReleaseWork belongs to the disposing original parent.
+// Its containing allocation is admitted by that parent before Bind. It survives
+// detaching the original transaction and its private constructor.
+type PrimaryConstructionReleaseWork struct {
+	mu          sync.Mutex
+	transaction *DurableRootTransaction
+	removal     retainedalloc.RemovalWork
+	phase       uint8
+}
+type primaryConstructionReleaseState struct {
+	owner  *retainedalloc.Owner
+	charge uint64
+}
+
+func (s *PrimaryConstructionReleaseWork) Bind(t *DurableRootTransaction, w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil || t == nil || w == nil {
 		return false, ErrDurableRootOwnership
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.transaction != nil || s.phase != 0 {
+		return false, ErrDurableRootOwnership
+	}
+	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*s))+2*uint64(unsafe.Sizeof(*t))) {
+		return false, nil
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.phase == durableRootConsumed && t.constructionV6 == nil {
-		return true, nil
-	}
-	if t.phase != durableRootConstructingV6 || t.constructionV6 == nil || !t.constructionV6.nativeWorkOwned {
+	if t.phase != durableRootConstructingV6 || t.constructionV6 == nil || !t.constructionV6.nativeWorkOwned || t.constructionV6.cleanupReceipt != nil {
 		return false, ErrDurableRootOwnership
 	}
-	return t.abortNativeMVCCConstructionStepLockedV6(w)
+	t.constructionV6.cleanupReceipt = s
+	s.transaction = t
+	return true, nil
+}
+func (s *PrimaryConstructionReleaseWork) ContinueWork(w *iterator.OrdinalScanWork) (bool, error) {
+	if s == nil || w == nil {
+		return false, ErrDurableRootOwnership
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.phase == 2 {
+		return true, nil
+	}
+	if s.phase == 1 {
+		ready, err := s.removal.ContinueWork(w)
+		if ready {
+			s.phase = 2
+		}
+		return ready, err
+	}
+	t := s.transaction
+	if t == nil {
+		return false, ErrDurableRootOwnership
+	}
+	t.mu.Lock()
+	var terminal primaryConstructionReleaseState
+	ready, err := t.abortNativeMVCCConstructionStepLockedV6(w, &terminal, &s.removal)
+	if ready && err == nil {
+		s.transaction = nil
+		s.phase = 1
+	}
+	t.mu.Unlock()
+	// The original transaction is no longer accessed after its active call joins.
+	return false, err
+}
+
+// The old receiver-only native path cannot retain a receipt after refund of
+// this receiver. Production callers must bind their admitted external receipt.
+func (t *DurableRootTransaction) AbortNativeMVCCConstructionStepV6(w *iterator.OrdinalScanWork) (bool, error) {
+	return false, ErrNativeMVCCRootWorkRequiredV6
 }
 
 // Ordinary Abort loops these exact phases under its ordinary unlimited policy.
 // The native path has no opaque callbacks: the unbound private constructor has
 // not installed any, and later visibility Finish supplies work-bearing hooks.
-func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iterator.OrdinalScanWork) (bool, error) {
+func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iterator.OrdinalScanWork, terminal *primaryConstructionReleaseState, removal *retainedalloc.RemovalWork) (bool, error) {
 	if t.physicalCleanupError != nil {
 		return false, t.physicalCleanupError
 	}
@@ -127,16 +183,21 @@ func (t *DurableRootTransaction) abortNativeMVCCConstructionStepLockedV6(w *iter
 			c.cleanupPhase = 5
 		}
 	}
+	owner, charge := c.arena.MetadataOwner(), c.metadataCharge
+	if removal != nil {
+		ready, err := removal.BindPendingWork(owner, charge, w)
+		if !ready || err != nil {
+			return false, err
+		}
+	}
 	if !w.Reserve(1, 2*uint64(unsafe.Sizeof(*t))+2*uint64(unsafe.Sizeof(*c))) {
 		return false, nil
 	}
 	t.constructionV6 = nil
 	t.input = DurableRootCallbackInput{}
 	t.activate, t.consume, t.abort, t.abortComplete, t.fail = nil, nil, nil, nil, nil
-	// Clear all containing aliases before the original metadata refund.
-	owner, charge := c.arena.MetadataOwner(), c.metadataCharge
 	*c = primaryTransactionConstructionV6{}
 	t.owner, t.phase = ResourceOwnerReleased, durableRootConsumed
-	owner.RemovePending(charge)
+	terminal.owner, terminal.charge = owner, charge
 	return true, nil
 }
