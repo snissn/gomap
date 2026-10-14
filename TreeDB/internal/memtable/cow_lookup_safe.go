@@ -2,7 +2,7 @@
 
 package memtable
 
-import "github.com/tidwall/btree"
+import btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 
 // Tidwall has no heterogeneous byte/string lookup. Rank binary search uses
 // read-only GetAt and existing owned strings without allocating a conversion.

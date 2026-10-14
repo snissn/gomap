@@ -12,9 +12,9 @@ import (
 	"testing"
 	"unsafe"
 
+	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/tidwall/btree"
 )
 
 func cowTestWriter(t testing.TB, limits COWLimits) (*COWBudget, *COWWriter) {

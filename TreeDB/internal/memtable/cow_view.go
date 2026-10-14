@@ -4,7 +4,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/tidwall/btree"
+	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 )
 
 // COWView is an independently closable pin. Close races safely with Get/Seek
@@ -50,11 +50,18 @@ func (v *COWView) Get(key []byte) (COWRecord, bool, error) {
 }
 
 func (v *COWView) Close() {
+	retirement := v.Release()
+	retirement.Drain()
+}
+
+// Release transfers last-owner cleanup without running resource callbacks.
+// The recipient must finish the returned retirement before claiming refund.
+func (v *COWView) Release() COWRetirement {
 	v.mu.Lock()
 	r := v.root
 	if r == nil {
 		v.mu.Unlock()
-		return
+		return COWRetirement{}
 	}
 	v.root = nil
 	b := r.generation.budget
@@ -64,8 +71,7 @@ func (v *COWView) Close() {
 	b.releaseControlLocked()
 	b.mu.Unlock()
 	v.mu.Unlock()
-	retirement := r.Release()
-	retirement.Drain()
+	return r.Release()
 }
 
 // COWCursor owns its own view, so closing the creating cut/view does not revoke

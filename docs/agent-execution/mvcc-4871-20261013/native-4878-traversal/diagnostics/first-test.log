@@ -1,0 +1,13 @@
+--- FAIL: TestCursorDifferentialOrderingAndSeek (0.00s)
+    --- FAIL: TestCursorDifferentialOrderingAndSeek/1 (0.00s)
+        string_cursor_test.go:112: reverse mismatch 00000000 0 true false
+    --- FAIL: TestCursorDifferentialOrderingAndSeek/63 (0.00s)
+        string_cursor_test.go:112: reverse mismatch 00000124 62 true true
+    --- FAIL: TestCursorDifferentialOrderingAndSeek/64 (0.00s)
+        string_cursor_test.go:112: reverse mismatch 00000126 63 true true
+    --- FAIL: TestCursorDifferentialOrderingAndSeek/4096 (0.00s)
+        string_cursor_test.go:112: reverse mismatch 00008190 4095 true true
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/cowbtree	0.014s
+ok  	github.com/snissn/gomap/TreeDB/internal/memtable	0.495s
+FAIL

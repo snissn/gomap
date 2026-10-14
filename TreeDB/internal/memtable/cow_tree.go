@@ -5,9 +5,9 @@ import (
 	"sync"
 	"unsafe"
 
+	btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 	"github.com/snissn/gomap/TreeDB/node"
 	"github.com/snissn/gomap/TreeDB/page"
-	"github.com/tidwall/btree"
 )
 
 // COWMutation borrows input only during Prepare. Remove erases the physical key;

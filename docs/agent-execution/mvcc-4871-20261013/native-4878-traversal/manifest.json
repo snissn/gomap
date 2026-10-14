@@ -1,0 +1,305 @@
+{
+  "schema": "native-4878-lower-core-construction-v1",
+  "status": "provisional construction; full native algorithm remains unqualified",
+  "base_commit": "3dc8dd31976ad2650e734358b4498c1affdceb5c",
+  "runtime_ancestor": "4f61cbbd6d0b7be5c69d9411c1344b4576f5e879",
+  "source_only_staged_tree": "b061f7a715e9f0f4310195547ca96cf3cd4acb4b",
+  "runtime_treedb_tree": "c33cad312a62dce492654a7454e228d33634d12a",
+  "package_trees": {
+    "TreeDB/internal/cowbtree": "32b2ba061305dbbdcaf5d8474df8faeb458921da",
+    "TreeDB/internal/memtable": "703e2f5bf555a2de55d5816aa88606daf34eef4d"
+  },
+  "files": [
+    {
+      "path": "TreeDB/internal/cowbtree/LICENSE",
+      "git_blob": "5f1fbd044a7290caaf6d8bdaafbc203a7626a833",
+      "sha256": "144307e5049646f9bcfba8ef92095d0a8e223fc88d0e339106877071341898ee",
+      "bytes": 1054,
+      "role": "provenance"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/README.md",
+      "git_blob": "e64739024318c921720af5a789888bd2640924c1",
+      "sha256": "baf716995169782912d32f1c276583e35f81d8b36d4c3cfac9bb28c9514a54f9",
+      "bytes": 4691,
+      "role": "provenance"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/map.go",
+      "git_blob": "0ddc7be2632feea8a3df2e5c8c0027e936918012",
+      "sha256": "93bc64acb04e4a0c36d77efaae12ae33ffb69094b76e930df307ca62d4978a3f",
+      "bytes": 28865,
+      "role": "runtime"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/string_cursor.go",
+      "git_blob": "c3f65d5a281a92cceaf3af5e19480c7a277916af",
+      "sha256": "d5e946fa7e83cb8d530786e7225d7c392e82ab8015ff27b382fff358607fab7f",
+      "bytes": 8890,
+      "role": "runtime"
+    },
+    {
+      "path": "TreeDB/internal/cowbtree/string_cursor_test.go",
+      "git_blob": "7294c14f5204245f352a4e334bbbe83a788b8441",
+      "sha256": "d62b29b2ed72e75f0392052c879962f68b792fbe5891423402e112de71f53340",
+      "bytes": 6972,
+      "role": "harness"
+    },
+    {
+      "path": "TreeDB/internal/memtable/btree.go",
+      "git_blob": "58aa4983ea7f10efcba0ad7762a682beb4c0fbfc",
+      "sha256": "e58505a76a913bb5b33cfeaa28db278844130fd2254fee67cd53f96d8b9a5a9e",
+      "bytes": 19824,
+      "role": "runtime"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_baseline_red_test.go",
+      "git_blob": "f22ec5aa418e550d90c2c08d8563aeea73dee3eb",
+      "sha256": "c357ca9f6779a3901d7818bc6254e204723c603fc8b373b12db2456c551832c7",
+      "bytes": 970,
+      "role": "harness"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_lookup_safe.go",
+      "git_blob": "844df302a3252449c597cb174fbfc6678442c56e",
+      "sha256": "405519808eec9f240fd3134d950eab905b3b7dcaac589d61f132095f2bfa3217",
+      "bytes": 1467,
+      "role": "runtime"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_lookup_unsafe.go",
+      "git_blob": "b65a5a2f74f48d39ead6d16aac584864c55c5980",
+      "sha256": "24e8dbcae53bf69904d99a1c859993a267e31676bf6c7fe22caadc7e11a0efc4",
+      "bytes": 970,
+      "role": "runtime"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_test.go",
+      "git_blob": "c2630f4975d917be765508cab669275702befb93",
+      "sha256": "04009aa6780ab3c40e3852671f28101b47a4e8f8290e12809bf9a59d6937ee6e",
+      "bytes": 39609,
+      "role": "harness"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_traversal.go",
+      "git_blob": "83928ce5d5bd196fbbe05921b53aa1c4973a8179",
+      "sha256": "bbc6a94824ec38648ca3179a9bec05de9158de0d7b028c5c11cbdbb258be6df6",
+      "bytes": 4743,
+      "role": "runtime"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_traversal_test.go",
+      "git_blob": "3fc1c22dcd0edd4a36e8835db2d60272a3257445",
+      "sha256": "c303deba58dbd24cac7a869fbc2ecfae1ed5d29f1c87e983cc479c31c7c538c3",
+      "bytes": 7038,
+      "role": "harness"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_tree.go",
+      "git_blob": "e2792dad1f70c7b623a6647bbcfa41f0828d8300",
+      "sha256": "a1eca81dab8cfc1a5ab6abab0d38175a361aecb0860472b17b27d0384f9dfe2d",
+      "bytes": 18591,
+      "role": "runtime"
+    },
+    {
+      "path": "TreeDB/internal/memtable/cow_view.go",
+      "git_blob": "f740e8752a27640fb04a7e636c0f16bb18f31efe",
+      "sha256": "02e61682f2c63abf9c0afcb3365758ff4eb0666aa962bdadb7bcfc97bbbf8a2b",
+      "bytes": 5319,
+      "role": "runtime"
+    }
+  ],
+  "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "branch": "codex/4878-native-traversal-20261014",
+  "worktree_helper": {
+    "mode": "git",
+    "seed": "ordinary-5111",
+    "fallback": "ordinary Git explicitly selected"
+  },
+  "provenance": {
+    "upstream": "github.com/tidwall/btree v1.8.1/map.go",
+    "sha256": "21346608b7bbd7b658ad45cdc25ed4b545f0ef6e921eae4e824231b929f74b0e",
+    "unchanged_bytes_except_package_declaration": true,
+    "license": "MIT; upstream license retained",
+    "single_production_memtable_map": true
+  },
+  "work_contract": {
+    "work_type": "TreeDB/internal/iterator.OrdinalScanWork",
+    "Q_records": 32,
+    "Q_bytes": 1048576,
+    "input_cap": 32,
+    "resource_cap": 16,
+    "file_cap": 17,
+    "indexes": 2,
+    "same_requests": [
+      33,
+      80,
+      4096
+    ],
+    "charge_before_effect": [
+      "constructor allocation/zeroing",
+      "node visits",
+      "key-header probes",
+      "binary-search byte comparisons",
+      "stack operations",
+      "metadata publication/export",
+      "phased cursor close"
+    ],
+    "borrowed_seek_key": "immutable until completion/cancellation",
+    "pointer_payload": "not read by this lower core"
+  },
+  "ownership": {
+    "edited": [
+      "TreeDB/internal/cowbtree",
+      "TreeDB/internal/memtable",
+      "this evidence directory"
+    ],
+    "not_edited": [
+      "caching",
+      "db",
+      "rootpublication",
+      "pager",
+      "public selection/custody",
+      "MVCC destructive authority",
+      "backend codecs",
+      "protected native donors/fixtures"
+    ]
+  },
+  "checks": [
+    {
+      "log": "diagnostics/first-test.log",
+      "sha256": "9b0cfabf9703a31a427cdaa28adb52446a88e38cb37a81b3b56c037bf7593167",
+      "bytes": 739,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 ./TreeDB/internal/cowbtree ./TreeDB/internal/memtable",
+      "result": "failed: differential oracle endpoint assumption"
+    },
+    {
+      "log": "diagnostics/second-test.log",
+      "sha256": "7990b13fec72a50abc5d433aa53cfa9ee2f33d299fe169ab5a69f15427c50625",
+      "bytes": 122,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 ./TreeDB/internal/cowbtree ./TreeDB/internal/memtable",
+      "result": "pass: early core and adapter"
+    },
+    {
+      "log": "diagnostics/shared-work-test.log",
+      "sha256": "acb2f1215d5b0180bc18e35f822f6e074d2bbc8f09e3de3aa458756d2df6f2a7",
+      "bytes": 122,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 ./TreeDB/internal/cowbtree ./TreeDB/internal/memtable",
+      "result": "pass: shared OrdinalScanWork adapter"
+    },
+    {
+      "log": "diagnostics/charged-export-test.log",
+      "sha256": "3ada047e37b13fca09af8d74cfea354d00d0c8bdccc96a96e284db37113467ff",
+      "bytes": 122,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 ./TreeDB/internal/cowbtree ./TreeDB/internal/memtable",
+      "result": "pass: charged export and empty completion"
+    },
+    {
+      "log": "diagnostics/safe-test.log",
+      "sha256": "3b67f9854dc60d9e341095f906c5a3de6707e2c1ebcaf5269ec382a354a9e6dd",
+      "bytes": 122,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -tags treedb_safe -p 2 ./TreeDB/internal/cowbtree ./TreeDB/internal/memtable",
+      "result": "pass"
+    },
+    {
+      "log": "diagnostics/race-safe-test.log",
+      "sha256": "9985416689effc9a83cdb06eb0fbc0735eeb9bc4f9b005aaac4da01cbe49fb93",
+      "bytes": 122,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -race -tags treedb_safe -p 2 -run 'TestCursor|TestMapUpstream|TestCOWChargedTraversal|TestCOWConcurrentTraversalAndClose|TestCOWOwnedHeadersAndBytes' ./TreeDB/internal/cowbtree ./TreeDB/internal/memtable",
+      "result": "pass"
+    },
+    {
+      "log": "diagnostics/caller-compile.log",
+      "sha256": "0416b5e64fb6b53edabcb8b6661d3be01b945ec061276a73b5c6dab370ce0da2",
+      "bytes": 130,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 -run '^$' ./TreeDB/caching ./TreeDB",
+      "result": "pass: compile only"
+    },
+    {
+      "log": "diagnostics/final-adapter-test.log",
+      "sha256": "3b5d1d277bd51fefc0b9884a402a1373d6d6dffa90ecc55357a26a6ac0a8c24c",
+      "bytes": 61,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -p 2 -run TestCOWChargedTraversal ./TreeDB/internal/memtable",
+      "result": "pass: final constructor invariant and actual allocation witness"
+    },
+    {
+      "log": "diagnostics/final-allocation-race-safe.log",
+      "sha256": "8ff130929babf85b84f03d9232a10fb677c07a3a178fc2ced2a9e518bf161f15",
+      "bytes": 61,
+      "command": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin/go test -race -tags treedb_safe -p 2 -run TestCOWChargedTraversalAllocationAdmission ./TreeDB/internal/memtable",
+      "result": "pass: final allocation witness safe/race"
+    }
+  ],
+  "other_checks": [
+    "git diff --check passed",
+    "upstream package-only byte comparison passed",
+    "all production memtable Map imports migrated to same implementation"
+  ],
+  "check_applicability": "Safe/race/package controls precede final constructor invariant assertion and actual allocation test; final targeted normal and allocation safe/race checks cover these last changes. No performance campaign.",
+  "failed_diagnostic": "first-test.log preserves an incorrect oracle assumption: upstream Prev after forward exhaustion performs Last then Prev. Corrected oracle uses explicit Last; original upstream mutation/iterator bytes remain unchanged.",
+  "unqualified": [
+    "composite cut capture and source admission",
+    "PRIMARY/page/frame preparation and traversal",
+    "actual payload decode/copy/hash accounting",
+    "merge/anchor/floor/no-resurrection",
+    "exact own-ACK continuation vs foreign mutation",
+    "all19 basis completion",
+    "phased retirement callbacks and physical refund",
+    "total native Finish",
+    "full adversarial Request33/80/4096 qualification"
+  ],
+  "public_refusal": "unchanged pre-effects refusal; no production deep activation",
+  "retirement": "CloseStep transfers once-owned existing COWRetirement. Drain still loops resource callbacks and is not bounded Finish; HistoryBytes remain charged until callback completion.",
+  "retained_paths": {
+    "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+    "scratch": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal",
+    "scratch_members": [
+      {
+        "name": "caller-compile.log",
+        "bytes": 130,
+        "sha256": "0416b5e64fb6b53edabcb8b6661d3be01b945ec061276a73b5c6dab370ce0da2"
+      },
+      {
+        "name": "charged-export-test.log",
+        "bytes": 122,
+        "sha256": "3ada047e37b13fca09af8d74cfea354d00d0c8bdccc96a96e284db37113467ff"
+      },
+      {
+        "name": "final-adapter-test.log",
+        "bytes": 61,
+        "sha256": "3b5d1d277bd51fefc0b9884a402a1373d6d6dffa90ecc55357a26a6ac0a8c24c"
+      },
+      {
+        "name": "final-allocation-race-safe.log",
+        "bytes": 61,
+        "sha256": "8ff130929babf85b84f03d9232a10fb677c07a3a178fc2ced2a9e518bf161f15"
+      },
+      {
+        "name": "first-test.log",
+        "bytes": 739,
+        "sha256": "9b0cfabf9703a31a427cdaa28adb52446a88e38cb37a81b3b56c037bf7593167"
+      },
+      {
+        "name": "race-safe-test.log",
+        "bytes": 122,
+        "sha256": "9985416689effc9a83cdb06eb0fbc0735eeb9bc4f9b005aaac4da01cbe49fb93"
+      },
+      {
+        "name": "safe-test.log",
+        "bytes": 122,
+        "sha256": "3b67f9854dc60d9e341095f906c5a3de6707e2c1ebcaf5269ec382a354a9e6dd"
+      },
+      {
+        "name": "second-test.log",
+        "bytes": 122,
+        "sha256": "7990b13fec72a50abc5d433aa53cfa9ee2f33d299fe169ab5a69f15427c50625"
+      },
+      {
+        "name": "shared-work-test.log",
+        "bytes": 122,
+        "sha256": "acb2f1215d5b0180bc18e35f822f6e074d2bbc8f09e3de3aa458756d2df6f2a7"
+      }
+    ]
+  },
+  "release_state": "All test/compile consumers completed; no persistent build output or active test process. Scratch raw logs and worktree intentionally retained; no cleanup performed. Shared caches and donors protected."
+}

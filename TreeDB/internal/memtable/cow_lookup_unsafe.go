@@ -2,7 +2,7 @@
 
 package memtable
 
-import "github.com/tidwall/btree"
+import btree "github.com/snissn/gomap/TreeDB/internal/cowbtree"
 
 func cowLookupGE(tree *btree.Map[string, cowValue], key []byte) (string, cowValue, bool) {
 	var owned string
