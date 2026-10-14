@@ -1,0 +1,12 @@
+[
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/zstd-rank-075ae7748/fixture/value-000001.log",
+    "bytes": 791783,
+    "sha256": "31f7f83c713ec221c0936aed469d7f3491a5f37cf039f36d07495e20939746bd"
+  },
+  {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/zstd-rank-075ae7748/fixture-random64-not-kept/value-000001.log",
+    "bytes": 2101296,
+    "sha256": "3b56fab31b0c3e1da97caf78143454c760744eaf1539551809f2f70dc99ed702"
+  }
+]

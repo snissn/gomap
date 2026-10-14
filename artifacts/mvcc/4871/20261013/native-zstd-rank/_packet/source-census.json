@@ -1,0 +1,60 @@
+[
+  {
+    "dependency_path": "zstd/blockdec.go",
+    "bytes": 18898,
+    "sha256": "d1889ce970f06cd18d2c8240df55f3d16abd5758a2caebb74ade41dbd7ee2cac"
+  },
+  {
+    "dependency_path": "zstd/decodeheader.go",
+    "bytes": 7958,
+    "sha256": "18a618ead4628fb685e7da85c37af5e65517ed2d17c1c5029a352610f4929a06"
+  },
+  {
+    "dependency_path": "huff0/decompress.go",
+    "bytes": 29575,
+    "sha256": "2252d5f37da24ca8cdc7cc82a61594cd608c36f7269a728c2085fe19ce3b586d"
+  },
+  {
+    "dependency_path": "huff0/decompress_generic.go",
+    "bytes": 7721,
+    "sha256": "d924dea81e35f8211e46ad8d4298a89acd28a64821ea1f89d606772ada20be5a"
+  },
+  {
+    "dependency_path": "huff0/decompress_amd64.go",
+    "bytes": 5754,
+    "sha256": "ccf0d90b851f2f42bb4752ad772bcab64b47a4e4b5562bd077d8bbaa2f19d4ed"
+  },
+  {
+    "dependency_path": "huff0/decompress_amd64.s",
+    "bytes": 15330,
+    "sha256": "1be4b028f6a98b957cf7557629bbc3aaead44fccf0c60f796fdee608b8d7ee9e"
+  },
+  {
+    "protected_donor_path": "/home/mikers/benchmarks/mvcc-bounded-prune-4878-20261001/source/TreeDB/mvcc/versions.go",
+    "artifact": "original-versions.go",
+    "bytes": 23806,
+    "sha256": "6f6b87f11eb85d05b9071a413229eed11c997c1e119300095b80c01e2a7a02ed",
+    "qualification": "read-only actual donor bytes; not assumed compilable or a native gate PASS"
+  },
+  {
+    "protected_donor_path": "/home/mikers/benchmarks/mvcc-bounded-prune-4878-20261001/source/TreeDB/mvcc/bounded_prune_test.go",
+    "artifact": "original-bounded_prune_test.go",
+    "bytes": 29457,
+    "sha256": "7f7640931e2c915761bd0dd0e989efb45859593fc45ecd28ae394daa8d91da4c",
+    "qualification": "read-only actual donor bytes; not assumed compilable or a native gate PASS"
+  },
+  {
+    "protected_donor_path": "/home/mikers/benchmarks/mvcc-bounded-prune-4878-20261001/source/TreeDB/mvcc/bounded_prune_public_test.go",
+    "artifact": "original-bounded_prune_public_test.go",
+    "bytes": 5904,
+    "sha256": "93ab89569ab771b4349b47672846d9998b6758b339b395b4ab5df0278247c67f",
+    "qualification": "read-only actual donor bytes; not assumed compilable or a native gate PASS"
+  },
+  {
+    "protected_donor_path": "/home/mikers/benchmarks/mvcc-bounded-prune-4878-20261001/source/TreeDB/mvcc/bounded_prune_terminal_diagnostic_test.go",
+    "artifact": "original-bounded_prune_terminal_diagnostic_test.go",
+    "bytes": 9602,
+    "sha256": "354364d901aeeb24f65161dab74405192e2844a6816cc6775314a5d1af351f51",
+    "qualification": "read-only actual donor bytes; not assumed compilable or a native gate PASS"
+  }
+]

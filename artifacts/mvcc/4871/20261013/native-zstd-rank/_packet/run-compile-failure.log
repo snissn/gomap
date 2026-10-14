@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/internal/valuelog [github.com/snissn/gomap/TreeDB/internal/valuelog.test]
+TreeDB/internal/valuelog/native_zstd_rank_census_test.go:70:50: h.RawLen undefined (type FrameHeader has no field or method RawLen)
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog [build failed]
+FAIL

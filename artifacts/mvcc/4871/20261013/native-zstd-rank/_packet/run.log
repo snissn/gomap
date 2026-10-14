@@ -1,0 +1,5 @@
+=== RUN   TestNativeZSTDPhysicalRankCensus
+    native_zstd_rank_census_test.go:197: value=2101248 payload=791735 blocks=33 huffman_probes>=1050596 minimum_Q32_calls=32832 SAME_Request_capacity=131072
+--- PASS: TestNativeZSTDPhysicalRankCensus (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	0.017s

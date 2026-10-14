@@ -1,0 +1,26 @@
+{
+  "inventory_sha256": "f8b2bb53a3a5457e51a1c2d187bee81200d096d003ed2db37be8f6fd79cf699c",
+  "source": "075ae77487778a872384a935c6d550359ca76452",
+  "last_consumers": "sole diagnostic Go tests exited; deferred original file Close executed",
+  "lsof": {
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "files": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/zstd-rank-075ae7748/fixture/value-000001.log",
+      "bytes": 791783,
+      "sha256": "31f7f83c713ec221c0936aed469d7f3491a5f37cf039f36d07495e20939746bd"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/native-4878-traversal/zstd-rank-075ae7748/fixture-random64-not-kept/value-000001.log",
+      "bytes": 2101296,
+      "sha256": "3b56fab31b0c3e1da97caf78143454c760744eaf1539551809f2f70dc99ed702"
+    }
+  ],
+  "released_files": 2,
+  "released_file_bytes": 2893079,
+  "exact_paths_absent": true,
+  "preserved": "worktree/source/harness/census/raw/issue/originalprotectedinputs/other evidence/caches/donors"
+}

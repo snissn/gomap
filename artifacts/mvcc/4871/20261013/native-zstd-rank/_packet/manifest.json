@@ -1,0 +1,94 @@
+{
+  "runtime_source": "075ae77487778a872384a935c6d550359ca76452",
+  "runtime_treeDB_subtree": "667e0bbd4dc35f1640801262fa28b1da18a34cc0",
+  "diagnostic_harness": "TreeDB/internal/valuelog/native_zstd_rank_census_test.go",
+  "git_worktree_changes": "only untracked diagnostic harness; no production edits",
+  "dependency": "87fb149e472104f0c2fa7a961b2493c4372603dc",
+  "members": [
+    {
+      "path": "census.json",
+      "bytes": 10606,
+      "sha256": "a9db254fb4e067fc36095c42b9cb362d5fd223f2a80a574bd915fed729625856"
+    },
+    {
+      "path": "cleanup-receipt.json",
+      "bytes": 1072,
+      "sha256": "32958dadddfdc94b57075e4803dbd9cd1684001fac23d04783afbe1e55d923fd"
+    },
+    {
+      "path": "codec-rank-issue4878.json",
+      "bytes": 245591,
+      "sha256": "d5d7c1afb72e01ce5fcddcd770e9cdefc7a22c7fcdbf0512079469648307c90e"
+    },
+    {
+      "path": "decision.md",
+      "bytes": 10047,
+      "sha256": "b9317d1f6909fc09562d611c8bb8716f00a8cb1c0a0d8d1a46b41f48950e423a"
+    },
+    {
+      "path": "fixture-inventory.json",
+      "bytes": 524,
+      "sha256": "f8b2bb53a3a5457e51a1c2d187bee81200d096d003ed2db37be8f6fd79cf699c"
+    },
+    {
+      "path": "native_zstd_rank_census_test.go",
+      "bytes": 6748,
+      "sha256": "2dbfb20ef6b39a6297813e121231cd4b5f6ad3912ead49bf640d55d2aef6ecfc"
+    },
+    {
+      "path": "original-bounded_prune_public_test.go",
+      "bytes": 5904,
+      "sha256": "93ab89569ab771b4349b47672846d9998b6758b339b395b4ab5df0278247c67f"
+    },
+    {
+      "path": "original-bounded_prune_terminal_diagnostic_test.go",
+      "bytes": 9602,
+      "sha256": "354364d901aeeb24f65161dab74405192e2844a6816cc6775314a5d1af351f51"
+    },
+    {
+      "path": "original-bounded_prune_test.go",
+      "bytes": 29457,
+      "sha256": "7f7640931e2c915761bd0dd0e989efb45859593fc45ecd28ae394daa8d91da4c"
+    },
+    {
+      "path": "original-versions.go",
+      "bytes": 23806,
+      "sha256": "6f6b87f11eb85d05b9071a413229eed11c997c1e119300095b80c01e2a7a02ed"
+    },
+    {
+      "path": "protected-bounded_prune_test.go",
+      "bytes": 31626,
+      "sha256": "e7552d4e4d192042c3de91c2305ab300aafc0670c1a59235d062b4442b712341"
+    },
+    {
+      "path": "protected-bounded_prune_whole_current_publication_test.go",
+      "bytes": 6429,
+      "sha256": "77f14c80a007ce9b918e007e5cce24e5d78ffa022c6a92386cfb58bda246d55f"
+    },
+    {
+      "path": "protected-ledger-v2.json",
+      "bytes": 455291,
+      "sha256": "e373b60962e0eac52bbf3e6a672f09308d24fa94b79c4f1a57716c4f271d2887"
+    },
+    {
+      "path": "run-compile-failure.log",
+      "bytes": 313,
+      "sha256": "72e5a6fbc9ee87f02c9da1e1a0aee47fd8a2cca4de38577a46edb307e933fb29"
+    },
+    {
+      "path": "run-random64-not-kept.log",
+      "bytes": 237,
+      "sha256": "3dc4c5bf3669fec9b97991384725120bd056038f50ecc384f4ea8975d47a9b71"
+    },
+    {
+      "path": "run.log",
+      "bytes": 317,
+      "sha256": "b791fb380812b597d1795d410b6c2850131e6f62921ff4f22f9ec889882ee789"
+    },
+    {
+      "path": "source-census.json",
+      "bytes": 2537,
+      "sha256": "ffe481adb27790c1efa23bf51a1a6a5f5e43df7a47339b0d23de9ee174407c52"
+    }
+  ]
+}
