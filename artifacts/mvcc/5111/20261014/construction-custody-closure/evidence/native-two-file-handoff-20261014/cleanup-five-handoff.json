@@ -1,0 +1,44 @@
+{
+  "baseHead": "725c31dd2711467514a91df9847e2e303b719afd",
+  "checkpointSha256": "af0a5a326fea2ee89d8524bf308eb90a9f48543fed9c43375856e600af4488a2",
+  "contract": "Keep SAME original File/Manager, primary owner, indexGen, leaf/snapshot lifetime; terminal exclusion is not physical completion; actual consumed edges distinct from sticky physical error; preserve all aliases until their actual final uses, full containing admissions, callback/error traversal outside locks, existing DB-rooted first outcome and siblings. Native phases must use ordinary unlimited driver and return actual final physical outcome; no keeper, replacement authority, scalar discount or retry of consumed edges. Integrate back before qualification.",
+  "files": [
+    {
+      "bytes": 103853,
+      "gitBlob": "afcbbb4922471f30e9706101c61196ec33dd8a16",
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "sha256": "8f7d0c50d026f364f53b51f3a5b6c565a60759d747a7c2fd37e8d232ad7be3d6",
+      "source": "120-file checkpoint"
+    },
+    {
+      "bytes": 8446,
+      "gitBlob": "10e990696c9d82eaa11d37ad9128574fa3d86c74",
+      "path": "TreeDB/db/primary_arena_owner_v5.go",
+      "sha256": "6062b075f02b04e7b28a986e1734b0e3b6b52e59ad901557f38bf366d7ec48ba",
+      "source": "120-file checkpoint"
+    },
+    {
+      "bytes": 8103,
+      "gitBlob": "c108a258a080d0a902106269e9b2aa5349acd904",
+      "path": "TreeDB/db/index_gen.go",
+      "sha256": "88575e7cac2633dda743da8e5b6013d982626c5835bd9e1f2cf280b59429dce5",
+      "source": "120-file checkpoint"
+    },
+    {
+      "bytes": 7917,
+      "gitBlob": "ebc0d07004456ca061dafcabae4245b6af9eac87",
+      "path": "TreeDB/db/leaf_generation_runtime.go",
+      "sha256": "f50000ceeb93faf0d640c454e8e962e87dc52f83ba465ba7390b5c0b53b6ab05",
+      "source": "unchanged HEAD725c31dd"
+    },
+    {
+      "bytes": 591,
+      "gitBlob": "e4f6bdeed02ff216152a7b4914d85c457410e1af",
+      "path": "TreeDB/db/snapshot_read_lifetime.go",
+      "sha256": "40ad6a277191ffa9feb281bcbb0c21686d1634bed5003a4697ff8708fa5aaa9a",
+      "source": "unchanged HEAD725c31dd"
+    }
+  ],
+  "ordinaryClosureConflict": "No current planned manifest/pack closure changes require these five files.",
+  "release": "Each listed file released for native-only existing-file writer. Ordinary will not edit after this receipt."
+}

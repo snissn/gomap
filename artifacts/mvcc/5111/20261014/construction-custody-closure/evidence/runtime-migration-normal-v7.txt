@@ -1,0 +1,5 @@
+--- FAIL: TestOriginalGenerationWrapperCloseRacesLastSnapshot (0.02s)
+    snapshot_manager_cleanup_test.go:128: original wrapper was not retained/admitted
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	10.321s
+FAIL

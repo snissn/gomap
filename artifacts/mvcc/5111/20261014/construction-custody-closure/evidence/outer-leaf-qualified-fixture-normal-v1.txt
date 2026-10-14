@@ -1,0 +1,19 @@
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+    cow_public_review_regression_test.go:353: unused leaf physically reclaimed: polls=1 elapsed=40.92µs
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+    cow_public_review_regression_test.go:353: unused leaf physically reclaimed: polls=1 elapsed=34.86µs
+=== RUN   TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_records_total=13
+    cow_public_review_regression_test.go:288: original outer-leaf dispatch treedb.cache.flush_apply.leaf_log_append_frames_total=5
+    cow_public_review_regression_test.go:353: unused leaf physically reclaimed: polls=1 elapsed=34.41µs
+--- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (6.82s)
+    --- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable (5.62s)
+    --- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed (0.63s)
+    --- PASS: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.57s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB	6.824s

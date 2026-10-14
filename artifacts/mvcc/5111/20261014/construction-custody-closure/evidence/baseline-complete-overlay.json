@@ -1,0 +1,15 @@
+{
+  "Replace": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/primary_arena_owner_v5.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/db/primary_arena_owner_v5.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/root_publication_activation.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/db/root_publication_activation.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/root_publication_build_group.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/db/root_publication_build_group.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/rootpublication/durable_root_transaction.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/internal/rootpublication/durable_root_transaction.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/primary_directory.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/zipper/primary_directory.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/zipper.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/zipper/zipper.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/primary_construction_failure_v6_test.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/zipper/primary_construction_failure_v6_test.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/root_publication_primary_cleanup_v6_test.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/db/root_publication_primary_cleanup_v6_test.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/root_publication_build_group_primary_v6_test.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/db/root_publication_build_group_primary_v6_test.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/primaryarena/read_root_construction_release_v6.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-source/TreeDB/internal/primaryarena/read_root_construction_release_v6.go"
+  }
+}

@@ -1,0 +1,1947 @@
+{
+  "original_primary_pointer": "0x14588b7c20d0",
+  "transaction_count": 7,
+  "transactions": {
+    "0x14588b5fc400": {
+      "events": [
+        {
+          "raw_line": 34,
+          "operation": "constructor-success",
+          "transaction": "0x14588b5fc400",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234882,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        }
+      ],
+      "caller_frames": [
+        {
+          "raw_line": 35,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 36,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 37,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 38,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 39,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 40,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 41,
+          "depth": 7,
+          "pc": 9462004,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 285,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).Write"
+        },
+        {
+          "raw_line": 42,
+          "depth": 8,
+          "pc": 13640056,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 988,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 43,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 44,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 45,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 46,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ],
+      "bank_events": [],
+      "bound": false,
+      "finished": false,
+      "aborted": false,
+      "recovered": false
+    },
+    "0x14588b5fc800": {
+      "events": [
+        {
+          "raw_line": 54,
+          "operation": "constructor-success",
+          "transaction": "0x14588b5fc800",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234883,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 102,
+          "operation": "bind-before",
+          "transaction": "0x14588b5fc800",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234883,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 117,
+          "operation": "bind-after",
+          "transaction": "0x14588b5fc800",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234883,
+          "root_incarnation": 1,
+          "phase": 1,
+          "owned_metadata_charge": 5152,
+          "local_metadata_charge": 5152,
+          "construction_present": true
+        },
+        {
+          "raw_line": 169,
+          "operation": "finish-before",
+          "transaction": "0x14588b5fc800",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234883,
+          "root_incarnation": 1,
+          "phase": 4,
+          "owned_metadata_charge": 6176,
+          "local_metadata_charge": 6176,
+          "construction_present": true
+        },
+        {
+          "raw_line": 172,
+          "operation": "finish-after",
+          "transaction": "0x14588b5fc800",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234883,
+          "root_incarnation": 1,
+          "phase": 3,
+          "owned_metadata_charge": 0,
+          "local_metadata_charge": 6176,
+          "construction_present": false
+        }
+      ],
+      "caller_frames": [
+        {
+          "raw_line": 55,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 56,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 57,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 58,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 59,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 60,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 61,
+          "depth": 7,
+          "pc": 9462071,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 289,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+        },
+        {
+          "raw_line": 62,
+          "depth": 8,
+          "pc": 13640035,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 986,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 63,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 64,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 65,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 66,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ],
+      "bank_events": [
+        {
+          "raw_line": 103,
+          "operation": "detach-before",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234883,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588b5fc800",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        },
+        {
+          "raw_line": 116,
+          "operation": "detach-after",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234883,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588b5fc800",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        }
+      ],
+      "bound": true,
+      "finished": true,
+      "aborted": false,
+      "recovered": false
+    },
+    "0x14588b5fcc00": {
+      "events": [
+        {
+          "raw_line": 174,
+          "operation": "constructor-success",
+          "transaction": "0x14588b5fcc00",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234885,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        }
+      ],
+      "caller_frames": [
+        {
+          "raw_line": 175,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 176,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 177,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 178,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 179,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 180,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 181,
+          "depth": 7,
+          "pc": 9462004,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 285,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).Write"
+        },
+        {
+          "raw_line": 182,
+          "depth": 8,
+          "pc": 13640056,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 988,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 183,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 184,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 185,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 186,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ],
+      "bank_events": [],
+      "bound": false,
+      "finished": false,
+      "aborted": false,
+      "recovered": false
+    },
+    "0x14588b5fd000": {
+      "events": [
+        {
+          "raw_line": 194,
+          "operation": "constructor-success",
+          "transaction": "0x14588b5fd000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234886,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 235,
+          "operation": "bind-before",
+          "transaction": "0x14588b5fd000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234886,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 250,
+          "operation": "bind-after",
+          "transaction": "0x14588b5fd000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234886,
+          "root_incarnation": 1,
+          "phase": 1,
+          "owned_metadata_charge": 5152,
+          "local_metadata_charge": 5152,
+          "construction_present": true
+        },
+        {
+          "raw_line": 296,
+          "operation": "finish-before",
+          "transaction": "0x14588b5fd000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234886,
+          "root_incarnation": 1,
+          "phase": 4,
+          "owned_metadata_charge": 6176,
+          "local_metadata_charge": 6176,
+          "construction_present": true
+        },
+        {
+          "raw_line": 299,
+          "operation": "finish-after",
+          "transaction": "0x14588b5fd000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234886,
+          "root_incarnation": 1,
+          "phase": 3,
+          "owned_metadata_charge": 0,
+          "local_metadata_charge": 6176,
+          "construction_present": false
+        }
+      ],
+      "caller_frames": [
+        {
+          "raw_line": 195,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 196,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 197,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 198,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 199,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 200,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 201,
+          "depth": 7,
+          "pc": 9462071,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 289,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+        },
+        {
+          "raw_line": 202,
+          "depth": 8,
+          "pc": 13640035,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 986,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 203,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 204,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 205,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 206,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ],
+      "bank_events": [
+        {
+          "raw_line": 236,
+          "operation": "detach-before",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234886,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588b5fd000",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        },
+        {
+          "raw_line": 249,
+          "operation": "detach-after",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234886,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588b5fd000",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        }
+      ],
+      "bound": true,
+      "finished": true,
+      "aborted": false,
+      "recovered": false
+    },
+    "0x14588c2dda00": {
+      "events": [
+        {
+          "raw_line": 302,
+          "operation": "constructor-success",
+          "transaction": "0x14588c2dda00",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234888,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        }
+      ],
+      "caller_frames": [
+        {
+          "raw_line": 303,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 304,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 305,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 306,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 307,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 308,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 309,
+          "depth": 7,
+          "pc": 9462004,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 285,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).Write"
+        },
+        {
+          "raw_line": 310,
+          "depth": 8,
+          "pc": 13640056,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 988,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 311,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 312,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 313,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 314,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ],
+      "bank_events": [],
+      "bound": false,
+      "finished": false,
+      "aborted": false,
+      "recovered": false
+    },
+    "0x14588c53a000": {
+      "events": [
+        {
+          "raw_line": 322,
+          "operation": "constructor-success",
+          "transaction": "0x14588c53a000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234889,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 363,
+          "operation": "bind-before",
+          "transaction": "0x14588c53a000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234889,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 378,
+          "operation": "bind-after",
+          "transaction": "0x14588c53a000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234889,
+          "root_incarnation": 1,
+          "phase": 1,
+          "owned_metadata_charge": 5152,
+          "local_metadata_charge": 5152,
+          "construction_present": true
+        },
+        {
+          "raw_line": 427,
+          "operation": "finish-before",
+          "transaction": "0x14588c53a000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234889,
+          "root_incarnation": 1,
+          "phase": 4,
+          "owned_metadata_charge": 6176,
+          "local_metadata_charge": 6176,
+          "construction_present": true
+        },
+        {
+          "raw_line": 430,
+          "operation": "finish-after",
+          "transaction": "0x14588c53a000",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234889,
+          "root_incarnation": 1,
+          "phase": 3,
+          "owned_metadata_charge": 0,
+          "local_metadata_charge": 6176,
+          "construction_present": false
+        }
+      ],
+      "caller_frames": [
+        {
+          "raw_line": 323,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 324,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 325,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 326,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 327,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 328,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 329,
+          "depth": 7,
+          "pc": 9462071,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 289,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+        },
+        {
+          "raw_line": 330,
+          "depth": 8,
+          "pc": 13640035,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 986,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 331,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 332,
+          "depth": 10,
+          "pc": 12340876,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 109,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+        },
+        {
+          "raw_line": 333,
+          "depth": 11,
+          "pc": 12936079,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25421,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+        },
+        {
+          "raw_line": 334,
+          "depth": 12,
+          "pc": 23520485,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 25258,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Checkpoint"
+        }
+      ],
+      "bank_events": [
+        {
+          "raw_line": 364,
+          "operation": "detach-before",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234889,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588c53a000",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        },
+        {
+          "raw_line": 377,
+          "operation": "detach-after",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234889,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588c53a000",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        }
+      ],
+      "bound": true,
+      "finished": true,
+      "aborted": false,
+      "recovered": false
+    },
+    "0x14588c53a200": {
+      "events": [
+        {
+          "raw_line": 434,
+          "operation": "constructor-success",
+          "transaction": "0x14588c53a200",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234891,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 475,
+          "operation": "bind-before",
+          "transaction": "0x14588c53a200",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234891,
+          "root_incarnation": 1,
+          "phase": 6,
+          "owned_metadata_charge": 2560,
+          "local_metadata_charge": 2560,
+          "construction_present": true
+        },
+        {
+          "raw_line": 490,
+          "operation": "bind-after",
+          "transaction": "0x14588c53a200",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234891,
+          "root_incarnation": 1,
+          "phase": 1,
+          "owned_metadata_charge": 5152,
+          "local_metadata_charge": 5152,
+          "construction_present": true
+        },
+        {
+          "raw_line": 539,
+          "operation": "finish-before",
+          "transaction": "0x14588c53a200",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234891,
+          "root_incarnation": 1,
+          "phase": 4,
+          "owned_metadata_charge": 6176,
+          "local_metadata_charge": 6176,
+          "construction_present": true
+        },
+        {
+          "raw_line": 542,
+          "operation": "finish-after",
+          "transaction": "0x14588c53a200",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234891,
+          "root_incarnation": 1,
+          "phase": 3,
+          "owned_metadata_charge": 0,
+          "local_metadata_charge": 6176,
+          "construction_present": false
+        }
+      ],
+      "caller_frames": [
+        {
+          "raw_line": 435,
+          "depth": 1,
+          "pc": 8620444,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/primary_directory.go",
+          "line": 328,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyPrimaryDirectory"
+        },
+        {
+          "raw_line": 436,
+          "depth": 2,
+          "pc": 8757988,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/zipper.go",
+          "line": 1858,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applyWithConfig"
+        },
+        {
+          "raw_line": 437,
+          "depth": 3,
+          "pc": 8663582,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/zipper/read_only_prepare.go",
+          "line": 1135,
+          "symbol": "github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions"
+        },
+        {
+          "raw_line": 438,
+          "depth": 4,
+          "pc": 11279128,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 275,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).applyBatchLocked"
+        },
+        {
+          "raw_line": 439,
+          "depth": 5,
+          "pc": 11286260,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+          "line": 448,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+        },
+        {
+          "raw_line": 440,
+          "depth": 6,
+          "pc": 9462276,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 304,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+        },
+        {
+          "raw_line": 441,
+          "depth": 7,
+          "pc": 9462071,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+          "line": 289,
+          "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+        },
+        {
+          "raw_line": 442,
+          "depth": 8,
+          "pc": 13640035,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+          "line": 986,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+        },
+        {
+          "raw_line": 443,
+          "depth": 9,
+          "pc": 12369508,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+          "line": 234,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+        },
+        {
+          "raw_line": 444,
+          "depth": 10,
+          "pc": 12344293,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+          "line": 217,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).closeCOWFrontier"
+        },
+        {
+          "raw_line": 445,
+          "depth": 11,
+          "pc": 12953284,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+          "line": 26429,
+          "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Close"
+        },
+        {
+          "raw_line": 446,
+          "depth": 12,
+          "pc": 23493781,
+          "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/public.go",
+          "line": 1859,
+          "symbol": "github.com/snissn/gomap/TreeDB.(*DB).Close"
+        }
+      ],
+      "bank_events": [
+        {
+          "raw_line": 476,
+          "operation": "detach-before",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234891,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588c53a200",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        },
+        {
+          "raw_line": 489,
+          "operation": "detach-after",
+          "arena": "0x14588b7ba000",
+          "owner": "0x14588b7c20d0",
+          "root_page_id": 5764607523034234891,
+          "root_incarnation": 1,
+          "construction_itab": "0x1c5c3a0",
+          "transaction": "0x14588c53a200",
+          "refs_before": 2,
+          "refs_after": 2,
+          "bank_metadata_charge": 9120
+        }
+      ],
+      "bound": true,
+      "finished": true,
+      "aborted": false,
+      "recovered": false
+    }
+  },
+  "bank_events": [
+    {
+      "raw_line": 103,
+      "operation": "detach-before",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588b5fc800",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    },
+    {
+      "raw_line": 116,
+      "operation": "detach-after",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588b5fc800",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    },
+    {
+      "raw_line": 236,
+      "operation": "detach-before",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588b5fd000",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    },
+    {
+      "raw_line": 249,
+      "operation": "detach-after",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588b5fd000",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    },
+    {
+      "raw_line": 364,
+      "operation": "detach-before",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588c53a000",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    },
+    {
+      "raw_line": 377,
+      "operation": "detach-after",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588c53a000",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    },
+    {
+      "raw_line": 476,
+      "operation": "detach-before",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588c53a200",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    },
+    {
+      "raw_line": 489,
+      "operation": "detach-after",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_itab": "0x1c5c3a0",
+      "transaction": "0x14588c53a200",
+      "refs_before": 2,
+      "refs_after": 2,
+      "bank_metadata_charge": 9120
+    }
+  ],
+  "bank_caller_frames": [
+    {
+      "raw_line": 104,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 1,
+      "pc": 7349764,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 141,
+      "symbol": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).BindPrimaryVisibilityV6"
+    },
+    {
+      "raw_line": 105,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 2,
+      "pc": 11227652,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 899,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate"
+    },
+    {
+      "raw_line": 106,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 3,
+      "pc": 11239012,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 1100,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1"
+    },
+    {
+      "raw_line": 107,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 4,
+      "pc": 9909989,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/db.go",
+      "line": 3763,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions"
+    },
+    {
+      "raw_line": 108,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 5,
+      "pc": 11284393,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 408,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked"
+    },
+    {
+      "raw_line": 109,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 6,
+      "pc": 11286308,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 455,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+    },
+    {
+      "raw_line": 110,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 7,
+      "pc": 9462276,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 304,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+    },
+    {
+      "raw_line": 111,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 8,
+      "pc": 9462071,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 289,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+    },
+    {
+      "raw_line": 112,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 9,
+      "pc": 13640035,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+      "line": 986,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+    },
+    {
+      "raw_line": 113,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 10,
+      "pc": 12369508,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+      "line": 234,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+    },
+    {
+      "raw_line": 114,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 11,
+      "pc": 12340876,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+      "line": 109,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+    },
+    {
+      "raw_line": 115,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234883,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fc800)",
+      "depth": 12,
+      "pc": 12936079,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+      "line": 25421,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+    },
+    {
+      "raw_line": 237,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 1,
+      "pc": 7349764,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 141,
+      "symbol": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).BindPrimaryVisibilityV6"
+    },
+    {
+      "raw_line": 238,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 2,
+      "pc": 11227652,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 899,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate"
+    },
+    {
+      "raw_line": 239,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 3,
+      "pc": 11239012,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 1100,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1"
+    },
+    {
+      "raw_line": 240,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 4,
+      "pc": 9909989,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/db.go",
+      "line": 3763,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions"
+    },
+    {
+      "raw_line": 241,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 5,
+      "pc": 11284393,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 408,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked"
+    },
+    {
+      "raw_line": 242,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 6,
+      "pc": 11286308,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 455,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+    },
+    {
+      "raw_line": 243,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 7,
+      "pc": 9462276,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 304,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+    },
+    {
+      "raw_line": 244,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 8,
+      "pc": 9462071,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 289,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+    },
+    {
+      "raw_line": 245,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 9,
+      "pc": 13640035,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+      "line": 986,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+    },
+    {
+      "raw_line": 246,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 10,
+      "pc": 12369508,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+      "line": 234,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+    },
+    {
+      "raw_line": 247,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 11,
+      "pc": 12340876,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+      "line": 109,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+    },
+    {
+      "raw_line": 248,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234886,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588b5fd000)",
+      "depth": 12,
+      "pc": 12936079,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+      "line": 25421,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+    },
+    {
+      "raw_line": 365,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 1,
+      "pc": 7349764,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 141,
+      "symbol": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).BindPrimaryVisibilityV6"
+    },
+    {
+      "raw_line": 366,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 2,
+      "pc": 11227652,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 899,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate"
+    },
+    {
+      "raw_line": 367,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 3,
+      "pc": 11239012,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 1100,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1"
+    },
+    {
+      "raw_line": 368,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 4,
+      "pc": 9909989,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/db.go",
+      "line": 3763,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions"
+    },
+    {
+      "raw_line": 369,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 5,
+      "pc": 11284393,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 408,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked"
+    },
+    {
+      "raw_line": 370,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 6,
+      "pc": 11286308,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 455,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+    },
+    {
+      "raw_line": 371,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 7,
+      "pc": 9462276,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 304,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+    },
+    {
+      "raw_line": 372,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 8,
+      "pc": 9462071,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 289,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+    },
+    {
+      "raw_line": 373,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 9,
+      "pc": 13640035,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+      "line": 986,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+    },
+    {
+      "raw_line": 374,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 10,
+      "pc": 12369508,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+      "line": 234,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+    },
+    {
+      "raw_line": 375,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 11,
+      "pc": 12340876,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+      "line": 109,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointCOWContext"
+    },
+    {
+      "raw_line": 376,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234889,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a000)",
+      "depth": 12,
+      "pc": 12936079,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+      "line": 25421,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).checkpointContext"
+    },
+    {
+      "raw_line": 477,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 1,
+      "pc": 7349764,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "line": 141,
+      "symbol": "github.com/snissn/gomap/TreeDB/internal/rootpublication.(*DurableRootTransaction).BindPrimaryVisibilityV6"
+    },
+    {
+      "raw_line": 478,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 2,
+      "pc": 11227652,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 899,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).prepareVisibleCandidate"
+    },
+    {
+      "raw_line": 479,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 3,
+      "pc": 11239012,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_activation.go",
+      "line": 1100,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeQueuedRootPublicationV1"
+    },
+    {
+      "raw_line": 480,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 4,
+      "pc": 9909989,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/db.go",
+      "line": 3763,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*DB).finalizeCommitLockedWithOptions"
+    },
+    {
+      "raw_line": 481,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 5,
+      "pc": 11284393,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 408,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).finalizeLocked"
+    },
+    {
+      "raw_line": 482,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 6,
+      "pc": 11286308,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/root_publication_build_group.go",
+      "line": 455,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*RootPublicationBuildGroup).writeBatch"
+    },
+    {
+      "raw_line": 483,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 7,
+      "pc": 9462276,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 304,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).write"
+    },
+    {
+      "raw_line": 484,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 8,
+      "pc": 9462071,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/db/batch.go",
+      "line": 289,
+      "symbol": "github.com/snissn/gomap/TreeDB/db.(*Batch).WriteSync"
+    },
+    {
+      "raw_line": 485,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 9,
+      "pc": 13640035,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/flush_run_planner.go",
+      "line": 986,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).writeCanonicalFlushRunOpsChunk"
+    },
+    {
+      "raw_line": 486,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 10,
+      "pc": 12369508,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_flush.go",
+      "line": 234,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).flushCOWFrozen"
+    },
+    {
+      "raw_line": 487,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 11,
+      "pc": 12344293,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/cow_checkpoint.go",
+      "line": 217,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).closeCOWFrontier"
+    },
+    {
+      "raw_line": 488,
+      "operation": "detach",
+      "arena": "0x14588b7ba000",
+      "owner": "0x14588b7c20d0",
+      "root_page_id": 5764607523034234891,
+      "root_incarnation": 1,
+      "construction_interface": "(0x1c5c3a0,0x14588c53a200)",
+      "depth": 12,
+      "pc": 12953284,
+      "file": "/workspace/scratch/1ecfdb811b25/cow-terminal-probe-c014/TreeDB/caching/db.go",
+      "line": 26429,
+      "symbol": "github.com/snissn/gomap/TreeDB/caching.(*DB).Close"
+    }
+  ],
+  "unbound_transaction_pointers": [
+    "0x14588b5fc400",
+    "0x14588b5fcc00",
+    "0x14588c2dda00"
+  ]
+}

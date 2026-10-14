@@ -1,0 +1,97 @@
+=== RUN   TestDependencyDirectoryV2RequiredFeatureNewStoreAndReopen
+--- PASS: TestDependencyDirectoryV2RequiredFeatureNewStoreAndReopen (0.13s)
+=== RUN   TestDependencyDirectoryV2RequiredFeatureRefusesV1Activation
+--- PASS: TestDependencyDirectoryV2RequiredFeatureRefusesV1Activation (0.05s)
+=== RUN   TestDependencyDirectoryV2UnknownRequiredFeaturePrecedesStorageDecode
+--- PASS: TestDependencyDirectoryV2UnknownRequiredFeaturePrecedesStorageDecode (0.01s)
+=== RUN   TestDependencyDirectoryV2RequiredFeatureRefusesDirtyWAL
+--- PASS: TestDependencyDirectoryV2RequiredFeatureRefusesDirtyWAL (0.00s)
+=== RUN   TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation
+--- PASS: TestDependencyDirectoryV2OldReaderSlotsAndSharedSubtreeReclamation (0.20s)
+=== RUN   TestDependencyDirectoryV2SealRecoveryBothSlotsAndCorruptFallback
+--- PASS: TestDependencyDirectoryV2SealRecoveryBothSlotsAndCorruptFallback (0.05s)
+=== RUN   TestDependencyDirectoryV2COWRemovalKeepsOldRoot
+--- PASS: TestDependencyDirectoryV2COWRemovalKeepsOldRoot (0.03s)
+=== RUN   TestDependencyDirectoryV2InitialEmptyAndNoop
+--- PASS: TestDependencyDirectoryV2InitialEmptyAndNoop (0.03s)
+=== RUN   TestDependencyDirectoryV2RebuildPreservesBothSlots
+--- PASS: TestDependencyDirectoryV2RebuildPreservesBothSlots (0.04s)
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery/before-publication-seal-write
+    durable_root_open_test.go:1122: recovered value "": <nil>
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery/after-publication-seal-write
+    durable_root_open_test.go:1122: recovered value "": <nil>
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery/before-meta-sync
+--- FAIL: TestDependencyDirectoryV2PublicationCutFailureRecovery (0.22s)
+    --- FAIL: TestDependencyDirectoryV2PublicationCutFailureRecovery/before-publication-seal-write (0.08s)
+    --- FAIL: TestDependencyDirectoryV2PublicationCutFailureRecovery/after-publication-seal-write (0.08s)
+    --- PASS: TestDependencyDirectoryV2PublicationCutFailureRecovery/before-meta-sync (0.07s)
+=== RUN   TestPrimaryJointCompletedV6AdvancedCanonicalPair
+    primary_joint_completed_v6_test.go:27: treedb: no recoverable durable meta: slot 0: stable resource dependency unresolved: incomplete durable dependency descriptor; slot 1: stable resource dependency unresolved: incomplete durable dependency descriptor
+--- FAIL: TestPrimaryJointCompletedV6AdvancedCanonicalPair (0.08s)
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery/before-commit
+    primary_offline_pair_v6_test.go:100: cut before-commit: treedb: no recoverable durable meta: slot 0: stable resource dependency unresolved: incomplete durable dependency descriptor; slot 1: stable resource dependency unresolved: incomplete durable dependency descriptor
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery/after-commit
+    primary_offline_pair_v6_test.go:100: cut after-commit: treedb: no recoverable durable meta: slot 0: stable resource dependency unresolved: incomplete durable dependency descriptor; slot 1: stable resource dependency unresolved: incomplete durable dependency descriptor
+--- FAIL: TestPrimaryOfflineVlogV6CacheInvalidationRecovery (0.16s)
+    --- FAIL: TestPrimaryOfflineVlogV6CacheInvalidationRecovery/before-commit (0.08s)
+    --- FAIL: TestPrimaryOfflineVlogV6CacheInvalidationRecovery/after-commit (0.08s)
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback/0
+    primary_offline_pair_v6_test.go:122: treedb: no recoverable durable meta: slot 0: stable resource dependency unresolved: incomplete durable dependency descriptor; slot 1: stable resource dependency unresolved: incomplete durable dependency descriptor
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback/1
+    primary_offline_pair_v6_test.go:122: treedb: no recoverable durable meta: slot 0: stable resource dependency unresolved: incomplete durable dependency descriptor; slot 1: stable resource dependency unresolved: incomplete durable dependency descriptor
+--- FAIL: TestPrimaryOfflineVlogV6IndependentFallback (0.15s)
+    --- FAIL: TestPrimaryOfflineVlogV6IndependentFallback/0 (0.08s)
+    --- FAIL: TestPrimaryOfflineVlogV6IndependentFallback/1 (0.07s)
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA
+    vlog_ref_incarnation_test.go:102: rebuilt counts=map[] want map[2147483650:1]
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY
+    vlog_ref_incarnation_test.go:102: rebuilt counts=map[] want map[2147483650:1]
+--- FAIL: TestValueLogRefCacheRejectsOtherPhysicalIncarnation (0.26s)
+    --- FAIL: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA (0.12s)
+    --- FAIL: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY (0.14s)
+=== RUN   TestValueLogRefCacheFormatBindsPhysicalPair
+--- PASS: TestValueLogRefCacheFormatBindsPhysicalPair (0.04s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	1.422s
+testing: warning: no tests to run
+PASS
+ok  	github.com/snissn/gomap/TreeDB/pager	0.001s [no tests to run]
+=== RUN   TestDependencyDirectoryV2ExactIdentityAndCanonicalRecords
+--- PASS: TestDependencyDirectoryV2ExactIdentityAndCanonicalRecords (0.00s)
+=== RUN   TestDependencyDirectoryV2PinnedPointAndStreamingChecks
+--- PASS: TestDependencyDirectoryV2PinnedPointAndStreamingChecks (0.00s)
+=== RUN   TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles
+=== RUN   TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/beyond-selected-extent
+=== RUN   TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/cycle
+--- PASS: TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles (0.00s)
+    --- PASS: TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/beyond-selected-extent (0.00s)
+    --- PASS: TestDependencyDirectoryV2RejectsChildOutsideSelectedExtentAndCycles/cycle (0.00s)
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/exact
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/different-valid
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/malformed-value
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/wrong-owner-key
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/missing-owner
+=== RUN   TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/corrupt-page
+--- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/exact (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/different-valid (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/malformed-value (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/wrong-owner-key (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/missing-owner (0.00s)
+    --- PASS: TestDependencyDirectoryV2CanonicalPhysicalComparisonFailsClosed/corrupt-page (0.00s)
+=== RUN   TestStableResourceNamespaceRequiresExactLinkedChild
+--- PASS: TestStableResourceNamespaceRequiresExactLinkedChild (0.00s)
+=== RUN   TestStableResourceNamespaceAcceptsExactLinkedChild
+--- PASS: TestStableResourceNamespaceAcceptsExactLinkedChild (0.00s)
+=== RUN   TestDependencyDirectoryV2ResourceClosureAppendAndLease
+--- PASS: TestDependencyDirectoryV2ResourceClosureAppendAndLease (0.00s)
+=== RUN   TestDependencyDirectoryV2EmptyClosureLease
+--- PASS: TestDependencyDirectoryV2EmptyClosureLease (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.002s
+FAIL

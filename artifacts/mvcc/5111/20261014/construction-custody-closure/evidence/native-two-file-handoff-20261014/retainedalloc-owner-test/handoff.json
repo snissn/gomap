@@ -1,0 +1,7 @@
+{
+  "path": "TreeDB/internal/retainedalloc/owner_test.go",
+  "sha256": "93547cbe38e67f3e77ba95d44f709e69fd3199c92f5c66ba795dedeea801296a",
+  "bytes": 5150,
+  "ownership": "released to native; ordinary read-only after this receipt",
+  "contract": "test fixture exact AllocationCharge containing geometry; production caps unchanged"
+}

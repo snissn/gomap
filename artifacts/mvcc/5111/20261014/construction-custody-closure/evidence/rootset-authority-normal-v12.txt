@@ -1,0 +1,8 @@
+--- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsFirstOutcome (0.04s)
+    leaf_generation_pack_stable_prepare_test.go:561: exact original namespace token/parent identity lost
+--- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClose (0.04s)
+    leaf_generation_pack_stable_prepare_test.go:669: exact original namespace token/parent identity lost
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.515s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.008s
+FAIL

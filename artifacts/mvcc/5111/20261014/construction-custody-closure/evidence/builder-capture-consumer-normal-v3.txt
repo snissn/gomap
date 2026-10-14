@@ -1,0 +1,9 @@
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.005s
+ok  	github.com/snissn/gomap/TreeDB/internal/valuelog	0.014s
+ok  	github.com/snissn/gomap/TreeDB/internal/dictdb	0.531s
+ok  	github.com/snissn/gomap/TreeDB/internal/templatedb	0.602s
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/original_cleanup_error_graph_test.go:20:5: undefined: originalCleanupPriorLinker
+ok  	github.com/snissn/gomap/TreeDB/caching	0.012s [no tests to run]
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

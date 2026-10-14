@@ -1,0 +1,7 @@
+=== RUN   TestPrimaryJointCompletedV6AdvancedCanonicalPair
+--- PASS: TestPrimaryJointCompletedV6AdvancedCanonicalPair (0.24s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.242s
+testing: warning: no tests to run
+PASS
+ok  	github.com/snissn/gomap/TreeDB/pager	0.001s [no tests to run]

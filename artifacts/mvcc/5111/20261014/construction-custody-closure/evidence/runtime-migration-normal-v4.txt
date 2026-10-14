@@ -1,0 +1,37 @@
+--- FAIL: TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6 (0.06s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0xbdf3ba]
+
+goroutine 20 [running]:
+testing.tRunner.func1.2({0x1b05d00, 0x2ce4410})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:1974 +0x232
+testing.tRunner.func1()
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:1977 +0x349
+panic({0x1b05d00?, 0x2ce4410?})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/runtime/panic.go:860 +0x13a
+github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).MetadataOwner(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/primaryarena/retention.go:10
+github.com/snissn/gomap/TreeDB/db.(*rootPublicationSealV1).release(0x2d1a36e25808)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/root_publication_activation.go:266 +0x19a
+github.com/snissn/gomap/TreeDB/db.(*rootPublicationRuntimeV1).release(0x2d1a36ec00b0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/root_publication_activation.go:1927 +0x171
+github.com/snissn/gomap/TreeDB/db.(*DB).closeAfterHooks(0x2d1a36faea08)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/db.go:3430 +0x141e
+github.com/snissn/gomap/TreeDB/db.(*DB).closeAfterHooksOnce.func1()
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/db.go:3263 +0x37
+sync.(*Once).doSlow(0x2d1a36f18668?, 0xa84e00?)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/sync/once.go:78 +0xac
+sync.(*Once).Do(...)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/sync/once.go:69
+github.com/snissn/gomap/TreeDB/db.(*DB).closeAfterHooksOnce(0x2d1a36faea08)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/db.go:3259 +0x45
+github.com/snissn/gomap/TreeDB/db.(*DB).Close(0x2d1a36faea08)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/db.go:3252 +0x2b2
+github.com/snissn/gomap/TreeDB/db.TestPrimaryCapsulePostInstallFenceFailureRetainsCustodyV6(0x2d1a36e266c8)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/primary_capsule_v6_test.go:181 +0xb2b
+testing.tRunner(0x2d1a36e266c8, 0x1de55e8)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2101 +0x4c5
+FAIL	github.com/snissn/gomap/TreeDB/db	0.185s
+FAIL

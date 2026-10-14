@@ -1,0 +1,22 @@
+func (builder *StableResourceSetBuilder) Abandon() {
+	if builder == nil {
+		return
+	}
+	builder.mu.Lock()
+	if builder.closed || builder.abandoned {
+		builder.mu.Unlock()
+		return
+	}
+	entries := builder.entries
+	views := builder.kindViews
+	builder.entries = nil
+	builder.kindViews = nil
+	builder.abandoned = true
+	builder.state = ResourceOwnerReleased
+	builder.disposeSelectedBuilderLocked()
+	builder.mu.Unlock()
+	releaseStableResourceKindViews(views)
+	for _, entry := range entries {
+		entry.token.releaseFrom(ResourceOwnerBuilder)
+	}
+}

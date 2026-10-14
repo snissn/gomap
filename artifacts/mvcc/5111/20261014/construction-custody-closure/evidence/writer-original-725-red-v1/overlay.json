@@ -1,0 +1,8 @@
+{
+  "Replace": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/writer.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/writer.go.original-725",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/stable_resource.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/stable_resource.go.original-725",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/writer_original_cleanup.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/writer_original_cleanup.empty.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/writer_original_cleanup_test.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/writer_original_cleanup.diagnostic_test.go"
+  }
+}

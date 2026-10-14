@@ -1,0 +1,10 @@
+{
+  "path": "TreeDB/db/leaf_generation_pack_authority_test.go",
+  "sha256": "6470c73c59fae411669bb630057eeaa58883fdfa0798d7c4711235425c12a68c",
+  "size": 34818,
+  "scope": "three selected physical-descriptor/stat controls; checked scoped Close before authority release; disjoint from held owner-selection category",
+  "command": "go test ./TreeDB/db -run TestLeafGenerationPackPromotionAuthority(RetainsExactPackedResourceThroughRegistration|MergesAndOwnsDictionaryClosure|MultipleSegmentsShareParentSyncs)$ -count=1 -timeout=120s",
+  "final_raw": "disjoint-test-normal-v2.txt",
+  "final_exit": 0,
+  "prior_command_error": "disjoint-test-normal.txt: invalid timeout flag; no tests ran"
+}

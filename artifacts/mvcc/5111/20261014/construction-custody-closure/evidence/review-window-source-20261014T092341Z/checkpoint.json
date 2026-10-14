@@ -1,0 +1,2173 @@
+{
+  "branch": "codex/5111-structural-repair-20261013",
+  "coordination": "No commit/push/PR advance. Existing coordinator/transaction/admission/types/ordinaryfinish transfer to native awaits parent stable-source choice. Native mvcc/internalmvccadmission/new native files untouched.",
+  "diff_check_exit": 0,
+  "head": "725c31dd2711467514a91df9847e2e303b719afd",
+  "head_tree": "2f3a39843b18c1a6627f763d482dc4a2760f76bf",
+  "latest_results": {
+    "outer-leaf-original-fixture-normal-v1": "exit1 retained original fixture RED",
+    "outer-leaf-qualified-fixture-normal-v1": "exit0 actual13records/5frames all3profiles",
+    "shared-builder-kind-normal-v1": "exit0",
+    "shared-import-cache-normal-v1": "exit0",
+    "shared-import-capture-cache-race-v2": "exit1: rootpublication/valuelog/caching GREEN; db pending metadata underflow primary_runtime_metadata_test.go51",
+    "shared-manager-borrow-normal-v1": "exit0"
+  },
+  "process_recheck": [],
+  "purpose": "Recoverable dirty-source checkpoint before review-slot pause; not qualified or committed",
+  "raw_evidence": [
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/accounting-final.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/activation-failure-first.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/activation-failure-second.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/activation-first.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/affected-internals.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/affected-public.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/affected-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2996,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-complete-overlay.json",
+      "sha256": "e7b8aa1d58bec737c14ed56a1f4101c214c33b34f890a26a25652ae48cc05b43"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-known-public-cuts.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-leaf-race.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2170,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-overlay.json",
+      "sha256": "0943e0f88b6dcae4b4bc925689fb842e590bf510049a28c8a391e818d9791228"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/baseline-standalone-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-caller-final-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-caller-final-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-caller-first-race.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-caller-second-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-caller-third-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 444,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-current-green-overlay.json",
+      "sha256": "376d82be6c7555247637cd0ca8225e9e1a97b31d07532e6bb10d4b39bccc7b91"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-current-green-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2081,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-current-source-binding.json",
+      "sha256": "cfd86e9c0862e4f2607dfe6201e9f46121516501ce034774b2faaedc2f9de6ff"
+    },
+    {
+      "bytes": 442,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-final-green-overlay.json",
+      "sha256": "3ec533e261b42c6d67f635403a470d8c0a01fba1a6f4c8820b8c2dea4e8713d4"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-green-first.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 445,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-green-overlay.json",
+      "sha256": "e4a3750f1d440dbd59595c5a75c2240a1fc7740c81e5614eb06f7dd5276f5df1"
+    },
+    {
+      "bytes": 444,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-red-overlay.json",
+      "sha256": "5d245167ebf998c0f9c61815edcaea8e18deec7c9c3ccc93d1ad455d4323baf1"
+    },
+    {
+      "bytes": 447,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-red-v2-overlay.json",
+      "sha256": "34046ace98bf0afa93fb3cab475d14e200d3410fcb52c10ddce6a387fc484753"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-red-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 13036,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-completion-source-freeze.json",
+      "sha256": "76fd0e5dac6882b809cb4cab286d082e7e854cfe96405f8338425e6afd8bf0e8"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-docs-final.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-docs-freeze.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-first-normal.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-original-final-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 437,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-public-consumer-green-overlay.json",
+      "sha256": "1d579d6cd91c9044d9fce9b2e0c82fe6eec3dc06977e4e9998946231211ab5e0"
+    },
+    {
+      "bytes": 647,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-public-consumer-red-overlay.json",
+      "sha256": "2633d5d206699e4b344311359995b5691fbc4c810d6838e3d9c1352332b8a5f9"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-public-consumer-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-public-final-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-public-final-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-refresh-admission-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-registry-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-second-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-shared-first-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-shared-first-race.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-shared-second-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-wrapper-final-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/basis-wrapper-final-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 687,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v2.txt",
+      "sha256": "64c71f2cd4b7adb4816fec8b9fc5d0c83fe9ce95fc556e8a0575249c8ecd2835"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 547,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v3.txt",
+      "sha256": "5dbcb9d3398749ba32de561a74c05e8f1150abf5d6fd48f3752159f576845e91"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v4.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 707,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v4.txt",
+      "sha256": "0671421167e7eaae561cbb2cbdeaf819e6ceca17f8e50d4bd2830f1aeba8a71f"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v5.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 348,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v5.txt",
+      "sha256": "e2c48ae479c35b5586a7be46918f9730b4f3ac40dd7edd41feaeff39f6b043ab"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v6.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 4921,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-normal-v6.txt",
+      "sha256": "0bafeff83a081c2084d79824c218ad9dde8869aed7461051c1fecac45176fd37"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 348,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-capture-consumer-race-v1.txt",
+      "sha256": "b71c9dc193ee209839cf3917f0047260e44bf1f28659d3890bf4e9aceda47177"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-original-red-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 243,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-original-red-v1.txt",
+      "sha256": "8e076781bd9cc778595e497f28d3fbca67b8ea26139f152401c54ebac0618648"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-selected-consumer-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 442,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/builder-selected-consumer-normal-v1.txt",
+      "sha256": "b8d2b84643b7fd29285a7c51ec026b1004defaedc36f71c976f3c0b9b567c18b"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-commit-focused-normal-v5.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-commit-focused-race-v4.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-incarnation-first-green.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-incarnation-focused-race-v3.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-incarnation-focused-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-incarnation-focused-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-incarnation-green-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-incarnation-original-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-read-original-completion-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/cache-read-original-completion-normal-v1.txt",
+      "sha256": "211bda5de9990b5157d0f9b2c20706945c92a21ea8bf133d47102e64d21af29c"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/candidate-standalone-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/certificate-namespace-completion-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 175,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/certificate-namespace-completion-normal-v1.txt",
+      "sha256": "aad0d2fc7c5b63cf364780b70a3708a56d8b7dc1485b1987fd44bf2682c4e05c"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/child-certificate-original-completion-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 228,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/child-certificate-original-completion-normal-v1.txt",
+      "sha256": "8498dc7a0955c80a9168559cb18c232558ec8814e36f26e057c3a229a2ff6426"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/child-certificate-original-completion-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 228,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/child-certificate-original-completion-race-v1.txt",
+      "sha256": "191a944856bf15208a195e2e12d7b470079522e04487aa7abd17b95dee96bc33"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/child-namespace-original-red-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 976,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/child-namespace-original-red-v1.txt",
+      "sha256": "d4acda5a2067d9bfb06eaaf02cc41ed47c6805c43923d208fded2c32fcb2715e"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-completed-fault-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-completed-fault-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-completed-fault-v3.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-completed-first-green-diagnostic.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-completed-green-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-completed-green-v3.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-completed-original-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/commit-shared-descriptor-focused-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/constructor-focused.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-abort-completion-first-green.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-abort-original-clean-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-abort-readonly-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-canonical-capacity-normal-v9.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-canonical-recovery-normal-v7.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-disposal-recovery-race-v8.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-owned-first-diagnostic.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-owned-focused-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-owned-focused-normal-v4.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-owned-focused-normal-v5.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-owned-focused-normal-v6.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-owned-second-diagnostic.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/count-owner-vacuum-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 13788,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/custody-cut-freeze.json",
+      "sha256": "5369ed0f19f82e58a828e641b2ff424f63705c25784d1a1ef4de975e36a2b694"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/custody-cut-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/custody-cut-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/custody-internal-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/custody-original-diagnostic-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/custody-original-diagnostic.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/descriptor-caller-count-owner-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/descriptor-caller-count-owner-normal-v4.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/descriptor-caller-outcomes-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/descriptor-caller-outcomes-normal-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/descriptor-outcomes-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/descriptor-outcomes-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/dispatch-diagnostic.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-actual-physical-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-actual-physical-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-handoff-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-handoff-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-outcomes-first-compile.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-outcomes-first-normal-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-outcomes-normal-v3.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/disposal-outcomes-normal-v4.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/fallback-cause.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/final-affected-normal.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/final-affected-race.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/final-coherent-focused.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/ghost-borrower-outcomes-normal-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 1113,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/ghost-borrower-outcomes-normal-v2.txt",
+      "sha256": "dcd21ba8082303683f82e4e87d0d4fcecf15a1f97604e2d17ab8979bce9b3e8a"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/ghost-borrower-outcomes-normal-v3.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 114,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/ghost-borrower-outcomes-normal-v3.txt",
+      "sha256": "db916546715d4fe657449d272139a90e0edf8f6233d65ac98ef0f18777543fe5"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/ghost-generation-outcomes-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/import-original-completion-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 302,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/import-original-completion-normal-v1.txt",
+      "sha256": "a7d420fc7a616269bc92cfb8e79815136a7040a6ad697ac74bba310703ff913e"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-constructor-original-red-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 3411,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-constructor-original-red-v1.txt",
+      "sha256": "360233a03f9b5d3bf3e3b6e626ff709012e1f7d41c54f4843c2018bbc06a6121"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 341,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v1.txt",
+      "sha256": "9351ae4017259d25fa65edab788a9db76f73b25ea50163dea38cf481715750ca"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 224,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v2.txt",
+      "sha256": "171b53ad022e6457294c149fbe9dba6da68f2211c41b7feb570cb5480cc12513"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 248,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v3.txt",
+      "sha256": "8a24a875729393e46696369e8c960e6d7c3f521cfd7fc4dbd958936ec6e7a62f"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v4.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 61,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-normal-v4.txt",
+      "sha256": "839fdd6f182a3b5b08bb02ca2e05c617312fff6a19f5ba9468586678a1357c44"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 61,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-lastset-race-v1.txt",
+      "sha256": "e7dd9a46899d357be6960b1d9501f15d7d92cf38fb1d84a3fd8873f075076f63"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-receipt-sibling-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 61,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-receipt-sibling-race-v1.txt",
+      "sha256": "a1c8b3061d55509cc40de59cbd408bbfb36b08045c0330954ac0405f370775a0"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-terminal-retirement-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 1781,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-terminal-retirement-normal-v1.txt",
+      "sha256": "c49e323b400685d291a315c876798aa6ce1920aeb4a80195d4ce9f675251b17d"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-terminal-retirement-race-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 61,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/manager-terminal-retirement-race-v2.txt",
+      "sha256": "33186bba76dac0fc5cb6fb0e34cc0aad98ccadc70c7c15d86c443cbb814359c5"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/original-diagnostic-after.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/original-error-graph-completion-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 175,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/original-error-graph-completion-normal-v1.txt",
+      "sha256": "23270996e308c7f179501db45a4ad4b51489ad3e2620573f226bfb80b07972c6"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/original-error-graph-completion-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 175,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/original-error-graph-completion-race-v1.txt",
+      "sha256": "d2fcbf6a17b8e0bc5f75f24c9f4f373b22f2fe817e1392e86b0890f924607c3e"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/original-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/outer-leaf-original-fixture-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 623,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/outer-leaf-original-fixture-normal-v1.txt",
+      "sha256": "dbcdf0186adea0f668cc3562fd5bc22e487678e22294b67f23f41e9404e9527a"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/outer-leaf-qualified-fixture-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 1807,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/outer-leaf-qualified-fixture-normal-v1.txt",
+      "sha256": "f8d8d69224d3f3664a4dabbb3c7ae3b9c7d908e2fdb45b6aa59325585edb0c43"
+    },
+    {
+      "bytes": 1198,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/overlay-rebound.json",
+      "sha256": "467071a14fd4c2cb3acec2fb5837e3fbd99fbd7238750bec97baf64ee00df0e4"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/partial-file-original-completion-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 3875,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/partial-file-original-completion-normal-v1.txt",
+      "sha256": "ccaba84f299e9b8baeb9cc18e4a6af789a6915f6b57bcb1e92cac695b402426d"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/partial-file-original-completion-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 107,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/partial-file-original-completion-normal-v2.txt",
+      "sha256": "dea8d0bec568ab89b2b6585428b7f103b728af77961f112843098ee3f1720d4e"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/partial-file-original-completion-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 107,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/partial-file-original-completion-race-v1.txt",
+      "sha256": "fdc9d2770ca3a5cc986048d1633f59dff6a9cb0276997b512f9066c8859f907a"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 519,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-normal-v1.txt",
+      "sha256": "0cf18c3ac6beb2c665bb8e4eb24e6b7dd2b1b0d95be157361e509ec0a61cee71"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-normal-v2.txt",
+      "sha256": "1f6f743fda047f202f348f93b008bf7f5adf41113447e14e0fe5c7f455773651"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 248,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-normal-v3.txt",
+      "sha256": "d28bd11d02865b905806797b59c6bb920f93d123861603c1f1f6401b8c53bdaf"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-original-red-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 252,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/primary-producer-certificate-original-red-v1.txt",
+      "sha256": "ccbf35cff1e906663be19f484b4377a850e0dab3b672a1b194cb2ccc5e6f944e"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/product-green-2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/product-green-3.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/product-green.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/product-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/public-selection-original-green.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 236,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/public-selection-red-overlay.json",
+      "sha256": "41c3cb3a5caa7300132e07c4bc254c17276d409dda522e99eb183664cff09ec4"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/public-selection-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/raw-namespace-and-readonly-normal-v6.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/readonly-owned-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 1944,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/released-standalone-db-cleanup.json",
+      "sha256": "d1958f22a1e240806b8e50ced05e7392a4a9768f54a8a7a87ff1374b2250a5df"
+    },
+    {
+      "bytes": 6514,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/released-standalone-db-inventory.json",
+      "sha256": "fde7f3a6f0f8149def7123d1d8902b7aba16cae3e9e5864fdaa493dd05dacf35"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v1.txt",
+      "sha256": "2918246db66d79bbb9f84ed0a2037acffdc6e73d17ee4cd914f7a97f88800c0e"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 47,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v2.txt",
+      "sha256": "f84da8f8cb3504e570e70af5187c857805295a400a308d166dd69dc3bba75390"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 328,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v3.txt",
+      "sha256": "60d18b59434c7483f40a90a3ae68228db92d5a31cf1cbc594b8382e2f1b07654"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v4.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 115,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-normal-v4.txt",
+      "sha256": "1346fa0cfdbe433a3397f1870bb56f33b24a4b91ff3f48592523833fb1f7a905"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 114,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-constructor-race-v1.txt",
+      "sha256": "4cce9a8ea19128967e6442553ce0dba2c04a6de3876b5b58140acbd89451de07"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-build-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-build-normal-v1.txt",
+      "sha256": "fbe9bcf1351a59f51ba24dbee16c3ab12dcdf8fb731c3b10abf3baf49dc71239"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 203,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v2.txt",
+      "sha256": "c57fee922d0a98e1059a5a25e57bf7bfb5e48d14b0f2981d75fdcf5a1f894988"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 203,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v3.txt",
+      "sha256": "c57fee922d0a98e1059a5a25e57bf7bfb5e48d14b0f2981d75fdcf5a1f894988"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v4.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2778,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v4.txt",
+      "sha256": "906dfe7272b83c8002d49de5a7eec9b5e45feb6839fc11667fe998a7f78aa03c"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v5.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 316,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v5.txt",
+      "sha256": "f626629d51686aa1d92274ff30e6deed54c1f02e0de077b71d79dab7215e7bbb"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v6.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 3242,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v6.txt",
+      "sha256": "13b8a0177433f0a28c540fa41960bd9398dc35934fbf90241ba941bdde594f29"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v7.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 212,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v7.txt",
+      "sha256": "4158e778efca20318e64e1e4e902498ae4bf823860083f922bc35e96dcab3ff3"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v8.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 47,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-normal-v8.txt",
+      "sha256": "fe799cd3ae665796f9932e816a9b6e40b623d70966a7a4ddc2b14bbeb354bc53"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-migration-race-v1.txt",
+      "sha256": "117e1eac486e18e5a856152ee60a161f8ffc9622aaf94c712cb26a0797bee18d"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-selector-original-725-red-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 252,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/runtime-selector-original-725-red-v1.txt",
+      "sha256": "14213003444cb67e252a996c59d59368722227bc1521fe8b8130bedaca715857"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-custody-fallback-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-custody-fallback-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-docs-final.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-docs.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-event.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-fallback-green.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-first.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-normal-final.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-normal.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-reopen-close-normal.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-reopen-close-race.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/selection-second.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-builder-kind-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 68,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-builder-kind-normal-v1.txt",
+      "sha256": "47fb0d13aae1978f1e10ca3258c6b2c0aafc2e8dbc64dadb48900b7e3e5d34b3"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-import-cache-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 226,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-import-cache-normal-v1.txt",
+      "sha256": "b85ae3e39dff07d7c7e8d0e8c0e4f42227d80fbd015ddfadedb7257263e34bd7"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-import-capture-cache-race-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 1573,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-import-capture-cache-race-v2.txt",
+      "sha256": "010ebaf6647222d67162ea6965e9f3940589e0e8fa487ff576ebe00ad237df0e"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-manager-borrow-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 244,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/shared-manager-borrow-normal-v1.txt",
+      "sha256": "778f9a50c3ed7b6521a20d6becb7a4844f2c1fe763f1e12aa7d012e04d84825d"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-generation-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-generation-race-v1.txt",
+      "sha256": "179503449a993a3330050dce490d1ec55ae400d97a761fa71d512502cda884e9"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-generation-receipt-race-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-generation-receipt-race-v1.txt",
+      "sha256": "cd9bbf16259caac815bd66f3d3fe58abc0f6f59e385f9ab3748e4df02fd931ef"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-generation-receipt-race-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-generation-receipt-race-v2.txt",
+      "sha256": "126cb16e8de511cf28898a9564eef58382537f158aa9748a93de1ed23f25d44d"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-red-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 510,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-red-v1.txt",
+      "sha256": "f85ec57c8b6da96ef80cfab743d401574c0016389695f556a658bb24394eb7e3"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-red-v2.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 714,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-red-v2.txt",
+      "sha256": "92a0e83f4611f0b8ff88376a135b786642443288d1d06fe25c568087dfc929b9"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-red-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 1926,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-red-v3.txt",
+      "sha256": "2981f83fc77b3a3abb80b838f2d8a23d7c1eef9ab15bdc795c0ef44f964c381c"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-v4.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 510,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-v4.txt",
+      "sha256": "3eef2ddae2435b4667357c531ac5e11c22ab7d8d741d136a9334d655f3c02905"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-v5.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-normal-v5.txt",
+      "sha256": "221a00294a132f68d50c96cc2252ed3f83d4971785fff648c6642217963b6096"
+    },
+    {
+      "bytes": 422,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/snapshot-manager-late-red-source.json",
+      "sha256": "26daa323557a01fd1864c9b3ada7e35d9e2c199d6c02a49324766ebe38574135"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-ghost-count-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 47,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-ghost-count-normal-v1.txt",
+      "sha256": "e54d3b380a65f2b5840556028d9a6e5d05d5a0aa5a77aaefe1107137594b1467"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-original-allcallers-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-original-allcallers-normal-v1.txt",
+      "sha256": "5dfe5a6a2ba29d3ad2ae04667ff0cd56ca92b119b276acf8f54592273509152d"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-original-physical-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 46,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-original-physical-normal-v1.txt",
+      "sha256": "076632d474ad2e5229fcba43d798d364bb986cebaf129e6acfd856bb62bccb7a"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-original-physical-red-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 278,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/startup-original-physical-red-v1.txt",
+      "sha256": "401d1fb69161a575261fd2b70e15f7b9bc62c8f1ef76b74a7f2c96123c3f4abf"
+    },
+    {
+      "bytes": 271,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/supersession-abort-count-overlay.json",
+      "sha256": "fdae12971e51ff5e794bc2ca12d228403bb811d59c06b0e3d25fec1a7af93c79"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/supersession-abort-count.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/supersession-first-normal.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/supersession-first-red.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/token-constructor-migration-normal-v1.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 2325,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/working-source-binding.json",
+      "sha256": "5e1f46db775f6d61291d53e56b4ba68cc1cdf42fd6532c82ae34716e23e78d7c"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-consumer-migration-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 274,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-consumer-migration-normal-v1.txt",
+      "sha256": "b6a22e9456783c64c74dda965d2eda34f881bcd4cd1bccc47b6b9b339e6bb6d6"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-consumer-migration-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 159,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-consumer-migration-normal-v2.txt",
+      "sha256": "d2da68cf380bf8a2a913b323e472af852719ab8b23e89a8e9b986731662afab8"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v1.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 303,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v1.txt",
+      "sha256": "1ee44dad6d00e650d65ae1940b676207a5620111133e90d1d81c23f5ea3392b9"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v2.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 61,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v2.txt",
+      "sha256": "01a39e87fb8cce6446bc43282d930324a426cc863b9c5291f96d634cc365e011"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v3.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 225,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v3.txt",
+      "sha256": "9b5b5701bbe49eb9281ebd17a5b34e7aa2d9e03f31037ada25c6e20332bf302f"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v4.exit",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "bytes": 270,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v4.txt",
+      "sha256": "c849bcc7ddc87fd832560ae0e76023c9fbcfb7de85eeca1f56daa85b053dd196"
+    },
+    {
+      "bytes": 2,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v5.exit",
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    {
+      "bytes": 61,
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-disposal-normal-v5.txt",
+      "sha256": "eac4f12dd90b09c11ce712c09af57f7e77eec1cd1fc3141f6e896ecff84e43d3"
+    }
+  ],
+  "remaining_findings": [
+    {
+      "files": [
+        "TreeDB/db/primary_runtime_metadata.go",
+        "TreeDB/db/primary_runtime_metadata_test.go"
+      ],
+      "finding": "New final focused race fails actual test RemovePending64 at line51. Read source owner selection before any calibration; do not waive underflow."
+    },
+    {
+      "files": [
+        "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+        "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+        "TreeDB/db/durable_root_runtime.go"
+      ],
+      "finding": "Existing prepared closure containing/header and owned arrays/previousView need genuine producer admission; Release/Take paths withdraw then ignore physical resource/parent Close outcomes. Parent selects smallest coherent original containing custody contract; no redesign started during review pause."
+    },
+    {
+      "files": [
+        "TreeDB/internal/rootpublication/resource_kind_allocation.go",
+        "TreeDB/internal/rootpublication/resource_entry_view.go"
+      ],
+      "finding": "Selected backing constructor now checked prefix unwind; retainStableResourceKindView acquired-prefix unwind needs source-bound nonlast proof or outcome migration."
+    },
+    {
+      "files": [
+        "TreeDB/db/stable_pager_owned_operations.go"
+      ],
+      "finding": "Original refs0/finalizer claim synchronization repair remains to qualify with deterministic control, not merely repeated stress."
+    },
+    {
+      "files": [
+        "TreeDB/db/recoverable_root_set.go",
+        "TreeDB/db/primary_arena_owner_v5.go",
+        "TreeDB/db/durable_root_runtime.go"
+      ],
+      "finding": "RootSet early Snapshot.Close, primary cleanup receipt live Unwrap concurrency, and early publication bundle cleanup remaining selected caller census."
+    },
+    {
+      "files": [
+        "TreeDB/cow_public_review_regression_test.go",
+        "TreeDB/docs/design/ordinary-primary-allocation-5111.md"
+      ],
+      "finding": "Genuine leaf fixture normal green only; leaf race and entire19 producer/object/caller/failure census, whole platform/format/fault/cost gates stay open."
+    }
+  ],
+  "source_count": 115,
+  "source_files": [
+    {
+      "bytes": 1404965,
+      "path": "TreeDB/caching/db.go",
+      "sha256": "49e42bdd8976ab9918c36eb31abf7afb3060f0802d42d035b97b694b973f5c91",
+      "status": " M"
+    },
+    {
+      "bytes": 9695,
+      "path": "TreeDB/caching/stable_leaf_resource.go",
+      "sha256": "b885712d78acc2df14253e7e40b018642db20b9324178c780044de1f6cd6c0f8",
+      "status": " M"
+    },
+    {
+      "bytes": 13411,
+      "path": "TreeDB/cow_public_review_regression_test.go",
+      "sha256": "78405693b66163beeb22a0895e5e01cc4b85766549968f4170390e6bd045dd2f",
+      "status": " M"
+    },
+    {
+      "bytes": 89982,
+      "path": "TreeDB/db/compact_storage.go",
+      "sha256": "c38f79f35af7b19e8cb7a679b5bab301d3608b7c92062733cfb0da254f73ea76",
+      "status": " M"
+    },
+    {
+      "bytes": 30896,
+      "path": "TreeDB/db/compact_storage_audit.go",
+      "sha256": "fc044aa47781ec68f9c8a21d9d068b66679433893f306b3cf7c74c8868e41d8f",
+      "status": " M"
+    },
+    {
+      "bytes": 47806,
+      "path": "TreeDB/db/compact_storage_audit_test.go",
+      "sha256": "392df8dfaa1707d2d3f12c68bb0e2d70ecf35cd9d53c2058c00fbf33643e530a",
+      "status": " M"
+    },
+    {
+      "bytes": 204995,
+      "path": "TreeDB/db/db.go",
+      "sha256": "56c76ad3197f3a95972882df63f6bedea94f5d7863284031134c6af7a6c6e5f1",
+      "status": " M"
+    },
+    {
+      "bytes": 5662,
+      "path": "TreeDB/db/dependency_directory_rebuild_v2.go",
+      "sha256": "9756397f54a58d19fbe984a0675b483edb5d48174860606cf989faec48b31ef5",
+      "status": " M"
+    },
+    {
+      "bytes": 20414,
+      "path": "TreeDB/db/durable_primary_rebuild_v5.go",
+      "sha256": "1d541a1a63cfbdd3639ab13425e677ecc29ac11a0bbc3320f736b03dd4e31720",
+      "status": " M"
+    },
+    {
+      "bytes": 8097,
+      "path": "TreeDB/db/durable_primary_recovery_v5.go",
+      "sha256": "321a663278217d81fd897b135a2991e9e5cd9cd65d8922d44c5f07cc6275752d",
+      "status": " M"
+    },
+    {
+      "bytes": 32787,
+      "path": "TreeDB/db/durable_primary_runtime_v5.go",
+      "sha256": "85205679fae38abc565014f6c7eae1f2b4018dd7df6a185d33311a3a0e8e12f5",
+      "status": " M"
+    },
+    {
+      "bytes": 30922,
+      "path": "TreeDB/db/durable_root_projection_test.go",
+      "sha256": "1f7a66d31249d94fd3467ff6d77d38a554d05c5aee1e1df5dc867e098cbeceee",
+      "status": " M"
+    },
+    {
+      "bytes": 16311,
+      "path": "TreeDB/db/durable_root_recovery.go",
+      "sha256": "b02d7a941f6d632ec871c0916c17d2a76bb47d7ecb3f8b9156913f7ce353c387",
+      "status": " M"
+    },
+    {
+      "bytes": 130726,
+      "path": "TreeDB/db/durable_root_runtime.go",
+      "sha256": "0f8f36fd62c1672fd45a737a0e5a590b0f41331c6ce62ee6e0ff636a8112a07b",
+      "status": " M"
+    },
+    {
+      "bytes": 11417,
+      "path": "TreeDB/db/durable_root_tracker_repair_test.go",
+      "sha256": "d3a6b74e1d8c9181ea457b72b2315454f123bd496fd3e91da7fd383683988f7e",
+      "status": " M"
+    },
+    {
+      "bytes": 8103,
+      "path": "TreeDB/db/index_gen.go",
+      "sha256": "88575e7cac2633dda743da8e5b6013d982626c5835bd9e1f2cf280b59429dce5",
+      "status": " M"
+    },
+    {
+      "bytes": 4018,
+      "path": "TreeDB/db/index_gen_db.go",
+      "sha256": "509bb17a3ea4889f3c9c9bd2797d8260504198aeac34996fdcaffada0fd46276",
+      "status": " M"
+    },
+    {
+      "bytes": 4636,
+      "path": "TreeDB/db/index_swap.go",
+      "sha256": "f3d6e679a7a90274e4ff9ec2af014b8428a5ef17f377f485d72b343416c07260",
+      "status": " M"
+    },
+    {
+      "bytes": 12165,
+      "path": "TreeDB/db/leaf_generation_manifest_stable_prepare.go",
+      "sha256": "7bc181568925c46bfe0a6858101820cfbe0cd919ceae022c18be6b1c29515b94",
+      "status": " M"
+    },
+    {
+      "bytes": 28085,
+      "path": "TreeDB/db/leaf_generation_pack.go",
+      "sha256": "58e1e06e8311514cfdbd65e6cab3bb8fdf16da27b3af7a1b32f2fdfbad70490e",
+      "status": " M"
+    },
+    {
+      "bytes": 22277,
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+      "sha256": "144526c2293035ef8ebd708b14121e094d4fac1304fb5429b33c9a3d38576f4f",
+      "status": " M"
+    },
+    {
+      "bytes": 42114,
+      "path": "TreeDB/db/leaf_page_log.go",
+      "sha256": "4aa907e169731ac431386adc2b57adbc7b3953439e4f8e02ce5c0aea2f50b8a4",
+      "status": " M"
+    },
+    {
+      "bytes": 21272,
+      "path": "TreeDB/db/maintenance_reachability.go",
+      "sha256": "482d791c08b9f59dc278541440d734f2acf94e5477c687de559a2e59408850b4",
+      "status": " M"
+    },
+    {
+      "bytes": 16835,
+      "path": "TreeDB/db/maintenance_reachability_test.go",
+      "sha256": "4808f4b2a26c8a6faba805bd00353c14b9ff3e4eeb0334f5316768fee19dd279",
+      "status": " M"
+    },
+    {
+      "bytes": 17208,
+      "path": "TreeDB/db/open_readonly.go",
+      "sha256": "a6eaf36a8c316ac8363a36213e9d7b4b9ea0a2a2bf3f5d7a0329c88aa746f6a9",
+      "status": " M"
+    },
+    {
+      "bytes": 189908,
+      "path": "TreeDB/db/ordered_root_publish.go",
+      "sha256": "6d4adbce83ae85c73ad39100f7bda3dd32eab4c848a2635a74ae4b7fe081d5d9",
+      "status": " M"
+    },
+    {
+      "bytes": 7771,
+      "path": "TreeDB/db/pools.go",
+      "sha256": "6cb70a64b214cbc9d93ed98361c36a85e8d29380b1f8231380549dfe4f9c47f9",
+      "status": " M"
+    },
+    {
+      "bytes": 8446,
+      "path": "TreeDB/db/primary_arena_owner_v5.go",
+      "sha256": "6062b075f02b04e7b28a986e1734b0e3b6b52e59ad901557f38bf366d7ec48ba",
+      "status": " M"
+    },
+    {
+      "bytes": 11322,
+      "path": "TreeDB/db/primary_capsule_recovery_v6.go",
+      "sha256": "f01fc3cd76930da32589bb628fae8ba23a4669ada5d0d37d60de686158461968",
+      "status": " M"
+    },
+    {
+      "bytes": 10131,
+      "path": "TreeDB/db/primary_capsule_runtime_v6.go",
+      "sha256": "0b590175363559cbcd3123a0217df8ae8b1c4e590259665dfd0d567a22d2e9de",
+      "status": " M"
+    },
+    {
+      "bytes": 15387,
+      "path": "TreeDB/db/primary_joint_swap_v6.go",
+      "sha256": "21946a82d9a9d5cd7dd949495b03487b85884cf08135b1cb8dc6a5c43b3287a8",
+      "status": " M"
+    },
+    {
+      "bytes": 14905,
+      "path": "TreeDB/db/primary_offline_pair_v6.go",
+      "sha256": "6fbc6e6f35937ecc6b41f867b8a3747af6afc60dba2046d64b3601020ffb4210",
+      "status": " M"
+    },
+    {
+      "bytes": 26812,
+      "path": "TreeDB/db/primary_offline_pair_v6_test.go",
+      "sha256": "17ca3fa4dbbd10e1aa6944956de03ef61ca9ad9bb5fa5532197416bd2657199d",
+      "status": " M"
+    },
+    {
+      "bytes": 4265,
+      "path": "TreeDB/db/primary_runtime_metadata.go",
+      "sha256": "f2d7007f0c4ff322a8bb87a179ec04e9e3ce9b74dd49b644f099d2fc8ee67b9e",
+      "status": " M"
+    },
+    {
+      "bytes": 4945,
+      "path": "TreeDB/db/prune.go",
+      "sha256": "916ac95b292dcf7438a5fd966155dc7027ab78dc9c1bb0e5f17eb739b828d98f",
+      "status": " M"
+    },
+    {
+      "bytes": 30215,
+      "path": "TreeDB/db/recoverable_root_set.go",
+      "sha256": "bc17da03e01599fa34e1595c67a6ae8ea21e26d6c4005b5589632f975a0a4a7a",
+      "status": " M"
+    },
+    {
+      "bytes": 78060,
+      "path": "TreeDB/db/root_publication_activation.go",
+      "sha256": "15c2b7c936fd66acc84104b94d7934ae414e14e0b6837d77c4090c993119da0f",
+      "status": " M"
+    },
+    {
+      "bytes": 41476,
+      "path": "TreeDB/db/root_publication_activation_test.go",
+      "sha256": "5c0934a0041cc3429d87f42b3b31726170a25505b741b007195540a24cdab379",
+      "status": " M"
+    },
+    {
+      "bytes": 10009,
+      "path": "TreeDB/db/root_publication_primary_cleanup_v6_test.go",
+      "sha256": "a3487f1945966596b2d8b36876b6f15af2dd9878342c96a424baf74f686a2744",
+      "status": " M"
+    },
+    {
+      "bytes": 13968,
+      "path": "TreeDB/db/stable_leaf_rewrite.go",
+      "sha256": "622d1555da70508d1ef3eb7744a2e4d4846f4019f3bcb2bca472ce91b133b0b6",
+      "status": " M"
+    },
+    {
+      "bytes": 6916,
+      "path": "TreeDB/db/stable_pager_owned_operations.go",
+      "sha256": "4a37f97f46a70f5594f36cb728df0c0bbdc29609aa60001b1331e894014e2bc1",
+      "status": " M"
+    },
+    {
+      "bytes": 31049,
+      "path": "TreeDB/db/stable_resource.go",
+      "sha256": "5ac835b62db166b243f907a3566bbb9d9bdbd57c3620ef098870abfb5030c7f5",
+      "status": " M"
+    },
+    {
+      "bytes": 19134,
+      "path": "TreeDB/db/vacuum_offline.go",
+      "sha256": "adf995de2235d37055443b539356f580df0c54829bc6ed728ab13a12df56a023",
+      "status": " M"
+    },
+    {
+      "bytes": 84460,
+      "path": "TreeDB/db/vacuum_online.go",
+      "sha256": "07b61f2247aa13649197cd64734892f903bc03dc55bd223e6ec5836b22dd50d1",
+      "status": " M"
+    },
+    {
+      "bytes": 33805,
+      "path": "TreeDB/db/vlog_gc_incremental.go",
+      "sha256": "e85691feb18fd2889b5b109368e8ccd8be1f9eb20c0e913e0d9fadd384fec8c7",
+      "status": " M"
+    },
+    {
+      "bytes": 4096,
+      "path": "TreeDB/db/vlog_gc_incremental_apply_test.go",
+      "sha256": "ec79abfa91bc59b10e485d1878c5f9cd15540ee666f412fdf0f550e55b4586f4",
+      "status": " M"
+    },
+    {
+      "bytes": 67944,
+      "path": "TreeDB/db/vlog_gc_test.go",
+      "sha256": "05dfb91ec38040cc3918ae80a36e5b29091b2efa6c0e6e89b0a7f87de8221e26",
+      "status": " M"
+    },
+    {
+      "bytes": 186726,
+      "path": "TreeDB/db/vlog_rewrite.go",
+      "sha256": "aef28239915f09526aec8fce995f88317fc0e79636f94f51007f11cd3b50a34c",
+      "status": " M"
+    },
+    {
+      "bytes": 47439,
+      "path": "TreeDB/db/wal_recovery.go",
+      "sha256": "b93d7b7b229261e724b09f44d60707c2f08e6fed6a1c0b114157f49296984dcc",
+      "status": " M"
+    },
+    {
+      "bytes": 22901,
+      "path": "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "sha256": "2b42148baea58c763bc758d19127fa36d63b7303422ae3f27e159422f0be9620",
+      "status": " M"
+    },
+    {
+      "bytes": 230317,
+      "path": "TreeDB/docs/spec/storage-format.md",
+      "sha256": "1ca807f58e77b84581badd3b4590245cd55cb2b0b2b11f404b17432cb418e550",
+      "status": " M"
+    },
+    {
+      "bytes": 54666,
+      "path": "TreeDB/docs/spec/value-log-lifecycle.md",
+      "sha256": "7dc3d7d9eb24f26ac4ff82eab9088554a664b5043252f3f8e1420258ec7a7d41",
+      "status": " M"
+    },
+    {
+      "bytes": 8875,
+      "path": "TreeDB/internal/dictdb/resource_capture.go",
+      "sha256": "c2c0eb49825e0895e3f2280fda99c4bbafb199b851855cb1f5e2b9fea451ef03",
+      "status": " M"
+    },
+    {
+      "bytes": 13441,
+      "path": "TreeDB/internal/primaryarena/read_root_v6.go",
+      "sha256": "ce1dda24c3c2c8fd336d45ab20d9aa1db631f2512fee9bd9c744b8afb55a7d55",
+      "status": " M"
+    },
+    {
+      "bytes": 42879,
+      "path": "TreeDB/internal/rootpublication/coordinator.go",
+      "sha256": "eb706b95fa57037447dd3810d20507db92bb51943c3a8723a6b240d04bf5eb76",
+      "status": " M"
+    },
+    {
+      "bytes": 11582,
+      "path": "TreeDB/internal/rootpublication/dependency_directory_reader_v2.go",
+      "sha256": "db282e687ba45baa575443357d20684818f702e41cbacd163fa34ea4c89497cb",
+      "status": " M"
+    },
+    {
+      "bytes": 6730,
+      "path": "TreeDB/internal/rootpublication/dependency_directory_recovery_v2.go",
+      "sha256": "f2e1d6e657ea8ffca058d0fd93831e464a82e855d2ffc6b9da47c2741236c3bb",
+      "status": " M"
+    },
+    {
+      "bytes": 8180,
+      "path": "TreeDB/internal/rootpublication/dependency_directory_remove_v2.go",
+      "sha256": "42f34eabfb413e89015fbe7eab6f19739936b510e871e42f8a6b6a1e07c36ad2",
+      "status": " M"
+    },
+    {
+      "bytes": 21286,
+      "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+      "sha256": "9f8bd96a301f91cca6224eebf08adcb58777ea1be1876644e68682f55182ad9e",
+      "status": " M"
+    },
+    {
+      "bytes": 731,
+      "path": "TreeDB/internal/rootpublication/ordinary_finish_v6.go",
+      "sha256": "1f53ec849a7d9adeb528bf9041c1bbc31f027cef014441befa7c339e750074cc",
+      "status": " M"
+    },
+    {
+      "bytes": 27629,
+      "path": "TreeDB/internal/rootpublication/pin_registry.go",
+      "sha256": "354baa6013d738ee1abfa8c7100df78977cb78924a377e7e1e10ff0b5bc710eb",
+      "status": " M"
+    },
+    {
+      "bytes": 17340,
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "1d52686ae3e7dbb4e0172099c3bab0c6d4f29e73f715763978d1e4431b36e906",
+      "status": " M"
+    },
+    {
+      "bytes": 4915,
+      "path": "TreeDB/internal/rootpublication/resource_allocation.go",
+      "sha256": "31d9b537fbbf815a6387c585a6c321cfb3dc0ff7f0bcb23bf71eadfd0ae7ea2e",
+      "status": " M"
+    },
+    {
+      "bytes": 14457,
+      "path": "TreeDB/internal/rootpublication/resource_diagnostics_allocation.go",
+      "sha256": "3b6a309b9e39dd6be8b7845eb44eeff18310d255065065eb85f37e78c054b63a",
+      "status": " M"
+    },
+    {
+      "bytes": 2950,
+      "path": "TreeDB/internal/rootpublication/resource_entry_allocation.go",
+      "sha256": "2775db0e168da67525ceda77f20a675c77cb97b005d1f6b700bfe18b409577d7",
+      "status": " M"
+    },
+    {
+      "bytes": 27084,
+      "path": "TreeDB/internal/rootpublication/resource_entry_view.go",
+      "sha256": "e875ff7524739b5f7b1a9f7a19304cf35f119a95bcbcf8dad6b966f2db75d441",
+      "status": " M"
+    },
+    {
+      "bytes": 3810,
+      "path": "TreeDB/internal/rootpublication/resource_import_directory.go",
+      "sha256": "3d8e269dfccbfc8e0b8963d2b0e1b87d76461367c93f0d87b2c092d64b96898d",
+      "status": " M"
+    },
+    {
+      "bytes": 10411,
+      "path": "TreeDB/internal/rootpublication/resource_import_set.go",
+      "sha256": "ce75b7a50ca7282021a83bff4256908a65f21f2f35bfe38c315b1653ac10b393",
+      "status": " M"
+    },
+    {
+      "bytes": 14585,
+      "path": "TreeDB/internal/rootpublication/resource_kind_allocation.go",
+      "sha256": "a06e84b9ed1b6e4ee05ba9d0f2c603ed46e9724e779fb91f63f0f350e9e3c059",
+      "status": " M"
+    },
+    {
+      "bytes": 4890,
+      "path": "TreeDB/internal/rootpublication/resource_logical_allocation.go",
+      "sha256": "f7f8d48dd192dd8fcbac873c1d600078bea9ca4ee5a85b50d785aceda7fac7f7",
+      "status": " M"
+    },
+    {
+      "bytes": 13767,
+      "path": "TreeDB/internal/rootpublication/resource_manifest_allocation.go",
+      "sha256": "18008e2cdb46752dfe31377d5890c4aca2ff66d95e49f1785fde2428c93dbd12",
+      "status": " M"
+    },
+    {
+      "bytes": 12294,
+      "path": "TreeDB/internal/rootpublication/resource_mutation_allocation.go",
+      "sha256": "6ab72bec82933c726946bc2d1b1e64e8d64e00e5bb6424868adc304d8b805f49",
+      "status": " M"
+    },
+    {
+      "bytes": 3615,
+      "path": "TreeDB/internal/rootpublication/resource_namespace_cleanup_unix_test.go",
+      "sha256": "f9bfde64d824c3b3b0b2f3263c2448c35605688f96f827fa2491f34e62cbd730",
+      "status": " M"
+    },
+    {
+      "bytes": 9103,
+      "path": "TreeDB/internal/rootpublication/resource_original_cleanup.go",
+      "sha256": "c19a81d26a78b7b463d22f1c20579cc1e6d6ccbd350da268cc770b8441fe4f16",
+      "status": " M"
+    },
+    {
+      "bytes": 6850,
+      "path": "TreeDB/internal/rootpublication/resource_original_cleanup_unix_test.go",
+      "sha256": "4ff409458efd5e29656471921e60b7801609a968522cd6d98ecfd370dc0c9b5e",
+      "status": " M"
+    },
+    {
+      "bytes": 5849,
+      "path": "TreeDB/internal/rootpublication/resource_physical_allocation.go",
+      "sha256": "1834de5d55454886485caebcaf97ad6acacce89ddf7825f9cee401d63bea6674",
+      "status": " M"
+    },
+    {
+      "bytes": 12199,
+      "path": "TreeDB/internal/rootpublication/resource_requirements_allocation.go",
+      "sha256": "0a9952da8208ee68e6c117c32756de7de2c7f35a35f714a556380862cd45e521",
+      "status": " M"
+    },
+    {
+      "bytes": 5376,
+      "path": "TreeDB/internal/rootpublication/resource_rope_allocation.go",
+      "sha256": "99ebf625cc6f9aaea12561d272810da669c7d4d426147cbd0970980672222d2a",
+      "status": " M"
+    },
+    {
+      "bytes": 177663,
+      "path": "TreeDB/internal/rootpublication/resource_set.go",
+      "sha256": "f960c0fc924b54808a6cca052ac90eab4a36199a654d5e25c6b6c9116d05ef7a",
+      "status": " M"
+    },
+    {
+      "bytes": 21375,
+      "path": "TreeDB/internal/rootpublication/resource_set_allocation_test.go",
+      "sha256": "2107d62dfbeb1bb487d1b374a6a7116bb8b7eccbfd0df94f0430d80bdd0364fd",
+      "status": " M"
+    },
+    {
+      "bytes": 94557,
+      "path": "TreeDB/internal/rootpublication/resource_token.go",
+      "sha256": "97d2ad104441fe4c6946caf5af2ed364034db221fd7fd69b1be965764b048782",
+      "status": " M"
+    },
+    {
+      "bytes": 13245,
+      "path": "TreeDB/internal/rootpublication/resource_token_allocation.go",
+      "sha256": "7220c07cd3024c83c7f66fd850a55dc375968bc6d931aea2e4195a80c1fd626e",
+      "status": " M"
+    },
+    {
+      "bytes": 9236,
+      "path": "TreeDB/internal/rootpublication/resource_token_allocation_test.go",
+      "sha256": "d21e8c058314a7cb1e69f289edafa24f98b72750b1390a8c5c131faa3a6df6fe",
+      "status": " M"
+    },
+    {
+      "bytes": 16827,
+      "path": "TreeDB/internal/rootpublication/types.go",
+      "sha256": "3fc00c9bc50e6cf749ea6d129bd5b252a0e57b7cde8a9b80438e4a2156022aef",
+      "status": " M"
+    },
+    {
+      "bytes": 11766,
+      "path": "TreeDB/internal/templatedb/resource_capture.go",
+      "sha256": "9ca8ee8c8f42cfdbd53253758c1199f8511b26f2cd5155186a305c03f5371fd1",
+      "status": " M"
+    },
+    {
+      "bytes": 103853,
+      "path": "TreeDB/internal/valuelog/manager.go",
+      "sha256": "8f7d0c50d026f364f53b51f3a5b6c565a60759d747a7c2fd37e8d232ad7be3d6",
+      "status": " M"
+    },
+    {
+      "bytes": 90806,
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "sha256": "c8bfb3ca9453bb39a423a5cb9cac2ad91cc4541db2d13a8b85a2989880b86eb5",
+      "status": " M"
+    },
+    {
+      "bytes": 79938,
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "sha256": "dc2313b16f879a95578986cda5000051df3932202798f6a906d6e342ebc31b9d",
+      "status": " M"
+    },
+    {
+      "bytes": 2779,
+      "path": "TreeDB/pager/grow.go",
+      "sha256": "e3ae43cab70b6592f56bc5cb2074765c74d620b4e07cf6ab90c4c6df7d980c6f",
+      "status": " M"
+    },
+    {
+      "bytes": 45380,
+      "path": "TreeDB/pager/pager.go",
+      "sha256": "1a9540bf0de68fb4e37a7ecc70c5157a78c98ab80c25d8ded02f0e234e43164f",
+      "status": " M"
+    },
+    {
+      "bytes": 5821,
+      "path": "TreeDB/caching/original_capture_cleanup_test.go",
+      "sha256": "d4308395b9f3c8c7a4088f670eb2506ff12f8a71a590846d8a6e0cbe5a292374",
+      "status": "??"
+    },
+    {
+      "bytes": 5472,
+      "path": "TreeDB/db/durable_dependency_descriptor_v1.go",
+      "sha256": "5bbad6d109685df048ebd3f8cf7e05e2e7159adb6f0c4f00335ef0d6c8976bc5",
+      "status": "??"
+    },
+    {
+      "bytes": 4610,
+      "path": "TreeDB/db/original_cleanup_error_graph_test.go",
+      "sha256": "3c320b88b2be3045875c89be0b5e483c8e45da684d93f09351279ff2ac2832c6",
+      "status": "??"
+    },
+    {
+      "bytes": 8577,
+      "path": "TreeDB/db/original_primary_runtime_cleanup.go",
+      "sha256": "1a6baa03f3b03720d6937b6172f495188d28606fb7eed514d5a3aa73d9ad6131",
+      "status": "??"
+    },
+    {
+      "bytes": 3172,
+      "path": "TreeDB/db/original_startup_generation.go",
+      "sha256": "10a2f2a4d0f155eafbfb21bea3083a401d4133602fa9e88a1d32f2b25baf287f",
+      "status": "??"
+    },
+    {
+      "bytes": 5160,
+      "path": "TreeDB/db/original_startup_generation_test.go",
+      "sha256": "7996835c1efb5a4e7339ba4dcf387d6938dc7291958e1765d5cb31ebd7f96ba9",
+      "status": "??"
+    },
+    {
+      "bytes": 8625,
+      "path": "TreeDB/db/primary_joint_completed_v6_test.go",
+      "sha256": "63356fab45cf00763c896419efeb39eeabdf4d8f813766141c121bb926d947bf",
+      "status": "??"
+    },
+    {
+      "bytes": 11191,
+      "path": "TreeDB/db/primary_joint_recovery_proof_v6.go",
+      "sha256": "f1584ee76bf0cba882a9c0f0234785a9fd9996fc02b43a205eedf85b31bd595f",
+      "status": "??"
+    },
+    {
+      "bytes": 1607,
+      "path": "TreeDB/db/primary_read_certificate_v6.go",
+      "sha256": "13f39e21c4a4b2ab000f9f2491c2ab160def34b4a1ae1d629164f64f03009fe9",
+      "status": "??"
+    },
+    {
+      "bytes": 4604,
+      "path": "TreeDB/db/primary_read_certificate_v6_test.go",
+      "sha256": "150ca12fa930ddd52c6d821e07d5be1e253bc6eeaf4047a1b64cb12d1d60f436",
+      "status": "??"
+    },
+    {
+      "bytes": 5598,
+      "path": "TreeDB/db/primary_runtime_cleanup_test.go",
+      "sha256": "a5cdcefcd77880fdbf70392b185e68af5f51ac363c5c8b38e35786d2fbff44ad",
+      "status": "??"
+    },
+    {
+      "bytes": 7200,
+      "path": "TreeDB/db/snapshot_manager_cleanup_test.go",
+      "sha256": "b5613de28d33b24b3829b824dbcc07a10a66df548101ef9ca162234269f83185",
+      "status": "??"
+    },
+    {
+      "bytes": 2985,
+      "path": "TreeDB/db/vlog_ref_cache_read.go",
+      "sha256": "7672ba65411dce79db77729eea165733c7f52c95f21728a766f7ac6db7af36a8",
+      "status": "??"
+    },
+    {
+      "bytes": 3347,
+      "path": "TreeDB/db/vlog_ref_cache_read_test.go",
+      "sha256": "cd139259d2ea80fd48ed39f46e360d63cebdc6e4af403bd9be9990d4aa56cf0f",
+      "status": "??"
+    },
+    {
+      "bytes": 4723,
+      "path": "TreeDB/db/vlog_ref_counts_owned.go",
+      "sha256": "da07e7af8d51195a6bf86bfd1edf19df1158d63b75e7256b5aaa1e6035e65948",
+      "status": "??"
+    },
+    {
+      "bytes": 11517,
+      "path": "TreeDB/db/vlog_ref_counts_owned_test.go",
+      "sha256": "eda07891936178da62d305ee98e8c72829df56de113aa6fa611911a5c41d195d",
+      "status": "??"
+    },
+    {
+      "bytes": 6675,
+      "path": "TreeDB/db/vlog_ref_incarnation.go",
+      "sha256": "ddc684c077303db51d1b216462a7441642e49a6d5418ec15ff8574bead802743",
+      "status": "??"
+    },
+    {
+      "bytes": 12405,
+      "path": "TreeDB/db/vlog_ref_incarnation_test.go",
+      "sha256": "96cd93354f0476979374593a63a61f54a8496a026197c0c465f73ac4fe55c765",
+      "status": "??"
+    },
+    {
+      "bytes": 1593,
+      "path": "TreeDB/internal/rootpublication/original_cleanup_error_graph.go",
+      "sha256": "e62aafed04e5c20d2af6e508cfb30f21eeada1e9857a11418063a38c419a6d6e",
+      "status": "??"
+    },
+    {
+      "bytes": 7812,
+      "path": "TreeDB/internal/valuelog/original_cleanup.go",
+      "sha256": "ddef7b8f901f7a2edcd6318f95e04fdf319f3be07a7362ec3ea13d3c4429cbf0",
+      "status": "??"
+    },
+    {
+      "bytes": 6647,
+      "path": "TreeDB/internal/valuelog/original_cleanup_test.go",
+      "sha256": "79d3353aa3adc4952f07b3658150194f981bbeef44fb759686a7d3cf1c876739",
+      "status": "??"
+    },
+    {
+      "bytes": 6963,
+      "path": "TreeDB/internal/valuelog/writer_original_cleanup.go",
+      "sha256": "4b6ee18953cf4b1fad48765871b855127d9c1d8f38da21ccaf5203199e560d9d",
+      "status": "??"
+    },
+    {
+      "bytes": 5095,
+      "path": "TreeDB/internal/valuelog/writer_original_cleanup_test.go",
+      "sha256": "13ddf0b3c72ef366951110fa0211b6f18c3415bf662c15292c2e193baa3f04a0",
+      "status": "??"
+    },
+    {
+      "bytes": 1651,
+      "path": "TreeDB/pager/owned_file_metadata_test.go",
+      "sha256": "e49a3463464b2a9a8bf5d955d088088e73ef15c290b7992c90819554a03f0078",
+      "status": "??"
+    },
+    {
+      "bytes": 4188,
+      "path": "TreeDB/pager/readonly_owned_metadata_test.go",
+      "sha256": "bebab6b66768efe503df6f36c22b2c87939b524c8c0cb2694cbad073bde9d158",
+      "status": "??"
+    }
+  ],
+  "worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111"
+}

@@ -1,0 +1,5 @@
+--- FAIL: TestOriginalManagerActualLastSetCloseFailureIsSticky (0.01s)
+    original_cleanup_test.go:87: repeated terminal observation changed/replayed original physical outcome
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.017s
+FAIL

@@ -1,0 +1,2 @@
+ok  	github.com/snissn/gomap/TreeDB/db	4.706s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	1.067s

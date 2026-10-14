@@ -1,0 +1,68 @@
+TreeDB/db/db.go:3980:		durableResources, err = db.captureDurableRootResourcesV1(idx, nextMeta, vlogRefDelta, opts.durableResources, opts.durableResourceRequirements, opts.durableResourceMutation, opts.durableResourceAppendMutation, opts.durableResourceRequirementWork, opts.durableResourceRequirementsFallback, opts.valueLogPublicationLocked, opts.publishTiming)
+TreeDB/db/durable_root_namespace_closure_test.go:28:	candidate, err := database.captureDurableRootResourcesFromBaseV1(database.idx.Load(), database.meta, nil, base, producer,
+TreeDB/db/durable_root_open_test.go:846:	captured, err := database.captureRebuiltIndexDurableResourcesV1(idx.pager, database.meta)
+TreeDB/db/durable_root_projection_test.go:170:	exact, work, err := database.captureRebuiltIndexDurableResourcesWithWorkV1(idx.pager, database.meta, source)
+TreeDB/db/durable_root_projection_test.go:738:			resources, work, err := database.captureRebuiltIndexDurableResourcesWithWorkV1(idx.pager, database.meta, source)
+TreeDB/db/durable_root_resource_closure_test.go:37:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:90:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:144:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:181:	_, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:217:	visibleBase, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:238:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:273:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:310:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:359:	_, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:525:		candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:559:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:590:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:621:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_resource_closure_test.go:652:	candidate, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/durable_root_runtime.go:68:func (db *DB) replaceDurableRootManifestResourcesV1(base, manifest *rootpublication.StableResourceSet) (result *rootpublication.StableResourceSet, retErr error) {
+TreeDB/db/durable_root_runtime.go:144:	replacedCurrent, err := db.replaceDurableRootManifestResourcesV1(current, manifest)
+TreeDB/db/durable_root_runtime.go:151:	replacedOlder, err := db.replaceDurableRootManifestResourcesV1(older, manifest)
+TreeDB/db/durable_root_runtime.go:165:func (db *DB) prepareDurableRootManifestResourcesV1(candidate *leafGenerationManifest, current, older *rootpublication.StableResourceSet) (persistedResult *leafGenerationManifest, currentResult *rootpublication.StableResourceSet, olderResult *rootpublication.StableResourceSet, retErr error) {
+TreeDB/db/durable_root_runtime.go:768:func (db *DB) captureDurableValueLogResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:769:	return db.captureDurableValueLogResourcesWithLimitsV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, nil)
+TreeDB/db/durable_root_runtime.go:772:func (db *DB) captureDurableValueLogResourcesWithLimitsV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:777:	return db.captureDurableValueLogResourcesWithMetadataV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, limits, metadata)
+TreeDB/db/durable_root_runtime.go:780:func (db *DB) captureDurableValueLogResourcesWithMetadataV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, exactPackedFileIDs map[uint32]struct{}, valueLogPublicationLocked bool, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits, metadata *retainedalloc.Owner) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:808:	return db.captureRegisteredDurableValueLogResourcesWithMetadataV1(references, limits, metadata)
+TreeDB/db/durable_root_runtime.go:957:// captureDurableRootResourcesV1 builds the candidate root's complete external
+TreeDB/db/durable_root_runtime.go:963:func (db *DB) captureDurableRootResourcesV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:965:	return db.captureDurableRootResourcesFromBaseV1(idx, next, delta, selected, additional, requirements, mutation, appendMutation, requirementWork, requirementsFallback, valueLogPublicationLocked, timing)
+TreeDB/db/durable_root_runtime.go:968:// captureDurableRootResourcesFromBaseV1 is the common closure builder for
+TreeDB/db/durable_root_runtime.go:974:func (db *DB) captureDurableRootResourcesFromBaseV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:975:	return db.captureDurableRootResourcesFromBaseWithRefCountsV1(idx, next, delta, base, additional, requirements, mutation, appendMutation, requirementWork, requirementsFallback, valueLogPublicationLocked, timing, nil, nil)
+TreeDB/db/durable_root_runtime.go:978:func (db *DB) captureDurableRootResourcesFromBaseWithRefCountsV1(idx *indexGen, next page.MetaPageBody, delta *valueLogRefDelta, base *rootpublication.StableResourceSet, additional *rootpublication.StableResourceSet, requirements rootpublication.StableLogicalObligationRequirements, mutation rootpublication.StableLogicalObligationMutation, appendMutation rootpublication.StableLogicalObligationMutation, requirementWork rootpublication.StableResourceClosureWork, requirementsFallback func() (rootpublication.StableLogicalObligationRequirements, rootpublication.StableResourceClosureWork, error), valueLogPublicationLocked bool, timing *CommandWALPublishTiming, scanned *candidateValueLogRefCountsV1, limits *PreparedRootPublicationLimits) (result *rootpublication.StableResourceSet, retErr error) {
+TreeDB/db/durable_root_runtime.go:1200:		fresh, err = db.captureRegisteredDurableValueLogResourcesWithMetadataV1(freshOuterLeafReferences, limits, metadata)
+TreeDB/db/durable_root_runtime.go:1202:		fresh, err = db.captureDurableValueLogResourcesWithMetadataV1(idx, next, delta, exactPackedFileIDs, valueLogPublicationLocked, scanned, limits, metadata)
+TreeDB/db/durable_root_runtime.go:1261:func (db *DB) captureRegisteredDurableValueLogResourcesV1(references map[uint32]struct{}) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:1262:	return db.captureRegisteredDurableValueLogResourcesWithLimitsV1(references, nil)
+TreeDB/db/durable_root_runtime.go:1265:func (db *DB) captureRegisteredDurableValueLogResourcesWithLimitsV1(references map[uint32]struct{}, limits *PreparedRootPublicationLimits) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:1266:	return db.captureRegisteredDurableValueLogResourcesWithMetadataV1(references, limits, nil)
+TreeDB/db/durable_root_runtime.go:1269:func (db *DB) captureRegisteredDurableValueLogResourcesWithMetadataV1(references map[uint32]struct{}, limits *PreparedRootPublicationLimits, metadata *retainedalloc.Owner) (result *rootpublication.StableResourceSet, retErr error) {
+TreeDB/db/durable_root_runtime.go:1357:// captureRebuiltIndexDurableResourcesV1 scans a replacement index before its
+TreeDB/db/durable_root_runtime.go:1362:func (db *DB) captureRebuiltIndexDurableResourcesV1(p *pager.Pager, meta page.MetaPageBody) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:1367:	return db.captureRebuiltIndexDurableResourcesFromV1(p, meta, inherited)
+TreeDB/db/durable_root_runtime.go:1370:func (db *DB) captureRebuiltIndexDurableResourcesFromV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, error) {
+TreeDB/db/durable_root_runtime.go:1371:	resources, _, err := db.captureRebuiltIndexDurableResourcesWithWorkV1(p, meta, source)
+TreeDB/db/durable_root_runtime.go:1454:func (db *DB) captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
+TreeDB/db/durable_root_runtime.go:1531:	resources, exactWork, err := db.captureRebuiltIndexDurableResourcesWithPackedSelectionV1(rebuiltPager, meta, source, projectCurrentPacked)
+TreeDB/db/durable_root_runtime.go:1539:func (db *DB) captureRebuiltIndexDurableResourcesWithWorkV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet) (*rootpublication.StableResourceSet, rebuiltDurableResourceWorkV1, error) {
+TreeDB/db/durable_root_runtime.go:1540:	return db.captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p, meta, source, true)
+TreeDB/db/durable_root_runtime.go:1543:func (db *DB) captureRebuiltIndexDurableResourcesWithPackedSelectionV1(p *pager.Pager, meta page.MetaPageBody, source *rootpublication.StableResourceSet, projectCurrentPacked bool) (output *rootpublication.StableResourceSet, outputWork rebuiltDurableResourceWorkV1, retErr error) {
+TreeDB/db/durable_root_runtime.go:1638:	fresh, err := db.captureRegisteredDurableValueLogResourcesWithMetadataV1(references, nil, metadata)
+TreeDB/db/durable_root_runtime.go:2331:		resources, err = db.captureDurableRootResourcesV1(idx, next, vlogRefDelta, nil, rootpublication.StableLogicalObligationRequirements{}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableLogicalObligationMutation{}, rootpublication.StableResourceClosureWork{}, nil, false, nil)
+TreeDB/db/r1_rebuilt_pack_projection_test.go:219:		result, _, err := database.captureRebuiltIndexDurableResourcesWithWorkV1(database.idx.Load().pager, database.meta, source)
+TreeDB/db/r1_rebuilt_pack_projection_test.go:268:			result, _, err := database.captureRebuiltIndexDurableResourcesWithWorkV1(database.idx.Load().pager, database.meta, source)
+TreeDB/db/root_publication_activation.go:1137:	resources, err := db.captureDurableRootResourcesFromBaseWithRefCountsV1(
+TreeDB/db/root_publication_activation_test.go:249:	captured, err := database.captureDurableRootResourcesFromBaseV1(
+TreeDB/db/vacuum_manifest_compatibility_test.go:50:		persisted, gotCurrent, gotOlder, err := database.prepareDurableRootManifestResourcesV1(candidate, current, older)
+TreeDB/db/vacuum_manifest_compatibility_test.go:96:			if _, _, _, err := database.prepareDurableRootManifestResourcesV1(candidate, current, older); !errors.Is(err, rootpublication.ErrResourceConflict) {
+TreeDB/db/vacuum_offline.go:286:	durableResources, err := d.captureRebuiltIndexDurableResourcesV1(newPager, meta)
+TreeDB/db/vacuum_offline.go:294:		persistedManifest, preparedResources, _, err := d.prepareDurableRootManifestResourcesV1(
+TreeDB/db/vacuum_online.go:1400:		durableResources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
+TreeDB/db/vacuum_online.go:1436:			persistedManifest, preparedCurrent, preparedOlder, prepareErr := db.prepareDurableRootManifestResourcesV1(
+TreeDB/db/vacuum_online.go:1935:	resources, resourceWork, err := db.captureRebuiltIndexDurableResourcesProjectedWithFallbackV1(
+TreeDB/db/vlog_rewrite.go:3099:	return db.captureRegisteredDurableValueLogResourcesV1(references)
+TreeDB/db/vlog_rewrite.go:3495:			resources, e := d.captureRebuiltIndexDurableResourcesFromV1(newPager, meta, sourceResources)

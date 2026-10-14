@@ -1,0 +1,115 @@
+ M TreeDB/caching/db.go
+ M TreeDB/caching/stable_leaf_resource.go
+ M TreeDB/cow_public_review_regression_test.go
+ M TreeDB/db/compact_storage.go
+ M TreeDB/db/compact_storage_audit.go
+ M TreeDB/db/compact_storage_audit_test.go
+ M TreeDB/db/db.go
+ M TreeDB/db/dependency_directory_rebuild_v2.go
+ M TreeDB/db/durable_primary_rebuild_v5.go
+ M TreeDB/db/durable_primary_recovery_v5.go
+ M TreeDB/db/durable_primary_runtime_v5.go
+ M TreeDB/db/durable_root_projection_test.go
+ M TreeDB/db/durable_root_recovery.go
+ M TreeDB/db/durable_root_runtime.go
+ M TreeDB/db/durable_root_tracker_repair_test.go
+ M TreeDB/db/index_gen.go
+ M TreeDB/db/index_gen_db.go
+ M TreeDB/db/index_swap.go
+ M TreeDB/db/leaf_generation_manifest_stable_prepare.go
+ M TreeDB/db/leaf_generation_pack.go
+ M TreeDB/db/leaf_generation_pack_stable_prepare.go
+ M TreeDB/db/leaf_page_log.go
+ M TreeDB/db/maintenance_reachability.go
+ M TreeDB/db/maintenance_reachability_test.go
+ M TreeDB/db/open_readonly.go
+ M TreeDB/db/ordered_root_publish.go
+ M TreeDB/db/pools.go
+ M TreeDB/db/primary_arena_owner_v5.go
+ M TreeDB/db/primary_capsule_recovery_v6.go
+ M TreeDB/db/primary_capsule_runtime_v6.go
+ M TreeDB/db/primary_joint_swap_v6.go
+ M TreeDB/db/primary_offline_pair_v6.go
+ M TreeDB/db/primary_offline_pair_v6_test.go
+ M TreeDB/db/primary_runtime_metadata.go
+ M TreeDB/db/prune.go
+ M TreeDB/db/recoverable_root_set.go
+ M TreeDB/db/root_publication_activation.go
+ M TreeDB/db/root_publication_activation_test.go
+ M TreeDB/db/root_publication_primary_cleanup_v6_test.go
+ M TreeDB/db/stable_leaf_rewrite.go
+ M TreeDB/db/stable_pager_owned_operations.go
+ M TreeDB/db/stable_resource.go
+ M TreeDB/db/vacuum_offline.go
+ M TreeDB/db/vacuum_online.go
+ M TreeDB/db/vlog_gc_incremental.go
+ M TreeDB/db/vlog_gc_incremental_apply_test.go
+ M TreeDB/db/vlog_gc_test.go
+ M TreeDB/db/vlog_rewrite.go
+ M TreeDB/db/wal_recovery.go
+ M TreeDB/docs/design/ordinary-primary-allocation-5111.md
+ M TreeDB/docs/spec/storage-format.md
+ M TreeDB/docs/spec/value-log-lifecycle.md
+ M TreeDB/internal/dictdb/resource_capture.go
+ M TreeDB/internal/primaryarena/read_root_v6.go
+ M TreeDB/internal/rootpublication/coordinator.go
+ M TreeDB/internal/rootpublication/dependency_directory_reader_v2.go
+ M TreeDB/internal/rootpublication/dependency_directory_recovery_v2.go
+ M TreeDB/internal/rootpublication/dependency_directory_remove_v2.go
+ M TreeDB/internal/rootpublication/durable_root_transaction.go
+ M TreeDB/internal/rootpublication/ordinary_finish_v6.go
+ M TreeDB/internal/rootpublication/pin_registry.go
+ M TreeDB/internal/rootpublication/primary_transaction_construction_v6.go
+ M TreeDB/internal/rootpublication/resource_allocation.go
+ M TreeDB/internal/rootpublication/resource_diagnostics_allocation.go
+ M TreeDB/internal/rootpublication/resource_entry_allocation.go
+ M TreeDB/internal/rootpublication/resource_entry_view.go
+ M TreeDB/internal/rootpublication/resource_import_directory.go
+ M TreeDB/internal/rootpublication/resource_import_set.go
+ M TreeDB/internal/rootpublication/resource_kind_allocation.go
+ M TreeDB/internal/rootpublication/resource_logical_allocation.go
+ M TreeDB/internal/rootpublication/resource_manifest_allocation.go
+ M TreeDB/internal/rootpublication/resource_mutation_allocation.go
+ M TreeDB/internal/rootpublication/resource_namespace_cleanup_unix_test.go
+ M TreeDB/internal/rootpublication/resource_original_cleanup.go
+ M TreeDB/internal/rootpublication/resource_original_cleanup_unix_test.go
+ M TreeDB/internal/rootpublication/resource_physical_allocation.go
+ M TreeDB/internal/rootpublication/resource_requirements_allocation.go
+ M TreeDB/internal/rootpublication/resource_rope_allocation.go
+ M TreeDB/internal/rootpublication/resource_set.go
+ M TreeDB/internal/rootpublication/resource_set_allocation_test.go
+ M TreeDB/internal/rootpublication/resource_token.go
+ M TreeDB/internal/rootpublication/resource_token_allocation.go
+ M TreeDB/internal/rootpublication/resource_token_allocation_test.go
+ M TreeDB/internal/rootpublication/types.go
+ M TreeDB/internal/templatedb/resource_capture.go
+ M TreeDB/internal/valuelog/manager.go
+ M TreeDB/internal/valuelog/stable_resource.go
+ M TreeDB/internal/valuelog/writer.go
+ M TreeDB/pager/grow.go
+ M TreeDB/pager/pager.go
+?? TreeDB/caching/original_capture_cleanup_test.go
+?? TreeDB/db/durable_dependency_descriptor_v1.go
+?? TreeDB/db/original_cleanup_error_graph_test.go
+?? TreeDB/db/original_primary_runtime_cleanup.go
+?? TreeDB/db/original_startup_generation.go
+?? TreeDB/db/original_startup_generation_test.go
+?? TreeDB/db/primary_joint_completed_v6_test.go
+?? TreeDB/db/primary_joint_recovery_proof_v6.go
+?? TreeDB/db/primary_read_certificate_v6.go
+?? TreeDB/db/primary_read_certificate_v6_test.go
+?? TreeDB/db/primary_runtime_cleanup_test.go
+?? TreeDB/db/snapshot_manager_cleanup_test.go
+?? TreeDB/db/vlog_ref_cache_read.go
+?? TreeDB/db/vlog_ref_cache_read_test.go
+?? TreeDB/db/vlog_ref_counts_owned.go
+?? TreeDB/db/vlog_ref_counts_owned_test.go
+?? TreeDB/db/vlog_ref_incarnation.go
+?? TreeDB/db/vlog_ref_incarnation_test.go
+?? TreeDB/internal/rootpublication/original_cleanup_error_graph.go
+?? TreeDB/internal/valuelog/original_cleanup.go
+?? TreeDB/internal/valuelog/original_cleanup_test.go
+?? TreeDB/internal/valuelog/writer_original_cleanup.go
+?? TreeDB/internal/valuelog/writer_original_cleanup_test.go
+?? TreeDB/pager/owned_file_metadata_test.go
+?? TreeDB/pager/readonly_owned_metadata_test.go

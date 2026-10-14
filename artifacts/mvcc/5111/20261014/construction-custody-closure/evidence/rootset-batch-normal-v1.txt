@@ -1,0 +1,12 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/durable_root_projection_test.go:324:11: invalid argument: roots.rootResources (variable of type [5]recoverableRootResource) is not a map
+TreeDB/db/durable_root_projection_test.go:373:18: assignment mismatch: 2 variables but 1 value
+TreeDB/db/durable_root_projection_test.go:373:38: invalid argument: index key (variable of struct type recoverableRootKey) must be integer
+TreeDB/db/durable_root_projection_test.go:426:11: invalid argument: roots.rootResources (variable of type [5]recoverableRootResource) is not a map
+TreeDB/db/durable_root_projection_test.go:480:18: assignment mismatch: 2 variables but 1 value
+TreeDB/db/durable_root_projection_test.go:480:38: invalid argument: index key (variable of struct type recoverableRootKey) must be integer
+TreeDB/db/resource_selector_test.go:42:44: cannot use map[recoverableRootKey]*rootpublication.StableResourceSet{…} (value of type map[recoverableRootKey]*rootpublication.StableResourceSet) as [5]recoverableRootResource value in struct literal
+TreeDB/db/resource_selector_test.go:56:43: cannot use map[recoverableRootKey]*rootpublication.StableResourceSet{…} (value of type map[recoverableRootKey]*rootpublication.StableResourceSet) as [5]recoverableRootResource value in struct literal
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.009s
+FAIL

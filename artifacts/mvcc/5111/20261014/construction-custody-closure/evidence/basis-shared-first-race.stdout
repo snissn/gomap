@@ -1,0 +1,62 @@
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY
+--- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator (0.11s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA (0.05s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY (0.06s)
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/DATA
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY
+--- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose (0.06s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/DATA (0.03s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY (0.04s)
+=== RUN   TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt
+--- PASS: TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt (0.03s)
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/DATA
+=== RUN   TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/PRIMARY
+--- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator (0.07s)
+    --- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/DATA (0.03s)
+    --- PASS: TestCOWBasisPostcaptureRefusalJoinsPendingOriginalIterator/PRIMARY (0.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	1.346s
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest
+=== RUN   TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory
+--- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot (0.42s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/manifest (0.22s)
+    --- PASS: TestPrimarySnapshotRebindBothFilesDependenciesAndOlderSlot/directory (0.21s)
+=== RUN   TestSnapshotCleanupCompletionSharesOriginalFinalReader
+--- PASS: TestSnapshotCleanupCompletionSharesOriginalFinalReader (0.04s)
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed
+--- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal (0.05s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running (0.03s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed (0.03s)
+=== RUN   TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError
+    snapshot_cleanup_completion_test.go:155: actual pager error arrived after Snapshot governor refund
+--- FAIL: TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError (0.04s)
+=== RUN   TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors
+--- PASS: TestSnapshotCleanupCompletionDoesNotWaitForIndependentPagerDescriptors (0.04s)
+=== RUN   TestPrimaryMetadataCaptureFinalizesAfterLastRead
+--- PASS: TestPrimaryMetadataCaptureFinalizesAfterLastRead (0.06s)
+=== RUN   TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer
+--- PASS: TestPrimaryMetadataCaptureWrongOwnerRefusesWithoutTransfer (0.08s)
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary
+=== RUN   TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded
+--- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead (0.12s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/ordinary (0.06s)
+    --- PASS: TestPrimarySnapshotPhysicalOwnerSurvivesDBCloseAndLastRead/bounded (0.06s)
+=== RUN   TestOwnedPagerOperationWaitsForActualSnapshotFinalization
+--- PASS: TestOwnedPagerOperationWaitsForActualSnapshotFinalization (0.05s)
+=== RUN   TestOwnedPagerOperationJoinsOriginalRunningFinalizer
+--- PASS: TestOwnedPagerOperationJoinsOriginalRunningFinalizer (0.04s)
+=== RUN   TestOwnedPagerOperationFinalReaderAndExportedHandleRace
+--- PASS: TestOwnedPagerOperationFinalReaderAndExportedHandleRace (0.05s)
+=== RUN   TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor
+--- PASS: TestOwnedPagerOperationPostConsumptionVLogFailureRetainsGovernor (0.05s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	1.138s
+FAIL

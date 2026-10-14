@@ -1,0 +1,20 @@
+{
+  "contracts": [
+    "caching DB original bgErr revision-validated error graph retains original cleanup before notification including closing; callbacks outside locks. No late budget Close may refund held capture/physical aliases. Existing containing admissions use sizeof and must include new fields.",
+    "primary transaction construction original physical abort and constructor root disposal report first sticky actual outcome; final AbortComplete only after both actual physical phases consume, before alias clear and refund. Native phased debt must stay on SAME original owner/transaction and exclude ordinary synchronous scheduling. Preserve actual consumed/progress and no replay."
+  ],
+  "files": [
+    {
+      "bytes": 1404965,
+      "path": "TreeDB/caching/db.go",
+      "sha256": "49e42bdd8976ab9918c36eb31abf7afb3060f0802d42d035b97b694b973f5c91"
+    },
+    {
+      "bytes": 17340,
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "1d52686ae3e7dbb4e0172099c3bab0c6d4f29e73f715763978d1e4431b36e906"
+    }
+  ],
+  "head": "725c31dd2711467514a91df9847e2e303b719afd",
+  "ownership": "Ordinary writer releases these exact existing files to root-mediated native integration now; no further ordinary writes unless coordinator reassigns. Not whole packet/CI qualification."
+}

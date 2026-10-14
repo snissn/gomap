@@ -1,0 +1,20 @@
+{
+  "read_root_v6.overlay.go": "1028647f376ff1e5ccb770390cc4cd84627935e5a49dd10f7e25501d5b462560",
+  "primary_transaction_construction_v6.overlay.go": "6ae1bac90bcf5c88295ae2af6a49b33e53f2fa2a49ba81f505302ca559f1893a",
+  "overlay.json": "01ce1a594ffb059e83d8121eab493cf78b777dda02aa9c1ad913b8810e03a016",
+  "original-primary-identities.json": "243e71a75084ea53e6274ed5b0ecf67569f51001da4624dba8b6fe8a6f06410b",
+  "run-start.json": "359171f281c5f4c47ce4455f7aa2532d0f8dc70fca108ca75d97a74420fc2a98",
+  "owner.overlay.go": "ad481dfa9f2a4582c3a2d635d74b9a1c25e1ba4ad1300e3dbb527cb9a64bc905",
+  "original-primary-identities.filtered.log": "27ad95a0ea0612b837fa129b93f7bb04352d5447c453ac1b3047bddb0679136c",
+  "run-exit.json": "0afba3ff75da55061fb0cf391c19e9b8e04255de67970a4ecd189b0863bdebfc",
+  "go-env.json": "2aaa64bed61ce5195e57f953e3946817e3863217853fc2f20e620ceb29bb3e33",
+  "arena.overlay.go": "5383803926acf238d9cb9dc7fac9d912d8a3aaa66471bd7fb8ff91e9898dbfa2",
+  "TreeDB_AGENTS.md.immutable": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+  "preparation.json": "46dddaf4ef5314a90dec0a186235eb869d2a131fb3f2f9807aba27c939c01ed1",
+  "stdout.log": "fdb85c23858fd6bdec7f7f509c38307826343d10fd7bb49efa0847c163ea2de0",
+  "source-blob-bindings.json": "55c9c72b1c7ded443e91a8b75ebc3e7448364401f513f9ec0cba20f5a53a6b9a",
+  "inquiry-result.json": "9f625490c771f8ef7e6035b424b974750795d1ecad2e9579f53fa88e2b0b5d36",
+  "AGENTS.md.immutable": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+  "stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "cow_public_retention_test.overlay.go": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40"
+}

@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/db
+../evidence/ordinary-5111/basis-completion-original-db.overlay.go:5136:62: undefined: os
+FAIL	github.com/snissn/gomap/TreeDB/caching [build failed]
+FAIL

@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/durable_root_owner_continuity_test.go:17:23: database.Snapshot undefined (type *DB has no field or method Snapshot)
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

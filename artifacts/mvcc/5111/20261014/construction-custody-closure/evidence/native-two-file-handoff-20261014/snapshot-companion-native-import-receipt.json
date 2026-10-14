@@ -1,0 +1,9 @@
+{
+  "source": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/native-two-file-handoff-20261014/snapshot-companion/TreeDB/db/snapshot_primary_retention.go",
+  "destination": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal/TreeDB/db/snapshot_primary_retention.go",
+  "prior_sha256": "c810943240322504957282e434a6f8238b73df6565179c23b728b037054b8f96",
+  "sha256": "c5fca2d8f61ccbe8672ea9a29ef73e9c35778fab69b26a247cf9f236ae463e9b",
+  "handoff_sha256": "7d661901b9eb728e505e7e9c2e1165a9e448784b1040bd054e26f86b1c0f3fd2",
+  "source_only": true,
+  "qualification_credit": false
+}

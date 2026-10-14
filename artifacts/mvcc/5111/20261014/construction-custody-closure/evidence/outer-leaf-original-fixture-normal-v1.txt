@@ -1,0 +1,10 @@
+--- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress (0.44s)
+    --- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_durable (0.17s)
+        cow_public_review_regression_test.go:308: no rotated leaf segment
+    --- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/command_wal_relaxed (0.15s)
+        cow_public_review_regression_test.go:308: no rotated leaf segment
+    --- FAIL: TestCOWPublicEmptyCheckpointLeafRegistrationProgress/no_wal_fast (0.12s)
+        cow_public_review_regression_test.go:308: no rotated leaf segment
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB	0.447s
+FAIL

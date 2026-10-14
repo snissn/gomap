@@ -1,0 +1,47 @@
+[
+  {
+    "argv": [
+      "go",
+      "test",
+      "./TreeDB",
+      "./TreeDB/db",
+      "-run",
+      "^(TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable|TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback|TestPublicCommandWALBatchFallbackPreservesEntryRevisions|TestCOWPublicPrimarySelectionLayeredPublication|TestCOWPublicPrimarySelectionModeAndExplicitFlag|TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild|TestRefreshCommandWALPrimaryCheckpointFallbackV6|TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands|TestCommandWALPrimaryCheckpointFallbackV6ChangedDirectory|TestRefreshCommandWALPrimaryCheckpointFallbackV6ActualAuthorityRefusal|TestRefreshCommandWALCheckpointFallbackConvergesSlotsWithoutNewLSN|TestCommandWALCheckpointFallbackNeedsRefreshForDifferentRoots|TestRefreshCommandWALCheckpointFallbackWaitsForVisibleRoot|TestRefreshCommandWALCheckpointFallbackSnapshotsRuntimeUnderDBMu|TestRefreshCommandWALCheckpointFallbackPublicationFailureRetainsFallback|TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff|TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader|TestPrimaryConstructionV6AbortDetachesRetainedReader|TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt|TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor|TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth)$",
+      "-count=1",
+      "-timeout=120s",
+      "-v"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "head": "4f61cbbd6d0b7be5c69d9411c1344b4576f5e879",
+    "environment": {
+      "PATH": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+      "GOWORK": "off",
+      "GOMAXPROCS": "2",
+      "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/ordinary-5111"
+    },
+    "receipt_prefix": "candidate-normal"
+  },
+  {
+    "argv": [
+      "go",
+      "test",
+      "-race",
+      "./TreeDB",
+      "./TreeDB/db",
+      "-run",
+      "^(TestPublicCommandWALBatchResetFallbackKeepsWrapperUsable|TestPublicCommandWALBatchResetPreservesCompactZeroScanFallback|TestPublicCommandWALBatchFallbackPreservesEntryRevisions|TestCOWPublicPrimarySelectionLayeredPublication|TestCOWPublicPrimarySelectionModeAndExplicitFlag|TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild|TestRefreshCommandWALPrimaryCheckpointFallbackV6|TestCommandWALPrimaryCheckpointFallbackV6RefusesIncompleteOperands|TestCommandWALPrimaryCheckpointFallbackV6ChangedDirectory|TestRefreshCommandWALPrimaryCheckpointFallbackV6ActualAuthorityRefusal|TestRefreshCommandWALCheckpointFallbackConvergesSlotsWithoutNewLSN|TestCommandWALCheckpointFallbackNeedsRefreshForDifferentRoots|TestRefreshCommandWALCheckpointFallbackWaitsForVisibleRoot|TestRefreshCommandWALCheckpointFallbackSnapshotsRuntimeUnderDBMu|TestRefreshCommandWALCheckpointFallbackPublicationFailureRetainsFallback|TestRootPublicationBuildGroupPrimaryV6SupersessionAndHandoff|TestRootPublicationBuildGroupPrimaryV6AbandonKeepsBorrowedReader|TestPrimaryConstructionV6AbortDetachesRetainedReader|TestRootPublicationBuildGroupPrimaryV6FailedAbortRetainsOriginalDebt|TestRootPublicationBuildGroupPrimaryV6FailedNextKeepsPredecessor|TestRootPublicationBuildGroupPrimaryV6SupersessionRefusalKeepsBoth)$",
+      "-count=1",
+      "-timeout=120s",
+      "-v"
+    ],
+    "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "head": "4f61cbbd6d0b7be5c69d9411c1344b4576f5e879",
+    "environment": {
+      "PATH": "/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+      "GOWORK": "off",
+      "GOMAXPROCS": "2",
+      "TMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/scratch/ordinary-5111"
+    },
+    "receipt_prefix": "candidate-race"
+  }
+]

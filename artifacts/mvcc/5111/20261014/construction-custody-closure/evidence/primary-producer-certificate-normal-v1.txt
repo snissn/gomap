@@ -1,0 +1,6 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/db.go:2189:25: s.primaryRebindErr undefined (type *Snapshot has no field or method primaryRebindErr)
+TreeDB/db/recoverable_root_set.go:708:15: snapshot.primaryRebindRoot undefined (type *Snapshot has no field or method primaryRebindRoot)
+TreeDB/db/recoverable_root_set.go:710:14: snapshot.primaryRebindErr undefined (type *Snapshot has no field or method primaryRebindErr)
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

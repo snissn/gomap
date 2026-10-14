@@ -1,0 +1,54 @@
+panic: test timed out after 2m0s
+	running tests:
+		TestOriginalManagerPartialFileParentRefusalRetainsProducer (1m59s)
+
+goroutine 125 [running]:
+testing.(*M).startAlarm.func1()
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2802 +0x354
+created by time.goFunc
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x178d160f0008, {0x8ca3b4?, 0x0?}, 0x8d44a0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2109 +0x4e5
+testing.runTests.func1(0x178d160f0008)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2585 +0x3e
+testing.tRunner(0x178d160f0008, 0x178d160ebbb0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+testing.runTests({0x8ad0e3, 0x17}, {0x8c269d, 0x30}, 0x178d160a0048, {0xc11f00, 0x176, 0x176}, {0xc2abea5c821637c5, 0x1bf092b8ac, ...})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2583 +0x505
+testing.(*M).Run(0x178d16092320)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2443 +0x6ac
+go.uber.org/goleak.VerifyTestMain({0x8dac08?, 0x178d16092320?}, {0x0, 0x0, 0x0})
+	/home/mikers/go/pkg/mod/go.uber.org/goleak@v1.3.0/testmain.go:53 +0x5a
+github.com/snissn/gomap/TreeDB/internal/valuelog.TestMain(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/leak_test.go:10
+main.main()
+	_testmain.go:868 +0xb7
+
+goroutine 124 [sync.RWMutex.RLock]:
+sync.runtime_SemacquireRWMutexR(0x178d16117b60?, 0x1f?, 0x83d860?)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/runtime/sema.go:100 +0x25
+sync.(*RWMutex).RLock(...)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/sync/rwmutex.go:74
+github.com/snissn/gomap/TreeDB/internal/valuelog.(*ManagerCleanupFailure).Is(0x178d160d0718, {0x8dad68, 0xc066e0})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/original_cleanup.go:149 +0x45
+errors.is({0x8daf40?, 0x178d160d0718?}, {0x8dad68, 0xc066e0}, 0x1)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/errors/wrap.go:59 +0xc3
+errors.Is({0x8daf40?, 0x178d160d0718?}, {0x8dad68?, 0xc066e0?})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/errors/wrap.go:51 +0x65
+github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Refresh(0x178d160d0680)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/manager.go:2081 +0x4e9
+github.com/snissn/gomap/TreeDB/internal/valuelog.newManagerWithStableResourcePinRegistry({0x178d16920630, 0x90}, 0x178d1691a540, 0x1, 0x1)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/manager.go:1698 +0x20d
+github.com/snissn/gomap/TreeDB/internal/valuelog.NewManagerWithStableResourcePinRegistry(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/manager.go:1650
+github.com/snissn/gomap/TreeDB/internal/valuelog.TestOriginalManagerPartialFileParentRefusalRetainsProducer(0x178d1623c008)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/original_cleanup_test.go:139 +0x2e7
+testing.tRunner(0x178d1623c008, 0x8d44a0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2101 +0x4c5
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	120.105s
+ok  	github.com/snissn/gomap/TreeDB/db	0.083s
+FAIL

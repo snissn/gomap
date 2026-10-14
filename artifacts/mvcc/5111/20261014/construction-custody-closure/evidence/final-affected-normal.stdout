@@ -1,0 +1,124 @@
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	7.153s
+ok  	github.com/snissn/gomap/TreeDB/internal/primaryarena	0.015s
+ok  	github.com/snissn/gomap/TreeDB/zipper	0.198s
+panic: test timed out after 4m0s
+	running tests:
+		TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites (0s)
+
+goroutine 14235 [running]:
+testing.(*M).startAlarm.func1()
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2802 +0x354
+created by time.goFunc
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x30b34d4ec908, {0x1d06dbb?, 0x0?}, 0x1da29b0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2109 +0x4e5
+testing.runTests.func1(0x30b34d4ec908)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2585 +0x3e
+testing.tRunner(0x30b34d4ec908, 0x30b34d505b60)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+testing.runTests({0x1c85b6e, 0x17}, {0x1ca698d, 0x21}, 0x30b34d4bc198, {0x2c86e80, 0x6b9, 0x6b9}, {0xc2abd154cdd43112, 0x37e125f342, ...})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2583 +0x505
+testing.(*M).Run(0x30b34d5334a0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2443 +0x6ac
+go.uber.org/goleak.VerifyTestMain({0x1db7c60?, 0x30b34d5334a0?}, {0x30b34d505e90, 0x1, 0x1})
+	/home/mikers/go/pkg/mod/go.uber.org/goleak@v1.3.0/testmain.go:53 +0x5a
+github.com/snissn/gomap/TreeDB/db.TestMain(0x30b34d5334a0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/leak_test.go:12 +0xad
+main.main()
+	_testmain.go:3682 +0xa5
+
+goroutine 14229 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x30b34d413000?)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 14268
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+
+goroutine 14231 [select]:
+github.com/snissn/gomap/TreeDB/db.(*indexGhostManager).loop(0x30b34e6b66c0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/pools.go:153 +0xf0
+created by github.com/snissn/gomap/TreeDB/db.(*indexGhostManager).start in goroutine 14268
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/pools.go:144 +0xbf
+
+goroutine 14232 [select]:
+github.com/snissn/gomap/TreeDB/internal/rootpublication.(*Coordinator).run(0x30b34d5ba008)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/rootpublication/coordinator.go:765 +0x208
+created by github.com/snissn/gomap/TreeDB/internal/rootpublication.New in goroutine 14268
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/rootpublication/coordinator.go:176 +0x505
+
+goroutine 719 [chan receive, 3 minutes]:
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).loop(0x30b34d414780?)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/memtable/hash_sorted_indexer.go:74 +0x87
+github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).sharedLoop(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/memtable/hash_sorted_indexer.go:70
+created by github.com/snissn/gomap/TreeDB/internal/memtable.(*HashSortedIndexer).start in goroutine 747
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/memtable/hash_sorted_indexer.go:51 +0x37
+
+goroutine 14234 [runnable]:
+github.com/snissn/gomap/TreeDB/node.(*Builder).finalize(0x30b34d780400)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/node/builder.go:1064 +0x1c5
+github.com/snissn/gomap/TreeDB/node.(*Builder).FinishNoNode(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/node/builder.go:1131
+github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ensureRootPage(0x30b34d77d600, {0x2d846c0, 0x0, 0x0}, {0x1, 0x0, {0x7f800001, 0x8c9, 0x40000171, 0x0}}, ...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/zipper.go:2455 +0x251
+github.com/snissn/gomap/TreeDB/zipper.(*Zipper).reduceSpanNativeRootWithScratch(0x30b34d77d600, {0x30b34d595da8, 0x1, 0x1}, 0x30b34d6ebb08, 0x30b34d5c3380)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/span_native_apply.go:1297 +0x1e6
+github.com/snissn/gomap/TreeDB/zipper.(*Zipper).reduceSpanNativeRootWithContext(0x30b34d77d600, 0xc8, {{0x30b34d96e340, 0x1, 0x1}, 0x30b34d64b360, 0x0}, 0x30b34d6ebb08, 0x30b34d5968b0, 0x30b34d5c3380)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/span_native_apply.go:928 +0x414
+github.com/snissn/gomap/TreeDB/zipper.(*Zipper).applySpanNativeWithPrepared(_, _, {_, _, _}, {0xc8, 0x1, 0x1, 0x0, 0x0, ...}, ...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/span_native_apply.go:571 +0x13ff
+github.com/snissn/gomap/TreeDB/zipper.(*Zipper).ApplyWithOptions(_, _, _, {0x1, 0x1, {0x0, 0x0, 0x0, 0x0, 0x0, ...}, ...})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/read_only_prepare.go:1099 +0x735
+github.com/snissn/gomap/TreeDB/db.(*Batch).writeOptimistic(0x30b34e6b7280, 0x0, 0x0, 0xc, 0x0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/batch.go:418 +0x86b
+github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntentPreflight(0x30b34e6b7280, 0x0, 0x0, 0xc, 0x0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/batch.go:356 +0x5a
+github.com/snissn/gomap/TreeDB/db.(*Batch).writeWithCommandWALIntent(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/batch.go:347
+github.com/snissn/gomap/TreeDB/db.(*Batch).write(0x30b34e6b7280, 0x0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/batch.go:343 +0x3e8
+github.com/snissn/gomap/TreeDB/db.(*Batch).Write(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/batch.go:285
+github.com/snissn/gomap/TreeDB/db.(*DB).applyCombinedBatch(0xc2abd154cddb2408?, {0x30b34d59fd30, 0x1, 0x0?})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/commit_combiner.go:179 +0x1e6
+github.com/snissn/gomap/TreeDB/db.(*DB).commitCombinerLoop(0x30b34e24b508, 0x30b34d698000, 0x30b34da002a0, 0x30b34d4b8000?)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/commit_combiner.go:266 +0x471
+created by github.com/snissn/gomap/TreeDB/db.(*DB).startCommitCombiner in goroutine 14268
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/commit_combiner.go:41 +0x1d1
+
+goroutine 14268 [select]:
+github.com/snissn/gomap/TreeDB/db.(*DB).writeViaCommitCombinerWithMVCCInput(0x30b34e24b508, {0x30b34deba4f8, 0x5, 0x8}, {0x30b34deba500, 0x5, 0x1?}, 0x0, 0x0, {0x0, ...})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/commit_combiner.go:118 +0x5a5
+github.com/snissn/gomap/TreeDB/db.(*DB).writeViaCommitCombiner(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/commit_combiner.go:65
+github.com/snissn/gomap/TreeDB/db.(*DB).setPoint(0x30b34e24b508, {0x30b34deba4f8?, 0x2c76dc0?, 0x30b34e3b9710?}, {0x30b34deba500?, 0x30b34e3b96f8?, 0x50527f?}, 0x0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/api.go:603 +0xbc
+github.com/snissn/gomap/TreeDB/db.(*DB).Set(0x30b34e24b508?, {0x30b34deba4f8?, 0x30b34e3b9f40?, 0x1?}, {0x30b34deba500?, 0x0?, 0x0?})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/api.go:597 +0x11b
+github.com/snissn/gomap/TreeDB/db.TestStandaloneLeafPageLogEnablesDirectOuterLeafWrites(0x30b34da26b48)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/standalone_leaf_page_log_test.go:40 +0x389
+testing.tRunner(0x30b34da26b48, 0x1da29b0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2101 +0x4c5
+
+goroutine 14230 [chan receive]:
+github.com/snissn/gomap/TreeDB/zipper.(*ApplyWorkerPool).worker(0x30b34d412a80?)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/apply_worker_pool.go:55 +0x65
+created by github.com/snissn/gomap/TreeDB/zipper.NewApplyWorkerPool in goroutine 14268
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/zipper/apply_worker_pool.go:48 +0x85
+
+goroutine 14269 [select]:
+github.com/snissn/gomap/TreeDB/pager.(*Pager).growLoop(0x30b34d415500)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/pager/grow.go:55 +0x9b
+created by github.com/snissn/gomap/TreeDB/pager.(*Pager).startGrower in goroutine 14268
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/pager/grow.go:13 +0x116
+
+goroutine 14233 [select]:
+github.com/snissn/gomap/TreeDB/db.(*pruneWorker).Start.func1()
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/prune.go:58 +0x105
+created by github.com/snissn/gomap/TreeDB/db.(*pruneWorker).Start in goroutine 14268
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/prune.go:51 +0x147
+FAIL	github.com/snissn/gomap/TreeDB/db	240.008s
+FAIL

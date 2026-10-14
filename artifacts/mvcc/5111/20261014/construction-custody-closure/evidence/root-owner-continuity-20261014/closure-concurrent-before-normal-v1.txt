@@ -1,0 +1,11 @@
+=== RUN   TestLeafGenerationPackPreparedCleanupConcurrentCompletion
+=== RUN   TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Release
+    leaf_generation_pack_stable_prepare_test.go:810: physical completion early=true first=<nil> second=stable resource ownership violation
+=== RUN   TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Take
+    leaf_generation_pack_stable_prepare_test.go:810: physical completion early=true first=<nil> second=stable resource ownership violation
+--- FAIL: TestLeafGenerationPackPreparedCleanupConcurrentCompletion (0.10s)
+    --- FAIL: TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Release (0.05s)
+    --- FAIL: TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Take (0.05s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.106s
+FAIL

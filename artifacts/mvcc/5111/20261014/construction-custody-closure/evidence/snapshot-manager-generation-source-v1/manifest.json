@@ -1,0 +1,60 @@
+{
+  "published_base": "725c31dd2711467514a91df9847e2e303b719afd",
+  "qualification": "focused uncommitted source-bound controls; whole ordinary packet open",
+  "files": {
+    "TreeDB/db/db.go": {
+      "sha256": "46e3702125c2f6389d10956f675bc534674503266bf90348ed13ca31e5cb969b",
+      "git_blob": "df2715908e9382c9b1b1aa0da865928ae08e0fe0",
+      "bytes": 202469
+    },
+    "TreeDB/db/index_gen.go": {
+      "sha256": "eaa3a6df9ab72155ca80052179b0d18e1cfdf90c4fddff42baa0dc036a465307",
+      "git_blob": "5d4d1795e984e9392e41b97ed96c0d66446c7591",
+      "bytes": 8150
+    },
+    "TreeDB/db/index_gen_db.go": {
+      "sha256": "509bb17a3ea4889f3c9c9bd2797d8260504198aeac34996fdcaffada0fd46276",
+      "git_blob": "fc57aa6e03994bd27a6ae0191d98ba49b62bee8e",
+      "bytes": 4018
+    },
+    "TreeDB/db/prune.go": {
+      "sha256": "916ac95b292dcf7438a5fd966155dc7027ab78dc9c1bb0e5f17eb739b828d98f",
+      "git_blob": "5563090f8383c4ff0629a1cab1621dfdff4a353b",
+      "bytes": 4945
+    },
+    "TreeDB/db/durable_root_runtime.go": {
+      "sha256": "1eb1ec4dc32360bf2c6269c14435790c68f3c95a99d9b2026c0417a678b0d6ed",
+      "git_blob": "e5d623c96c93e35b8bd36958e9090d0b1244775e",
+      "bytes": 124974
+    },
+    "TreeDB/db/snapshot_manager_cleanup_test.go": {
+      "sha256": "5f1d762aa69fadc9f508b347d59295ea055d3c6bcb74d2c073fa31c5857297ea",
+      "git_blob": "5964ac50a2562f2642ec5e6809e3ce2800a35c7c",
+      "bytes": 4520
+    },
+    "TreeDB/internal/valuelog/manager.go": {
+      "sha256": "e28863be28cd834a6b4c24ec3e19e8c439f31a0a036ce58eb7984535647547e2",
+      "git_blob": "6a71b008bcc37c1c6ca13b4251f0f5ddbb01dad5",
+      "bytes": 101099
+    },
+    "TreeDB/internal/valuelog/original_cleanup.go": {
+      "sha256": "d569082d70744ca50846b59587867a43fae4d1256618eff0c246ec2d527adc34",
+      "git_blob": "981f4611068b3e6423c177ea4bec9e5777aeab3a",
+      "bytes": 6668
+    }
+  },
+  "receipts": [
+    "snapshot-manager-late-normal-v5.txt",
+    "snapshot-manager-generation-race-v1.txt",
+    "snapshot-manager-late-normal-red-v3.txt",
+    "snapshot-manager-late-normal-v4.txt",
+    "snapshot-manager-late-red-source.json"
+  ],
+  "receipt_sha256": {
+    "snapshot-manager-late-normal-v5.txt": "221a00294a132f68d50c96cc2252ed3f83d4971785fff648c6642217963b6096",
+    "snapshot-manager-generation-race-v1.txt": "179503449a993a3330050dce490d1ec55ae400d97a761fa71d512502cda884e9",
+    "snapshot-manager-late-normal-red-v3.txt": "2981f83fc77b3a3abb80b838f2d8a23d7c1eef9ab15bdc795c0ef44f964c381c",
+    "snapshot-manager-late-normal-v4.txt": "3eef2ddae2435b4667357c531ac5e11c22ab7d8d741d136a9334d655f3c02905",
+    "snapshot-manager-late-red-source.json": "26daa323557a01fd1864c9b3ada7e35d9e2c199d6c02a49324766ebe38574135"
+  }
+}

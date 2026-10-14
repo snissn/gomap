@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/primary_capsule_runtime_v6.go:213:18: undefined: a
+TreeDB/db/durable_primary_runtime_v5.go:16:2: "github.com/snissn/gomap/TreeDB/internal/iterator" imported and not used
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

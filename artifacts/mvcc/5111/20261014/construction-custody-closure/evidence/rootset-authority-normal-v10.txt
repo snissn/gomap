@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/leaf_generation_pack_target_preflight_test.go:6:2: "os" imported and not used
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.007s [no tests to run]
+FAIL

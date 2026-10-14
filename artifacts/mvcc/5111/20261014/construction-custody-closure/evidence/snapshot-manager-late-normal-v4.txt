@@ -1,0 +1,8 @@
+--- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB (0.11s)
+    --- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-snapshot (0.06s)
+        snapshot_manager_cleanup_test.go:85: lost actual original last-release error: <nil>
+    --- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-active-read (0.05s)
+        snapshot_manager_cleanup_test.go:85: lost actual original last-release error: <nil>
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.109s
+FAIL

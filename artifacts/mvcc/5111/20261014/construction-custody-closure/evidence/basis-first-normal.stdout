@@ -1,0 +1,9 @@
+# github.com/snissn/gomap/TreeDB/caching [github.com/snissn/gomap/TreeDB/caching.test]
+TreeDB/caching/cow_cut.go:210:11: undefined: basis
+TreeDB/caching/cow_flush.go:12:2: "github.com/snissn/gomap/TreeDB/internal/rootpublication" imported and not used
+FAIL	github.com/snissn/gomap/TreeDB/caching [build failed]
+# github.com/snissn/gomap/TreeDB/caching [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/caching/cow_cut.go:210:11: undefined: basis
+TreeDB/caching/cow_flush.go:12:2: "github.com/snissn/gomap/TreeDB/internal/rootpublication" imported and not used
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

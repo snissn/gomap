@@ -1,0 +1,37 @@
+{
+  "scope": "real post-unlink observer refusal and actual rebound conflict; concurrency physical parent Close",
+  "sources": [
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "bytes": 30856,
+      "sha256": "be3c850d1f1cf4af655c4348b9bbfa69efe5ef5fe0762296d9bcd175002f6a55"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority_test.go",
+      "bytes": 37595,
+      "sha256": "8f62beb657794f413caa946673b179f3e4697c16730d8c50b72b6b224ee90d91"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+      "bytes": 29404,
+      "sha256": "b255e00ad030971e2a98e3cb53398c93679658d85ff9b3ad860a40360abcc1e9"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare_test.go",
+      "bytes": 33317,
+      "sha256": "2b2d0e67277aa4bb940deb85b81b0e9f7a40a7abcfbd8d3e03a49b0270335843"
+    }
+  ],
+  "raw": [
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/root-owner-continuity-20261014/closure-concurrent-after-race-v1.txt",
+      "sha256": "52f2c45bb8f5e34cde50ba5978505415790145928987978d61c5e98a99ed0e99",
+      "exit": "0"
+    },
+    {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/root-owner-continuity-20261014/hard-refusal-after-race-v1.txt",
+      "sha256": "90acc98bdb1b3c0b4be75b51eeef528adbc358d7a32cc80fbfaa45d34e1c4679",
+      "exit": "0"
+    }
+  ]
+}

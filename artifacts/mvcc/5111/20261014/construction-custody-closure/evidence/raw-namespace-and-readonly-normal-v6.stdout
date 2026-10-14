@@ -1,0 +1,75 @@
+=== RUN   TestPrimaryJointCompletedV6AdvancedCanonicalPair
+--- PASS: TestPrimaryJointCompletedV6AdvancedCanonicalPair (0.24s)
+=== RUN   TestPrimaryJointCompletedV6PhysicalProofRefusal
+=== RUN   TestPrimaryJointCompletedV6PhysicalProofRefusal/before-proof-close
+=== RUN   TestPrimaryJointCompletedV6PhysicalProofRefusal/proof-pager-close
+=== RUN   TestPrimaryJointCompletedV6PhysicalProofRefusal/before-dependency-close
+=== RUN   TestPrimaryJointCompletedV6PhysicalProofRefusal/before-parent-close
+--- PASS: TestPrimaryJointCompletedV6PhysicalProofRefusal (0.91s)
+    --- PASS: TestPrimaryJointCompletedV6PhysicalProofRefusal/before-proof-close (0.22s)
+    --- PASS: TestPrimaryJointCompletedV6PhysicalProofRefusal/proof-pager-close (0.22s)
+    --- PASS: TestPrimaryJointCompletedV6PhysicalProofRefusal/before-dependency-close (0.23s)
+    --- PASS: TestPrimaryJointCompletedV6PhysicalProofRefusal/before-parent-close (0.24s)
+=== RUN   TestPrimaryJointRecoveryV6OriginalFailurePropagation
+=== RUN   TestPrimaryJointRecoveryV6OriginalFailurePropagation/Open
+=== RUN   TestPrimaryJointRecoveryV6OriginalFailurePropagation/ReadOnly
+=== RUN   TestPrimaryJointRecoveryV6OriginalFailurePropagation/Vacuum
+=== RUN   TestPrimaryJointRecoveryV6OriginalFailurePropagation/Rewrite
+--- PASS: TestPrimaryJointRecoveryV6OriginalFailurePropagation (0.89s)
+    --- PASS: TestPrimaryJointRecoveryV6OriginalFailurePropagation/Open (0.22s)
+    --- PASS: TestPrimaryJointRecoveryV6OriginalFailurePropagation/ReadOnly (0.22s)
+    --- PASS: TestPrimaryJointRecoveryV6OriginalFailurePropagation/Vacuum (0.23s)
+    --- PASS: TestPrimaryJointRecoveryV6OriginalFailurePropagation/Rewrite (0.22s)
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation
+    primary_joint_completed_v6_test.go:274: physical-change refusal: collectionwal: recovery required: committed pair identity missing: index.db
+        collectionwal: recovery required
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules
+    primary_joint_completed_v6_test.go:274: physical-change refusal: treedb: no recoverable durable meta: slot 0: primary capsule V6: invalid complete authority; slot 1: primary capsule V6: invalid complete authority
+        collectionwal: recovery required
+=== RUN   TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency
+    primary_joint_completed_v6_test.go:274: physical-change refusal: treedb: no recoverable durable meta: slot 0: no such file or directory; slot 1: no such file or directory
+        collectionwal: recovery required
+--- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange (0.66s)
+    --- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange/DATA-incarnation (0.21s)
+    --- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange/PRIMARY-capsules (0.22s)
+    --- PASS: TestPrimaryJointCompletedV6RejectsPhysicalChange/missing-dependency (0.22s)
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery/before-commit
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery/after-commit
+--- PASS: TestPrimaryOfflineVlogV6CacheInvalidationRecovery (0.33s)
+    --- PASS: TestPrimaryOfflineVlogV6CacheInvalidationRecovery/before-commit (0.15s)
+    --- PASS: TestPrimaryOfflineVlogV6CacheInvalidationRecovery/after-commit (0.18s)
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback/0
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback/1
+--- PASS: TestPrimaryOfflineVlogV6IndependentFallback (0.39s)
+    --- PASS: TestPrimaryOfflineVlogV6IndependentFallback/0 (0.20s)
+    --- PASS: TestPrimaryOfflineVlogV6IndependentFallback/1 (0.19s)
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY
+--- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation (0.26s)
+    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA (0.12s)
+    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY (0.14s)
+=== RUN   TestValueLogRefCacheFormatBindsPhysicalPair
+--- PASS: TestValueLogRefCacheFormatBindsPhysicalPair (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	3.714s
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/success
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/preadmission-refusal
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/extent-changed
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/actual-close-refusal
+--- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/success (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/preadmission-refusal (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/extent-changed (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/actual-close-refusal (0.00s)
+=== RUN   TestReadOnlyOriginalPathRetainsPartialCleanupInError
+--- PASS: TestReadOnlyOriginalPathRetainsPartialCleanupInError (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/pager	0.002s
+testing: warning: no tests to run
+PASS
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.001s [no tests to run]

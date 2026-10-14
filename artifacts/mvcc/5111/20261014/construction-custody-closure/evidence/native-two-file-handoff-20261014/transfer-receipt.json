@@ -1,0 +1,25 @@
+{
+  "utc": "2026-10-14T09:40:32.805016+00:00",
+  "type": "explicit partial existing-file ownership transfer; no whole acceptance",
+  "prior_writer": "/root/mvcc_architecture_repair_sol61",
+  "new_writer": "/root/mvcc_native_codec_integration_sol61",
+  "coordinator": "/root",
+  "source_worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+  "target_worktree": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "handoff_sha256": "c7dfcf56072b5822c74fa6391475f2848dfbf13be5e996432272b8801497e825",
+  "files": [
+    {
+      "bytes": 1404965,
+      "path": "TreeDB/caching/db.go",
+      "sha256": "49e42bdd8976ab9918c36eb31abf7afb3060f0802d42d035b97b694b973f5c91",
+      "prior_native_sha256": "e612e178e2b00206c2290a2cd8a0d1c431ec2ef120c2870fdfdb90dd1a73fdfb"
+    },
+    {
+      "bytes": 17340,
+      "path": "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go",
+      "sha256": "1d52686ae3e7dbb4e0172099c3bab0c6d4f29e73f715763978d1e4431b36e906",
+      "prior_native_sha256": "b876329876572f66bea119dd1f3be0233df61d451441cacb488c347c1c5a95c1"
+    }
+  ],
+  "other_files": "Original ordinary writer retains all other existing shared files; native owns only named NEW files and these two frozen files."
+}

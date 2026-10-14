@@ -1,0 +1,153 @@
+{
+  "scope": "Exact original COW intermediate constructor identities and private group missing disposal; diagnostic-only, no repair qualification",
+  "source": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
+  "local_commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "modified_overlay": true,
+  "exact_ids": {
+    "original_primary_pointer": "0x14588b7c20d0",
+    "unreleased": [
+      {
+        "transaction": "0x14588b5fc400",
+        "root_page_id_decimal": "5764607523034234882",
+        "root_incarnation_decimal": "1",
+        "owner": "0x14588b7c20d0"
+      },
+      {
+        "transaction": "0x14588b5fcc00",
+        "root_page_id_decimal": "5764607523034234885",
+        "root_incarnation_decimal": "1",
+        "owner": "0x14588b7c20d0"
+      },
+      {
+        "transaction": "0x14588c2dda00",
+        "root_page_id_decimal": "5764607523034234888",
+        "root_incarnation_decimal": "1",
+        "owner": "0x14588b7c20d0"
+      }
+    ],
+    "transaction_shape": "dict",
+    "transaction_count": 7
+  },
+  "integer_serialization": "Exact64-bit IDs bound as decimal strings here; original raw JSON receipts unchanged, never reconstruct these IDs with JavaScript floating point.",
+  "finding": "Original intermediate nonfinal flush chunk constructors remain unbound and undisposed when SAME build group replaces private currentRoot. Four final sync chunk constructors bind/detach/finish. Group abandonment only frees DATA tracker allocations. Original private constructed PRIMARY roots require original transaction Abort, with component/proof custody and final-transfer boundary preserved.",
+  "repair_contract": "Abort superseded original group-owned private constructor after genuine successor ownership succeeds; cover post-Apply error and unfinished group cleanup; protect borrowed base/publicreaders and original final candidate/coordinator transfer. Retain exact original operand/debt on failed Abort before clearing/refunding/freeing dependencies. No global reader/bank Abort, new registry/lifecycle or size-based inference.",
+  "raw_files": [
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/AGENTS.md.immutable",
+      "sha": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+      "sha256": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+      "bytes": 4696
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/TreeDB_AGENTS.md.immutable",
+      "sha": "13811b724a980dddad76b3e4c12b6403214b8069",
+      "sha256": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+      "bytes": 3046
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/arena.overlay.go",
+      "sha": "4a3e80a4e1dd7346b4334f80c9e08fc21bae4f93",
+      "sha256": "5383803926acf238d9cb9dc7fac9d912d8a3aaa66471bd7fb8ff91e9898dbfa2",
+      "bytes": 39064
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/cow_public_retention_test.overlay.go",
+      "sha": "bf7281eee22351a7f2248200219f56aa40c2e320",
+      "sha256": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40",
+      "bytes": 9580
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/evidence-sha256.json",
+      "sha": "0ddf8132a5704438a5169835dfddc403feb70b57",
+      "sha256": "37089da2828eda23434ce4274d0e433b72ff828f53cb17164a7b00c3f13bad53",
+      "bytes": 1719
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/go-env.json",
+      "sha": "54a494be65e3f3d2cbaabcb7eed3fedeaa96b033",
+      "sha256": "2aaa64bed61ce5195e57f953e3946817e3863217853fc2f20e620ceb29bb3e33",
+      "bytes": 1375
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/inquiry-result.json",
+      "sha": "d66364deb3ca1987297716195becccc4ae3e83d6",
+      "sha256": "9f625490c771f8ef7e6035b424b974750795d1ecad2e9579f53fa88e2b0b5d36",
+      "bytes": 18322
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/original-primary-identities.filtered.log",
+      "sha": "4dcc9bccb01dda2bf2fdc88bee1f23404ae9e9bf",
+      "sha256": "27ad95a0ea0612b837fa129b93f7bb04352d5447c453ac1b3047bddb0679136c",
+      "bytes": 33164
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/original-primary-identities.json",
+      "sha": "8ac769b5e4ae37ba80ae44a3d78ad1272340eaad",
+      "sha256": "243e71a75084ea53e6274ed5b0ecf67569f51001da4624dba8b6fe8a6f06410b",
+      "bytes": 69108
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/overlay.json",
+      "sha": "99b4748de102d76a72f468b11c042d4cc91054ba",
+      "sha256": "01ce1a594ffb059e83d8121eab493cf78b777dda02aa9c1ad913b8810e03a016",
+      "bytes": 1088
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/owner.overlay.go",
+      "sha": "c45999db3a1fc798285db2728fafc0159d0869e9",
+      "sha256": "ad481dfa9f2a4582c3a2d635d74b9a1c25e1ba4ad1300e3dbb527cb9a64bc905",
+      "bytes": 11649
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/preparation.json",
+      "sha": "bf855a328396465d787f60ad75498eb49fb05f10",
+      "sha256": "46dddaf4ef5314a90dec0a186235eb869d2a131fb3f2f9807aba27c939c01ed1",
+      "bytes": 2442
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/primary_transaction_construction_v6.overlay.go",
+      "sha": "ee1b9fa103c125e3a48d7388f84b84941b32dcb3",
+      "sha256": "6ae1bac90bcf5c88295ae2af6a49b33e53f2fa2a49ba81f505302ca559f1893a",
+      "bytes": 17947
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/read_root_v6.overlay.go",
+      "sha": "fcf8aeefb744616563ad2d5e849c94287310f93b",
+      "sha256": "1028647f376ff1e5ccb770390cc4cd84627935e5a49dd10f7e25501d5b462560",
+      "bytes": 13679
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/run-exit.json",
+      "sha": "d1051deca9d3304f79c0a7bce26cb85db9b6695b",
+      "sha256": "0afba3ff75da55061fb0cf391c19e9b8e04255de67970a4ecd189b0863bdebfc",
+      "bytes": 310
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/run-start.json",
+      "sha": "11e458d157a66a7bc060ab7880276fdcfb52b055",
+      "sha256": "359171f281c5f4c47ce4455f7aa2532d0f8dc70fca108ca75d97a74420fc2a98",
+      "bytes": 1881
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/source-blob-bindings.json",
+      "sha": "cd70e6deed7763588e4ea234d2be719d324ac215",
+      "sha256": "55c9c72b1c7ded443e91a8b75ebc3e7448364401f513f9ec0cba20f5a53a6b9a",
+      "bytes": 1546
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/stderr.log",
+      "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "docs/agent-execution/mvcc-4871-20261008/evidence/cow-constructor-identities-c014/stdout.log",
+      "sha": "e8e4a5fc1290c0ebba1ea6f3fd0cafe7620fe728",
+      "sha256": "fdb85c23858fd6bdec7f7f509c38307826343d10fd7bb49efa0847c163ea2de0",
+      "bytes": 103333
+    }
+  ],
+  "owner": "/root",
+  "next_action": "Route narrow private build group repair to sole writer after coherent value/leaf freeze; meaningful original public zero-drain and cleanup failure evidence still required."
+}

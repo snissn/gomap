@@ -1,0 +1,47 @@
+panic: test timed out after 5s
+	running tests:
+		TestOriginalManagerPhysicalCaptureConstructorReentersClose (5s)
+
+goroutine 17 [running]:
+testing.(*M).startAlarm.func1()
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2802 +0x354
+created by time.goFunc
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/time/sleep.go:215 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x114d8b194008, {0x8cb651?, 0x0?}, 0x8d5788)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2109 +0x4e5
+testing.runTests.func1(0x114d8b194008)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2585 +0x3e
+testing.tRunner(0x114d8b194008, 0x114d8b189bb0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+testing.runTests({0x8ae294, 0x17}, {0x8c389d, 0x30}, 0x114d8b0e0060, {0xc13f00, 0x177, 0x177}, {0xc2abee7f6fd3a007, 0x12a0c0f2d, ...})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2583 +0x505
+testing.(*M).Run(0x114d8b148280)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2443 +0x6ac
+go.uber.org/goleak.VerifyTestMain({0x8dbf28?, 0x114d8b148280?}, {0x0, 0x0, 0x0})
+	/home/mikers/go/pkg/mod/go.uber.org/goleak@v1.3.0/testmain.go:53 +0x5a
+github.com/snissn/gomap/TreeDB/internal/valuelog.TestMain(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/leak_test.go:10
+main.main()
+	_testmain.go:870 +0xb7
+
+goroutine 7 [sync.RWMutex.Lock]:
+sync.runtime_SemacquireRWMutex(0x114d8b18b968?, 0x6b?, 0x114d8b1ae1c0?)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/runtime/sema.go:105 +0x25
+sync.(*RWMutex).Lock(0x13?)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/sync/rwmutex.go:155 +0x6b
+github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).Close(0x114d8b1704e0)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/manager.go:1940 +0x3f
+github.com/snissn/gomap/TreeDB/internal/valuelog.TestOriginalManagerPhysicalCaptureConstructorReentersClose.func1({0x114d8b1ae150, {0x0, 0x0}, 0x0, {0x0, 0x0}, {0x0, 0x0}, {0x0, 0x0}, ...})
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/original_cleanup_test.go:172 +0x4b
+github.com/snissn/gomap/TreeDB/internal/valuelog.(*Manager).StableExistingPhysicalResourceToken(_, _, {0x114d8b1ae150, {0x0, 0x0}, 0x0, {0x0, 0x0}, {0x0, 0x0}, ...}, ...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/stable_resource.go:566 +0x2c6
+github.com/snissn/gomap/TreeDB/internal/valuelog.TestOriginalManagerPhysicalCaptureConstructorReentersClose(0x114d8b194248)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/original_cleanup_test.go:168 +0x1bd
+testing.tRunner(0x114d8b194248, 0x8d5788)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2101 +0x4c5
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	5.008s
+FAIL

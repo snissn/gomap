@@ -1,0 +1,49 @@
+{
+  "commit": "c014f32e81cf77d2bd6dd6bc99071753567521e0",
+  "original_blob_bindings": {
+    "TreeDB/internal/retainedalloc/owner.go": "4fdfaba0624c259f19e0da3a65db6903a8943dc0",
+    "TreeDB/cow_public_retention_test.go": "c8036d8ac257ecb0e1db72b23aaccfaacf1d7ace",
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": "b92cbc22d37c54814c1d1ac148d4c164aea4038e",
+    "TreeDB/internal/primaryarena/arena.go": "40dfa2e4b3dc4ecc6998a9556ccb8e0cf6b76c4b",
+    "TreeDB/internal/primaryarena/read_root_v6.go": "760a27405aef9125c65824aea88b571f2f633cce",
+    "TreeDB/zipper/primary_directory.go": "47df125e6778f79d5e2738da85dce49e91f4ed6d",
+    "AGENTS.md": "cbe743c72b8ca77734dbeaf004cefedb5b6adcd2",
+    "TreeDB/AGENTS.md": "13811b724a980dddad76b3e4c12b6403214b8069"
+  },
+  "overlay_scope": "read-only existing transaction/bank identity lifecycle and caller frames under original locks, retained owner pending-site and category probes; no ownership/admission/refund/workload/assertion change",
+  "event_fields": {
+    "COW_TXN_ID": [
+      "operation",
+      "transaction_pointer",
+      "arena_pointer",
+      "metadata_owner_pointer",
+      "root_page_id",
+      "root_incarnation",
+      "phase",
+      "owned_construction_metadata_charge",
+      "local_construction_metadata_charge",
+      "construction_present"
+    ],
+    "COW_BANK_ID": [
+      "operation",
+      "arena_pointer",
+      "metadata_owner_pointer",
+      "root_page_id",
+      "root_incarnation",
+      "construction_interface_itab_data_tuple",
+      "refs_before",
+      "refs_after",
+      "bank_metadata_charge"
+    ]
+  },
+  "files_sha256": {
+    "read_root_v6.overlay.go": "1028647f376ff1e5ccb770390cc4cd84627935e5a49dd10f7e25501d5b462560",
+    "primary_transaction_construction_v6.overlay.go": "6ae1bac90bcf5c88295ae2af6a49b33e53f2fa2a49ba81f505302ca559f1893a",
+    "overlay.json": "01ce1a594ffb059e83d8121eab493cf78b777dda02aa9c1ad913b8810e03a016",
+    "owner.overlay.go": "ad481dfa9f2a4582c3a2d635d74b9a1c25e1ba4ad1300e3dbb527cb9a64bc905",
+    "arena.overlay.go": "5383803926acf238d9cb9dc7fac9d912d8a3aaa66471bd7fb8ff91e9898dbfa2",
+    "TreeDB_AGENTS.md.immutable": "1cb6426fe7a764a79f8e97f7e164669232c350fb8ce2e7850558e0b7f42bb854",
+    "AGENTS.md.immutable": "320c5ed8a179e15886cd58832f76d7906f5d76c189500e756f0adb957d6ecf99",
+    "cow_public_retention_test.overlay.go": "95d10642c5671e3a134caa8af1c6187212c564f918646e55339e409f8e416f40"
+  }
+}

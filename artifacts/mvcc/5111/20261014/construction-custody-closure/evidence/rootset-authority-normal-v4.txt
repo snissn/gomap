@@ -1,0 +1,15 @@
+--- FAIL: TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources (1.20s)
+    --- FAIL: TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources/phase-5 (0.19s)
+        leaf_generation_pack_publication_test.go:251: created segment 4286578691 remained registered; original failure=leaf generation pack: rewrite leaf refs: vlog-rewrite: post-registration failpoint: leaf pack publication failpoint
+    --- FAIL: TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources/phase-6 (0.24s)
+        leaf_generation_pack_publication_test.go:251: created segment 4286578691 remained registered; original failure=leaf generation pack: rewrite leaf refs: vlog-rewrite: meta write failpoint: leaf pack publication failpoint
+--- FAIL: TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce (0.05s)
+    leaf_generation_pack_stable_prepare_test.go:287: stable resource ownership violation
+--- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityRetainsAndRetries (0.05s)
+    leaf_generation_pack_stable_prepare_test.go:531: Close retrying exact promoted cleanup: original DB physical cleanup failed
+--- FAIL: TestLeafGenerationPackStablePrepareValidationCleanupAmbiguityConcurrentClose (0.05s)
+    leaf_generation_pack_stable_prepare_test.go:623: Close draining retained packed cleanup: original DB physical cleanup failed
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	2.090s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.012s
+FAIL

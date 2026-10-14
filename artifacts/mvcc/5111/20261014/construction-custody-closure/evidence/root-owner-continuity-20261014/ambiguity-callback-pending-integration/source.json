@@ -1,0 +1,37 @@
+{
+  "head": "b5ace51b3f2605f0d03d38bed42d0bb5fccf2dea",
+  "sources": [
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority.go",
+      "bytes": 32617,
+      "sha256": "1c2c89d152681fc45098f36aaef78ccd5b6511248bb36d4a9a9307bb5f5c51df"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_authority_test.go",
+      "bytes": 40157,
+      "sha256": "ec2e9651a3193c82eaeb837e24ad9d7ada2498c47d6767108b636a587dd10302"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare.go",
+      "bytes": 29624,
+      "sha256": "15aafd7965e395b4ca599397a7676ac005a5eb97cf6ebc04c23b01c9d1fc0f4a"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_stable_prepare_test.go",
+      "bytes": 33317,
+      "sha256": "2b2d0e67277aa4bb940deb85b81b0e9f7a40a7abcfbd8d3e03a49b0270335843"
+    },
+    {
+      "path": "TreeDB/db/leaf_generation_pack_rewrite.go",
+      "bytes": 68611,
+      "sha256": "3328be1e80f6728f15c71695b91132342d8d03db13333979cbe74cc4aff63ec4"
+    },
+    {
+      "path": "TreeDB/docs/design/ordinary-primary-allocation-5111.md",
+      "bytes": 30936,
+      "sha256": "f5e0beba70fd78258084c83e3e8e38ea8a4fa5b32931cfa4bcafb979a3334a24"
+    }
+  ],
+  "status": "source preparation; compile pending native tryRegisterCaptureTeardownOwnedHook import; not qualified",
+  "callback_contract": "same registry array; separately preadmitted method environment; physical handles refund separately; fixed containing/environment completion charge refunded by DB after callback aliases clear on successful return; error retains original authority and charge"
+}

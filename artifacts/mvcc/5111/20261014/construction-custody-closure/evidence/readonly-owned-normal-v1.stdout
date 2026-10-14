@@ -1,0 +1,14 @@
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/success
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/preadmission-refusal
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/extent-changed
+=== RUN   TestReadOnlyOwnedMetadataAdmissionAndLifetime/actual-close-refusal
+--- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/success (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/preadmission-refusal (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/extent-changed (0.00s)
+    --- PASS: TestReadOnlyOwnedMetadataAdmissionAndLifetime/actual-close-refusal (0.00s)
+=== RUN   TestReadOnlyOriginalPathRetainsPartialCleanupInError
+--- PASS: TestReadOnlyOriginalPathRetainsPartialCleanupInError (0.00s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/pager	0.001s

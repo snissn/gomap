@@ -1,0 +1,79 @@
+=== RUN   TestProjectRebuiltOlderRootDurableResourcesPreservesExactExternalClosure
+--- PASS: TestProjectRebuiltOlderRootDurableResourcesPreservesExactExternalClosure (0.03s)
+=== RUN   TestProjectRebuiltOlderRootDurableResourcesMatchesExactScan
+--- PASS: TestProjectRebuiltOlderRootDurableResourcesMatchesExactScan (0.11s)
+=== RUN   TestProjectRebuiltOlderRootDurableResourcesRejectsUnsupportedPolicy
+--- PASS: TestProjectRebuiltOlderRootDurableResourcesRejectsUnsupportedPolicy (0.01s)
+=== RUN   TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdentity
+--- PASS: TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdentity (0.01s)
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/exact-binding
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/generation-mismatch
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/ambiguous-identity
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/missing-root-closure
+--- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure (0.35s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/exact-binding (0.09s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/generation-mismatch (0.09s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/ambiguous-identity (0.09s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/missing-root-closure (0.09s)
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/exact-binding
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/generation-mismatch
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/ambiguous-identity
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/missing-root-closure
+--- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure (0.54s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/exact-binding (0.12s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/generation-mismatch (0.15s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/ambiguous-identity (0.14s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/missing-root-closure (0.13s)
+=== RUN   TestVacuumIndexOnlineRecapturesVisibleClosureBeforeCurrentRootProjection
+--- PASS: TestVacuumIndexOnlineRecapturesVisibleClosureBeforeCurrentRootProjection (0.28s)
+=== RUN   TestVacuumIndexOnlineFallsBackAfterSameSegmentOuterLeafReplay
+--- PASS: TestVacuumIndexOnlineFallsBackAfterSameSegmentOuterLeafReplay (0.13s)
+=== RUN   TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles
+    leaf_generation_pack_authority_test.go:664: Close DB: original DB physical cleanup failed
+--- FAIL: TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles (0.19s)
+=== RUN   TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity
+    leaf_generation_pack_authority_test.go:727: teardown retained staging root: <nil>
+--- FAIL: TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity (0.01s)
+=== RUN   TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates
+    leaf_generation_pack_publication_test.go:777: packed authority pins after close=1 want 0
+--- FAIL: TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates (0.19s)
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance/success
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance/before_acceptance
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance/accepted_error
+    leaf_generation_pack_test.go:67: close: original DB physical cleanup failed
+--- FAIL: TestLeafGenerationPackRelocationFollowsAcceptance (0.49s)
+    --- PASS: TestLeafGenerationPackRelocationFollowsAcceptance/success (0.16s)
+    --- PASS: TestLeafGenerationPackRelocationFollowsAcceptance/before_acceptance (0.16s)
+    --- FAIL: TestLeafGenerationPackRelocationFollowsAcceptance/accepted_error (0.17s)
+=== RUN   TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate
+    leaf_generation_pack_test.go:324: retained candidate manifest revision=4 manifest=false pack=false entries=[]
+    leaf_generation_pack_test.go:67: close: original DB physical cleanup failed
+--- FAIL: TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate (0.20s)
+=== RUN   TestR1RebuiltCurrentRootDropsUnreachablePackedDependency
+    r1_rebuilt_pack_projection_test.go:72: ordinary current vacuum: {AttemptID:2 Phase:rebuild TotalDuration:26.353783ms UserTreeDuration:1.82µs SystemReserveDuration:730ns CollectionBasisDuration:2.48µs PreflushDuration:420ns CutoverDuration:12.005457ms SystemTreeDuration:5.18µs FinalPagerSyncDuration:14.169025ms SwapPublishDuration:11.642502ms MaxWriterPause:26.174852ms PrecloneTraversalPages:0 RecloneTraversalPages:0 CutoverCloneTraversalPages:0 DirtyDescriptors:0 UserTailMutations:0 UserTailPointMutations:0 UserTailRangeMutations:0 DeferredCutovers:0 ConcurrentMutationAborts:0 RecoverableSetCaptureDuration:35.79µs RecoverableSetCaptureAttempts:1 RecoverableSetCaptures:1 RecoverableSetRecaptureAttempts:0 RecoverableSetRecaptures:0 RecoverableRoots:2 OlderRootRebuildDuration:57.52µs OlderRootRebuilds:1 OlderRootDurableResourceCaptureDuration:6.31µs OlderRootDurableResourceCaptures:1 OlderRootDurableResourceDescriptors:3 OlderRootDurableResourceBytes:6501 OlderRootExactCandidateScans:0 OlderRootProjections:1 OlderRootProjectionFallbacks:0 OlderRootProjectionFallbackReason: OlderRootReusedNonValueLogDescriptors:0 OlderRootUniqueExternalSegments:0 DurableResourceCaptureDuration:123.962µs DurableResourceCaptures:1 DurableResourceDescriptors:2 DurableResourceBytes:5035 DurableResourceExactCandidateScans:1 DurableResourceProjections:0 DurableResourceProjectionFallbacks:1 DurableResourceProjectionFallbackReason:current-packed-reachability OlderRootRebuiltPages:2 ReplacementPagerPages:16 ExactCandidateScan:true ReusedNonValueLogDescriptors:1 UniqueExternalSegments:1 WorkCompleted:true Canceled:false}
+    r1_rebuilt_pack_projection_test.go:127: after retained member release: {GenerationsTotal:2 GenerationsWritable:1 GenerationsLive:0 GenerationsRetiring:0 GenerationsEligible:0 GenerationsDeleted:1 FilesDeleted:1 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:3 ManifestRevisionsProtected:2 ManifestRevisionsEligible:1 ManifestRevisionsDeleted:1 ManifestRevisionBytesEligible:569 ManifestRevisionBytesDeleted:569}
+--- PASS: TestR1RebuiltCurrentRootDropsUnreachablePackedDependency (0.46s)
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id
+--- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority (0.23s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id (0.00s)
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility/no_exact_authority
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_current
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_older
+--- PASS: TestPrepareDurableRootManifestResourcesCompatibility (0.05s)
+    --- PASS: TestPrepareDurableRootManifestResourcesCompatibility/no_exact_authority (0.01s)
+    --- PASS: TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_current (0.02s)
+    --- PASS: TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_older (0.02s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	3.322s
+FAIL

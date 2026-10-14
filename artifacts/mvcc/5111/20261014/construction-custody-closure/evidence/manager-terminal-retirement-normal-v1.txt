@@ -1,0 +1,20 @@
+--- FAIL: TestManagerDirectRetirementQueuedReplacement (0.05s)
+    --- FAIL: TestManagerDirectRetirementQueuedReplacement/RemoveSegment (0.02s)
+        direct_retirement_concurrency_test.go:116: queued completion changed canonical successor: open : no such file or directory
+    --- FAIL: TestManagerDirectRetirementQueuedReplacement/RemoveSegmentExpectedIdentity (0.01s)
+        direct_retirement_concurrency_test.go:116: queued completion changed canonical successor: open : no such file or directory
+    --- FAIL: TestManagerDirectRetirementQueuedReplacement/RemoveSegmentIfUnpinned (0.01s)
+        direct_retirement_concurrency_test.go:116: queued completion changed canonical successor: open : no such file or directory
+    --- FAIL: TestManagerDirectRetirementQueuedReplacement/RemoveSegmentForce (0.01s)
+        direct_retirement_concurrency_test.go:116: queued completion changed canonical successor: open : no such file or directory
+--- FAIL: TestManagerDirectRetirementSamePointerFinalization (0.02s)
+    --- FAIL: TestManagerDirectRetirementSamePointerFinalization/nil-registry (0.01s)
+        direct_retirement_test.go:209: old finalization changed replacement bytes or physical identity: open : no such file or directory
+    --- FAIL: TestManagerDirectRetirementSamePointerFinalization/registry (0.01s)
+        direct_retirement_test.go:209: old finalization changed replacement bytes or physical identity: open : no such file or directory
+--- FAIL: TestManagerDirectRetirementJoinsExternalClose (0.11s)
+    --- FAIL: TestManagerDirectRetirementJoinsExternalClose/EvictSegment (0.06s)
+        direct_retirement_test.go:468: stable resource conflict: retirement physical parent changed after Close
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.984s
+FAIL

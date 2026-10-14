@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/durable_root_runtime.go:144:26: undefined: db
+TreeDB/db/durable_root_runtime.go:151:24: undefined: db
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

@@ -1,0 +1,9 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/durable_root_runtime.go:752:39: undefined: retErr
+TreeDB/db/durable_root_projection_test.go:279:6: multiple-value rebuiltOlderRootIndexAuthorityV1(resources, identity, generation) (value of type (valid bool, retErr error)) in single-value context
+TreeDB/db/durable_root_projection_test.go:282:5: multiple-value rebuiltOlderRootIndexAuthorityV1(resources, identity, generation + 1) (value of type (valid bool, retErr error)) in single-value context
+TreeDB/db/durable_root_projection_test.go:294:5: multiple-value rebuiltOlderRootIndexAuthorityV1(resources, otherIdentity, generation) (value of type (valid bool, retErr error)) in single-value context
+TreeDB/db/durable_root_projection_test.go:301:5: multiple-value rebuiltOlderRootIndexAuthorityV1(missingNamespace, mustStableResourceDescriptors(t, missingNamespace)[0].Identity(), 1) (value of type (valid bool, retErr error)) in single-value context
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.010s
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

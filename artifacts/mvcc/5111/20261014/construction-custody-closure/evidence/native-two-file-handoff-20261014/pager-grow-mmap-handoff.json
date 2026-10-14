@@ -1,0 +1,26 @@
+{
+  "head": "725c31dd2711467514a91df9847e2e303b719afd",
+  "paths": [
+    {
+      "path": "TreeDB/pager/grow_work.go",
+      "sha256": "185dd0ffae5ad0b033ab47e11c2c6d1c62c3b1f580407c346e893b0cf642aa60",
+      "bytes": 17502,
+      "snapshot": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/native-two-file-handoff-20261014/pager-grow-mmap/TreeDB/pager/grow_work.go",
+      "release": "native sole writer; ordinary no further writes",
+      "contract": "SAME original Pager growth/mapping authority and retained physical byte charge; checked one-time actual cleanup outcome, unresolved aliases/debt retained; no admission/refund waiver; Windows ordinary behavior unchanged"
+    },
+    {
+      "path": "TreeDB/pager/mmap_unix.go",
+      "sha256": "b82965789fa53d71a61cdf46b308154cb886ad0c7861a60de1eed8aaeb015c10",
+      "bytes": 827,
+      "snapshot": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/native-two-file-handoff-20261014/pager-grow-mmap/TreeDB/pager/mmap_unix.go",
+      "release": "native sole writer; ordinary no further writes",
+      "contract": "SAME original Pager growth/mapping authority and retained physical byte charge; checked one-time actual cleanup outcome, unresolved aliases/debt retained; no admission/refund waiver; Windows ordinary behavior unchanged"
+    }
+  ],
+  "read_only_companions": [
+    "TreeDB/pager/pager.go already native-owned",
+    "TreeDB/internal/retainedalloc owner APIs unchanged"
+  ],
+  "no_additional_constructor_companion_required_for_source_snapshot": true
+}

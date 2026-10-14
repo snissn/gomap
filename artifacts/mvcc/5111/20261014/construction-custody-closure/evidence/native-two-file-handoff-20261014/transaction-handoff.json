@@ -1,0 +1,9 @@
+{
+  "bytes": 21286,
+  "import_closure": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/review-window-source-20261014T092341Z/checkpoint.json",
+  "import_closure_sha256": "772cb514a6ff93326f0db1793275a2c8155fa96b4d345a37145892b66e775578",
+  "matches_review_window": true,
+  "ownership": "Released to native via root now; no ordinary writes. SAME original first physical cleanup outcome / abort final completion ABI remains mandatory.",
+  "path": "TreeDB/internal/rootpublication/durable_root_transaction.go",
+  "sha256": "9f8bd96a301f91cca6224eebf08adcb58777ea1be1876644e68682f55182ad9e"
+}

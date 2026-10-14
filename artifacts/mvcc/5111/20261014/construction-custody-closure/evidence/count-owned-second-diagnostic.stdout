@@ -1,0 +1,32 @@
+=== RUN   TestValueLogRefTracker_PreservesFastPathForUnchangedCollectionDescriptors
+--- PASS: TestValueLogRefTracker_PreservesFastPathForUnchangedCollectionDescriptors (0.06s)
+=== RUN   TestValueLogRefTracker_PreservesFastPathForCollectionDescriptorRepresentationChange
+--- PASS: TestValueLogRefTracker_PreservesFastPathForCollectionDescriptorRepresentationChange (0.07s)
+=== RUN   TestValueLogRefTrackerApplyPathAvoidsPointLookups
+--- PASS: TestValueLogRefTrackerApplyPathAvoidsPointLookups (0.07s)
+=== RUN   TestValueLogRefTrackerPreservesSharedPointerMultiplicity
+--- PASS: TestValueLogRefTrackerPreservesSharedPointerMultiplicity (0.06s)
+=== RUN   TestValueLogRefDelta_InlineThenMapPromotion
+--- PASS: TestValueLogRefDelta_InlineThenMapPromotion (0.00s)
+=== RUN   TestValueLogRefDelta_AddCancelsToZero
+--- PASS: TestValueLogRefDelta_AddCancelsToZero (0.00s)
+=== RUN   TestValueLogRefDelta_MergePreservesPositiveAppendAccounting
+--- PASS: TestValueLogRefDelta_MergePreservesPositiveAppendAccounting (0.00s)
+=== RUN   TestValueLogRefTracker_OuterLeavesRebuildsStaleMetadata
+--- PASS: TestValueLogRefTracker_OuterLeavesRebuildsStaleMetadata (0.05s)
+=== RUN   TestValueLogRefTracker_GCReplaceDoesNotRegressConcurrentAdvance
+--- PASS: TestValueLogRefTracker_GCReplaceDoesNotRegressConcurrentAdvance (0.00s)
+=== RUN   TestValueLogRefTracker_GCReplaceRepairsUnchangedStaleAheadState
+--- PASS: TestValueLogRefTracker_GCReplaceRepairsUnchangedStaleAheadState (0.00s)
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY
+--- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation (0.25s)
+    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA (0.12s)
+    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY (0.13s)
+=== RUN   TestValueLogRefTrackerSameSequencePhysicalReplacement
+--- PASS: TestValueLogRefTrackerSameSequencePhysicalReplacement (0.08s)
+=== RUN   TestValueLogRefCacheFormatBindsPhysicalPair
+--- PASS: TestValueLogRefCacheFormatBindsPhysicalPair (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.661s

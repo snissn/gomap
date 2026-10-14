@@ -1,0 +1,5 @@
+--- FAIL: TestOriginalRecoverySelectorPhysicalRefusalCannotAcceptAnotherSlot (0.00s)
+    primary_runtime_cleanup_test.go:139: physical refusal became fallback success at commit 1 (older 1): <nil>
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.003s
+FAIL

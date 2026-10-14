@@ -1,0 +1,52 @@
+=== RUN   TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles
+--- PASS: TestLeafGenerationPackBeforePromotionReboundPreservesBothSourceFiles (0.22s)
+=== RUN   TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity
+--- PASS: TestLeafGenerationPackPromotionAuthorityRetainsPostMutationAmbiguity (0.01s)
+=== RUN   TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion
+=== RUN   TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion/refuse=false
+=== RUN   TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion/refuse=true
+--- PASS: TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion (0.01s)
+    --- PASS: TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion/refuse=false (0.01s)
+    --- PASS: TestLeafGenerationPackRecoveryCallbackAdmissionAndCompletion/refuse=true (0.01s)
+=== RUN   TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates
+    leaf_generation_pack_publication_test.go:779: cleanup outcome type=*errors.joinError ownership=false conflict=false closed=false recovery=true
+    original_cleanup_diagnostic_test.go:27: cleanup depth=0 type=*errors.joinError cause=drain root publication: root publication recovery required
+        treedb: sync meta failpoint
+        collectionwal: recovery required
+        stop root publication: root publication stopped before debt drained
+    original_cleanup_diagnostic_test.go:27: cleanup depth=1 type=*errors.joinError cause=drain root publication: root publication recovery required
+        treedb: sync meta failpoint
+        collectionwal: recovery required
+        stop root publication: root publication stopped before debt drained
+    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=drain root publication: root publication recovery required
+        treedb: sync meta failpoint
+        collectionwal: recovery required
+    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.joinError cause=root publication recovery required
+        treedb: sync meta failpoint
+        collectionwal: recovery required
+    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.joinError cause=root publication recovery required
+        treedb: sync meta failpoint
+    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=root publication recovery required
+    original_cleanup_diagnostic_test.go:27: cleanup depth=5 type=*errors.errorString cause=treedb: sync meta failpoint
+    original_cleanup_diagnostic_test.go:27: cleanup depth=4 type=*errors.errorString cause=collectionwal: recovery required
+    original_cleanup_diagnostic_test.go:27: cleanup depth=2 type=*fmt.wrapError cause=stop root publication: root publication stopped before debt drained
+    original_cleanup_diagnostic_test.go:27: cleanup depth=3 type=*errors.errorString cause=root publication stopped before debt drained
+--- PASS: TestLeafGenerationPack_MetaSyncFailurePoisonsAndRetainsCandidates (0.29s)
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance/success
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance/before_acceptance
+=== RUN   TestLeafGenerationPackRelocationFollowsAcceptance/accepted_error
+--- PASS: TestLeafGenerationPackRelocationFollowsAcceptance (0.57s)
+    --- PASS: TestLeafGenerationPackRelocationFollowsAcceptance/success (0.19s)
+    --- PASS: TestLeafGenerationPackRelocationFollowsAcceptance/before_acceptance (0.19s)
+    --- PASS: TestLeafGenerationPackRelocationFollowsAcceptance/accepted_error (0.18s)
+=== RUN   TestLeafGenerationPackPreparedCleanupConcurrentCompletion
+=== RUN   TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Release
+=== RUN   TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Take
+--- PASS: TestLeafGenerationPackPreparedCleanupConcurrentCompletion (0.23s)
+    --- PASS: TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Release (0.12s)
+    --- PASS: TestLeafGenerationPackPreparedCleanupConcurrentCompletion/Take (0.11s)
+=== RUN   TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate
+--- PASS: TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate (0.23s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	2.582s

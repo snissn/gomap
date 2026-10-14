@@ -1,0 +1,38 @@
+--- FAIL: TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery (0.15s)
+    --- FAIL: TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery/ready-create (0.06s)
+panic: runtime error: invalid memory address or nil pointer dereference [recovered, repanicked]
+[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0xba90cf]
+
+goroutine 1129 [running]:
+testing.tRunner.func1.2({0x1b07d20, 0x2ce7410})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:1974 +0x232
+testing.tRunner.func1()
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:1977 +0x349
+panic({0x1b07d20?, 0x2ce7410?})
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/runtime/panic.go:860 +0x13a
+github.com/snissn/gomap/TreeDB/internal/primaryarena.(*Arena).Drop(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/primaryarena/arena.go:637
+github.com/snissn/gomap/TreeDB/db.releasePrimaryRuntimeV5(0x0, 0x1bdc70e8f008)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/original_primary_runtime_cleanup.go:42 +0x16f
+github.com/snissn/gomap/TreeDB/db.(*DB).releaseOriginalPrimaryRuntimeV5(0x1bdc7092a008, 0x1bdc70fae768?, 0x0?)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/original_primary_runtime_cleanup.go:143 +0x1e
+github.com/snissn/gomap/TreeDB/db.(*DB).vacuumIndexOnlineRebuildV1.func3()
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/vacuum_online.go:610 +0x45
+github.com/snissn/gomap/TreeDB/db.(*DB).vacuumIndexOnlineRebuildV1(0x1bdc7092a008, {0x1e04fa8?, 0x2e029e0?}, 0x0, {0x0?, 0x0?}, 0x1bdc705f5008, 0x1bdc708be908, {0xc2abe60b8344dc40, 0x29c588c99, ...}, ...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/vacuum_online.go:1823 +0x7711
+github.com/snissn/gomap/TreeDB/db.(*DB).vacuumIndexOnlineProductionV1(0x1bdc7092a008, {0x1e04fa8?, 0x2e029e0?}, 0x0?, 0x1bdc708beba8)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/vacuum_online.go:492 +0x550
+github.com/snissn/gomap/TreeDB/db.(*DB).vacuumIndexOnlineWithStats(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/vacuum_online.go:433
+github.com/snissn/gomap/TreeDB/db.(*DB).vacuumIndexOnline(0x1bdc70676ed0?, {0x1e04fa8?, 0x2e029e0?}, 0x0?)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/vacuum_online.go:420 +0x59
+github.com/snissn/gomap/TreeDB/db.(*DB).VacuumIndexOnline(...)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/vacuum_online.go:416
+github.com/snissn/gomap/TreeDB/db.TestPrimaryVacuumCutoverFaultsPreserveCompleteRecovery.func1(0x1bdc7063e248)
+	/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/primary_vacuum_v5_test.go:318 +0x391
+testing.tRunner(0x1bdc7063e248, 0x1bdc706f40f0)
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2036 +0xea
+created by testing.(*T).Run in goroutine 1138
+	/home/mikers/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.linux-amd64/src/testing/testing.go:2101 +0x4c5
+FAIL	github.com/snissn/gomap/TreeDB/db	11.234s
+FAIL

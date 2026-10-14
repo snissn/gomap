@@ -1,0 +1,13 @@
+--- FAIL: TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources (1.16s)
+    --- FAIL: TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources/phase-5 (0.21s)
+        leaf_generation_pack_publication_test.go:251: created segment 4286578691 remained registered
+    --- FAIL: TestLeafGenerationPack_PreMetaFailureMatrixCleansPrivateResources/phase-6 (0.19s)
+        leaf_generation_pack_publication_test.go:251: created segment 4286578691 remained registered
+--- FAIL: TestLeafGenerationPack_FinalizeFailpointCleansCreatedSegments (0.19s)
+    leaf_generation_pack_test.go:243: bootstrap file count=3, want 2
+--- FAIL: TestLeafGenerationPack_WriteMetaFailpointRetainsExactRetryCandidate (0.19s)
+    leaf_generation_pack_test.go:324: retained candidate manifest revision=4 manifest=false pack=false entries=[]
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	1.924s
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.004s
+FAIL

@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/durable_root_runtime.go:3048:14: undefined: primaryarena
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

@@ -1,0 +1,7 @@
+{
+  "head": "725c31dd2711467514a91df9847e2e303b719afd",
+  "path": "TreeDB/pager/primary_read_root_v6.go",
+  "sha256": "a7c80f022d3e8b6cca67ff5debdb369fa40de4911c7fceb3a6c0b36dffe23ed8",
+  "bytes": 6454,
+  "release": "native sole writer; preserve SAME mapping descriptor sizing/admission and actual root cleanup phases"
+}

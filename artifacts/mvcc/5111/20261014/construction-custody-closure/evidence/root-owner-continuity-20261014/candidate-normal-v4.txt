@@ -1,0 +1,20 @@
+=== RUN   TestCaptureDurableRootUsesSelectedPredecessorOwner
+--- PASS: TestCaptureDurableRootUsesSelectedPredecessorOwner (0.05s)
+=== RUN   TestCaptureDurableRootErrorDisposesOriginalResultAndRetainsPhysicalRefusal
+--- PASS: TestCaptureDurableRootErrorDisposesOriginalResultAndRetainsPhysicalRefusal (0.03s)
+=== RUN   TestLeafGenerationPack_ChangedOverlappingRootDiscardsCopyAndRetries
+--- PASS: TestLeafGenerationPack_ChangedOverlappingRootDiscardsCopyAndRetries (0.75s)
+=== RUN   TestLeafGenerationPack_SourcePinnedUntilPublishThenGCReadable
+--- PASS: TestLeafGenerationPack_SourcePinnedUntilPublishThenGCReadable (0.40s)
+=== RUN   TestLeafGenerationPack_CheckpointReopenPreservesLeafRefsAndValuePointers
+--- PASS: TestLeafGenerationPack_CheckpointReopenPreservesLeafRefsAndValuePointers (0.29s)
+=== RUN   TestLeafGenerationPack_SyncFalseStillDurablyPublishesBeforeGC
+--- PASS: TestLeafGenerationPack_SyncFalseStillDurablyPublishesBeforeGC (0.28s)
+=== RUN   TestLeafGenerationPackRunOnce_MovesSparseGeneration
+--- PASS: TestLeafGenerationPackRunOnce_MovesSparseGeneration (0.28s)
+=== RUN   TestLeafGenerationPack_RewritesCollectionLeafRefRoot
+--- PASS: TestLeafGenerationPack_RewritesCollectionLeafRefRoot (0.26s)
+=== RUN   TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC
+--- PASS: TestLeafGenerationPack_RewritesCollectionInternalRootsBeforeGC (0.25s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	2.628s

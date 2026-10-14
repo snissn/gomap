@@ -1,0 +1,5 @@
+--- FAIL: TestLeafGenerationPackStablePreparedClosureTransfersExactAuthorityOnce (0.05s)
+    leaf_generation_pack_stable_prepare_test.go:287: stable resource ownership violation
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.051s
+FAIL

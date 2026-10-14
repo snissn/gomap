@@ -1,0 +1,8 @@
+--- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB (0.05s)
+    --- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-snapshot (0.03s)
+        snapshot_manager_cleanup_test.go:24: value exceeds inline threshold; use SetPointer
+    --- FAIL: TestOriginalDATAOnlySnapshotLateManagerFailureRetainedByDB/held-active-read (0.03s)
+        snapshot_manager_cleanup_test.go:24: value exceeds inline threshold; use SetPointer
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.057s
+FAIL

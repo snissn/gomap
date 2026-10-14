@@ -1,0 +1,11 @@
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA
+    vlog_ref_incarnation_test.go:92: same-sequence foreign cache accepted without original scan: seq=2 DATA={Platform:linux VolumeID:66306 ObjectID:[2 3 1 0 0 0 0 0 157 157 98 6 0 0 0 0] Generation:0} versus {Platform:linux VolumeID:66306 ObjectID:[2 3 1 0 0 0 0 0 166 157 98 6 0 0 0 0] Generation:0}
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY
+    vlog_ref_incarnation_test.go:92: same-sequence foreign cache accepted without original scan: seq=2 DATA={Platform:linux VolumeID:66306 ObjectID:[2 3 1 0 0 0 0 0 157 157 98 6 0 0 0 0] Generation:0} versus {Platform:linux VolumeID:66306 ObjectID:[2 3 1 0 0 0 0 0 167 157 98 6 0 0 0 0] Generation:0}
+--- FAIL: TestValueLogRefCacheRejectsOtherPhysicalIncarnation (0.23s)
+    --- FAIL: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA (0.11s)
+    --- FAIL: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY (0.12s)
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.237s
+FAIL

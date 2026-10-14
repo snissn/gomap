@@ -1,0 +1,13 @@
+{
+  "production_sha": "7a0ef65bad20694e86edd5869dcd115f0af1643c",
+  "production_tree": "cd5808587e1c11480756f3484a6c94462969ed18",
+  "parent": "b5ace51b3f2605f0d03d38bed42d0bb5fccf2dea",
+  "source_allowlist_sha256": "e07682556a9f045ba4e65680362289e6fa553901757f2d981f7fc6aa05a7a8c7",
+  "source_rows": 152,
+  "subtrees": {
+    "TreeDB": "abb9a2b1a382623e655b324cff6df3cbf77db159",
+    "cmd": "39bc700c1c47842ad6b71f103df839acccbd19cb",
+    "docs": "ff6c426d8e6fcf240f97a7c41f76102e331fdf6c"
+  },
+  "qualification": "UNQUALIFIED construction checkpoint. Full generic native original completion integration and final all19/caller/value/leaf/format/fault/platform/cost/currentCI/independent review pending."
+}

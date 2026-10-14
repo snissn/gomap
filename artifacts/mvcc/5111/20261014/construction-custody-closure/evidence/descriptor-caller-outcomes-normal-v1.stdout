@@ -1,0 +1,5 @@
+# github.com/snissn/gomap/TreeDB/internal/rootpublication
+TreeDB/internal/rootpublication/dependency_directory_remove_v2.go:169:26: undefined: errors
+FAIL	github.com/snissn/gomap/TreeDB/internal/rootpublication [build failed]
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

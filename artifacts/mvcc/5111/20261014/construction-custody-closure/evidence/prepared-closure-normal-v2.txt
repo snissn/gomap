@@ -1,0 +1,4 @@
+# github.com/snissn/gomap/TreeDB/db [github.com/snissn/gomap/TreeDB/db.test]
+TreeDB/db/leaf_generation_manifest_store.go:370:61: unknown field MetadataOwner in struct literal of type rootpublication.StableNamespaceSpec
+FAIL	github.com/snissn/gomap/TreeDB/db [build failed]
+FAIL

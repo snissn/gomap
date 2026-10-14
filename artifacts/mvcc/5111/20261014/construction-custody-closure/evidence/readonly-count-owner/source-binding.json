@@ -1,0 +1,7 @@
+{
+  "head": "725c31dd2711467514a91df9847e2e303b719afd",
+  "before_sha256": "fc044aa47781ec68f9c8a21d9d068b66679433893f306b3cf7c74c8868e41d8f",
+  "head_blob_sha256": "151b4b0eb8dcb7aa25dccf698e4e3cb57ef1808e4a038c2fe8558b3e06552ffc",
+  "diagnostic": "rootset-readonly-normal-v2.txt",
+  "cause": "new collector owner chosen through optional derived tracker; read-only Open deliberately has no tracker; actual DB identity registry is original collector owner"
+}

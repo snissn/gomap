@@ -1,0 +1,13 @@
+--- FAIL: TestOriginalPreparedPackParentCloseRefusalKeepsCustody (0.06s)
+    leaf_generation_prepared_cleanup_test.go:39: ignored original parent Close refusal: Set=true err=<nil>
+--- FAIL: TestOriginalPreparedManifestPhysicalCloseRefusalKeepsCustody (0.06s)
+    leaf_generation_prepared_cleanup_test.go:91: lost actual original manifest cleanup: prior manifest background error
+--- FAIL: TestOriginalPreparedClosureHeaderRefusesBeforeProducerEffects (0.10s)
+    --- FAIL: TestOriginalPreparedClosureHeaderRefusesBeforeProducerEffects/manifest (0.06s)
+        leaf_generation_prepared_cleanup_test.go:134: unadmitted manifest producer: retained metadata capacity exhausted
+            collectionwal: recovery required
+    --- FAIL: TestOriginalPreparedClosureHeaderRefusesBeforeProducerEffects/pack (0.04s)
+        leaf_generation_prepared_cleanup_test.go:145: header refusal reached producer effects or changed capacity: hooks=1 bytes=4832 baseline=4832
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.224s
+FAIL

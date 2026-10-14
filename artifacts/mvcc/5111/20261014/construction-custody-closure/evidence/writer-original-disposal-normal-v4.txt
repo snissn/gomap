@@ -1,0 +1,5 @@
+--- FAIL: TestSelectedStableRotationRetainsPendingAndContainerMetadata (0.01s)
+    stable_pending_successor_supported_test.go:895: exact pending registration and successor metadata escaped admission
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.243s
+FAIL

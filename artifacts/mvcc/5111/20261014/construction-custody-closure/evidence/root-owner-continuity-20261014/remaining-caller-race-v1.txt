@@ -1,0 +1,88 @@
+=== RUN   TestCaptureDurableRootNamespaceScopeCannotBypassAppendFallback
+--- PASS: TestCaptureDurableRootNamespaceScopeCannotBypassAppendFallback (0.03s)
+=== RUN   TestCaptureDurableRootUsesSelectedPredecessorOwner
+--- PASS: TestCaptureDurableRootUsesSelectedPredecessorOwner (0.05s)
+=== RUN   TestCaptureDurableRootErrorDisposesOriginalResultAndRetainsPhysicalRefusal
+--- PASS: TestCaptureDurableRootErrorDisposesOriginalResultAndRetainsPhysicalRefusal (0.03s)
+=== RUN   TestProjectRebuiltOlderRootDurableResourcesPreservesExactExternalClosure
+--- PASS: TestProjectRebuiltOlderRootDurableResourcesPreservesExactExternalClosure (0.03s)
+=== RUN   TestProjectRebuiltOlderRootDurableResourcesMatchesExactScan
+--- PASS: TestProjectRebuiltOlderRootDurableResourcesMatchesExactScan (0.11s)
+=== RUN   TestProjectRebuiltOlderRootDurableResourcesRejectsUnsupportedPolicy
+--- PASS: TestProjectRebuiltOlderRootDurableResourcesRejectsUnsupportedPolicy (0.01s)
+=== RUN   TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdentity
+--- PASS: TestRebuiltOlderRootIndexAuthorityRequiresExactNamespaceGenerationAndIdentity (0.01s)
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/exact-binding
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/generation-mismatch
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/ambiguous-identity
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/missing-root-closure
+--- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure (0.36s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/exact-binding (0.09s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/generation-mismatch (0.09s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/ambiguous-identity (0.09s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessOlderRootClosure/missing-root-closure (0.10s)
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/exact-binding
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/generation-mismatch
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/ambiguous-identity
+=== RUN   TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/missing-root-closure
+--- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure (0.56s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/exact-binding (0.13s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/generation-mismatch (0.15s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/ambiguous-identity (0.14s)
+    --- PASS: TestVacuumIndexOnlineBindsDescriptorlessCurrentRootClosure/missing-root-closure (0.14s)
+=== RUN   TestVacuumIndexOnlineRecapturesVisibleClosureBeforeCurrentRootProjection
+--- PASS: TestVacuumIndexOnlineRecapturesVisibleClosureBeforeCurrentRootProjection (0.31s)
+=== RUN   TestVacuumIndexOnlineFallsBackAfterSameSegmentOuterLeafReplay
+--- PASS: TestVacuumIndexOnlineFallsBackAfterSameSegmentOuterLeafReplay (0.14s)
+=== RUN   TestCaptureDurableRootAppendRequirementsStayMutationLocal4366
+--- PASS: TestCaptureDurableRootAppendRequirementsStayMutationLocal4366 (0.08s)
+=== RUN   TestCaptureDurableRootDistinctSegmentAppendAvoidsExactRequirements4371
+--- PASS: TestCaptureDurableRootDistinctSegmentAppendAvoidsExactRequirements4371 (0.07s)
+=== RUN   TestCaptureDurableRootAppendRequirementsFallbackIsLazyAndOneShot4366
+--- PASS: TestCaptureDurableRootAppendRequirementsFallbackIsLazyAndOneShot4366 (0.03s)
+=== RUN   TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesBaseAndReleasesProducer4366
+--- PASS: TestCaptureDurableRootAppendRequirementsFallbackErrorPreservesBaseAndReleasesProducer4366 (0.02s)
+=== RUN   TestCaptureDurableRootAppendRequirementsUseVisiblePredecessor4366
+--- PASS: TestCaptureDurableRootAppendRequirementsUseVisiblePredecessor4366 (0.02s)
+=== RUN   TestCaptureDurableRootAppendRequirementsProducerMismatchFallsBack4366
+--- PASS: TestCaptureDurableRootAppendRequirementsProducerMismatchFallsBack4366 (0.03s)
+=== RUN   TestCaptureDurableRootAppendRequirementAlreadyRetainedIsIdempotent4366
+--- PASS: TestCaptureDurableRootAppendRequirementAlreadyRetainedIsIdempotent4366 (0.06s)
+=== RUN   TestCaptureDurableRootAppendRequirementDistinctResourceDuplicateFallsBack4366
+--- PASS: TestCaptureDurableRootAppendRequirementDistinctResourceDuplicateFallsBack4366 (0.03s)
+=== RUN   TestCaptureDurableRootAppendMutationDiscardRetryPreservesBase3928
+--- PASS: TestCaptureDurableRootAppendMutationDiscardRetryPreservesBase3928 (0.03s)
+=== RUN   TestCaptureDurableRootDestructiveMutationUsesFullFallback3928
+--- PASS: TestCaptureDurableRootDestructiveMutationUsesFullFallback3928 (0.03s)
+=== RUN   TestCaptureDurableRootMixedProducerFallsBackAndValidates3928
+--- PASS: TestCaptureDurableRootMixedProducerFallsBackAndValidates3928 (0.02s)
+=== RUN   TestCaptureDurableRootAppendMutationOmittedRemovalFallsBack3928
+--- PASS: TestCaptureDurableRootAppendMutationOmittedRemovalFallsBack3928 (0.03s)
+=== RUN   TestCaptureDurableRootEmptyMutationCannotRetainStaleObligation3928
+--- PASS: TestCaptureDurableRootEmptyMutationCannotRetainStaleObligation3928 (0.03s)
+=== RUN   TestR1RebuiltCurrentRootDropsUnreachablePackedDependency
+    r1_rebuilt_pack_projection_test.go:72: ordinary current vacuum: {AttemptID:2 Phase:rebuild TotalDuration:26.633205ms UserTreeDuration:16.741µs SystemReserveDuration:7.58µs CollectionBasisDuration:24.12µs PreflushDuration:2.53µs CutoverDuration:12.299279ms SystemTreeDuration:9.57µs FinalPagerSyncDuration:13.330627ms SwapPublishDuration:9.675063ms MaxWriterPause:25.632166ms PrecloneTraversalPages:0 RecloneTraversalPages:0 CutoverCloneTraversalPages:0 DirtyDescriptors:0 UserTailMutations:0 UserTailPointMutations:0 UserTailRangeMutations:0 DeferredCutovers:0 ConcurrentMutationAborts:0 RecoverableSetCaptureDuration:335.743µs RecoverableSetCaptureAttempts:1 RecoverableSetCaptures:1 RecoverableSetRecaptureAttempts:0 RecoverableSetRecaptures:0 RecoverableRoots:2 OlderRootRebuildDuration:223.642µs OlderRootRebuilds:1 OlderRootDurableResourceCaptureDuration:55.15µs OlderRootDurableResourceCaptures:1 OlderRootDurableResourceDescriptors:3 OlderRootDurableResourceBytes:6501 OlderRootExactCandidateScans:0 OlderRootProjections:1 OlderRootProjectionFallbacks:0 OlderRootProjectionFallbackReason: OlderRootReusedNonValueLogDescriptors:0 OlderRootUniqueExternalSegments:0 DurableResourceCaptureDuration:909.989µs DurableResourceCaptures:1 DurableResourceDescriptors:2 DurableResourceBytes:5035 DurableResourceExactCandidateScans:1 DurableResourceProjections:0 DurableResourceProjectionFallbacks:1 DurableResourceProjectionFallbackReason:current-packed-reachability OlderRootRebuiltPages:2 ReplacementPagerPages:16 ExactCandidateScan:true ReusedNonValueLogDescriptors:1 UniqueExternalSegments:1 WorkCompleted:true Canceled:false}
+    r1_rebuilt_pack_projection_test.go:127: after retained member release: {GenerationsTotal:2 GenerationsWritable:1 GenerationsLive:0 GenerationsRetiring:0 GenerationsEligible:0 GenerationsDeleted:1 FilesDeleted:1 BytesEligible:0 BytesDeleted:0 ManifestRevisionGCUnsupported:false ManifestRevisionsTotal:3 ManifestRevisionsProtected:2 ManifestRevisionsEligible:1 ManifestRevisionsDeleted:1 ManifestRevisionBytesEligible:569 ManifestRevisionBytesDeleted:569}
+--- PASS: TestR1RebuiltCurrentRootDropsUnreachablePackedDependency (0.51s)
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager
+=== RUN   TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id
+--- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority (0.24s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/physical-alias (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/wrong-physical (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/missing-manager (0.00s)
+    --- PASS: TestR1RebuiltPackedCaptureRejectsWrongPhysicalAuthority/malformed-id (0.00s)
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility/no_exact_authority
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_current
+=== RUN   TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_older
+--- PASS: TestPrepareDurableRootManifestResourcesCompatibility (0.05s)
+    --- PASS: TestPrepareDurableRootManifestResourcesCompatibility/no_exact_authority (0.01s)
+    --- PASS: TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_current (0.02s)
+    --- PASS: TestPrepareDurableRootManifestResourcesCompatibility/reject_exact_older (0.02s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	4.132s

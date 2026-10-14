@@ -1,0 +1,7 @@
+--- FAIL: TestOriginalPreparedManifestAbandonActualCloseRefusalKeepsCustody (0.09s)
+    leaf_generation_prepared_cleanup_test.go:204: ignored actual restored-file last Close: injected=true err=<nil>
+--- FAIL: TestOriginalPreparedManifestAbandonAdmissionRefusesBeforeRestore (0.08s)
+    leaf_generation_prepared_cleanup_test.go:270: unadmitted abandonment changed namespace/debt: err=<nil> mutations=3 bytes=4832 baseline=5680
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.169s
+FAIL

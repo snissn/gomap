@@ -1,0 +1,9 @@
+--- FAIL: TestRecoverableRootSetOriginalContainingAdmissionRefusal (0.04s)
+    original_rootset_authority_completion_test.go:73: original containing refusal: set=0x80629e07008 retry=false err=<nil>
+--- FAIL: TestLeafGenerationPackAuthorityOriginalCloseRefusalRetainsCharge (0.02s)
+    original_rootset_authority_completion_test.go:106: original final-Close cause not DB-rooted: <nil>
+--- FAIL: TestRecoverableRootSetCaptureBackingRefundsAfterOriginalCompletion (0.03s)
+    original_rootset_authority_completion_test.go:136: actual capture retained no producer capacity
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.100s
+FAIL

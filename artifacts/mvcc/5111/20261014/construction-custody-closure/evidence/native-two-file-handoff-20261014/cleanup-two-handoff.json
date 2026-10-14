@@ -1,0 +1,17 @@
+{
+  "contract": "SAME File/Manager first-error, independently consumed edges, retained original namespace lease/parent/mmap/file until actual success; exact authorized unlink distinction, terminal exclusion/read-drain vs actual last physical disposal, no forced refund/retry; DB-rooted late DATA-only receipt and sibling custody, callbacks/notification/error traversal outside Manager/File locks. Enlarged concrete containing admissions before birth/effects; ordinary unlimited methods drive same phases.",
+  "files": [
+    {
+      "bytes": 7812,
+      "path": "TreeDB/internal/valuelog/original_cleanup.go",
+      "sha256": "ddef7b8f901f7a2edcd6318f95e04fdf319f3be07a7362ec3ea13d3c4429cbf0"
+    },
+    {
+      "bytes": 90806,
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "sha256": "c8bfb3ca9453bb39a423a5cb9cac2ad91cc4541db2d13a8b85a2989880b86eb5"
+    }
+  ],
+  "ordinaryConflict": "No current manifest/pack changes require these files; explicitly release both for native-only existing-file writer.",
+  "source": "exact120checkpointaf0a5a326fea2ee89d8524bf308eb90a9f48543fed9c43375856e600af4488a2"
+}

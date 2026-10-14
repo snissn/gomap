@@ -1,0 +1,8 @@
+ok  	github.com/snissn/gomap/TreeDB/internal/rootpublication	0.004s
+--- FAIL: TestCaptureDictionaryResourcesReturnsExactTransitiveClosureForReusedPointerID (0.04s)
+    stable_resource_capture_test.go:60: stable namespace links=0 want baseline 0 + 1 value-log link
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/dictdb	0.638s
+ok  	github.com/snissn/gomap/TreeDB/internal/templatedb	0.688s
+ok  	github.com/snissn/gomap/TreeDB/db	0.238s
+FAIL

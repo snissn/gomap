@@ -1,0 +1,5 @@
+--- FAIL: TestCaptureDurableRootUsesSelectedPredecessorOwner (0.05s)
+    durable_root_owner_continuity_test.go:68: merge candidate value-log resources: stable resource ownership violation
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/db	0.056s
+FAIL

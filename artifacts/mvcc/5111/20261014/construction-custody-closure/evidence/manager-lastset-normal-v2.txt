@@ -1,0 +1,5 @@
+--- FAIL: TestOriginalManagerActualLastSetCloseFailureIsSticky (0.01s)
+    original_cleanup_test.go:81: actual failed disposal refunded original payload
+FAIL
+FAIL	github.com/snissn/gomap/TreeDB/internal/valuelog	0.018s
+FAIL

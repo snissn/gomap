@@ -1,0 +1,13 @@
+{
+  "bytes": 204995,
+  "contract": [
+    "Snapshot admitted before capture side effects; successful capture retains original indexGen wrapper through final registry/pager/primary/Manager/leaf uses. Refusal keeps original Snapshot/generation/physical aliases and actual sticky error in DB original error graph.",
+    "Snapshot completion runs exactly once after actual cleanup and alias scrub. Late DATA-only Manager failure rooted in DB before last borrower disappears. Existing scalar/epoch effects must be counted by native continuation; no reservation around an unlimited capture.",
+    "Original DB cleanup receipts selected/traversed outside bgErrMu, revision revalidated before callback-free original bind; preserve siblings/wrappers and notify outside owner locks.",
+    "All enlarged concrete DB/Snapshot/indexGen sizes require original producer admission; no second registry/keeper or retry of consumed roots/Set edges."
+  ],
+  "matches_review_window": true,
+  "ownership": "Released to root-mediated native now; ordinary writer will not edit DB/db.go. Whole qualification remains open.",
+  "path": "TreeDB/db/db.go",
+  "sha256": "56c76ad3197f3a95972882df63f6bedea94f5d7863284031134c6af7a6c6e5f1"
+}

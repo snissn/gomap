@@ -1,0 +1,43 @@
+{
+  "base_head": "54893f48cb2a7a195b1b89198a39c87a9a1919c4",
+  "base_tree": "5b9e74c2022d1d3670aa3f04ed79717a22890cf0",
+  "files": {
+    "TreeDB/db/primary_arena_owner_v5.go": {
+      "baseline_sha256": "adaa450ecb0de36e5db314545a7e891efd537fd93ef27b92e7be0af2b104d811",
+      "baseline_blob": "9b31ae90215f79b5b0f1679e8d39e5544245c320",
+      "candidate_sha256": "6f1326403c0597ed9f1d3c963087a1ee6c2912eb53b9eaa58161fdc51bb2be54"
+    },
+    "TreeDB/db/root_publication_build_group.go": {
+      "baseline_sha256": "a7861ae20338bdb97c4197740e9b4f682bc9a873b325efc366a36929602f5df2",
+      "baseline_blob": "0e26a8af745f6aaf5ad8c126e6a9099dd2589468",
+      "candidate_sha256": "369e4d45c28f9cf568f0436b14ffd42370cd220bab5e1959348fdb382d9afc8e"
+    },
+    "TreeDB/internal/rootpublication/durable_root_transaction.go": {
+      "baseline_sha256": "a7cd128b4cbc3bc431c9bd4d3b4a5566e9dcf4d88198e2bd7d9eb45fb920f985",
+      "baseline_blob": "1718ee14c27389a40bda4b3f1e38aefd00287b20",
+      "candidate_sha256": "1a05e6632d58f2ab50873c0c67c79ed60ed249054d1440c2426ac097f22630af"
+    },
+    "TreeDB/internal/rootpublication/primary_transaction_construction_v6.go": {
+      "baseline_sha256": "1b8e562605d4721f577cd0204d0ffcbe8486f4b7bbcee87b5934b3cbb22f9355",
+      "baseline_blob": "b92cbc22d37c54814c1d1ac148d4c164aea4038e",
+      "candidate_sha256": "b876329876572f66bea119dd1f3be0233df61d451441cacb488c347c1c5a95c1"
+    },
+    "TreeDB/zipper/primary_directory.go": {
+      "baseline_sha256": "40a355ab4c33e5f3ba460260a0d2b0193e6da69e2fbed47972cd8ba3afaaf6e5",
+      "baseline_blob": "47df125e6778f79d5e2738da85dce49e91f4ed6d",
+      "candidate_sha256": "c34baa1c7d9ffde27240c0eebe6b9fc8ab5e924fee6592610bbf09a1ca5ab258"
+    },
+    "TreeDB/db/root_publication_build_group_primary_v6_test.go": {
+      "baseline_absent": true,
+      "candidate_sha256": "80ba008f0ef54a35d6799da1f4fd07d7caf95eb7849b353403b1ae094d8ed8f1"
+    },
+    "TreeDB/internal/primaryarena/read_root_construction_release_v6.go": {
+      "baseline_absent": true,
+      "candidate_sha256": "67fedf3dbb6e868a43a33374ce328c8c4cb68dd8c31b05a3d01ab9e656653ac3"
+    },
+    "TreeDB/zipper/primary_construction_failure_v6_test.go": {
+      "baseline_absent": true,
+      "candidate_sha256": "90ae8e7cf3ae9210cf92c62553b75b658f5574ef5d3b098cf1526de62507f057"
+    }
+  }
+}

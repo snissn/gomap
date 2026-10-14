@@ -1,0 +1,32 @@
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery/before-publication-seal-write
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery/after-publication-seal-write
+=== RUN   TestDependencyDirectoryV2PublicationCutFailureRecovery/before-meta-sync
+--- PASS: TestDependencyDirectoryV2PublicationCutFailureRecovery (0.22s)
+    --- PASS: TestDependencyDirectoryV2PublicationCutFailureRecovery/before-publication-seal-write (0.08s)
+    --- PASS: TestDependencyDirectoryV2PublicationCutFailureRecovery/after-publication-seal-write (0.07s)
+    --- PASS: TestDependencyDirectoryV2PublicationCutFailureRecovery/before-meta-sync (0.07s)
+=== RUN   TestPrimaryJointCompletedV6AdvancedCanonicalPair
+--- PASS: TestPrimaryJointCompletedV6AdvancedCanonicalPair (0.25s)
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery/before-commit
+=== RUN   TestPrimaryOfflineVlogV6CacheInvalidationRecovery/after-commit
+--- PASS: TestPrimaryOfflineVlogV6CacheInvalidationRecovery (0.34s)
+    --- PASS: TestPrimaryOfflineVlogV6CacheInvalidationRecovery/before-commit (0.15s)
+    --- PASS: TestPrimaryOfflineVlogV6CacheInvalidationRecovery/after-commit (0.19s)
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback/0
+=== RUN   TestPrimaryOfflineVlogV6IndependentFallback/1
+--- PASS: TestPrimaryOfflineVlogV6IndependentFallback (0.40s)
+    --- PASS: TestPrimaryOfflineVlogV6IndependentFallback/0 (0.21s)
+    --- PASS: TestPrimaryOfflineVlogV6IndependentFallback/1 (0.20s)
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA
+=== RUN   TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY
+--- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation (0.25s)
+    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/DATA (0.12s)
+    --- PASS: TestValueLogRefCacheRejectsOtherPhysicalIncarnation/PRIMARY (0.14s)
+=== RUN   TestValueLogRefCacheFormatBindsPhysicalPair
+--- PASS: TestValueLogRefCacheFormatBindsPhysicalPair (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	1.512s

@@ -1,0 +1,28 @@
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA
+=== RUN   TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY
+--- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator (0.15s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/DATA (0.09s)
+    --- PASS: TestCOWBasisCompletionWaitsForActualOriginalIterator/PRIMARY (0.06s)
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/DATA
+=== RUN   TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY
+--- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose (0.06s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/DATA (0.03s)
+    --- PASS: TestCOWBasisStartupAndHandoffPostcaptureClose/PRIMARY (0.03s)
+=== RUN   TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt
+--- PASS: TestCOWBasisCompletionRegistrationRefusalRetainsOriginalDebt (0.03s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/caching	0.243s
+=== RUN   TestSnapshotCleanupCompletionSharesOriginalFinalReader
+--- PASS: TestSnapshotCleanupCompletionSharesOriginalFinalReader (0.04s)
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running
+=== RUN   TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed
+--- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal (0.05s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/running (0.03s)
+    --- PASS: TestSnapshotCleanupCompletionJoinsRunningAndCompletedOriginal/completed (0.03s)
+=== RUN   TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError
+--- PASS: TestSnapshotCleanupCompletionReportsActualPagerLastPhysicalError (0.04s)
+PASS
+ok  	github.com/snissn/gomap/TreeDB/db	0.139s

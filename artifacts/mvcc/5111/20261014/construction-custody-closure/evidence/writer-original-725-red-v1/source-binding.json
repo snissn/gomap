@@ -1,0 +1,25 @@
+{
+  "classification": "source-bound original published Writer/parent production bytes; unchanged actual registry and genuine file Close refusal; diagnostic only",
+  "head": "725c31dd2711467514a91df9847e2e303b719afd",
+  "operands": [
+    {
+      "path": "TreeDB/internal/valuelog/writer.go",
+      "head": "725c31dd2711467514a91df9847e2e303b719afd",
+      "git_blob": "bd939cf756ba3b7cd07f1629ddec84655031cb68",
+      "sha256": "d2bab5102be79c3041423b055464f25ce986fdd9d8a5254d5fa60bbaf508bb67"
+    },
+    {
+      "path": "TreeDB/internal/valuelog/stable_resource.go",
+      "head": "725c31dd2711467514a91df9847e2e303b719afd",
+      "git_blob": "567f2501ba5e2fbad5be4467d827d327c6a68870",
+      "sha256": "164253ca324a7f00fc62e037f6dda2082dca290cf4c7c919a21e1bd148fa0087"
+    }
+  ],
+  "diagnostic_sha256": "1b10bf7b565da4aaeb74c2ac3de8543f36447c51132f196d68a796d358cb5e5d",
+  "overlay": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/writer.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/writer.go.original-725",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/stable_resource.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/stable_resource.go.original-725",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/writer_original_cleanup.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/writer_original_cleanup.empty.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/internal/valuelog/writer_original_cleanup_test.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/writer-original-725-red-v1/writer_original_cleanup.diagnostic_test.go"
+  }
+}
