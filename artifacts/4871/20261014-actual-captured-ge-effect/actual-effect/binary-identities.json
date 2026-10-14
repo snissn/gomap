@@ -1,0 +1,12 @@
+{
+  "before": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/before.test",
+    "bytes": 27350931,
+    "sha256": "10736311fd8e270f9d6e3b1b874eef50d1f6b08539a157f29b21f19667569fce"
+  },
+  "after": {
+    "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/after.test",
+    "bytes": 27374097,
+    "sha256": "8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4"
+  }
+}

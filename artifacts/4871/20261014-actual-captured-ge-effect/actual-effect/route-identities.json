@@ -1,0 +1,14 @@
+{
+  "harness": {
+    "benchmark_test.go": "8b0efd309dd0c660d2b31fb6f8f81e3047b425e403511097677d1d98c1b46872",
+    "admission_test.go": "2978839f31fd5e5f511c4375ffc1109745ad5344d80bdaccdbdaa003f9b356ad",
+    "captured_successor_test.go": "00e82e5b073629475481f07eb738f1873f3f7a069f5cea2e9d6041814aa633b6"
+  },
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "actual_module_sha256": "cd23849d1b62100b75dc340481be576c96a7dc16379baef22b27fe88d5a0fd53",
+  "actual_sum_sha256": "42506ed859079cc29b55a393f84b83ea89f0c431da0cd48cacfd61c5a6e4483a",
+  "temporary_module_sha256": "932469c9300de785b7ba80749019b84005db3aefa02163b86933456be86b0236",
+  "raft_replacement": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/third_party/hashicorp_raft_v1.7.3",
+  "source_files": 11598,
+  "effective_production_delta_count": 6
+}

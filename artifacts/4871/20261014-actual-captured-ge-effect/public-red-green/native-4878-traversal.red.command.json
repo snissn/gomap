@@ -1,0 +1,26 @@
+{
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-json",
+    "-count=1",
+    "-timeout=180s",
+    "-benchtime=16x",
+    "-run=^TestPopulatedCapturedSuccessorAllocation$",
+    "./TreeDB/mvcc"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4",
+    "CGO_ENABLED": "1",
+    "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "GOTMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/captured-ge-production-integration-20261014/build-scratch"
+  },
+  "start_utc": "2026-10-14T21:22:10.510201+00:00",
+  "exit": 1,
+  "end_utc": "2026-10-14T21:22:14.667076+00:00",
+  "raw_sha256": "7be4445f68136abe8961da90b97d03aab52dce5c68f9bf3fd4cbffc17519a583"
+}

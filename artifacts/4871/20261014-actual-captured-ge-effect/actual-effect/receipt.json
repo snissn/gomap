@@ -1,0 +1,36 @@
+{
+  "schema": "bounded-actual-public-effect-v1",
+  "status": "16 valid calls, provisional GE; multilevel pointer total-cost concern retained",
+  "artifact_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014",
+  "benchmark_invocations": 16,
+  "production_source_root": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+  "head": "9bd10594dc87e0ccc9f4d1c59ce6aabbf5e69e85",
+  "index_sha256": "ad4473b1d423c4f36b187d91de9d7a5907e3d9246165e4363637babaacb89736",
+  "source_inventory_entries": 11598,
+  "source_inventory_before_sha256": "776258e2a2b59386a9732c51beaaf8fb511d2ec6ef1d17b0f0b59166e8a016b0",
+  "source_inventory_after_sha256": "776258e2a2b59386a9732c51beaaf8fb511d2ec6ef1d17b0f0b59166e8a016b0",
+  "actual_source_head_index_status_unchanged": true,
+  "source_head_index_freeze_released_to_root_checkpoint": true,
+  "go_quiet": true,
+  "task_owned_producers": [],
+  "production_source_mutations": 0,
+  "binaries": {
+    "before": {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/before.test",
+      "bytes": 27350931,
+      "sha256": "10736311fd8e270f9d6e3b1b874eef50d1f6b08539a157f29b21f19667569fce"
+    },
+    "after": {
+      "path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/after.test",
+      "bytes": 27374097,
+      "sha256": "8c54eca1f1740fd7880c65a52b465a20f6425bcd4c55e96fa676310550ef38f4"
+    }
+  },
+  "disposable_release_list": [],
+  "retention": "All evidence, source deltas, temporary harness module and both binaries retained pending root acceptance; no cleanup.",
+  "packaging_diagnostic": {
+    "first_freeze_script_exit": 1,
+    "cause": "Python SyntaxError from escaped quotes inside f-string; corrected only packaging script before execution. No benchmark, source or result changes and no repeated measurement.",
+    "corrected_freeze_script_exit": 0
+  }
+}

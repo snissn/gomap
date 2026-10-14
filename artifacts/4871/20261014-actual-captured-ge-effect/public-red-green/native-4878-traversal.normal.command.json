@@ -1,0 +1,31 @@
+{
+  "cwd": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/native-4878-traversal",
+  "argv": [
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin/go",
+    "test",
+    "-json",
+    "-count=1",
+    "-p=1",
+    "-timeout=180s",
+    "-benchtime=16x",
+    "-run=^(TestOwnedSuccessorPrimarySelectionAndErrors|TestOwnedSuccessorExternalLeafRefusesUnownedBuffer|TestOwnedPointerProjectionFixedScratch|TestOwnedPointerProjectionExternalLeafRequiresBoundedReader|TestOwnedUserRootEmptyCapturedPrimary|TestPointValueMetadataOwnedAndRevision|TestCOWSuccessorCapturedSourcesPrecedenceAndPressure|TestCOWSuccessorPointerOwnershipRefusalRetry|TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose|TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose|TestCOWPointerCheckpointCapturedBasisAndTombstones|TestSeekGE_ReturnsOwnedBytes|TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases|TestCOWSuccessorLogicalTombstoneAndEmptyValue|TestCOWSuccessorPublicEmptyKeyValue|TestMVCCOwnedOutputsSurviveMutationFlushAndClose|TestMVCCRetainedOwnedOutputs|TestGetAtSuccessorTransfersOwnedPayload|TestC3COWStoreReadersProgressDuringPreparedGroup|TestPopulatedCapturedSuccessorAllocation|TestOneShotReadOwnedMissingEmptyAndNilKey|TestOwnedPagerOperationWaitsForActualSnapshotFinalization|TestOwnedPagerOperationJoinsOriginalRunningFinalizer|TestOwnedPagerOperationFinalReaderAndExportedHandleRace|TestDBIteratorKeyValueReturnViewsAndCopiesRemainOwned|TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis|TestCOWPublicPrimarySelectionLayeredPublication|TestCOWPublicPrimarySelectionModeAndExplicitFlag|TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild)$",
+    "./TreeDB/tree",
+    "./TreeDB/caching",
+    "./TreeDB/mvcc",
+    "./TreeDB/db",
+    "./TreeDB"
+  ],
+  "env": {
+    "GOROOT": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014",
+    "GOWORK": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4",
+    "CGO_ENABLED": "1",
+    "PATH": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/toolchains/go1.26.3-from-185-20261014/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "GOTMPDIR": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/ordinary-5111/captured-ge-production-integration-20261014/build-scratch"
+  },
+  "start_utc": "2026-10-14T21:25:37.764348+00:00",
+  "exit": 0,
+  "end_utc": "2026-10-14T21:26:33.107847+00:00",
+  "raw_sha256": "6b85b48add6980fb9ce7d525f293d6d7c66dab08580f8219126e9f6c9bf52299"
+}

@@ -1,0 +1,14 @@
+{
+  "paths": [
+    "actual/TreeDB/caching/cow_read.go",
+    "actual/TreeDB/caching/cow_read_workspace.go",
+    "actual/TreeDB/db/bounded_read_owner.go",
+    "actual/TreeDB/tree/owned_successor.go",
+    "actual/TreeDB/tree/primary_directory.go",
+    "actual/TreeDB/tree/tree.go"
+  ],
+  "count": 6,
+  "before_entries": 3901,
+  "after_entries": 3902,
+  "note": "Includes test metadata; exactly six changed production inputs, new owned_successor.go excluded by BEFORE build tag."
+}

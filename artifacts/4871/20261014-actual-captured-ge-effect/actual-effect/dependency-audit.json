@@ -1,0 +1,40 @@
+{
+  "actual_replacement": {
+    "Path": "github.com/snissn/gomap",
+    "Version": "v0.0.0",
+    "Replace": {
+      "Path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "Dir": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "GoMod": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/go.mod",
+      "GoVersion": "1.26"
+    },
+    "Dir": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "GoMod": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/go.mod",
+    "GoVersion": "1.26"
+  },
+  "compiled_compression_fork": {
+    "Path": "github.com/snissn/compress",
+    "Version": "v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+    "Time": "2026-10-14T11:24:47Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/snissn/compress@v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/snissn/compress/@v/v1.18.2-snissn.0.0.20261014112447-88a027b09341.mod",
+    "GoVersion": "1.23",
+    "Sum": "h1:brG2Yps8frK2s7mVF9Lz+N3ettUty+hcX2y3vAyEMUw=",
+    "GoModSum": "h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM="
+  },
+  "raft_replacement": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/third_party/hashicorp_raft_v1.7.3",
+  "raft_compiled": false,
+  "note": "Raft replacement is preserved explicitly in temporary module; no raft package is in this fixture runtime graph.",
+  "go_binary_sha256": "d68b7abbc40d0844f673f6cf06ae3cded225c50437c6454fa37ef178d079fe65",
+  "go_version_file": "go1.26.3\ntime 2026-05-04T20:36:18Z\n",
+  "hostname": "mikers-MS-7E71",
+  "uname": [
+    "Linux",
+    "mikers-MS-7E71",
+    "7.0.0-30-generic",
+    "#30-Ubuntu SMP PREEMPT_DYNAMIC Fri Jul 31 18:22:54 UTC 2026",
+    "x86_64",
+    ""
+  ],
+  "lscpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  16\nOn-line CPU(s) list:                     0-15\nVendor ID:                               AuthenticAMD\nModel name:                              AMD Ryzen 7 9700X 8-Core Processor\nCPU family:                              26\nModel:                                   68\nThread(s) per core:                      2\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                0\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      27%\nCPU max MHz:                             5582.3008\nCPU min MHz:                             605.3100\nBogoMIPS:                                7599.98\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpuid_fault cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d amd_lbr_pmc_freeze\nVirtualization:                          AMD-V\nL1d cache:                               384 KiB (8 instances)\nL1i cache:                               256 KiB (8 instances)\nL2 cache:                                8 MiB (8 instances)\nL3 cache:                                32 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-15\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; IBPB on VMEXIT only\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB on VMEXIT\n"
+}

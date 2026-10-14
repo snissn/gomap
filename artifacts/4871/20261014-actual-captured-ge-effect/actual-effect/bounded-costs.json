@@ -1,0 +1,10 @@
+{
+  "benchmark_processes": 16,
+  "samples_per_cell_per_version": 2,
+  "fixed_iterations_per_process": 64,
+  "benchmark_process_elapsed_s": 9.942352294921875,
+  "measured_loop_elapsed_s": 0.077313639,
+  "comparative_trace_or_profile_invocations": 0,
+  "correctness_test_invocations": 0,
+  "additional_warmup_invocations": 0
+}

@@ -1,0 +1,12 @@
+{
+  "actual_source_unchanged": true,
+  "head": "9bd10594dc87e0ccc9f4d1c59ce6aabbf5e69e85",
+  "index_sha256": "ad4473b1d423c4f36b187d91de9d7a5907e3d9246165e4363637babaacb89736",
+  "file_count": 11598,
+  "go_quiet": true,
+  "binaries_unchanged": {
+    "before": true,
+    "after": true
+  },
+  "disposable_release_list": []
+}

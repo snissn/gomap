@@ -1,0 +1,306 @@
+[
+  {
+    "size": "small",
+    "shape": "inline",
+    "pair": 1,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "small",
+    "shape": "inline",
+    "pair": 1,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "small",
+    "shape": "inline",
+    "pair": 2,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "small",
+    "shape": "inline",
+    "pair": 2,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "small",
+    "shape": "forced_pointer",
+    "pair": 1,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "small",
+    "shape": "forced_pointer",
+    "pair": 1,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "small",
+    "shape": "forced_pointer",
+    "pair": 2,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "small",
+    "shape": "forced_pointer",
+    "pair": 2,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=1 leaves=1 physical_records=4",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034234883 root_type=0xb persisted_records=4 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "inline",
+    "pair": 1,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "inline",
+    "pair": 1,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "inline",
+    "pair": 2,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "inline",
+    "pair": 2,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=2728 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000004\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "forced_pointer",
+    "pair": 1,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "forced_pointer",
+    "pair": 1,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "forced_pointer",
+    "pair": 2,
+    "version": "after",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  },
+  {
+    "size": "multilevel",
+    "shape": "forced_pointer",
+    "pair": 2,
+    "version": "before",
+    "proof_lines": [
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:123: phase=open profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:197: populated_depth=3 leaves=340 physical_records=24582",
+      "benchmark_test.go:204: proven_cross_leaf_key=\"bulk-00000235\"",
+      "benchmark_test.go:209: populated_proof root_id=5764607523034235205 root_type=0xb persisted_records=24582 mutable_bytes=0 queue_len=0 read_timestamp=15 expected_timestamp=10",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed",
+      "benchmark_test.go:385: phase=boundary profile=command_wal_relaxed requested=cow_btree resolved=cow_btree config=fixed ordinary_ack=relaxed"
+    ]
+  }
+]

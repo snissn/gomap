@@ -1,0 +1,41 @@
+{
+  "./TreeDB/tree": [
+    "TestOwnedSuccessorPrimarySelectionAndErrors",
+    "TestOwnedSuccessorExternalLeafRefusesUnownedBuffer",
+    "TestOwnedPointerProjectionFixedScratch",
+    "TestOwnedPointerProjectionExternalLeafRequiresBoundedReader",
+    "TestOwnedUserRootEmptyCapturedPrimary",
+    "TestPointValueMetadataOwnedAndRevision"
+  ],
+  "./TreeDB/caching": [
+    "TestCOWSuccessorCapturedSourcesPrecedenceAndPressure",
+    "TestCOWSuccessorPointerOwnershipRefusalRetry",
+    "TestC3COWSuccessorFallbackCompletesBeforeQueuedDBClose",
+    "TestCOWDBCloseWaitsForAdmittedPointerReadAndDelayedOwnersClose",
+    "TestCOWPointerCheckpointCapturedBasisAndTombstones",
+    "TestSeekGE_ReturnsOwnedBytes",
+    "TestCOWBasisOwnedIteratorScrubsConsumedWrapperAliases"
+  ],
+  "./TreeDB/mvcc": [
+    "TestCOWSuccessorLogicalTombstoneAndEmptyValue",
+    "TestCOWSuccessorPublicEmptyKeyValue",
+    "TestMVCCOwnedOutputsSurviveMutationFlushAndClose",
+    "TestMVCCRetainedOwnedOutputs",
+    "TestGetAtSuccessorTransfersOwnedPayload",
+    "TestC3COWStoreReadersProgressDuringPreparedGroup",
+    "TestPopulatedCapturedSuccessorAllocation"
+  ],
+  "./TreeDB/db": [
+    "TestOneShotReadOwnedMissingEmptyAndNilKey",
+    "TestOwnedPagerOperationWaitsForActualSnapshotFinalization",
+    "TestOwnedPagerOperationJoinsOriginalRunningFinalizer",
+    "TestOwnedPagerOperationFinalReaderAndExportedHandleRace",
+    "TestDBIteratorKeyValueReturnViewsAndCopiesRemainOwned"
+  ],
+  "./TreeDB": [
+    "TestCOWPublicPrimaryEmptyCheckpointPreservesSuccessorBasis",
+    "TestCOWPublicPrimarySelectionLayeredPublication",
+    "TestCOWPublicPrimarySelectionModeAndExplicitFlag",
+    "TestCOWPublicPrimarySelectionNonemptyDATARequiresRebuild"
+  ]
+}

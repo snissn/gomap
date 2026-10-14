@@ -1,0 +1,112 @@
+{
+  "github.com/snissn/gomap/TreeDB/sprintperf_actual_effect": {
+    "Path": "github.com/snissn/gomap/TreeDB/sprintperf_actual_effect",
+    "Main": true,
+    "Dir": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/harness",
+    "GoMod": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-actual-effect-20261014/harness/go.mod",
+    "GoVersion": "1.26"
+  },
+  "github.com/snissn/compress": {
+    "Path": "github.com/snissn/compress",
+    "Version": "v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+    "Time": "2026-10-14T11:24:47Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/snissn/compress@v1.18.2-snissn.0.0.20261014112447-88a027b09341",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/snissn/compress/@v/v1.18.2-snissn.0.0.20261014112447-88a027b09341.mod",
+    "GoVersion": "1.23",
+    "Sum": "h1:brG2Yps8frK2s7mVF9Lz+N3ettUty+hcX2y3vAyEMUw=",
+    "GoModSum": "h1:p4xiZN07JMUF5xuybNGkG+pozT12MAblxCx36z+PIYM="
+  },
+  "golang.org/x/sys": {
+    "Path": "golang.org/x/sys",
+    "Version": "v0.41.0",
+    "Time": "2026-02-08T05:32:41Z",
+    "Dir": "/home/mikers/go/pkg/mod/golang.org/x/sys@v0.41.0",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/golang.org/x/sys/@v/v0.41.0.mod",
+    "GoVersion": "1.24.0",
+    "Sum": "h1:Ivj+2Cp/ylzLiEU89QhWblYnOE9zerudt9Ftecq2C6k=",
+    "GoModSum": "h1:OgkHotnGiDImocRcuBABYBEXf8A9a87e/uXjp9XT3ks="
+  },
+  "github.com/snissn/go-crc32-asm": {
+    "Path": "github.com/snissn/go-crc32-asm",
+    "Version": "v0.0.0-20260522204125-08945951423a",
+    "Time": "2026-05-22T20:41:25Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/snissn/go-crc32-asm@v0.0.0-20260522204125-08945951423a",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/snissn/go-crc32-asm/@v/v0.0.0-20260522204125-08945951423a.mod",
+    "GoVersion": "1.23.0",
+    "Sum": "h1:uqSq50AAT36ZzDiRApq8GNsbeJASPaneZ6aKfw3KShc=",
+    "GoModSum": "h1:PDwKLbWpRDAN2IPbK9PxIgSx0YdwQaSOLWObRawQJ58="
+  },
+  "github.com/snissn/gomap": {
+    "Path": "github.com/snissn/gomap",
+    "Version": "v0.0.0",
+    "Replace": {
+      "Path": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "Dir": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+      "GoMod": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/go.mod",
+      "GoVersion": "1.26"
+    },
+    "Dir": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111",
+    "GoMod": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/go.mod",
+    "GoVersion": "1.26"
+  },
+  "github.com/cespare/xxhash/v2": {
+    "Path": "github.com/cespare/xxhash/v2",
+    "Version": "v2.3.0",
+    "Time": "2024-04-04T20:00:10Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/cespare/xxhash/v2@v2.3.0",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/cespare/xxhash/v2/@v/v2.3.0.mod",
+    "GoVersion": "1.11",
+    "Sum": "h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=",
+    "GoModSum": "h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs="
+  },
+  "github.com/golang/snappy": {
+    "Path": "github.com/golang/snappy",
+    "Version": "v0.0.4",
+    "Time": "2021-06-08T04:05:37Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/golang/snappy@v0.0.4",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/golang/snappy/@v/v0.0.4.mod",
+    "Sum": "h1:yAGX7huGHXlcLOEtBnF4w7FQwA26wojNCwOYAEhLjQM=",
+    "GoModSum": "h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q="
+  },
+  "github.com/pierrec/lz4/v4": {
+    "Path": "github.com/pierrec/lz4/v4",
+    "Version": "v4.1.22",
+    "Time": "2024-12-12T16:53:43Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/pierrec/lz4/v4@v4.1.22",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/pierrec/lz4/v4/@v/v4.1.22.mod",
+    "GoVersion": "1.14",
+    "Sum": "h1:cKFw6uJDK+/gfw5BcDL0JL5aBsAFdsIT18eRtLj7VIU=",
+    "GoModSum": "h1:gZWDp/Ze/IJXGXf23ltt2EXimqmTUXEy0GFuRQyBid4="
+  },
+  "github.com/klauspost/cpuid/v2": {
+    "Path": "github.com/klauspost/cpuid/v2",
+    "Version": "v2.2.10",
+    "Time": "2025-02-24T19:37:05Z",
+    "Indirect": true,
+    "Dir": "/home/mikers/go/pkg/mod/github.com/klauspost/cpuid/v2@v2.2.10",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/klauspost/cpuid/v2/@v/v2.2.10.mod",
+    "GoVersion": "1.22",
+    "Sum": "h1:tBs3QSyvjDyFTq3uoc/9xFpCuOsJQFNPiAhYdw2skhE=",
+    "GoModSum": "h1:hqwkgyIinND0mEev00jJYCxPNVRVXFQeu1XKlok6oO0="
+  },
+  "github.com/zeebo/xxh3": {
+    "Path": "github.com/zeebo/xxh3",
+    "Version": "v1.1.0",
+    "Time": "2026-01-23T19:18:08Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/zeebo/xxh3@v1.1.0",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/zeebo/xxh3/@v/v1.1.0.mod",
+    "GoVersion": "1.22",
+    "Sum": "h1:s7DLGDK45Dyfg7++yxI0khrfwq9661w9EN78eP/UZVs=",
+    "GoModSum": "h1:IisAie1LELR4xhVinxWS5+zf1lA4p0MW4T+w+W07F5s="
+  },
+  "github.com/tidwall/btree": {
+    "Path": "github.com/tidwall/btree",
+    "Version": "v1.8.1",
+    "Time": "2025-08-05T22:12:24Z",
+    "Dir": "/home/mikers/go/pkg/mod/github.com/tidwall/btree@v1.8.1",
+    "GoMod": "/home/mikers/go/pkg/mod/cache/download/github.com/tidwall/btree/@v/v1.8.1.mod",
+    "GoVersion": "1.20",
+    "Sum": "h1:27ehoXvm5AG/g+1VxLS1SD3vRhp/H7LuEfwNvddEdmA=",
+    "GoModSum": "h1:jBbTdUWhSZClZWoDg54VnvV7/54modSOzDN7VXftj1A="
+  }
+}

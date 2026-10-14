@@ -1,0 +1,12 @@
+{
+  "before": {
+    "exit": 0,
+    "stdout": "\tlinux-vdso.so.1 (0x00007fd227ef2000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007fd227c00000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fd227ef4000)\n",
+    "stderr": ""
+  },
+  "after": {
+    "exit": 0,
+    "stdout": "\tlinux-vdso.so.1 (0x000072899c2f8000)\n\tlibc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x000072899c000000)\n\t/lib64/ld-linux-x86-64.so.2 (0x000072899c2fa000)\n",
+    "stderr": ""
+  }
+}

@@ -1,0 +1,710 @@
+--- a/TreeDB/caching/cow_read.go
++++ b/TreeDB/caching/cow_read.go
+@@ -80,6 +80,9 @@
+ 			}
+ 		}
+ 	}
++	if key, value, found, eligible, err := s.cowSeekGEOneAdmitted(start, end); eligible || err != nil {
++		return key, value, found, err
++	}
+ 	return s.cowSeekGEMergeAdmitted(start, end)
+ }
+ 
+@@ -325,3 +328,48 @@
+ 	}
+ 	return sources, nil
+ }
++
++// cowSeekGEOneAdmitted compares one metadata candidate from every immutable
++// source on the retained cut. Unknown sources and physical tombstone winners
++// keep the existing full merge, including its suppression/advancement rules.
++func (s *Snapshot) cowSeekGEOneAdmitted(start, end []byte) (key, value []byte, found, eligible bool, err error) {
++	queue := s.rootIterator.immutables
++	for _, source := range queue {
++		if _, ok := source.(memtable.SuccessorTable); !ok {
++			return nil, nil, false, false, nil
++		}
++	}
++	s.cowReadMu.Lock()
++	defer s.cowReadMu.Unlock()
++	w, err := s.cowWorkspaceLocked()
++	if err != nil {
++		return nil, nil, false, true, err
++	}
++	point, err := w.pointScratch()
++	if err != nil {
++		return nil, nil, false, true, err
++	}
++	disk, ok, err := s.cowCut.basis.snapshot.SeekGEEntryWithFixedScratch(start, end, point.key[:], point.leaf[:], &point.successor, w.readLeaf)
++	if err != nil {
++		return nil, nil, false, true, err
++	}
++	best := pointSuccessorCandidate{key: disk.Key, value: disk.Value, ptr: disk.ValuePtr, flags: disk.Flags, revision: disk.Revision, priority: len(queue), found: ok}
++	for i := len(queue) - 1; i >= 0; i-- {
++		best = choosePointSuccessor(best, seekPointSuccessorTable(queue[i], start, end, nil, 0, len(queue)-1-i))
++	}
++	if !best.found {
++		return nil, nil, false, true, nil
++	}
++	if best.flags&node.FlagTombstone != 0 {
++		return nil, nil, false, false, nil
++	}
++	key = append([]byte(nil), best.key...)
++	borrowed := best.value
++	if best.flags&node.FlagPointer != 0 {
++		borrowed, err = w.read(best.ptr, false, nil)
++		if err != nil {
++			return nil, nil, false, true, err
++		}
++	}
++	return key, append([]byte(nil), borrowed...), true, true, nil
++}
+--- a/TreeDB/caching/cow_read_workspace.go
++++ b/TreeDB/caching/cow_read_workspace.go
+@@ -27,6 +27,7 @@
+ type cowPointScratch struct {
+ 	lease     *memtable.COWExternalLease
+ 	key, leaf [page.PageSize]byte
++	successor tree.OwnedSuccessorScratch
+ }
+ 
+ type cowReadWorkspace struct {
+--- a/TreeDB/db/bounded_read_owner.go
++++ b/TreeDB/db/bounded_read_owner.go
+@@ -1,6 +1,7 @@
+ package db
+ 
+ import (
++	"github.com/snissn/gomap/TreeDB/tree"
+ 	"os"
+ 
+ 	"github.com/snissn/gomap/TreeDB/internal/iterator"
+@@ -150,3 +151,16 @@
+ 	defer s.endRead()
+ 	return s.tree.OwnedUserRootEmpty()
+ }
++
++// SeekGEEntryWithFixedScratch reads metadata through this already captured tree.
++// Returned bytes borrow caller-admitted scratch and this snapshot until reuse.
++func (s *Snapshot) SeekGEEntryWithFixedScratch(start, end, keyScratch, leafScratch []byte, scratch *tree.OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
++	if s == nil {
++		return node.LeafEntry{}, false, ErrClosed
++	}
++	if err := s.beginRead(); err != nil {
++		return node.LeafEntry{}, false, err
++	}
++	defer s.endRead()
++	return s.tree.SeekGEWithFixedScratch(start, end, keyScratch, leafScratch, scratch, readLeaf)
++}
+--- a/TreeDB/tree/primary_directory.go
++++ b/TreeDB/tree/primary_directory.go
+@@ -22,21 +22,10 @@
+ 		op = entry.Operand
+ 	}
+ 	var n node.Node
+-	if bounded && op.Ref.Kind == page.ChildRefLeafLog {
+-		if readLeaf == nil {
+-			return page.ChildRef{}, node.PrimaryDirectoryEntry{}, ErrOwnedIteratorLeafReader
+-		}
+-		image, e := readLeaf(op.Ref.Log, leafScratch[:0])
+-		if e != nil {
+-			return page.ChildRef{}, node.PrimaryDirectoryEntry{}, e
+-		}
+-		if len(image) != page.PageSize || cap(image) != page.PageSize || &image[0] != &leafScratch[:page.PageSize][0] {
+-			return page.ChildRef{}, node.PrimaryDirectoryEntry{}, ErrOwnedIteratorLeafReader
+-		}
+-		n = *node.NewNode(image)
+-	} else if err = t.loadChildRefViewInto(&n, op.Ref, true, false); err != nil {
++	if err = t.loadReadRefInto(&n, op.Ref, true, nil, leafScratch, readLeaf, bounded); err != nil {
+ 		return page.ChildRef{}, node.PrimaryDirectoryEntry{}, err
+ 	}
++
+ 	if !node.VerifyPrimaryOperand(op, n.Data()) {
+ 		return page.ChildRef{}, node.PrimaryDirectoryEntry{}, node.ErrPrimaryDirectory
+ 	}
+--- a/TreeDB/tree/tree.go
++++ b/TreeDB/tree/tree.go
+@@ -625,24 +625,10 @@
+ 
+ 	for depth := 0; depth < maxTraversalDepth; depth++ {
+ 		var n node.Node
+-		if bounded && currRef.Kind == page.ChildRefLeafLog {
+-			if readLeaf == nil {
+-				return node.LeafEntry{}, ErrOwnedIteratorLeafReader
+-			}
+-			data, err := readLeaf(currRef.Log, leafScratch[:0])
+-			if err != nil {
+-				return node.LeafEntry{}, err
+-			}
+-			if len(data) != page.PageSize || cap(data) != page.PageSize || &data[0] != &leafScratch[:page.PageSize][0] {
+-				return node.LeafEntry{}, ErrOwnedIteratorLeafReader
+-			}
+-			n, err = validateLeafLogNode(data, currRef.Log, t.shouldVerifyLeafRefChecksum(), false)
+-			if err != nil {
+-				return node.LeafEntry{}, err
+-			}
+-		} else if err := t.loadChildRefViewInto(&n, currRef, verifyAlways, false); err != nil {
++		if err := t.loadReadRefInto(&n, currRef, verifyAlways, keyScratch, leafScratch, readLeaf, bounded); err != nil {
+ 			return node.LeafEntry{}, err
+ 		}
++
+ 		if bounded {
+ 			n.SetFixedKeyScratch(keyScratch)
+ 		}
+--- /dev/null
++++ b/TreeDB/tree/owned_successor.go
+@@ -0,0 +1,195 @@
++package tree
++
++import (
++	"github.com/snissn/gomap/TreeDB/node"
++	"github.com/snissn/gomap/TreeDB/page"
++)
++
++type successorFrame struct {
++	ref  page.ChildRef
++	next uint16
++}
++
++// OwnedSuccessorScratch is caller-admitted storage, never pooled or retained by
++// the tree. Compact ancestors reload immutable parent pages at leaf boundaries.
++type OwnedSuccessorScratch struct {
++	frames [maxTraversalDepth]successorFrame
++}
++
++func (t *Tree) loadReadRefInto(n *node.Node, ref page.ChildRef, verify bool, keyScratch, leafScratch []byte, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error), bounded bool) error {
++	if bounded && ref.Kind == page.ChildRefLeafLog {
++		if readLeaf == nil {
++			return ErrOwnedIteratorLeafReader
++		}
++		data, err := readLeaf(ref.Log, leafScratch[:0])
++		if err != nil {
++			return err
++		}
++		if len(data) != page.PageSize || cap(data) != page.PageSize || &data[0] != &leafScratch[:page.PageSize][0] {
++			return ErrOwnedIteratorLeafReader
++		}
++		if err = validateLeafLogNodeInto(n, data, ref.Log, t.shouldVerifyLeafRefChecksum(), false); err != nil {
++			return err
++		}
++	} else if err := t.loadChildRefViewInto(n, ref, verify, false); err != nil {
++		return err
++	}
++	if bounded && keyScratch != nil {
++		n.SetFixedKeyScratch(keyScratch)
++	}
++	return nil
++}
++
++// SeekGEWithFixedScratch returns borrowed metadata from this exact captured tree.
++// It includes physical tombstones so the existing cache merge owns suppression.
++// Every scratch backing must be admitted and exclusively owned by the caller.
++func (t *Tree) SeekGEWithFixedScratch(start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
++	if scratch == nil || cap(keyScratch) < page.PageSize || cap(leafScratch) < page.PageSize {
++		return node.LeafEntry{}, false, node.ErrCorruptedNode
++	}
++	if start != nil && end != nil && compareTreeKey(start, end) >= 0 {
++		return node.LeafEntry{}, false, nil
++	}
++	var root node.Node
++	if err := t.loadReadRefInto(&root, page.PageChildRef(t.rootPageID), true, keyScratch, leafScratch, readLeaf, true); err != nil {
++		return node.LeafEntry{}, false, err
++	}
++	rootRef := page.PageChildRef(t.rootPageID)
++	var directory node.PrimaryDirectoryView
++	primary := root.Type() == page.PageTypePrimaryDirectory
++	if primary {
++		var err error
++		directory, err = node.DecodePrimaryDirectory(root.Data())
++		if err != nil {
++			return node.LeafEntry{}, false, err
++		}
++		// The same complete base/digest validation used by ordinary PRIMARY reads.
++		base, _ := directory.Base()
++		var n node.Node
++		if err = t.loadReadRefInto(&n, base.Ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
++			return node.LeafEntry{}, false, err
++		}
++		if !node.VerifyPrimaryOperand(base, n.Data()) || (n.Type() != page.PageTypeInternal && n.Type() != page.PageTypeLeaf) {
++			return node.LeafEntry{}, false, node.ErrPrimaryDirectory
++		}
++		rootRef = base.Ref
++	}
++	best, found, err := t.seekBaseGE(rootRef, start, end, keyScratch, leafScratch, scratch, readLeaf)
++	if err != nil || !primary {
++		return best, found, err
++	}
++	// Directory order and equal-key precedence are the maintained PRIMARY merge
++	// rule. Only the winning component is materialized and validated.
++	lo, hi := 0, directory.Count()
++	for lo < hi {
++		mid := lo + (hi-lo)/2
++		e, er := directory.Entry(mid)
++		if er != nil {
++			return node.LeafEntry{}, false, er
++		}
++		if start != nil && compareTreeKey(e.Key, start) < 0 {
++			lo = mid + 1
++		} else {
++			hi = mid
++		}
++	}
++	if lo >= directory.Count() {
++		return best, found, nil
++	}
++	delta, err := directory.Entry(lo)
++	if err != nil {
++		return node.LeafEntry{}, false, err
++	}
++	if end != nil && compareTreeKey(delta.Key, end) >= 0 || found && compareTreeKey(delta.Key, best.Key) > 0 {
++		return best, found, nil
++	}
++	if delta.InlineAbsence() {
++		return node.LeafEntry{Key: delta.Key, Flags: node.FlagTombstone, Revision: delta.Revision}, true, nil
++	}
++	ref, _, err := t.selectPrimaryOperand(root.Data(), delta.Key, readLeaf, leafScratch, true)
++	if err != nil {
++		return node.LeafEntry{}, false, err
++	}
++	var n node.Node
++	if err = t.loadReadRefInto(&n, ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
++		return node.LeafEntry{}, false, err
++	}
++	k, v, p, f, r, err := n.GetLeafEntryViewWithRevision(0)
++	return node.LeafEntry{Key: k, Value: v, ValuePtr: p, Flags: f, Revision: r}, err == nil, err
++}
++
++func (t *Tree) seekBaseGE(ref page.ChildRef, start, end, keyScratch, leafScratch []byte, scratch *OwnedSuccessorScratch, readLeaf func(page.LeafLogPtr, []byte) ([]byte, error)) (node.LeafEntry, bool, error) {
++	depth := 0
++	leftmost := false
++	for {
++		if depth >= maxTraversalDepth {
++			return node.LeafEntry{}, false, node.ErrCorruptedNode
++		}
++		var n node.Node
++		if err := t.loadReadRefInto(&n, ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
++			return node.LeafEntry{}, false, err
++		}
++		switch n.Type() {
++		case page.PageTypeInternal:
++			var index uint16
++			if !leftmost && start != nil {
++				index, _ = n.SearchInternal(start)
++			}
++			child, err := n.GetInternalChildRef(index)
++			if err != nil {
++				return node.LeafEntry{}, false, err
++			}
++			scratch.frames[depth] = successorFrame{ref: ref, next: index + 1}
++			depth++
++			ref = child
++			continue
++		case page.PageTypeLeaf:
++			var index uint16
++			if !leftmost && start != nil {
++				var err error
++				index, _, err = n.SearchLeaf(start)
++				if err != nil {
++					return node.LeafEntry{}, false, err
++				}
++			}
++			if index < n.Count() {
++				k, v, p, f, r, err := n.GetLeafEntryViewWithRevision(index)
++				if err != nil {
++					return node.LeafEntry{}, false, err
++				}
++				if end != nil && compareTreeKey(k, end) >= 0 {
++					return node.LeafEntry{}, false, nil
++				}
++				return node.LeafEntry{Key: k, Value: v, ValuePtr: p, Flags: f, Revision: r}, true, nil
++			}
++		default:
++			return node.LeafEntry{}, false, page.ErrInvalidPageType
++		}
++		advanced := false
++		for depth > 0 {
++			frame := &scratch.frames[depth-1]
++			var parent node.Node
++			if err := t.loadReadRefInto(&parent, frame.ref, true, keyScratch, leafScratch, readLeaf, true); err != nil {
++				return node.LeafEntry{}, false, err
++			}
++			if parent.Type() != page.PageTypeInternal {
++				return node.LeafEntry{}, false, node.ErrCorruptedNode
++			}
++			if frame.next < parent.Count() {
++				var err error
++				ref, err = parent.GetInternalChildRef(frame.next)
++				if err != nil {
++					return node.LeafEntry{}, false, err
++				}
++				frame.next++
++				leftmost = true
++				advanced = true
++				break
++			}
++			depth--
++		}
++		if !advanced {
++			return node.LeafEntry{}, false, nil
++		}
++	}
++}
+--- /dev/null
++++ b/TreeDB/tree/owned_successor_test.go
+@@ -0,0 +1,124 @@
++package tree
++
++import (
++	"crypto/sha256"
++	"github.com/snissn/gomap/TreeDB/node"
++	"github.com/snissn/gomap/TreeDB/page"
++	"github.com/snissn/gomap/TreeDB/pager"
++	"path/filepath"
++	"testing"
++)
++
++func TestOwnedSuccessorPrimarySelectionAndErrors(t *testing.T) {
++	for _, kind := range []string{"put", "absence", "bad_base", "bad_component"} {
++		t.Run(kind, func(t *testing.T) {
++			p, err := pager.Open(filepath.Join(t.TempDir(), "index.db"), 65536)
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer p.Close()
++			if _, err := p.Alloc(2); err != nil {
++				t.Fatal(err)
++			}
++			makeLeaf := func(keys, values []string) (uint64, []byte) {
++				id, e := p.Alloc(1)
++				if e != nil {
++					t.Fatal(e)
++				}
++				image, e := p.GetForWrite(id)
++				if e != nil {
++					t.Fatal(e)
++				}
++				b := node.NewBuilder(image, page.PageTypeLeaf)
++				b.SetPageID(id)
++				for i, k := range keys {
++					if e = b.AddLeafEntryWithRevision([]byte(k), []byte(values[i]), node.FlagInline, page.ValuePtr{}, 1); e != nil {
++						t.Fatal(e)
++					}
++				}
++				b.FinishNoNode()
++				return id, image
++			}
++			baseID, baseImage := makeLeaf([]string{"a", "c"}, []string{"base-a", "base-c"})
++			componentID, component := makeLeaf([]string{"c"}, []string{"delta-c"})
++			base := node.PrimaryOperand{Ref: page.PageChildRef(baseID), Digest: sha256.Sum256(baseImage)}
++			entry := node.PrimaryDirectoryEntry{Key: []byte("c"), Revision: 1, Kind: node.PrimaryPut, Operand: node.PrimaryOperand{Ref: page.PageChildRef(componentID), Digest: sha256.Sum256(component)}}
++			if kind == "absence" {
++				entry = node.PrimaryDirectoryEntry{Key: []byte("c"), Revision: 1, Kind: node.PrimaryAbsence}
++			}
++			if kind == "bad_base" {
++				base.Digest[0] ^= 1
++			}
++			if kind == "bad_component" {
++				entry.Operand.Digest[0] ^= 1
++			}
++			root, e := p.Alloc(1)
++			if e != nil {
++				t.Fatal(e)
++			}
++			image, e := p.GetForWrite(root)
++			if e != nil {
++				t.Fatal(e)
++			}
++			if e = node.EncodePrimaryDirectory(image, root, 1, base, []node.PrimaryDirectoryEntry{entry}); e != nil {
++				t.Fatal(e)
++			}
++			tr := New(p, nil, root)
++			var key, leaf [page.PageSize]byte
++			var scratch OwnedSuccessorScratch
++			got, ok, e := tr.SeekGEWithFixedScratch([]byte("b"), nil, key[:], leaf[:], &scratch, nil)
++			if kind == "bad_base" || kind == "bad_component" {
++				if e == nil {
++					t.Fatal("corrupt operand accepted")
++				}
++				return
++			}
++			if e != nil || !ok || string(got.Key) != "c" {
++				t.Fatalf("entry=%+v found=%v err=%v", got, ok, e)
++			}
++			if kind == "absence" {
++				if got.Flags&node.FlagTombstone == 0 {
++					t.Fatal("absence lost")
++				}
++			} else if string(got.Value) != "delta-c" {
++				t.Fatal("equal-key PRIMARY precedence lost")
++			}
++			if _, ok, e = tr.SeekGEWithFixedScratch([]byte("d"), nil, key[:], leaf[:], &scratch, nil); e != nil || ok {
++				t.Fatalf("absence=%v %v", ok, e)
++			}
++			if _, ok, e = tr.SeekGEWithFixedScratch([]byte("b"), []byte("c"), key[:], leaf[:], &scratch, nil); e != nil || ok {
++				t.Fatalf("exclusive end=%v %v", ok, e)
++			}
++		})
++	}
++}
++
++func TestOwnedSuccessorExternalLeafRefusesUnownedBuffer(t *testing.T) {
++	ptr := page.LeafLogPtr{FileID: 1, Offset: 8}
++	data := make([]byte, page.PageSize)
++	n := node.NewNode(data)
++	n.SetType(page.PageTypeLeaf)
++	n.AddLeafEntry([]byte("k"), []byte("v"), node.FlagInline, page.ValuePtr{})
++	n.UpdateChecksum()
++	reader := &trackedValueReader{mapValueReader: newMapValueReader()}
++	reader.values[ptr.ValuePtr()] = data
++	tr, closeTree := newTreeWithLeafLogRoot(t, reader, nil, ptr)
++	defer closeTree()
++	var key, leaf [page.PageSize]byte
++	var scratch OwnedSuccessorScratch
++	for _, read := range []func(page.LeafLogPtr, []byte) ([]byte, error){nil, func(_ page.LeafLogPtr, _ []byte) ([]byte, error) { return data, nil }} {
++		if _, _, e := tr.SeekGEWithFixedScratch([]byte("k"), nil, key[:], leaf[:], &scratch, read); e != ErrOwnedIteratorLeafReader {
++			t.Fatalf("unowned read accepted: %v", e)
++		}
++	}
++	read := func(_ page.LeafLogPtr, dst []byte) ([]byte, error) {
++		copy(dst[:page.PageSize], data)
++		return dst[:page.PageSize], nil
++	}
++	if got, ok, e := tr.SeekGEWithFixedScratch([]byte("j"), nil, key[:], leaf[:], &scratch, read); e != nil || !ok || string(got.Value) != "v" {
++		t.Fatalf("bounded leaf: %+v %v %v", got, ok, e)
++	}
++	if reader.readUnsafeCalls != 0 {
++		t.Fatal("global reader used")
++	}
++}
+--- /dev/null
++++ b/TreeDB/mvcc/captured_successor_test.go
+@@ -0,0 +1,211 @@
++package mvcc_test
++
++import (
++	"bytes"
++	"fmt"
++	treedb "github.com/snissn/gomap/TreeDB"
++	"github.com/snissn/gomap/TreeDB/internal/mvcckey"
++	mvcc "github.com/snissn/gomap/TreeDB/mvcc"
++	"github.com/snissn/gomap/TreeDB/node"
++	"github.com/snissn/gomap/TreeDB/page"
++	"testing"
++)
++
++// Inspect only the pager of this already captured snapshot. External leaf refs
++// are leaves; no mutable/current backend lookup participates in this proof.
++func populatedTreeProof(s treedb.Snapshot) (depth, leaves int, err error) {
++	var walk func(page.ChildRef, int) error
++	walk = func(ref page.ChildRef, d int) error {
++		if d > 50 {
++			return fmt.Errorf("cyclic/deep proof")
++		}
++		if d > depth {
++			depth = d
++		}
++		if ref.Kind == page.ChildRefLeafLog {
++			leaves++
++			return nil
++		}
++		data, e := s.Pager().Get(ref.Page)
++		if e != nil {
++			return e
++		}
++		n := node.NewNodeView(data)
++		switch n.Type() {
++		case page.PageTypePrimaryDirectory:
++			dir, e := node.DecodePrimaryDirectory(data)
++			if e != nil {
++				return e
++			}
++			base, _ := dir.Base()
++			return walk(base.Ref, d)
++		case page.PageTypeLeaf:
++			leaves++
++			return nil
++		case page.PageTypeInternal:
++			for i := 0; i < int(n.Count()); i++ {
++				child, e := n.GetInternalChildRef(uint16(i))
++				if e != nil {
++					return e
++				}
++				if e = walk(child, d+1); e != nil {
++					return e
++				}
++			}
++			return nil
++		default:
++			return fmt.Errorf("unexpected proof page %d", n.Type())
++		}
++	}
++	err = walk(page.PageChildRef(s.State().RootPageID), 1)
++	return
++}
++
++func seedPopulated(db *treedb.DB, st *mvcc.Store, groups []mvcc.CommitGroup, mode mvcc.CommitMode) error {
++	for lo := 0; lo < len(groups[0].Mutations); lo += 128 {
++		hi := min(lo+128, len(groups[0].Mutations))
++		chunk := make([]mvcc.CommitGroup, len(groups))
++		for i, g := range groups {
++			chunk[i] = mvcc.CommitGroup{Timestamp: g.Timestamp, Mutations: g.Mutations[lo:hi]}
++		}
++		if err := st.CommitGroupAt(chunk, mode); err != nil {
++			return err
++		}
++		if len(groups[0].Mutations) > 128 {
++			if err := db.Checkpoint(); err != nil {
++				return err
++			}
++		}
++	}
++	return nil
++}
++
++func TestPopulatedCapturedSuccessorAllocation(t *testing.T) {
++	for _, size := range []int{0, 8192} {
++		t.Run(fmt.Sprint(size), func(t *testing.T) {
++			o := treedb.OptionsFor(treedb.ProfileCommandWALRelaxed, t.TempDir())
++			o.DisableSideStores = true
++			o.BackgroundCheckpointInterval = -1
++			o.MemtableMode = "cow_btree"
++			o.MemtableShards = 4
++			o.FlushThreshold = 16 << 20
++			o.ValueLog.PointerThreshold = 1 << 30
++			db, e := treedb.Open(o)
++			if e != nil {
++				t.Fatal(e)
++			}
++			t.Cleanup(func() {
++				if err := db.Close(); err != nil {
++					t.Errorf("checked DB.Close: %v", err)
++				}
++			})
++			st := mvcc.New(db)
++			v := bytes.Repeat([]byte{0x63}, 256)
++			key := []byte("c3-a")
++			groups := []mvcc.CommitGroup{{Timestamp: 10, Mutations: []mvcc.Mutation{{Key: key, Value: v}, {Key: []byte("c3-ab"), Value: v}}}, {Timestamp: 20, Mutations: []mvcc.Mutation{{Key: key, Value: v}, {Key: []byte("c3-ab"), Value: v}}}}
++			for i := 0; i < size; i++ {
++				k := []byte(fmt.Sprintf("bulk-%08d", i))
++				for j := range groups {
++					groups[j].Mutations = append(groups[j].Mutations, mvcc.Mutation{Key: k, Value: v})
++				}
++			}
++			if size > 0 {
++				groups = append(groups, mvcc.CommitGroup{Timestamp: 30, Mutations: groups[0].Mutations})
++			}
++			if e = seedPopulated(db, st, groups, mvcc.CommitRelaxed); e != nil {
++				t.Fatal(e)
++			}
++			if e = db.Checkpoint(); e != nil {
++				t.Fatal(e)
++			}
++			stats := db.Stats()
++			if stats["treedb.cache.mutable_bytes"] != "0" || stats["treedb.cache.queue_len"] != "0" {
++				t.Fatal("not drained")
++			}
++			snap := db.AcquireSnapshot()
++			depth, leaves, e := populatedTreeProof(snap)
++			if e != nil {
++				t.Fatal(e)
++			}
++			if size > 0 {
++				boundary, err := populatedBoundaryKey(snap)
++				if err != nil {
++					t.Fatal(err)
++				}
++				key = boundary
++				t.Logf("proven cross-leaf historical key=%q", key)
++			}
++			if e = snap.Close(); e != nil {
++				t.Fatal(e)
++			}
++			if size > 0 && (depth < 3 || leaves < 3) {
++				t.Fatalf("depth=%d leaves=%d", depth, leaves)
++			}
++			t.Logf("depth=%d leaves=%d", depth, leaves)
++			result := testing.Benchmark(func(b *testing.B) {
++				b.ReportAllocs()
++				for i := 0; i < b.N; i++ {
++					r, e := st.GetAt(key, 15)
++					if e != nil || r.Timestamp != 10 || r.State != mvcc.Present || !bytes.Equal(r.Value, v) {
++						b.Fatalf("wrong historical winner: %+v %v", r, e)
++					}
++				}
++			})
++			// A generously bounded public guard rejects constructing the 57KB complete
++			// iterator for a single historical winner; output ownership remains required.
++			t.Logf("historical GetAt allocation: %d B/op, %d allocs/op", result.AllocedBytesPerOp(), result.AllocsPerOp())
++			if got := result.AllocedBytesPerOp(); got >= 48<<10 {
++				t.Fatalf("public historical GetAt allocates %d B/op; want <48KiB", got)
++			}
++		})
++	}
++}
++
++// A separator whose first physical row is version10 proves GetAt15 must leave
++// the preceding leaf (versions20/30 precede it in physical order).
++func populatedBoundaryKey(s treedb.Snapshot) ([]byte, error) {
++	var visit func(page.ChildRef) ([]byte, error)
++	visit = func(ref page.ChildRef) ([]byte, error) {
++		if ref.Kind == page.ChildRefLeafLog {
++			return nil, nil
++		}
++		data, e := s.Pager().Get(ref.Page)
++		if e != nil {
++			return nil, e
++		}
++		n := node.NewNodeView(data)
++		if n.Type() == page.PageTypePrimaryDirectory {
++			d, e := node.DecodePrimaryDirectory(data)
++			if e != nil {
++				return nil, e
++			}
++			base, _ := d.Base()
++			return visit(base.Ref)
++		}
++		if n.Type() != page.PageTypeInternal {
++			return nil, nil
++		}
++		for i := 0; i < int(n.Count()); i++ {
++			physical, child, e := n.GetInternalEntryRefView(uint16(i))
++			if e != nil {
++				return nil, e
++			}
++			if i > 0 {
++				key, ts, e := mvcckey.Decode(physical)
++				if e == nil && ts == 10 {
++					return append([]byte(nil), key...), nil
++				}
++			}
++			key, e := visit(child)
++			if e != nil || key != nil {
++				return key, e
++			}
++		}
++		return nil, nil
++	}
++	key, e := visit(page.PageChildRef(s.State().RootPageID))
++	if e == nil && key == nil {
++		e = fmt.Errorf("no proven between-version leaf separator")
++	}
++	return key, e
++}
+--- a/TreeDB/docs/spec/cow-cache-publication.md
++++ b/TreeDB/docs/spec/cow-cache-publication.md
+@@ -123,6 +123,15 @@
+ digest-validated base is an empty leaf. Nonempty/internal bases and any component
+ (including an inline absence) retain the same-cut merge path; physical validation
+ errors propagate. It never consults a newer published root to infer emptiness.
++
++For a nonempty captured backend, one-successor selection uses fixed admitted
++ancestor, key and leaf scratch on that same immutable cut. It compares one
++metadata candidate from each eligible source and materializes only the winning
++value-log pointer. PRIMARY base/component digests retain ordinary read validation.
++A physical tombstone or unsupported source returns to the existing complete
++same-cut merge so suppression and advancement remain correct. The returned key
++and value are owned copies; this changes neither publication nor durability
++authority.
+ 
+ Point lookup, successor selection, merge traversal, pointer/checksum decoding
+ and copying occur after the cut latch is released. Public values are owned

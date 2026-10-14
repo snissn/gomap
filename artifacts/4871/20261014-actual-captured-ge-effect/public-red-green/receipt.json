@@ -1,0 +1,164 @@
+{
+  "schema": 1,
+  "status": "focused GREEN; GE provisional; original complete gates OPEN",
+  "at_utc": "2026-10-14T21:28:52.436241+00:00",
+  "scope": [
+    {
+      "path": "TreeDB/caching/cow_read.go",
+      "bytes": 11654,
+      "sha256": "27d036f301c68b666d12801cc60bffdad72598d8ae0abd182cedee492ff43446"
+    },
+    {
+      "path": "TreeDB/caching/cow_read_workspace.go",
+      "bytes": 12876,
+      "sha256": "394eb29ef7df5f8b2316d95aa7d1573b0db29a18b89ad336c648e12d14a30202"
+    },
+    {
+      "path": "TreeDB/db/bounded_read_owner.go",
+      "bytes": 5717,
+      "sha256": "fdebf16eed3571132fe216957d4756c5318a4d1e3920675cc9e809fb2748ed0a"
+    },
+    {
+      "path": "TreeDB/tree/primary_directory.go",
+      "bytes": 1942,
+      "sha256": "4f393a3d62d2d585b4fee908ff81308b5b7d21434745e7127906f4182ab2873e"
+    },
+    {
+      "path": "TreeDB/tree/tree.go",
+      "bytes": 55888,
+      "sha256": "c9319602ea6b027cd1053a725ed564527de859693a97a4f72892e4f90e116d81"
+    },
+    {
+      "path": "TreeDB/tree/owned_successor.go",
+      "bytes": 6577,
+      "sha256": "193dbe06cc4b4a8defbfaf39f30f6aa25170def3e597896fc28393cffdaf5f69"
+    },
+    {
+      "path": "TreeDB/tree/owned_successor_test.go",
+      "bytes": 4287,
+      "sha256": "16422538b03b9d760c1073ac03ef91148983f197daebb894adeafc8e1a213ed5"
+    },
+    {
+      "path": "TreeDB/mvcc/captured_successor_test.go",
+      "bytes": 6112,
+      "sha256": "3ba44a66a4b7e1bc5de16a373be68a70198bf09613ec20cd0c9c3dd6a5328bbd"
+    },
+    {
+      "path": "TreeDB/docs/spec/cow-cache-publication.md",
+      "bytes": 26552,
+      "sha256": "aaa293607d0247c78e64797e110018747fd408028903694b8fe49d919e621120"
+    }
+  ],
+  "lanes": {
+    "ordinary-5111": {
+      "head": "9bd10594dc87e0ccc9f4d1c59ce6aabbf5e69e85",
+      "index_sha256": "ad4473b1d423c4f36b187d91de9d7a5907e3d9246165e4363637babaacb89736",
+      "before_status_lines": 127,
+      "after_status_lines": 135,
+      "before_inventory_sha256": "cad6492eb21b07e27c61a4d552fd6843b156d25f33d9e22e1f72e0bff5abd326",
+      "final_inventory_sha256": "2241ae97f79548f26306531c166c13b4127be2df4236d7fb2d5a69bc68376faf",
+      "preserved_other_files": 11589,
+      "patch": "ordinary-5111.patch",
+      "patch_sha256": "8f5a36e8e8b3d88ee67ecc9e346c57564b53f0cadb7b07c879e915ae2f906834"
+    },
+    "native-4878-traversal": {
+      "head": "30f60e90679dc0b1e1e20f8c39a6bde7d4772e16",
+      "index_sha256": "9ce46224590d3b93e64bd3b26a83f7e75d286918542c435a913197ca11b2d7fb",
+      "before_status_lines": 2,
+      "after_status_lines": 11,
+      "before_inventory_sha256": "53890d4318ed876868ade5e3c5a47d643425b2ec666e571286749343673b25bf",
+      "final_inventory_sha256": "0c94e345b86d5d4a134411a790b830dda5e9c302186e5941601a3bcab66d378e",
+      "preserved_other_files": 11739,
+      "patch": "native-4878-traversal.patch",
+      "patch_sha256": "8f5a36e8e8b3d88ee67ecc9e346c57564b53f0cadb7b07c879e915ae2f906834"
+    }
+  },
+  "tests": {
+    "ordinary-5111": {
+      "red": {
+        "command": "ordinary-5111.red.command.json",
+        "command_sha256": "36531afa65fac70bd6a14e4f6dfd5b01e78c0f3cf7afe076ded146d57fb64ecc",
+        "raw": "ordinary-5111.red.raw.jsonl",
+        "raw_sha256": "a77867ed76f187f11eb89d9467c519c79ad9aab251d13d404137652bd72ed9f9",
+        "exit": 1,
+        "top_pass": 0,
+        "skipped": [],
+        "failed": [
+          "TestPopulatedCapturedSuccessorAllocation/0",
+          "TestPopulatedCapturedSuccessorAllocation/8192",
+          "TestPopulatedCapturedSuccessorAllocation",
+          "github.com/snissn/gomap/TreeDB/mvcc"
+        ]
+      },
+      "normal": {
+        "command": "ordinary-5111.normal.command.json",
+        "command_sha256": "daca517ca996381a900b6293ba4c6253e708929ee5a6ee3b0f5e7b6c1ec9acdf",
+        "raw": "ordinary-5111.normal.raw.jsonl",
+        "raw_sha256": "014ed510c573911c01a2af5822ad635e9d5fea7ce81e66b9d346cfa775ade847",
+        "exit": 0,
+        "top_pass": 28,
+        "skipped": [
+          "TestMVCCRetainedOwnedOutputs"
+        ],
+        "failed": []
+      },
+      "race": {
+        "command": "ordinary-5111.race.command.json",
+        "command_sha256": "01102800f7da1032ca1b5b0eeb1ef223ff3010e9f36168174e6352d02f570d8c",
+        "raw": "ordinary-5111.race.raw.jsonl",
+        "raw_sha256": "a038a91d60a41a4241dcb0ae197fa304932f8b5958e147ab42ade480e7712c5f",
+        "exit": 0,
+        "top_pass": 28,
+        "skipped": [
+          "TestMVCCRetainedOwnedOutputs"
+        ],
+        "failed": []
+      }
+    },
+    "native-4878-traversal": {
+      "red": {
+        "command": "native-4878-traversal.red.command.json",
+        "command_sha256": "cb0df79d2abe8fd7132ea7932097fe4858e1ed23ee828a68797f2ca7dd4052c7",
+        "raw": "native-4878-traversal.red.raw.jsonl",
+        "raw_sha256": "7be4445f68136abe8961da90b97d03aab52dce5c68f9bf3fd4cbffc17519a583",
+        "exit": 1,
+        "top_pass": 0,
+        "skipped": [],
+        "failed": [
+          "TestPopulatedCapturedSuccessorAllocation/0",
+          "TestPopulatedCapturedSuccessorAllocation/8192",
+          "TestPopulatedCapturedSuccessorAllocation",
+          "github.com/snissn/gomap/TreeDB/mvcc"
+        ]
+      },
+      "normal": {
+        "command": "native-4878-traversal.normal.command.json",
+        "command_sha256": "01f2a70dd40cd11a5a930f55f97f5979f2fa8632f43ab9725d09a43b936c4f8a",
+        "raw": "native-4878-traversal.normal.raw.jsonl",
+        "raw_sha256": "6b85b48add6980fb9ce7d525f293d6d7c66dab08580f8219126e9f6c9bf52299",
+        "exit": 0,
+        "top_pass": 28,
+        "skipped": [
+          "TestMVCCRetainedOwnedOutputs"
+        ],
+        "failed": []
+      },
+      "race": {
+        "command": "native-4878-traversal.race.command.json",
+        "command_sha256": "3179a802045a0eb6015afa37061f678c0253f10c2fcd5565bd251fe214569b04",
+        "raw": "native-4878-traversal.race.raw.jsonl",
+        "raw_sha256": "92ed23fcb1f70a7c4e29446b25fe847ee892445c00c2b26070abaf4c262726c2",
+        "exit": 0,
+        "top_pass": 28,
+        "skipped": [
+          "TestMVCCRetainedOwnedOutputs"
+        ],
+        "failed": []
+      }
+    }
+  },
+  "documentation": "Current spec retained; only same-cut fixed-scratch successor paragraph added. No format/public semantics/WAL ACK authority change.",
+  "activation": "Public fixed16x allocation guard + drained cache and captured PRIMARY depth3/2728-leaf cross-version selector proves changed path; no throughput/latency claim.",
+  "preservation": "Exactly9 paths changed in each actual lane; same9 bytes; unrelated tracked/nonignored contents/status plus HEAD/index unchanged; foreign native2 tests preserved. No harness/projection import.",
+  "limits": "No benchmark collection, commits/GH, cleanup, all19/broad qualification or M5 GO/edge change. Both actual lanes frozen and no Go/test/build producer remains."
+}

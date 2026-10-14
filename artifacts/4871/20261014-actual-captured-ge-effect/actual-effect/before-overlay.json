@@ -1,0 +1,10 @@
+{
+  "Replace": {
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/caching/cow_read.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/baseline-source/TreeDB/caching/cow_read.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/caching/cow_read_workspace.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/baseline-source/TreeDB/caching/cow_read_workspace.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/db/bounded_read_owner.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/baseline-source/TreeDB/db/bounded_read_owner.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/tree/owned_successor.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/baseline-source/ignore_successor.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/tree/primary_directory.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/baseline-source/TreeDB/tree/primary_directory.go",
+    "/home/mikers/benchmarks/mvcc-4871-repair-20261013/ordinary-5111/TreeDB/tree/tree.go": "/home/mikers/benchmarks/mvcc-4871-repair-20261013/evidence/successor-4876-pointer-tail-20261014/baseline-source/TreeDB/tree/tree.go"
+  }
+}
